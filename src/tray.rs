@@ -1,0 +1,206 @@
+use crate::{startup, CONFIG, RUNNING};
+use std::sync::atomic::Ordering;
+use windows::core::{w, PCWSTR};
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::UI::Shell::{
+    Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW,
+};
+use windows::Win32::UI::WindowsAndMessaging::{
+    AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DispatchMessageW,
+    GetCursorPos, LoadImageW, PeekMessageW, PostQuitMessage, RegisterClassExW, SetForegroundWindow,
+    TrackPopupMenu, TranslateMessage, CS_HREDRAW, CS_VREDRAW, HICON, IMAGE_ICON,
+    LR_DEFAULTSIZE, LR_SHARED, MF_CHECKED, MF_STRING, MF_UNCHECKED, MSG, PM_REMOVE, TPM_BOTTOMALIGN,
+    TPM_LEFTALIGN, WM_COMMAND, WM_DESTROY, WM_LBUTTONUP, WM_RBUTTONUP, WM_USER, WNDCLASSEXW,
+    WS_EX_TOOLWINDOW, WS_POPUP,
+};
+
+const WM_TRAYICON: u32 = WM_USER + 1;
+const ID_TRAY_EXIT: u16 = 1001;
+const ID_TRAY_STARTUP: u16 = 1002;
+
+const TRAY_CLASS: PCWSTR = w!("RustHoverPreviewTrayClass");
+
+static mut TRAY_HWND: HWND = HWND(std::ptr::null_mut());
+
+unsafe extern "system" fn tray_window_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    match msg {
+        WM_TRAYICON => {
+            let event = lparam.0 as u32;
+            if event == WM_RBUTTONUP || event == WM_LBUTTONUP {
+                show_context_menu(hwnd);
+            }
+            LRESULT(0)
+        }
+        WM_COMMAND => {
+            let cmd = (wparam.0 & 0xFFFF) as u16;
+            match cmd {
+                ID_TRAY_EXIT => {
+                    RUNNING.store(false, Ordering::SeqCst);
+                    PostQuitMessage(0);
+                }
+                ID_TRAY_STARTUP => {
+                    toggle_startup();
+                }
+                _ => {}
+            }
+            LRESULT(0)
+        }
+        WM_DESTROY => {
+            remove_tray_icon(hwnd);
+            PostQuitMessage(0);
+            LRESULT(0)
+        }
+        _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+    }
+}
+
+unsafe fn show_context_menu(hwnd: HWND) {
+    let menu = CreatePopupMenu().unwrap();
+
+    // Add "Run at Startup" with checkmark
+    let startup_enabled = CONFIG.lock().map(|c| c.run_at_startup).unwrap_or(false);
+    let flags = MF_STRING | if startup_enabled { MF_CHECKED } else { MF_UNCHECKED };
+    let _ = AppendMenuW(menu, flags, ID_TRAY_STARTUP as usize, w!("Run at Startup"));
+
+    // Add Exit
+    let _ = AppendMenuW(menu, MF_STRING, ID_TRAY_EXIT as usize, w!("Exit"));
+
+    // Get cursor position and show menu
+    let mut pt = windows::Win32::Foundation::POINT::default();
+    let _ = GetCursorPos(&mut pt);
+
+    let _ = SetForegroundWindow(hwnd).ok();
+    let _ = TrackPopupMenu(menu, TPM_LEFTALIGN | TPM_BOTTOMALIGN, pt.x, pt.y, 0, hwnd, None).ok();
+    let _ = DestroyMenu(menu);
+}
+
+fn toggle_startup() {
+    if let Ok(mut config) = CONFIG.lock() {
+        config.run_at_startup = !config.run_at_startup;
+        config.save();
+
+        if config.run_at_startup {
+            startup::enable_startup();
+        } else {
+            startup::disable_startup();
+        }
+    }
+}
+
+unsafe fn add_tray_icon(hwnd: HWND) -> bool {
+    // Load a system icon (IDI_APPLICATION = 32512)
+    let hicon = LoadImageW(
+        None,
+        PCWSTR(32512 as *const u16), // IDI_APPLICATION
+        IMAGE_ICON,
+        0,
+        0,
+        LR_DEFAULTSIZE | LR_SHARED,
+    );
+
+    let hicon = match hicon {
+        Ok(h) => HICON(h.0),
+        Err(_) => HICON::default(),
+    };
+
+    let mut nid = NOTIFYICONDATAW {
+        cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
+        hWnd: hwnd,
+        uID: 1,
+        uFlags: NIF_ICON | NIF_MESSAGE | NIF_TIP,
+        uCallbackMessage: WM_TRAYICON,
+        hIcon: hicon,
+        ..Default::default()
+    };
+
+    // Set tooltip
+    let tip = "Hover Preview";
+    let tip_wide: Vec<u16> = tip.encode_utf16().chain(std::iter::once(0)).collect();
+    let len = tip_wide.len().min(nid.szTip.len());
+    nid.szTip[..len].copy_from_slice(&tip_wide[..len]);
+
+    Shell_NotifyIconW(NIM_ADD, &nid).as_bool()
+}
+
+unsafe fn remove_tray_icon(hwnd: HWND) {
+    let nid = NOTIFYICONDATAW {
+        cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
+        hWnd: hwnd,
+        uID: 1,
+        ..Default::default()
+    };
+    let _ = Shell_NotifyIconW(NIM_DELETE, &nid);
+}
+
+pub fn run_tray() {
+    unsafe {
+        let hinstance = GetModuleHandleW(None).unwrap();
+
+        // Register window class
+        let wc = WNDCLASSEXW {
+            cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
+            style: CS_HREDRAW | CS_VREDRAW,
+            lpfnWndProc: Some(tray_window_proc),
+            hInstance: hinstance.into(),
+            lpszClassName: TRAY_CLASS,
+            ..Default::default()
+        };
+
+        RegisterClassExW(&wc);
+
+        // Create hidden window for tray messages
+        let hwnd = CreateWindowExW(
+            WS_EX_TOOLWINDOW,
+            TRAY_CLASS,
+            w!("Hover Preview Tray"),
+            WS_POPUP,
+            0,
+            0,
+            0,
+            0,
+            None,
+            None,
+            hinstance,
+            None,
+        );
+
+        let hwnd = match hwnd {
+            Ok(h) => h,
+            Err(e) => {
+                eprintln!("Failed to create tray window: {:?}", e);
+                return;
+            }
+        };
+
+        TRAY_HWND = hwnd;
+
+        // Add tray icon
+        if !add_tray_icon(hwnd) {
+            eprintln!("Failed to add tray icon");
+            return;
+        }
+
+        // Message loop
+        let mut msg = MSG::default();
+        while RUNNING.load(Ordering::SeqCst) {
+            while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
+                if msg.message == windows::Win32::UI::WindowsAndMessaging::WM_QUIT {
+                    RUNNING.store(false, Ordering::SeqCst);
+                    break;
+                }
+                let _ = TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+
+        // Cleanup
+        remove_tray_icon(hwnd);
+    }
+}
