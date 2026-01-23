@@ -22,7 +22,6 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 const PREVIEW_CLASS: PCWSTR = w!("RustHoverPreviewWindow");
-const PREVIEW_SIZE: i32 = 300;
 
 // Message passing for thread communication
 pub static PREVIEW_SENDER: Lazy<Mutex<Option<Sender<PreviewMessage>>>> =
@@ -89,12 +88,33 @@ pub fn hide_preview() {
     }
 }
 
-fn load_image(path: &PathBuf) -> Option<ImageData> {
+fn load_image(path: &PathBuf, max_width: u32, max_height: u32) -> Option<ImageData> {
     let img = image::open(path).ok()?;
 
-    // Calculate scaled dimensions to fit within PREVIEW_SIZE
+    // Calculate scaled dimensions to fit within screen bounds while maintaining aspect ratio
     let (orig_width, orig_height) = img.dimensions();
-    let scale = (PREVIEW_SIZE as f32 / orig_width.max(orig_height) as f32).min(1.0);
+    
+    // If image fits, show at 100%
+    if orig_width <= max_width && orig_height <= max_height {
+        let rgba = img.to_rgba8();
+        let mut pixels: Vec<u8> = Vec::with_capacity((orig_width * orig_height * 4) as usize);
+        for pixel in rgba.pixels() {
+            pixels.push(pixel[2]); // B
+            pixels.push(pixel[1]); // G
+            pixels.push(pixel[0]); // R
+            pixels.push(pixel[3]); // A
+        }
+        return Some(ImageData {
+            pixels,
+            width: orig_width,
+            height: orig_height,
+        });
+    }
+    
+    // Scale down to fit while maintaining aspect ratio
+    let scale_x = max_width as f32 / orig_width as f32;
+    let scale_y = max_height as f32 / orig_height as f32;
+    let scale = scale_x.min(scale_y);
     let new_width = (orig_width as f32 * scale) as u32;
     let new_height = (orig_height as f32 * scale) as u32;
 
@@ -214,8 +234,8 @@ pub fn run_preview_window() {
             WS_POPUP,
             0,
             0,
-            PREVIEW_SIZE,
-            PREVIEW_SIZE,
+            1,
+            1,
             None,
             None,
             hinstance,
@@ -252,8 +272,63 @@ pub fn run_preview_window() {
                             let _ = writeln!(file, "PreviewMessage::Show received for {:?}", path);
                         }
                         
-                        // Load and display the image
-                        if let Some(img_data) = load_image(&path) {
+                        // Get screen dimensions
+                        let screen_width = GetSystemMetrics(SM_CXSCREEN);
+                        let screen_height = GetSystemMetrics(SM_CYSCREEN);
+                        let offset = 20; // Gap between cursor and preview
+                        
+                        // Get original image dimensions first
+                        let orig_dims = match image::image_dimensions(&path) {
+                            Ok(dims) => dims,
+                            Err(_) => continue,
+                        };
+                        let (orig_w, orig_h) = (orig_dims.0 as i32, orig_dims.1 as i32);
+                        
+                        // Calculate available space in each quadrant (with offset from cursor)
+                        // Quadrant 0: Bottom-Right of cursor
+                        // Quadrant 1: Bottom-Left of cursor  
+                        // Quadrant 2: Top-Right of cursor
+                        // Quadrant 3: Top-Left of cursor
+                        let quadrants = [
+                            (screen_width - x - offset, screen_height - y - offset, x + offset, y + offset),      // BR: (avail_w, avail_h, pos_x, pos_y)
+                            (x - offset, screen_height - y - offset, 0, y + offset),                              // BL
+                            (screen_width - x - offset, y - offset, x + offset, 0),                               // TR
+                            (x - offset, y - offset, 0, 0),                                                        // TL
+                        ];
+                        
+                        // Find the best quadrant - the one where image can be shown largest
+                        let mut best_quadrant = 0;
+                        let mut best_scale: f32 = 0.0;
+                        
+                        for (i, &(avail_w, avail_h, _, _)) in quadrants.iter().enumerate() {
+                            if avail_w <= 0 || avail_h <= 0 {
+                                continue;
+                            }
+                            
+                            // Calculate scale needed to fit in this quadrant
+                            let scale_x = avail_w as f32 / orig_w as f32;
+                            let scale_y = avail_h as f32 / orig_h as f32;
+                            let scale = scale_x.min(scale_y).min(1.0); // Don't upscale
+                            
+                            if scale > best_scale {
+                                best_scale = scale;
+                                best_quadrant = i;
+                            }
+                        }
+                        
+                        // If no valid quadrant found, skip
+                        if best_scale <= 0.0 {
+                            continue;
+                        }
+                        
+                        let (avail_w, avail_h, base_x, base_y) = quadrants[best_quadrant];
+                        
+                        // Calculate final image size
+                        let max_width = avail_w.max(1) as u32;
+                        let max_height = avail_h.max(1) as u32;
+                        
+                        // Load and resize image to fit the chosen quadrant
+                        if let Some(img_data) = load_image(&path, max_width, max_height) {
                             // Debug log
                             if let Ok(mut file) = std::fs::OpenOptions::new()
                                 .create(true)
@@ -261,7 +336,7 @@ pub fn run_preview_window() {
                                 .open("C:\\temp\\hover_preview_debug.log")
                             {
                                 use std::io::Write;
-                                let _ = writeln!(file, "Image loaded: {}x{}", img_data.width, img_data.height);
+                                let _ = writeln!(file, "Image loaded: {}x{}, quadrant: {}", img_data.width, img_data.height, best_quadrant);
                             }
                             
                             let img_width = img_data.width as i32;
@@ -272,21 +347,14 @@ pub fn run_preview_window() {
                                 *current = Some(img_data);
                             }
 
-                            // Calculate position (bottom-right of cursor)
-                            let screen_width = GetSystemMetrics(SM_CXSCREEN);
-                            let screen_height = GetSystemMetrics(SM_CYSCREEN);
-
-                            let offset = 20;
-                            let mut pos_x = x + offset;
-                            let mut pos_y = y + offset;
-
-                            // Adjust if would go off screen
-                            if pos_x + img_width > screen_width {
-                                pos_x = x - img_width - offset;
-                            }
-                            if pos_y + img_height > screen_height {
-                                pos_y = y - img_height - offset;
-                            }
+                            // Calculate final position based on quadrant
+                            let (pos_x, pos_y) = match best_quadrant {
+                                0 => (x + offset, y + offset),                           // Bottom-Right
+                                1 => (x - offset - img_width, y + offset),               // Bottom-Left
+                                2 => (x + offset, y - offset - img_height),              // Top-Right
+                                3 => (x - offset - img_width, y - offset - img_height),  // Top-Left
+                                _ => (x + offset, y + offset),
+                            };
 
                             // Move and resize window
                             let move_result = MoveWindow(hwnd, pos_x, pos_y, img_width, img_height, true);
