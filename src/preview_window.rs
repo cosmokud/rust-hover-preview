@@ -243,8 +243,8 @@ pub fn run_preview_window() {
         )
         .unwrap();
 
-        // Set window transparency
-        SetLayeredWindowAttributes(hwnd, COLORREF(0), 240, LWA_ALPHA).ok();
+        // Set window fully opaque (255 = no transparency)
+        SetLayeredWindowAttributes(hwnd, COLORREF(0), 255, LWA_ALPHA).ok();
 
         // Store HWND as isize
         PREVIEW_HWND.store(hwnd.0 as isize, Ordering::SeqCst);

@@ -1,5 +1,5 @@
 use crate::preview_window::{hide_preview, show_preview};
-use crate::RUNNING;
+use crate::{CONFIG, RUNNING};
 use std::ffi::OsString;
 use std::os::windows::ffi::OsStringExt;
 use std::path::PathBuf;
@@ -447,12 +447,28 @@ pub fn run_explorer_hook() {
 
     let mut last_file: Option<PathBuf> = None;
     let mut hover_start: Option<std::time::Instant> = None;
-    let hover_delay = std::time::Duration::from_millis(500);
     let mut last_cursor_pos = POINT::default();
     let mut log_counter = 0u32;
 
     while RUNNING.load(Ordering::SeqCst) {
         std::thread::sleep(std::time::Duration::from_millis(50));
+
+        // Check if preview is enabled
+        let (preview_enabled, hover_delay_ms) = CONFIG
+            .lock()
+            .map(|c| (c.preview_enabled, c.hover_delay_ms))
+            .unwrap_or((true, 0));
+        
+        if !preview_enabled {
+            if last_file.is_some() {
+                hide_preview();
+                last_file = None;
+                hover_start = None;
+            }
+            continue;
+        }
+        
+        let hover_delay = std::time::Duration::from_millis(hover_delay_ms);
 
         unsafe {
             // Log every ~2 seconds for debugging

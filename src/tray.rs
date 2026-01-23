@@ -18,6 +18,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 const WM_TRAYICON: u32 = WM_USER + 1;
 const ID_TRAY_EXIT: u16 = 1001;
 const ID_TRAY_STARTUP: u16 = 1002;
+const ID_TRAY_ENABLE: u16 = 1003;
 
 const TRAY_CLASS: PCWSTR = w!("RustHoverPreviewTrayClass");
 
@@ -47,6 +48,9 @@ unsafe extern "system" fn tray_window_proc(
                 ID_TRAY_STARTUP => {
                     toggle_startup();
                 }
+                ID_TRAY_ENABLE => {
+                    toggle_preview_enabled();
+                }
                 _ => {}
             }
             LRESULT(0)
@@ -62,6 +66,11 @@ unsafe extern "system" fn tray_window_proc(
 
 unsafe fn show_context_menu(hwnd: HWND) {
     let menu = CreatePopupMenu().unwrap();
+
+    // Add "Enable Preview" with checkmark
+    let preview_enabled = CONFIG.lock().map(|c| c.preview_enabled).unwrap_or(true);
+    let enable_flags = MF_STRING | if preview_enabled { MF_CHECKED } else { MF_UNCHECKED };
+    let _ = AppendMenuW(menu, enable_flags, ID_TRAY_ENABLE as usize, w!("Enable Preview"));
 
     // Add "Run at Startup" with checkmark
     let startup_enabled = CONFIG.lock().map(|c| c.run_at_startup).unwrap_or(false);
@@ -90,6 +99,13 @@ fn toggle_startup() {
         } else {
             startup::disable_startup();
         }
+    }
+}
+
+fn toggle_preview_enabled() {
+    if let Ok(mut config) = CONFIG.lock() {
+        config.preview_enabled = !config.preview_enabled;
+        config.save();
     }
 }
 
