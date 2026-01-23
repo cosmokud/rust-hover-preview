@@ -311,6 +311,51 @@ fn get_file_under_cursor() -> Option<PathBuf> {
     None
 }
 
+/// Check if cursor is currently over an Explorer window (regardless of foreground)
+fn is_cursor_over_explorer() -> bool {
+    unsafe {
+        let mut cursor_pos = POINT::default();
+        if GetCursorPos(&mut cursor_pos).is_err() {
+            return false;
+        }
+
+        // Get window under cursor
+        let hwnd = WindowFromPoint(cursor_pos);
+        if hwnd.0.is_null() {
+            return false;
+        }
+
+        // Walk up parent windows to find Explorer window
+        let mut current_hwnd = hwnd;
+        let folders = get_all_explorer_folders();
+
+        for _ in 0..20 {
+            // Check if this window is an Explorer window
+            for (explorer_hwnd, _) in &folders {
+                if current_hwnd == *explorer_hwnd {
+                    return true;
+                }
+            }
+            
+            // Also check by class/process
+            if is_explorer_window(current_hwnd) {
+                return true;
+            }
+
+            // Get parent
+            if let Ok(parent) = windows::Win32::UI::WindowsAndMessaging::GetParent(current_hwnd) {
+                if parent.0.is_null() || parent == current_hwnd {
+                    break;
+                }
+                current_hwnd = parent;
+            } else {
+                break;
+            }
+        }
+    }
+    false
+}
+
 fn is_explorer_window(hwnd: HWND) -> bool {
     unsafe {
         let mut class_name = [0u16; 256];
@@ -395,23 +440,22 @@ pub fn run_explorer_hook() {
         std::thread::sleep(std::time::Duration::from_millis(50));
 
         unsafe {
-            let foreground = GetForegroundWindow();
-            
             // Log every ~2 seconds for debugging
             log_counter += 1;
             if log_counter % 40 == 0 {
-                let is_explorer = !foreground.0.is_null() && is_explorer_window(foreground);
+                let over_explorer = is_cursor_over_explorer();
                 if let Ok(mut file) = std::fs::OpenOptions::new()
                     .create(true)
                     .append(true)
                     .open("C:\\temp\\hover_preview_debug.log")
                 {
                     use std::io::Write;
-                    let _ = writeln!(file, "Foreground HWND: {:?}, is_explorer: {}", foreground.0, is_explorer);
+                    let _ = writeln!(file, "Cursor over explorer: {}", over_explorer);
                 }
             }
             
-            if foreground.0.is_null() || !is_explorer_window(foreground) {
+            // Check if cursor is over any Explorer window (not just foreground)
+            if !is_cursor_over_explorer() {
                 if last_file.is_some() {
                     hide_preview();
                     last_file = None;
@@ -420,24 +464,38 @@ pub fn run_explorer_hook() {
                 continue;
             }
 
-            // Check cursor position changed
+            // Check cursor position
             let mut cursor_pos = POINT::default();
             if GetCursorPos(&mut cursor_pos).is_err() {
                 continue;
             }
 
-            // If cursor moved significantly, reset hover timer
+            // If cursor moved significantly, check what's under it
             let moved = (cursor_pos.x - last_cursor_pos.x).abs() > 5
                 || (cursor_pos.y - last_cursor_pos.y).abs() > 5;
 
             if moved {
                 last_cursor_pos = cursor_pos;
-                hover_start = Some(std::time::Instant::now());
                 
-                // Hide preview when moving
-                if last_file.is_some() {
-                    hide_preview();
-                    last_file = None;
+                // When cursor moves, check immediately what file is under it
+                // If it's the same file, keep the preview; if different or none, handle accordingly
+                if let Some(file_path) = get_file_under_cursor() {
+                    if last_file.as_ref() == Some(&file_path) {
+                        // Same file - keep preview, no need to reset timer
+                        continue;
+                    } else {
+                        // Different file - hide and start new hover timer
+                        hide_preview();
+                        last_file = None;
+                        hover_start = Some(std::time::Instant::now());
+                    }
+                } else {
+                    // No file under cursor - hide preview
+                    if last_file.is_some() {
+                        hide_preview();
+                        last_file = None;
+                    }
+                    hover_start = Some(std::time::Instant::now());
                 }
                 continue;
             }
