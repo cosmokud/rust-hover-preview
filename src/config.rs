@@ -8,6 +8,8 @@ pub struct AppConfig {
     pub run_at_startup: bool,
     pub preview_size: u32,
     pub preview_offset: i32,
+    pub hover_delay_ms: u64,
+    pub preview_enabled: bool,
 }
 
 impl Default for AppConfig {
@@ -16,6 +18,8 @@ impl Default for AppConfig {
             run_at_startup: false,
             preview_size: 300,
             preview_offset: 20,
+            hover_delay_ms: 0,
+            preview_enabled: true,
         }
     }
 }
