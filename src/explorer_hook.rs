@@ -285,42 +285,12 @@ fn get_file_under_cursor() -> Option<PathBuf> {
 
     // Get ALL Explorer folders (all windows and tabs)
     let all_folders = get_all_explorer_folders();
-    
-    // Debug logging
-    if let Ok(mut file) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open("C:\\temp\\hover_preview_debug.log")
-    {
-        use std::io::Write;
-        let _ = writeln!(file, "Item: {:?}, All folders: {:?}", item_name, all_folders.iter().map(|(_, f)| f).collect::<Vec<_>>());
-    }
 
     // Try to find the file in ANY of the open Explorer folders
-    // This handles Windows 11 tabs where all tabs share the same HWND
     for (_, folder) in &all_folders {
         if let Some(path) = find_image_in_folder(folder, &item_name) {
-            // Debug: log the found path
-            if let Ok(mut file) = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open("C:\\temp\\hover_preview_debug.log")
-            {
-                use std::io::Write;
-                let _ = writeln!(file, "Found image at: {:?}", path);
-            }
             return Some(path);
         }
-    }
-
-    // Debug: log if not found
-    if let Ok(mut file) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open("C:\\temp\\hover_preview_debug.log")
-    {
-        use std::io::Write;
-        let _ = writeln!(file, "Image not found in any folder for item: {:?}", item_name);
     }
 
     None
@@ -383,16 +353,6 @@ fn is_explorer_window(hwnd: HWND) -> bool {
             String::new()
         };
 
-        // Log for debugging
-        if let Ok(mut file) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open("C:\\temp\\hover_preview_debug.log")
-        {
-            use std::io::Write;
-            let _ = writeln!(file, "Window class: '{}'", class_str);
-        }
-
         // Check for common Explorer window classes
         if class_str.contains("cabinetwclass") || class_str.contains("explorerwclass") {
             return true;
@@ -420,17 +380,6 @@ fn is_explorer_window(hwnd: HWND) -> bool {
                 let path = OsString::from_wide(&buffer[..size as usize]);
                 let path_str = path.to_string_lossy().to_lowercase();
                 let _ = windows::Win32::Foundation::CloseHandle(handle);
-                
-                // Log process name
-                if let Ok(mut file) = std::fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open("C:\\temp\\hover_preview_debug.log")
-                {
-                    use std::io::Write;
-                    let _ = writeln!(file, "Process: '{}'", path_str);
-                }
-                
                 return path_str.contains("explorer.exe");
             }
             let _ = windows::Win32::Foundation::CloseHandle(handle);
@@ -448,10 +397,10 @@ pub fn run_explorer_hook() {
     let mut last_file: Option<PathBuf> = None;
     let mut hover_start: Option<std::time::Instant> = None;
     let mut last_cursor_pos = POINT::default();
-    let mut log_counter = 0u32;
 
     while RUNNING.load(Ordering::SeqCst) {
-        std::thread::sleep(std::time::Duration::from_millis(50));
+        // Reduced sleep for faster response (30ms = ~33 checks/sec)
+        std::thread::sleep(std::time::Duration::from_millis(30));
 
         // Check if preview is enabled
         let (preview_enabled, hover_delay_ms) = CONFIG
@@ -471,20 +420,6 @@ pub fn run_explorer_hook() {
         let hover_delay = std::time::Duration::from_millis(hover_delay_ms);
 
         unsafe {
-            // Log every ~2 seconds for debugging
-            log_counter += 1;
-            if log_counter % 40 == 0 {
-                let over_explorer = is_cursor_over_explorer();
-                if let Ok(mut file) = std::fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open("C:\\temp\\hover_preview_debug.log")
-                {
-                    use std::io::Write;
-                    let _ = writeln!(file, "Cursor over explorer: {}", over_explorer);
-                }
-            }
-            
             // Check if cursor is over any Explorer window (not just foreground)
             if !is_cursor_over_explorer() {
                 if last_file.is_some() {
@@ -509,10 +444,9 @@ pub fn run_explorer_hook() {
                 last_cursor_pos = cursor_pos;
                 
                 // When cursor moves, check immediately what file is under it
-                // If it's the same file, keep the preview; if different or none, handle accordingly
                 if let Some(file_path) = get_file_under_cursor() {
                     if last_file.as_ref() == Some(&file_path) {
-                        // Same file - keep preview, no need to reset timer
+                        // Same file - keep preview
                         continue;
                     } else {
                         // Different file - hide and start new hover timer
@@ -536,28 +470,8 @@ pub fn run_explorer_hook() {
                 if start.elapsed() >= hover_delay {
                     // Try to get file under cursor
                     if let Some(file_path) = get_file_under_cursor() {
-                        // Debug log
-                        if let Ok(mut logfile) = std::fs::OpenOptions::new()
-                            .create(true)
-                            .append(true)
-                            .open("C:\\temp\\hover_preview_debug.log")
-                        {
-                            use std::io::Write;
-                            let _ = writeln!(logfile, "Found file: {:?}, last_file: {:?}, match: {}", 
-                                file_path, last_file, last_file.as_ref() == Some(&file_path));
-                        }
-                        
                         if last_file.as_ref() != Some(&file_path) {
                             last_file = Some(file_path.clone());
-                            // Debug log - about to call show_preview
-                            if let Ok(mut logfile) = std::fs::OpenOptions::new()
-                                .create(true)
-                                .append(true)
-                                .open("C:\\temp\\hover_preview_debug.log")
-                            {
-                                use std::io::Write;
-                                let _ = writeln!(logfile, "Calling show_preview!");
-                            }
                             show_preview(&file_path, cursor_pos.x, cursor_pos.y);
                         }
                     } else {

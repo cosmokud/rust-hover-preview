@@ -44,38 +44,9 @@ struct ImageData {
 }
 
 pub fn show_preview(path: &PathBuf, x: i32, y: i32) {
-    // Debug log
-    if let Ok(mut file) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open("C:\\temp\\hover_preview_debug.log")
-    {
-        use std::io::Write;
-        let _ = writeln!(file, "show_preview called: {:?}, x={}, y={}", path, x, y);
-    }
-    
     if let Ok(sender) = PREVIEW_SENDER.lock() {
         if let Some(ref tx) = *sender {
-            let result = tx.send(PreviewMessage::Show(path.clone(), x, y));
-            // Debug log send result
-            if let Ok(mut file) = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open("C:\\temp\\hover_preview_debug.log")
-            {
-                use std::io::Write;
-                let _ = writeln!(file, "send result: {:?}", result);
-            }
-        } else {
-            // Debug log - no sender
-            if let Ok(mut file) = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open("C:\\temp\\hover_preview_debug.log")
-            {
-                use std::io::Write;
-                let _ = writeln!(file, "ERROR: No sender available!");
-            }
+            let _ = tx.send(PreviewMessage::Show(path.clone(), x, y));
         }
     }
 }
@@ -262,16 +233,6 @@ pub fn run_preview_window() {
             while let Ok(preview_msg) = rx.try_recv() {
                 match preview_msg {
                     PreviewMessage::Show(path, x, y) => {
-                        // Debug log
-                        if let Ok(mut file) = std::fs::OpenOptions::new()
-                            .create(true)
-                            .append(true)
-                            .open("C:\\temp\\hover_preview_debug.log")
-                        {
-                            use std::io::Write;
-                            let _ = writeln!(file, "PreviewMessage::Show received for {:?}", path);
-                        }
-                        
                         // Get screen dimensions
                         let screen_width = GetSystemMetrics(SM_CXSCREEN);
                         let screen_height = GetSystemMetrics(SM_CYSCREEN);
@@ -401,7 +362,7 @@ pub fn run_preview_window() {
                 }
             }
 
-            std::thread::sleep(std::time::Duration::from_millis(16)); // ~60fps
+            std::thread::sleep(std::time::Duration::from_millis(8)); // ~120fps for responsive preview
         }
     }
 }
