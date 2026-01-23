@@ -33,10 +33,14 @@ impl AppConfig {
     }
 
     pub fn load() -> Self {
-        Self::config_path()
+        let config: Self = Self::config_path()
             .and_then(|path| fs::read_to_string(path).ok())
             .and_then(|content| serde_json::from_str(&content).ok())
-            .unwrap_or_default()
+            .unwrap_or_default();
+        
+        // Always save to ensure new fields are written to config file
+        config.save();
+        config
     }
 
     pub fn save(&self) {
