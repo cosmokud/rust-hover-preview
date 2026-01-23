@@ -10,6 +10,7 @@ pub struct AppConfig {
     pub preview_offset: i32,
     pub hover_delay_ms: u64,
     pub preview_enabled: bool,
+    pub follow_cursor: bool,
 }
 
 impl Default for AppConfig {
@@ -20,6 +21,7 @@ impl Default for AppConfig {
             preview_offset: 20,
             hover_delay_ms: 0,
             preview_enabled: true,
+            follow_cursor: false,
         }
     }
 }
