@@ -1,4 +1,4 @@
-use crate::RUNNING;
+use crate::{CONFIG, RUNNING};
 use image::GenericImageView;
 use once_cell::sync::Lazy;
 use std::path::PathBuf;
@@ -277,6 +277,9 @@ pub fn run_preview_window() {
                         let screen_height = GetSystemMetrics(SM_CYSCREEN);
                         let offset = 20; // Gap between cursor and preview
                         
+                        // Get config for positioning mode
+                        let follow_cursor = CONFIG.lock().map(|c| c.follow_cursor).unwrap_or(true);
+                        
                         // Get original image dimensions first
                         let orig_dims = match image::image_dimensions(&path) {
                             Ok(dims) => dims,
@@ -284,128 +287,108 @@ pub fn run_preview_window() {
                         };
                         let (orig_w, orig_h) = (orig_dims.0 as i32, orig_dims.1 as i32);
                         
-                        // Calculate available space in each quadrant (with offset from cursor)
-                        // Quadrant 0: Bottom-Right of cursor
-                        // Quadrant 1: Bottom-Left of cursor  
-                        // Quadrant 2: Top-Right of cursor
-                        // Quadrant 3: Top-Left of cursor
-                        let quadrants = [
-                            (screen_width - x - offset, screen_height - y - offset, x + offset, y + offset),      // BR: (avail_w, avail_h, pos_x, pos_y)
-                            (x - offset, screen_height - y - offset, 0, y + offset),                              // BL
-                            (screen_width - x - offset, y - offset, x + offset, 0),                               // TR
-                            (x - offset, y - offset, 0, 0),                                                        // TL
-                        ];
-                        
-                        // Find the best quadrant - the one where image can be shown largest
-                        let mut best_quadrant = 0;
-                        let mut best_scale: f32 = 0.0;
-                        
-                        for (i, &(avail_w, avail_h, _, _)) in quadrants.iter().enumerate() {
-                            if avail_w <= 0 || avail_h <= 0 {
+                        if follow_cursor {
+                            // Follow cursor mode: use 4 quadrants around cursor
+                            // Quadrant 0: Bottom-Right of cursor
+                            // Quadrant 1: Bottom-Left of cursor  
+                            // Quadrant 2: Top-Right of cursor
+                            // Quadrant 3: Top-Left of cursor
+                            let quadrants = [
+                                (screen_width - x - offset, screen_height - y - offset, x + offset, y + offset),      // BR
+                                (x - offset, screen_height - y - offset, 0, y + offset),                              // BL
+                                (screen_width - x - offset, y - offset, x + offset, 0),                               // TR
+                                (x - offset, y - offset, 0, 0),                                                        // TL
+                            ];
+                            
+                            // Find the best quadrant
+                            let mut best_quadrant = 0;
+                            let mut best_scale: f32 = 0.0;
+                            
+                            for (i, &(avail_w, avail_h, _, _)) in quadrants.iter().enumerate() {
+                                if avail_w <= 0 || avail_h <= 0 {
+                                    continue;
+                                }
+                                let scale_x = avail_w as f32 / orig_w as f32;
+                                let scale_y = avail_h as f32 / orig_h as f32;
+                                let scale = scale_x.min(scale_y).min(1.0);
+                                if scale > best_scale {
+                                    best_scale = scale;
+                                    best_quadrant = i;
+                                }
+                            }
+                            
+                            if best_scale <= 0.0 {
                                 continue;
                             }
                             
-                            // Calculate scale needed to fit in this quadrant
-                            let scale_x = avail_w as f32 / orig_w as f32;
-                            let scale_y = avail_h as f32 / orig_h as f32;
-                            let scale = scale_x.min(scale_y).min(1.0); // Don't upscale
+                            let (avail_w, avail_h, _, _) = quadrants[best_quadrant];
+                            let max_width = avail_w.max(1) as u32;
+                            let max_height = avail_h.max(1) as u32;
                             
-                            if scale > best_scale {
-                                best_scale = scale;
-                                best_quadrant = i;
+                            if let Some(img_data) = load_image(&path, max_width, max_height) {
+                                let img_width = img_data.width as i32;
+                                let img_height = img_data.height as i32;
+                                
+                                if let Ok(mut current) = CURRENT_IMAGE.lock() {
+                                    *current = Some(img_data);
+                                }
+                                
+                                let (pos_x, pos_y) = match best_quadrant {
+                                    0 => (x + offset, y + offset),
+                                    1 => (x - offset - img_width, y + offset),
+                                    2 => (x + offset, y - offset - img_height),
+                                    3 => (x - offset - img_width, y - offset - img_height),
+                                    _ => (x + offset, y + offset),
+                                };
+                                
+                                let _ = MoveWindow(hwnd, pos_x, pos_y, img_width, img_height, true);
+                                let _ = SetWindowPos(hwnd, HWND_TOPMOST, pos_x, pos_y, img_width, img_height, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+                                let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+                                let _ = InvalidateRect(hwnd, None, true);
                             }
-                        }
-                        
-                        // If no valid quadrant found, skip
-                        if best_scale <= 0.0 {
-                            continue;
-                        }
-                        
-                        let (avail_w, avail_h, base_x, base_y) = quadrants[best_quadrant];
-                        
-                        // Calculate final image size
-                        let max_width = avail_w.max(1) as u32;
-                        let max_height = avail_h.max(1) as u32;
-                        
-                        // Load and resize image to fit the chosen quadrant
-                        if let Some(img_data) = load_image(&path, max_width, max_height) {
-                            // Debug log
-                            if let Ok(mut file) = std::fs::OpenOptions::new()
-                                .create(true)
-                                .append(true)
-                                .open("C:\\temp\\hover_preview_debug.log")
-                            {
-                                use std::io::Write;
-                                let _ = writeln!(file, "Image loaded: {}x{}, quadrant: {}", img_data.width, img_data.height, best_quadrant);
-                            }
-                            
-                            let img_width = img_data.width as i32;
-                            let img_height = img_data.height as i32;
-
-                            // Store image data for painting
-                            if let Ok(mut current) = CURRENT_IMAGE.lock() {
-                                *current = Some(img_data);
-                            }
-
-                            // Calculate final position based on quadrant
-                            let (pos_x, pos_y) = match best_quadrant {
-                                0 => (x + offset, y + offset),                           // Bottom-Right
-                                1 => (x - offset - img_width, y + offset),               // Bottom-Left
-                                2 => (x + offset, y - offset - img_height),              // Top-Right
-                                3 => (x - offset - img_width, y - offset - img_height),  // Top-Left
-                                _ => (x + offset, y + offset),
-                            };
-
-                            // Move and resize window
-                            let move_result = MoveWindow(hwnd, pos_x, pos_y, img_width, img_height, true);
-
-                            // Debug log
-                            if let Ok(mut file) = std::fs::OpenOptions::new()
-                                .create(true)
-                                .append(true)
-                                .open("C:\\temp\\hover_preview_debug.log")
-                            {
-                                use std::io::Write;
-                                let _ = writeln!(file, "Window pos: ({}, {}), size: {}x{}, screen: {}x{}", 
-                                    pos_x, pos_y, img_width, img_height, screen_width, screen_height);
-                                let _ = writeln!(file, "MoveWindow result: {:?}", move_result);
-                            }
-
-                            // Show window without activating
-                            let setpos_result = SetWindowPos(
-                                hwnd,
-                                HWND_TOPMOST,
-                                pos_x,
-                                pos_y,
-                                img_width,
-                                img_height,
-                                SWP_NOACTIVATE | SWP_SHOWWINDOW,
-                            );
-
-                            let show_result = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
-
-                            // Debug log
-                            if let Ok(mut file) = std::fs::OpenOptions::new()
-                                .create(true)
-                                .append(true)
-                                .open("C:\\temp\\hover_preview_debug.log")
-                            {
-                                use std::io::Write;
-                                let _ = writeln!(file, "SetWindowPos result: {:?}, ShowWindow result: {:?}", 
-                                    setpos_result, show_result);
-                            }
-
-                            // Trigger repaint
-                            let _ = InvalidateRect(hwnd, None, true);
                         } else {
-                            // Debug log - image load failed
-                            if let Ok(mut file) = std::fs::OpenOptions::new()
-                                .create(true)
-                                .append(true)
-                                .open("C:\\temp\\hover_preview_debug.log")
-                            {
-                                use std::io::Write;
-                                let _ = writeln!(file, "ERROR: load_image returned None!");
+                            // Best spot mode: choose left or right side of cursor for maximum size
+                            let left_width = x - offset;
+                            let right_width = screen_width - x - offset;
+                            let full_height = screen_height;
+                            
+                            // Calculate which side can show the image larger
+                            let left_scale_x = left_width as f32 / orig_w as f32;
+                            let left_scale_y = full_height as f32 / orig_h as f32;
+                            let left_scale = left_scale_x.min(left_scale_y).min(1.0);
+                            
+                            let right_scale_x = right_width as f32 / orig_w as f32;
+                            let right_scale_y = full_height as f32 / orig_h as f32;
+                            let right_scale = right_scale_x.min(right_scale_y).min(1.0);
+                            
+                            let (use_left, max_width, max_height) = if left_scale > right_scale && left_width > 0 {
+                                (true, left_width.max(1) as u32, full_height as u32)
+                            } else if right_width > 0 {
+                                (false, right_width.max(1) as u32, full_height as u32)
+                            } else {
+                                continue;
+                            };
+                            
+                            if let Some(img_data) = load_image(&path, max_width, max_height) {
+                                let img_width = img_data.width as i32;
+                                let img_height = img_data.height as i32;
+                                
+                                if let Ok(mut current) = CURRENT_IMAGE.lock() {
+                                    *current = Some(img_data);
+                                }
+                                
+                                // Position: center vertically, left or right side
+                                let pos_x = if use_left {
+                                    x - offset - img_width
+                                } else {
+                                    x + offset
+                                };
+                                let pos_y = (screen_height - img_height) / 2; // Center vertically
+                                
+                                let _ = MoveWindow(hwnd, pos_x, pos_y, img_width, img_height, true);
+                                let _ = SetWindowPos(hwnd, HWND_TOPMOST, pos_x, pos_y, img_width, img_height, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+                                let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+                                let _ = InvalidateRect(hwnd, None, true);
                             }
                         }
                     }
