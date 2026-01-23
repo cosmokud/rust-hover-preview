@@ -237,45 +237,12 @@ fn get_item_name_under_cursor() -> Option<String> {
     None
 }
 
-/// Try to find an image file under the cursor
-fn get_file_under_cursor() -> Option<PathBuf> {
-    // Get the current Explorer folder
-    let folder = get_current_explorer_folder();
-    
-    // Get the item name under cursor
-    let item_name = get_item_name_under_cursor();
-
-    // Debug logging to a file
-    if let Ok(mut file) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open("C:\\temp\\hover_preview_debug.log")
-    {
-        use std::io::Write;
-        let _ = writeln!(file, "Folder: {:?}, Item: {:?}", folder, item_name);
-    }
-
-    let folder = folder?;
-    let item_name = item_name?;
-
-    // Try to construct the full path
-    // The item_name might be just the filename or include the extension
-    let folder_path = PathBuf::from(&folder);
+/// Try to find an image file in a specific folder by item name
+fn find_image_in_folder(folder: &str, item_name: &str) -> Option<PathBuf> {
+    let folder_path = PathBuf::from(folder);
 
     // First try: item_name as-is
-    let full_path = folder_path.join(&item_name);
-    
-    // Debug: log the full path attempt
-    if let Ok(mut file) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open("C:\\temp\\hover_preview_debug.log")
-    {
-        use std::io::Write;
-        let _ = writeln!(file, "Trying path: {:?}, exists: {}, is_image: {}", 
-            full_path, full_path.exists(), is_image_file(&full_path));
-    }
-    
+    let full_path = folder_path.join(item_name);
     if full_path.exists() && is_image_file(&full_path) {
         return Some(full_path);
     }
@@ -306,6 +273,54 @@ fn get_file_under_cursor() -> Option<PathBuf> {
                 }
             }
         }
+    }
+
+    None
+}
+
+/// Try to find an image file under the cursor
+fn get_file_under_cursor() -> Option<PathBuf> {
+    // Get the item name under cursor
+    let item_name = get_item_name_under_cursor()?;
+
+    // Get ALL Explorer folders (all windows and tabs)
+    let all_folders = get_all_explorer_folders();
+    
+    // Debug logging
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("C:\\temp\\hover_preview_debug.log")
+    {
+        use std::io::Write;
+        let _ = writeln!(file, "Item: {:?}, All folders: {:?}", item_name, all_folders.iter().map(|(_, f)| f).collect::<Vec<_>>());
+    }
+
+    // Try to find the file in ANY of the open Explorer folders
+    // This handles Windows 11 tabs where all tabs share the same HWND
+    for (_, folder) in &all_folders {
+        if let Some(path) = find_image_in_folder(folder, &item_name) {
+            // Debug: log the found path
+            if let Ok(mut file) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open("C:\\temp\\hover_preview_debug.log")
+            {
+                use std::io::Write;
+                let _ = writeln!(file, "Found image at: {:?}", path);
+            }
+            return Some(path);
+        }
+    }
+
+    // Debug: log if not found
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("C:\\temp\\hover_preview_debug.log")
+    {
+        use std::io::Write;
+        let _ = writeln!(file, "Image not found in any folder for item: {:?}", item_name);
     }
 
     None
