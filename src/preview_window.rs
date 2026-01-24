@@ -41,6 +41,9 @@ pub static PREVIEW_SENDER: Lazy<Mutex<Option<Sender<PreviewMessage>>>> =
 // Use AtomicIsize for the HWND pointer (thread-safe)
 static PREVIEW_HWND: AtomicIsize = AtomicIsize::new(0);
 
+// Track the ffplay video window HWND for cursor-over-preview detection
+static VIDEO_HWND: AtomicIsize = AtomicIsize::new(0);
+
 static CURRENT_MEDIA: Lazy<Mutex<Option<MediaData>>> = Lazy::new(|| Mutex::new(None));
 
 pub enum PreviewMessage {
@@ -115,6 +118,40 @@ pub fn hide_preview() {
         if let Some(ref tx) = *sender {
             let _ = tx.send(PreviewMessage::Hide);
         }
+    }
+}
+
+/// Check if cursor is currently over any preview window (image or video)
+pub fn is_cursor_over_preview() -> bool {
+    unsafe {
+        use windows::Win32::Foundation::POINT;
+        use windows::Win32::UI::WindowsAndMessaging::{GetCursorPos, WindowFromPoint};
+        
+        let mut cursor_pos = POINT::default();
+        if GetCursorPos(&mut cursor_pos).is_err() {
+            return false;
+        }
+        
+        let hwnd_under_cursor = WindowFromPoint(cursor_pos);
+        if hwnd_under_cursor.is_invalid() {
+            return false;
+        }
+        
+        let hwnd_ptr = hwnd_under_cursor.0 as isize;
+        
+        // Check image preview window
+        let preview_hwnd = PREVIEW_HWND.load(Ordering::SeqCst);
+        if preview_hwnd != 0 && hwnd_ptr == preview_hwnd {
+            return true;
+        }
+        
+        // Check video preview window (ffplay)
+        let video_hwnd = VIDEO_HWND.load(Ordering::SeqCst);
+        if video_hwnd != 0 && hwnd_ptr == video_hwnd {
+            return true;
+        }
+        
+        false
     }
 }
 
@@ -445,6 +482,9 @@ unsafe fn try_apply_noactivate_style(pid: u32) -> bool {
     );
     
     if !data.found_hwnd.is_invalid() {
+        // Store the video window HWND for cursor-over-preview detection
+        VIDEO_HWND.store(data.found_hwnd.0 as isize, Ordering::SeqCst);
+        
         // Found the window, add WS_EX_NOACTIVATE to its extended style
         let current_style = GetWindowLongPtrW(data.found_hwnd, GWL_EXSTYLE);
         let new_style = current_style | WS_EX_NOACTIVATE.0 as isize | WS_EX_TOOLWINDOW.0 as isize;
@@ -552,6 +592,8 @@ fn stop_video_playback(media: &mut MediaData) {
         let _ = process.wait();
     }
     media.video_process = None;
+    // Clear the video window HWND
+    VIDEO_HWND.store(0, Ordering::SeqCst);
 }
 
 /// Load media (image, animated image, or video) with appropriate loader

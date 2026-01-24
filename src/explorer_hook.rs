@@ -1,4 +1,4 @@
-use crate::preview_window::{hide_preview, show_preview};
+use crate::preview_window::{hide_preview, is_cursor_over_preview, show_preview};
 use crate::{CONFIG, RUNNING};
 use std::ffi::OsString;
 use std::os::windows::ffi::OsStringExt;
@@ -651,6 +651,17 @@ pub fn run_explorer_hook() {
 
         // Explorer is active - use faster polling
         std::thread::sleep(Duration::from_millis(ACTIVE_POLL_MS));
+
+        // Check if cursor is over the preview window itself - if so, hide it
+        // This applies to both image and video previews
+        if is_cursor_over_preview() {
+            if last_file.is_some() {
+                hide_preview();
+                last_file = None;
+                hover_start = None;
+            }
+            continue;
+        }
 
         unsafe {
             // Get cursor position
