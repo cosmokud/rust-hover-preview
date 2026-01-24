@@ -4,6 +4,7 @@ use std::ffi::OsString;
 use std::os::windows::ffi::OsStringExt;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
+use std::time::{Duration, Instant};
 use windows::core::{Interface, VARIANT};
 use windows::Win32::Foundation::{HWND, POINT, SHANDLE_PTR};
 use windows::Win32::System::Com::{
@@ -312,8 +313,20 @@ fn get_file_under_cursor() -> Option<PathBuf> {
     None
 }
 
+/// Quick check if foreground window is Explorer (cheap, no COM)
+fn is_foreground_explorer() -> bool {
+    unsafe {
+        let foreground = GetForegroundWindow();
+        if foreground.is_invalid() {
+            return false;
+        }
+        is_explorer_window(foreground)
+    }
+}
+
 /// Check if cursor is currently over an Explorer window (regardless of foreground)
-fn is_cursor_over_explorer() -> bool {
+/// This is the expensive check that uses COM
+fn is_cursor_over_explorer_full() -> bool {
     unsafe {
         let mut cursor_pos = POINT::default();
         if GetCursorPos(&mut cursor_pos).is_err() {
@@ -322,7 +335,7 @@ fn is_cursor_over_explorer() -> bool {
 
         // Get window under cursor
         let hwnd = WindowFromPoint(cursor_pos);
-        if hwnd.0.is_null() {
+        if hwnd.is_invalid() {
             return false;
         }
 
@@ -345,7 +358,7 @@ fn is_cursor_over_explorer() -> bool {
 
             // Get parent
             if let Ok(parent) = windows::Win32::UI::WindowsAndMessaging::GetParent(current_hwnd) {
-                if parent.0.is_null() || parent == current_hwnd {
+                if parent.is_invalid() || parent == current_hwnd {
                     break;
                 }
                 current_hwnd = parent;
@@ -411,13 +424,19 @@ pub fn run_explorer_hook() {
     }
 
     let mut last_file: Option<PathBuf> = None;
-    let mut hover_start: Option<std::time::Instant> = None;
+    let mut hover_start: Option<Instant> = None;
     let mut last_cursor_pos = POINT::default();
+    
+    // State for optimized polling
+    let mut explorer_active = false;
+    let mut last_explorer_check = Instant::now();
+    
+    // Polling intervals
+    const IDLE_POLL_MS: u64 = 200;     // When Explorer not in view - very low CPU
+    const ACTIVE_POLL_MS: u64 = 30;    // When Explorer is active - responsive
+    const EXPLORER_CHECK_INTERVAL_MS: u64 = 500; // How often to do full Explorer check when idle
 
     while RUNNING.load(Ordering::SeqCst) {
-        // Reduced sleep for faster response (30ms = ~33 checks/sec)
-        std::thread::sleep(std::time::Duration::from_millis(30));
-
         // Check if preview is enabled
         let (preview_enabled, hover_delay_ms) = CONFIG
             .lock()
@@ -430,23 +449,54 @@ pub fn run_explorer_hook() {
                 last_file = None;
                 hover_start = None;
             }
+            // Sleep longer when disabled
+            std::thread::sleep(Duration::from_millis(IDLE_POLL_MS));
             continue;
         }
         
-        let hover_delay = std::time::Duration::from_millis(hover_delay_ms);
+        let hover_delay = Duration::from_millis(hover_delay_ms);
+
+        // Determine if Explorer is active using tiered checks:
+        // 1. Quick check: Is foreground window Explorer? (very cheap)
+        // 2. Full check: Is cursor over any Explorer window? (expensive, done less frequently)
+        
+        let foreground_is_explorer = is_foreground_explorer();
+        
+        if foreground_is_explorer {
+            // Foreground is Explorer - definitely active
+            explorer_active = true;
+            last_explorer_check = Instant::now();
+        } else if explorer_active {
+            // Was active, but foreground changed - do a full check periodically
+            // to see if cursor is still over an Explorer window
+            if last_explorer_check.elapsed() > Duration::from_millis(EXPLORER_CHECK_INTERVAL_MS) {
+                explorer_active = is_cursor_over_explorer_full();
+                last_explorer_check = Instant::now();
+            }
+        } else {
+            // Not active - do periodic full check to detect when Explorer becomes visible
+            if last_explorer_check.elapsed() > Duration::from_millis(EXPLORER_CHECK_INTERVAL_MS) {
+                explorer_active = foreground_is_explorer || is_cursor_over_explorer_full();
+                last_explorer_check = Instant::now();
+            }
+        }
+
+        if !explorer_active {
+            // Explorer not in view - hide preview and sleep longer
+            if last_file.is_some() {
+                hide_preview();
+                last_file = None;
+                hover_start = None;
+            }
+            std::thread::sleep(Duration::from_millis(IDLE_POLL_MS));
+            continue;
+        }
+
+        // Explorer is active - use faster polling
+        std::thread::sleep(Duration::from_millis(ACTIVE_POLL_MS));
 
         unsafe {
-            // Check if cursor is over any Explorer window (not just foreground)
-            if !is_cursor_over_explorer() {
-                if last_file.is_some() {
-                    hide_preview();
-                    last_file = None;
-                    hover_start = None;
-                }
-                continue;
-            }
-
-            // Check cursor position
+            // Double-check cursor is over Explorer (quick window check)
             let mut cursor_pos = POINT::default();
             if GetCursorPos(&mut cursor_pos).is_err() {
                 continue;
@@ -468,7 +518,7 @@ pub fn run_explorer_hook() {
                         // Different file - hide and start new hover timer
                         hide_preview();
                         last_file = None;
-                        hover_start = Some(std::time::Instant::now());
+                        hover_start = Some(Instant::now());
                     }
                 } else {
                     // No file under cursor - hide preview
@@ -476,7 +526,7 @@ pub fn run_explorer_hook() {
                         hide_preview();
                         last_file = None;
                     }
-                    hover_start = Some(std::time::Instant::now());
+                    hover_start = Some(Instant::now());
                 }
                 continue;
             }
@@ -500,7 +550,7 @@ pub fn run_explorer_hook() {
                 }
             } else {
                 // Initialize hover_start if not moving
-                hover_start = Some(std::time::Instant::now());
+                hover_start = Some(Instant::now());
             }
         }
     }
