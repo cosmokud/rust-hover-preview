@@ -6,15 +6,15 @@ use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 use windows::core::{Interface, VARIANT};
-use windows::Win32::Foundation::{HWND, POINT, SHANDLE_PTR};
+use windows::Win32::Foundation::{HWND, POINT, RECT, SHANDLE_PTR};
 use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CLSCTX_ALL, COINIT_APARTMENTTHREADED,
 };
-use windows::Win32::UI::Shell::{
-    IShellWindows, ShellWindows,
-};
+use windows::Win32::UI::Shell::{IShellWindows, ShellWindows};
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetClassNameW, GetCursorPos, GetForegroundWindow, GetWindowThreadProcessId, WindowFromPoint,
+    GetClassNameW, GetCursorPos, GetForegroundWindow, GetWindowPlacement, GetWindowRect,
+    GetWindowThreadProcessId, IsIconic, IsWindowVisible, WindowFromPoint, WINDOWPLACEMENT,
+    SW_SHOWMAXIMIZED,
 };
 
 // Supported image extensions
@@ -324,6 +324,144 @@ fn is_foreground_explorer() -> bool {
     }
 }
 
+/// Check if a window is maximized
+fn is_window_maximized(hwnd: HWND) -> bool {
+    unsafe {
+        let mut placement = WINDOWPLACEMENT::default();
+        placement.length = std::mem::size_of::<WINDOWPLACEMENT>() as u32;
+        if GetWindowPlacement(hwnd, &mut placement).is_ok() {
+            return placement.showCmd == SW_SHOWMAXIMIZED.0 as u32;
+        }
+    }
+    false
+}
+
+/// Check if a window is fullscreen (covers entire screen)
+fn is_window_fullscreen(hwnd: HWND) -> bool {
+    unsafe {
+        let mut window_rect = RECT::default();
+        if GetWindowRect(hwnd, &mut window_rect).is_err() {
+            return false;
+        }
+        
+        // Get screen dimensions
+        let screen_width = windows::Win32::UI::WindowsAndMessaging::GetSystemMetrics(
+            windows::Win32::UI::WindowsAndMessaging::SM_CXSCREEN,
+        );
+        let screen_height = windows::Win32::UI::WindowsAndMessaging::GetSystemMetrics(
+            windows::Win32::UI::WindowsAndMessaging::SM_CYSCREEN,
+        );
+        
+        // Check if window covers entire screen (with small tolerance for borders)
+        let width = window_rect.right - window_rect.left;
+        let height = window_rect.bottom - window_rect.top;
+        
+        width >= screen_width && height >= screen_height
+    }
+}
+
+/// Check if foreground window is maximized or fullscreen AND is not Explorer
+/// Returns true if we should sleep (Explorer is hidden behind a maximized/fullscreen window)
+fn is_explorer_hidden_by_foreground() -> bool {
+    unsafe {
+        let foreground = GetForegroundWindow();
+        if foreground.is_invalid() {
+            return false;
+        }
+        
+        // If foreground IS Explorer, it's not hidden
+        if is_explorer_window(foreground) {
+            return false;
+        }
+        
+        // Check if foreground is maximized or fullscreen
+        is_window_maximized(foreground) || is_window_fullscreen(foreground)
+    }
+}
+
+/// Check if a window is minimized
+fn is_window_minimized(hwnd: HWND) -> bool {
+    unsafe { IsIconic(hwnd).as_bool() }
+}
+
+/// Get count of Explorer windows and count of visible (not minimized) ones
+/// Returns (total_count, visible_count)
+fn get_explorer_window_counts() -> (usize, usize) {
+    unsafe {
+        let mut total = 0;
+        let mut visible = 0;
+        
+        if let Ok(shell_windows) =
+            CoCreateInstance::<_, IShellWindows>(&ShellWindows, None, CLSCTX_ALL)
+        {
+            if let Ok(count) = shell_windows.Count() {
+                for i in 0..count {
+                    let variant = VARIANT::from(i);
+                    if let Ok(disp) = shell_windows.Item(&variant) {
+                        if let Ok(browser) =
+                            disp.cast::<windows::Win32::UI::Shell::IWebBrowser2>()
+                        {
+                            if let Ok(browser_hwnd) = browser.HWND() {
+                                let hwnd = HWND(browser_hwnd.0 as *mut _);
+                                total += 1;
+                                
+                                // Check if window is visible and not minimized
+                                if IsWindowVisible(hwnd).as_bool() && !is_window_minimized(hwnd) {
+                                    visible += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        (total, visible)
+    }
+}
+
+/// Enum representing the state of Explorer windows for CPU optimization
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum ExplorerState {
+    /// No Explorer windows open at all - longest sleep
+    NoExplorerWindows,
+    /// All Explorer windows are minimized - long sleep
+    AllMinimized,
+    /// A non-Explorer window is maximized/fullscreen, hiding Explorer - long sleep
+    HiddenByForeground,
+    /// Explorer is visible but not in focus - medium sleep
+    VisibleNotFocused,
+    /// Explorer is in focus and cursor might be over it - active polling
+    ActiveFocus,
+}
+
+/// Determine the current state of Explorer for CPU optimization
+fn get_explorer_state() -> ExplorerState {
+    // Quick check: is foreground Explorer? (cheapest check)
+    if is_foreground_explorer() {
+        return ExplorerState::ActiveFocus;
+    }
+    
+    // Check if foreground is maximized/fullscreen (cheap check)
+    if is_explorer_hidden_by_foreground() {
+        return ExplorerState::HiddenByForeground;
+    }
+    
+    // Need to check Explorer window states (more expensive, uses COM)
+    let (total, visible) = get_explorer_window_counts();
+    
+    if total == 0 {
+        return ExplorerState::NoExplorerWindows;
+    }
+    
+    if visible == 0 {
+        return ExplorerState::AllMinimized;
+    }
+    
+    // Explorer windows exist and are visible, but not in foreground
+    ExplorerState::VisibleNotFocused
+}
+
 /// Check if cursor is currently over an Explorer window (regardless of foreground)
 /// This is the expensive check that uses COM
 fn is_cursor_over_explorer_full() -> bool {
@@ -428,13 +566,20 @@ pub fn run_explorer_hook() {
     let mut last_cursor_pos = POINT::default();
     
     // State for optimized polling
-    let mut explorer_active = false;
-    let mut last_explorer_check = Instant::now();
+    let mut last_state_check = Instant::now();
+    let mut current_state = ExplorerState::NoExplorerWindows;
     
-    // Polling intervals
-    const IDLE_POLL_MS: u64 = 200;     // When Explorer not in view - very low CPU
-    const ACTIVE_POLL_MS: u64 = 30;    // When Explorer is active - responsive
-    const EXPLORER_CHECK_INTERVAL_MS: u64 = 500; // How often to do full Explorer check when idle
+    // Polling intervals based on state
+    const DEEP_SLEEP_MS: u64 = 1000;   // No Explorer windows - check once per second
+    const LONG_SLEEP_MS: u64 = 500;    // All minimized or hidden - check twice per second
+    const MEDIUM_SLEEP_MS: u64 = 150;  // Visible but not focused - moderate checking
+    const ACTIVE_POLL_MS: u64 = 30;    // Active focus - responsive polling
+    
+    // How often to re-evaluate the state when in sleep modes
+    const STATE_RECHECK_DEEP_MS: u64 = 2000;    // When no Explorer windows
+    const STATE_RECHECK_LONG_MS: u64 = 1000;    // When minimized/hidden
+    const STATE_RECHECK_MEDIUM_MS: u64 = 300;   // When visible but not focused
+    const STATE_RECHECK_ACTIVE_MS: u64 = 100;   // When active
 
     while RUNNING.load(Ordering::SeqCst) {
         // Check if preview is enabled
@@ -450,53 +595,65 @@ pub fn run_explorer_hook() {
                 hover_start = None;
             }
             // Sleep longer when disabled
-            std::thread::sleep(Duration::from_millis(IDLE_POLL_MS));
+            std::thread::sleep(Duration::from_millis(LONG_SLEEP_MS));
             continue;
         }
         
         let hover_delay = Duration::from_millis(hover_delay_ms);
 
-        // Determine if Explorer is active using tiered checks:
-        // 1. Quick check: Is foreground window Explorer? (very cheap)
-        // 2. Full check: Is cursor over any Explorer window? (expensive, done less frequently)
+        // Determine sleep duration and whether to recheck state based on current state
+        let (sleep_ms, state_recheck_ms) = match current_state {
+            ExplorerState::NoExplorerWindows => (DEEP_SLEEP_MS, STATE_RECHECK_DEEP_MS),
+            ExplorerState::AllMinimized => (LONG_SLEEP_MS, STATE_RECHECK_LONG_MS),
+            ExplorerState::HiddenByForeground => (LONG_SLEEP_MS, STATE_RECHECK_LONG_MS),
+            ExplorerState::VisibleNotFocused => (MEDIUM_SLEEP_MS, STATE_RECHECK_MEDIUM_MS),
+            ExplorerState::ActiveFocus => (ACTIVE_POLL_MS, STATE_RECHECK_ACTIVE_MS),
+        };
         
-        let foreground_is_explorer = is_foreground_explorer();
-        
-        if foreground_is_explorer {
-            // Foreground is Explorer - definitely active
-            explorer_active = true;
-            last_explorer_check = Instant::now();
-        } else if explorer_active {
-            // Was active, but foreground changed - do a full check periodically
-            // to see if cursor is still over an Explorer window
-            if last_explorer_check.elapsed() > Duration::from_millis(EXPLORER_CHECK_INTERVAL_MS) {
-                explorer_active = is_cursor_over_explorer_full();
-                last_explorer_check = Instant::now();
-            }
-        } else {
-            // Not active - do periodic full check to detect when Explorer becomes visible
-            if last_explorer_check.elapsed() > Duration::from_millis(EXPLORER_CHECK_INTERVAL_MS) {
-                explorer_active = foreground_is_explorer || is_cursor_over_explorer_full();
-                last_explorer_check = Instant::now();
-            }
+        // Periodically re-evaluate the state
+        if last_state_check.elapsed() > Duration::from_millis(state_recheck_ms) {
+            current_state = get_explorer_state();
+            last_state_check = Instant::now();
         }
-
-        if !explorer_active {
-            // Explorer not in view - hide preview and sleep longer
-            if last_file.is_some() {
-                hide_preview();
-                last_file = None;
-                hover_start = None;
+        
+        // If Explorer is not accessible, hide preview and sleep
+        match current_state {
+            ExplorerState::NoExplorerWindows 
+            | ExplorerState::AllMinimized 
+            | ExplorerState::HiddenByForeground => {
+                if last_file.is_some() {
+                    hide_preview();
+                    last_file = None;
+                    hover_start = None;
+                }
+                std::thread::sleep(Duration::from_millis(sleep_ms));
+                continue;
             }
-            std::thread::sleep(Duration::from_millis(IDLE_POLL_MS));
-            continue;
+            ExplorerState::VisibleNotFocused => {
+                // Explorer is visible but not focused - do a quick cursor check
+                // Only activate full polling if cursor is actually over Explorer
+                if !is_cursor_over_explorer_full() {
+                    if last_file.is_some() {
+                        hide_preview();
+                        last_file = None;
+                        hover_start = None;
+                    }
+                    std::thread::sleep(Duration::from_millis(sleep_ms));
+                    continue;
+                }
+                // Cursor is over Explorer, switch to active state
+                current_state = ExplorerState::ActiveFocus;
+            }
+            ExplorerState::ActiveFocus => {
+                // Continue with active polling below
+            }
         }
 
         // Explorer is active - use faster polling
         std::thread::sleep(Duration::from_millis(ACTIVE_POLL_MS));
 
         unsafe {
-            // Double-check cursor is over Explorer (quick window check)
+            // Get cursor position
             let mut cursor_pos = POINT::default();
             if GetCursorPos(&mut cursor_pos).is_err() {
                 continue;
