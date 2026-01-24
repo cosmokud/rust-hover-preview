@@ -5,6 +5,7 @@ use image::{AnimationDecoder, GenericImageView, ImageDecoder};
 use once_cell::sync::Lazy;
 use std::fs::File;
 use std::io::BufReader;
+use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicIsize, Ordering};
@@ -376,6 +377,9 @@ fn load_video_thumbnail(path: &PathBuf, max_width: u32, max_height: u32) -> Opti
     })
 }
 
+// Windows constant for hiding console window
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
 /// Get video dimensions using ffprobe
 fn get_video_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
     let output = Command::new("ffprobe")
@@ -392,6 +396,7 @@ fn get_video_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
         .arg(path)
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
+        .creation_flags(CREATE_NO_WINDOW)  // Hide the console window
         .output()
         .ok()?;
 
@@ -430,6 +435,7 @@ fn start_video_playback(path: &PathBuf, x: i32, y: i32, width: i32, height: i32)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
+        .creation_flags(CREATE_NO_WINDOW)  // Hide the console window
         .spawn()
         .ok()
 }
