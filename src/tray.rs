@@ -25,6 +25,8 @@ const ID_TRAY_VOLUME_MEDIUM: u16 = 1012;   // 50%
 const ID_TRAY_VOLUME_LOW: u16 = 1013;      // 25%
 const ID_TRAY_VOLUME_VERY_LOW: u16 = 1014; // 10%
 const ID_TRAY_VOLUME_MUTE: u16 = 1015;     // 0%
+const ID_TRAY_POSITION_FOLLOW: u16 = 1020; // Follow cursor
+const ID_TRAY_POSITION_BEST: u16 = 1021;   // Best position
 
 const TRAY_CLASS: PCWSTR = w!("RustHoverPreviewTrayClass");
 
@@ -63,6 +65,8 @@ unsafe extern "system" fn tray_window_proc(
                 ID_TRAY_VOLUME_LOW => set_volume(25),
                 ID_TRAY_VOLUME_VERY_LOW => set_volume(10),
                 ID_TRAY_VOLUME_MUTE => set_volume(0),
+                ID_TRAY_POSITION_FOLLOW => set_follow_cursor(true),
+                ID_TRAY_POSITION_BEST => set_follow_cursor(false),
                 _ => {}
             }
             LRESULT(0)
@@ -97,6 +101,16 @@ unsafe fn show_context_menu(hwnd: HWND) {
     let _ = AppendMenuW(volume_menu, vol_flag(0), ID_TRAY_VOLUME_MUTE as usize, w!("Mute (0%)"));
     
     let _ = AppendMenuW(menu, MF_STRING | MF_POPUP, volume_menu.0 as usize, w!("Video Volume"));
+
+    // Add Cursor Position submenu
+    let follow_cursor = CONFIG.lock().map(|c| c.follow_cursor).unwrap_or(false);
+    let position_menu = CreatePopupMenu().unwrap();
+    
+    let pos_flag = |follow: bool| MF_STRING | if follow_cursor == follow { MF_CHECKED } else { MF_UNCHECKED };
+    let _ = AppendMenuW(position_menu, pos_flag(true), ID_TRAY_POSITION_FOLLOW as usize, w!("Follow Cursor"));
+    let _ = AppendMenuW(position_menu, pos_flag(false), ID_TRAY_POSITION_BEST as usize, w!("Best Position"));
+    
+    let _ = AppendMenuW(menu, MF_STRING | MF_POPUP, position_menu.0 as usize, w!("Preview Position"));
 
     // Add "Run at Startup" with checkmark
     let startup_enabled = CONFIG.lock().map(|c| c.run_at_startup).unwrap_or(false);
@@ -138,6 +152,13 @@ fn toggle_preview_enabled() {
 fn set_volume(volume: u32) {
     if let Ok(mut config) = CONFIG.lock() {
         config.video_volume = volume;
+        config.save();
+    }
+}
+
+fn set_follow_cursor(follow: bool) {
+    if let Ok(mut config) = CONFIG.lock() {
+        config.follow_cursor = follow;
         config.save();
     }
 }
