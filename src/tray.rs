@@ -10,7 +10,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DispatchMessageW,
     GetCursorPos, LoadImageW, PeekMessageW, PostQuitMessage, RegisterClassExW, SetForegroundWindow,
     TrackPopupMenu, TranslateMessage, CS_HREDRAW, CS_VREDRAW, HICON, IMAGE_ICON,
-    LR_DEFAULTSIZE, LR_SHARED, MF_CHECKED, MF_STRING, MF_UNCHECKED, MSG, PM_REMOVE, TPM_BOTTOMALIGN,
+    LR_DEFAULTSIZE, LR_LOADFROMFILE, LR_SHARED, MF_CHECKED, MF_STRING, MF_UNCHECKED, MSG, PM_REMOVE, TPM_BOTTOMALIGN,
     TPM_LEFTALIGN, WM_COMMAND, WM_DESTROY, WM_LBUTTONUP, WM_RBUTTONUP, WM_USER, WNDCLASSEXW,
     WS_EX_TOOLWINDOW, WS_POPUP,
 };
@@ -110,19 +110,53 @@ fn toggle_preview_enabled() {
 }
 
 unsafe fn add_tray_icon(hwnd: HWND) -> bool {
-    // Load a system icon (IDI_APPLICATION = 32512)
-    let hicon = LoadImageW(
-        None,
-        PCWSTR(32512 as *const u16), // IDI_APPLICATION
-        IMAGE_ICON,
-        0,
-        0,
-        LR_DEFAULTSIZE | LR_SHARED,
-    );
-
-    let hicon = match hicon {
-        Ok(h) => HICON(h.0),
-        Err(_) => HICON::default(),
+    // Try to load custom icon from assets/icon.ico next to the executable
+    let hicon = if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(exe_dir) = exe_path.parent() {
+            let icon_path = exe_dir.join("assets").join("icon.ico");
+            if icon_path.exists() {
+                let icon_path_str: Vec<u16> = icon_path.to_string_lossy()
+                    .encode_utf16()
+                    .chain(std::iter::once(0))
+                    .collect();
+                
+                if let Ok(h) = LoadImageW(
+                    None,
+                    PCWSTR(icon_path_str.as_ptr()),
+                    IMAGE_ICON,
+                    0,
+                    0,
+                    LR_LOADFROMFILE | LR_DEFAULTSIZE,
+                ) {
+                    HICON(h.0)
+                } else {
+                    HICON::default()
+                }
+            } else {
+                HICON::default()
+            }
+        } else {
+            HICON::default()
+        }
+    } else {
+        HICON::default()
+    };
+    
+    // Fallback to system icon if custom icon failed
+    let hicon = if hicon.0.is_null() {
+        match LoadImageW(
+            None,
+            PCWSTR(32512 as *const u16), // IDI_APPLICATION
+            IMAGE_ICON,
+            0,
+            0,
+            LR_DEFAULTSIZE | LR_SHARED,
+        ) {
+            Ok(h) => HICON(h.0),
+            Err(_) => HICON::default(),
+        }
+    } else {
+        hicon
     };
 
     let mut nid = NOTIFYICONDATAW {
