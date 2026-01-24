@@ -196,15 +196,62 @@ fn get_current_explorer_folder() -> Option<String> {
     None
 }
 
-/// Get the filename under cursor using accessibility - try multiple approaches
-fn get_item_name_under_cursor() -> Option<String> {
+/// Names that indicate container elements, not actual files
+const CONTAINER_NAMES: &[&str] = &[
+    "Items View", "Folder View", "Shell Folder View", "ShellView",
+    "UIItemsView", "DirectUIHWND", "Search Results", "File list",
+    "Name", "Date modified", "Type", "Size", "Date", "Date created",
+    "Details", "List", "Content", "Tiles", "Large icons", "Medium icons",
+    "Small icons", "Extra large icons", "Item", "Group", "Header",
+];
+
+/// Patterns that suggest a value might be a folder path rather than a file
+const FOLDER_PATTERNS: &[&str] = &[
+    "search-ms:", "shell:", "::{",
+];
+
+/// Check if a name is a container/UI element name rather than an actual file
+fn is_container_name(name: &str) -> bool {
+    if name.is_empty() {
+        return true;
+    }
+    CONTAINER_NAMES.iter().any(|&c| name.eq_ignore_ascii_case(c))
+}
+
+/// Check if a value looks like a valid file path (not a shell special path)
+fn is_valid_file_path(s: &str) -> bool {
+    if s.is_empty() {
+        return false;
+    }
+    // Skip shell special paths
+    for pattern in FOLDER_PATTERNS {
+        if s.to_lowercase().contains(pattern) {
+            return false;
+        }
+    }
+    // Check if it looks like a file path
+    let path = PathBuf::from(s);
+    path.is_absolute()
+}
+
+/// Result from accessibility query - can be a filename or a full path
+#[derive(Debug, Clone)]
+enum AccessibilityResult {
+    /// Just a filename (need to find in folder)
+    FileName(String),
+    /// Full path to file (from search results)
+    FullPath(PathBuf),
+}
+
+/// Get the filename or full path under cursor using accessibility - try multiple approaches
+fn get_item_under_cursor() -> Option<AccessibilityResult> {
     unsafe {
         let mut cursor_pos = POINT::default();
         if GetCursorPos(&mut cursor_pos).is_err() {
             return None;
         }
 
-        // Use accessibility to get the item name
+        // Use accessibility to get the item info
         let mut accessible: Option<windows::Win32::UI::Accessibility::IAccessible> = None;
         let mut child_variant = VARIANT::default();
 
@@ -216,41 +263,235 @@ fn get_item_name_under_cursor() -> Option<String> {
         .is_ok()
         {
             if let Some(ref acc) = accessible {
-                // Try with the child variant first
+                // First, try to get the value - this often contains the full path in search results
+                if let Ok(value) = acc.get_accValue(&child_variant) {
+                    let value_str = value.to_string();
+                    // Check if it's a valid full path (not shell:, search-ms:, etc.)
+                    if is_valid_file_path(&value_str) {
+                        let path = PathBuf::from(&value_str);
+                        if path.exists() && is_media_file(&path) {
+                            return Some(AccessibilityResult::FullPath(path));
+                        }
+                    }
+                }
+                
+                // Try with the child variant first for name
                 if let Ok(name) = acc.get_accName(&child_variant) {
                     let name_str = name.to_string();
-                    if !name_str.is_empty() && name_str != "Items View" && name_str != "Folder View" {
-                        return Some(name_str);
+                    if !is_container_name(&name_str) {
+                        // Check if the name itself is a full path (can happen in search)
+                        if is_valid_file_path(&name_str) {
+                            let path = PathBuf::from(&name_str);
+                            if path.exists() && is_media_file(&path) {
+                                return Some(AccessibilityResult::FullPath(path));
+                            }
+                        }
+                        return Some(AccessibilityResult::FileName(name_str));
                     }
                 }
                 
                 // Try with default variant
                 if let Ok(name) = acc.get_accName(&VARIANT::default()) {
                     let name_str = name.to_string();
-                    if !name_str.is_empty() && name_str != "Items View" && name_str != "Folder View" {
-                        return Some(name_str);
+                    if !is_container_name(&name_str) {
+                        // Check if the name itself is a full path
+                        if is_valid_file_path(&name_str) {
+                            let path = PathBuf::from(&name_str);
+                            if path.exists() && is_media_file(&path) {
+                                return Some(AccessibilityResult::FullPath(path));
+                            }
+                        }
+                        return Some(AccessibilityResult::FileName(name_str));
                     }
                 }
-
-                // Try get_accValue
-                if let Ok(value) = acc.get_accValue(&child_variant) {
-                    let value_str = value.to_string();
-                    if !value_str.is_empty() {
-                        return Some(value_str);
-                    }
+                
+                // Try navigating parent chain to find item name (for list/details views)
+                if let Some(result) = try_get_item_from_parent(acc, &child_variant) {
+                    return Some(result);
                 }
-
-                // Try getting help text which sometimes has the filename
+                
+                // Try getting help text which sometimes has info
                 if let Ok(help) = acc.get_accHelp(&child_variant) {
                     let help_str = help.to_string();
-                    if !help_str.is_empty() {
-                        return Some(help_str);
+                    if !help_str.is_empty() && !is_container_name(&help_str) {
+                        return Some(AccessibilityResult::FileName(help_str));
                     }
+                }
+                
+                // Try description which may have path info
+                if let Ok(desc) = acc.get_accDescription(&child_variant) {
+                    let desc_str = desc.to_string();
+                    // Check for path in description
+                    if is_valid_file_path(&desc_str) {
+                        let path = PathBuf::from(&desc_str);
+                        if path.exists() && is_media_file(&path) {
+                            return Some(AccessibilityResult::FullPath(path));
+                        }
+                    }
+                }
+                
+                // Try to walk up parent hierarchy more aggressively (for details view text cells)
+                if let Some(result) = try_deep_parent_search(acc) {
+                    return Some(result);
                 }
             }
         }
     }
 
+    None
+}
+
+/// Try to get item info by navigating the accessibility parent chain
+/// This helps with List/Details views where hovering over filename text doesn't directly give the name
+fn try_get_item_from_parent(
+    acc: &windows::Win32::UI::Accessibility::IAccessible,
+    _child_variant: &VARIANT,
+) -> Option<AccessibilityResult> {
+    unsafe {
+        // Try to get parent accessible object
+        if let Ok(parent_disp) = acc.accParent() {
+            if let Ok(parent_acc) = parent_disp.cast::<windows::Win32::UI::Accessibility::IAccessible>() {
+                // Try to get name from parent
+                if let Ok(name) = parent_acc.get_accName(&VARIANT::default()) {
+                    let name_str = name.to_string();
+                    if !is_container_name(&name_str) {
+                        return Some(AccessibilityResult::FileName(name_str));
+                    }
+                }
+                
+                // Try to get value (path) from parent
+                if let Ok(value) = parent_acc.get_accValue(&VARIANT::default()) {
+                    let value_str = value.to_string();
+                    if !value_str.is_empty() {
+                        let path = PathBuf::from(&value_str);
+                        if path.is_absolute() && path.exists() && is_media_file(&path) {
+                            return Some(AccessibilityResult::FullPath(path));
+                        }
+                    }
+                }
+                
+                // Try child enumeration to find focused/selected item
+                if let Some(result) = try_get_focused_child(&parent_acc) {
+                    return Some(result);
+                }
+            }
+        }
+        
+        // Try getting focused element within the accessible object
+        if let Ok(focus) = acc.accFocus() {
+            // If focus returns a variant with child ID
+            let vt = focus.as_raw().Anonymous.Anonymous.vt;
+            if vt == windows::Win32::System::Variant::VT_I4.0 {
+                if let Ok(name) = acc.get_accName(&focus) {
+                    let name_str = name.to_string();
+                    if !is_container_name(&name_str) {
+                        return Some(AccessibilityResult::FileName(name_str));
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Try to find focused/hot-tracked child in accessibility tree
+fn try_get_focused_child(
+    acc: &windows::Win32::UI::Accessibility::IAccessible,
+) -> Option<AccessibilityResult> {
+    unsafe {
+        // Get child count
+        if let Ok(count) = acc.accChildCount() {
+            // Limit iteration to prevent hanging
+            let max_check = (count as i32).min(100);
+            
+            for i in 1..=max_check {
+                let child_var = VARIANT::from(i);
+                
+                // Check state for focus/hot tracking
+                if let Ok(state) = acc.get_accState(&child_var) {
+                    let state_val = state.as_raw().Anonymous.Anonymous.Anonymous.uintVal;
+                    // STATE_SYSTEM_HOTTRACKED = 0x80, STATE_SYSTEM_FOCUSED = 0x4
+                    if (state_val & 0x80) != 0 || (state_val & 0x4) != 0 {
+                        if let Ok(name) = acc.get_accName(&child_var) {
+                            let name_str = name.to_string();
+                            if !is_container_name(&name_str) {
+                                return Some(AccessibilityResult::FileName(name_str));
+                            }
+                        }
+                        
+                        // Also try value for full path
+                        if let Ok(value) = acc.get_accValue(&child_var) {
+                            let value_str = value.to_string();
+                            if !value_str.is_empty() {
+                                let path = PathBuf::from(&value_str);
+                                if path.is_absolute() && path.exists() && is_media_file(&path) {
+                                    return Some(AccessibilityResult::FullPath(path));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Deep parent search - walk up the accessibility tree to find file information
+/// This is especially useful for Details/List views where clicking on a text cell
+/// gives us the cell, not the row/item
+fn try_deep_parent_search(
+    acc: &windows::Win32::UI::Accessibility::IAccessible,
+) -> Option<AccessibilityResult> {
+    unsafe {
+        let mut current_acc = acc.clone();
+        
+        // Walk up to 5 levels of parent hierarchy
+        for _ in 0..5 {
+            // Try to get parent
+            if let Ok(parent_disp) = current_acc.accParent() {
+                if let Ok(parent_acc) = parent_disp.cast::<windows::Win32::UI::Accessibility::IAccessible>() {
+                    // Try getting name from parent
+                    if let Ok(name) = parent_acc.get_accName(&VARIANT::default()) {
+                        let name_str = name.to_string();
+                        if !is_container_name(&name_str) {
+                            // Check if it's a full path
+                            if is_valid_file_path(&name_str) {
+                                let path = PathBuf::from(&name_str);
+                                if path.exists() && is_media_file(&path) {
+                                    return Some(AccessibilityResult::FullPath(path));
+                                }
+                            }
+                            // It's a filename
+                            return Some(AccessibilityResult::FileName(name_str));
+                        }
+                    }
+                    
+                    // Try getting value from parent (may contain path)
+                    if let Ok(value) = parent_acc.get_accValue(&VARIANT::default()) {
+                        let value_str = value.to_string();
+                        if is_valid_file_path(&value_str) {
+                            let path = PathBuf::from(&value_str);
+                            if path.exists() && is_media_file(&path) {
+                                return Some(AccessibilityResult::FullPath(path));
+                            }
+                        }
+                    }
+                    
+                    // Try to find selected/focused child of this parent
+                    if let Some(result) = try_get_focused_child(&parent_acc) {
+                        return Some(result);
+                    }
+                    
+                    current_acc = parent_acc;
+                } else {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+    }
     None
 }
 
@@ -297,20 +538,37 @@ fn find_media_in_folder(folder: &str, item_name: &str) -> Option<PathBuf> {
 
 /// Try to find an image or video file under the cursor
 fn get_file_under_cursor() -> Option<PathBuf> {
-    // Get the item name under cursor
-    let item_name = get_item_name_under_cursor()?;
+    // Get the item info under cursor
+    let item_info = get_item_under_cursor()?;
 
-    // Get ALL Explorer folders (all windows and tabs)
-    let all_folders = get_all_explorer_folders();
+    match item_info {
+        AccessibilityResult::FullPath(path) => {
+            // Already have full path (from search results), verify it's a media file
+            if is_media_file(&path) {
+                return Some(path);
+            }
+            None
+        }
+        AccessibilityResult::FileName(item_name) => {
+            // Get ALL Explorer folders (all windows and tabs)
+            let all_folders = get_all_explorer_folders();
 
-    // Try to find the file in ANY of the open Explorer folders
-    for (_, folder) in &all_folders {
-        if let Some(path) = find_media_in_folder(folder, &item_name) {
-            return Some(path);
+            // Try to find the file in ANY of the open Explorer folders
+            for (_, folder) in &all_folders {
+                if let Some(path) = find_media_in_folder(folder, &item_name) {
+                    return Some(path);
+                }
+            }
+            
+            // Also try treating item_name as a potential full path
+            let potential_path = PathBuf::from(&item_name);
+            if potential_path.is_absolute() && potential_path.exists() && is_media_file(&potential_path) {
+                return Some(potential_path);
+            }
+
+            None
         }
     }
-
-    None
 }
 
 /// Quick check if foreground window is Explorer (cheap, no COM)
