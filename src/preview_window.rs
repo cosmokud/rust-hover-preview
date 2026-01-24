@@ -20,11 +20,13 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DispatchMessageW, GetSystemMetrics, LoadCursorW, MoveWindow,
-    PeekMessageW, RegisterClassExW, SetLayeredWindowAttributes, SetWindowPos, ShowWindow,
-    TranslateMessage, CS_HREDRAW, CS_VREDRAW, HWND_TOPMOST, IDC_ARROW, LWA_ALPHA, MSG, PM_REMOVE,
-    SM_CXSCREEN, SM_CYSCREEN, SWP_NOACTIVATE, SWP_SHOWWINDOW, SW_HIDE, SW_SHOWNOACTIVATE,
-    WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    CreateWindowExW, DefWindowProcW, DispatchMessageW, EnumWindows, GetSystemMetrics,
+    GetWindowLongPtrW, GetWindowThreadProcessId, LoadCursorW, MoveWindow, PeekMessageW,
+    RegisterClassExW, SetLayeredWindowAttributes, SetWindowLongPtrW, SetWindowPos, ShowWindow,
+    TranslateMessage, CS_HREDRAW, CS_VREDRAW, GWL_EXSTYLE, HWND_TOPMOST, IDC_ARROW, LWA_ALPHA,
+    MSG, PM_REMOVE, SM_CXSCREEN, SM_CYSCREEN, SWP_NOACTIVATE, SWP_SHOWWINDOW, SW_HIDE,
+    SW_SHOWNOACTIVATE, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+    WS_EX_TOPMOST, WS_POPUP,
 };
 
 const PREVIEW_CLASS: PCWSTR = w!("RustHoverPreviewWindow");
@@ -410,6 +412,57 @@ fn get_video_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
     None
 }
 
+/// Data passed to the EnumWindows callback to find ffplay window
+struct EnumWindowsData {
+    target_pid: u32,
+    found_hwnd: HWND,
+}
+
+/// Callback for EnumWindows to find a window belonging to a specific process
+unsafe extern "system" fn enum_windows_callback(hwnd: HWND, lparam: LPARAM) -> windows::Win32::Foundation::BOOL {
+    let data = &mut *(lparam.0 as *mut EnumWindowsData);
+    let mut window_pid: u32 = 0;
+    GetWindowThreadProcessId(hwnd, Some(&mut window_pid));
+    
+    if window_pid == data.target_pid {
+        data.found_hwnd = hwnd;
+        return windows::Win32::Foundation::BOOL(0); // Stop enumeration
+    }
+    windows::Win32::Foundation::BOOL(1) // Continue enumeration
+}
+
+/// Set WS_EX_NOACTIVATE on a window belonging to the given process
+/// This prevents the window from stealing focus
+/// Spawns a background thread to avoid blocking the main preview loop
+fn set_noactivate_for_process(pid: u32) {
+    std::thread::spawn(move || {
+        unsafe {
+            let mut data = EnumWindowsData {
+                target_pid: pid,
+                found_hwnd: HWND::default(),
+            };
+            
+            // Try a few times with short delays since ffplay window may take a moment to appear
+            for _ in 0..20 {
+                let _ = EnumWindows(
+                    Some(enum_windows_callback),
+                    LPARAM(&mut data as *mut EnumWindowsData as isize),
+                );
+                
+                if !data.found_hwnd.is_invalid() {
+                    // Found the window, add WS_EX_NOACTIVATE to its extended style
+                    let current_style = GetWindowLongPtrW(data.found_hwnd, GWL_EXSTYLE);
+                    let new_style = current_style | WS_EX_NOACTIVATE.0 as isize | WS_EX_TOOLWINDOW.0 as isize;
+                    SetWindowLongPtrW(data.found_hwnd, GWL_EXSTYLE, new_style);
+                    return;
+                }
+                
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+    });
+}
+
 /// Start ffplay for video preview with configurable volume
 fn start_video_playback(path: &PathBuf, x: i32, y: i32, width: i32, height: i32) -> Option<Child> {
     // Get volume setting from config (0-100)
@@ -427,7 +480,7 @@ fn start_video_playback(path: &PathBuf, x: i32, y: i32, width: i32, height: i32)
         cmd.args(["-af", &volume_filter]);
     }
     
-    cmd.args([
+    let child = cmd.args([
             "-loop",
             "0",                   // Loop forever
             "-noborder",           // No window border
@@ -449,7 +502,15 @@ fn start_video_playback(path: &PathBuf, x: i32, y: i32, width: i32, height: i32)
         .stderr(Stdio::null())
         .creation_flags(CREATE_NO_WINDOW)  // Hide the console window
         .spawn()
-        .ok()
+        .ok();
+    
+    // After spawning, try to set WS_EX_NOACTIVATE on the ffplay window
+    // to prevent it from stealing focus
+    if let Some(ref child_process) = child {
+        set_noactivate_for_process(child_process.id());
+    }
+    
+    child
 }
 
 /// Stop video playback process
