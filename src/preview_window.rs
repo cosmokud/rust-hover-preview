@@ -89,8 +89,9 @@ fn load_image(path: &PathBuf, max_width: u32, max_height: u32) -> Option<ImageDa
     let new_width = (orig_width as f32 * scale) as u32;
     let new_height = (orig_height as f32 * scale) as u32;
 
-    // Resize image
-    let resized = img.resize(new_width, new_height, image::imageops::FilterType::Triangle);
+    // Resize image - use resize_exact to get exact dimensions we calculated
+    // (img.resize preserves aspect ratio and may return different dimensions)
+    let resized = img.resize_exact(new_width, new_height, image::imageops::FilterType::Triangle);
     let rgba = resized.to_rgba8();
 
     // Convert to BGRA for Windows
