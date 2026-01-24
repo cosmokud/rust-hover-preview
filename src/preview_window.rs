@@ -290,10 +290,6 @@ pub fn run_preview_window() {
                                 let img_width = img_data.width as i32;
                                 let img_height = img_data.height as i32;
                                 
-                                if let Ok(mut current) = CURRENT_IMAGE.lock() {
-                                    *current = Some(img_data);
-                                }
-                                
                                 let (pos_x, pos_y) = match best_quadrant {
                                     0 => (x + offset, y + offset),
                                     1 => (x - offset - img_width, y + offset),
@@ -302,8 +298,16 @@ pub fn run_preview_window() {
                                     _ => (x + offset, y + offset),
                                 };
                                 
-                                let _ = MoveWindow(hwnd, pos_x, pos_y, img_width, img_height, true);
+                                // IMPORTANT: Resize window BEFORE setting image data to prevent
+                                // race condition where WM_PAINT fires with old window size but new image
+                                let _ = MoveWindow(hwnd, pos_x, pos_y, img_width, img_height, false);
                                 let _ = SetWindowPos(hwnd, HWND_TOPMOST, pos_x, pos_y, img_width, img_height, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+                                
+                                // Now set the image data after window is properly sized
+                                if let Ok(mut current) = CURRENT_IMAGE.lock() {
+                                    *current = Some(img_data);
+                                }
+                                
                                 let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
                                 let _ = InvalidateRect(hwnd, None, true);
                             }
@@ -334,10 +338,6 @@ pub fn run_preview_window() {
                                 let img_width = img_data.width as i32;
                                 let img_height = img_data.height as i32;
                                 
-                                if let Ok(mut current) = CURRENT_IMAGE.lock() {
-                                    *current = Some(img_data);
-                                }
-                                
                                 // Position: center vertically, left or right side
                                 let pos_x = if use_left {
                                     x - offset - img_width
@@ -346,8 +346,16 @@ pub fn run_preview_window() {
                                 };
                                 let pos_y = (screen_height - img_height) / 2; // Center vertically
                                 
-                                let _ = MoveWindow(hwnd, pos_x, pos_y, img_width, img_height, true);
+                                // IMPORTANT: Resize window BEFORE setting image data to prevent
+                                // race condition where WM_PAINT fires with old window size but new image
+                                let _ = MoveWindow(hwnd, pos_x, pos_y, img_width, img_height, false);
                                 let _ = SetWindowPos(hwnd, HWND_TOPMOST, pos_x, pos_y, img_width, img_height, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+                                
+                                // Now set the image data after window is properly sized
+                                if let Ok(mut current) = CURRENT_IMAGE.lock() {
+                                    *current = Some(img_data);
+                                }
+                                
                                 let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
                                 let _ = InvalidateRect(hwnd, None, true);
                             }
