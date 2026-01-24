@@ -431,33 +431,65 @@ unsafe extern "system" fn enum_windows_callback(hwnd: HWND, lparam: LPARAM) -> w
     windows::Win32::Foundation::BOOL(1) // Continue enumeration
 }
 
+/// Apply WS_EX_NOACTIVATE style to a window
+/// Returns true if the window was found and modified
+unsafe fn try_apply_noactivate_style(pid: u32) -> bool {
+    let mut data = EnumWindowsData {
+        target_pid: pid,
+        found_hwnd: HWND::default(),
+    };
+    
+    let _ = EnumWindows(
+        Some(enum_windows_callback),
+        LPARAM(&mut data as *mut EnumWindowsData as isize),
+    );
+    
+    if !data.found_hwnd.is_invalid() {
+        // Found the window, add WS_EX_NOACTIVATE to its extended style
+        let current_style = GetWindowLongPtrW(data.found_hwnd, GWL_EXSTYLE);
+        let new_style = current_style | WS_EX_NOACTIVATE.0 as isize | WS_EX_TOOLWINDOW.0 as isize;
+        SetWindowLongPtrW(data.found_hwnd, GWL_EXSTYLE, new_style);
+        return true;
+    }
+    false
+}
+
 /// Set WS_EX_NOACTIVATE on a window belonging to the given process
 /// This prevents the window from stealing focus
-/// Spawns a background thread to avoid blocking the main preview loop
+/// Uses aggressive polling to minimize the race condition window
 fn set_noactivate_for_process(pid: u32) {
+    // First, do a few immediate synchronous checks with very tight timing
+    // This minimizes the window where focus can be stolen
+    unsafe {
+        for _ in 0..10 {
+            if try_apply_noactivate_style(pid) {
+                // Found and modified - but keep monitoring in case window is recreated
+                break;
+            }
+            // Very short spin-wait for the first attempts
+            std::thread::yield_now();
+        }
+    }
+    
+    // Continue monitoring in background thread for longer period
+    // The window might appear later or be recreated
     std::thread::spawn(move || {
         unsafe {
-            let mut data = EnumWindowsData {
-                target_pid: pid,
-                found_hwnd: HWND::default(),
-            };
-            
-            // Try a few times with short delays since ffplay window may take a moment to appear
-            for _ in 0..20 {
-                let _ = EnumWindows(
-                    Some(enum_windows_callback),
-                    LPARAM(&mut data as *mut EnumWindowsData as isize),
-                );
-                
-                if !data.found_hwnd.is_invalid() {
-                    // Found the window, add WS_EX_NOACTIVATE to its extended style
-                    let current_style = GetWindowLongPtrW(data.found_hwnd, GWL_EXSTYLE);
-                    let new_style = current_style | WS_EX_NOACTIVATE.0 as isize | WS_EX_TOOLWINDOW.0 as isize;
-                    SetWindowLongPtrW(data.found_hwnd, GWL_EXSTYLE, new_style);
+            // Keep checking and re-applying the style periodically
+            // This handles cases where the window appears late or style gets reset
+            for i in 0..100 {
+                if try_apply_noactivate_style(pid) {
+                    // Keep re-applying a few more times to ensure it sticks
+                    for _ in 0..5 {
+                        std::thread::sleep(Duration::from_millis(5));
+                        try_apply_noactivate_style(pid);
+                    }
                     return;
                 }
                 
-                std::thread::sleep(Duration::from_millis(10));
+                // Gradually increase delay as we wait longer
+                let delay = if i < 20 { 1 } else if i < 50 { 5 } else { 10 };
+                std::thread::sleep(Duration::from_millis(delay));
             }
         }
     });
