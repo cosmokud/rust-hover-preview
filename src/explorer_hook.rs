@@ -21,11 +21,27 @@ const IMAGE_EXTENSIONS: &[&str] = &[
     "jpg", "jpeg", "png", "gif", "bmp", "ico", "tiff", "tif", "webp",
 ];
 
+// Supported video extensions
+const VIDEO_EXTENSIONS: &[&str] = &[
+    "mp4", "webm", "mkv", "avi", "mov", "wmv", "flv", "m4v",
+];
+
 fn is_image_file(path: &PathBuf) -> bool {
     path.extension()
         .and_then(|ext| ext.to_str())
         .map(|ext| IMAGE_EXTENSIONS.contains(&ext.to_lowercase().as_str()))
         .unwrap_or(false)
+}
+
+fn is_video_file(path: &PathBuf) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| VIDEO_EXTENSIONS.contains(&ext.to_lowercase().as_str()))
+        .unwrap_or(false)
+}
+
+fn is_media_file(path: &PathBuf) -> bool {
+    is_image_file(path) || is_video_file(path)
 }
 
 /// Get current folder path from an Explorer window
@@ -237,13 +253,13 @@ fn get_item_name_under_cursor() -> Option<String> {
     None
 }
 
-/// Try to find an image file in a specific folder by item name
-fn find_image_in_folder(folder: &str, item_name: &str) -> Option<PathBuf> {
+/// Try to find an image or video file in a specific folder by item name
+fn find_media_in_folder(folder: &str, item_name: &str) -> Option<PathBuf> {
     let folder_path = PathBuf::from(folder);
 
     // First try: item_name as-is
     let full_path = folder_path.join(item_name);
-    if full_path.exists() && is_image_file(&full_path) {
+    if full_path.exists() && is_media_file(&full_path) {
         return Some(full_path);
     }
 
@@ -252,23 +268,23 @@ fn find_image_in_folder(folder: &str, item_name: &str) -> Option<PathBuf> {
         for entry in entries.flatten() {
             let path = entry.path();
             
-            // Check full filename match (e.g., "image.jpg")
+            // Check full filename match (e.g., "image.jpg" or "video.mp4")
             if let Some(file_name) = path.file_name().and_then(|s| s.to_str()) {
-                if file_name == item_name && is_image_file(&path) {
+                if file_name == item_name && is_media_file(&path) {
                     return Some(path);
                 }
             }
             
             // Check file stem match (e.g., "image" matches "image.jpg")
             if let Some(file_stem) = path.file_stem().and_then(|s| s.to_str()) {
-                if file_stem == item_name && is_image_file(&path) {
+                if file_stem == item_name && is_media_file(&path) {
                     return Some(path);
                 }
             }
             
             // Check case-insensitive match
             if let Some(file_name) = path.file_name().and_then(|s| s.to_str()) {
-                if file_name.to_lowercase() == item_name.to_lowercase() && is_image_file(&path) {
+                if file_name.to_lowercase() == item_name.to_lowercase() && is_media_file(&path) {
                     return Some(path);
                 }
             }
@@ -278,7 +294,7 @@ fn find_image_in_folder(folder: &str, item_name: &str) -> Option<PathBuf> {
     None
 }
 
-/// Try to find an image file under the cursor
+/// Try to find an image or video file under the cursor
 fn get_file_under_cursor() -> Option<PathBuf> {
     // Get the item name under cursor
     let item_name = get_item_name_under_cursor()?;
@@ -288,7 +304,7 @@ fn get_file_under_cursor() -> Option<PathBuf> {
 
     // Try to find the file in ANY of the open Explorer folders
     for (_, folder) in &all_folders {
-        if let Some(path) = find_image_in_folder(folder, &item_name) {
+        if let Some(path) = find_media_in_folder(folder, &item_name) {
             return Some(path);
         }
     }
