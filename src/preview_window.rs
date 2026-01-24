@@ -410,12 +410,24 @@ fn get_video_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
     None
 }
 
-/// Start ffplay for video preview (muted, looped)
+/// Start ffplay for video preview with configurable volume
 fn start_video_playback(path: &PathBuf, x: i32, y: i32, width: i32, height: i32) -> Option<Child> {
-    // Use ffplay for video playback - muted, borderless, positioned at preview location
-    Command::new("ffplay")
-        .args([
-            "-an",                  // No audio (muted)
+    // Get volume setting from config (0-100)
+    let volume = CONFIG.lock().map(|c| c.video_volume).unwrap_or(0);
+    
+    // Use ffplay for video playback - borderless, positioned at preview location
+    let mut cmd = Command::new("ffplay");
+    
+    // If volume is 0, disable audio completely for better performance
+    if volume == 0 {
+        cmd.arg("-an");
+    } else {
+        // Convert percentage to ffplay volume filter (0-100 maps to 0.0-1.0)
+        let volume_filter = format!("volume={:.2}", volume as f64 / 100.0);
+        cmd.args(["-af", &volume_filter]);
+    }
+    
+    cmd.args([
             "-loop",
             "0",                   // Loop forever
             "-noborder",           // No window border

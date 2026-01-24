@@ -10,7 +10,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DispatchMessageW,
     GetCursorPos, LoadImageW, PeekMessageW, PostQuitMessage, RegisterClassExW, SetForegroundWindow,
     TrackPopupMenu, TranslateMessage, CS_HREDRAW, CS_VREDRAW, HICON, IMAGE_ICON,
-    LR_DEFAULTSIZE, LR_LOADFROMFILE, LR_SHARED, MF_CHECKED, MF_STRING, MF_UNCHECKED, MSG, PM_REMOVE, TPM_BOTTOMALIGN,
+    LR_DEFAULTSIZE, LR_LOADFROMFILE, LR_SHARED, MF_CHECKED, MF_POPUP, MF_STRING, MF_UNCHECKED, MSG, PM_REMOVE, TPM_BOTTOMALIGN,
     TPM_LEFTALIGN, WM_COMMAND, WM_DESTROY, WM_LBUTTONUP, WM_RBUTTONUP, WM_USER, WNDCLASSEXW,
     WS_EX_TOOLWINDOW, WS_POPUP,
 };
@@ -19,6 +19,12 @@ const WM_TRAYICON: u32 = WM_USER + 1;
 const ID_TRAY_EXIT: u16 = 1001;
 const ID_TRAY_STARTUP: u16 = 1002;
 const ID_TRAY_ENABLE: u16 = 1003;
+const ID_TRAY_VOLUME_MAX: u16 = 1010;      // 100%
+const ID_TRAY_VOLUME_HIGH: u16 = 1011;     // 80%
+const ID_TRAY_VOLUME_MEDIUM: u16 = 1012;   // 50%
+const ID_TRAY_VOLUME_LOW: u16 = 1013;      // 25%
+const ID_TRAY_VOLUME_VERY_LOW: u16 = 1014; // 10%
+const ID_TRAY_VOLUME_MUTE: u16 = 1015;     // 0%
 
 const TRAY_CLASS: PCWSTR = w!("RustHoverPreviewTrayClass");
 
@@ -51,6 +57,12 @@ unsafe extern "system" fn tray_window_proc(
                 ID_TRAY_ENABLE => {
                     toggle_preview_enabled();
                 }
+                ID_TRAY_VOLUME_MAX => set_volume(100),
+                ID_TRAY_VOLUME_HIGH => set_volume(80),
+                ID_TRAY_VOLUME_MEDIUM => set_volume(50),
+                ID_TRAY_VOLUME_LOW => set_volume(25),
+                ID_TRAY_VOLUME_VERY_LOW => set_volume(10),
+                ID_TRAY_VOLUME_MUTE => set_volume(0),
                 _ => {}
             }
             LRESULT(0)
@@ -71,6 +83,20 @@ unsafe fn show_context_menu(hwnd: HWND) {
     let preview_enabled = CONFIG.lock().map(|c| c.preview_enabled).unwrap_or(true);
     let enable_flags = MF_STRING | if preview_enabled { MF_CHECKED } else { MF_UNCHECKED };
     let _ = AppendMenuW(menu, enable_flags, ID_TRAY_ENABLE as usize, w!("Enable Preview"));
+
+    // Add Volume submenu
+    let current_volume = CONFIG.lock().map(|c| c.video_volume).unwrap_or(0);
+    let volume_menu = CreatePopupMenu().unwrap();
+    
+    let vol_flag = |vol: u32| MF_STRING | if current_volume == vol { MF_CHECKED } else { MF_UNCHECKED };
+    let _ = AppendMenuW(volume_menu, vol_flag(100), ID_TRAY_VOLUME_MAX as usize, w!("Max (100%)"));
+    let _ = AppendMenuW(volume_menu, vol_flag(80), ID_TRAY_VOLUME_HIGH as usize, w!("High (80%)"));
+    let _ = AppendMenuW(volume_menu, vol_flag(50), ID_TRAY_VOLUME_MEDIUM as usize, w!("Medium (50%)"));
+    let _ = AppendMenuW(volume_menu, vol_flag(25), ID_TRAY_VOLUME_LOW as usize, w!("Low (25%)"));
+    let _ = AppendMenuW(volume_menu, vol_flag(10), ID_TRAY_VOLUME_VERY_LOW as usize, w!("Very Low (10%)"));
+    let _ = AppendMenuW(volume_menu, vol_flag(0), ID_TRAY_VOLUME_MUTE as usize, w!("Mute (0%)"));
+    
+    let _ = AppendMenuW(menu, MF_STRING | MF_POPUP, volume_menu.0 as usize, w!("Video Volume"));
 
     // Add "Run at Startup" with checkmark
     let startup_enabled = CONFIG.lock().map(|c| c.run_at_startup).unwrap_or(false);
@@ -105,6 +131,13 @@ fn toggle_startup() {
 fn toggle_preview_enabled() {
     if let Ok(mut config) = CONFIG.lock() {
         config.preview_enabled = !config.preview_enabled;
+        config.save();
+    }
+}
+
+fn set_volume(volume: u32) {
+    if let Ok(mut config) = CONFIG.lock() {
+        config.video_volume = volume;
         config.save();
     }
 }

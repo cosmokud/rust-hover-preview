@@ -11,6 +11,8 @@ pub struct AppConfig {
     pub hover_delay_ms: u64,
     pub preview_enabled: bool,
     pub follow_cursor: bool,
+    #[serde(default)]
+    pub video_volume: u32,
 }
 
 impl Default for AppConfig {
@@ -22,6 +24,7 @@ impl Default for AppConfig {
             hover_delay_ms: 0,
             preview_enabled: true,
             follow_cursor: false,
+            video_volume: 0, // Mute by default
         }
     }
 }
