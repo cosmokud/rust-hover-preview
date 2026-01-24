@@ -22,11 +22,17 @@ windows = { version = "0.58", features = [
     "Win32_UI_Accessibility",
     "Win32_System_Ole",
     "Win32_System_Variant",
+    "Win32_Media_MediaFoundation",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dxgi_Common",
     "implement",
 ]}
 
 # Image handling
 image = "0.25"
+
+# Animated GIF support
+gif = "0.13"
 
 # For async operations
 once_cell = "1.19"
