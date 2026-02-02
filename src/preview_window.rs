@@ -24,9 +24,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GetWindowLongPtrW, GetWindowThreadProcessId, LoadCursorW, MoveWindow, PeekMessageW,
     RegisterClassExW, SetLayeredWindowAttributes, SetWindowLongPtrW, SetWindowPos, ShowWindow,
     TranslateMessage, CS_HREDRAW, CS_VREDRAW, GWL_EXSTYLE, HWND_TOPMOST, IDC_ARROW, LWA_ALPHA,
-    MSG, PM_REMOVE, SM_CXSCREEN, SM_CYSCREEN, SWP_NOACTIVATE, SWP_SHOWWINDOW, SW_HIDE,
-    SW_SHOWNOACTIVATE, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
-    WS_EX_TOPMOST, WS_POPUP,
+    MSG, PM_REMOVE, SM_CXSCREEN, SM_CYSCREEN, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+    SWP_SHOWWINDOW, SW_HIDE, SW_SHOWNOACTIVATE, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
+    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
 const PREVIEW_CLASS: PCWSTR = w!("RustHoverPreviewWindow");
@@ -485,10 +485,24 @@ unsafe fn try_apply_noactivate_style(pid: u32) -> bool {
         // Store the video window HWND for cursor-over-preview detection
         VIDEO_HWND.store(data.found_hwnd.0 as isize, Ordering::SeqCst);
         
-        // Found the window, add WS_EX_NOACTIVATE to its extended style
+        // Found the window, add WS_EX_NOACTIVATE and WS_EX_TOPMOST to its extended style
         let current_style = GetWindowLongPtrW(data.found_hwnd, GWL_EXSTYLE);
-        let new_style = current_style | WS_EX_NOACTIVATE.0 as isize | WS_EX_TOOLWINDOW.0 as isize;
+        let new_style = current_style
+            | WS_EX_NOACTIVATE.0 as isize
+            | WS_EX_TOOLWINDOW.0 as isize
+            | WS_EX_TOPMOST.0 as isize;
         SetWindowLongPtrW(data.found_hwnd, GWL_EXSTYLE, new_style);
+
+        // Force the video preview window to topmost so it doesn't hide behind Explorer
+        let _ = SetWindowPos(
+            data.found_hwnd,
+            HWND_TOPMOST,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
+        );
         return true;
     }
     false
