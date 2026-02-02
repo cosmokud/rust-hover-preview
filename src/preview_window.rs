@@ -8,7 +8,7 @@ use std::io::BufReader;
 use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicIsize, Ordering};
+use std::sync::atomic::{AtomicIsize, AtomicU32, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -43,6 +43,8 @@ static PREVIEW_HWND: AtomicIsize = AtomicIsize::new(0);
 
 // Track the ffplay video window HWND for cursor-over-preview detection
 static VIDEO_HWND: AtomicIsize = AtomicIsize::new(0);
+// Track the ffplay process ID to re-find the window if needed
+static VIDEO_PID: AtomicU32 = AtomicU32::new(0);
 
 static CURRENT_MEDIA: Lazy<Mutex<Option<MediaData>>> = Lazy::new(|| Mutex::new(None));
 
@@ -526,23 +528,14 @@ fn set_noactivate_for_process(pid: u32) {
     }
     
     // Continue monitoring in background thread for longer period
-    // The window might appear later or be recreated
+    // The window might appear later, be recreated, or lose topmost
     std::thread::spawn(move || {
         unsafe {
-            // Keep checking and re-applying the style periodically
-            // This handles cases where the window appears late or style gets reset
-            for i in 0..100 {
-                if try_apply_noactivate_style(pid) {
-                    // Keep re-applying a few more times to ensure it sticks
-                    for _ in 0..5 {
-                        std::thread::sleep(Duration::from_millis(5));
-                        try_apply_noactivate_style(pid);
-                    }
-                    return;
-                }
-                
+            for i in 0..200 {
+                let _ = try_apply_noactivate_style(pid);
+
                 // Gradually increase delay as we wait longer
-                let delay = if i < 20 { 1 } else if i < 50 { 5 } else { 10 };
+                let delay = if i < 20 { 1 } else if i < 60 { 5 } else { 25 };
                 std::thread::sleep(Duration::from_millis(delay));
             }
         }
@@ -593,6 +586,7 @@ fn start_video_playback(path: &PathBuf, x: i32, y: i32, width: i32, height: i32)
     // After spawning, try to set WS_EX_NOACTIVATE on the ffplay window
     // to prevent it from stealing focus
     if let Some(ref child_process) = child {
+        VIDEO_PID.store(child_process.id(), Ordering::SeqCst);
         set_noactivate_for_process(child_process.id());
     }
     
@@ -608,6 +602,71 @@ fn stop_video_playback(media: &mut MediaData) {
     media.video_process = None;
     // Clear the video window HWND
     VIDEO_HWND.store(0, Ordering::SeqCst);
+    VIDEO_PID.store(0, Ordering::SeqCst);
+}
+
+/// Check if the current ffplay process is still running
+/// Clears stored state if the process has exited
+fn is_video_process_running() -> bool {
+    if let Ok(mut media_guard) = CURRENT_MEDIA.lock() {
+        if let Some(ref mut media) = *media_guard {
+            if let Some(ref mut process) = media.video_process {
+                match process.try_wait() {
+                    Ok(Some(_)) => {
+                        media.video_process = None;
+                        VIDEO_HWND.store(0, Ordering::SeqCst);
+                        return false;
+                    }
+                    Ok(None) => return true,
+                    Err(_) => {
+                        media.video_process = None;
+                        VIDEO_HWND.store(0, Ordering::SeqCst);
+                        return false;
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Ensure the ffplay window is topmost and positioned correctly
+fn ensure_video_window_topmost(x: i32, y: i32, width: i32, height: i32) -> bool {
+    let hwnd_val = VIDEO_HWND.load(Ordering::SeqCst);
+    let mut hwnd_val = hwnd_val;
+    if hwnd_val == 0 {
+        let pid = VIDEO_PID.load(Ordering::SeqCst);
+        if pid == 0 {
+            return false;
+        }
+
+        unsafe {
+            let _ = try_apply_noactivate_style(pid);
+        }
+        hwnd_val = VIDEO_HWND.load(Ordering::SeqCst);
+        if hwnd_val == 0 {
+            return false;
+        }
+    }
+
+    unsafe {
+        let hwnd = HWND(hwnd_val as *mut std::ffi::c_void);
+        if hwnd.is_invalid() {
+            return false;
+        }
+
+        let _ = SetWindowPos(
+            hwnd,
+            HWND_TOPMOST,
+            x,
+            y,
+            width,
+            height,
+            SWP_NOACTIVATE | SWP_SHOWWINDOW,
+        );
+    }
+
+    true
 }
 
 /// Load media (image, animated image, or video) with appropriate loader
@@ -865,8 +924,10 @@ pub fn run_preview_window() {
                                     // For video, hide our window and use ffplay
                                     let _ = ShowWindow(hwnd, SW_HIDE);
 
-                                    // Check if same video is already playing
-                                    let should_start = current_video_path.as_ref() != Some(&path);
+                                    // Check if same video is already playing and still alive
+                                    let process_running = is_video_process_running();
+                                    let should_start = current_video_path.as_ref() != Some(&path)
+                                        || !process_running;
 
                                     if should_start {
                                         // Stop any existing video
@@ -892,6 +953,19 @@ pub fn run_preview_window() {
                                         }
 
                                         current_video_path = Some(path.clone());
+                                        let _ = ensure_video_window_topmost(
+                                            pos_x,
+                                            pos_y,
+                                            media_width,
+                                            media_height,
+                                        );
+                                    } else {
+                                        let _ = ensure_video_window_topmost(
+                                            pos_x,
+                                            pos_y,
+                                            media_width,
+                                            media_height,
+                                        );
                                     }
                                 } else {
                                     // For images/animations, use our preview window
@@ -971,7 +1045,9 @@ pub fn run_preview_window() {
                                     // For video, hide our window and use ffplay
                                     let _ = ShowWindow(hwnd, SW_HIDE);
 
-                                    let should_start = current_video_path.as_ref() != Some(&path);
+                                    let process_running = is_video_process_running();
+                                    let should_start = current_video_path.as_ref() != Some(&path)
+                                        || !process_running;
 
                                     if should_start {
                                         if let Ok(mut media_guard) = CURRENT_MEDIA.lock() {
@@ -995,6 +1071,19 @@ pub fn run_preview_window() {
                                         }
 
                                         current_video_path = Some(path.clone());
+                                        let _ = ensure_video_window_topmost(
+                                            pos_x,
+                                            pos_y,
+                                            media_width,
+                                            media_height,
+                                        );
+                                    } else {
+                                        let _ = ensure_video_window_topmost(
+                                            pos_x,
+                                            pos_y,
+                                            media_width,
+                                            media_height,
+                                        );
                                     }
                                 } else {
                                     // For images/animations
