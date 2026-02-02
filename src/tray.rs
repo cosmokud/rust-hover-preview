@@ -1,7 +1,7 @@
 use crate::{startup, CONFIG, RUNNING};
 use std::sync::atomic::Ordering;
 use windows::core::{w, PCWSTR};
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Shell::{
     Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW,
@@ -10,7 +10,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DispatchMessageW,
     GetCursorPos, LoadImageW, PeekMessageW, PostQuitMessage, RegisterClassExW, SetForegroundWindow,
     TrackPopupMenu, TranslateMessage, CS_HREDRAW, CS_VREDRAW, HICON, IMAGE_ICON,
-    LR_DEFAULTSIZE, LR_LOADFROMFILE, LR_SHARED, MF_CHECKED, MF_POPUP, MF_STRING, MF_UNCHECKED, MSG, PM_REMOVE, TPM_BOTTOMALIGN,
+    LR_DEFAULTSIZE, LR_SHARED, MF_CHECKED, MF_POPUP, MF_STRING, MF_UNCHECKED, MSG, PM_REMOVE, TPM_BOTTOMALIGN,
     TPM_LEFTALIGN, WM_COMMAND, WM_DESTROY, WM_LBUTTONUP, WM_RBUTTONUP, WM_USER, WNDCLASSEXW,
     WS_EX_TOOLWINDOW, WS_POPUP,
 };
@@ -164,33 +164,19 @@ fn set_follow_cursor(follow: bool) {
 }
 
 unsafe fn add_tray_icon(hwnd: HWND) -> bool {
-    // Try to load custom icon from assets/icon.ico next to the executable
-    let hicon = if let Ok(exe_path) = std::env::current_exe() {
-        if let Some(exe_dir) = exe_path.parent() {
-            let icon_path = exe_dir.join("assets").join("icon.ico");
-            if icon_path.exists() {
-                let icon_path_str: Vec<u16> = icon_path.to_string_lossy()
-                    .encode_utf16()
-                    .chain(std::iter::once(0))
-                    .collect();
-                
-                if let Ok(h) = LoadImageW(
-                    None,
-                    PCWSTR(icon_path_str.as_ptr()),
-                    IMAGE_ICON,
-                    0,
-                    0,
-                    LR_LOADFROMFILE | LR_DEFAULTSIZE,
-                ) {
-                    HICON(h.0)
-                } else {
-                    HICON::default()
-                }
-            } else {
-                HICON::default()
-            }
-        } else {
-            HICON::default()
+    // Load the embedded icon resource (assets/icon.ico compiled via build.rs)
+    let hicon = if let Ok(hmodule) = GetModuleHandleW(None) {
+        let hinstance = HINSTANCE(hmodule.0);
+        match LoadImageW(
+            hinstance,
+            PCWSTR(1 as *const u16),
+            IMAGE_ICON,
+            0,
+            0,
+            LR_DEFAULTSIZE | LR_SHARED,
+        ) {
+            Ok(h) => HICON(h.0),
+            Err(_) => HICON::default(),
         }
     } else {
         HICON::default()
