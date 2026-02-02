@@ -1,30 +1,35 @@
 # Rust Hover Preview
 
-A Windows 11 system tray application that shows image previews when hovering over images in Windows Explorer.
+Windows 11 system tray application that shows image and video previews when hovering over files in Windows Explorer.
 
 ## Features
 
-- **Image Preview on Hover**: When you hover over an image file in Windows Explorer, a preview window appears at the bottom-right of your cursor position.
-- **System Tray Integration**: Runs quietly in the system tray with minimal resource usage.
-- **Run at Startup**: Toggle option to automatically start the application when Windows boots.
-- **Supported Formats**: JPG, JPEG, PNG, GIF, BMP, ICO, TIFF, TIF, WebP, SVG
+- **Image preview on hover** for common formats (JPG, JPEG, PNG, GIF, BMP, ICO, TIFF/TIF, WebP)
+- **Animated GIF** and **animated WebP** playback
+- **Video preview on hover** (MP4, WebM, MKV, AVI, MOV, WMV, FLV, M4V) using FFmpeg tools
+- **System tray controls** for enabling/disabling previews, startup, video volume, and preview position
+- **Configurable preview size, offset, and hover delay**
 
 ## System Tray Menu
 
 Right-click the system tray icon to access:
 
-- **Run at Startup**: Toggle to enable/disable automatic startup with Windows
+- **Enable Preview**: Toggle all previews on/off
+- **Video Volume**: Set preview volume from 0–100%
+- **Preview Position**: Follow Cursor or Best Position
+- **Run at Startup**: Toggle automatic startup with Windows
 - **Exit**: Close the application
 
-## Building
+## Requirements
 
-### Prerequisites
-
+- Windows 11
 - Rust toolchain (1.70+)
 - Windows 11 SDK
 - Visual Studio Build Tools (for Windows linking)
+- **Optional:** FFmpeg in PATH (for video previews)
+  - Required tools: `ffplay` and `ffprobe`
 
-### Build Commands
+## Building
 
 ```bash
 # Debug build
@@ -48,15 +53,6 @@ To add a custom application icon:
 3. Run the application
 4. (Optional) Enable "Run at Startup" from the system tray menu
 
-## How It Works
-
-The application uses several Windows APIs:
-
-- **UI Accessibility (MSAA)**: To detect what file the cursor is hovering over in Explorer
-- **Shell Windows API**: To interact with Windows Explorer windows
-- **GDI**: For rendering the image preview window
-- **Registry API**: For managing startup entries
-
 ## Configuration
 
 Settings are stored in:
@@ -65,13 +61,40 @@ Settings are stored in:
 %APPDATA%\RustHoverPreview\RustHoverPreview\config.json
 ```
 
-## Technical Notes
+Example configuration:
 
-- The preview window is a layered, topmost window that doesn't steal focus
-- Image loading is done using the `image` crate with automatic resizing
-- The application uses polling (50ms interval) to check cursor position
-- Preview appears after 300ms hover delay to avoid flickering
+```json
+{
+  "run_at_startup": false,
+  "preview_size": 300,
+  "preview_offset": 20,
+  "hover_delay_ms": 300,
+  "preview_enabled": true,
+  "follow_cursor": false,
+  "video_volume": 0
+}
+```
+
+- `preview_size`: Max width/height (in pixels) for previews
+- `preview_offset`: Gap between cursor and preview window (in pixels)
+- `hover_delay_ms`: Delay before showing preview (in milliseconds)
+
+## How It Works
+
+The application uses several Windows APIs:
+
+- **UI Accessibility (MSAA)** to detect the hovered item in Explorer
+- **Shell Windows API** to resolve active Explorer windows and folders
+- **GDI** for rendering image previews without stealing focus
+- **Registry API** for managing startup entries
+- **FFmpeg (ffplay/ffprobe)** for video preview playback and sizing
+
+## Notes
+
+- If FFmpeg is not installed or not in PATH, video previews are skipped.
+- The preview window is layered, topmost, and does not steal focus.
+- No telemetry is collected.
 
 ## License
 
-MIT License - See LICENSE file for details
+MIT License - See LICENSE for details
