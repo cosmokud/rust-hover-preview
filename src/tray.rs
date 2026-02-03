@@ -122,7 +122,7 @@ unsafe fn show_context_menu(hwnd: HWND) {
         delay_menu,
         delay_flag(200),
         ID_TRAY_DELAY_VERY_FAST as usize,
-        w!("Very Fast (200 ms)"),
+        w!("Fast (200 ms)"),
     );
     let _ = AppendMenuW(
         delay_menu,

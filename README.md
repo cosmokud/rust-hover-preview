@@ -15,7 +15,7 @@ Windows 11 system tray application that shows image and video previews when hove
 Right-click the system tray icon to access:
 
 - **Enable Preview**: Toggle all previews on/off
-- **Preview Delay**: Instant (0ms), Very Fast (200ms), Medium (500ms), Slow (1000ms)
+- **Preview Delay**: Instant (0 ms), Fast (200 ms), Medium (500 ms), Slow (1000 ms)
 - **Video Volume**: Set preview volume from 0–100%
 - **Preview Position**: Follow Cursor or Best Position
 - **Run at Startup**: Toggle automatic startup with Windows
