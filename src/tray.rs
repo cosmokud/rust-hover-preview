@@ -116,25 +116,25 @@ unsafe fn show_context_menu(hwnd: HWND) {
         delay_menu,
         delay_flag(0),
         ID_TRAY_DELAY_INSTANT as usize,
-        w!("Instant (0ms) (default)"),
+        w!("Instant (0 ms)"),
     );
     let _ = AppendMenuW(
         delay_menu,
         delay_flag(200),
         ID_TRAY_DELAY_VERY_FAST as usize,
-        w!("Very Fast (200ms)"),
+        w!("Very Fast (200 ms)"),
     );
     let _ = AppendMenuW(
         delay_menu,
         delay_flag(500),
         ID_TRAY_DELAY_MEDIUM as usize,
-        w!("Medium (500ms)"),
+        w!("Medium (500 ms)"),
     );
     let _ = AppendMenuW(
         delay_menu,
         delay_flag(1000),
         ID_TRAY_DELAY_SLOW as usize,
-        w!("Slow (1000ms)"),
+        w!("Slow (1000 ms)"),
     );
 
     let _ = AppendMenuW(menu, MF_STRING | MF_POPUP, delay_menu.0 as usize, w!("Preview Delay"));
