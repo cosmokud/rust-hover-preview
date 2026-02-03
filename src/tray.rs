@@ -1,18 +1,20 @@
 use crate::{startup, CONFIG, RUNNING};
+use std::os::windows::ffi::OsStrExt;
 use std::sync::atomic::Ordering;
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Shell::{
-    Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW,
+    Shell_NotifyIconW, ShellExecuteW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE,
+    NOTIFYICONDATAW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DispatchMessageW,
-    GetCursorPos, LoadImageW, PeekMessageW, PostQuitMessage, RegisterClassExW, SetForegroundWindow,
-    TrackPopupMenu, TranslateMessage, CS_HREDRAW, CS_VREDRAW, HICON, IMAGE_ICON,
-    LR_DEFAULTSIZE, LR_SHARED, MF_CHECKED, MF_POPUP, MF_STRING, MF_UNCHECKED, MSG, PM_REMOVE, TPM_BOTTOMALIGN,
-    TPM_LEFTALIGN, WM_COMMAND, WM_DESTROY, WM_LBUTTONUP, WM_RBUTTONUP, WM_USER, WNDCLASSEXW,
-    WS_EX_TOOLWINDOW, WS_POPUP,
+    GetCursorPos, LoadImageW, PeekMessageW, PostQuitMessage, RegisterClassExW, RegisterWindowMessageW,
+    SetForegroundWindow, TrackPopupMenu, TranslateMessage, CS_HREDRAW, CS_VREDRAW, HICON, IMAGE_ICON,
+    LR_DEFAULTSIZE, LR_SHARED, MF_CHECKED, MF_POPUP, MF_STRING, MF_UNCHECKED, MSG, PM_REMOVE,
+    SW_SHOWNORMAL, TPM_BOTTOMALIGN, TPM_LEFTALIGN, WM_COMMAND, WM_DESTROY, WM_LBUTTONUP, WM_RBUTTONUP,
+    WM_USER, WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_POPUP,
 };
 
 const WM_TRAYICON: u32 = WM_USER + 1;
@@ -27,10 +29,16 @@ const ID_TRAY_VOLUME_VERY_LOW: u16 = 1014; // 10%
 const ID_TRAY_VOLUME_MUTE: u16 = 1015;     // 0%
 const ID_TRAY_POSITION_FOLLOW: u16 = 1020; // Follow cursor
 const ID_TRAY_POSITION_BEST: u16 = 1021;   // Best position
+const ID_TRAY_DELAY_INSTANT: u16 = 1030;   // 0ms
+const ID_TRAY_DELAY_VERY_FAST: u16 = 1031; // 200ms
+const ID_TRAY_DELAY_MEDIUM: u16 = 1032;    // 500ms
+const ID_TRAY_DELAY_SLOW: u16 = 1033;      // 1000ms
+const ID_TRAY_OPEN_CONFIG: u16 = 1040;
 
 const TRAY_CLASS: PCWSTR = w!("RustHoverPreviewTrayClass");
 
 static mut TRAY_HWND: HWND = HWND(std::ptr::null_mut());
+static mut TASKBAR_CREATED: u32 = 0;
 
 unsafe extern "system" fn tray_window_proc(
     hwnd: HWND,
@@ -39,6 +47,12 @@ unsafe extern "system" fn tray_window_proc(
     lparam: LPARAM,
 ) -> LRESULT {
     match msg {
+        _ if TASKBAR_CREATED != 0 && msg == TASKBAR_CREATED => {
+            // Explorer (taskbar) restarted; re-add tray icon
+            remove_tray_icon(hwnd);
+            let _ = add_tray_icon(hwnd);
+            LRESULT(0)
+        }
         WM_TRAYICON => {
             let event = lparam.0 as u32;
             if event == WM_RBUTTONUP || event == WM_LBUTTONUP {
@@ -67,6 +81,11 @@ unsafe extern "system" fn tray_window_proc(
                 ID_TRAY_VOLUME_MUTE => set_volume(0),
                 ID_TRAY_POSITION_FOLLOW => set_follow_cursor(true),
                 ID_TRAY_POSITION_BEST => set_follow_cursor(false),
+                ID_TRAY_DELAY_INSTANT => set_hover_delay(0),
+                ID_TRAY_DELAY_VERY_FAST => set_hover_delay(200),
+                ID_TRAY_DELAY_MEDIUM => set_hover_delay(500),
+                ID_TRAY_DELAY_SLOW => set_hover_delay(1000),
+                ID_TRAY_OPEN_CONFIG => open_config_file(),
                 _ => {}
             }
             LRESULT(0)
@@ -87,6 +106,38 @@ unsafe fn show_context_menu(hwnd: HWND) {
     let preview_enabled = CONFIG.lock().map(|c| c.preview_enabled).unwrap_or(true);
     let enable_flags = MF_STRING | if preview_enabled { MF_CHECKED } else { MF_UNCHECKED };
     let _ = AppendMenuW(menu, enable_flags, ID_TRAY_ENABLE as usize, w!("Enable Preview"));
+
+    // Add Preview Delay submenu
+    let hover_delay_ms = CONFIG.lock().map(|c| c.hover_delay_ms).unwrap_or(0);
+    let delay_menu = CreatePopupMenu().unwrap();
+
+    let delay_flag = |delay: u64| MF_STRING | if hover_delay_ms == delay { MF_CHECKED } else { MF_UNCHECKED };
+    let _ = AppendMenuW(
+        delay_menu,
+        delay_flag(0),
+        ID_TRAY_DELAY_INSTANT as usize,
+        w!("Instant (0ms) (default)"),
+    );
+    let _ = AppendMenuW(
+        delay_menu,
+        delay_flag(200),
+        ID_TRAY_DELAY_VERY_FAST as usize,
+        w!("Very Fast (200ms)"),
+    );
+    let _ = AppendMenuW(
+        delay_menu,
+        delay_flag(500),
+        ID_TRAY_DELAY_MEDIUM as usize,
+        w!("Medium (500ms)"),
+    );
+    let _ = AppendMenuW(
+        delay_menu,
+        delay_flag(1000),
+        ID_TRAY_DELAY_SLOW as usize,
+        w!("Slow (1000ms)"),
+    );
+
+    let _ = AppendMenuW(menu, MF_STRING | MF_POPUP, delay_menu.0 as usize, w!("Preview Delay"));
 
     // Add Volume submenu
     let current_volume = CONFIG.lock().map(|c| c.video_volume).unwrap_or(0);
@@ -116,6 +167,9 @@ unsafe fn show_context_menu(hwnd: HWND) {
     let startup_enabled = CONFIG.lock().map(|c| c.run_at_startup).unwrap_or(false);
     let flags = MF_STRING | if startup_enabled { MF_CHECKED } else { MF_UNCHECKED };
     let _ = AppendMenuW(menu, flags, ID_TRAY_STARTUP as usize, w!("Run at Startup"));
+
+    // Add "Edit Config.ini"
+    let _ = AppendMenuW(menu, MF_STRING, ID_TRAY_OPEN_CONFIG as usize, w!("Edit Config.ini"));
 
     // Add Exit
     let _ = AppendMenuW(menu, MF_STRING, ID_TRAY_EXIT as usize, w!("Exit"));
@@ -160,6 +214,38 @@ fn set_follow_cursor(follow: bool) {
     if let Ok(mut config) = CONFIG.lock() {
         config.follow_cursor = follow;
         config.save();
+    }
+}
+
+fn set_hover_delay(hover_delay_ms: u64) {
+    if let Ok(mut config) = CONFIG.lock() {
+        config.hover_delay_ms = hover_delay_ms;
+        config.save();
+    }
+}
+
+fn open_config_file() {
+    if let Ok(config) = CONFIG.lock() {
+        config.save();
+    }
+
+    if let Some(path) = crate::config::AppConfig::config_path() {
+        let wide_path: Vec<u16> = path
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+
+        unsafe {
+            let _ = ShellExecuteW(
+                HWND(std::ptr::null_mut()),
+                w!("open"),
+                PCWSTR(wide_path.as_ptr()),
+                PCWSTR(std::ptr::null()),
+                PCWSTR(std::ptr::null()),
+                SW_SHOWNORMAL,
+            );
+        }
     }
 }
 
@@ -244,6 +330,9 @@ pub fn run_tray() {
 
         RegisterClassExW(&wc);
 
+        // Register TaskbarCreated message to detect Explorer restarts
+        TASKBAR_CREATED = RegisterWindowMessageW(w!("TaskbarCreated"));
+
         // Create hidden window for tray messages
         let hwnd = CreateWindowExW(
             WS_EX_TOOLWINDOW,
@@ -270,9 +359,21 @@ pub fn run_tray() {
 
         TRAY_HWND = hwnd;
 
-        // Add tray icon
-        if !add_tray_icon(hwnd) {
-            eprintln!("Failed to add tray icon");
+        // Add tray icon (retry briefly in case Explorer isn't ready yet)
+        let mut added = add_tray_icon(hwnd);
+        if !added {
+            let mut retries = 20;
+            while !added && retries > 0 && RUNNING.load(Ordering::SeqCst) {
+                std::thread::sleep(std::time::Duration::from_millis(500));
+                added = add_tray_icon(hwnd);
+                retries -= 1;
+            }
+        }
+
+        if !added {
+            eprintln!("Failed to add tray icon after retries; exiting.");
+            RUNNING.store(false, Ordering::SeqCst);
+            remove_tray_icon(hwnd);
             return;
         }
 

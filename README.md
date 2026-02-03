@@ -1,23 +1,25 @@
 # Rust Hover Preview
 
-Windows 11 system tray application that shows image and video previews when hovering over files in Windows Explorer.
+Windows 11 system tray application that shows image and video previews when hovering over files in Windows Explorer. Inspired by QTTabBar hover preview.
 
 ## Features
 
 - **Image preview on hover** for common formats (JPG, JPEG, PNG, GIF, BMP, ICO, TIFF/TIF, WebP)
 - **Animated GIF** and **animated WebP** playback
 - **Video preview on hover** (MP4, WebM, MKV, AVI, MOV, WMV, FLV, M4V) using FFmpeg tools
-- **System tray controls** for enabling/disabling previews, startup, video volume, and preview position
-- **Configurable preview size, offset, and hover delay**
+- **System tray controls** for enabling/disabling previews, startup, video volume, preview position, and preview delay
+- **Configurable hover delay**
 
 ## System Tray Menu
 
 Right-click the system tray icon to access:
 
 - **Enable Preview**: Toggle all previews on/off
+- **Preview Delay**: Instant (0ms), Very Fast (200ms), Medium (500ms), Slow (1000ms)
 - **Video Volume**: Set preview volume from 0–100%
 - **Preview Position**: Follow Cursor or Best Position
 - **Run at Startup**: Toggle automatic startup with Windows
+- **Edit Config.ini**: Open `config.ini` in the default text editor
 - **Exit**: Close the application
 
 ## Requirements
@@ -58,25 +60,20 @@ To add a custom application icon:
 Settings are stored in:
 
 ```
-%APPDATA%\RustHoverPreview\RustHoverPreview\config.json
+%APPDATA%\rust-hover-preview\config.ini
 ```
 
 Example configuration:
 
-```json
-{
-  "run_at_startup": false,
-  "preview_size": 300,
-  "preview_offset": 20,
-  "hover_delay_ms": 300,
-  "preview_enabled": true,
-  "follow_cursor": false,
-  "video_volume": 0
-}
+```ini
+[settings]
+run_at_startup=false
+hover_delay_ms=0
+preview_enabled=true
+follow_cursor=false
+video_volume=0
 ```
 
-- `preview_size`: Max width/height (in pixels) for previews
-- `preview_offset`: Gap between cursor and preview window (in pixels)
 - `hover_delay_ms`: Delay before showing preview (in milliseconds)
 
 ## How It Works

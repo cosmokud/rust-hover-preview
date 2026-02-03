@@ -12,4 +12,4 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Animated GIF and animated WebP playback
 - Video preview on hover for MP4, WebM, MKV, AVI, MOV, WMV, FLV, and M4V (via FFmpeg tools)
 - System tray controls for preview enable/disable, startup toggle, preview position, and video volume
-- JSON configuration file in %APPDATA% for preview size, offset, hover delay, and playback settings
+- INI configuration file in %APPDATA%\rust-hover-preview\config.ini for hover delay, preview enablement, and playback settings
