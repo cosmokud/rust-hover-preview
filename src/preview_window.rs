@@ -7,7 +7,7 @@ use std::io::BufReader;
 use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicIsize, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -74,6 +74,8 @@ struct MediaData {
     frames: Vec<ImageFrame>,
     /// Shared frames vec for streaming decode (animated formats append here)
     shared_frames: Option<Arc<Mutex<Vec<ImageFrame>>>>,
+    /// Signal from the background thread that all frames have been decoded
+    all_frames_loaded: Option<Arc<AtomicBool>>,
     current_frame: usize,
     last_frame_time: Instant,
     media_type: MediaType,
@@ -93,6 +95,14 @@ impl MediaData {
 
     fn current_height(&self) -> u32 {
         self.frames[self.current_frame].height
+    }
+
+    /// Check if all frames have finished streaming
+    fn is_fully_loaded(&self) -> bool {
+        match &self.all_frames_loaded {
+            Some(flag) => flag.load(Ordering::Acquire),
+            None => true, // No streaming = already complete
+        }
     }
 
     /// Pull any newly decoded frames from the shared buffer
@@ -125,9 +135,19 @@ impl MediaData {
 
         let delay = Duration::from_millis(self.frames[self.current_frame].delay_ms as u64);
         if self.last_frame_time.elapsed() >= delay {
-            self.current_frame = (self.current_frame + 1) % self.frames.len();
-            self.last_frame_time = Instant::now();
-            return true;
+            let next = self.current_frame + 1;
+            if next < self.frames.len() {
+                // More frames ahead, advance normally
+                self.current_frame = next;
+                self.last_frame_time = Instant::now();
+                return true;
+            } else if self.is_fully_loaded() {
+                // All frames loaded, safe to loop back to start
+                self.current_frame = 0;
+                self.last_frame_time = Instant::now();
+                return true;
+            }
+            // else: still streaming — hold on the last frame, don't loop
         }
         false
     }
@@ -349,6 +369,8 @@ fn load_animated_gif(path: &PathBuf, max_width: u32, max_height: u32) -> Option<
     }).collect::<Vec<_>>()));
 
     let shared_clone = Arc::clone(&shared);
+    let loaded_flag = Arc::new(AtomicBool::new(false));
+    let loaded_flag_clone = Arc::clone(&loaded_flag);
 
     // Stream remaining frames in background
     let path_clone = path.clone();
@@ -356,13 +378,13 @@ fn load_animated_gif(path: &PathBuf, max_width: u32, max_height: u32) -> Option<
         // Re-open and re-decode from the start to get remaining frames
         let file = match File::open(&path_clone) {
             Ok(f) => f,
-            Err(_) => return,
+            Err(_) => { loaded_flag_clone.store(true, Ordering::Release); return; },
         };
         let mut dec = DecodeOptions::new();
         dec.set_color_output(gif::ColorOutput::RGBA);
         let mut dec = match dec.read_info(BufReader::new(file)) {
             Ok(d) => d,
-            Err(_) => return,
+            Err(_) => { loaded_flag_clone.store(true, Ordering::Release); return; },
         };
 
         let mut canvas = vec![0u8; (gif_width * gif_height * 4) as usize];
@@ -387,11 +409,13 @@ fn load_animated_gif(path: &PathBuf, max_width: u32, max_height: u32) -> Option<
             }
             frame_idx += 1;
         }
+        loaded_flag_clone.store(true, Ordering::Release);
     });
 
     Some(MediaData {
         frames: vec![first_image],
         shared_frames: Some(shared),
+        all_frames_loaded: Some(loaded_flag),
         current_frame: 0,
         last_frame_time: Instant::now(),
         media_type: MediaType::AnimatedGif,
@@ -517,6 +541,8 @@ fn load_animated_webp(path: &PathBuf, max_width: u32, max_height: u32) -> Option
     }]));
 
     let shared_clone = Arc::clone(&shared);
+    let loaded_flag = Arc::new(AtomicBool::new(false));
+    let loaded_flag_clone = Arc::clone(&loaded_flag);
 
     // Stream remaining frames in background thread
     let path_clone = path.clone();
@@ -524,12 +550,12 @@ fn load_animated_webp(path: &PathBuf, max_width: u32, max_height: u32) -> Option
         // Re-open decoder to get remaining frames
         let file = match File::open(&path_clone) {
             Ok(f) => f,
-            Err(_) => return,
+            Err(_) => { loaded_flag_clone.store(true, Ordering::Release); return; },
         };
         let reader = BufReader::new(file);
         let mut dec = match image_webp::WebPDecoder::new(reader) {
             Ok(d) => d,
-            Err(_) => return,
+            Err(_) => { loaded_flag_clone.store(true, Ordering::Release); return; },
         };
 
         let bpp: usize = if dec.has_alpha() { 4 } else { 3 };
@@ -556,11 +582,13 @@ fn load_animated_webp(path: &PathBuf, max_width: u32, max_height: u32) -> Option
                 Err(_) => break,
             }
         }
+        loaded_flag_clone.store(true, Ordering::Release);
     });
 
     Some(MediaData {
         frames: vec![first_image],
         shared_frames: Some(shared),
+        all_frames_loaded: Some(loaded_flag),
         current_frame: 0,
         last_frame_time: Instant::now(),
         media_type: MediaType::AnimatedWebP,
@@ -599,6 +627,7 @@ fn load_static_image(path: &PathBuf, max_width: u32, max_height: u32) -> Option<
     Some(MediaData {
         frames: vec![frame],
         shared_frames: None,
+        all_frames_loaded: None,
         current_frame: 0,
         last_frame_time: Instant::now(),
         media_type: MediaType::StaticImage,
@@ -627,6 +656,7 @@ fn load_video_thumbnail(path: &PathBuf, max_width: u32, max_height: u32) -> Opti
     Some(MediaData {
         frames: vec![frame],
         shared_frames: None,
+        all_frames_loaded: None,
         current_frame: 0,
         last_frame_time: Instant::now(),
         media_type: MediaType::Video,
@@ -1011,6 +1041,7 @@ fn create_loading_media(width: u32, height: u32) -> MediaData {
     MediaData {
         frames: vec![frame],
         shared_frames: None,
+        all_frames_loaded: None,
         current_frame: 0,
         last_frame_time: Instant::now(),
         media_type: MediaType::Loading,
