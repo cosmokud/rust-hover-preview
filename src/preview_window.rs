@@ -134,18 +134,32 @@ impl MediaData {
             return false;
         }
 
+        let fully_loaded = self.is_fully_loaded();
         let mut advanced = false;
 
         // Allow skipping multiple frames per call to keep up with real time.
-        // When streaming (not all frames loaded yet), we loop through whatever
-        // frames are available at the correct speed — this prevents slow-motion
-        // while still showing the animation immediately.
         for _ in 0..frame_count {
             let delay = Duration::from_millis(self.frames[self.current_frame].delay_ms as u64);
             if self.last_frame_time.elapsed() >= delay {
-                self.current_frame = (self.current_frame + 1) % frame_count;
-                self.last_frame_time += delay;
-                advanced = true;
+                let next = self.current_frame + 1;
+                if next < frame_count {
+                    // More decoded frames ahead — advance normally
+                    self.current_frame = next;
+                    self.last_frame_time += delay;
+                    advanced = true;
+                } else if fully_loaded {
+                    // All frames decoded — safe to loop back to start
+                    self.current_frame = 0;
+                    self.last_frame_time += delay;
+                    advanced = true;
+                } else {
+                    // Still streaming — pause on this frame until the next
+                    // one arrives.  Reset the clock so that when a new frame
+                    // does appear we resume immediately without a stutter
+                    // burst of catch-up skips.
+                    self.last_frame_time = Instant::now();
+                    break;
+                }
             } else {
                 break;
             }
