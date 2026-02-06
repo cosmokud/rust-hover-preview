@@ -58,6 +58,7 @@ enum MediaType {
     AnimatedGif,
     AnimatedWebP,
     Video,
+    Loading,
 }
 
 /// A single frame of image data
@@ -76,6 +77,7 @@ struct MediaData {
     media_type: MediaType,
     // For video playback using ffplay
     video_process: Option<Child>,
+    loading_start: Option<Instant>,
 }
 
 impl MediaData {
@@ -99,6 +101,26 @@ impl MediaData {
         let delay = Duration::from_millis(self.frames[self.current_frame].delay_ms as u64);
         if self.last_frame_time.elapsed() >= delay {
             self.current_frame = (self.current_frame + 1) % self.frames.len();
+            self.last_frame_time = Instant::now();
+            return true;
+        }
+        false
+    }
+
+    fn update_loading_frame(&mut self) -> bool {
+        if !matches!(self.media_type, MediaType::Loading) {
+            return false;
+        }
+        if self.last_frame_time.elapsed() >= Duration::from_millis(33) {
+            if !self.frames.is_empty() {
+                let width = self.frames[0].width;
+                let height = self.frames[0].height;
+                if let Some(start) = self.loading_start {
+                    let elapsed_secs = start.elapsed().as_secs_f32();
+                    let angle = elapsed_secs * 2.0 * std::f32::consts::PI * 1.2;
+                    self.frames[0].pixels = render_loading_frame(width, height, angle);
+                }
+            }
             self.last_frame_time = Instant::now();
             return true;
         }
@@ -290,6 +312,7 @@ fn load_animated_gif(path: &PathBuf, max_width: u32, max_height: u32) -> Option<
         last_frame_time: Instant::now(),
         media_type: MediaType::AnimatedGif,
         video_process: None,
+        loading_start: None,
     })
 }
 
@@ -309,13 +332,35 @@ fn load_animated_webp(path: &PathBuf, max_width: u32, max_height: u32) -> Option
     }
 
     let (orig_width, orig_height) = decoder.dimensions();
+
+    // Validate dimensions to prevent excessive allocation or crashes
+    if orig_width == 0 || orig_height == 0 || orig_width > 16384 || orig_height > 16384 {
+        return None;
+    }
+
     let (target_width, target_height) =
         scale_dimensions(orig_width, orig_height, max_width, max_height);
 
+    if target_width == 0 || target_height == 0 {
+        return None;
+    }
+
     let has_alpha = decoder.has_alpha();
     let num_frames = decoder.num_frames();
+
+    // Sanity check on frame count
+    if num_frames == 0 || num_frames > 10000 {
+        return None;
+    }
+
     let bytes_per_pixel: usize = if has_alpha { 4 } else { 3 };
     let buf_size = orig_width as usize * orig_height as usize * bytes_per_pixel;
+
+    // Prevent excessive memory allocation (100MB per frame buffer)
+    if buf_size > 100_000_000 {
+        return None;
+    }
+
     let mut buf = vec![0u8; buf_size];
 
     let mut frames = Vec::new();
@@ -324,6 +369,11 @@ fn load_animated_webp(path: &PathBuf, max_width: u32, max_height: u32) -> Option
         match decoder.read_frame(&mut buf) {
             Ok(delay_ms) => {
                 let delay_ms = delay_ms.max(20); // Minimum 20ms
+
+                // Validate buffer was properly filled
+                if buf.len() != buf_size {
+                    break;
+                }
 
                 // Convert to RGBA if the image doesn't have alpha
                 let rgba = if has_alpha {
@@ -340,8 +390,16 @@ fn load_animated_webp(path: &PathBuf, max_width: u32, max_height: u32) -> Option
                     rgba
                 };
 
-                let img =
-                    image::RgbaImage::from_raw(orig_width, orig_height, rgba)?;
+                // Validate RGBA buffer size
+                let expected_rgba = orig_width as usize * orig_height as usize * 4;
+                if rgba.len() != expected_rgba {
+                    break;
+                }
+
+                let img = match image::RgbaImage::from_raw(orig_width, orig_height, rgba) {
+                    Some(img) => img,
+                    None => break,
+                };
 
                 let scaled = if target_width != orig_width || target_height != orig_height {
                     let resized = image::imageops::resize(
@@ -356,6 +414,12 @@ fn load_animated_webp(path: &PathBuf, max_width: u32, max_height: u32) -> Option
                 };
 
                 let bgra = rgba_to_bgra(&scaled);
+
+                // Final validation of output buffer
+                let expected_bgra = target_width as usize * target_height as usize * 4;
+                if bgra.len() != expected_bgra {
+                    break;
+                }
 
                 frames.push(ImageFrame {
                     pixels: bgra,
@@ -378,6 +442,7 @@ fn load_animated_webp(path: &PathBuf, max_width: u32, max_height: u32) -> Option
         last_frame_time: Instant::now(),
         media_type: MediaType::AnimatedWebP,
         video_process: None,
+        loading_start: None,
     })
 }
 
@@ -414,6 +479,7 @@ fn load_static_image(path: &PathBuf, max_width: u32, max_height: u32) -> Option<
         last_frame_time: Instant::now(),
         media_type: MediaType::StaticImage,
         video_process: None,
+        loading_start: None,
     })
 }
 
@@ -440,6 +506,7 @@ fn load_video_thumbnail(path: &PathBuf, max_width: u32, max_height: u32) -> Opti
         last_frame_time: Instant::now(),
         media_type: MediaType::Video,
         video_process: None,
+        loading_start: None,
     })
 }
 
@@ -733,6 +800,105 @@ fn get_media_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
     image::image_dimensions(path).ok()
 }
 
+/// Render a single frame of the loading spinner animation (BGRA pixels)
+fn render_loading_frame(width: u32, height: u32, angle: f32) -> Vec<u8> {
+    let total_pixels = (width as usize) * (height as usize);
+    let mut pixels = vec![0u8; total_pixels * 4];
+
+    let cx = width as f32 / 2.0;
+    let cy = height as f32 / 2.0;
+
+    // Spinner proportional to window size, clamped for aesthetics
+    let radius = (width.min(height) as f32 * 0.08).clamp(10.0, 32.0);
+    let thickness = (radius * 0.32).clamp(2.5, 7.0);
+
+    // Background color (dark charcoal)
+    let bg: [u8; 3] = [30, 30, 30];
+
+    // Fill background
+    for pixel in pixels.chunks_exact_mut(4) {
+        pixel[0] = bg[0]; // B
+        pixel[1] = bg[1]; // G
+        pixel[2] = bg[2]; // R
+        pixel[3] = 255;   // A
+    }
+
+    let two_pi = std::f32::consts::PI * 2.0;
+    let arc_length = std::f32::consts::PI * 1.5; // 270-degree arc
+
+    // Only iterate over the bounding box of the spinner ring
+    let min_x = ((cx - radius - thickness - 2.0).max(0.0)) as u32;
+    let max_x = ((cx + radius + thickness + 2.0).min(width as f32 - 1.0)) as u32;
+    let min_y = ((cy - radius - thickness - 2.0).max(0.0)) as u32;
+    let max_y = ((cy + radius + thickness + 2.0).min(height as f32 - 1.0)) as u32;
+
+    for y in min_y..=max_y {
+        for x in min_x..=max_x {
+            let dx = x as f32 + 0.5 - cx;
+            let dy = y as f32 + 0.5 - cy;
+            let dist = (dx * dx + dy * dy).sqrt();
+
+            let ring_dist = (dist - radius).abs();
+            if ring_dist > thickness + 1.0 {
+                continue;
+            }
+
+            // Anti-aliased smooth edge
+            let edge_alpha = (1.0 - (ring_dist - thickness + 1.0).max(0.0)).clamp(0.0, 1.0);
+            if edge_alpha <= 0.0 {
+                continue;
+            }
+
+            let pixel_angle = dy.atan2(dx);
+            let relative = (pixel_angle - angle).rem_euclid(two_pi);
+
+            if relative <= arc_length {
+                // Smooth gradient: ease-in from tail (transparent) to head (bright)
+                let t = relative / arc_length;
+                let t_smooth = t * t; // quadratic ease-in
+                let alpha = edge_alpha * t_smooth;
+
+                let idx = ((y * width + x) * 4) as usize;
+                let blend = |bg_c: u8, fg: u8, a: f32| -> u8 {
+                    ((bg_c as f32) * (1.0 - a) + (fg as f32) * a).clamp(0.0, 255.0) as u8
+                };
+
+                pixels[idx] = blend(bg[0], 255, alpha);     // B
+                pixels[idx + 1] = blend(bg[1], 255, alpha); // G
+                pixels[idx + 2] = blend(bg[2], 255, alpha); // R
+                pixels[idx + 3] = 255;
+            }
+        }
+    }
+
+    pixels
+}
+
+/// Create a loading animation MediaData for the given dimensions
+fn create_loading_media(width: u32, height: u32) -> MediaData {
+    let pixels = render_loading_frame(width, height, 0.0);
+    let frame = ImageFrame {
+        pixels,
+        width,
+        height,
+        delay_ms: 33,
+    };
+    MediaData {
+        frames: vec![frame],
+        current_frame: 0,
+        last_frame_time: Instant::now(),
+        media_type: MediaType::Loading,
+        video_process: None,
+        loading_start: Some(Instant::now()),
+    }
+}
+
+/// Result from background image loading thread
+struct LoadResult {
+    generation: u64,
+    media: Option<MediaData>,
+}
+
 unsafe extern "system" fn window_proc(
     hwnd: HWND,
     msg: u32,
@@ -748,6 +914,18 @@ unsafe extern "system" fn window_proc(
                 if let Some(ref media) = *media_guard {
                     // Don't paint for video - ffplay handles its own window
                     if !matches!(media.media_type, MediaType::Video) {
+                        // Validate pixel buffer before painting
+                        let expected_size = (media.current_width() as usize)
+                            * (media.current_height() as usize)
+                            * 4;
+                        if media.current_width() == 0
+                            || media.current_height() == 0
+                            || media.current_pixels().len() < expected_size
+                        {
+                            let _ = EndPaint(hwnd, &ps);
+                            return LRESULT(0);
+                        }
+
                         // Create bitmap info
                         let bmi = BITMAPINFO {
                             bmiHeader: BITMAPINFOHEADER {
@@ -850,6 +1028,10 @@ pub fn run_preview_window() {
         // Track current video path to avoid restarting
         let mut current_video_path: Option<PathBuf> = None;
 
+        // Background loading support
+        let (load_tx, load_rx): (Sender<LoadResult>, Receiver<LoadResult>) = channel();
+        let mut current_generation: u64 = 0;
+
         // Message loop
         let mut msg = MSG::default();
         while RUNNING.load(Ordering::SeqCst) {
@@ -866,10 +1048,34 @@ pub fn run_preview_window() {
                     if media.advance_frame() {
                         needs_repaint = true;
                     }
+                    if media.update_loading_frame() {
+                        needs_repaint = true;
+                    }
                 }
             }
             if needs_repaint {
                 let _ = InvalidateRect(hwnd, None, false);
+            }
+
+            // Check for completed background loads
+            while let Ok(result) = load_rx.try_recv() {
+                if result.generation == current_generation {
+                    match result.media {
+                        Some(media_data) => {
+                            if let Ok(mut current) = CURRENT_MEDIA.lock() {
+                                *current = Some(media_data);
+                            }
+                            let _ = InvalidateRect(hwnd, None, true);
+                        }
+                        None => {
+                            // Loading failed, hide window
+                            let _ = ShowWindow(hwnd, SW_HIDE);
+                            if let Ok(mut current) = CURRENT_MEDIA.lock() {
+                                *current = None;
+                            }
+                        }
+                    }
+                }
             }
 
             // Check for our custom messages
@@ -933,42 +1139,43 @@ pub fn run_preview_window() {
                             let max_width = avail_w.max(1) as u32;
                             let max_height = avail_h.max(1) as u32;
 
-                            if let Some(media_data) = load_media(&path, max_width, max_height) {
-                                let media_width = media_data.current_width() as i32;
-                                let media_height = media_data.current_height() as i32;
+                            // Pre-calculate preview dimensions for positioning
+                            let (preview_w, preview_h) = scale_dimensions(
+                                orig_dims.0, orig_dims.1, max_width, max_height,
+                            );
+                            let media_width = preview_w as i32;
+                            let media_height = preview_h as i32;
 
-                                let (pos_x, pos_y) = match best_quadrant {
-                                    0 => (x + offset, y + offset),
-                                    1 => (x - offset - media_width, y + offset),
-                                    2 => (x + offset, y - offset - media_height),
-                                    3 => (x - offset - media_width, y - offset - media_height),
-                                    _ => (x + offset, y + offset),
-                                };
+                            if media_width <= 0 || media_height <= 0 {
+                                continue;
+                            }
 
-                                if is_video {
+                            let (pos_x, pos_y) = match best_quadrant {
+                                0 => (x + offset, y + offset),
+                                1 => (x - offset - media_width, y + offset),
+                                2 => (x + offset, y - offset - media_height),
+                                3 => (x - offset - media_width, y - offset - media_height),
+                                _ => (x + offset, y + offset),
+                            };
+
+                            if is_video {
+                                if let Some(media_data) = load_media(&path, max_width, max_height) {
                                     // For video, hide our window and use ffplay
                                     let _ = ShowWindow(hwnd, SW_HIDE);
 
-                                    // Check if same video is already playing and still alive
                                     let process_running = is_video_process_running();
                                     let should_start = current_video_path.as_ref() != Some(&path)
                                         || !process_running;
 
                                     if should_start {
-                                        // Stop any existing video
                                         if let Ok(mut media_guard) = CURRENT_MEDIA.lock() {
                                             if let Some(ref mut media) = *media_guard {
                                                 stop_video_playback(media);
                                             }
                                         }
 
-                                        // Start new video playback
                                         let video_process = start_video_playback(
-                                            &path,
-                                            pos_x,
-                                            pos_y,
-                                            media_width,
-                                            media_height,
+                                            &path, pos_x, pos_y, media_width, media_height,
                                         );
 
                                         if let Ok(mut current) = CURRENT_MEDIA.lock() {
@@ -979,56 +1186,59 @@ pub fn run_preview_window() {
 
                                         current_video_path = Some(path.clone());
                                         let _ = ensure_video_window_topmost(
-                                            pos_x,
-                                            pos_y,
-                                            media_width,
-                                            media_height,
+                                            pos_x, pos_y, media_width, media_height,
                                         );
                                     } else {
                                         let _ = ensure_video_window_topmost(
-                                            pos_x,
-                                            pos_y,
-                                            media_width,
-                                            media_height,
+                                            pos_x, pos_y, media_width, media_height,
                                         );
                                     }
-                                } else {
-                                    // For images/animations, use our preview window
-                                    // Stop any video if switching from video
-                                    if current_video_path.is_some() {
-                                        if let Ok(mut media_guard) = CURRENT_MEDIA.lock() {
-                                            if let Some(ref mut media) = *media_guard {
-                                                stop_video_playback(media);
-                                            }
-                                        }
-                                        current_video_path = None;
-                                    }
-
-                                    let _ = MoveWindow(
-                                        hwnd,
-                                        pos_x,
-                                        pos_y,
-                                        media_width,
-                                        media_height,
-                                        false,
-                                    );
-                                    let _ = SetWindowPos(
-                                        hwnd,
-                                        HWND_TOPMOST,
-                                        pos_x,
-                                        pos_y,
-                                        media_width,
-                                        media_height,
-                                        SWP_NOACTIVATE | SWP_SHOWWINDOW,
-                                    );
-
-                                    if let Ok(mut current) = CURRENT_MEDIA.lock() {
-                                        *current = Some(media_data);
-                                    }
-
-                                    let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
-                                    let _ = InvalidateRect(hwnd, None, true);
                                 }
+                            } else {
+                                // For images/animations, show loading then load async
+                                if current_video_path.is_some() {
+                                    if let Ok(mut media_guard) = CURRENT_MEDIA.lock() {
+                                        if let Some(ref mut media) = *media_guard {
+                                            stop_video_playback(media);
+                                        }
+                                    }
+                                    current_video_path = None;
+                                }
+
+                                // Show loading animation immediately
+                                current_generation += 1;
+                                let gen = current_generation;
+                                let loading = create_loading_media(preview_w, preview_h);
+                                if let Ok(mut current) = CURRENT_MEDIA.lock() {
+                                    *current = Some(loading);
+                                }
+
+                                let _ = MoveWindow(
+                                    hwnd, pos_x, pos_y, media_width, media_height, false,
+                                );
+                                let _ = SetWindowPos(
+                                    hwnd, HWND_TOPMOST, pos_x, pos_y,
+                                    media_width, media_height,
+                                    SWP_NOACTIVATE | SWP_SHOWWINDOW,
+                                );
+                                let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+                                let _ = InvalidateRect(hwnd, None, true);
+
+                                // Load media in background thread
+                                let tx = load_tx.clone();
+                                let path_clone = path.clone();
+                                std::thread::spawn(move || {
+                                    let media = std::panic::catch_unwind(
+                                        std::panic::AssertUnwindSafe(|| {
+                                            load_media(&path_clone, max_width, max_height)
+                                        }),
+                                    )
+                                    .unwrap_or(None);
+                                    let _ = tx.send(LoadResult {
+                                        generation: gen,
+                                        media,
+                                    });
+                                });
                             }
                         } else {
                             // Best spot mode: choose left or right side of cursor for maximum size
@@ -1054,19 +1264,27 @@ pub fn run_preview_window() {
                                     continue;
                                 };
 
-                            if let Some(media_data) = load_media(&path, max_width, max_height) {
-                                let media_width = media_data.current_width() as i32;
-                                let media_height = media_data.current_height() as i32;
+                            // Pre-calculate preview dimensions for positioning
+                            let (preview_w, preview_h) = scale_dimensions(
+                                orig_dims.0, orig_dims.1, max_width, max_height,
+                            );
+                            let media_width = preview_w as i32;
+                            let media_height = preview_h as i32;
 
-                                // Position: center vertically, left or right side
-                                let pos_x = if use_left {
-                                    x - offset - media_width
-                                } else {
-                                    x + offset
-                                };
-                                let pos_y = (screen_height - media_height) / 2; // Center vertically
+                            if media_width <= 0 || media_height <= 0 {
+                                continue;
+                            }
 
-                                if is_video {
+                            // Position: center vertically, left or right side
+                            let pos_x = if use_left {
+                                x - offset - media_width
+                            } else {
+                                x + offset
+                            };
+                            let pos_y = (screen_height - media_height) / 2;
+
+                            if is_video {
+                                if let Some(media_data) = load_media(&path, max_width, max_height) {
                                     // For video, hide our window and use ffplay
                                     let _ = ShowWindow(hwnd, SW_HIDE);
 
@@ -1082,11 +1300,7 @@ pub fn run_preview_window() {
                                         }
 
                                         let video_process = start_video_playback(
-                                            &path,
-                                            pos_x,
-                                            pos_y,
-                                            media_width,
-                                            media_height,
+                                            &path, pos_x, pos_y, media_width, media_height,
                                         );
 
                                         if let Ok(mut current) = CURRENT_MEDIA.lock() {
@@ -1097,59 +1311,66 @@ pub fn run_preview_window() {
 
                                         current_video_path = Some(path.clone());
                                         let _ = ensure_video_window_topmost(
-                                            pos_x,
-                                            pos_y,
-                                            media_width,
-                                            media_height,
+                                            pos_x, pos_y, media_width, media_height,
                                         );
                                     } else {
                                         let _ = ensure_video_window_topmost(
-                                            pos_x,
-                                            pos_y,
-                                            media_width,
-                                            media_height,
+                                            pos_x, pos_y, media_width, media_height,
                                         );
                                     }
-                                } else {
-                                    // For images/animations
-                                    if current_video_path.is_some() {
-                                        if let Ok(mut media_guard) = CURRENT_MEDIA.lock() {
-                                            if let Some(ref mut media) = *media_guard {
-                                                stop_video_playback(media);
-                                            }
-                                        }
-                                        current_video_path = None;
-                                    }
-
-                                    let _ = MoveWindow(
-                                        hwnd,
-                                        pos_x,
-                                        pos_y,
-                                        media_width,
-                                        media_height,
-                                        false,
-                                    );
-                                    let _ = SetWindowPos(
-                                        hwnd,
-                                        HWND_TOPMOST,
-                                        pos_x,
-                                        pos_y,
-                                        media_width,
-                                        media_height,
-                                        SWP_NOACTIVATE | SWP_SHOWWINDOW,
-                                    );
-
-                                    if let Ok(mut current) = CURRENT_MEDIA.lock() {
-                                        *current = Some(media_data);
-                                    }
-
-                                    let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
-                                    let _ = InvalidateRect(hwnd, None, true);
                                 }
+                            } else {
+                                // For images/animations, show loading then load async
+                                if current_video_path.is_some() {
+                                    if let Ok(mut media_guard) = CURRENT_MEDIA.lock() {
+                                        if let Some(ref mut media) = *media_guard {
+                                            stop_video_playback(media);
+                                        }
+                                    }
+                                    current_video_path = None;
+                                }
+
+                                // Show loading animation immediately
+                                current_generation += 1;
+                                let gen = current_generation;
+                                let loading = create_loading_media(preview_w, preview_h);
+                                if let Ok(mut current) = CURRENT_MEDIA.lock() {
+                                    *current = Some(loading);
+                                }
+
+                                let _ = MoveWindow(
+                                    hwnd, pos_x, pos_y, media_width, media_height, false,
+                                );
+                                let _ = SetWindowPos(
+                                    hwnd, HWND_TOPMOST, pos_x, pos_y,
+                                    media_width, media_height,
+                                    SWP_NOACTIVATE | SWP_SHOWWINDOW,
+                                );
+                                let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+                                let _ = InvalidateRect(hwnd, None, true);
+
+                                // Load media in background thread
+                                let tx = load_tx.clone();
+                                let path_clone = path.clone();
+                                std::thread::spawn(move || {
+                                    let media = std::panic::catch_unwind(
+                                        std::panic::AssertUnwindSafe(|| {
+                                            load_media(&path_clone, max_width, max_height)
+                                        }),
+                                    )
+                                    .unwrap_or(None);
+                                    let _ = tx.send(LoadResult {
+                                        generation: gen,
+                                        media,
+                                    });
+                                });
                             }
                         }
                     }
                     PreviewMessage::Hide => {
+                        // Invalidate any pending background loads
+                        current_generation += 1;
+
                         let _ = ShowWindow(hwnd, SW_HIDE);
 
                         // Stop video playback if any
