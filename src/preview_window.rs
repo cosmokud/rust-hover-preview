@@ -129,27 +129,41 @@ impl MediaData {
         // Pull in any new frames from streaming decode
         self.sync_shared_frames();
 
-        if self.frames.len() <= 1 {
+        let frame_count = self.frames.len();
+        if frame_count <= 1 {
             return false;
         }
 
-        let delay = Duration::from_millis(self.frames[self.current_frame].delay_ms as u64);
-        if self.last_frame_time.elapsed() >= delay {
-            let next = self.current_frame + 1;
-            if next < self.frames.len() {
-                // More frames ahead, advance normally
-                self.current_frame = next;
-                self.last_frame_time = Instant::now();
-                return true;
-            } else if self.is_fully_loaded() {
-                // All frames loaded, safe to loop back to start
-                self.current_frame = 0;
-                self.last_frame_time = Instant::now();
-                return true;
+        let mut advanced = false;
+
+        // Allow skipping multiple frames per call to keep up with real time.
+        // When streaming (not all frames loaded yet), we loop through whatever
+        // frames are available at the correct speed — this prevents slow-motion
+        // while still showing the animation immediately.
+        for _ in 0..frame_count {
+            let delay = Duration::from_millis(self.frames[self.current_frame].delay_ms as u64);
+            if self.last_frame_time.elapsed() >= delay {
+                self.current_frame = (self.current_frame + 1) % frame_count;
+                self.last_frame_time += delay;
+                advanced = true;
+            } else {
+                break;
             }
-            // else: still streaming — hold on the last frame, don't loop
         }
-        false
+
+        // Safety: if last_frame_time drifted too far behind (e.g. >1s),
+        // snap it forward to avoid perpetual catch-up across multiple loops
+        if self.last_frame_time.elapsed() > Duration::from_secs(1) {
+            self.last_frame_time = Instant::now();
+        }
+
+        advanced
+    }
+
+    /// Returns true if this media is an animation still being decoded
+    fn is_streaming(&self) -> bool {
+        matches!(self.media_type, MediaType::AnimatedGif | MediaType::AnimatedWebP)
+            && !self.is_fully_loaded()
     }
 
     fn update_loading_frame(&mut self) -> bool {
@@ -420,7 +434,7 @@ fn load_animated_gif(path: &PathBuf, max_width: u32, max_height: u32) -> Option<
         last_frame_time: Instant::now(),
         media_type: MediaType::AnimatedGif,
         video_process: None,
-        loading_start: None,
+        loading_start: Some(Instant::now()),
     })
 }
 
@@ -434,7 +448,6 @@ fn decode_webp_frame_to_image(
     target_height: u32,
     delay_ms: u32,
 ) -> Option<ImageFrame> {
-    // Convert to RGBA if the image doesn't have alpha
     let rgba = if has_alpha {
         buf.to_vec()
     } else {
@@ -482,8 +495,7 @@ fn decode_webp_frame_to_image(
     })
 }
 
-/// Load an animated WebP file - decodes first frame immediately, streams the rest.
-/// Uses image_webp directly for reliable frame decoding.
+/// Load an animated WebP file — decodes first frame immediately, streams the rest in background.
 fn load_animated_webp(path: &PathBuf, max_width: u32, max_height: u32) -> Option<MediaData> {
     let file = File::open(path).ok()?;
     let reader = BufReader::new(file);
@@ -494,81 +506,68 @@ fn load_animated_webp(path: &PathBuf, max_width: u32, max_height: u32) -> Option
     }
 
     let (orig_width, orig_height) = decoder.dimensions();
-
     if orig_width == 0 || orig_height == 0 || orig_width > 16384 || orig_height > 16384 {
         return None;
     }
 
     let (target_width, target_height) =
         scale_dimensions(orig_width, orig_height, max_width, max_height);
-
     if target_width == 0 || target_height == 0 {
         return None;
     }
 
     let has_alpha = decoder.has_alpha();
     let num_frames = decoder.num_frames();
-
     if num_frames == 0 || num_frames > 10000 {
         return None;
     }
 
     let bytes_per_pixel: usize = if has_alpha { 4 } else { 3 };
     let buf_size = orig_width as usize * orig_height as usize * bytes_per_pixel;
-
     if buf_size > 100_000_000 {
         return None;
     }
 
+    // Decode first frame immediately so the user sees something right away
     let mut buf = vec![0u8; buf_size];
-
-    // Decode first frame immediately
     let first_delay = match decoder.read_frame(&mut buf) {
         Ok(d) => d.max(20),
         Err(_) => return None,
     };
-
     let first_image = decode_webp_frame_to_image(
         &buf, has_alpha, orig_width, orig_height, target_width, target_height, first_delay,
     )?;
 
-    // Set up shared frame buffer for streaming
+    // Shared buffer: background thread pushes decoded frames here
     let shared = Arc::new(Mutex::new(vec![ImageFrame {
         pixels: first_image.pixels.clone(),
         width: target_width,
         height: target_height,
         delay_ms: first_delay,
     }]));
-
     let shared_clone = Arc::clone(&shared);
     let loaded_flag = Arc::new(AtomicBool::new(false));
     let loaded_flag_clone = Arc::clone(&loaded_flag);
 
-    // Stream remaining frames in background thread
     let path_clone = path.clone();
     std::thread::spawn(move || {
-        // Re-open decoder to get remaining frames
         let file = match File::open(&path_clone) {
             Ok(f) => f,
             Err(_) => { loaded_flag_clone.store(true, Ordering::Release); return; },
         };
-        let reader = BufReader::new(file);
-        let mut dec = match image_webp::WebPDecoder::new(reader) {
+        let mut dec = match image_webp::WebPDecoder::new(BufReader::new(file)) {
             Ok(d) => d,
             Err(_) => { loaded_flag_clone.store(true, Ordering::Release); return; },
         };
 
         let bpp: usize = if dec.has_alpha() { 4 } else { 3 };
-        let bs = orig_width as usize * orig_height as usize * bpp;
-        let mut buf = vec![0u8; bs];
-
+        let mut buf = vec![0u8; orig_width as usize * orig_height as usize * bpp];
         let total = dec.num_frames();
+
         for i in 0..total {
             match dec.read_frame(&mut buf) {
                 Ok(delay_ms) => {
-                    if i == 0 {
-                        continue; // Skip first frame, already decoded
-                    }
+                    if i == 0 { continue; } // already decoded above
                     let delay_ms = delay_ms.max(20);
                     if let Some(img) = decode_webp_frame_to_image(
                         &buf, dec.has_alpha(), orig_width, orig_height,
@@ -593,7 +592,7 @@ fn load_animated_webp(path: &PathBuf, max_width: u32, max_height: u32) -> Option
         last_frame_time: Instant::now(),
         media_type: MediaType::AnimatedWebP,
         video_process: None,
-        loading_start: None,
+        loading_start: Some(Instant::now()),
     })
 }
 
@@ -1050,6 +1049,77 @@ fn create_loading_media(width: u32, height: u32) -> MediaData {
     }
 }
 
+/// Render a small loading spinner overlay onto an existing BGRA pixel buffer (in-place).
+/// Draws a spinning arc in the bottom-right corner with a semi-transparent dark backdrop circle.
+fn overlay_loading_spinner(pixels: &mut [u8], width: u32, height: u32, angle: f32) {
+    if width < 24 || height < 24 {
+        return;
+    }
+
+    let radius = 8.0_f32;
+    let thickness = 2.5_f32;
+    let padding = 12.0_f32;
+    let backdrop_r = radius + thickness + 4.0;
+
+    // Center of the spinner in the bottom-right corner
+    let cx = width as f32 - padding - radius - thickness;
+    let cy = height as f32 - padding - radius - thickness;
+
+    let min_x = ((cx - backdrop_r - 1.0).max(0.0)) as u32;
+    let max_x = ((cx + backdrop_r + 1.0).min(width as f32 - 1.0)) as u32;
+    let min_y = ((cy - backdrop_r - 1.0).max(0.0)) as u32;
+    let max_y = ((cy + backdrop_r + 1.0).min(height as f32 - 1.0)) as u32;
+
+    let two_pi = std::f32::consts::PI * 2.0;
+    let arc_length = std::f32::consts::PI * 1.5;
+
+    for y in min_y..=max_y {
+        for x in min_x..=max_x {
+            let dx = x as f32 + 0.5 - cx;
+            let dy = y as f32 + 0.5 - cy;
+            let dist = (dx * dx + dy * dy).sqrt();
+            let idx = ((y * width + x) * 4) as usize;
+            if idx + 3 >= pixels.len() {
+                continue;
+            }
+
+            // Semi-transparent dark backdrop circle
+            if dist <= backdrop_r {
+                let edge = (1.0 - (dist - backdrop_r + 1.0).max(0.0)).clamp(0.0, 1.0);
+                let bg_alpha = 0.45 * edge;
+                if bg_alpha > 0.0 {
+                    pixels[idx]     = ((pixels[idx]     as f32) * (1.0 - bg_alpha)) as u8;
+                    pixels[idx + 1] = ((pixels[idx + 1] as f32) * (1.0 - bg_alpha)) as u8;
+                    pixels[idx + 2] = ((pixels[idx + 2] as f32) * (1.0 - bg_alpha)) as u8;
+                }
+            }
+
+            // Spinner ring
+            let ring_dist = (dist - radius).abs();
+            if ring_dist > thickness + 1.0 {
+                continue;
+            }
+            let edge_alpha = (1.0 - (ring_dist - thickness + 1.0).max(0.0)).clamp(0.0, 1.0);
+            if edge_alpha <= 0.0 {
+                continue;
+            }
+            let pixel_angle = dy.atan2(dx);
+            let relative = (pixel_angle - angle).rem_euclid(two_pi);
+            if relative <= arc_length {
+                let t = relative / arc_length;
+                let t_smooth = t * t;
+                let alpha = edge_alpha * t_smooth;
+                let blend = |bg_c: u8, fg: u8, a: f32| -> u8 {
+                    ((bg_c as f32) * (1.0 - a) + (fg as f32) * a).clamp(0.0, 255.0) as u8
+                };
+                pixels[idx]     = blend(pixels[idx],     255, alpha);
+                pixels[idx + 1] = blend(pixels[idx + 1], 255, alpha);
+                pixels[idx + 2] = blend(pixels[idx + 2], 255, alpha);
+            }
+        }
+    }
+}
+
 /// Result from background image loading thread
 struct LoadResult {
     generation: u64,
@@ -1094,6 +1164,24 @@ unsafe extern "system" fn window_proc(
                             return LRESULT(0);
                         }
 
+                        // If we're still streaming frames, overlay a loading spinner
+                        let paint_pixels: std::borrow::Cow<[u8]> = if media.is_streaming() {
+                            let elapsed = media.loading_start
+                                .map(|s| s.elapsed().as_secs_f32())
+                                .unwrap_or(0.0);
+                            let angle = elapsed * 2.0 * std::f32::consts::PI * 1.2;
+                            let mut buf = media.current_pixels().to_vec();
+                            overlay_loading_spinner(
+                                &mut buf,
+                                media.current_width(),
+                                media.current_height(),
+                                angle,
+                            );
+                            std::borrow::Cow::Owned(buf)
+                        } else {
+                            std::borrow::Cow::Borrowed(media.current_pixels())
+                        };
+
                         // Create bitmap info
                         let bmi = BITMAPINFO {
                             bmiHeader: BITMAPINFOHEADER {
@@ -1124,7 +1212,7 @@ unsafe extern "system" fn window_proc(
                             0,
                             media.current_width() as i32,
                             media.current_height() as i32,
-                            Some(media.current_pixels().as_ptr() as *const _),
+                            Some(paint_pixels.as_ptr() as *const _),
                             &bmi,
                             DIB_RGB_COLORS,
                             SRCCOPY,
@@ -1218,6 +1306,10 @@ pub fn run_preview_window() {
                         needs_repaint = true;
                     }
                     if media.update_loading_frame() {
+                        needs_repaint = true;
+                    }
+                    // While streaming, continuously repaint to animate the overlay spinner
+                    if media.is_streaming() {
                         needs_repaint = true;
                     }
                 }
