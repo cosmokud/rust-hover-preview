@@ -1,6 +1,6 @@
 # Rust Hover Preview
 
-Windows 11 system tray application that shows image and video previews when hovering over files in Windows Explorer. Inspired by QTTabBar hover preview.
+Windows 11 system tray application that shows image and video previews when hovering over files in Windows Explorer. Inspired by QTTabBar (QuizoApps) hover preview.
 
 ## Features
 
