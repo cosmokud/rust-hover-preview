@@ -899,6 +899,17 @@ struct LoadResult {
     media: Option<MediaData>,
 }
 
+/// Tracks a pending background load so we can show the spinner after a delay
+struct PendingLoad {
+    generation: u64,
+    started: Instant,
+    pos_x: i32,
+    pos_y: i32,
+    width: u32,
+    height: u32,
+    spinner_shown: bool,
+}
+
 unsafe extern "system" fn window_proc(
     hwnd: HWND,
     msg: u32,
@@ -1031,6 +1042,7 @@ pub fn run_preview_window() {
         // Background loading support
         let (load_tx, load_rx): (Sender<LoadResult>, Receiver<LoadResult>) = channel();
         let mut current_generation: u64 = 0;
+        let mut pending_load: Option<PendingLoad> = None;
 
         // Message loop
         let mut msg = MSG::default();
@@ -1062,9 +1074,28 @@ pub fn run_preview_window() {
                 if result.generation == current_generation {
                     match result.media {
                         Some(media_data) => {
+                            let mw = media_data.current_width() as i32;
+                            let mh = media_data.current_height() as i32;
+
+                            // If window wasn't shown yet (fast load), show it now
+                            if let Some(ref pl) = pending_load {
+                                if pl.generation == result.generation && !pl.spinner_shown {
+                                    let _ = MoveWindow(
+                                        hwnd, pl.pos_x, pl.pos_y, mw, mh, false,
+                                    );
+                                    let _ = SetWindowPos(
+                                        hwnd, HWND_TOPMOST, pl.pos_x, pl.pos_y,
+                                        mw, mh,
+                                        SWP_NOACTIVATE | SWP_SHOWWINDOW,
+                                    );
+                                    let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+                                }
+                            }
+
                             if let Ok(mut current) = CURRENT_MEDIA.lock() {
                                 *current = Some(media_data);
                             }
+                            pending_load = None;
                             let _ = InvalidateRect(hwnd, None, true);
                         }
                         None => {
@@ -1073,8 +1104,31 @@ pub fn run_preview_window() {
                             if let Ok(mut current) = CURRENT_MEDIA.lock() {
                                 *current = None;
                             }
+                            pending_load = None;
                         }
                     }
+                }
+            }
+
+            // Show loading spinner if a background load has been pending for 3+ seconds
+            if let Some(ref mut pl) = pending_load {
+                if !pl.spinner_shown && pl.started.elapsed() >= Duration::from_secs(3) {
+                    pl.spinner_shown = true;
+                    let loading = create_loading_media(pl.width, pl.height);
+                    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+                        *current = Some(loading);
+                    }
+                    let _ = MoveWindow(
+                        hwnd, pl.pos_x, pl.pos_y,
+                        pl.width as i32, pl.height as i32, false,
+                    );
+                    let _ = SetWindowPos(
+                        hwnd, HWND_TOPMOST, pl.pos_x, pl.pos_y,
+                        pl.width as i32, pl.height as i32,
+                        SWP_NOACTIVATE | SWP_SHOWWINDOW,
+                    );
+                    let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+                    let _ = InvalidateRect(hwnd, None, true);
                 }
             }
 
@@ -1195,7 +1249,7 @@ pub fn run_preview_window() {
                                     }
                                 }
                             } else {
-                                // For images/animations, show loading then load async
+                                // For images/animations, load async
                                 if current_video_path.is_some() {
                                     if let Ok(mut media_guard) = CURRENT_MEDIA.lock() {
                                         if let Some(ref mut media) = *media_guard {
@@ -1205,26 +1259,19 @@ pub fn run_preview_window() {
                                     current_video_path = None;
                                 }
 
-                                // Show loading animation immediately
+                                // Start background load; spinner will appear after 3s
                                 current_generation += 1;
                                 let gen = current_generation;
-                                let loading = create_loading_media(preview_w, preview_h);
-                                if let Ok(mut current) = CURRENT_MEDIA.lock() {
-                                    *current = Some(loading);
-                                }
+                                pending_load = Some(PendingLoad {
+                                    generation: gen,
+                                    started: Instant::now(),
+                                    pos_x,
+                                    pos_y,
+                                    width: preview_w,
+                                    height: preview_h,
+                                    spinner_shown: false,
+                                });
 
-                                let _ = MoveWindow(
-                                    hwnd, pos_x, pos_y, media_width, media_height, false,
-                                );
-                                let _ = SetWindowPos(
-                                    hwnd, HWND_TOPMOST, pos_x, pos_y,
-                                    media_width, media_height,
-                                    SWP_NOACTIVATE | SWP_SHOWWINDOW,
-                                );
-                                let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
-                                let _ = InvalidateRect(hwnd, None, true);
-
-                                // Load media in background thread
                                 let tx = load_tx.clone();
                                 let path_clone = path.clone();
                                 std::thread::spawn(move || {
@@ -1320,7 +1367,7 @@ pub fn run_preview_window() {
                                     }
                                 }
                             } else {
-                                // For images/animations, show loading then load async
+                                // For images/animations, load async
                                 if current_video_path.is_some() {
                                     if let Ok(mut media_guard) = CURRENT_MEDIA.lock() {
                                         if let Some(ref mut media) = *media_guard {
@@ -1330,26 +1377,19 @@ pub fn run_preview_window() {
                                     current_video_path = None;
                                 }
 
-                                // Show loading animation immediately
+                                // Start background load; spinner will appear after 3s
                                 current_generation += 1;
                                 let gen = current_generation;
-                                let loading = create_loading_media(preview_w, preview_h);
-                                if let Ok(mut current) = CURRENT_MEDIA.lock() {
-                                    *current = Some(loading);
-                                }
+                                pending_load = Some(PendingLoad {
+                                    generation: gen,
+                                    started: Instant::now(),
+                                    pos_x,
+                                    pos_y,
+                                    width: preview_w,
+                                    height: preview_h,
+                                    spinner_shown: false,
+                                });
 
-                                let _ = MoveWindow(
-                                    hwnd, pos_x, pos_y, media_width, media_height, false,
-                                );
-                                let _ = SetWindowPos(
-                                    hwnd, HWND_TOPMOST, pos_x, pos_y,
-                                    media_width, media_height,
-                                    SWP_NOACTIVATE | SWP_SHOWWINDOW,
-                                );
-                                let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
-                                let _ = InvalidateRect(hwnd, None, true);
-
-                                // Load media in background thread
                                 let tx = load_tx.clone();
                                 let path_clone = path.clone();
                                 std::thread::spawn(move || {
@@ -1370,6 +1410,7 @@ pub fn run_preview_window() {
                     PreviewMessage::Hide => {
                         // Invalidate any pending background loads
                         current_generation += 1;
+                        pending_load = None;
 
                         let _ = ShowWindow(hwnd, SW_HIDE);
 
