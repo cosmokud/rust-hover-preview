@@ -74,8 +74,6 @@ follow_cursor=false
 video_volume=0
 ```
 
-- `hover_delay_ms`: Delay before showing preview (in milliseconds)
-
 ## How It Works
 
 The application uses several Windows APIs:

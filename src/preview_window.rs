@@ -1,7 +1,6 @@
 use crate::{CONFIG, RUNNING};
 use gif::DecodeOptions;
-use image::codecs::webp::WebPDecoder;
-use image::{AnimationDecoder, GenericImageView, ImageDecoder};
+use image::GenericImageView;
 use once_cell::sync::Lazy;
 use std::fs::File;
 use std::io::BufReader;
@@ -294,14 +293,18 @@ fn load_animated_gif(path: &PathBuf, max_width: u32, max_height: u32) -> Option<
     })
 }
 
-/// Load an animated WebP file
+/// Load an animated WebP file using image_webp directly for reliable frame decoding.
+/// This bypasses the image crate's AnimationDecoder wrapper which has a frame iterator
+/// state bug: if any frame errors, subsequent frames all retry the same broken position.
+/// Using image_webp directly also avoids a latent RIFF padding bug in next_frame_start
+/// calculation (unrounded anmf_size used instead of rounded).
 fn load_animated_webp(path: &PathBuf, max_width: u32, max_height: u32) -> Option<MediaData> {
     let file = File::open(path).ok()?;
     let reader = BufReader::new(file);
-    let decoder = WebPDecoder::new(reader).ok()?;
+    let mut decoder = image_webp::WebPDecoder::new(reader).ok()?;
 
     // Check if it's animated
-    if !decoder.has_animation() {
+    if !decoder.is_animated() {
         return None; // Not animated, use static loader
     }
 
@@ -309,37 +312,59 @@ fn load_animated_webp(path: &PathBuf, max_width: u32, max_height: u32) -> Option
     let (target_width, target_height) =
         scale_dimensions(orig_width, orig_height, max_width, max_height);
 
+    let has_alpha = decoder.has_alpha();
+    let num_frames = decoder.num_frames();
+    let bytes_per_pixel: usize = if has_alpha { 4 } else { 3 };
+    let buf_size = orig_width as usize * orig_height as usize * bytes_per_pixel;
+    let mut buf = vec![0u8; buf_size];
+
     let mut frames = Vec::new();
 
-    for frame_result in decoder.into_frames() {
-        if let Ok(frame) = frame_result {
-            let (numer, denom) = frame.delay().numer_denom_ms();
-            let delay_ms = if denom > 0 { numer / denom } else { 100 };
-            let delay_ms = delay_ms.max(20); // Minimum 20ms
+    for _ in 0..num_frames {
+        match decoder.read_frame(&mut buf) {
+            Ok(delay_ms) => {
+                let delay_ms = delay_ms.max(20); // Minimum 20ms
 
-            let img = frame.into_buffer();
-            let (w, h) = (img.width(), img.height());
+                // Convert to RGBA if the image doesn't have alpha
+                let rgba = if has_alpha {
+                    buf.clone()
+                } else {
+                    let mut rgba =
+                        Vec::with_capacity(orig_width as usize * orig_height as usize * 4);
+                    for chunk in buf.chunks_exact(3) {
+                        rgba.push(chunk[0]);
+                        rgba.push(chunk[1]);
+                        rgba.push(chunk[2]);
+                        rgba.push(255);
+                    }
+                    rgba
+                };
 
-            let scaled = if target_width != w || target_height != h {
-                let resized = image::imageops::resize(
-                    &img,
-                    target_width,
-                    target_height,
-                    image::imageops::FilterType::Triangle,
-                );
-                resized.into_raw()
-            } else {
-                img.into_raw()
-            };
+                let img =
+                    image::RgbaImage::from_raw(orig_width, orig_height, rgba)?;
 
-            let bgra = rgba_to_bgra(&scaled);
+                let scaled = if target_width != orig_width || target_height != orig_height {
+                    let resized = image::imageops::resize(
+                        &img,
+                        target_width,
+                        target_height,
+                        image::imageops::FilterType::Triangle,
+                    );
+                    resized.into_raw()
+                } else {
+                    img.into_raw()
+                };
 
-            frames.push(ImageFrame {
-                pixels: bgra,
-                width: target_width,
-                height: target_height,
-                delay_ms,
-            });
+                let bgra = rgba_to_bgra(&scaled);
+
+                frames.push(ImageFrame {
+                    pixels: bgra,
+                    width: target_width,
+                    height: target_height,
+                    delay_ms,
+                });
+            }
+            Err(_) => break, // Stop on first error
         }
     }
 

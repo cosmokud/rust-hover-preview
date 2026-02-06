@@ -799,6 +799,7 @@ dependencies = [
  "configparser",
  "gif 0.13.3",
  "image",
+ "image-webp",
  "once_cell",
  "windows",
  "winres",
