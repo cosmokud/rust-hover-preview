@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicIsize, AtomicU32, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, WPARAM};
@@ -72,6 +72,8 @@ struct ImageFrame {
 /// Media data that can be either static or animated
 struct MediaData {
     frames: Vec<ImageFrame>,
+    /// Shared frames vec for streaming decode (animated formats append here)
+    shared_frames: Option<Arc<Mutex<Vec<ImageFrame>>>>,
     current_frame: usize,
     last_frame_time: Instant,
     media_type: MediaType,
@@ -93,7 +95,30 @@ impl MediaData {
         self.frames[self.current_frame].height
     }
 
+    /// Pull any newly decoded frames from the shared buffer
+    fn sync_shared_frames(&mut self) {
+        if let Some(ref shared) = self.shared_frames {
+            if let Ok(shared_frames) = shared.lock() {
+                if shared_frames.len() > self.frames.len() {
+                    self.frames.extend(
+                        shared_frames[self.frames.len()..]
+                            .iter()
+                            .map(|f| ImageFrame {
+                                pixels: f.pixels.clone(),
+                                width: f.width,
+                                height: f.height,
+                                delay_ms: f.delay_ms,
+                            }),
+                    );
+                }
+            }
+        }
+    }
+
     fn advance_frame(&mut self) -> bool {
+        // Pull in any new frames from streaming decode
+        self.sync_shared_frames();
+
         if self.frames.len() <= 1 {
             return false;
         }
@@ -234,7 +259,67 @@ fn scale_dimensions(
     (new_width, new_height)
 }
 
-/// Load an animated GIF file
+/// Decode a single GIF frame from canvas to an ImageFrame
+fn decode_gif_frame_to_image(
+    canvas: &[u8],
+    gif_width: u32,
+    gif_height: u32,
+    target_width: u32,
+    target_height: u32,
+    delay_ms: u32,
+) -> Option<ImageFrame> {
+    let scaled = if target_width != gif_width || target_height != gif_height {
+        let img = image::RgbaImage::from_raw(gif_width, gif_height, canvas.to_vec())?;
+        let resized = image::imageops::resize(
+            &img,
+            target_width,
+            target_height,
+            image::imageops::FilterType::Nearest,
+        );
+        resized.into_raw()
+    } else {
+        canvas.to_vec()
+    };
+
+    let bgra = rgba_to_bgra(&scaled);
+
+    Some(ImageFrame {
+        pixels: bgra,
+        width: target_width,
+        height: target_height,
+        delay_ms,
+    })
+}
+
+/// Composite a GIF frame onto the canvas
+fn composite_gif_frame(canvas: &mut [u8], frame: &gif::Frame, gif_width: u32, gif_height: u32) {
+    let frame_x = frame.left as usize;
+    let frame_y = frame.top as usize;
+    let frame_w = frame.width as usize;
+    let frame_h = frame.height as usize;
+
+    for y in 0..frame_h {
+        for x in 0..frame_w {
+            let src_idx = (y * frame_w + x) * 4;
+            let dst_x = frame_x + x;
+            let dst_y = frame_y + y;
+            if dst_x < gif_width as usize && dst_y < gif_height as usize {
+                let dst_idx = (dst_y * gif_width as usize + dst_x) * 4;
+                if src_idx + 3 < frame.buffer.len() {
+                    let alpha = frame.buffer[src_idx + 3];
+                    if alpha > 0 {
+                        canvas[dst_idx] = frame.buffer[src_idx];
+                        canvas[dst_idx + 1] = frame.buffer[src_idx + 1];
+                        canvas[dst_idx + 2] = frame.buffer[src_idx + 2];
+                        canvas[dst_idx + 3] = alpha;
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Load an animated GIF file - decodes first frame immediately, streams the rest
 fn load_animated_gif(path: &PathBuf, max_width: u32, max_height: u32) -> Option<MediaData> {
     let file = File::open(path).ok()?;
     let mut decoder = DecodeOptions::new();
@@ -244,70 +329,69 @@ fn load_animated_gif(path: &PathBuf, max_width: u32, max_height: u32) -> Option<
     let (gif_width, gif_height) = (decoder.width() as u32, decoder.height() as u32);
     let (target_width, target_height) = scale_dimensions(gif_width, gif_height, max_width, max_height);
 
-    let mut frames = Vec::new();
     let mut canvas = vec![0u8; (gif_width * gif_height * 4) as usize];
 
-    while let Some(frame) = decoder.read_next_frame().ok()? {
-        // Composite frame onto canvas
-        let frame_x = frame.left as usize;
-        let frame_y = frame.top as usize;
-        let frame_w = frame.width as usize;
-        let frame_h = frame.height as usize;
+    // Decode first frame
+    let first_frame = decoder.read_next_frame().ok()??;
+    composite_gif_frame(&mut canvas, first_frame, gif_width, gif_height);
+    let delay_ms = (first_frame.delay as u32 * 10).max(20);
+    let first_image = decode_gif_frame_to_image(
+        &canvas, gif_width, gif_height, target_width, target_height, delay_ms,
+    )?;
 
-        for y in 0..frame_h {
-            for x in 0..frame_w {
-                let src_idx = (y * frame_w + x) * 4;
-                let dst_x = frame_x + x;
-                let dst_y = frame_y + y;
-                if dst_x < gif_width as usize && dst_y < gif_height as usize {
-                    let dst_idx = (dst_y * gif_width as usize + dst_x) * 4;
-                    if src_idx + 3 < frame.buffer.len() {
-                        let alpha = frame.buffer[src_idx + 3];
-                        if alpha > 0 {
-                            canvas[dst_idx] = frame.buffer[src_idx];
-                            canvas[dst_idx + 1] = frame.buffer[src_idx + 1];
-                            canvas[dst_idx + 2] = frame.buffer[src_idx + 2];
-                            canvas[dst_idx + 3] = alpha;
-                        }
-                    }
-                }
-            }
-        }
-
-        // Scale canvas to target size
-        let scaled = if target_width != gif_width || target_height != gif_height {
-            let img =
-                image::RgbaImage::from_raw(gif_width, gif_height, canvas.clone())?;
-            let resized = image::imageops::resize(
-                &img,
-                target_width,
-                target_height,
-                image::imageops::FilterType::Triangle,
-            );
-            resized.into_raw()
-        } else {
-            canvas.clone()
-        };
-
-        let bgra = rgba_to_bgra(&scaled);
-
-        // GIF delay is in centiseconds, convert to milliseconds (minimum 20ms for smooth playback)
-        let delay_ms = (frame.delay as u32 * 10).max(20);
-
-        frames.push(ImageFrame {
-            pixels: bgra,
+    let shared = Arc::new(Mutex::new(vec![first_image.pixels.clone()].into_iter().map(|pixels| {
+        ImageFrame {
+            pixels,
             width: target_width,
             height: target_height,
             delay_ms,
-        });
-    }
+        }
+    }).collect::<Vec<_>>()));
 
-    if frames.is_empty() {
-        return None;
-    }
+    let shared_clone = Arc::clone(&shared);
+
+    // Stream remaining frames in background
+    let path_clone = path.clone();
+    std::thread::spawn(move || {
+        // Re-open and re-decode from the start to get remaining frames
+        let file = match File::open(&path_clone) {
+            Ok(f) => f,
+            Err(_) => return,
+        };
+        let mut dec = DecodeOptions::new();
+        dec.set_color_output(gif::ColorOutput::RGBA);
+        let mut dec = match dec.read_info(BufReader::new(file)) {
+            Ok(d) => d,
+            Err(_) => return,
+        };
+
+        let mut canvas = vec![0u8; (gif_width * gif_height * 4) as usize];
+        let mut frame_idx = 0;
+
+        while let Ok(Some(frame)) = dec.read_next_frame() {
+            composite_gif_frame(&mut canvas, frame, gif_width, gif_height);
+            let delay_ms = (frame.delay as u32 * 10).max(20);
+
+            if frame_idx == 0 {
+                // Skip first frame, already decoded
+                frame_idx += 1;
+                continue;
+            }
+
+            if let Some(img) = decode_gif_frame_to_image(
+                &canvas, gif_width, gif_height, target_width, target_height, delay_ms,
+            ) {
+                if let Ok(mut frames) = shared_clone.lock() {
+                    frames.push(img);
+                }
+            }
+            frame_idx += 1;
+        }
+    });
 
     Some(MediaData {
-        frames,
+        frames: vec![first_image],
+        shared_frames: Some(shared),
         current_frame: 0,
         last_frame_time: Instant::now(),
         media_type: MediaType::AnimatedGif,
@@ -316,24 +400,77 @@ fn load_animated_gif(path: &PathBuf, max_width: u32, max_height: u32) -> Option<
     })
 }
 
-/// Load an animated WebP file using image_webp directly for reliable frame decoding.
-/// This bypasses the image crate's AnimationDecoder wrapper which has a frame iterator
-/// state bug: if any frame errors, subsequent frames all retry the same broken position.
-/// Using image_webp directly also avoids a latent RIFF padding bug in next_frame_start
-/// calculation (unrounded anmf_size used instead of rounded).
+/// Decode a single WebP frame buffer into an ImageFrame
+fn decode_webp_frame_to_image(
+    buf: &[u8],
+    has_alpha: bool,
+    orig_width: u32,
+    orig_height: u32,
+    target_width: u32,
+    target_height: u32,
+    delay_ms: u32,
+) -> Option<ImageFrame> {
+    // Convert to RGBA if the image doesn't have alpha
+    let rgba = if has_alpha {
+        buf.to_vec()
+    } else {
+        let mut rgba = Vec::with_capacity(orig_width as usize * orig_height as usize * 4);
+        for chunk in buf.chunks_exact(3) {
+            rgba.push(chunk[0]);
+            rgba.push(chunk[1]);
+            rgba.push(chunk[2]);
+            rgba.push(255);
+        }
+        rgba
+    };
+
+    let expected_rgba = orig_width as usize * orig_height as usize * 4;
+    if rgba.len() != expected_rgba {
+        return None;
+    }
+
+    let img = image::RgbaImage::from_raw(orig_width, orig_height, rgba)?;
+
+    let scaled = if target_width != orig_width || target_height != orig_height {
+        let resized = image::imageops::resize(
+            &img,
+            target_width,
+            target_height,
+            image::imageops::FilterType::Nearest,
+        );
+        resized.into_raw()
+    } else {
+        img.into_raw()
+    };
+
+    let bgra = rgba_to_bgra(&scaled);
+
+    let expected_bgra = target_width as usize * target_height as usize * 4;
+    if bgra.len() != expected_bgra {
+        return None;
+    }
+
+    Some(ImageFrame {
+        pixels: bgra,
+        width: target_width,
+        height: target_height,
+        delay_ms,
+    })
+}
+
+/// Load an animated WebP file - decodes first frame immediately, streams the rest.
+/// Uses image_webp directly for reliable frame decoding.
 fn load_animated_webp(path: &PathBuf, max_width: u32, max_height: u32) -> Option<MediaData> {
     let file = File::open(path).ok()?;
     let reader = BufReader::new(file);
     let mut decoder = image_webp::WebPDecoder::new(reader).ok()?;
 
-    // Check if it's animated
     if !decoder.is_animated() {
-        return None; // Not animated, use static loader
+        return None;
     }
 
     let (orig_width, orig_height) = decoder.dimensions();
 
-    // Validate dimensions to prevent excessive allocation or crashes
     if orig_width == 0 || orig_height == 0 || orig_width > 16384 || orig_height > 16384 {
         return None;
     }
@@ -348,7 +485,6 @@ fn load_animated_webp(path: &PathBuf, max_width: u32, max_height: u32) -> Option
     let has_alpha = decoder.has_alpha();
     let num_frames = decoder.num_frames();
 
-    // Sanity check on frame count
     if num_frames == 0 || num_frames > 10000 {
         return None;
     }
@@ -356,88 +492,75 @@ fn load_animated_webp(path: &PathBuf, max_width: u32, max_height: u32) -> Option
     let bytes_per_pixel: usize = if has_alpha { 4 } else { 3 };
     let buf_size = orig_width as usize * orig_height as usize * bytes_per_pixel;
 
-    // Prevent excessive memory allocation (100MB per frame buffer)
     if buf_size > 100_000_000 {
         return None;
     }
 
     let mut buf = vec![0u8; buf_size];
 
-    let mut frames = Vec::new();
+    // Decode first frame immediately
+    let first_delay = match decoder.read_frame(&mut buf) {
+        Ok(d) => d.max(20),
+        Err(_) => return None,
+    };
 
-    for _ in 0..num_frames {
-        match decoder.read_frame(&mut buf) {
-            Ok(delay_ms) => {
-                let delay_ms = delay_ms.max(20); // Minimum 20ms
+    let first_image = decode_webp_frame_to_image(
+        &buf, has_alpha, orig_width, orig_height, target_width, target_height, first_delay,
+    )?;
 
-                // Validate buffer was properly filled
-                if buf.len() != buf_size {
-                    break;
-                }
+    // Set up shared frame buffer for streaming
+    let shared = Arc::new(Mutex::new(vec![ImageFrame {
+        pixels: first_image.pixels.clone(),
+        width: target_width,
+        height: target_height,
+        delay_ms: first_delay,
+    }]));
 
-                // Convert to RGBA if the image doesn't have alpha
-                let rgba = if has_alpha {
-                    buf.clone()
-                } else {
-                    let mut rgba =
-                        Vec::with_capacity(orig_width as usize * orig_height as usize * 4);
-                    for chunk in buf.chunks_exact(3) {
-                        rgba.push(chunk[0]);
-                        rgba.push(chunk[1]);
-                        rgba.push(chunk[2]);
-                        rgba.push(255);
+    let shared_clone = Arc::clone(&shared);
+
+    // Stream remaining frames in background thread
+    let path_clone = path.clone();
+    std::thread::spawn(move || {
+        // Re-open decoder to get remaining frames
+        let file = match File::open(&path_clone) {
+            Ok(f) => f,
+            Err(_) => return,
+        };
+        let reader = BufReader::new(file);
+        let mut dec = match image_webp::WebPDecoder::new(reader) {
+            Ok(d) => d,
+            Err(_) => return,
+        };
+
+        let bpp: usize = if dec.has_alpha() { 4 } else { 3 };
+        let bs = orig_width as usize * orig_height as usize * bpp;
+        let mut buf = vec![0u8; bs];
+
+        let total = dec.num_frames();
+        for i in 0..total {
+            match dec.read_frame(&mut buf) {
+                Ok(delay_ms) => {
+                    if i == 0 {
+                        continue; // Skip first frame, already decoded
                     }
-                    rgba
-                };
-
-                // Validate RGBA buffer size
-                let expected_rgba = orig_width as usize * orig_height as usize * 4;
-                if rgba.len() != expected_rgba {
-                    break;
+                    let delay_ms = delay_ms.max(20);
+                    if let Some(img) = decode_webp_frame_to_image(
+                        &buf, dec.has_alpha(), orig_width, orig_height,
+                        target_width, target_height, delay_ms,
+                    ) {
+                        if let Ok(mut frames) = shared_clone.lock() {
+                            frames.push(img);
+                        }
+                    }
                 }
-
-                let img = match image::RgbaImage::from_raw(orig_width, orig_height, rgba) {
-                    Some(img) => img,
-                    None => break,
-                };
-
-                let scaled = if target_width != orig_width || target_height != orig_height {
-                    let resized = image::imageops::resize(
-                        &img,
-                        target_width,
-                        target_height,
-                        image::imageops::FilterType::Triangle,
-                    );
-                    resized.into_raw()
-                } else {
-                    img.into_raw()
-                };
-
-                let bgra = rgba_to_bgra(&scaled);
-
-                // Final validation of output buffer
-                let expected_bgra = target_width as usize * target_height as usize * 4;
-                if bgra.len() != expected_bgra {
-                    break;
-                }
-
-                frames.push(ImageFrame {
-                    pixels: bgra,
-                    width: target_width,
-                    height: target_height,
-                    delay_ms,
-                });
+                Err(_) => break,
             }
-            Err(_) => break, // Stop on first error
         }
-    }
-
-    if frames.is_empty() {
-        return None;
-    }
+    });
 
     Some(MediaData {
-        frames,
+        frames: vec![first_image],
+        shared_frames: Some(shared),
         current_frame: 0,
         last_frame_time: Instant::now(),
         media_type: MediaType::AnimatedWebP,
@@ -475,6 +598,7 @@ fn load_static_image(path: &PathBuf, max_width: u32, max_height: u32) -> Option<
 
     Some(MediaData {
         frames: vec![frame],
+        shared_frames: None,
         current_frame: 0,
         last_frame_time: Instant::now(),
         media_type: MediaType::StaticImage,
@@ -502,6 +626,7 @@ fn load_video_thumbnail(path: &PathBuf, max_width: u32, max_height: u32) -> Opti
 
     Some(MediaData {
         frames: vec![frame],
+        shared_frames: None,
         current_frame: 0,
         last_frame_time: Instant::now(),
         media_type: MediaType::Video,
@@ -885,6 +1010,7 @@ fn create_loading_media(width: u32, height: u32) -> MediaData {
     };
     MediaData {
         frames: vec![frame],
+        shared_frames: None,
         current_frame: 0,
         last_frame_time: Instant::now(),
         media_type: MediaType::Loading,
@@ -1112,7 +1238,7 @@ pub fn run_preview_window() {
 
             // Show loading spinner if a background load has been pending for 3+ seconds
             if let Some(ref mut pl) = pending_load {
-                if !pl.spinner_shown && pl.started.elapsed() >= Duration::from_secs(3) {
+                if !pl.spinner_shown && pl.started.elapsed() >= Duration::from_secs(2) {
                     pl.spinner_shown = true;
                     let loading = create_loading_media(pl.width, pl.height);
                     if let Ok(mut current) = CURRENT_MEDIA.lock() {
