@@ -22,10 +22,10 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DispatchMessageW, EnumWindows, GetSystemMetrics,
     GetWindowLongPtrW, GetWindowThreadProcessId, LoadCursorW, MoveWindow, PeekMessageW,
     RegisterClassExW, SetLayeredWindowAttributes, SetWindowLongPtrW, SetWindowPos, ShowWindow,
-    TranslateMessage, CS_HREDRAW, CS_VREDRAW, GWL_EXSTYLE, HWND_TOPMOST, IDC_ARROW, LWA_ALPHA,
-    MSG, PM_REMOVE, SM_CXSCREEN, SM_CYSCREEN, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-    SWP_SHOWWINDOW, SW_HIDE, SW_SHOWNOACTIVATE, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
-    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    TranslateMessage, CS_HREDRAW, CS_VREDRAW, GWL_EXSTYLE, HWND_TOPMOST, IDC_ARROW, LWA_ALPHA, MSG,
+    PM_REMOVE, SM_CXSCREEN, SM_CYSCREEN, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW,
+    SW_HIDE, SW_SHOWNOACTIVATE, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+    WS_EX_TOPMOST, WS_POPUP,
 };
 
 const PREVIEW_CLASS: PCWSTR = w!("RustHoverPreviewWindow");
@@ -110,16 +110,17 @@ impl MediaData {
         if let Some(ref shared) = self.shared_frames {
             if let Ok(shared_frames) = shared.lock() {
                 if shared_frames.len() > self.frames.len() {
-                    self.frames.extend(
-                        shared_frames[self.frames.len()..]
-                            .iter()
-                            .map(|f| ImageFrame {
-                                pixels: f.pixels.clone(),
-                                width: f.width,
-                                height: f.height,
-                                delay_ms: f.delay_ms,
-                            }),
-                    );
+                    self.frames
+                        .extend(
+                            shared_frames[self.frames.len()..]
+                                .iter()
+                                .map(|f| ImageFrame {
+                                    pixels: f.pixels.clone(),
+                                    width: f.width,
+                                    height: f.height,
+                                    delay_ms: f.delay_ms,
+                                }),
+                        );
                 }
             }
         }
@@ -176,8 +177,10 @@ impl MediaData {
 
     /// Returns true if this media is an animation still being decoded
     fn is_streaming(&self) -> bool {
-        matches!(self.media_type, MediaType::AnimatedGif | MediaType::AnimatedWebP)
-            && !self.is_fully_loaded()
+        matches!(
+            self.media_type,
+            MediaType::AnimatedGif | MediaType::AnimatedWebP
+        ) && !self.is_fully_loaded()
     }
 
     fn update_loading_frame(&mut self) -> bool {
@@ -222,31 +225,31 @@ pub fn is_cursor_over_preview() -> bool {
     unsafe {
         use windows::Win32::Foundation::POINT;
         use windows::Win32::UI::WindowsAndMessaging::{GetCursorPos, WindowFromPoint};
-        
+
         let mut cursor_pos = POINT::default();
         if GetCursorPos(&mut cursor_pos).is_err() {
             return false;
         }
-        
+
         let hwnd_under_cursor = WindowFromPoint(cursor_pos);
         if hwnd_under_cursor.is_invalid() {
             return false;
         }
-        
+
         let hwnd_ptr = hwnd_under_cursor.0 as isize;
-        
+
         // Check image preview window
         let preview_hwnd = PREVIEW_HWND.load(Ordering::SeqCst);
         if preview_hwnd != 0 && hwnd_ptr == preview_hwnd {
             return true;
         }
-        
+
         // Check video preview window (ffplay)
         let video_hwnd = VIDEO_HWND.load(Ordering::SeqCst);
         if video_hwnd != 0 && hwnd_ptr == video_hwnd {
             return true;
         }
-        
+
         false
     }
 }
@@ -375,7 +378,8 @@ fn load_animated_gif(path: &PathBuf, max_width: u32, max_height: u32) -> Option<
     let mut decoder = decoder.read_info(BufReader::new(file)).ok()?;
 
     let (gif_width, gif_height) = (decoder.width() as u32, decoder.height() as u32);
-    let (target_width, target_height) = scale_dimensions(gif_width, gif_height, max_width, max_height);
+    let (target_width, target_height) =
+        scale_dimensions(gif_width, gif_height, max_width, max_height);
 
     let mut canvas = vec![0u8; (gif_width * gif_height * 4) as usize];
 
@@ -384,17 +388,30 @@ fn load_animated_gif(path: &PathBuf, max_width: u32, max_height: u32) -> Option<
     composite_gif_frame(&mut canvas, first_frame, gif_width, gif_height);
     let delay_ms = (first_frame.delay as u32 * 10).max(20);
     let first_image = decode_gif_frame_to_image(
-        &canvas, gif_width, gif_height, target_width, target_height, delay_ms,
+        &canvas,
+        gif_width,
+        gif_height,
+        target_width,
+        target_height,
+        delay_ms,
     )?;
 
-    let shared = Arc::new(Mutex::new(vec![first_image.pixels.clone()].into_iter().map(|pixels| {
-        ImageFrame {
-            pixels,
-            width: target_width,
-            height: target_height,
-            delay_ms,
-        }
-    }).collect::<Vec<_>>()));
+    let has_more_frames = matches!(decoder.read_next_frame(), Ok(Some(_)));
+    if !has_more_frames {
+        return None;
+    }
+
+    let shared = Arc::new(Mutex::new(
+        vec![first_image.pixels.clone()]
+            .into_iter()
+            .map(|pixels| ImageFrame {
+                pixels,
+                width: target_width,
+                height: target_height,
+                delay_ms,
+            })
+            .collect::<Vec<_>>(),
+    ));
 
     let shared_clone = Arc::clone(&shared);
     let loaded_flag = Arc::new(AtomicBool::new(false));
@@ -406,13 +423,19 @@ fn load_animated_gif(path: &PathBuf, max_width: u32, max_height: u32) -> Option<
         // Re-open and re-decode from the start to get remaining frames
         let file = match File::open(&path_clone) {
             Ok(f) => f,
-            Err(_) => { loaded_flag_clone.store(true, Ordering::Release); return; },
+            Err(_) => {
+                loaded_flag_clone.store(true, Ordering::Release);
+                return;
+            }
         };
         let mut dec = DecodeOptions::new();
         dec.set_color_output(gif::ColorOutput::RGBA);
         let mut dec = match dec.read_info(BufReader::new(file)) {
             Ok(d) => d,
-            Err(_) => { loaded_flag_clone.store(true, Ordering::Release); return; },
+            Err(_) => {
+                loaded_flag_clone.store(true, Ordering::Release);
+                return;
+            }
         };
 
         let mut canvas = vec![0u8; (gif_width * gif_height * 4) as usize];
@@ -429,7 +452,12 @@ fn load_animated_gif(path: &PathBuf, max_width: u32, max_height: u32) -> Option<
             }
 
             if let Some(img) = decode_gif_frame_to_image(
-                &canvas, gif_width, gif_height, target_width, target_height, delay_ms,
+                &canvas,
+                gif_width,
+                gif_height,
+                target_width,
+                target_height,
+                delay_ms,
             ) {
                 if let Ok(mut frames) = shared_clone.lock() {
                     frames.push(img);
@@ -549,7 +577,13 @@ fn load_animated_webp(path: &PathBuf, max_width: u32, max_height: u32) -> Option
         Err(_) => return None,
     };
     let first_image = decode_webp_frame_to_image(
-        &buf, has_alpha, orig_width, orig_height, target_width, target_height, first_delay,
+        &buf,
+        has_alpha,
+        orig_width,
+        orig_height,
+        target_width,
+        target_height,
+        first_delay,
     )?;
 
     // Shared buffer: background thread pushes decoded frames here
@@ -567,11 +601,17 @@ fn load_animated_webp(path: &PathBuf, max_width: u32, max_height: u32) -> Option
     std::thread::spawn(move || {
         let file = match File::open(&path_clone) {
             Ok(f) => f,
-            Err(_) => { loaded_flag_clone.store(true, Ordering::Release); return; },
+            Err(_) => {
+                loaded_flag_clone.store(true, Ordering::Release);
+                return;
+            }
         };
         let mut dec = match image_webp::WebPDecoder::new(BufReader::new(file)) {
             Ok(d) => d,
-            Err(_) => { loaded_flag_clone.store(true, Ordering::Release); return; },
+            Err(_) => {
+                loaded_flag_clone.store(true, Ordering::Release);
+                return;
+            }
         };
 
         let bpp: usize = if dec.has_alpha() { 4 } else { 3 };
@@ -581,11 +621,18 @@ fn load_animated_webp(path: &PathBuf, max_width: u32, max_height: u32) -> Option
         for i in 0..total {
             match dec.read_frame(&mut buf) {
                 Ok(delay_ms) => {
-                    if i == 0 { continue; } // already decoded above
+                    if i == 0 {
+                        continue;
+                    } // already decoded above
                     let delay_ms = delay_ms.max(20);
                     if let Some(img) = decode_webp_frame_to_image(
-                        &buf, dec.has_alpha(), orig_width, orig_height,
-                        target_width, target_height, delay_ms,
+                        &buf,
+                        dec.has_alpha(),
+                        orig_width,
+                        orig_height,
+                        target_width,
+                        target_height,
+                        delay_ms,
                     ) {
                         if let Ok(mut frames) = shared_clone.lock() {
                             frames.push(img);
@@ -697,7 +744,7 @@ fn get_video_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
         .arg(path)
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
-        .creation_flags(CREATE_NO_WINDOW)  // Hide the console window
+        .creation_flags(CREATE_NO_WINDOW) // Hide the console window
         .output()
         .ok()?;
 
@@ -718,11 +765,14 @@ struct EnumWindowsData {
 }
 
 /// Callback for EnumWindows to find a window belonging to a specific process
-unsafe extern "system" fn enum_windows_callback(hwnd: HWND, lparam: LPARAM) -> windows::Win32::Foundation::BOOL {
+unsafe extern "system" fn enum_windows_callback(
+    hwnd: HWND,
+    lparam: LPARAM,
+) -> windows::Win32::Foundation::BOOL {
     let data = &mut *(lparam.0 as *mut EnumWindowsData);
     let mut window_pid: u32 = 0;
     GetWindowThreadProcessId(hwnd, Some(&mut window_pid));
-    
+
     if window_pid == data.target_pid {
         data.found_hwnd = hwnd;
         return windows::Win32::Foundation::BOOL(0); // Stop enumeration
@@ -737,16 +787,16 @@ unsafe fn try_apply_noactivate_style(pid: u32) -> bool {
         target_pid: pid,
         found_hwnd: HWND::default(),
     };
-    
+
     let _ = EnumWindows(
         Some(enum_windows_callback),
         LPARAM(&mut data as *mut EnumWindowsData as isize),
     );
-    
+
     if !data.found_hwnd.is_invalid() {
         // Store the video window HWND for cursor-over-preview detection
         VIDEO_HWND.store(data.found_hwnd.0 as isize, Ordering::SeqCst);
-        
+
         // Found the window, add WS_EX_NOACTIVATE and WS_EX_TOPMOST to its extended style
         let current_style = GetWindowLongPtrW(data.found_hwnd, GWL_EXSTYLE);
         let new_style = current_style
@@ -786,7 +836,7 @@ fn set_noactivate_for_process(pid: u32) {
             std::thread::yield_now();
         }
     }
-    
+
     // Continue monitoring in background thread for longer period
     // The window might appear later, be recreated, or lose topmost
     std::thread::spawn(move || {
@@ -795,7 +845,13 @@ fn set_noactivate_for_process(pid: u32) {
                 let _ = try_apply_noactivate_style(pid);
 
                 // Gradually increase delay as we wait longer
-                let delay = if i < 20 { 1 } else if i < 60 { 5 } else { 25 };
+                let delay = if i < 20 {
+                    1
+                } else if i < 60 {
+                    5
+                } else {
+                    25
+                };
                 std::thread::sleep(Duration::from_millis(delay));
             }
         }
@@ -806,10 +862,10 @@ fn set_noactivate_for_process(pid: u32) {
 fn start_video_playback(path: &PathBuf, x: i32, y: i32, width: i32, height: i32) -> Option<Child> {
     // Get volume setting from config (0-100)
     let volume = CONFIG.lock().map(|c| c.video_volume).unwrap_or(0);
-    
+
     // Use ffplay for video playback - borderless, positioned at preview location
     let mut cmd = Command::new("ffplay");
-    
+
     // If volume is 0, disable audio completely for better performance
     if volume == 0 {
         cmd.arg("-an");
@@ -818,11 +874,12 @@ fn start_video_playback(path: &PathBuf, x: i32, y: i32, width: i32, height: i32)
         let volume_filter = format!("volume={:.2}", volume as f64 / 100.0);
         cmd.args(["-af", &volume_filter]);
     }
-    
-    let child = cmd.args([
+
+    let child = cmd
+        .args([
             "-loop",
-            "0",                   // Loop forever
-            "-noborder",           // No window border
+            "0",         // Loop forever
+            "-noborder", // No window border
             "-left",
             &x.to_string(),
             "-top",
@@ -839,17 +896,17 @@ fn start_video_playback(path: &PathBuf, x: i32, y: i32, width: i32, height: i32)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .creation_flags(CREATE_NO_WINDOW)  // Hide the console window
+        .creation_flags(CREATE_NO_WINDOW) // Hide the console window
         .spawn()
         .ok();
-    
+
     // After spawning, try to set WS_EX_NOACTIVATE on the ffplay window
     // to prevent it from stealing focus
     if let Some(ref child_process) = child {
         VIDEO_PID.store(child_process.id(), Ordering::SeqCst);
         set_noactivate_for_process(child_process.id());
     }
-    
+
     child
 }
 
@@ -938,9 +995,7 @@ fn load_media(path: &PathBuf, max_width: u32, max_height: u32) -> Option<MediaDa
     if is_gif_file(path) {
         // Try animated GIF first
         if let Some(media) = load_animated_gif(path, max_width, max_height) {
-            if media.frames.len() > 1 {
-                return Some(media);
-            }
+            return Some(media);
         }
         // Fall back to static for single-frame GIFs
         return load_static_image(path, max_width, max_height);
@@ -988,7 +1043,7 @@ fn render_loading_frame(width: u32, height: u32, angle: f32) -> Vec<u8> {
         pixel[0] = bg[0]; // B
         pixel[1] = bg[1]; // G
         pixel[2] = bg[2]; // R
-        pixel[3] = 255;   // A
+        pixel[3] = 255; // A
     }
 
     let two_pi = std::f32::consts::PI * 2.0;
@@ -1031,7 +1086,7 @@ fn render_loading_frame(width: u32, height: u32, angle: f32) -> Vec<u8> {
                     ((bg_c as f32) * (1.0 - a) + (fg as f32) * a).clamp(0.0, 255.0) as u8
                 };
 
-                pixels[idx] = blend(bg[0], 255, alpha);     // B
+                pixels[idx] = blend(bg[0], 255, alpha); // B
                 pixels[idx + 1] = blend(bg[1], 255, alpha); // G
                 pixels[idx + 2] = blend(bg[2], 255, alpha); // R
                 pixels[idx + 3] = 255;
@@ -1102,7 +1157,7 @@ fn overlay_loading_spinner(pixels: &mut [u8], width: u32, height: u32, angle: f3
                 let edge = (1.0 - (dist - backdrop_r + 1.0).max(0.0)).clamp(0.0, 1.0);
                 let bg_alpha = 0.45 * edge;
                 if bg_alpha > 0.0 {
-                    pixels[idx]     = ((pixels[idx]     as f32) * (1.0 - bg_alpha)) as u8;
+                    pixels[idx] = ((pixels[idx] as f32) * (1.0 - bg_alpha)) as u8;
                     pixels[idx + 1] = ((pixels[idx + 1] as f32) * (1.0 - bg_alpha)) as u8;
                     pixels[idx + 2] = ((pixels[idx + 2] as f32) * (1.0 - bg_alpha)) as u8;
                 }
@@ -1126,7 +1181,7 @@ fn overlay_loading_spinner(pixels: &mut [u8], width: u32, height: u32, angle: f3
                 let blend = |bg_c: u8, fg: u8, a: f32| -> u8 {
                     ((bg_c as f32) * (1.0 - a) + (fg as f32) * a).clamp(0.0, 255.0) as u8
                 };
-                pixels[idx]     = blend(pixels[idx],     255, alpha);
+                pixels[idx] = blend(pixels[idx], 255, alpha);
                 pixels[idx + 1] = blend(pixels[idx + 1], 255, alpha);
                 pixels[idx + 2] = blend(pixels[idx + 2], 255, alpha);
             }
@@ -1180,7 +1235,8 @@ unsafe extern "system" fn window_proc(
 
                         // If we're still streaming frames, overlay a loading spinner
                         let paint_pixels: std::borrow::Cow<[u8]> = if media.is_streaming() {
-                            let elapsed = media.loading_start
+                            let elapsed = media
+                                .loading_start
                                 .map(|s| s.elapsed().as_secs_f32())
                                 .unwrap_or(0.0);
                             let angle = elapsed * 2.0 * std::f32::consts::PI * 1.2;
@@ -1343,12 +1399,14 @@ pub fn run_preview_window() {
                             // If window wasn't shown yet (fast load), show it now
                             if let Some(ref pl) = pending_load {
                                 if pl.generation == result.generation && !pl.spinner_shown {
-                                    let _ = MoveWindow(
-                                        hwnd, pl.pos_x, pl.pos_y, mw, mh, false,
-                                    );
+                                    let _ = MoveWindow(hwnd, pl.pos_x, pl.pos_y, mw, mh, false);
                                     let _ = SetWindowPos(
-                                        hwnd, HWND_TOPMOST, pl.pos_x, pl.pos_y,
-                                        mw, mh,
+                                        hwnd,
+                                        HWND_TOPMOST,
+                                        pl.pos_x,
+                                        pl.pos_y,
+                                        mw,
+                                        mh,
                                         SWP_NOACTIVATE | SWP_SHOWWINDOW,
                                     );
                                     let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
@@ -1382,12 +1440,20 @@ pub fn run_preview_window() {
                         *current = Some(loading);
                     }
                     let _ = MoveWindow(
-                        hwnd, pl.pos_x, pl.pos_y,
-                        pl.width as i32, pl.height as i32, false,
+                        hwnd,
+                        pl.pos_x,
+                        pl.pos_y,
+                        pl.width as i32,
+                        pl.height as i32,
+                        false,
                     );
                     let _ = SetWindowPos(
-                        hwnd, HWND_TOPMOST, pl.pos_x, pl.pos_y,
-                        pl.width as i32, pl.height as i32,
+                        hwnd,
+                        HWND_TOPMOST,
+                        pl.pos_x,
+                        pl.pos_y,
+                        pl.width as i32,
+                        pl.height as i32,
                         SWP_NOACTIVATE | SWP_SHOWWINDOW,
                     );
                     let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
@@ -1405,8 +1471,7 @@ pub fn run_preview_window() {
                         let offset = 20; // Gap between cursor and preview
 
                         // Get config for positioning mode
-                        let follow_cursor =
-                            CONFIG.lock().map(|c| c.follow_cursor).unwrap_or(true);
+                        let follow_cursor = CONFIG.lock().map(|c| c.follow_cursor).unwrap_or(true);
 
                         // Get original media dimensions first
                         let orig_dims = match get_media_dimensions(&path) {
@@ -1457,9 +1522,8 @@ pub fn run_preview_window() {
                             let max_height = avail_h.max(1) as u32;
 
                             // Pre-calculate preview dimensions for positioning
-                            let (preview_w, preview_h) = scale_dimensions(
-                                orig_dims.0, orig_dims.1, max_width, max_height,
-                            );
+                            let (preview_w, preview_h) =
+                                scale_dimensions(orig_dims.0, orig_dims.1, max_width, max_height);
                             let media_width = preview_w as i32;
                             let media_height = preview_h as i32;
 
@@ -1492,7 +1556,11 @@ pub fn run_preview_window() {
                                         }
 
                                         let video_process = start_video_playback(
-                                            &path, pos_x, pos_y, media_width, media_height,
+                                            &path,
+                                            pos_x,
+                                            pos_y,
+                                            media_width,
+                                            media_height,
                                         );
 
                                         if let Ok(mut current) = CURRENT_MEDIA.lock() {
@@ -1503,11 +1571,17 @@ pub fn run_preview_window() {
 
                                         current_video_path = Some(path.clone());
                                         let _ = ensure_video_window_topmost(
-                                            pos_x, pos_y, media_width, media_height,
+                                            pos_x,
+                                            pos_y,
+                                            media_width,
+                                            media_height,
                                         );
                                     } else {
                                         let _ = ensure_video_window_topmost(
-                                            pos_x, pos_y, media_width, media_height,
+                                            pos_x,
+                                            pos_y,
+                                            media_width,
+                                            media_height,
                                         );
                                     }
                                 }
@@ -1538,12 +1612,11 @@ pub fn run_preview_window() {
                                 let tx = load_tx.clone();
                                 let path_clone = path.clone();
                                 std::thread::spawn(move || {
-                                    let media = std::panic::catch_unwind(
-                                        std::panic::AssertUnwindSafe(|| {
-                                            load_media(&path_clone, max_width, max_height)
-                                        }),
-                                    )
-                                    .unwrap_or(None);
+                                    let media =
+                                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+                                            || load_media(&path_clone, max_width, max_height),
+                                        ))
+                                        .unwrap_or(None);
                                     let _ = tx.send(LoadResult {
                                         generation: gen,
                                         media,
@@ -1575,9 +1648,8 @@ pub fn run_preview_window() {
                                 };
 
                             // Pre-calculate preview dimensions for positioning
-                            let (preview_w, preview_h) = scale_dimensions(
-                                orig_dims.0, orig_dims.1, max_width, max_height,
-                            );
+                            let (preview_w, preview_h) =
+                                scale_dimensions(orig_dims.0, orig_dims.1, max_width, max_height);
                             let media_width = preview_w as i32;
                             let media_height = preview_h as i32;
 
@@ -1610,7 +1682,11 @@ pub fn run_preview_window() {
                                         }
 
                                         let video_process = start_video_playback(
-                                            &path, pos_x, pos_y, media_width, media_height,
+                                            &path,
+                                            pos_x,
+                                            pos_y,
+                                            media_width,
+                                            media_height,
                                         );
 
                                         if let Ok(mut current) = CURRENT_MEDIA.lock() {
@@ -1621,11 +1697,17 @@ pub fn run_preview_window() {
 
                                         current_video_path = Some(path.clone());
                                         let _ = ensure_video_window_topmost(
-                                            pos_x, pos_y, media_width, media_height,
+                                            pos_x,
+                                            pos_y,
+                                            media_width,
+                                            media_height,
                                         );
                                     } else {
                                         let _ = ensure_video_window_topmost(
-                                            pos_x, pos_y, media_width, media_height,
+                                            pos_x,
+                                            pos_y,
+                                            media_width,
+                                            media_height,
                                         );
                                     }
                                 }
@@ -1656,12 +1738,11 @@ pub fn run_preview_window() {
                                 let tx = load_tx.clone();
                                 let path_clone = path.clone();
                                 std::thread::spawn(move || {
-                                    let media = std::panic::catch_unwind(
-                                        std::panic::AssertUnwindSafe(|| {
-                                            load_media(&path_clone, max_width, max_height)
-                                        }),
-                                    )
-                                    .unwrap_or(None);
+                                    let media =
+                                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+                                            || load_media(&path_clone, max_width, max_height),
+                                        ))
+                                        .unwrap_or(None);
                                     let _ = tx.send(LoadResult {
                                         generation: gen,
                                         media,
