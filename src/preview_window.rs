@@ -49,6 +49,7 @@ static CURRENT_MEDIA: Lazy<Mutex<Option<MediaData>>> = Lazy::new(|| Mutex::new(N
 
 pub enum PreviewMessage {
     Show(PathBuf, i32, i32),
+    ShowKeyboard(PathBuf, i32, i32, i32, i32),
     Hide,
 }
 
@@ -208,6 +209,20 @@ pub fn show_preview(path: &PathBuf, x: i32, y: i32) {
     if let Ok(sender) = PREVIEW_SENDER.lock() {
         if let Some(ref tx) = *sender {
             let _ = tx.send(PreviewMessage::Show(path.clone(), x, y));
+        }
+    }
+}
+
+pub fn show_preview_keyboard(path: &PathBuf, item_left: i32, item_top: i32, item_right: i32, item_bottom: i32) {
+    if let Ok(sender) = PREVIEW_SENDER.lock() {
+        if let Some(ref tx) = *sender {
+            let _ = tx.send(PreviewMessage::ShowKeyboard(
+                path.clone(),
+                item_left,
+                item_top,
+                item_right,
+                item_bottom,
+            ));
         }
     }
 }
@@ -1299,6 +1314,238 @@ unsafe extern "system" fn window_proc(
     }
 }
 
+/// Computed preview window layout
+struct PreviewLayout {
+    pos_x: i32,
+    pos_y: i32,
+    max_width: u32,
+    max_height: u32,
+    preview_w: u32,
+    preview_h: u32,
+}
+
+/// Compute preview layout for mouse hover (relative to cursor position)
+fn compute_mouse_layout(
+    cursor_x: i32,
+    cursor_y: i32,
+    orig_dims: (u32, u32),
+    follow_cursor: bool,
+    screen_width: i32,
+    screen_height: i32,
+) -> Option<PreviewLayout> {
+    let offset = 20;
+    let (orig_w, orig_h) = (orig_dims.0 as i32, orig_dims.1 as i32);
+
+    if follow_cursor {
+        let quadrants = [
+            (
+                screen_width - cursor_x - offset,
+                screen_height - cursor_y - offset,
+                cursor_x + offset,
+                cursor_y + offset,
+            ), // BR
+            (cursor_x - offset, screen_height - cursor_y - offset, 0, cursor_y + offset), // BL
+            (screen_width - cursor_x - offset, cursor_y - offset, cursor_x + offset, 0),  // TR
+            (cursor_x - offset, cursor_y - offset, 0, 0),                                  // TL
+        ];
+
+        let mut best_quadrant = 0;
+        let mut best_scale: f32 = 0.0;
+
+        for (i, &(avail_w, avail_h, _, _)) in quadrants.iter().enumerate() {
+            if avail_w <= 0 || avail_h <= 0 {
+                continue;
+            }
+            let scale_x = avail_w as f32 / orig_w as f32;
+            let scale_y = avail_h as f32 / orig_h as f32;
+            let scale = scale_x.min(scale_y).min(1.0);
+            if scale > best_scale {
+                best_scale = scale;
+                best_quadrant = i;
+            }
+        }
+
+        if best_scale <= 0.0 {
+            return None;
+        }
+
+        let (avail_w, avail_h, _, _) = quadrants[best_quadrant];
+        let max_width = avail_w.max(1) as u32;
+        let max_height = avail_h.max(1) as u32;
+
+        let (preview_w, preview_h) =
+            scale_dimensions(orig_dims.0, orig_dims.1, max_width, max_height);
+        let media_width = preview_w as i32;
+        let media_height = preview_h as i32;
+
+        if media_width <= 0 || media_height <= 0 {
+            return None;
+        }
+
+        let (pos_x, pos_y) = match best_quadrant {
+            0 => (cursor_x + offset, cursor_y + offset),
+            1 => (cursor_x - offset - media_width, cursor_y + offset),
+            2 => (cursor_x + offset, cursor_y - offset - media_height),
+            3 => (cursor_x - offset - media_width, cursor_y - offset - media_height),
+            _ => (cursor_x + offset, cursor_y + offset),
+        };
+
+        Some(PreviewLayout { pos_x, pos_y, max_width, max_height, preview_w, preview_h })
+    } else {
+        let left_width = cursor_x - offset;
+        let right_width = screen_width - cursor_x - offset;
+        let full_height = screen_height;
+
+        let left_scale_x = left_width as f32 / orig_w as f32;
+        let left_scale_y = full_height as f32 / orig_h as f32;
+        let left_scale = left_scale_x.min(left_scale_y).min(1.0);
+
+        let right_scale_x = right_width as f32 / orig_w as f32;
+        let right_scale_y = full_height as f32 / orig_h as f32;
+        let right_scale = right_scale_x.min(right_scale_y).min(1.0);
+
+        let (use_left, max_width, max_height) =
+            if left_scale > right_scale && left_width > 0 {
+                (true, left_width.max(1) as u32, full_height as u32)
+            } else if right_width > 0 {
+                (false, right_width.max(1) as u32, full_height as u32)
+            } else {
+                return None;
+            };
+
+        let (preview_w, preview_h) =
+            scale_dimensions(orig_dims.0, orig_dims.1, max_width, max_height);
+        let media_width = preview_w as i32;
+        let media_height = preview_h as i32;
+
+        if media_width <= 0 || media_height <= 0 {
+            return None;
+        }
+
+        let pos_x = if use_left {
+            cursor_x - offset - media_width
+        } else {
+            cursor_x + offset
+        };
+        let pos_y = (screen_height - media_height) / 2;
+
+        Some(PreviewLayout { pos_x, pos_y, max_width, max_height, preview_w, preview_h })
+    }
+}
+
+/// Compute preview layout for keyboard hover (relative to item bounding rect)
+/// Positions the preview so it doesn't block the selected file item
+fn compute_keyboard_layout(
+    item_left: i32,
+    item_top: i32,
+    item_right: i32,
+    item_bottom: i32,
+    orig_dims: (u32, u32),
+    follow_cursor: bool,
+    screen_width: i32,
+    screen_height: i32,
+) -> Option<PreviewLayout> {
+    let gap = 10;
+    let (orig_w, orig_h) = (orig_dims.0 as i32, orig_dims.1 as i32);
+
+    if follow_cursor {
+        // Quadrant-based positioning relative to item rect edges
+        let quadrants = [
+            // Bottom-Right of item
+            (screen_width - item_right - gap, screen_height - item_bottom - gap, item_right + gap, item_bottom + gap),
+            // Bottom-Left of item
+            (item_left - gap, screen_height - item_bottom - gap, 0, item_bottom + gap),
+            // Top-Right of item
+            (screen_width - item_right - gap, item_top - gap, item_right + gap, 0),
+            // Top-Left of item
+            (item_left - gap, item_top - gap, 0, 0),
+        ];
+
+        let mut best_quadrant = 0;
+        let mut best_scale: f32 = 0.0;
+
+        for (i, &(avail_w, avail_h, _, _)) in quadrants.iter().enumerate() {
+            if avail_w <= 0 || avail_h <= 0 {
+                continue;
+            }
+            let scale_x = avail_w as f32 / orig_w as f32;
+            let scale_y = avail_h as f32 / orig_h as f32;
+            let scale = scale_x.min(scale_y).min(1.0);
+            if scale > best_scale {
+                best_scale = scale;
+                best_quadrant = i;
+            }
+        }
+
+        if best_scale <= 0.0 {
+            return None;
+        }
+
+        let (avail_w, avail_h, _, _) = quadrants[best_quadrant];
+        let max_width = avail_w.max(1) as u32;
+        let max_height = avail_h.max(1) as u32;
+
+        let (preview_w, preview_h) =
+            scale_dimensions(orig_dims.0, orig_dims.1, max_width, max_height);
+        let media_width = preview_w as i32;
+        let media_height = preview_h as i32;
+
+        if media_width <= 0 || media_height <= 0 {
+            return None;
+        }
+
+        let (pos_x, pos_y) = match best_quadrant {
+            0 => (item_right + gap, item_bottom + gap),
+            1 => (item_left - gap - media_width, item_bottom + gap),
+            2 => (item_right + gap, item_top - gap - media_height),
+            3 => (item_left - gap - media_width, item_top - gap - media_height),
+            _ => (item_right + gap, item_bottom + gap),
+        };
+
+        Some(PreviewLayout { pos_x, pos_y, max_width, max_height, preview_w, preview_h })
+    } else {
+        // Best spot mode: choose left or right side of item
+        let left_width = item_left - gap;
+        let right_width = screen_width - item_right - gap;
+        let full_height = screen_height;
+
+        let left_scale_x = left_width as f32 / orig_w as f32;
+        let left_scale_y = full_height as f32 / orig_h as f32;
+        let left_scale = left_scale_x.min(left_scale_y).min(1.0);
+
+        let right_scale_x = right_width as f32 / orig_w as f32;
+        let right_scale_y = full_height as f32 / orig_h as f32;
+        let right_scale = right_scale_x.min(right_scale_y).min(1.0);
+
+        let (use_left, max_width, max_height) =
+            if left_scale > right_scale && left_width > 0 {
+                (true, left_width.max(1) as u32, full_height as u32)
+            } else if right_width > 0 {
+                (false, right_width.max(1) as u32, full_height as u32)
+            } else {
+                return None;
+            };
+
+        let (preview_w, preview_h) =
+            scale_dimensions(orig_dims.0, orig_dims.1, max_width, max_height);
+        let media_width = preview_w as i32;
+        let media_height = preview_h as i32;
+
+        if media_width <= 0 || media_height <= 0 {
+            return None;
+        }
+
+        let pos_x = if use_left {
+            item_left - gap - media_width
+        } else {
+            item_right + gap
+        };
+        let pos_y = (screen_height - media_height) / 2;
+
+        Some(PreviewLayout { pos_x, pos_y, max_width, max_height, preview_w, preview_h })
+    }
+}
+
 pub fn run_preview_window() {
     let (tx, rx): (Sender<PreviewMessage>, Receiver<PreviewMessage>) = channel();
 
@@ -1463,291 +1710,41 @@ pub fn run_preview_window() {
 
             // Check for our custom messages
             while let Ok(preview_msg) = rx.try_recv() {
+                // Common variables for Show/ShowKeyboard - set in match, used after
+                let mut show_path: Option<PathBuf> = None;
+                let mut show_layout: Option<PreviewLayout> = None;
+                let mut show_is_video: bool = false;
+
                 match preview_msg {
                     PreviewMessage::Show(path, x, y) => {
-                        // Get screen dimensions
                         let screen_width = GetSystemMetrics(SM_CXSCREEN);
                         let screen_height = GetSystemMetrics(SM_CYSCREEN);
-                        let offset = 20; // Gap between cursor and preview
-
-                        // Get config for positioning mode
                         let follow_cursor = CONFIG.lock().map(|c| c.follow_cursor).unwrap_or(true);
 
-                        // Get original media dimensions first
-                        let orig_dims = match get_media_dimensions(&path) {
-                            Some(dims) => dims,
-                            None => continue,
-                        };
-                        let (orig_w, orig_h) = (orig_dims.0 as i32, orig_dims.1 as i32);
-
-                        let is_video = is_video_file(&path);
-
-                        if follow_cursor {
-                            // Follow cursor mode: use 4 quadrants around cursor
-                            let quadrants = [
-                                (
-                                    screen_width - x - offset,
-                                    screen_height - y - offset,
-                                    x + offset,
-                                    y + offset,
-                                ), // BR
-                                (x - offset, screen_height - y - offset, 0, y + offset), // BL
-                                (screen_width - x - offset, y - offset, x + offset, 0),  // TR
-                                (x - offset, y - offset, 0, 0),                          // TL
-                            ];
-
-                            // Find the best quadrant
-                            let mut best_quadrant = 0;
-                            let mut best_scale: f32 = 0.0;
-
-                            for (i, &(avail_w, avail_h, _, _)) in quadrants.iter().enumerate() {
-                                if avail_w <= 0 || avail_h <= 0 {
-                                    continue;
-                                }
-                                let scale_x = avail_w as f32 / orig_w as f32;
-                                let scale_y = avail_h as f32 / orig_h as f32;
-                                let scale = scale_x.min(scale_y).min(1.0);
-                                if scale > best_scale {
-                                    best_scale = scale;
-                                    best_quadrant = i;
-                                }
+                        if let Some(orig_dims) = get_media_dimensions(&path) {
+                            let is_video = is_video_file(&path);
+                            if let Some(layout) = compute_mouse_layout(
+                                x, y, orig_dims, follow_cursor, screen_width, screen_height,
+                            ) {
+                                show_is_video = is_video;
+                                show_layout = Some(layout);
+                                show_path = Some(path);
                             }
+                        }
+                    }
+                    PreviewMessage::ShowKeyboard(path, il, it, ir, ib) => {
+                        let screen_width = GetSystemMetrics(SM_CXSCREEN);
+                        let screen_height = GetSystemMetrics(SM_CYSCREEN);
+                        let follow_cursor = CONFIG.lock().map(|c| c.follow_cursor).unwrap_or(true);
 
-                            if best_scale <= 0.0 {
-                                continue;
-                            }
-
-                            let (avail_w, avail_h, _, _) = quadrants[best_quadrant];
-                            let max_width = avail_w.max(1) as u32;
-                            let max_height = avail_h.max(1) as u32;
-
-                            // Pre-calculate preview dimensions for positioning
-                            let (preview_w, preview_h) =
-                                scale_dimensions(orig_dims.0, orig_dims.1, max_width, max_height);
-                            let media_width = preview_w as i32;
-                            let media_height = preview_h as i32;
-
-                            if media_width <= 0 || media_height <= 0 {
-                                continue;
-                            }
-
-                            let (pos_x, pos_y) = match best_quadrant {
-                                0 => (x + offset, y + offset),
-                                1 => (x - offset - media_width, y + offset),
-                                2 => (x + offset, y - offset - media_height),
-                                3 => (x - offset - media_width, y - offset - media_height),
-                                _ => (x + offset, y + offset),
-                            };
-
-                            if is_video {
-                                if let Some(media_data) = load_media(&path, max_width, max_height) {
-                                    // For video, hide our window and use ffplay
-                                    let _ = ShowWindow(hwnd, SW_HIDE);
-
-                                    let process_running = is_video_process_running();
-                                    let should_start = current_video_path.as_ref() != Some(&path)
-                                        || !process_running;
-
-                                    if should_start {
-                                        if let Ok(mut media_guard) = CURRENT_MEDIA.lock() {
-                                            if let Some(ref mut media) = *media_guard {
-                                                stop_video_playback(media);
-                                            }
-                                        }
-
-                                        let video_process = start_video_playback(
-                                            &path,
-                                            pos_x,
-                                            pos_y,
-                                            media_width,
-                                            media_height,
-                                        );
-
-                                        if let Ok(mut current) = CURRENT_MEDIA.lock() {
-                                            let mut data = media_data;
-                                            data.video_process = video_process;
-                                            *current = Some(data);
-                                        }
-
-                                        current_video_path = Some(path.clone());
-                                        let _ = ensure_video_window_topmost(
-                                            pos_x,
-                                            pos_y,
-                                            media_width,
-                                            media_height,
-                                        );
-                                    } else {
-                                        let _ = ensure_video_window_topmost(
-                                            pos_x,
-                                            pos_y,
-                                            media_width,
-                                            media_height,
-                                        );
-                                    }
-                                }
-                            } else {
-                                // For images/animations, load async
-                                if current_video_path.is_some() {
-                                    if let Ok(mut media_guard) = CURRENT_MEDIA.lock() {
-                                        if let Some(ref mut media) = *media_guard {
-                                            stop_video_playback(media);
-                                        }
-                                    }
-                                    current_video_path = None;
-                                }
-
-                                // Start background load; spinner will appear after 3s
-                                current_generation += 1;
-                                let gen = current_generation;
-                                pending_load = Some(PendingLoad {
-                                    generation: gen,
-                                    started: Instant::now(),
-                                    pos_x,
-                                    pos_y,
-                                    width: preview_w,
-                                    height: preview_h,
-                                    spinner_shown: false,
-                                });
-
-                                let tx = load_tx.clone();
-                                let path_clone = path.clone();
-                                std::thread::spawn(move || {
-                                    let media =
-                                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(
-                                            || load_media(&path_clone, max_width, max_height),
-                                        ))
-                                        .unwrap_or(None);
-                                    let _ = tx.send(LoadResult {
-                                        generation: gen,
-                                        media,
-                                    });
-                                });
-                            }
-                        } else {
-                            // Best spot mode: choose left or right side of cursor for maximum size
-                            let left_width = x - offset;
-                            let right_width = screen_width - x - offset;
-                            let full_height = screen_height;
-
-                            // Calculate which side can show the media larger
-                            let left_scale_x = left_width as f32 / orig_w as f32;
-                            let left_scale_y = full_height as f32 / orig_h as f32;
-                            let left_scale = left_scale_x.min(left_scale_y).min(1.0);
-
-                            let right_scale_x = right_width as f32 / orig_w as f32;
-                            let right_scale_y = full_height as f32 / orig_h as f32;
-                            let right_scale = right_scale_x.min(right_scale_y).min(1.0);
-
-                            let (use_left, max_width, max_height) =
-                                if left_scale > right_scale && left_width > 0 {
-                                    (true, left_width.max(1) as u32, full_height as u32)
-                                } else if right_width > 0 {
-                                    (false, right_width.max(1) as u32, full_height as u32)
-                                } else {
-                                    continue;
-                                };
-
-                            // Pre-calculate preview dimensions for positioning
-                            let (preview_w, preview_h) =
-                                scale_dimensions(orig_dims.0, orig_dims.1, max_width, max_height);
-                            let media_width = preview_w as i32;
-                            let media_height = preview_h as i32;
-
-                            if media_width <= 0 || media_height <= 0 {
-                                continue;
-                            }
-
-                            // Position: center vertically, left or right side
-                            let pos_x = if use_left {
-                                x - offset - media_width
-                            } else {
-                                x + offset
-                            };
-                            let pos_y = (screen_height - media_height) / 2;
-
-                            if is_video {
-                                if let Some(media_data) = load_media(&path, max_width, max_height) {
-                                    // For video, hide our window and use ffplay
-                                    let _ = ShowWindow(hwnd, SW_HIDE);
-
-                                    let process_running = is_video_process_running();
-                                    let should_start = current_video_path.as_ref() != Some(&path)
-                                        || !process_running;
-
-                                    if should_start {
-                                        if let Ok(mut media_guard) = CURRENT_MEDIA.lock() {
-                                            if let Some(ref mut media) = *media_guard {
-                                                stop_video_playback(media);
-                                            }
-                                        }
-
-                                        let video_process = start_video_playback(
-                                            &path,
-                                            pos_x,
-                                            pos_y,
-                                            media_width,
-                                            media_height,
-                                        );
-
-                                        if let Ok(mut current) = CURRENT_MEDIA.lock() {
-                                            let mut data = media_data;
-                                            data.video_process = video_process;
-                                            *current = Some(data);
-                                        }
-
-                                        current_video_path = Some(path.clone());
-                                        let _ = ensure_video_window_topmost(
-                                            pos_x,
-                                            pos_y,
-                                            media_width,
-                                            media_height,
-                                        );
-                                    } else {
-                                        let _ = ensure_video_window_topmost(
-                                            pos_x,
-                                            pos_y,
-                                            media_width,
-                                            media_height,
-                                        );
-                                    }
-                                }
-                            } else {
-                                // For images/animations, load async
-                                if current_video_path.is_some() {
-                                    if let Ok(mut media_guard) = CURRENT_MEDIA.lock() {
-                                        if let Some(ref mut media) = *media_guard {
-                                            stop_video_playback(media);
-                                        }
-                                    }
-                                    current_video_path = None;
-                                }
-
-                                // Start background load; spinner will appear after 3s
-                                current_generation += 1;
-                                let gen = current_generation;
-                                pending_load = Some(PendingLoad {
-                                    generation: gen,
-                                    started: Instant::now(),
-                                    pos_x,
-                                    pos_y,
-                                    width: preview_w,
-                                    height: preview_h,
-                                    spinner_shown: false,
-                                });
-
-                                let tx = load_tx.clone();
-                                let path_clone = path.clone();
-                                std::thread::spawn(move || {
-                                    let media =
-                                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(
-                                            || load_media(&path_clone, max_width, max_height),
-                                        ))
-                                        .unwrap_or(None);
-                                    let _ = tx.send(LoadResult {
-                                        generation: gen,
-                                        media,
-                                    });
-                                });
+                        if let Some(orig_dims) = get_media_dimensions(&path) {
+                            let is_video = is_video_file(&path);
+                            if let Some(layout) = compute_keyboard_layout(
+                                il, it, ir, ib, orig_dims, follow_cursor, screen_width, screen_height,
+                            ) {
+                                show_is_video = is_video;
+                                show_layout = Some(layout);
+                                show_path = Some(path);
                             }
                         }
                     }
@@ -1766,6 +1763,103 @@ pub fn run_preview_window() {
                             *current = None;
                         }
                         current_video_path = None;
+                    }
+                }
+
+                // Shared load/display logic for Show and ShowKeyboard
+                if let (Some(path), Some(layout)) = (show_path, show_layout) {
+                    let pos_x = layout.pos_x;
+                    let pos_y = layout.pos_y;
+                    let media_width = layout.preview_w as i32;
+                    let media_height = layout.preview_h as i32;
+                    let max_width = layout.max_width;
+                    let max_height = layout.max_height;
+                    let preview_w = layout.preview_w;
+                    let preview_h = layout.preview_h;
+
+                    if show_is_video {
+                        if let Some(media_data) = load_media(&path, max_width, max_height) {
+                            // For video, hide our window and use ffplay
+                            let _ = ShowWindow(hwnd, SW_HIDE);
+
+                            let process_running = is_video_process_running();
+                            let should_start = current_video_path.as_ref() != Some(&path)
+                                || !process_running;
+
+                            if should_start {
+                                if let Ok(mut media_guard) = CURRENT_MEDIA.lock() {
+                                    if let Some(ref mut media) = *media_guard {
+                                        stop_video_playback(media);
+                                    }
+                                }
+
+                                let video_process = start_video_playback(
+                                    &path,
+                                    pos_x,
+                                    pos_y,
+                                    media_width,
+                                    media_height,
+                                );
+
+                                if let Ok(mut current) = CURRENT_MEDIA.lock() {
+                                    let mut data = media_data;
+                                    data.video_process = video_process;
+                                    *current = Some(data);
+                                }
+
+                                current_video_path = Some(path.clone());
+                                let _ = ensure_video_window_topmost(
+                                    pos_x,
+                                    pos_y,
+                                    media_width,
+                                    media_height,
+                                );
+                            } else {
+                                let _ = ensure_video_window_topmost(
+                                    pos_x,
+                                    pos_y,
+                                    media_width,
+                                    media_height,
+                                );
+                            }
+                        }
+                    } else {
+                        // For images/animations, load async
+                        if current_video_path.is_some() {
+                            if let Ok(mut media_guard) = CURRENT_MEDIA.lock() {
+                                if let Some(ref mut media) = *media_guard {
+                                    stop_video_playback(media);
+                                }
+                            }
+                            current_video_path = None;
+                        }
+
+                        // Start background load; spinner will appear after 2s
+                        current_generation += 1;
+                        let gen = current_generation;
+                        pending_load = Some(PendingLoad {
+                            generation: gen,
+                            started: Instant::now(),
+                            pos_x,
+                            pos_y,
+                            width: preview_w,
+                            height: preview_h,
+                            spinner_shown: false,
+                        });
+
+                        let tx = load_tx.clone();
+                        let path_clone = path.clone();
+                        std::thread::spawn(move || {
+                            let media =
+                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+                                    || load_media(&path_clone, max_width, max_height),
+                                ))
+                                .unwrap_or(None);
+                            let _ = tx.send(LoadResult {
+                                generation: gen,
+                                media,
+                            });
+                        });
                     }
                 }
             }

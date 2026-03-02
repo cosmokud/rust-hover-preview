@@ -1,4 +1,4 @@
-use crate::preview_window::{hide_preview, is_cursor_over_preview, show_preview};
+use crate::preview_window::{hide_preview, is_cursor_over_preview, show_preview, show_preview_keyboard};
 use crate::{CONFIG, RUNNING};
 use std::ffi::OsString;
 use std::os::windows::ffi::OsStringExt;
@@ -11,10 +11,11 @@ use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CLSCTX_ALL, COINIT_APARTMENTTHREADED,
 };
 use windows::Win32::UI::Shell::{IShellWindows, ShellWindows};
+use windows::Win32::UI::Accessibility::{CUIAutomation, IUIAutomation};
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetClassNameW, GetCursorPos, GetForegroundWindow, GetWindowPlacement, GetWindowRect,
-    GetWindowThreadProcessId, IsIconic, IsWindowVisible, WindowFromPoint, WINDOWPLACEMENT,
-    SW_SHOWMAXIMIZED,
+    GetClassNameW, GetCursorPos, GetForegroundWindow, GetWindowPlacement,
+    GetWindowRect, GetWindowThreadProcessId, IsIconic, IsWindowVisible, WindowFromPoint,
+    WINDOWPLACEMENT, SW_SHOWMAXIMIZED,
 };
 
 // Supported image extensions
@@ -813,15 +814,105 @@ fn is_explorer_window(hwnd: HWND) -> bool {
     false
 }
 
+/// Information about a focused item from Explorer's accessibility tree
+struct FocusedItemInfo {
+    result: AccessibilityResult,
+    rect: RECT,
+}
+
+/// Get the currently focused/selected file in Explorer using UI Automation.
+/// UI Automation is far more reliable than MSAA IAccessible for modern Explorer.
+fn get_focused_explorer_item(automation: &IUIAutomation) -> Option<FocusedItemInfo> {
+    unsafe {
+        // Only works when Explorer is the foreground window
+        let foreground = GetForegroundWindow();
+        if foreground.is_invalid() || !is_explorer_window(foreground) {
+            return None;
+        }
+
+        // Get the currently focused UI element via UI Automation
+        let focused = automation.GetFocusedElement().ok()?;
+
+        // Get the element name (this is the filename in Explorer)
+        let name = focused.CurrentName().ok()?.to_string();
+        if name.is_empty() || is_container_name(&name) {
+            return None;
+        }
+
+        // Get bounding rectangle (screen coordinates)
+        let rect = focused.CurrentBoundingRectangle().ok()?;
+        if rect.right <= rect.left || rect.bottom <= rect.top {
+            return None;
+        }
+
+        // Check if name is a full path (can happen in search results)
+        if is_valid_file_path(&name) {
+            let path = PathBuf::from(&name);
+            if path.exists() && is_media_file(&path) {
+                return Some(FocusedItemInfo {
+                    result: AccessibilityResult::FullPath(path),
+                    rect,
+                });
+            }
+        }
+
+        Some(FocusedItemInfo {
+            result: AccessibilityResult::FileName(name),
+            rect,
+        })
+    }
+}
+
+/// Resolve a FocusedItemInfo to a media file path, similar to get_file_under_cursor
+fn resolve_focused_item_to_path(item: &FocusedItemInfo) -> Option<PathBuf> {
+    match &item.result {
+        AccessibilityResult::FullPath(path) => {
+            if is_media_file(path) {
+                Some(path.clone())
+            } else {
+                None
+            }
+        }
+        AccessibilityResult::FileName(item_name) => {
+            // Search all open Explorer folder paths
+            let all_folders = get_all_explorer_folders();
+            for (_, folder) in &all_folders {
+                if let Some(path) = find_media_in_folder(folder, item_name) {
+                    return Some(path);
+                }
+            }
+            // Try as a potential full path
+            let potential_path = PathBuf::from(item_name);
+            if potential_path.is_absolute()
+                && potential_path.exists()
+                && is_media_file(&potential_path)
+            {
+                return Some(potential_path);
+            }
+            None
+        }
+    }
+}
+
 /// Main loop for explorer hook
 pub fn run_explorer_hook() {
     unsafe {
         let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
     }
 
+    // Create UI Automation instance for keyboard focus detection (cached for the lifetime of the loop)
+    let uia: Option<IUIAutomation> = unsafe {
+        CoCreateInstance(&CUIAutomation, None, CLSCTX_ALL).ok()
+    };
+
     let mut last_file: Option<PathBuf> = None;
     let mut hover_start: Option<Instant> = None;
     let mut last_cursor_pos = POINT::default();
+
+    // Keyboard hover state
+    let mut keyboard_file: Option<PathBuf> = None;
+    let mut last_focused_name: Option<String> = None;
+    let mut is_keyboard_hover = false;
     
     // State for optimized polling
     let mut last_state_check = Instant::now();
@@ -847,11 +938,14 @@ pub fn run_explorer_hook() {
             .unwrap_or((true, 0));
         
         if !preview_enabled {
-            if last_file.is_some() {
+            if last_file.is_some() || keyboard_file.is_some() {
                 hide_preview();
                 last_file = None;
                 hover_start = None;
             }
+            keyboard_file = None;
+            last_focused_name = None;
+            is_keyboard_hover = false;
             // Sleep longer when disabled
             std::thread::sleep(Duration::from_millis(LONG_SLEEP_MS));
             continue;
@@ -879,10 +973,13 @@ pub fn run_explorer_hook() {
             ExplorerState::NoExplorerWindows 
             | ExplorerState::AllMinimized 
             | ExplorerState::HiddenByForeground => {
-                if last_file.is_some() {
+                if last_file.is_some() || keyboard_file.is_some() {
                     hide_preview();
                     last_file = None;
                     hover_start = None;
+                    keyboard_file = None;
+                    last_focused_name = None;
+                    is_keyboard_hover = false;
                 }
                 std::thread::sleep(Duration::from_millis(sleep_ms));
                 continue;
@@ -891,10 +988,13 @@ pub fn run_explorer_hook() {
                 // Explorer is visible but not focused - do a quick cursor check
                 // Only activate full polling if cursor is actually over Explorer
                 if !is_cursor_over_explorer_full() {
-                    if last_file.is_some() {
+                    if last_file.is_some() || keyboard_file.is_some() {
                         hide_preview();
                         last_file = None;
                         hover_start = None;
+                        keyboard_file = None;
+                        last_focused_name = None;
+                        is_keyboard_hover = false;
                     }
                     std::thread::sleep(Duration::from_millis(sleep_ms));
                     continue;
@@ -913,10 +1013,13 @@ pub fn run_explorer_hook() {
         // Check if cursor is over the preview window itself - if so, hide it
         // This applies to both image and video previews
         if is_cursor_over_preview() {
-            if last_file.is_some() {
+            if last_file.is_some() || keyboard_file.is_some() {
                 hide_preview();
                 last_file = None;
                 hover_start = None;
+                keyboard_file = None;
+                last_focused_name = None;
+                is_keyboard_hover = false;
             }
             continue;
         }
@@ -934,6 +1037,16 @@ pub fn run_explorer_hook() {
 
             if moved {
                 last_cursor_pos = cursor_pos;
+
+                // Mouse movement always takes priority - dismiss keyboard hover
+                if is_keyboard_hover {
+                    hide_preview();
+                    keyboard_file = None;
+                    is_keyboard_hover = false;
+                }
+                // Reset focused name tracking so keyboard navigation can be re-detected
+                // after mouse stops moving
+                last_focused_name = None;
                 
                 // When cursor moves, check immediately what file is under it
                 if let Some(file_path) = get_file_under_cursor() {
@@ -957,7 +1070,67 @@ pub fn run_explorer_hook() {
                 continue;
             }
 
-            // Check if we've hovered long enough
+            // Mouse is stationary - check for keyboard navigation
+            // Only when Explorer is the foreground window (keyboard input goes there)
+            if is_foreground_explorer() {
+                if let Some(focused_info) = uia.as_ref().and_then(|a| get_focused_explorer_item(a)) {
+                    let focused_name = match &focused_info.result {
+                        AccessibilityResult::FileName(name) => name.clone(),
+                        AccessibilityResult::FullPath(path) => {
+                            path.to_string_lossy().to_string()
+                        }
+                    };
+
+                    if last_focused_name.is_none() {
+                        // First observation after mouse stopped - just record, don't trigger
+                        last_focused_name = Some(focused_name);
+                    } else if last_focused_name.as_ref() != Some(&focused_name) {
+                        // Focused item changed - keyboard navigation detected
+                        last_focused_name = Some(focused_name);
+
+                        // Dismiss any active mouse hover
+                        if last_file.is_some() && !is_keyboard_hover {
+                            hide_preview();
+                            last_file = None;
+                            hover_start = None;
+                        }
+
+                        // Resolve to a media file and show keyboard preview
+                        if let Some(path) = resolve_focused_item_to_path(&focused_info) {
+                            if keyboard_file.as_ref() != Some(&path) {
+                                // Hide previous preview before showing new one
+                                if is_keyboard_hover {
+                                    hide_preview();
+                                }
+                                keyboard_file = Some(path.clone());
+                                is_keyboard_hover = true;
+                                show_preview_keyboard(
+                                    &path,
+                                    focused_info.rect.left,
+                                    focused_info.rect.top,
+                                    focused_info.rect.right,
+                                    focused_info.rect.bottom,
+                                );
+                            }
+                        } else {
+                            // Not a media file - hide any keyboard preview
+                            if is_keyboard_hover {
+                                hide_preview();
+                            }
+                            keyboard_file = None;
+                            is_keyboard_hover = false;
+                        }
+                        continue;
+                    }
+                }
+            }
+
+            // If keyboard hover is active, skip mouse hover delay logic
+            if is_keyboard_hover {
+                continue;
+            }
+
+            // Check if we've hovered long enough (mouse hover)
             if let Some(start) = hover_start {
                 if start.elapsed() >= hover_delay {
                     // Try to get file under cursor
@@ -981,3 +1154,6 @@ pub fn run_explorer_hook() {
         }
     }
 }
+
+
+
