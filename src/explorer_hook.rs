@@ -1012,14 +1012,13 @@ pub fn run_explorer_hook() {
 
         // Check if cursor is over the preview window itself - if so, hide it
         // This applies to both image and video previews
-        if is_cursor_over_preview() {
-            if last_file.is_some() || keyboard_file.is_some() {
+        // BUT: when keyboard hover is active, don't hide just because the cursor
+        // happens to be over the preview — only mouse movement dismisses keyboard hover.
+        if is_cursor_over_preview() && !is_keyboard_hover {
+            if last_file.is_some() {
                 hide_preview();
                 last_file = None;
                 hover_start = None;
-                keyboard_file = None;
-                last_focused_name = None;
-                is_keyboard_hover = false;
             }
             continue;
         }
