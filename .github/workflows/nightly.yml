@@ -48,6 +48,5 @@ jobs:
           tag_name: nightly
           name: Nightly Build
           prerelease: true
+          generate_release_notes: true
           files: target/release/rust-hover-preview.exe
-          body: |
-            Automated nightly build from the latest commit.
