@@ -974,6 +974,8 @@ pub fn run_explorer_hook() {
     let mut last_cursor_folder: Option<String> = None;
     let mut suspend_preview_until_user_input = false;
     let mut allow_keyboard_preview_on_first_observation = false;
+    let mut folder_change_time: Option<Instant> = None;
+    let mut suspended_initial_focus: Option<String> = None;
     
     // State for optimized polling
     let mut last_state_check = Instant::now();
@@ -1012,6 +1014,8 @@ pub fn run_explorer_hook() {
             suspend_preview_until_user_input = false;
             allow_keyboard_preview_on_first_observation = false;
             last_cursor_folder = None;
+            folder_change_time = None;
+            suspended_initial_focus = None;
             // Sleep longer when disabled
             std::thread::sleep(Duration::from_millis(LONG_SLEEP_MS));
             continue;
@@ -1091,10 +1095,14 @@ pub fn run_explorer_hook() {
                     last_cursor_folder = Some(folder);
                     suspend_preview_until_user_input = true;
                     allow_keyboard_preview_on_first_observation = false;
+                    folder_change_time = Some(Instant::now());
+                    suspended_initial_focus = None;
                     hover_start = None;
                     last_focused_name = None;
                     // Reset cursor baseline so we don't mistake stale delta for movement.
                     last_cursor_pos = cursor_pos;
+                    // Drain stale GetAsyncKeyState flags from prior navigation
+                    let _ = is_keyboard_navigation_input_detected();
 
                     if last_file.is_some() || keyboard_file.is_some() || is_keyboard_hover {
                         hide_preview();
@@ -1112,17 +1120,56 @@ pub fn run_explorer_hook() {
 
             // Hard gate: after folder change, do not preview until explicit user input.
             if suspend_preview_until_user_input {
-                let keyboard_navigation_input = is_keyboard_navigation_input_detected();
+                // Cooldown: ignore all input for 150ms after folder change to let
+                // COM/accessibility settle and to avoid stale keyboard state.
+                if let Some(change_time) = folder_change_time {
+                    if change_time.elapsed() < Duration::from_millis(150) {
+                        continue;
+                    }
+                }
 
                 if moved {
                     suspend_preview_until_user_input = false;
                     allow_keyboard_preview_on_first_observation = false;
                     hover_start = Some(Instant::now());
-                } else if keyboard_navigation_input {
-                    suspend_preview_until_user_input = false;
-                    allow_keyboard_preview_on_first_observation = true;
+                    suspended_initial_focus = None;
+                    folder_change_time = None;
                 } else {
-                    continue;
+                    // Detect real keyboard navigation by observing UI Automation
+                    // focus changes, which is far more reliable than GetAsyncKeyState
+                    // (whose "pressed since last check" bit can carry stale state
+                    // from the navigation that opened this folder).
+                    let mut keyboard_unlocked = false;
+                    if is_foreground_explorer() {
+                        if let Some(focused_info) =
+                            uia.as_ref().and_then(|a| get_focused_explorer_item(a))
+                        {
+                            let focused_name = match &focused_info.result {
+                                AccessibilityResult::FileName(name) => name.clone(),
+                                AccessibilityResult::FullPath(path) => {
+                                    path.to_string_lossy().to_string()
+                                }
+                            };
+
+                            if suspended_initial_focus.is_none() {
+                                // Record the auto-focused first item
+                                // (set by Windows when folder opens)
+                                suspended_initial_focus = Some(focused_name);
+                            } else if suspended_initial_focus.as_ref() != Some(&focused_name) {
+                                // Focus actually changed — user pressed a navigation key
+                                keyboard_unlocked = true;
+                            }
+                        }
+                    }
+
+                    if keyboard_unlocked {
+                        suspend_preview_until_user_input = false;
+                        allow_keyboard_preview_on_first_observation = true;
+                        suspended_initial_focus = None;
+                        folder_change_time = None;
+                    } else {
+                        continue;
+                    }
                 }
             }
 
