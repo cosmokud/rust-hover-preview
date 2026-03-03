@@ -237,6 +237,11 @@ pub fn hide_preview() {
 
 /// Check if cursor is currently over any preview window (image or video)
 pub fn is_cursor_over_preview() -> bool {
+    is_cursor_over_image_preview() || is_cursor_over_video_preview()
+}
+
+/// Check if cursor is currently over the IMAGE preview window only
+pub fn is_cursor_over_image_preview() -> bool {
     unsafe {
         use windows::Win32::Foundation::POINT;
         use windows::Win32::UI::WindowsAndMessaging::{GetCursorPos, WindowFromPoint};
@@ -253,16 +258,46 @@ pub fn is_cursor_over_preview() -> bool {
 
         let hwnd_ptr = hwnd_under_cursor.0 as isize;
 
-        // Check image preview window
         let preview_hwnd = PREVIEW_HWND.load(Ordering::SeqCst);
-        if preview_hwnd != 0 && hwnd_ptr == preview_hwnd {
-            return true;
+        preview_hwnd != 0 && hwnd_ptr == preview_hwnd
+    }
+}
+
+/// Check if cursor is currently over the VIDEO preview window (ffplay)
+/// Also checks by process ID to handle the race condition where the ffplay
+/// window exists but VIDEO_HWND hasn't been stored yet.
+pub fn is_cursor_over_video_preview() -> bool {
+    unsafe {
+        use windows::Win32::Foundation::POINT;
+        use windows::Win32::UI::WindowsAndMessaging::{GetCursorPos, GetWindowThreadProcessId, WindowFromPoint};
+
+        let mut cursor_pos = POINT::default();
+        if GetCursorPos(&mut cursor_pos).is_err() {
+            return false;
         }
 
-        // Check video preview window (ffplay)
+        let hwnd_under_cursor = WindowFromPoint(cursor_pos);
+        if hwnd_under_cursor.is_invalid() {
+            return false;
+        }
+
+        let hwnd_ptr = hwnd_under_cursor.0 as isize;
+
+        // Check by stored HWND
         let video_hwnd = VIDEO_HWND.load(Ordering::SeqCst);
         if video_hwnd != 0 && hwnd_ptr == video_hwnd {
             return true;
+        }
+
+        // Also check by process ID — covers the race window where ffplay's
+        // window exists but VIDEO_HWND hasn't been discovered yet
+        let video_pid = VIDEO_PID.load(Ordering::SeqCst);
+        if video_pid != 0 {
+            let mut window_pid: u32 = 0;
+            GetWindowThreadProcessId(hwnd_under_cursor, Some(&mut window_pid));
+            if window_pid == video_pid {
+                return true;
+            }
         }
 
         false
@@ -749,6 +784,10 @@ fn get_video_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
         .args([
             "-v",
             "error",
+            "-err_detect",
+            "ignore_err",
+            "-fflags",
+            "+genpts+discardcorrupt+igndts",
             "-select_streams",
             "v:0",
             "-show_entries",
@@ -892,6 +931,11 @@ fn start_video_playback(path: &PathBuf, x: i32, y: i32, width: i32, height: i32)
 
     let child = cmd
         .args([
+            "-err_detect",
+            "ignore_err",   // Ignore header/stream errors
+            "-fflags",
+            "+genpts+discardcorrupt+igndts", // Handle missing timestamps & corrupt data
+            "-framedrop",   // Drop undecodable frames instead of stalling
             "-loop",
             "0",         // Loop forever
             "-noborder", // No window border
@@ -1600,6 +1644,9 @@ pub fn run_preview_window() {
 
         // Track current video path to avoid restarting
         let mut current_video_path: Option<PathBuf> = None;
+        // Track video position/size for periodic topmost re-assertion
+        let mut video_pos: (i32, i32, i32, i32) = (0, 0, 0, 0); // (x, y, w, h)
+        let mut last_topmost_check = Instant::now();
 
         // Background loading support
         let (load_tx, load_rx): (Sender<LoadResult>, Receiver<LoadResult>) = channel();
@@ -1613,6 +1660,15 @@ pub fn run_preview_window() {
             while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
                 let _ = TranslateMessage(&msg);
                 DispatchMessageW(&msg);
+            }
+
+            // Periodically re-assert topmost on the video window to prevent it
+            // from falling behind Explorer or other windows (Bug 2 fix)
+            if current_video_path.is_some() && last_topmost_check.elapsed() >= Duration::from_millis(200) {
+                last_topmost_check = Instant::now();
+                let _ = ensure_video_window_topmost(
+                    video_pos.0, video_pos.1, video_pos.2, video_pos.3,
+                );
             }
 
             // Advance animation frames if needed
@@ -1763,6 +1819,7 @@ pub fn run_preview_window() {
                             *current = None;
                         }
                         current_video_path = None;
+                        video_pos = (0, 0, 0, 0);
                     }
                 }
 
@@ -1808,6 +1865,7 @@ pub fn run_preview_window() {
                                 }
 
                                 current_video_path = Some(path.clone());
+                                video_pos = (pos_x, pos_y, media_width, media_height);
                                 let _ = ensure_video_window_topmost(
                                     pos_x,
                                     pos_y,
@@ -1815,6 +1873,7 @@ pub fn run_preview_window() {
                                     media_height,
                                 );
                             } else {
+                                video_pos = (pos_x, pos_y, media_width, media_height);
                                 let _ = ensure_video_window_topmost(
                                     pos_x,
                                     pos_y,
@@ -1832,6 +1891,7 @@ pub fn run_preview_window() {
                                 }
                             }
                             current_video_path = None;
+                            video_pos = (0, 0, 0, 0);
                         }
 
                         // Start background load; spinner will appear after 2s

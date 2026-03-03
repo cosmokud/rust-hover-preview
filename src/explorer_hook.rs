@@ -1,4 +1,4 @@
-use crate::preview_window::{hide_preview, is_cursor_over_preview, show_preview, show_preview_keyboard};
+use crate::preview_window::{hide_preview, is_cursor_over_image_preview, is_cursor_over_video_preview, show_preview, show_preview_keyboard};
 use crate::{CONFIG, RUNNING};
 use std::ffi::OsString;
 use std::os::windows::ffi::OsStringExt;
@@ -1010,16 +1010,23 @@ pub fn run_explorer_hook() {
         // Explorer is active - use faster polling
         std::thread::sleep(Duration::from_millis(ACTIVE_POLL_MS));
 
-        // Check if cursor is over the preview window itself - if so, hide it
-        // This applies to both image and video previews
+        // Check if cursor is over the IMAGE preview window - if so, hide it
+        // (dismiss-on-hover behavior for images).
         // BUT: when keyboard hover is active, don't hide just because the cursor
         // happens to be over the preview — only mouse movement dismisses keyboard hover.
-        if is_cursor_over_preview() && !is_keyboard_hover {
+        if is_cursor_over_image_preview() && !is_keyboard_hover {
             if last_file.is_some() {
                 hide_preview();
                 last_file = None;
                 hover_start = None;
             }
+            continue;
+        }
+
+        // If cursor is over the VIDEO preview window (ffplay), keep playing.
+        // The video window appears right where the cursor is, so we must NOT
+        // dismiss it.  The video hides naturally when the cursor moves away.
+        if is_cursor_over_video_preview() {
             continue;
         }
 
