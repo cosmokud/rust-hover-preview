@@ -1,47 +1,51 @@
 # Rust Hover Preview
 
-Windows 11 system tray application that shows image and video previews when hovering over files in Windows Explorer. Inspired by QTTabBar (QuizoApps) hover preview.
+Rust Hover Preview is a Windows 11 system tray app that shows instant image and video previews in File Explorer when you hover files with the mouse or navigate with the keyboard.
 
-[hover_preview_2.webm](https://github.com/user-attachments/assets/3f1b3360-dfa4-47c0-bb4a-a2971d729cd8)
+Inspired by QTTabBar (QuizoApps) hover preview.
 
-## Features
+![Showcase](https://github.com/user-attachments/assets/3f1b3360-dfa4-47c0-bb4a-a2971d729cd8)
 
-- **Image preview on hover** for common formats (JPG, JPEG, PNG, GIF, BMP, ICO, TIFF/TIF, WebP)
-- **Animated GIF** and **animated WebP** playback
-- **Video preview on hover** (MP4, WebM, MKV, AVI, MOV, WMV, FLV, M4V) using FFmpeg tools
-- **System tray controls** for enabling/disabling previews, startup, video volume, preview position, and preview delay
-- **Configurable hover delay**
+## Highlights
 
-## System Tray Menu
+- Mouse-hover and keyboard-navigation previews in Explorer
+- Static image previews plus animated GIF/WebP playback
+- Video previews through FFmpeg (`ffplay` + `ffprobe`)
+- Tray controls for enable/disable, delay, positioning, startup, and volume
+- Topmost, non-activating preview windows designed to avoid focus stealing
 
-Right-click the system tray icon to access:
+## Supported Formats
 
-- **Enable Preview**: Toggle all previews on/off
-- **Preview Delay**: Instant (0 ms), Fast (200 ms), Medium (500 ms), Slow (1000 ms)
-- **Video Volume**: Set preview volume from 0–100%
-- **Preview Position**: Follow Cursor or Best Position
-- **Run at Startup**: Toggle automatic startup with Windows
-- **Edit Config.ini**: Open `config.ini` in the default text editor
-- **Exit**: Close the application
+### Images
 
-## Requirements
+`jpg`, `jpeg`, `png`, `gif`, `bmp`, `ico`, `tiff`, `tif`, `webp`
 
-- Windows 11
-- Rust toolchain (1.70+)
-- Windows 11 SDK
-- Visual Studio Build Tools (for Windows linking)
-- **Optional:** FFmpeg in PATH (for video previews)
-  - Required tools: `ffplay` and `ffprobe`
+### Videos (FFmpeg required)
 
-## Install FFmpeg in PATH (Windows)
+`mp4`, `webm`, `mkv`, `avi`, `mov`, `wmv`, `flv`, `m4v`
 
-### Option A: Install with winget (recommended)
+## Installation (Recommended)
+
+Download the prebuilt executable from the repository **Releases** tab:
+
+1. Open [Releases](../../releases)
+2. Download the latest `rust-hover-preview.exe` asset
+3. Place it in any folder you prefer (for example: `C:\Tools\RustHoverPreview`)
+4. Launch `rust-hover-preview.exe`
+
+No Rust toolchain is needed when installing from Releases.
+
+## Optional: Enable Video Preview (FFmpeg)
+
+Video previews require `ffplay` and `ffprobe` available in `PATH`.
+
+### Option A: Install with winget
 
 ```powershell
 winget install --id Gyan.FFmpeg -e
 ```
 
-Close and reopen your terminal, then verify:
+Then reopen your terminal and verify:
 
 ```powershell
 ffplay -version
@@ -50,12 +54,9 @@ ffprobe -version
 
 ### Option B: Manual install
 
-1. Download a Windows FFmpeg build from https://ffmpeg.org/download.html.
-2. Extract the archive to a folder such as `C:\ffmpeg`.
-3. Add `C:\ffmpeg\bin` to your user PATH:
-   - Open **Edit environment variables for your account**
-   - Select **Path** → **Edit** → **New**
-   - Add `C:\ffmpeg\bin` and save
+1. Download a Windows FFmpeg build from https://ffmpeg.org/download.html
+2. Extract it to a location such as `C:\ffmpeg`
+3. Add `C:\ffmpeg\bin` to your user `PATH`
 4. Open a new terminal and run:
 
 ```powershell
@@ -63,65 +64,75 @@ ffplay -version
 ffprobe -version
 ```
 
-## Building
+## Usage
 
-```bash
-# Debug build
-cargo build
+1. Start the app (tray icon appears)
+2. Hover media files in Explorer to preview them
+3. Use keyboard navigation in Explorer (arrow keys/tab) to trigger focused-item previews
+4. Right-click the tray icon to configure behavior
 
-# Release build (optimized)
-cargo build --release
-```
+## System Tray Menu
 
-### Custom Icon
-
-To add a custom application icon:
-
-1. Place your `.ico` file at `assets/icon.ico`
-2. Rebuild the application
-
-## Installation
-
-1. Build the release version: `cargo build --release`
-2. Copy `target/release/rust-hover-preview.exe` to your preferred location
-3. Run the application
-4. (Optional) Enable "Run at Startup" from the system tray menu
+- **Enable Preview**: Turn previews on or off
+- **Preview Delay**: `Instant (0 ms)`, `Fast (200 ms)`, `Medium (500 ms)`, `Slow (1000 ms)`
+- **Video Volume**: `Max (100%)`, `High (80%)`, `Medium (50%)`, `Low (25%)`, `Very Low (10%)`, `Mute (0%)`
+- **Preview Position**: `Follow Cursor` or `Best Position`
+- **Run at Startup**: Add/remove startup entry in Windows
+- **Edit Config.ini**: Open configuration file in your default editor
+- **Exit**: Close the application
 
 ## Configuration
 
-Settings are stored in:
+Settings are stored at:
 
-```
+```text
 %APPDATA%\rust-hover-preview\config.ini
 ```
 
-Example configuration:
+Example:
 
 ```ini
 [settings]
-run_at_startup=false
+run_at_startup=true
 hover_delay_ms=0
 preview_enabled=true
 follow_cursor=false
 video_volume=0
 ```
 
-## How It Works
+## Build from Source
 
-The application uses several Windows APIs:
+### Requirements
 
-- **UI Accessibility (MSAA)** to detect the hovered item in Explorer
-- **Shell Windows API** to resolve active Explorer windows and folders
-- **GDI** for rendering image previews without stealing focus
-- **Registry API** for managing startup entries
-- **FFmpeg (ffplay/ffprobe)** for video preview playback and sizing
+- Windows 11
+- Rust toolchain 1.70+
+- Visual Studio Build Tools (MSVC)
+- Windows SDK
 
-## Notes
+### Build Commands
 
-- If FFmpeg is not installed or not in PATH, video previews are skipped.
-- The preview window is layered, topmost, and does not steal focus.
-- No telemetry is collected.
+```bash
+# Debug
+cargo build
+
+# Release
+cargo build --release
+```
+
+Release binary output:
+
+```text
+target/release/rust-hover-preview.exe
+```
+
+## Architecture Notes
+
+- Uses Windows accessibility APIs (MSAA + UI Automation) to resolve hovered/focused Explorer items
+- Uses Shell COM APIs to identify active Explorer windows and folders
+- Uses GDI for image rendering in a layered topmost preview window
+- Uses `ffprobe` for video dimensions and `ffplay` for video playback
+- Uses the registry (`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`) for startup control
 
 ## License
 
-MIT License - See LICENSE for details
+MIT. See [LICENSE](LICENSE).
