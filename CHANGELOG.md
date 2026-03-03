@@ -4,6 +4,23 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.1.3] - 2026-03-03
+
+### Added
+
+- Post-folder-navigation input gate that suspends preview until explicit user input is detected.
+
+### Changed
+
+- Mouse hover target resolution now validates accessibility hit-testing against the actual cursor position.
+- Prioritized media file resolution in the Explorer folder currently under the cursor before global folder fallback.
+
+### Fixed
+
+- Prevented automatic preview of Explorer's first auto-selected item when opening a folder with a stationary cursor.
+- Keyboard preview now starts only after real navigation input (arrow/Home/End/PageUp/PageDown) following folder changes.
+- Removed dead-code warnings from unused helper functions to keep builds warning-free.
+
 ## [0.1.2] - 2026-03-03
 
 ### Added
