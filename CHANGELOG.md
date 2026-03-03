@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.1.4] - 2026-03-03
+
+### Changed
+
+- Refined folder-navigation input gate to use UI Automation focus changes and a brief cooldown, eliminating stale `GetAsyncKeyState` triggers.
+
+### Fixed
+
+- Eliminated residual previews caused by leftover keyboard state when opening folders; preview now only appears after actual user movement or navigation.
+
 ## [0.1.3] - 2026-03-03
 
 ### Added
