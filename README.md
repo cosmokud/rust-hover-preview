@@ -4,7 +4,7 @@ Rust Hover Preview is a Windows 11 system tray app that shows instant image and 
 
 Inspired by QTTabBar (QuizoApps) hover preview.
 
-[Showcase](https://github.com/user-attachments/assets/3f1b3360-dfa4-47c0-bb4a-a2971d729cd8)
+[Showcase.webm](https://github.com/user-attachments/assets/33ee1f35-d399-4226-8847-5bd50f867ebb)
 
 ## Highlights
 
