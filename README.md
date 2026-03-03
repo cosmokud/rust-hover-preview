@@ -2,6 +2,16 @@
 
 Windows 11 system tray application that shows image and video previews when hovering over files in Windows Explorer. Inspired by QTTabBar (QuizoApps) hover preview.
 
+[hover_preview_2.webm](https://github.com/user-attachments/assets/3f1b3360-dfa4-47c0-bb4a-a2971d729cd8)
+
+## Features
+
+- **Image preview on hover** for common formats (JPG, JPEG, PNG, GIF, BMP, ICO, TIFF/TIF, WebP)
+- **Animated GIF** and **animated WebP** playback
+- **Video preview on hover** (MP4, WebM, MKV, AVI, MOV, WMV, FLV, M4V) using FFmpeg tools
+- **System tray controls** for enabling/disabling previews, startup, video volume, preview position, and preview delay
+- **Configurable hover delay**
+- 
 ## Features
 
 - **Image preview on hover** for common formats (JPG, JPEG, PNG, GIF, BMP, ICO, TIFF/TIF, WebP)
