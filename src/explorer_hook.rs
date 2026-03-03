@@ -12,6 +12,10 @@ use windows::Win32::System::Com::{
 };
 use windows::Win32::UI::Shell::{IShellWindows, ShellWindows};
 use windows::Win32::UI::Accessibility::{CUIAutomation, IUIAutomation};
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    GetAsyncKeyState, VK_DOWN, VK_END, VK_HOME, VK_LEFT, VK_NEXT, VK_PRIOR,
+    VK_RIGHT, VK_UP,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
     GetClassNameW, GetCursorPos, GetForegroundWindow, GetWindowPlacement,
     GetWindowRect, GetWindowThreadProcessId, IsIconic, IsWindowVisible, WindowFromPoint,
@@ -244,6 +248,40 @@ enum AccessibilityResult {
     FullPath(PathBuf),
 }
 
+/// Check whether an accessibility element/child variant contains the current cursor point.
+/// This prevents fallbacks from returning focused/default items that are not truly hovered.
+fn is_variant_under_cursor(
+    acc: &windows::Win32::UI::Accessibility::IAccessible,
+    variant: &VARIANT,
+    cursor_pos: &POINT,
+) -> bool {
+    unsafe {
+        let mut left = 0;
+        let mut top = 0;
+        let mut width = 0;
+        let mut height = 0;
+
+        if acc
+            .accLocation(&mut left, &mut top, &mut width, &mut height, variant)
+            .is_err()
+        {
+            return false;
+        }
+
+        if width <= 0 || height <= 0 {
+            return false;
+        }
+
+        let right = left.saturating_add(width);
+        let bottom = top.saturating_add(height);
+
+        cursor_pos.x >= left
+            && cursor_pos.x < right
+            && cursor_pos.y >= top
+            && cursor_pos.y < bottom
+    }
+}
+
 /// Get the filename or full path under cursor using accessibility - try multiple approaches
 fn get_item_under_cursor() -> Option<AccessibilityResult> {
     unsafe {
@@ -265,74 +303,85 @@ fn get_item_under_cursor() -> Option<AccessibilityResult> {
         {
             if let Some(ref acc) = accessible {
                 // First, try to get the value - this often contains the full path in search results
-                if let Ok(value) = acc.get_accValue(&child_variant) {
-                    let value_str = value.to_string();
-                    // Check if it's a valid full path (not shell:, search-ms:, etc.)
-                    if is_valid_file_path(&value_str) {
-                        let path = PathBuf::from(&value_str);
-                        if path.exists() && is_media_file(&path) {
-                            return Some(AccessibilityResult::FullPath(path));
+                if is_variant_under_cursor(acc, &child_variant, &cursor_pos) {
+                    if let Ok(value) = acc.get_accValue(&child_variant) {
+                        let value_str = value.to_string();
+                        // Check if it's a valid full path (not shell:, search-ms:, etc.)
+                        if is_valid_file_path(&value_str) {
+                            let path = PathBuf::from(&value_str);
+                            if path.exists() && is_media_file(&path) {
+                                return Some(AccessibilityResult::FullPath(path));
+                            }
                         }
                     }
                 }
                 
                 // Try with the child variant first for name
-                if let Ok(name) = acc.get_accName(&child_variant) {
-                    let name_str = name.to_string();
-                    if !is_container_name(&name_str) {
-                        // Check if the name itself is a full path (can happen in search)
-                        if is_valid_file_path(&name_str) {
-                            let path = PathBuf::from(&name_str);
-                            if path.exists() && is_media_file(&path) {
-                                return Some(AccessibilityResult::FullPath(path));
+                if is_variant_under_cursor(acc, &child_variant, &cursor_pos) {
+                    if let Ok(name) = acc.get_accName(&child_variant) {
+                        let name_str = name.to_string();
+                        if !is_container_name(&name_str) {
+                            // Check if the name itself is a full path (can happen in search)
+                            if is_valid_file_path(&name_str) {
+                                let path = PathBuf::from(&name_str);
+                                if path.exists() && is_media_file(&path) {
+                                    return Some(AccessibilityResult::FullPath(path));
+                                }
                             }
+                            return Some(AccessibilityResult::FileName(name_str));
                         }
-                        return Some(AccessibilityResult::FileName(name_str));
                     }
                 }
                 
                 // Try with default variant
-                if let Ok(name) = acc.get_accName(&VARIANT::default()) {
-                    let name_str = name.to_string();
-                    if !is_container_name(&name_str) {
-                        // Check if the name itself is a full path
-                        if is_valid_file_path(&name_str) {
-                            let path = PathBuf::from(&name_str);
-                            if path.exists() && is_media_file(&path) {
-                                return Some(AccessibilityResult::FullPath(path));
+                let default_variant = VARIANT::default();
+                if is_variant_under_cursor(acc, &default_variant, &cursor_pos) {
+                    if let Ok(name) = acc.get_accName(&default_variant) {
+                        let name_str = name.to_string();
+                        if !is_container_name(&name_str) {
+                            // Check if the name itself is a full path
+                            if is_valid_file_path(&name_str) {
+                                let path = PathBuf::from(&name_str);
+                                if path.exists() && is_media_file(&path) {
+                                    return Some(AccessibilityResult::FullPath(path));
+                                }
                             }
+                            return Some(AccessibilityResult::FileName(name_str));
                         }
-                        return Some(AccessibilityResult::FileName(name_str));
                     }
                 }
                 
                 // Try navigating parent chain to find item name (for list/details views)
-                if let Some(result) = try_get_item_from_parent(acc, &child_variant) {
+                if let Some(result) = try_get_item_from_parent(acc, &child_variant, &cursor_pos) {
                     return Some(result);
                 }
                 
                 // Try getting help text which sometimes has info
-                if let Ok(help) = acc.get_accHelp(&child_variant) {
-                    let help_str = help.to_string();
-                    if !help_str.is_empty() && !is_container_name(&help_str) {
-                        return Some(AccessibilityResult::FileName(help_str));
+                if is_variant_under_cursor(acc, &child_variant, &cursor_pos) {
+                    if let Ok(help) = acc.get_accHelp(&child_variant) {
+                        let help_str = help.to_string();
+                        if !help_str.is_empty() && !is_container_name(&help_str) {
+                            return Some(AccessibilityResult::FileName(help_str));
+                        }
                     }
                 }
                 
                 // Try description which may have path info
-                if let Ok(desc) = acc.get_accDescription(&child_variant) {
-                    let desc_str = desc.to_string();
-                    // Check for path in description
-                    if is_valid_file_path(&desc_str) {
-                        let path = PathBuf::from(&desc_str);
-                        if path.exists() && is_media_file(&path) {
-                            return Some(AccessibilityResult::FullPath(path));
+                if is_variant_under_cursor(acc, &child_variant, &cursor_pos) {
+                    if let Ok(desc) = acc.get_accDescription(&child_variant) {
+                        let desc_str = desc.to_string();
+                        // Check for path in description
+                        if is_valid_file_path(&desc_str) {
+                            let path = PathBuf::from(&desc_str);
+                            if path.exists() && is_media_file(&path) {
+                                return Some(AccessibilityResult::FullPath(path));
+                            }
                         }
                     }
                 }
                 
                 // Try to walk up parent hierarchy more aggressively (for details view text cells)
-                if let Some(result) = try_deep_parent_search(acc) {
+                if let Some(result) = try_deep_parent_search(acc, &cursor_pos) {
                     return Some(result);
                 }
             }
@@ -347,32 +396,39 @@ fn get_item_under_cursor() -> Option<AccessibilityResult> {
 fn try_get_item_from_parent(
     acc: &windows::Win32::UI::Accessibility::IAccessible,
     _child_variant: &VARIANT,
+    cursor_pos: &POINT,
 ) -> Option<AccessibilityResult> {
     unsafe {
         // Try to get parent accessible object
         if let Ok(parent_disp) = acc.accParent() {
             if let Ok(parent_acc) = parent_disp.cast::<windows::Win32::UI::Accessibility::IAccessible>() {
+                let default_variant = VARIANT::default();
+
                 // Try to get name from parent
-                if let Ok(name) = parent_acc.get_accName(&VARIANT::default()) {
-                    let name_str = name.to_string();
-                    if !is_container_name(&name_str) {
-                        return Some(AccessibilityResult::FileName(name_str));
+                if is_variant_under_cursor(&parent_acc, &default_variant, cursor_pos) {
+                    if let Ok(name) = parent_acc.get_accName(&default_variant) {
+                        let name_str = name.to_string();
+                        if !is_container_name(&name_str) {
+                            return Some(AccessibilityResult::FileName(name_str));
+                        }
                     }
                 }
                 
                 // Try to get value (path) from parent
-                if let Ok(value) = parent_acc.get_accValue(&VARIANT::default()) {
-                    let value_str = value.to_string();
-                    if !value_str.is_empty() {
-                        let path = PathBuf::from(&value_str);
-                        if path.is_absolute() && path.exists() && is_media_file(&path) {
-                            return Some(AccessibilityResult::FullPath(path));
+                if is_variant_under_cursor(&parent_acc, &default_variant, cursor_pos) {
+                    if let Ok(value) = parent_acc.get_accValue(&default_variant) {
+                        let value_str = value.to_string();
+                        if !value_str.is_empty() {
+                            let path = PathBuf::from(&value_str);
+                            if path.is_absolute() && path.exists() && is_media_file(&path) {
+                                return Some(AccessibilityResult::FullPath(path));
+                            }
                         }
                     }
                 }
                 
                 // Try child enumeration to find focused/selected item
-                if let Some(result) = try_get_focused_child(&parent_acc) {
+                if let Some(result) = try_get_focused_child(&parent_acc, cursor_pos) {
                     return Some(result);
                 }
             }
@@ -383,10 +439,12 @@ fn try_get_item_from_parent(
             // If focus returns a variant with child ID
             let vt = focus.as_raw().Anonymous.Anonymous.vt;
             if vt == windows::Win32::System::Variant::VT_I4.0 {
-                if let Ok(name) = acc.get_accName(&focus) {
-                    let name_str = name.to_string();
-                    if !is_container_name(&name_str) {
-                        return Some(AccessibilityResult::FileName(name_str));
+                if is_variant_under_cursor(acc, &focus, cursor_pos) {
+                    if let Ok(name) = acc.get_accName(&focus) {
+                        let name_str = name.to_string();
+                        if !is_container_name(&name_str) {
+                            return Some(AccessibilityResult::FileName(name_str));
+                        }
                     }
                 }
             }
@@ -398,6 +456,7 @@ fn try_get_item_from_parent(
 /// Try to find focused/hot-tracked child in accessibility tree
 fn try_get_focused_child(
     acc: &windows::Win32::UI::Accessibility::IAccessible,
+    cursor_pos: &POINT,
 ) -> Option<AccessibilityResult> {
     unsafe {
         // Get child count
@@ -407,6 +466,10 @@ fn try_get_focused_child(
             
             for i in 1..=max_check {
                 let child_var = VARIANT::from(i);
+
+                if !is_variant_under_cursor(acc, &child_var, cursor_pos) {
+                    continue;
+                }
                 
                 // Check state for focus/hot tracking
                 if let Ok(state) = acc.get_accState(&child_var) {
@@ -443,6 +506,7 @@ fn try_get_focused_child(
 /// gives us the cell, not the row/item
 fn try_deep_parent_search(
     acc: &windows::Win32::UI::Accessibility::IAccessible,
+    cursor_pos: &POINT,
 ) -> Option<AccessibilityResult> {
     unsafe {
         let mut current_acc = acc.clone();
@@ -452,35 +516,41 @@ fn try_deep_parent_search(
             // Try to get parent
             if let Ok(parent_disp) = current_acc.accParent() {
                 if let Ok(parent_acc) = parent_disp.cast::<windows::Win32::UI::Accessibility::IAccessible>() {
+                    let default_variant = VARIANT::default();
+
                     // Try getting name from parent
-                    if let Ok(name) = parent_acc.get_accName(&VARIANT::default()) {
-                        let name_str = name.to_string();
-                        if !is_container_name(&name_str) {
-                            // Check if it's a full path
-                            if is_valid_file_path(&name_str) {
-                                let path = PathBuf::from(&name_str);
-                                if path.exists() && is_media_file(&path) {
-                                    return Some(AccessibilityResult::FullPath(path));
+                    if is_variant_under_cursor(&parent_acc, &default_variant, cursor_pos) {
+                        if let Ok(name) = parent_acc.get_accName(&default_variant) {
+                            let name_str = name.to_string();
+                            if !is_container_name(&name_str) {
+                                // Check if it's a full path
+                                if is_valid_file_path(&name_str) {
+                                    let path = PathBuf::from(&name_str);
+                                    if path.exists() && is_media_file(&path) {
+                                        return Some(AccessibilityResult::FullPath(path));
+                                    }
                                 }
+                                // It's a filename
+                                return Some(AccessibilityResult::FileName(name_str));
                             }
-                            // It's a filename
-                            return Some(AccessibilityResult::FileName(name_str));
                         }
                     }
                     
                     // Try getting value from parent (may contain path)
-                    if let Ok(value) = parent_acc.get_accValue(&VARIANT::default()) {
-                        let value_str = value.to_string();
-                        if is_valid_file_path(&value_str) {
-                            let path = PathBuf::from(&value_str);
-                            if path.exists() && is_media_file(&path) {
-                                return Some(AccessibilityResult::FullPath(path));
+                    if is_variant_under_cursor(&parent_acc, &default_variant, cursor_pos) {
+                        if let Ok(value) = parent_acc.get_accValue(&default_variant) {
+                            let value_str = value.to_string();
+                            if is_valid_file_path(&value_str) {
+                                let path = PathBuf::from(&value_str);
+                                if path.exists() && is_media_file(&path) {
+                                    return Some(AccessibilityResult::FullPath(path));
+                                }
                             }
                         }
                     }
                     
                     // Try to find selected/focused child of this parent
-                    if let Some(result) = try_get_focused_child(&parent_acc) {
+                    if let Some(result) = try_get_focused_child(&parent_acc, cursor_pos) {
                         return Some(result);
                     }
                     
@@ -551,7 +621,15 @@ fn get_file_under_cursor() -> Option<PathBuf> {
             None
         }
         AccessibilityResult::FileName(item_name) => {
-            // Get ALL Explorer folders (all windows and tabs)
+            // First try the Explorer folder currently under cursor.
+            // This avoids accidental matches from other windows/tabs.
+            if let Some(folder) = get_current_explorer_folder() {
+                if let Some(path) = find_media_in_folder(&folder, &item_name) {
+                    return Some(path);
+                }
+            }
+
+            // Fallback: search all Explorer folders (all windows and tabs)
             let all_folders = get_all_explorer_folders();
 
             // Try to find the file in ANY of the open Explorer folders
@@ -719,6 +797,22 @@ fn get_explorer_state() -> ExplorerState {
     
     // Explorer windows exist and are visible, but not in foreground
     ExplorerState::VisibleNotFocused
+}
+
+/// Detect whether the user is actively navigating Explorer with keyboard.
+/// We treat both current-down and "pressed since last check" states as input.
+fn is_keyboard_navigation_input_detected() -> bool {
+    unsafe {
+        let navigation_keys = [
+            VK_UP, VK_DOWN, VK_LEFT, VK_RIGHT, VK_HOME, VK_END, VK_PRIOR,
+            VK_NEXT,
+        ];
+
+        navigation_keys.iter().any(|&key| {
+            let state = GetAsyncKeyState(key.0 as i32) as u16;
+            (state & 0x8000) != 0 || (state & 0x0001) != 0
+        })
+    }
 }
 
 /// Check if cursor is currently over an Explorer window (regardless of foreground)
@@ -916,6 +1010,10 @@ pub fn run_explorer_hook() {
     // Short grace after starting a video preview to avoid instant self-dismiss
     // while ffplay window is still initializing under the cursor.
     let mut video_hover_guard_until: Option<Instant> = None;
+    // Folder/input gate state: suppress preview after folder changes until explicit user input.
+    let mut last_cursor_folder: Option<String> = None;
+    let mut suspend_preview_until_user_input = false;
+    let mut allow_keyboard_preview_on_first_observation = false;
     
     // State for optimized polling
     let mut last_state_check = Instant::now();
@@ -951,6 +1049,9 @@ pub fn run_explorer_hook() {
             last_focused_name = None;
             is_keyboard_hover = false;
             video_hover_guard_until = None;
+            suspend_preview_until_user_input = false;
+            allow_keyboard_preview_on_first_observation = false;
+            last_cursor_folder = None;
             // Sleep longer when disabled
             std::thread::sleep(Duration::from_millis(LONG_SLEEP_MS));
             continue;
@@ -1024,9 +1125,46 @@ pub fn run_explorer_hook() {
                 continue;
             }
 
+            // Detect folder navigation/opening and suspend preview until user input.
+            if let Some(folder) = get_current_explorer_folder() {
+                if last_cursor_folder.as_ref() != Some(&folder) {
+                    last_cursor_folder = Some(folder);
+                    suspend_preview_until_user_input = true;
+                    allow_keyboard_preview_on_first_observation = false;
+                    hover_start = None;
+                    last_focused_name = None;
+                    // Reset cursor baseline so we don't mistake stale delta for movement.
+                    last_cursor_pos = cursor_pos;
+
+                    if last_file.is_some() || keyboard_file.is_some() || is_keyboard_hover {
+                        hide_preview();
+                    }
+                    last_file = None;
+                    keyboard_file = None;
+                    is_keyboard_hover = false;
+                    video_hover_guard_until = None;
+                }
+            }
+
             // If cursor moved significantly, check what's under it
             let moved = (cursor_pos.x - last_cursor_pos.x).abs() > 5
                 || (cursor_pos.y - last_cursor_pos.y).abs() > 5;
+
+            // Hard gate: after folder change, do not preview until explicit user input.
+            if suspend_preview_until_user_input {
+                let keyboard_navigation_input = is_keyboard_navigation_input_detected();
+
+                if moved {
+                    suspend_preview_until_user_input = false;
+                    allow_keyboard_preview_on_first_observation = false;
+                    hover_start = Some(Instant::now());
+                } else if keyboard_navigation_input {
+                    suspend_preview_until_user_input = false;
+                    allow_keyboard_preview_on_first_observation = true;
+                } else {
+                    continue;
+                }
+            }
 
             if moved {
                 last_cursor_pos = cursor_pos;
@@ -1041,6 +1179,7 @@ pub fn run_explorer_hook() {
                 // Reset focused name tracking so keyboard navigation can be re-detected
                 // after mouse stops moving
                 last_focused_name = None;
+                allow_keyboard_preview_on_first_observation = false;
 
                 // Dismiss preview only when the mouse has actually moved onto it.
                 // This avoids blocking keyboard navigation when the cursor is static.
@@ -1104,11 +1243,62 @@ pub fn run_explorer_hook() {
                     };
 
                     if last_focused_name.is_none() {
+                        if allow_keyboard_preview_on_first_observation {
+                            // User explicitly used keyboard right after folder change.
+                            // Allow first observed focused item to trigger preview.
+                            last_focused_name = Some(focused_name.clone());
+                            allow_keyboard_preview_on_first_observation = false;
+
+                            // Dismiss any active mouse hover
+                            if last_file.is_some() && !is_keyboard_hover {
+                                hide_preview();
+                                last_file = None;
+                                hover_start = None;
+                            }
+
+                            // Resolve to a media file and show keyboard preview
+                            if let Some(path) = resolve_focused_item_to_path(&focused_info) {
+                                if keyboard_file.as_ref() != Some(&path) {
+                                    // Hide previous preview before showing new one
+                                    if is_keyboard_hover {
+                                        hide_preview();
+                                    }
+                                    keyboard_file = Some(path.clone());
+                                    is_keyboard_hover = true;
+                                    video_hover_guard_until = if is_video_file(&path) {
+                                        Some(
+                                            Instant::now()
+                                                + Duration::from_millis(VIDEO_HOVER_DISMISS_GRACE_MS),
+                                        )
+                                    } else {
+                                        None
+                                    };
+                                    show_preview_keyboard(
+                                        &path,
+                                        focused_info.rect.left,
+                                        focused_info.rect.top,
+                                        focused_info.rect.right,
+                                        focused_info.rect.bottom,
+                                    );
+                                }
+                            } else {
+                                // Not a media file - hide any keyboard preview
+                                if is_keyboard_hover {
+                                    hide_preview();
+                                }
+                                keyboard_file = None;
+                                is_keyboard_hover = false;
+                                video_hover_guard_until = None;
+                            }
+                            continue;
+                        }
+
                         // First observation after mouse stopped - just record, don't trigger
                         last_focused_name = Some(focused_name);
                     } else if last_focused_name.as_ref() != Some(&focused_name) {
                         // Focused item changed - keyboard navigation detected
                         last_focused_name = Some(focused_name);
+                        allow_keyboard_preview_on_first_observation = false;
 
                         // Dismiss any active mouse hover
                         if last_file.is_some() && !is_keyboard_hover {
