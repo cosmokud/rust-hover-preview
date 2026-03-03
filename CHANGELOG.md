@@ -4,6 +4,25 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.1.2] - 2026-03-03
+
+### Added
+
+- Separate cursor-over detection for image preview and ffplay video preview windows.
+- Short startup grace period for video previews to avoid immediate dismissal while ffplay initializes.
+
+### Changed
+
+- Refined preview dismissal logic to dismiss on mouse movement over preview windows, preserving keyboard navigation when the cursor is stationary.
+- Improved ffplay window discovery by preferring visible, top-level windows and selecting the largest valid candidate.
+- Reasserted topmost and no-activate window styles during video playback to keep the preview above Explorer.
+- Updated ffprobe/ffplay invocation flags to better tolerate corrupt frames and missing timestamps.
+
+### Fixed
+
+- Prevented premature video preview dismissal during ffplay startup race conditions.
+- Reduced false preview closures when no hovered file is detected while the mouse is not moving.
+
 ## [0.1.1] - 2026-03-03
 
 ### Added

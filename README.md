@@ -31,6 +31,36 @@ Right-click the system tray icon to access:
 - **Optional:** FFmpeg in PATH (for video previews)
   - Required tools: `ffplay` and `ffprobe`
 
+## Install FFmpeg in PATH (Windows)
+
+### Option A: Install with winget (recommended)
+
+```powershell
+winget install --id Gyan.FFmpeg -e
+```
+
+Close and reopen your terminal, then verify:
+
+```powershell
+ffplay -version
+ffprobe -version
+```
+
+### Option B: Manual install
+
+1. Download a Windows FFmpeg build from https://ffmpeg.org/download.html.
+2. Extract the archive to a folder such as `C:\ffmpeg`.
+3. Add `C:\ffmpeg\bin` to your user PATH:
+   - Open **Edit environment variables for your account**
+   - Select **Path** → **Edit** → **New**
+   - Add `C:\ffmpeg\bin` and save
+4. Open a new terminal and run:
+
+```powershell
+ffplay -version
+ffprobe -version
+```
+
 ## Building
 
 ```bash
