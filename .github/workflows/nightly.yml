@@ -1,0 +1,53 @@
+name: Nightly Build
+
+on:
+  workflow_dispatch:
+
+jobs:
+  nightly:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust (MSVC)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable-x86_64-pc-windows-msvc
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build (release)
+        shell: pwsh
+        run: cargo build --release
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-hover-preview-nightly
+          path: target/release/rust-hover-preview.exe
+
+      - name: Delete existing nightly release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $release = gh release view nightly 2>&1
+          if ($LASTEXITCODE -eq 0) {
+            gh release delete nightly -y --cleanup-tag
+          }
+          $global:LASTEXITCODE = 0
+
+      - name: Create nightly release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: nightly
+          name: Nightly Build
+          prerelease: true
+          files: target/release/rust-hover-preview.exe
+          body: |
+            Automated nightly build from the latest commit.
