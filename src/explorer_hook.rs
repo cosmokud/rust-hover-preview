@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 use windows::core::{Interface, VARIANT};
-use windows::Win32::Foundation::{HWND, POINT, RECT, SHANDLE_PTR};
+use windows::Win32::Foundation::{HWND, POINT, RECT};
 use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CLSCTX_ALL, COINIT_APARTMENTTHREADED,
 };
@@ -48,46 +48,6 @@ fn is_video_file(path: &PathBuf) -> bool {
 
 fn is_media_file(path: &PathBuf) -> bool {
     is_image_file(path) || is_video_file(path)
-}
-
-/// Get current folder path from an Explorer window
-fn get_explorer_folder_path(hwnd: HWND) -> Option<String> {
-    unsafe {
-        let shell_windows: IShellWindows =
-            CoCreateInstance(&ShellWindows, None, CLSCTX_ALL).ok()?;
-
-        let count = shell_windows.Count().ok()?;
-
-        for i in 0..count {
-            let variant = VARIANT::from(i);
-            if let Ok(disp) = shell_windows.Item(&variant) {
-                // Get the IWebBrowser2 interface
-                if let Ok(browser) =
-                    disp.cast::<windows::Win32::UI::Shell::IWebBrowser2>()
-                {
-                    // Check if this is the window we're looking for
-                    if let Ok(browser_hwnd) = browser.HWND() {
-                        if browser_hwnd == SHANDLE_PTR(hwnd.0 as isize) {
-                            // Get the location URL
-                            if let Ok(url) = browser.LocationURL() {
-                                let url_str = url.to_string();
-                                if url_str.starts_with("file:///") {
-                                    let path = url_str
-                                        .strip_prefix("file:///")
-                                        .unwrap_or(&url_str)
-                                        .replace('/', "\\");
-                                    // URL decode
-                                    let path = urlencoding_decode(&path);
-                                    return Some(path);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-    None
 }
 
 /// Simple URL decoding for file paths
