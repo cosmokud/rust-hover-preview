@@ -1017,38 +1017,6 @@ pub fn run_explorer_hook() {
         // Explorer is active - use faster polling
         std::thread::sleep(Duration::from_millis(ACTIVE_POLL_MS));
 
-        // Check if cursor is over the IMAGE preview window - if so, hide it
-        // (dismiss-on-hover behavior for images).
-        // BUT: when keyboard hover is active, don't hide just because the cursor
-        // happens to be over the preview — only mouse movement dismisses keyboard hover.
-        if is_cursor_over_image_preview() && !is_keyboard_hover {
-            if last_file.is_some() {
-                hide_preview();
-                last_file = None;
-                hover_start = None;
-            }
-            video_hover_guard_until = None;
-            continue;
-        }
-
-        // If cursor is over the VIDEO preview window (ffplay), dismiss it like
-        // image previews, but only after a short grace period right after spawn.
-        if is_cursor_over_video_preview() {
-            let guard_active = video_hover_guard_until
-                .map(|until| Instant::now() < until)
-                .unwrap_or(false);
-
-            if !is_keyboard_hover && !guard_active {
-                if last_file.is_some() {
-                    hide_preview();
-                    last_file = None;
-                    hover_start = None;
-                }
-                video_hover_guard_until = None;
-            }
-            continue;
-        }
-
         unsafe {
             // Get cursor position
             let mut cursor_pos = POINT::default();
@@ -1073,6 +1041,32 @@ pub fn run_explorer_hook() {
                 // Reset focused name tracking so keyboard navigation can be re-detected
                 // after mouse stops moving
                 last_focused_name = None;
+
+                // Dismiss preview only when the mouse has actually moved onto it.
+                // This avoids blocking keyboard navigation when the cursor is static.
+                if !is_keyboard_hover {
+                    let over_image_preview = is_cursor_over_image_preview();
+                    let over_video_preview = is_cursor_over_video_preview();
+
+                    if over_image_preview || over_video_preview {
+                        let guard_active = video_hover_guard_until
+                            .map(|until| Instant::now() < until)
+                            .unwrap_or(false);
+
+                        // For video, keep the short spawn grace to prevent instant close
+                        // right after ffplay appears under the cursor.
+                        if !over_video_preview || !guard_active {
+                            if last_file.is_some() {
+                                hide_preview();
+                                last_file = None;
+                            }
+                            video_hover_guard_until = None;
+                        }
+
+                        hover_start = Some(Instant::now());
+                        continue;
+                    }
+                }
                 
                 // When cursor moves, check immediately what file is under it
                 if let Some(file_path) = get_file_under_cursor() {
@@ -1185,12 +1179,8 @@ pub fn run_explorer_hook() {
                             show_preview(&file_path, cursor_pos.x, cursor_pos.y);
                         }
                     } else {
-                        // No file found, hide preview
-                        if last_file.is_some() {
-                            hide_preview();
-                            last_file = None;
-                        }
-                        video_hover_guard_until = None;
+                        // No file found while mouse is stationary.
+                        // Keep current preview state; dismissal should happen only on mouse move.
                     }
                 }
             } else {
