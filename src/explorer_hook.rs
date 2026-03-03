@@ -913,6 +913,9 @@ pub fn run_explorer_hook() {
     let mut keyboard_file: Option<PathBuf> = None;
     let mut last_focused_name: Option<String> = None;
     let mut is_keyboard_hover = false;
+    // Short grace after starting a video preview to avoid instant self-dismiss
+    // while ffplay window is still initializing under the cursor.
+    let mut video_hover_guard_until: Option<Instant> = None;
     
     // State for optimized polling
     let mut last_state_check = Instant::now();
@@ -923,6 +926,7 @@ pub fn run_explorer_hook() {
     const LONG_SLEEP_MS: u64 = 500;    // All minimized or hidden - check twice per second
     const MEDIUM_SLEEP_MS: u64 = 150;  // Visible but not focused - moderate checking
     const ACTIVE_POLL_MS: u64 = 30;    // Active focus - responsive polling
+    const VIDEO_HOVER_DISMISS_GRACE_MS: u64 = 350;
     
     // How often to re-evaluate the state when in sleep modes
     const STATE_RECHECK_DEEP_MS: u64 = 2000;    // When no Explorer windows
@@ -946,6 +950,7 @@ pub fn run_explorer_hook() {
             keyboard_file = None;
             last_focused_name = None;
             is_keyboard_hover = false;
+            video_hover_guard_until = None;
             // Sleep longer when disabled
             std::thread::sleep(Duration::from_millis(LONG_SLEEP_MS));
             continue;
@@ -980,6 +985,7 @@ pub fn run_explorer_hook() {
                     keyboard_file = None;
                     last_focused_name = None;
                     is_keyboard_hover = false;
+                    video_hover_guard_until = None;
                 }
                 std::thread::sleep(Duration::from_millis(sleep_ms));
                 continue;
@@ -995,6 +1001,7 @@ pub fn run_explorer_hook() {
                         keyboard_file = None;
                         last_focused_name = None;
                         is_keyboard_hover = false;
+                        video_hover_guard_until = None;
                     }
                     std::thread::sleep(Duration::from_millis(sleep_ms));
                     continue;
@@ -1020,13 +1027,25 @@ pub fn run_explorer_hook() {
                 last_file = None;
                 hover_start = None;
             }
+            video_hover_guard_until = None;
             continue;
         }
 
-        // If cursor is over the VIDEO preview window (ffplay), keep playing.
-        // The video window appears right where the cursor is, so we must NOT
-        // dismiss it.  The video hides naturally when the cursor moves away.
+        // If cursor is over the VIDEO preview window (ffplay), dismiss it like
+        // image previews, but only after a short grace period right after spawn.
         if is_cursor_over_video_preview() {
+            let guard_active = video_hover_guard_until
+                .map(|until| Instant::now() < until)
+                .unwrap_or(false);
+
+            if !is_keyboard_hover && !guard_active {
+                if last_file.is_some() {
+                    hide_preview();
+                    last_file = None;
+                    hover_start = None;
+                }
+                video_hover_guard_until = None;
+            }
             continue;
         }
 
@@ -1049,6 +1068,7 @@ pub fn run_explorer_hook() {
                     hide_preview();
                     keyboard_file = None;
                     is_keyboard_hover = false;
+                    video_hover_guard_until = None;
                 }
                 // Reset focused name tracking so keyboard navigation can be re-detected
                 // after mouse stops moving
@@ -1064,6 +1084,7 @@ pub fn run_explorer_hook() {
                         hide_preview();
                         last_file = None;
                         hover_start = Some(Instant::now());
+                        video_hover_guard_until = None;
                     }
                 } else {
                     // No file under cursor - hide preview
@@ -1072,6 +1093,7 @@ pub fn run_explorer_hook() {
                         last_file = None;
                     }
                     hover_start = Some(Instant::now());
+                    video_hover_guard_until = None;
                 }
                 continue;
             }
@@ -1110,6 +1132,14 @@ pub fn run_explorer_hook() {
                                 }
                                 keyboard_file = Some(path.clone());
                                 is_keyboard_hover = true;
+                                video_hover_guard_until = if is_video_file(&path) {
+                                    Some(
+                                        Instant::now()
+                                            + Duration::from_millis(VIDEO_HOVER_DISMISS_GRACE_MS),
+                                    )
+                                } else {
+                                    None
+                                };
                                 show_preview_keyboard(
                                     &path,
                                     focused_info.rect.left,
@@ -1125,6 +1155,7 @@ pub fn run_explorer_hook() {
                             }
                             keyboard_file = None;
                             is_keyboard_hover = false;
+                            video_hover_guard_until = None;
                         }
                         continue;
                     }
@@ -1143,6 +1174,14 @@ pub fn run_explorer_hook() {
                     if let Some(file_path) = get_file_under_cursor() {
                         if last_file.as_ref() != Some(&file_path) {
                             last_file = Some(file_path.clone());
+                            video_hover_guard_until = if is_video_file(&file_path) {
+                                Some(
+                                    Instant::now()
+                                        + Duration::from_millis(VIDEO_HOVER_DISMISS_GRACE_MS),
+                                )
+                            } else {
+                                None
+                            };
                             show_preview(&file_path, cursor_pos.x, cursor_pos.y);
                         }
                     } else {
@@ -1151,6 +1190,7 @@ pub fn run_explorer_hook() {
                             hide_preview();
                             last_file = None;
                         }
+                        video_hover_guard_until = None;
                     }
                 }
             } else {

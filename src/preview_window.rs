@@ -12,20 +12,20 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use windows::core::{w, PCWSTR};
-use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, WPARAM};
+use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     BeginPaint, EndPaint, InvalidateRect, SetStretchBltMode, StretchDIBits, BITMAPINFO,
     BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, HALFTONE, PAINTSTRUCT, SRCCOPY,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DispatchMessageW, EnumWindows, GetSystemMetrics,
-    GetWindowLongPtrW, GetWindowThreadProcessId, LoadCursorW, MoveWindow, PeekMessageW,
-    RegisterClassExW, SetLayeredWindowAttributes, SetWindowLongPtrW, SetWindowPos, ShowWindow,
-    TranslateMessage, CS_HREDRAW, CS_VREDRAW, GWL_EXSTYLE, HWND_TOPMOST, IDC_ARROW, LWA_ALPHA, MSG,
-    PM_REMOVE, SM_CXSCREEN, SM_CYSCREEN, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW,
-    SW_HIDE, SW_SHOWNOACTIVATE, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
-    WS_EX_TOPMOST, WS_POPUP,
+    CreateWindowExW, DefWindowProcW, DispatchMessageW, EnumWindows, GetSystemMetrics, GetWindow,
+    GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, IsWindowVisible, LoadCursorW,
+    MoveWindow, PeekMessageW, RegisterClassExW, SetLayeredWindowAttributes, SetWindowLongPtrW,
+    SetWindowPos, ShowWindow, TranslateMessage, CS_HREDRAW, CS_VREDRAW, GWL_EXSTYLE, GW_OWNER,
+    HWND_TOPMOST, IDC_ARROW, LWA_ALPHA, MSG, PM_REMOVE, SM_CXSCREEN, SM_CYSCREEN, SWP_NOACTIVATE,
+    SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SW_HIDE, SW_SHOWNOACTIVATE, WNDCLASSEXW,
+    WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
 const PREVIEW_CLASS: PCWSTR = w!("RustHoverPreviewWindow");
@@ -816,6 +816,7 @@ fn get_video_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
 struct EnumWindowsData {
     target_pid: u32,
     found_hwnd: HWND,
+    best_area: i64,
 }
 
 /// Callback for EnumWindows to find a window belonging to a specific process
@@ -827,11 +828,40 @@ unsafe extern "system" fn enum_windows_callback(
     let mut window_pid: u32 = 0;
     GetWindowThreadProcessId(hwnd, Some(&mut window_pid));
 
-    if window_pid == data.target_pid {
-        data.found_hwnd = hwnd;
-        return windows::Win32::Foundation::BOOL(0); // Stop enumeration
+    if window_pid != data.target_pid {
+        return windows::Win32::Foundation::BOOL(1);
     }
-    windows::Win32::Foundation::BOOL(1) // Continue enumeration
+
+    // Prefer visible, top-level windows (skip hidden and owned/popups behind owners)
+    if !IsWindowVisible(hwnd).as_bool() {
+        return windows::Win32::Foundation::BOOL(1);
+    }
+
+    if let Ok(owner) = GetWindow(hwnd, GW_OWNER) {
+        if !owner.is_invalid() {
+            return windows::Win32::Foundation::BOOL(1);
+        }
+    }
+
+    let mut rect = RECT::default();
+    if GetWindowRect(hwnd, &mut rect).is_err() {
+        return windows::Win32::Foundation::BOOL(1);
+    }
+
+    let width = (rect.right - rect.left).max(0) as i64;
+    let height = (rect.bottom - rect.top).max(0) as i64;
+    let area = width * height;
+    if area <= 0 {
+        return windows::Win32::Foundation::BOOL(1);
+    }
+
+    // Keep the largest candidate; this is typically the real ffplay output window.
+    if area > data.best_area {
+        data.best_area = area;
+        data.found_hwnd = hwnd;
+    }
+
+    windows::Win32::Foundation::BOOL(1)
 }
 
 /// Apply WS_EX_NOACTIVATE style to a window
@@ -840,6 +870,7 @@ unsafe fn try_apply_noactivate_style(pid: u32) -> bool {
     let mut data = EnumWindowsData {
         target_pid: pid,
         found_hwnd: HWND::default(),
+        best_area: 0,
     };
 
     let _ = EnumWindows(
@@ -869,8 +900,11 @@ unsafe fn try_apply_noactivate_style(pid: u32) -> bool {
             0,
             SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
         );
+        let _ = ShowWindow(data.found_hwnd, SW_SHOWNOACTIVATE);
         return true;
     }
+
+    VIDEO_HWND.store(0, Ordering::SeqCst);
     false
 }
 
@@ -1008,27 +1042,35 @@ fn is_video_process_running() -> bool {
 
 /// Ensure the ffplay window is topmost and positioned correctly
 fn ensure_video_window_topmost(x: i32, y: i32, width: i32, height: i32) -> bool {
-    let hwnd_val = VIDEO_HWND.load(Ordering::SeqCst);
-    let mut hwnd_val = hwnd_val;
-    if hwnd_val == 0 {
-        let pid = VIDEO_PID.load(Ordering::SeqCst);
-        if pid == 0 {
-            return false;
-        }
-
+    // Re-discover/re-apply style by PID each time to survive ffplay window recreation
+    // and keep topmost state resilient over time.
+    let pid = VIDEO_PID.load(Ordering::SeqCst);
+    if pid != 0 {
         unsafe {
             let _ = try_apply_noactivate_style(pid);
         }
-        hwnd_val = VIDEO_HWND.load(Ordering::SeqCst);
-        if hwnd_val == 0 {
-            return false;
-        }
+    }
+
+    let hwnd_val = VIDEO_HWND.load(Ordering::SeqCst);
+    if hwnd_val == 0 {
+        return false;
     }
 
     unsafe {
         let hwnd = HWND(hwnd_val as *mut std::ffi::c_void);
         if hwnd.is_invalid() {
+            VIDEO_HWND.store(0, Ordering::SeqCst);
             return false;
+        }
+
+        // Re-assert desired style bits in case ffplay modified them
+        let current_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+        let new_style = current_style
+            | WS_EX_NOACTIVATE.0 as isize
+            | WS_EX_TOOLWINDOW.0 as isize
+            | WS_EX_TOPMOST.0 as isize;
+        if new_style != current_style {
+            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, new_style);
         }
 
         let _ = SetWindowPos(
@@ -1040,6 +1082,7 @@ fn ensure_video_window_topmost(x: i32, y: i32, width: i32, height: i32) -> bool 
             height,
             SWP_NOACTIVATE | SWP_SHOWWINDOW,
         );
+        let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
     }
 
     true
