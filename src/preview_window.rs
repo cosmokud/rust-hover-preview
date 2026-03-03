@@ -235,11 +235,6 @@ pub fn hide_preview() {
     }
 }
 
-/// Check if cursor is currently over any preview window (image or video)
-pub fn is_cursor_over_preview() -> bool {
-    is_cursor_over_image_preview() || is_cursor_over_video_preview()
-}
-
 /// Check if cursor is currently over the IMAGE preview window only
 pub fn is_cursor_over_image_preview() -> bool {
     unsafe {
