@@ -40,4 +40,5 @@ jobs:
           name: ${{ github.ref_name }}
           prerelease: false
           generate_release_notes: true
+          fail_on_unmatched_files: true
           files: target/release/rust-hover-preview.exe
