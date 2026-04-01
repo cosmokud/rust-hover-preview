@@ -1,15 +1,18 @@
 use crate::preview_window::{hide_preview, is_cursor_over_image_preview, is_cursor_over_video_preview, show_preview, show_preview_keyboard};
 use crate::{CONFIG, RUNNING};
+use once_cell::sync::Lazy;
+use std::collections::HashMap;
 use std::ffi::OsString;
 use std::os::windows::ffi::OsStringExt;
-use std::path::PathBuf;
-use std::sync::atomic::Ordering;
+use std::path::{Path, PathBuf};
+use std::sync::{atomic::Ordering, Mutex};
 use std::time::{Duration, Instant};
 use windows::core::{Interface, VARIANT};
 use windows::Win32::Foundation::{HWND, POINT, RECT};
 use windows::Win32::System::Com::{
-    CoCreateInstance, CoInitializeEx, CLSCTX_ALL, COINIT_APARTMENTTHREADED,
+    CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_ALL, COINIT_APARTMENTTHREADED,
 };
+use windows::Win32::System::Variant::VariantClear;
 use windows::Win32::UI::Shell::{IShellWindows, ShellWindows};
 use windows::Win32::UI::Accessibility::{CUIAutomation, IUIAutomation};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
@@ -31,6 +34,126 @@ const IMAGE_EXTENSIONS: &[&str] = &[
 const VIDEO_EXTENSIONS: &[&str] = &[
     "mp4", "webm", "mkv", "avi", "mov", "wmv", "flv", "m4v",
 ];
+
+struct FolderMediaIndex {
+    folder: String,
+    built_at: Instant,
+    by_file_name: HashMap<String, PathBuf>,
+    by_stem: HashMap<String, PathBuf>,
+}
+
+const FOLDER_INDEX_TTL_MS: u64 = 2000;
+
+static FOLDER_MEDIA_INDEX: Lazy<Mutex<Option<FolderMediaIndex>>> =
+    Lazy::new(|| Mutex::new(None));
+
+fn is_jpeg_extension(ext: &str) -> bool {
+    matches!(ext, "jpg" | "jpeg" | "jpe" | "jfif")
+}
+
+fn clear_variant(variant: &mut VARIANT) {
+    unsafe {
+        let _ = VariantClear(variant as *mut VARIANT);
+    }
+}
+
+fn build_folder_media_index(folder_path: &PathBuf, folder_key: &str) -> Option<FolderMediaIndex> {
+    let mut by_file_name = HashMap::new();
+    let mut by_stem = HashMap::new();
+
+    let entries = std::fs::read_dir(folder_path).ok()?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() || !is_media_file(&path) {
+            continue;
+        }
+
+        if let Some(file_name) = path.file_name().and_then(|s| s.to_str()) {
+            by_file_name
+                .entry(file_name.to_ascii_lowercase())
+                .or_insert_with(|| path.clone());
+        }
+
+        if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+            by_stem
+                .entry(stem.to_ascii_lowercase())
+                .or_insert(path.clone());
+        }
+    }
+
+    Some(FolderMediaIndex {
+        folder: folder_key.to_string(),
+        built_at: Instant::now(),
+        by_file_name,
+        by_stem,
+    })
+}
+
+fn lookup_media_in_folder_index(
+    folder_path: &PathBuf,
+    folder_key: &str,
+    item_name: &str,
+) -> Option<PathBuf> {
+    let item_name = item_name.trim();
+    if item_name.is_empty() {
+        return None;
+    }
+
+    let item_name_lower = item_name.to_ascii_lowercase();
+    let item_stem_lower = Path::new(item_name)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_ascii_lowercase());
+    let item_ext_lower = Path::new(item_name)
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_ascii_lowercase());
+
+    let mut cache = FOLDER_MEDIA_INDEX.lock().ok()?;
+    let needs_rebuild = match cache.as_ref() {
+        Some(index) => {
+            index.folder != folder_key
+                || index.built_at.elapsed() > Duration::from_millis(FOLDER_INDEX_TTL_MS)
+        }
+        None => true,
+    };
+
+    if needs_rebuild {
+        *cache = build_folder_media_index(folder_path, folder_key);
+    }
+
+    let index = cache.as_ref()?;
+
+    if let Some(path) = index.by_file_name.get(&item_name_lower) {
+        return Some(path.clone());
+    }
+
+    if let Some(stem_key) = item_stem_lower.as_ref() {
+        if let Some(path) = index.by_stem.get(stem_key) {
+            if let Some(item_ext) = item_ext_lower.as_deref() {
+                if let Some(candidate_ext) = path.extension().and_then(|s| s.to_str()) {
+                    let candidate_ext_lower = candidate_ext.to_ascii_lowercase();
+                    if candidate_ext_lower == item_ext
+                        || (is_jpeg_extension(&candidate_ext_lower)
+                            && is_jpeg_extension(item_ext))
+                    {
+                        return Some(path.clone());
+                    }
+                }
+            } else {
+                return Some(path.clone());
+            }
+        }
+    }
+
+    if item_ext_lower.is_none() {
+        if let Some(path) = index.by_stem.get(&item_name_lower) {
+            return Some(path.clone());
+        }
+    }
+
+    None
+}
 
 fn is_image_file(path: &PathBuf) -> bool {
     path.extension()
@@ -254,13 +377,17 @@ fn get_item_under_cursor() -> Option<AccessibilityResult> {
         let mut accessible: Option<windows::Win32::UI::Accessibility::IAccessible> = None;
         let mut child_variant = VARIANT::default();
 
-        if windows::Win32::UI::Accessibility::AccessibleObjectFromPoint(
-            cursor_pos,
-            &mut accessible,
-            &mut child_variant,
-        )
-        .is_ok()
-        {
+        let result = (|| -> Option<AccessibilityResult> {
+            if windows::Win32::UI::Accessibility::AccessibleObjectFromPoint(
+                cursor_pos,
+                &mut accessible,
+                &mut child_variant,
+            )
+            .is_err()
+            {
+                return None;
+            }
+
             if let Some(ref acc) = accessible {
                 // First, try to get the value - this often contains the full path in search results
                 if is_variant_under_cursor(acc, &child_variant, &cursor_pos) {
@@ -275,7 +402,7 @@ fn get_item_under_cursor() -> Option<AccessibilityResult> {
                         }
                     }
                 }
-                
+
                 // Try with the child variant first for name
                 if is_variant_under_cursor(acc, &child_variant, &cursor_pos) {
                     if let Ok(name) = acc.get_accName(&child_variant) {
@@ -292,7 +419,7 @@ fn get_item_under_cursor() -> Option<AccessibilityResult> {
                         }
                     }
                 }
-                
+
                 // Try with default variant
                 let default_variant = VARIANT::default();
                 if is_variant_under_cursor(acc, &default_variant, &cursor_pos) {
@@ -310,12 +437,12 @@ fn get_item_under_cursor() -> Option<AccessibilityResult> {
                         }
                     }
                 }
-                
+
                 // Try navigating parent chain to find item name (for list/details views)
                 if let Some(result) = try_get_item_from_parent(acc, &child_variant, &cursor_pos) {
                     return Some(result);
                 }
-                
+
                 // Try getting help text which sometimes has info
                 if is_variant_under_cursor(acc, &child_variant, &cursor_pos) {
                     if let Ok(help) = acc.get_accHelp(&child_variant) {
@@ -325,7 +452,7 @@ fn get_item_under_cursor() -> Option<AccessibilityResult> {
                         }
                     }
                 }
-                
+
                 // Try description which may have path info
                 if is_variant_under_cursor(acc, &child_variant, &cursor_pos) {
                     if let Ok(desc) = acc.get_accDescription(&child_variant) {
@@ -339,16 +466,19 @@ fn get_item_under_cursor() -> Option<AccessibilityResult> {
                         }
                     }
                 }
-                
+
                 // Try to walk up parent hierarchy more aggressively (for details view text cells)
                 if let Some(result) = try_deep_parent_search(acc, &cursor_pos) {
                     return Some(result);
                 }
             }
-        }
-    }
 
-    None
+            None
+        })();
+
+        clear_variant(&mut child_variant);
+        return result;
+    }
 }
 
 /// Try to get item info by navigating the accessibility parent chain
@@ -395,18 +525,27 @@ fn try_get_item_from_parent(
         }
         
         // Try getting focused element within the accessible object
-        if let Ok(focus) = acc.accFocus() {
-            // If focus returns a variant with child ID
-            let vt = focus.as_raw().Anonymous.Anonymous.vt;
-            if vt == windows::Win32::System::Variant::VT_I4.0 {
-                if is_variant_under_cursor(acc, &focus, cursor_pos) {
-                    if let Ok(name) = acc.get_accName(&focus) {
-                        let name_str = name.to_string();
-                        if !is_container_name(&name_str) {
-                            return Some(AccessibilityResult::FileName(name_str));
+        if let Ok(mut focus) = acc.accFocus() {
+            let focus_result = (|| -> Option<AccessibilityResult> {
+                // If focus returns a variant with child ID
+                let vt = focus.as_raw().Anonymous.Anonymous.vt;
+                if vt == windows::Win32::System::Variant::VT_I4.0 {
+                    if is_variant_under_cursor(acc, &focus, cursor_pos) {
+                        if let Ok(name) = acc.get_accName(&focus) {
+                            let name_str = name.to_string();
+                            if !is_container_name(&name_str) {
+                                return Some(AccessibilityResult::FileName(name_str));
+                            }
                         }
                     }
                 }
+
+                None
+            })();
+
+            clear_variant(&mut focus);
+            if focus_result.is_some() {
+                return focus_result;
             }
         }
     }
@@ -528,7 +667,13 @@ fn try_deep_parent_search(
 
 /// Try to find an image or video file in a specific folder by item name
 fn find_media_in_folder(folder: &str, item_name: &str) -> Option<PathBuf> {
+    let item_name = item_name.trim();
+    if item_name.is_empty() {
+        return None;
+    }
+
     let folder_path = PathBuf::from(folder);
+    let folder_key = folder_path.to_string_lossy().into_owned();
 
     // First try: item_name as-is
     let full_path = folder_path.join(item_name);
@@ -536,35 +681,31 @@ fn find_media_in_folder(folder: &str, item_name: &str) -> Option<PathBuf> {
         return Some(full_path);
     }
 
-    // Second try: search for files that match this name (with or without extension)
-    if let Ok(entries) = std::fs::read_dir(&folder_path) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            
-            // Check full filename match (e.g., "image.jpg" or "video.mp4")
-            if let Some(file_name) = path.file_name().and_then(|s| s.to_str()) {
-                if file_name == item_name && is_media_file(&path) {
-                    return Some(path);
-                }
-            }
-            
-            // Check file stem match (e.g., "image" matches "image.jpg")
-            if let Some(file_stem) = path.file_stem().and_then(|s| s.to_str()) {
-                if file_stem == item_name && is_media_file(&path) {
-                    return Some(path);
-                }
-            }
-            
-            // Check case-insensitive match
-            if let Some(file_name) = path.file_name().and_then(|s| s.to_str()) {
-                if file_name.to_lowercase() == item_name.to_lowercase() && is_media_file(&path) {
-                    return Some(path);
+    // JPEG extension aliases can differ between Explorer labels and on-disk names.
+    // Try sibling jpg/jpeg forms before consulting the folder index.
+    if let Some(item_ext) = Path::new(item_name)
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_ascii_lowercase())
+    {
+        if is_jpeg_extension(&item_ext) {
+            if let Some(stem) = Path::new(item_name).file_stem().and_then(|s| s.to_str()) {
+                for alt in ["jpg", "jpeg"] {
+                    if alt == item_ext {
+                        continue;
+                    }
+                    let candidate = folder_path.join(format!("{}.{}", stem, alt));
+                    if candidate.exists() && is_media_file(&candidate) {
+                        return Some(candidate);
+                    }
                 }
             }
         }
     }
 
-    None
+    // Fallback: use a short-lived folder index so large folders are scanned once
+    // instead of once per hover poll.
+    lookup_media_in_folder_index(&folder_path, &folder_key, item_name)
 }
 
 /// Try to find an image or video file under the cursor
@@ -1385,6 +1526,10 @@ pub fn run_explorer_hook() {
                 hover_start = Some(Instant::now());
             }
         }
+    }
+
+    unsafe {
+        CoUninitialize();
     }
 }
 
