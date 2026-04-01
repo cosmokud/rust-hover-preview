@@ -48,5 +48,7 @@ jobs:
           tag_name: nightly
           name: Nightly Build
           prerelease: true
+          make_latest: false
           generate_release_notes: true
+          fail_on_unmatched_files: true
           files: target/release/rust-hover-preview.exe
