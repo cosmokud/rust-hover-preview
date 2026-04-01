@@ -42,9 +42,17 @@ struct FolderMediaIndex {
     by_stem: HashMap<String, PathBuf>,
 }
 
-const FOLDER_INDEX_TTL_MS: u64 = 2000;
+struct ExplorerFoldersCache {
+    built_at: Instant,
+    folders: Vec<(isize, String)>,
+}
+
+const FOLDER_INDEX_TTL_MS: u64 = 60000;
+const EXPLORER_FOLDERS_CACHE_TTL_MS: u64 = 250;
 
 static FOLDER_MEDIA_INDEX: Lazy<Mutex<Option<FolderMediaIndex>>> =
+    Lazy::new(|| Mutex::new(None));
+static EXPLORER_FOLDERS_CACHE: Lazy<Mutex<Option<ExplorerFoldersCache>>> =
     Lazy::new(|| Mutex::new(None));
 
 fn is_jpeg_extension(ext: &str) -> bool {
@@ -197,7 +205,21 @@ fn urlencoding_decode(s: &str) -> String {
 
 /// Get all Explorer windows and their current folder paths
 fn get_all_explorer_folders() -> Vec<(HWND, String)> {
-    let mut result = Vec::new();
+    if let Ok(cache) = EXPLORER_FOLDERS_CACHE.lock() {
+        if let Some(cache_entry) = cache.as_ref() {
+            if cache_entry.built_at.elapsed()
+                <= Duration::from_millis(EXPLORER_FOLDERS_CACHE_TTL_MS)
+            {
+                return cache_entry
+                    .folders
+                    .iter()
+                    .map(|(hwnd, folder)| (HWND(*hwnd as *mut _), folder.clone()))
+                    .collect();
+            }
+        }
+    }
+
+    let mut result: Vec<(isize, String)> = Vec::new();
 
     unsafe {
         if let Ok(shell_windows) =
@@ -211,7 +233,7 @@ fn get_all_explorer_folders() -> Vec<(HWND, String)> {
                             disp.cast::<windows::Win32::UI::Shell::IWebBrowser2>()
                         {
                             if let Ok(browser_hwnd) = browser.HWND() {
-                                let hwnd = HWND(browser_hwnd.0 as *mut _);
+                                let hwnd = browser_hwnd.0 as isize;
                                 if let Ok(url) = browser.LocationURL() {
                                     let url_str = url.to_string();
                                     if url_str.starts_with("file:///") {
@@ -231,7 +253,17 @@ fn get_all_explorer_folders() -> Vec<(HWND, String)> {
         }
     }
 
+    if let Ok(mut cache) = EXPLORER_FOLDERS_CACHE.lock() {
+        *cache = Some(ExplorerFoldersCache {
+            built_at: Instant::now(),
+            folders: result.clone(),
+        });
+    }
+
     result
+        .into_iter()
+        .map(|(hwnd, folder)| (HWND(hwnd as *mut _), folder))
+        .collect()
 }
 
 /// Find which Explorer folder the cursor is currently over
@@ -1117,6 +1149,9 @@ pub fn run_explorer_hook() {
     let mut allow_keyboard_preview_on_first_observation = false;
     let mut folder_change_time: Option<Instant> = None;
     let mut suspended_initial_focus: Option<String> = None;
+    let mut last_folder_probe = Instant::now();
+    let mut last_hover_probe = Instant::now();
+    let mut last_keyboard_focus_probe = Instant::now();
     
     // State for optimized polling
     let mut last_state_check = Instant::now();
@@ -1128,6 +1163,9 @@ pub fn run_explorer_hook() {
     const MEDIUM_SLEEP_MS: u64 = 150;  // Visible but not focused - moderate checking
     const ACTIVE_POLL_MS: u64 = 30;    // Active focus - responsive polling
     const VIDEO_HOVER_DISMISS_GRACE_MS: u64 = 350;
+    const FOLDER_PROBE_MS: u64 = 200;
+    const HOVER_PROBE_MS: u64 = 120;
+    const KEYBOARD_FOCUS_PROBE_MS: u64 = 80;
     
     // How often to re-evaluate the state when in sleep modes
     const STATE_RECHECK_DEEP_MS: u64 = 2000;    // When no Explorer windows
@@ -1231,27 +1269,30 @@ pub fn run_explorer_hook() {
             }
 
             // Detect folder navigation/opening and suspend preview until user input.
-            if let Some(folder) = get_current_explorer_folder() {
-                if last_cursor_folder.as_ref() != Some(&folder) {
-                    last_cursor_folder = Some(folder);
-                    suspend_preview_until_user_input = true;
-                    allow_keyboard_preview_on_first_observation = false;
-                    folder_change_time = Some(Instant::now());
-                    suspended_initial_focus = None;
-                    hover_start = None;
-                    last_focused_name = None;
-                    // Reset cursor baseline so we don't mistake stale delta for movement.
-                    last_cursor_pos = cursor_pos;
-                    // Drain stale GetAsyncKeyState flags from prior navigation
-                    let _ = is_keyboard_navigation_input_detected();
+            if last_folder_probe.elapsed() >= Duration::from_millis(FOLDER_PROBE_MS) {
+                last_folder_probe = Instant::now();
+                if let Some(folder) = get_current_explorer_folder() {
+                    if last_cursor_folder.as_ref() != Some(&folder) {
+                        last_cursor_folder = Some(folder);
+                        suspend_preview_until_user_input = true;
+                        allow_keyboard_preview_on_first_observation = false;
+                        folder_change_time = Some(Instant::now());
+                        suspended_initial_focus = None;
+                        hover_start = None;
+                        last_focused_name = None;
+                        // Reset cursor baseline so we don't mistake stale delta for movement.
+                        last_cursor_pos = cursor_pos;
+                        // Drain stale GetAsyncKeyState flags from prior navigation
+                        let _ = is_keyboard_navigation_input_detected();
 
-                    if last_file.is_some() || keyboard_file.is_some() || is_keyboard_hover {
-                        hide_preview();
+                        if last_file.is_some() || keyboard_file.is_some() || is_keyboard_hover {
+                            hide_preview();
+                        }
+                        last_file = None;
+                        keyboard_file = None;
+                        is_keyboard_hover = false;
+                        video_hover_guard_until = None;
                     }
-                    last_file = None;
-                    keyboard_file = None;
-                    is_keyboard_hover = false;
-                    video_hover_guard_until = None;
                 }
             }
 
@@ -1281,7 +1322,11 @@ pub fn run_explorer_hook() {
                     // (whose "pressed since last check" bit can carry stale state
                     // from the navigation that opened this folder).
                     let mut keyboard_unlocked = false;
-                    if is_foreground_explorer() {
+                    if is_foreground_explorer()
+                        && last_keyboard_focus_probe.elapsed()
+                            >= Duration::from_millis(KEYBOARD_FOCUS_PROBE_MS)
+                    {
+                        last_keyboard_focus_probe = Instant::now();
                         if let Some(focused_info) =
                             uia.as_ref().and_then(|a| get_focused_explorer_item(a))
                         {
@@ -1355,33 +1400,24 @@ pub fn run_explorer_hook() {
                     }
                 }
                 
-                // When cursor moves, check immediately what file is under it
-                if let Some(file_path) = get_file_under_cursor() {
-                    if last_file.as_ref() == Some(&file_path) {
-                        // Same file - keep preview
-                        continue;
-                    } else {
-                        // Different file - hide and start new hover timer
-                        hide_preview();
-                        last_file = None;
-                        hover_start = Some(Instant::now());
-                        video_hover_guard_until = None;
-                    }
-                } else {
-                    // No file under cursor - hide preview
-                    if last_file.is_some() {
-                        hide_preview();
-                        last_file = None;
-                    }
-                    hover_start = Some(Instant::now());
+                // While moving (including list scrolling), avoid heavy accessibility
+                // resolution and wait until hover is stable before probing media.
+                if last_file.is_some() {
+                    hide_preview();
+                    last_file = None;
                     video_hover_guard_until = None;
                 }
+                hover_start = Some(Instant::now());
                 continue;
             }
 
             // Mouse is stationary - check for keyboard navigation
             // Only when Explorer is the foreground window (keyboard input goes there)
-            if is_foreground_explorer() {
+            if is_foreground_explorer()
+                && last_keyboard_focus_probe.elapsed()
+                    >= Duration::from_millis(KEYBOARD_FOCUS_PROBE_MS)
+            {
+                last_keyboard_focus_probe = Instant::now();
                 if let Some(focused_info) = uia.as_ref().and_then(|a| get_focused_explorer_item(a)) {
                     let focused_name = match &focused_info.result {
                         AccessibilityResult::FileName(name) => name.clone(),
@@ -1502,6 +1538,11 @@ pub fn run_explorer_hook() {
             // Check if we've hovered long enough (mouse hover)
             if let Some(start) = hover_start {
                 if start.elapsed() >= hover_delay {
+                    if last_hover_probe.elapsed() < Duration::from_millis(HOVER_PROBE_MS) {
+                        continue;
+                    }
+                    last_hover_probe = Instant::now();
+
                     // Try to get file under cursor
                     if let Some(file_path) = get_file_under_cursor() {
                         if last_file.as_ref() != Some(&file_path) {
