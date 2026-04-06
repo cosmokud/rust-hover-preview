@@ -12,7 +12,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DispatchMessageW,
     GetCursorPos, LoadImageW, PeekMessageW, PostQuitMessage, RegisterClassExW, RegisterWindowMessageW,
     SetForegroundWindow, TrackPopupMenu, TranslateMessage, CS_HREDRAW, CS_VREDRAW, HICON, IMAGE_ICON,
-    LR_DEFAULTSIZE, LR_SHARED, MF_CHECKED, MF_POPUP, MF_STRING, MF_UNCHECKED, MSG, PM_REMOVE,
+    LR_DEFAULTSIZE, LR_SHARED, MF_CHECKED, MF_DISABLED, MF_POPUP, MF_STRING, MF_UNCHECKED, MSG, PM_REMOVE,
     SW_SHOWNORMAL, TPM_BOTTOMALIGN, TPM_LEFTALIGN, WM_COMMAND, WM_DESTROY, WM_LBUTTONUP, WM_RBUTTONUP,
     WM_USER, WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_POPUP,
 };
@@ -21,6 +21,7 @@ const WM_TRAYICON: u32 = WM_USER + 1;
 const ID_TRAY_EXIT: u16 = 1001;
 const ID_TRAY_STARTUP: u16 = 1002;
 const ID_TRAY_ENABLE: u16 = 1003;
+const ID_TRAY_CONFIRM_FILE_TYPE: u16 = 1004;
 const ID_TRAY_VOLUME_MAX: u16 = 1010;      // 100%
 const ID_TRAY_VOLUME_HIGH: u16 = 1011;     // 80%
 const ID_TRAY_VOLUME_MEDIUM: u16 = 1012;   // 50%
@@ -73,6 +74,9 @@ unsafe extern "system" fn tray_window_proc(
                 ID_TRAY_ENABLE => {
                     toggle_preview_enabled();
                 }
+                ID_TRAY_CONFIRM_FILE_TYPE => {
+                    toggle_confirm_file_type();
+                }
                 ID_TRAY_VOLUME_MAX => set_volume(100),
                 ID_TRAY_VOLUME_HIGH => set_volume(80),
                 ID_TRAY_VOLUME_MEDIUM => set_volume(50),
@@ -106,6 +110,23 @@ unsafe fn show_context_menu(hwnd: HWND) {
     let preview_enabled = CONFIG.lock().map(|c| c.preview_enabled).unwrap_or(true);
     let enable_flags = MF_STRING | if preview_enabled { MF_CHECKED } else { MF_UNCHECKED };
     let _ = AppendMenuW(menu, enable_flags, ID_TRAY_ENABLE as usize, w!("Enable Preview"));
+
+    // Add "Confirm File Type" with checkmark (content/header sniffing)
+    let confirm_file_type = CONFIG.lock().map(|c| c.confirm_file_type).unwrap_or(false);
+    let confirm_flags = MF_STRING | if confirm_file_type { MF_CHECKED } else { MF_UNCHECKED };
+    let _ = AppendMenuW(
+        menu,
+        confirm_flags,
+        ID_TRAY_CONFIRM_FILE_TYPE as usize,
+        w!("Confirm File Type"),
+    );
+    // Brief tooltip-like hint shown directly in the menu.
+    let _ = AppendMenuW(
+        menu,
+        MF_STRING | MF_DISABLED,
+        0,
+        w!("Tip: Checks file header; handles wrong extensions (slower)"),
+    );
 
     // Add Preview Delay submenu
     let hover_delay_ms = CONFIG.lock().map(|c| c.hover_delay_ms).unwrap_or(0);
@@ -199,6 +220,13 @@ fn toggle_startup() {
 fn toggle_preview_enabled() {
     if let Ok(mut config) = CONFIG.lock() {
         config.preview_enabled = !config.preview_enabled;
+        config.save();
+    }
+}
+
+fn toggle_confirm_file_type() {
+    if let Ok(mut config) = CONFIG.lock() {
+        config.confirm_file_type = !config.confirm_file_type;
         config.save();
     }
 }
