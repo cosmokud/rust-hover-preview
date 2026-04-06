@@ -27,7 +27,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 // Supported image extensions
 const IMAGE_EXTENSIONS: &[&str] = &[
-    "jpg", "jpeg", "png", "gif", "bmp", "ico", "tiff", "tif", "webp",
+    "jpg", "jpeg", "jpe", "jfif", "png", "gif", "bmp", "ico", "tiff", "tif",
+    "webp",
 ];
 
 // Supported video extensions
@@ -714,7 +715,7 @@ fn find_media_in_folder(folder: &str, item_name: &str) -> Option<PathBuf> {
     }
 
     // JPEG extension aliases can differ between Explorer labels and on-disk names.
-    // Try sibling jpg/jpeg forms before consulting the folder index.
+    // Try sibling JPEG aliases before consulting the folder index.
     if let Some(item_ext) = Path::new(item_name)
         .extension()
         .and_then(|s| s.to_str())
@@ -722,7 +723,7 @@ fn find_media_in_folder(folder: &str, item_name: &str) -> Option<PathBuf> {
     {
         if is_jpeg_extension(&item_ext) {
             if let Some(stem) = Path::new(item_name).file_stem().and_then(|s| s.to_str()) {
-                for alt in ["jpg", "jpeg"] {
+                for alt in ["jpg", "jpeg", "jpe", "jfif"] {
                     if alt == item_ext {
                         continue;
                     }
