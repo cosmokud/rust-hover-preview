@@ -332,6 +332,13 @@ fn is_webp_file(path: &PathBuf) -> bool {
         .unwrap_or(false)
 }
 
+fn is_confirm_file_type_enabled() -> bool {
+    CONFIG
+        .lock()
+        .map(|cfg| cfg.confirm_file_type)
+        .unwrap_or(false)
+}
+
 /// Guess image format from header bytes instead of file extension.
 fn guessed_image_format(path: &PathBuf) -> Option<image::ImageFormat> {
     image::ImageReader::open(path)
@@ -779,7 +786,11 @@ fn load_animated_webp(
 
 /// Load a static image (JPG, PNG, BMP, static WebP, etc.)
 fn load_static_image(path: &PathBuf, max_width: u32, max_height: u32) -> Option<MediaData> {
-    let img = decode_image_with_header_check(path)?;
+    let img = if is_confirm_file_type_enabled() {
+        decode_image_with_header_check(path)?
+    } else {
+        image::open(path).ok()?
+    };
     let (orig_width, orig_height) = img.dimensions();
     let (target_width, target_height) =
         scale_dimensions(orig_width, orig_height, max_width, max_height);
@@ -1175,7 +1186,11 @@ fn load_media(
         return load_video_thumbnail(path, max_width, max_height);
     }
 
-    let guessed_format = guessed_image_format(path);
+    let guessed_format = if is_confirm_file_type_enabled() {
+        guessed_image_format(path)
+    } else {
+        None
+    };
 
     if matches!(guessed_format, Some(image::ImageFormat::Gif)) || is_gif_file(path) {
         // Try animated GIF first
@@ -1216,7 +1231,11 @@ fn get_media_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
         return get_video_dimensions(path).or(Some((1920, 1080)));
     }
 
-    image_dimensions_with_header_check(path)
+    if is_confirm_file_type_enabled() {
+        image_dimensions_with_header_check(path)
+    } else {
+        image::image_dimensions(path).ok()
+    }
 }
 
 /// Render a single frame of the loading spinner animation (BGRA pixels)

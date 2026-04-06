@@ -10,6 +10,7 @@ pub struct AppConfig {
     pub run_at_startup: bool,
     pub hover_delay_ms: u64,
     pub preview_enabled: bool,
+    pub confirm_file_type: bool,
     pub follow_cursor: bool,
     pub video_volume: u32,
 }
@@ -20,6 +21,7 @@ impl Default for AppConfig {
             run_at_startup: true,
             hover_delay_ms: 0,
             preview_enabled: true,
+            confirm_file_type: false,
             follow_cursor: false,
             video_volume: 0, // Mute by default
         }
@@ -57,6 +59,7 @@ impl AppConfig {
             ini.set(CONFIG_SECTION, "run_at_startup", Some(self.run_at_startup.to_string()));
             ini.set(CONFIG_SECTION, "hover_delay_ms", Some(self.hover_delay_ms.to_string()));
             ini.set(CONFIG_SECTION, "preview_enabled", Some(self.preview_enabled.to_string()));
+            ini.set(CONFIG_SECTION, "confirm_file_type", Some(self.confirm_file_type.to_string()));
             ini.set(CONFIG_SECTION, "follow_cursor", Some(self.follow_cursor.to_string()));
             ini.set(CONFIG_SECTION, "video_volume", Some(self.video_volume.to_string()));
             let _ = ini.write(path.to_string_lossy().as_ref());
@@ -72,6 +75,9 @@ impl AppConfig {
         }
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "preview_enabled") {
             self.preview_enabled = value;
+        }
+        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "confirm_file_type") {
+            self.confirm_file_type = value;
         }
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "follow_cursor") {
             self.follow_cursor = value;

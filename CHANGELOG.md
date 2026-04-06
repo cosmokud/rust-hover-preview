@@ -10,13 +10,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Optimized animated GIF/WebP streaming by switching to queue-based frame transfer, reducing duplicate frame copying and memory churn.
 - Limited preview animation decoding to the first 300 streamed frames and standardized animation timing to a 30 FPS ceiling for more stable CPU usage.
+- Added a new tray option, `Confirm File Type` (off by default), to optionally validate image headers for mislabeled file extensions.
 
 ### Fixed
 
 - Reduced severe CPU spikes while hovering animated WebP files by tightening streaming overlay redraw conditions and easing decoder contention.
 - Improved rapid-hover behavior across multiple animated files by making decoder workers more cooperative during long streams.
 - Fixed hover preview triggering for `.jpeg` files by treating JPEG aliases (`.jpg`, `.jpeg`, `.jpe`, `.jfif`) consistently during media resolution.
-- Added quick header-based image format detection so mislabeled files (for example PNG content with a JPG/JPEG extension) still load with the correct decoder.
+- With `Confirm File Type` enabled, mislabeled images (for example PNG content with a JPG/JPEG extension) now load with the correct decoder.
 
 ## [0.1.5] - 2026-04-01
 
