@@ -2,6 +2,7 @@ use crate::{CONFIG, RUNNING};
 use gif::DecodeOptions;
 use image::GenericImageView;
 use once_cell::sync::Lazy;
+use std::collections::VecDeque;
 use std::fs::File;
 use std::io::BufReader;
 use std::os::windows::process::CommandExt;
@@ -32,6 +33,9 @@ const PREVIEW_CLASS: PCWSTR = w!("RustHoverPreviewWindow");
 
 // Video extensions for detection
 const VIDEO_EXTENSIONS: &[&str] = &["mp4", "webm", "mkv", "avi", "mov", "wmv", "flv", "m4v"];
+const MAX_STREAMED_ANIMATION_FRAMES: usize = 300;
+const MIN_ANIMATION_FRAME_DELAY_MS: u32 = 33;
+const STREAMING_SPINNER_MAX_MS: u64 = 1500;
 
 // Message passing for thread communication
 pub static PREVIEW_SENDER: Lazy<Mutex<Option<Sender<PreviewMessage>>>> =
@@ -73,8 +77,8 @@ struct ImageFrame {
 /// Media data that can be either static or animated
 struct MediaData {
     frames: Vec<ImageFrame>,
-    /// Shared frames vec for streaming decode (animated formats append here)
-    shared_frames: Option<Arc<Mutex<Vec<ImageFrame>>>>,
+    /// Shared frame queue for streaming decode (animated formats append here)
+    shared_frames: Option<Arc<Mutex<VecDeque<ImageFrame>>>>,
     /// Signal from the background thread that all frames have been decoded
     all_frames_loaded: Option<Arc<AtomicBool>>,
     current_frame: usize,
@@ -111,19 +115,9 @@ impl MediaData {
     /// Pull any newly decoded frames from the shared buffer
     fn sync_shared_frames(&mut self) {
         if let Some(ref shared) = self.shared_frames {
-            if let Ok(shared_frames) = shared.lock() {
-                if shared_frames.len() > self.frames.len() {
-                    self.frames
-                        .extend(
-                            shared_frames[self.frames.len()..]
-                                .iter()
-                                .map(|f| ImageFrame {
-                                    pixels: f.pixels.clone(),
-                                    width: f.width,
-                                    height: f.height,
-                                    delay_ms: f.delay_ms,
-                                }),
-                        );
+            if let Ok(mut shared_frames) = shared.lock() {
+                if !shared_frames.is_empty() {
+                    self.frames.extend(shared_frames.drain(..));
                 }
             }
         }
@@ -184,6 +178,16 @@ impl MediaData {
             self.media_type,
             MediaType::AnimatedGif | MediaType::AnimatedWebP
         ) && !self.is_fully_loaded()
+    }
+
+    fn should_draw_streaming_overlay(&self) -> bool {
+        if !self.is_streaming() || self.frames.len() > 1 {
+            return false;
+        }
+
+        self.loading_start
+            .map(|s| s.elapsed() <= Duration::from_millis(STREAMING_SPINNER_MAX_MS))
+            .unwrap_or(false)
     }
 
     fn update_loading_frame(&mut self) -> bool {
@@ -448,7 +452,7 @@ fn load_animated_gif(
     // Decode first frame
     let first_frame = decoder.read_next_frame().ok()??;
     composite_gif_frame(&mut canvas, first_frame, gif_width, gif_height);
-    let delay_ms = (first_frame.delay as u32 * 10).max(20);
+    let delay_ms = (first_frame.delay as u32 * 10).max(MIN_ANIMATION_FRAME_DELAY_MS);
     let first_image = decode_gif_frame_to_image(
         &canvas,
         gif_width,
@@ -463,17 +467,7 @@ fn load_animated_gif(
         return None;
     }
 
-    let shared = Arc::new(Mutex::new(
-        vec![first_image.pixels.clone()]
-            .into_iter()
-            .map(|pixels| ImageFrame {
-                pixels,
-                width: target_width,
-                height: target_height,
-                delay_ms,
-            })
-            .collect::<Vec<_>>(),
-    ));
+    let shared = Arc::new(Mutex::new(VecDeque::new()));
 
     let shared_clone = Arc::clone(&shared);
     let loaded_flag = Arc::new(AtomicBool::new(false));
@@ -503,14 +497,19 @@ fn load_animated_gif(
 
         let mut canvas = vec![0u8; (gif_width * gif_height * 4) as usize];
         let mut frame_idx = 0;
+        let mut streamed_count: usize = 1; // first frame already decoded
 
         while let Ok(Some(frame)) = dec.read_next_frame() {
             if cancel_clone.load(Ordering::Acquire) {
                 break;
             }
 
+            if streamed_count >= MAX_STREAMED_ANIMATION_FRAMES {
+                break;
+            }
+
             composite_gif_frame(&mut canvas, frame, gif_width, gif_height);
-            let delay_ms = (frame.delay as u32 * 10).max(20);
+            let delay_ms = (frame.delay as u32 * 10).max(MIN_ANIMATION_FRAME_DELAY_MS);
 
             if frame_idx == 0 {
                 // Skip first frame, already decoded
@@ -527,7 +526,11 @@ fn load_animated_gif(
                 delay_ms,
             ) {
                 if let Ok(mut frames) = shared_clone.lock() {
-                    frames.push(img);
+                    frames.push_back(img);
+                }
+                streamed_count += 1;
+                if streamed_count % 8 == 0 {
+                    std::thread::yield_now();
                 }
             }
             frame_idx += 1;
@@ -650,7 +653,7 @@ fn load_animated_webp(
     // Decode first frame immediately so the user sees something right away
     let mut buf = vec![0u8; buf_size];
     let first_delay = match decoder.read_frame(&mut buf) {
-        Ok(d) => d.max(20),
+        Ok(d) => d.max(MIN_ANIMATION_FRAME_DELAY_MS),
         Err(_) => return None,
     };
     let first_image = decode_webp_frame_to_image(
@@ -664,12 +667,7 @@ fn load_animated_webp(
     )?;
 
     // Shared buffer: background thread pushes decoded frames here
-    let shared = Arc::new(Mutex::new(vec![ImageFrame {
-        pixels: first_image.pixels.clone(),
-        width: target_width,
-        height: target_height,
-        delay_ms: first_delay,
-    }]));
+    let shared = Arc::new(Mutex::new(VecDeque::new()));
     let shared_clone = Arc::clone(&shared);
     let loaded_flag = Arc::new(AtomicBool::new(false));
     let loaded_flag_clone = Arc::clone(&loaded_flag);
@@ -694,10 +692,16 @@ fn load_animated_webp(
 
         let bpp: usize = if dec.has_alpha() { 4 } else { 3 };
         let mut buf = vec![0u8; orig_width as usize * orig_height as usize * bpp];
+        let has_alpha = dec.has_alpha();
         let total = dec.num_frames();
+        let mut streamed_count: usize = 1; // first frame already decoded
 
         for i in 0..total {
             if cancel_clone.load(Ordering::Acquire) {
+                break;
+            }
+
+            if streamed_count >= MAX_STREAMED_ANIMATION_FRAMES {
                 break;
             }
 
@@ -706,10 +710,10 @@ fn load_animated_webp(
                     if i == 0 {
                         continue;
                     } // already decoded above
-                    let delay_ms = delay_ms.max(20);
+                    let delay_ms = delay_ms.max(MIN_ANIMATION_FRAME_DELAY_MS);
                     if let Some(img) = decode_webp_frame_to_image(
                         &buf,
-                        dec.has_alpha(),
+                        has_alpha,
                         orig_width,
                         orig_height,
                         target_width,
@@ -717,7 +721,11 @@ fn load_animated_webp(
                         delay_ms,
                     ) {
                         if let Ok(mut frames) = shared_clone.lock() {
-                            frames.push(img);
+                            frames.push_back(img);
+                        }
+                        streamed_count += 1;
+                        if streamed_count % 8 == 0 {
+                            std::thread::yield_now();
                         }
                     }
                 }
@@ -1391,8 +1399,8 @@ unsafe extern "system" fn window_proc(
                             return LRESULT(0);
                         }
 
-                        // If we're still streaming frames, overlay a loading spinner
-                        let paint_pixels: std::borrow::Cow<[u8]> = if media.is_streaming() {
+                        // If we're still waiting for streamed frames, overlay a loading spinner
+                        let paint_pixels: std::borrow::Cow<[u8]> = if media.should_draw_streaming_overlay() {
                             let elapsed = media
                                 .loading_start
                                 .map(|s| s.elapsed().as_secs_f32())
@@ -1782,8 +1790,8 @@ pub fn run_preview_window() {
                     if media.update_loading_frame() {
                         needs_repaint = true;
                     }
-                    // While streaming, repaint at a limited rate for spinner animation.
-                    if media.is_streaming()
+                    // While streaming first-frame loading, repaint for spinner animation.
+                    if media.should_draw_streaming_overlay()
                         && last_stream_overlay_repaint.elapsed() >= Duration::from_millis(83)
                     {
                         last_stream_overlay_repaint = Instant::now();
