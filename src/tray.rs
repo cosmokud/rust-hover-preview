@@ -12,7 +12,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DispatchMessageW,
     GetCursorPos, LoadImageW, PeekMessageW, PostQuitMessage, RegisterClassExW, RegisterWindowMessageW,
     SetForegroundWindow, TrackPopupMenu, TranslateMessage, CS_HREDRAW, CS_VREDRAW, HICON, IMAGE_ICON,
-    LR_DEFAULTSIZE, LR_SHARED, MF_CHECKED, MF_DISABLED, MF_POPUP, MF_STRING, MF_UNCHECKED, MSG, PM_REMOVE,
+    LR_DEFAULTSIZE, LR_SHARED, MF_CHECKED, MF_POPUP, MF_STRING, MF_UNCHECKED, MSG, PM_REMOVE,
     SW_SHOWNORMAL, TPM_BOTTOMALIGN, TPM_LEFTALIGN, WM_COMMAND, WM_DESTROY, WM_LBUTTONUP, WM_RBUTTONUP,
     WM_USER, WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_POPUP,
 };
@@ -119,13 +119,6 @@ unsafe fn show_context_menu(hwnd: HWND) {
         confirm_flags,
         ID_TRAY_CONFIRM_FILE_TYPE as usize,
         w!("Confirm File Type"),
-    );
-    // Brief tooltip-like hint shown directly in the menu.
-    let _ = AppendMenuW(
-        menu,
-        MF_STRING | MF_DISABLED,
-        0,
-        w!("Tip: Checks file header; handles wrong extensions (slower)"),
     );
 
     // Add Preview Delay submenu

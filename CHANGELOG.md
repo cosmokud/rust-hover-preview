@@ -18,6 +18,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Improved rapid-hover behavior across multiple animated files by making decoder workers more cooperative during long streams.
 - Fixed hover preview triggering for `.jpeg` files by treating JPEG aliases (`.jpg`, `.jpeg`, `.jpe`, `.jfif`) consistently during media resolution.
 - With `Confirm File Type` enabled, mislabeled images (for example PNG content with a JPG/JPEG extension) now load with the correct decoder.
+- Prevented the previous hovered image from flashing briefly when switching to a new file.
 
 ## [0.1.5] - 2026-04-01
 
