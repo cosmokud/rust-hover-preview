@@ -80,6 +80,8 @@ struct MediaData {
     current_frame: usize,
     last_frame_time: Instant,
     media_type: MediaType,
+    /// Cancellation token for background decode work.
+    stream_cancel: Option<Arc<AtomicBool>>,
     // For video playback using ffplay
     video_process: Option<Child>,
     loading_start: Option<Instant>,
@@ -202,6 +204,12 @@ impl MediaData {
             return true;
         }
         false
+    }
+
+    fn cancel_background_work(&mut self) {
+        if let Some(flag) = self.stream_cancel.take() {
+            flag.store(true, Ordering::Release);
+        }
     }
 }
 
@@ -416,7 +424,16 @@ fn composite_gif_frame(canvas: &mut [u8], frame: &gif::Frame, gif_width: u32, gi
 }
 
 /// Load an animated GIF file - decodes first frame immediately, streams the rest
-fn load_animated_gif(path: &PathBuf, max_width: u32, max_height: u32) -> Option<MediaData> {
+fn load_animated_gif(
+    path: &PathBuf,
+    max_width: u32,
+    max_height: u32,
+    cancel: Arc<AtomicBool>,
+) -> Option<MediaData> {
+    if cancel.load(Ordering::Acquire) {
+        return None;
+    }
+
     let file = File::open(path).ok()?;
     let mut decoder = DecodeOptions::new();
     decoder.set_color_output(gif::ColorOutput::RGBA);
@@ -464,6 +481,7 @@ fn load_animated_gif(path: &PathBuf, max_width: u32, max_height: u32) -> Option<
 
     // Stream remaining frames in background
     let path_clone = path.clone();
+    let cancel_clone = Arc::clone(&cancel);
     std::thread::spawn(move || {
         // Re-open and re-decode from the start to get remaining frames
         let file = match File::open(&path_clone) {
@@ -487,6 +505,10 @@ fn load_animated_gif(path: &PathBuf, max_width: u32, max_height: u32) -> Option<
         let mut frame_idx = 0;
 
         while let Ok(Some(frame)) = dec.read_next_frame() {
+            if cancel_clone.load(Ordering::Acquire) {
+                break;
+            }
+
             composite_gif_frame(&mut canvas, frame, gif_width, gif_height);
             let delay_ms = (frame.delay as u32 * 10).max(20);
 
@@ -520,6 +542,7 @@ fn load_animated_gif(path: &PathBuf, max_width: u32, max_height: u32) -> Option<
         current_frame: 0,
         last_frame_time: Instant::now(),
         media_type: MediaType::AnimatedGif,
+        stream_cancel: Some(cancel),
         video_process: None,
         loading_start: Some(Instant::now()),
     })
@@ -583,7 +606,16 @@ fn decode_webp_frame_to_image(
 }
 
 /// Load an animated WebP file — decodes first frame immediately, streams the rest in background.
-fn load_animated_webp(path: &PathBuf, max_width: u32, max_height: u32) -> Option<MediaData> {
+fn load_animated_webp(
+    path: &PathBuf,
+    max_width: u32,
+    max_height: u32,
+    cancel: Arc<AtomicBool>,
+) -> Option<MediaData> {
+    if cancel.load(Ordering::Acquire) {
+        return None;
+    }
+
     let file = File::open(path).ok()?;
     let reader = BufReader::new(file);
     let mut decoder = image_webp::WebPDecoder::new(reader).ok()?;
@@ -643,6 +675,7 @@ fn load_animated_webp(path: &PathBuf, max_width: u32, max_height: u32) -> Option
     let loaded_flag_clone = Arc::clone(&loaded_flag);
 
     let path_clone = path.clone();
+    let cancel_clone = Arc::clone(&cancel);
     std::thread::spawn(move || {
         let file = match File::open(&path_clone) {
             Ok(f) => f,
@@ -664,6 +697,10 @@ fn load_animated_webp(path: &PathBuf, max_width: u32, max_height: u32) -> Option
         let total = dec.num_frames();
 
         for i in 0..total {
+            if cancel_clone.load(Ordering::Acquire) {
+                break;
+            }
+
             match dec.read_frame(&mut buf) {
                 Ok(delay_ms) => {
                     if i == 0 {
@@ -697,6 +734,7 @@ fn load_animated_webp(path: &PathBuf, max_width: u32, max_height: u32) -> Option
         current_frame: 0,
         last_frame_time: Instant::now(),
         media_type: MediaType::AnimatedWebP,
+        stream_cancel: Some(cancel),
         video_process: None,
         loading_start: Some(Instant::now()),
     })
@@ -736,6 +774,7 @@ fn load_static_image(path: &PathBuf, max_width: u32, max_height: u32) -> Option<
         current_frame: 0,
         last_frame_time: Instant::now(),
         media_type: MediaType::StaticImage,
+        stream_cancel: None,
         video_process: None,
         loading_start: None,
     })
@@ -765,6 +804,7 @@ fn load_video_thumbnail(path: &PathBuf, max_width: u32, max_height: u32) -> Opti
         current_frame: 0,
         last_frame_time: Instant::now(),
         media_type: MediaType::Video,
+        stream_cancel: None,
         video_process: None,
         loading_start: None,
     })
@@ -1084,15 +1124,27 @@ fn ensure_video_window_topmost(x: i32, y: i32, width: i32, height: i32) -> bool 
 }
 
 /// Load media (image, animated image, or video) with appropriate loader
-fn load_media(path: &PathBuf, max_width: u32, max_height: u32) -> Option<MediaData> {
+fn load_media(
+    path: &PathBuf,
+    max_width: u32,
+    max_height: u32,
+    cancel: Arc<AtomicBool>,
+) -> Option<MediaData> {
+    if cancel.load(Ordering::Acquire) {
+        return None;
+    }
+
     if is_video_file(path) {
         return load_video_thumbnail(path, max_width, max_height);
     }
 
     if is_gif_file(path) {
         // Try animated GIF first
-        if let Some(media) = load_animated_gif(path, max_width, max_height) {
+        if let Some(media) = load_animated_gif(path, max_width, max_height, Arc::clone(&cancel)) {
             return Some(media);
+        }
+        if cancel.load(Ordering::Acquire) {
+            return None;
         }
         // Fall back to static for single-frame GIFs
         return load_static_image(path, max_width, max_height);
@@ -1100,14 +1152,22 @@ fn load_media(path: &PathBuf, max_width: u32, max_height: u32) -> Option<MediaDa
 
     if is_webp_file(path) {
         // Try animated WebP first
-        if let Some(media) = load_animated_webp(path, max_width, max_height) {
+        if let Some(media) =
+            load_animated_webp(path, max_width, max_height, Arc::clone(&cancel))
+        {
             return Some(media);
+        }
+        if cancel.load(Ordering::Acquire) {
+            return None;
         }
         // Fall back to static for non-animated WebP
         return load_static_image(path, max_width, max_height);
     }
 
     // Default to static image
+    if cancel.load(Ordering::Acquire) {
+        return None;
+    }
     load_static_image(path, max_width, max_height)
 }
 
@@ -1210,6 +1270,7 @@ fn create_loading_media(width: u32, height: u32) -> MediaData {
         current_frame: 0,
         last_frame_time: Instant::now(),
         media_type: MediaType::Loading,
+        stream_cancel: None,
         video_process: None,
         loading_start: Some(Instant::now()),
     }
@@ -1690,6 +1751,8 @@ pub fn run_preview_window() {
         let (load_tx, load_rx): (Sender<LoadResult>, Receiver<LoadResult>) = channel();
         let mut current_generation: u64 = 0;
         let mut pending_load: Option<PendingLoad> = None;
+        let mut pending_load_cancel: Option<Arc<AtomicBool>> = None;
+        let mut last_stream_overlay_repaint = Instant::now();
 
         // Message loop
         let mut msg = MSG::default();
@@ -1719,8 +1782,11 @@ pub fn run_preview_window() {
                     if media.update_loading_frame() {
                         needs_repaint = true;
                     }
-                    // While streaming, continuously repaint to animate the overlay spinner
-                    if media.is_streaming() {
+                    // While streaming, repaint at a limited rate for spinner animation.
+                    if media.is_streaming()
+                        && last_stream_overlay_repaint.elapsed() >= Duration::from_millis(83)
+                    {
+                        last_stream_overlay_repaint = Instant::now();
                         needs_repaint = true;
                     }
                 }
@@ -1755,18 +1821,26 @@ pub fn run_preview_window() {
                             }
 
                             if let Ok(mut current) = CURRENT_MEDIA.lock() {
+                                if let Some(ref mut existing) = *current {
+                                    existing.cancel_background_work();
+                                }
                                 *current = Some(media_data);
                             }
                             pending_load = None;
+                            pending_load_cancel = None;
                             let _ = InvalidateRect(hwnd, None, true);
                         }
                         None => {
                             // Loading failed, hide window
                             let _ = ShowWindow(hwnd, SW_HIDE);
                             if let Ok(mut current) = CURRENT_MEDIA.lock() {
+                                if let Some(ref mut existing) = *current {
+                                    existing.cancel_background_work();
+                                }
                                 *current = None;
                             }
                             pending_load = None;
+                            pending_load_cancel = None;
                         }
                     }
                 }
@@ -1846,12 +1920,16 @@ pub fn run_preview_window() {
                         // Invalidate any pending background loads
                         current_generation += 1;
                         pending_load = None;
+                        if let Some(cancel) = pending_load_cancel.take() {
+                            cancel.store(true, Ordering::Release);
+                        }
 
                         let _ = ShowWindow(hwnd, SW_HIDE);
 
                         // Stop video playback if any
                         if let Ok(mut current) = CURRENT_MEDIA.lock() {
                             if let Some(ref mut media) = *current {
+                                media.cancel_background_work();
                                 stop_video_playback(media);
                             }
                             *current = None;
@@ -1873,7 +1951,17 @@ pub fn run_preview_window() {
                     let preview_h = layout.preview_h;
 
                     if show_is_video {
-                        if let Some(media_data) = load_media(&path, max_width, max_height) {
+                        // Cancel any in-flight image load before switching to video.
+                        current_generation += 1;
+                        pending_load = None;
+                        if let Some(cancel) = pending_load_cancel.take() {
+                            cancel.store(true, Ordering::Release);
+                        }
+
+                        let no_cancel = Arc::new(AtomicBool::new(false));
+                        if let Some(media_data) =
+                            load_media(&path, max_width, max_height, no_cancel)
+                        {
                             // For video, hide our window and use ffplay
                             let _ = ShowWindow(hwnd, SW_HIDE);
 
@@ -1884,6 +1972,7 @@ pub fn run_preview_window() {
                             if should_start {
                                 if let Ok(mut media_guard) = CURRENT_MEDIA.lock() {
                                     if let Some(ref mut media) = *media_guard {
+                                        media.cancel_background_work();
                                         stop_video_playback(media);
                                     }
                                 }
@@ -1925,6 +2014,7 @@ pub fn run_preview_window() {
                         if current_video_path.is_some() {
                             if let Ok(mut media_guard) = CURRENT_MEDIA.lock() {
                                 if let Some(ref mut media) = *media_guard {
+                                    media.cancel_background_work();
                                     stop_video_playback(media);
                                 }
                             }
@@ -1932,9 +2022,20 @@ pub fn run_preview_window() {
                             video_pos = (0, 0, 0, 0);
                         }
 
+                        if let Some(cancel) = pending_load_cancel.take() {
+                            cancel.store(true, Ordering::Release);
+                        }
+                        if let Ok(mut media_guard) = CURRENT_MEDIA.lock() {
+                            if let Some(ref mut media) = *media_guard {
+                                media.cancel_background_work();
+                            }
+                        }
+
                         // Start background load; spinner will appear after 2s
                         current_generation += 1;
                         let gen = current_generation;
+                        let load_cancel = Arc::new(AtomicBool::new(false));
+                        pending_load_cancel = Some(Arc::clone(&load_cancel));
                         pending_load = Some(PendingLoad {
                             generation: gen,
                             started: Instant::now(),
@@ -1948,9 +2049,19 @@ pub fn run_preview_window() {
                         let tx = load_tx.clone();
                         let path_clone = path.clone();
                         std::thread::spawn(move || {
+                            if load_cancel.load(Ordering::Acquire) {
+                                return;
+                            }
                             let media =
                                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(
-                                    || load_media(&path_clone, max_width, max_height),
+                                    || {
+                                        load_media(
+                                            &path_clone,
+                                            max_width,
+                                            max_height,
+                                            Arc::clone(&load_cancel),
+                                        )
+                                    },
                                 ))
                                 .unwrap_or(None);
                             let _ = tx.send(LoadResult {
@@ -1962,7 +2073,7 @@ pub fn run_preview_window() {
                 }
             }
 
-            std::thread::sleep(std::time::Duration::from_millis(8)); // ~120fps for responsive preview
+            std::thread::sleep(std::time::Duration::from_millis(16)); // ~60fps loop is enough and lowers idle CPU
         }
     }
 }
