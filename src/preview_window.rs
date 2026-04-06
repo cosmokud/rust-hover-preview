@@ -332,6 +332,35 @@ fn is_webp_file(path: &PathBuf) -> bool {
         .unwrap_or(false)
 }
 
+/// Guess image format from header bytes instead of file extension.
+fn guessed_image_format(path: &PathBuf) -> Option<image::ImageFormat> {
+    image::ImageReader::open(path)
+        .ok()?
+        .with_guessed_format()
+        .ok()?
+        .format()
+}
+
+/// Decode an image by sniffing magic bytes instead of trusting the extension.
+fn decode_image_with_header_check(path: &PathBuf) -> Option<image::DynamicImage> {
+    image::ImageReader::open(path)
+        .ok()?
+        .with_guessed_format()
+        .ok()?
+        .decode()
+        .ok()
+}
+
+/// Read image dimensions by sniffing magic bytes instead of trusting the extension.
+fn image_dimensions_with_header_check(path: &PathBuf) -> Option<(u32, u32)> {
+    image::ImageReader::open(path)
+        .ok()?
+        .with_guessed_format()
+        .ok()?
+        .into_dimensions()
+        .ok()
+}
+
 /// Convert RGBA pixels to BGRA for Windows GDI
 fn rgba_to_bgra(rgba: &[u8]) -> Vec<u8> {
     let mut bgra = Vec::with_capacity(rgba.len());
@@ -750,7 +779,7 @@ fn load_animated_webp(
 
 /// Load a static image (JPG, PNG, BMP, static WebP, etc.)
 fn load_static_image(path: &PathBuf, max_width: u32, max_height: u32) -> Option<MediaData> {
-    let img = image::open(path).ok()?;
+    let img = decode_image_with_header_check(path)?;
     let (orig_width, orig_height) = img.dimensions();
     let (target_width, target_height) =
         scale_dimensions(orig_width, orig_height, max_width, max_height);
@@ -1146,7 +1175,9 @@ fn load_media(
         return load_video_thumbnail(path, max_width, max_height);
     }
 
-    if is_gif_file(path) {
+    let guessed_format = guessed_image_format(path);
+
+    if matches!(guessed_format, Some(image::ImageFormat::Gif)) || is_gif_file(path) {
         // Try animated GIF first
         if let Some(media) = load_animated_gif(path, max_width, max_height, Arc::clone(&cancel)) {
             return Some(media);
@@ -1158,7 +1189,7 @@ fn load_media(
         return load_static_image(path, max_width, max_height);
     }
 
-    if is_webp_file(path) {
+    if matches!(guessed_format, Some(image::ImageFormat::WebP)) || is_webp_file(path) {
         // Try animated WebP first
         if let Some(media) =
             load_animated_webp(path, max_width, max_height, Arc::clone(&cancel))
@@ -1185,7 +1216,7 @@ fn get_media_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
         return get_video_dimensions(path).or(Some((1920, 1080)));
     }
 
-    image::image_dimensions(path).ok()
+    image_dimensions_with_header_check(path)
 }
 
 /// Render a single frame of the loading spinner animation (BGRA pixels)
