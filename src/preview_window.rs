@@ -2087,7 +2087,11 @@ pub fn run_preview_window() {
                             if let Some(ref mut media) = *media_guard {
                                 media.cancel_background_work();
                             }
+                            // Clear immediately so old pixels never flash while
+                            // the new target is being decoded.
+                            *media_guard = None;
                         }
+                        let _ = ShowWindow(hwnd, SW_HIDE);
 
                         // Start background load; spinner will appear after 2s
                         current_generation += 1;
