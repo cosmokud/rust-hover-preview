@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
@@ -34,6 +34,7 @@ const PREVIEW_CLASS: PCWSTR = w!("RustHoverPreviewWindow");
 // Video extensions for detection
 const VIDEO_EXTENSIONS: &[&str] = &["mp4", "webm", "mkv", "avi", "mov", "wmv", "flv", "m4v"];
 const MAX_STREAMED_ANIMATION_FRAMES: usize = 300;
+const MAX_STREAMED_ANIMATION_BYTES: usize = 256 * 1024 * 1024;
 const MIN_ANIMATION_FRAME_DELAY_MS: u32 = 33;
 const STREAMING_SPINNER_MAX_MS: u64 = 1500;
 
@@ -48,6 +49,8 @@ static PREVIEW_HWND: AtomicIsize = AtomicIsize::new(0);
 static VIDEO_HWND: AtomicIsize = AtomicIsize::new(0);
 // Track the ffplay process ID to re-find the window if needed
 static VIDEO_PID: AtomicU32 = AtomicU32::new(0);
+// Guard to ensure we only run a single style-monitor thread.
+static NOACTIVATE_MONITOR_STARTED: AtomicBool = AtomicBool::new(false);
 
 static CURRENT_MEDIA: Lazy<Mutex<Option<MediaData>>> = Lazy::new(|| Mutex::new(None));
 
@@ -508,6 +511,7 @@ fn load_animated_gif(
     let shared_clone = Arc::clone(&shared);
     let loaded_flag = Arc::new(AtomicBool::new(false));
     let loaded_flag_clone = Arc::clone(&loaded_flag);
+    let first_frame_bytes = first_image.pixels.len();
 
     // Stream remaining frames in background
     let path_clone = path.clone();
@@ -534,6 +538,7 @@ fn load_animated_gif(
         let mut canvas = vec![0u8; (gif_width * gif_height * 4) as usize];
         let mut frame_idx = 0;
         let mut streamed_count: usize = 1; // first frame already decoded
+        let mut streamed_bytes: usize = first_frame_bytes;
 
         while let Ok(Some(frame)) = dec.read_next_frame() {
             if cancel_clone.load(Ordering::Acquire) {
@@ -561,10 +566,17 @@ fn load_animated_gif(
                 target_height,
                 delay_ms,
             ) {
+                let frame_bytes = img.pixels.len();
+                if streamed_bytes.saturating_add(frame_bytes)
+                    > MAX_STREAMED_ANIMATION_BYTES
+                {
+                    break;
+                }
                 if let Ok(mut frames) = shared_clone.lock() {
                     frames.push_back(img);
                 }
                 streamed_count += 1;
+                streamed_bytes = streamed_bytes.saturating_add(frame_bytes);
                 if streamed_count % 8 == 0 {
                     std::thread::yield_now();
                 }
@@ -707,6 +719,7 @@ fn load_animated_webp(
     let shared_clone = Arc::clone(&shared);
     let loaded_flag = Arc::new(AtomicBool::new(false));
     let loaded_flag_clone = Arc::clone(&loaded_flag);
+    let first_frame_bytes = first_image.pixels.len();
 
     let path_clone = path.clone();
     let cancel_clone = Arc::clone(&cancel);
@@ -731,6 +744,7 @@ fn load_animated_webp(
         let has_alpha = dec.has_alpha();
         let total = dec.num_frames();
         let mut streamed_count: usize = 1; // first frame already decoded
+        let mut streamed_bytes: usize = first_frame_bytes;
 
         for i in 0..total {
             if cancel_clone.load(Ordering::Acquire) {
@@ -756,10 +770,17 @@ fn load_animated_webp(
                         target_height,
                         delay_ms,
                     ) {
+                        let frame_bytes = img.pixels.len();
+                        if streamed_bytes.saturating_add(frame_bytes)
+                            > MAX_STREAMED_ANIMATION_BYTES
+                        {
+                            break;
+                        }
                         if let Ok(mut frames) = shared_clone.lock() {
                             frames.push_back(img);
                         }
                         streamed_count += 1;
+                        streamed_bytes = streamed_bytes.saturating_add(frame_bytes);
                         if streamed_count % 8 == 0 {
                             std::thread::yield_now();
                         }
@@ -993,8 +1014,56 @@ unsafe fn try_apply_noactivate_style(pid: u32) -> bool {
 
 /// Set WS_EX_NOACTIVATE on a window belonging to the given process
 /// This prevents the window from stealing focus
-/// Uses aggressive polling to minimize the race condition window
+/// Uses a singleton monitor thread so repeated previews don't spawn extra workers.
+fn ensure_noactivate_monitor() {
+    if NOACTIVATE_MONITOR_STARTED
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return;
+    }
+
+    std::thread::spawn(|| {
+        let mut monitored_pid: u32 = 0;
+        let mut pid_started = Instant::now();
+
+        while RUNNING.load(Ordering::Acquire) {
+            let pid = VIDEO_PID.load(Ordering::Acquire);
+
+            if pid != monitored_pid {
+                monitored_pid = pid;
+                pid_started = Instant::now();
+                if pid == 0 {
+                    VIDEO_HWND.store(0, Ordering::SeqCst);
+                }
+            }
+
+            if pid != 0 {
+                unsafe {
+                    let _ = try_apply_noactivate_style(pid);
+                }
+
+                let elapsed = pid_started.elapsed();
+                let delay_ms = if elapsed < Duration::from_millis(250) {
+                    5
+                } else if elapsed < Duration::from_secs(2) {
+                    20
+                } else {
+                    100
+                };
+                std::thread::sleep(Duration::from_millis(delay_ms));
+            } else {
+                std::thread::sleep(Duration::from_millis(80));
+            }
+        }
+
+        NOACTIVATE_MONITOR_STARTED.store(false, Ordering::Release);
+    });
+}
+
 fn set_noactivate_for_process(pid: u32) {
+    VIDEO_PID.store(pid, Ordering::SeqCst);
+
     // First, do a few immediate synchronous checks with very tight timing
     // This minimizes the window where focus can be stolen
     unsafe {
@@ -1008,25 +1077,7 @@ fn set_noactivate_for_process(pid: u32) {
         }
     }
 
-    // Continue monitoring in background thread for longer period
-    // The window might appear later, be recreated, or lose topmost
-    std::thread::spawn(move || {
-        unsafe {
-            for i in 0..200 {
-                let _ = try_apply_noactivate_style(pid);
-
-                // Gradually increase delay as we wait longer
-                let delay = if i < 20 {
-                    1
-                } else if i < 60 {
-                    5
-                } else {
-                    25
-                };
-                std::thread::sleep(Duration::from_millis(delay));
-            }
-        }
-    });
+    ensure_noactivate_monitor();
 }
 
 /// Start ffplay for video preview with configurable volume
@@ -1079,7 +1130,6 @@ fn start_video_playback(path: &PathBuf, x: i32, y: i32, width: i32, height: i32)
     // After spawning, try to set WS_EX_NOACTIVATE on the ffplay window
     // to prevent it from stealing focus
     if let Some(ref child_process) = child {
-        VIDEO_PID.store(child_process.id(), Ordering::SeqCst);
         set_noactivate_for_process(child_process.id());
     }
 
@@ -1108,12 +1158,14 @@ fn is_video_process_running() -> bool {
                     Ok(Some(_)) => {
                         media.video_process = None;
                         VIDEO_HWND.store(0, Ordering::SeqCst);
+                        VIDEO_PID.store(0, Ordering::SeqCst);
                         return false;
                     }
                     Ok(None) => return true,
                     Err(_) => {
                         media.video_process = None;
                         VIDEO_HWND.store(0, Ordering::SeqCst);
+                        VIDEO_PID.store(0, Ordering::SeqCst);
                         return false;
                     }
                 }
@@ -1409,6 +1461,97 @@ fn overlay_loading_spinner(pixels: &mut [u8], width: u32, height: u32, angle: f3
 struct LoadResult {
     generation: u64,
     media: Option<MediaData>,
+}
+
+/// A decode request consumed by the dedicated loader worker.
+struct LoadRequest {
+    generation: u64,
+    path: PathBuf,
+    max_width: u32,
+    max_height: u32,
+    cancel: Arc<AtomicBool>,
+}
+
+type LoadRequestSlot = Arc<(Mutex<Option<LoadRequest>>, Condvar)>;
+
+fn queue_load_request(slot: &LoadRequestSlot, request: LoadRequest) {
+    let (lock, cvar) = &**slot;
+    if let Ok(mut pending) = lock.lock() {
+        *pending = Some(request);
+        cvar.notify_one();
+    }
+}
+
+fn clear_load_request(slot: &LoadRequestSlot) {
+    let (lock, _) = &**slot;
+    if let Ok(mut pending) = lock.lock() {
+        *pending = None;
+    }
+}
+
+fn spawn_load_worker(
+    request_slot: LoadRequestSlot,
+    result_tx: Sender<LoadResult>,
+) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || {
+        while RUNNING.load(Ordering::Acquire) {
+            let mut request = {
+                let (lock, cvar) = &*request_slot;
+                let mut pending = match lock.lock() {
+                    Ok(guard) => guard,
+                    Err(_) => break,
+                };
+
+                while pending.is_none() && RUNNING.load(Ordering::Acquire) {
+                    pending = match cvar.wait_timeout(pending, Duration::from_millis(200)) {
+                        Ok((guard, _)) => guard,
+                        Err(_) => return,
+                    };
+                }
+
+                if !RUNNING.load(Ordering::Acquire) {
+                    break;
+                }
+
+                match pending.take() {
+                    Some(req) => req,
+                    None => continue,
+                }
+            };
+
+            // Coalesce any queued requests so we decode only the newest target.
+            {
+                let (lock, _) = &*request_slot;
+                if let Ok(mut pending) = lock.lock() {
+                    if let Some(newer) = pending.take() {
+                        request.cancel.store(true, Ordering::Release);
+                        request = newer;
+                    }
+                } else {
+                    break;
+                }
+            }
+
+            if request.cancel.load(Ordering::Acquire) {
+                continue;
+            }
+
+            let media = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                load_media(
+                    &request.path,
+                    request.max_width,
+                    request.max_height,
+                    Arc::clone(&request.cancel),
+                )
+            }))
+            .unwrap_or(None);
+
+            let _ = result_tx.send(LoadResult {
+                generation: request.generation,
+                media,
+            });
+        }
+    })
 }
 
 /// Tracks a pending background load so we can show the spinner after a delay
@@ -1807,6 +1950,10 @@ pub fn run_preview_window() {
 
         // Background loading support
         let (load_tx, load_rx): (Sender<LoadResult>, Receiver<LoadResult>) = channel();
+        let load_request_slot: LoadRequestSlot =
+            Arc::new((Mutex::new(None), Condvar::new()));
+        let load_worker =
+            spawn_load_worker(Arc::clone(&load_request_slot), load_tx);
         let mut current_generation: u64 = 0;
         let mut pending_load: Option<PendingLoad> = None;
         let mut pending_load_cancel: Option<Arc<AtomicBool>> = None;
@@ -1978,6 +2125,7 @@ pub fn run_preview_window() {
                         // Invalidate any pending background loads
                         current_generation += 1;
                         pending_load = None;
+                        clear_load_request(&load_request_slot);
                         if let Some(cancel) = pending_load_cancel.take() {
                             cancel.store(true, Ordering::Release);
                         }
@@ -2012,6 +2160,7 @@ pub fn run_preview_window() {
                         // Cancel any in-flight image load before switching to video.
                         current_generation += 1;
                         pending_load = None;
+                        clear_load_request(&load_request_slot);
                         if let Some(cancel) = pending_load_cancel.take() {
                             cancel.store(true, Ordering::Release);
                         }
@@ -2108,34 +2257,30 @@ pub fn run_preview_window() {
                             spinner_shown: false,
                         });
 
-                        let tx = load_tx.clone();
-                        let path_clone = path.clone();
-                        std::thread::spawn(move || {
-                            if load_cancel.load(Ordering::Acquire) {
-                                return;
-                            }
-                            let media =
-                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(
-                                    || {
-                                        load_media(
-                                            &path_clone,
-                                            max_width,
-                                            max_height,
-                                            Arc::clone(&load_cancel),
-                                        )
-                                    },
-                                ))
-                                .unwrap_or(None);
-                            let _ = tx.send(LoadResult {
+                        queue_load_request(
+                            &load_request_slot,
+                            LoadRequest {
                                 generation: gen,
-                                media,
-                            });
-                        });
+                                path,
+                                max_width,
+                                max_height,
+                                cancel: Arc::clone(&load_cancel),
+                            },
+                        );
                     }
                 }
             }
 
             std::thread::sleep(std::time::Duration::from_millis(16)); // ~60fps loop is enough and lowers idle CPU
         }
+
+        // Signal the dedicated loader worker to stop and wait for shutdown.
+        if let Some(cancel) = pending_load_cancel.take() {
+            cancel.store(true, Ordering::Release);
+        }
+        clear_load_request(&load_request_slot);
+        let (_, cvar) = &*load_request_slot;
+        cvar.notify_all();
+        let _ = load_worker.join();
     }
 }
