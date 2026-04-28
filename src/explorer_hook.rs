@@ -24,7 +24,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows::Win32::UI::Shell::{
     IFolderView, INameSpaceTreeControl, IShellBrowser, IShellFolder, IShellFolderViewDual,
-    IShellItem, IShellWindows, SHCreateItemFromIDList, SHCreateItemWithParent,
+    IShellItem, IShellView, IShellWindows, SHCreateItemFromIDList, SHCreateItemWithParent,
     SID_STopLevelBrowser, ShellWindows, SIGDN_DESKTOPABSOLUTEPARSING, SVGIO_ALLVIEW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -518,6 +518,80 @@ fn get_current_explorer_location_url() -> Option<String> {
     get_explorer_location_url(hwnd)
 }
 
+fn point_in_rect(point: &POINT, rect: &RECT) -> bool {
+    point.x >= rect.left && point.x < rect.right && point.y >= rect.top && point.y < rect.bottom
+}
+
+fn normalize_media_path(path: PathBuf) -> Option<PathBuf> {
+    if !path.exists() || !is_media_file(&path) {
+        return None;
+    }
+
+    std::fs::canonicalize(&path).ok().or(Some(path))
+}
+
+fn get_active_shell_view_under_cursor(screen_point: &POINT) -> Option<(IShellView, POINT)> {
+    unsafe {
+        let shell_windows =
+            CoCreateInstance::<_, IShellWindows>(&ShellWindows, None, CLSCTX_ALL).ok()?;
+        let count = shell_windows.Count().ok()?;
+        let mut foreground_candidate: Option<(IShellView, POINT)> = None;
+        let foreground = GetForegroundWindow();
+
+        for i in 0..count {
+            let variant = VARIANT::from(i);
+            let disp = match shell_windows.Item(&variant) {
+                Ok(disp) => disp,
+                Err(_) => continue,
+            };
+            let browser = match disp.cast::<windows::Win32::UI::Shell::IWebBrowser2>() {
+                Ok(browser) => browser,
+                Err(_) => continue,
+            };
+            let service_provider = match browser.cast::<IServiceProvider>() {
+                Ok(service_provider) => service_provider,
+                Err(_) => continue,
+            };
+            let shell_browser: IShellBrowser =
+                match service_provider.QueryService(&SID_STopLevelBrowser) {
+                    Ok(shell_browser) => shell_browser,
+                    Err(_) => continue,
+                };
+            let shell_view = match shell_browser.QueryActiveShellView() {
+                Ok(shell_view) => shell_view,
+                Err(_) => continue,
+            };
+            let shell_view_hwnd = match shell_view.GetWindow() {
+                Ok(hwnd) if !hwnd.is_invalid() => hwnd,
+                _ => continue,
+            };
+
+            let mut rect = RECT::default();
+            if GetWindowRect(shell_view_hwnd, &mut rect).is_err() {
+                continue;
+            }
+            if !point_in_rect(screen_point, &rect) {
+                if let Ok(browser_hwnd) = browser.HWND() {
+                    if foreground == HWND(browser_hwnd.0 as *mut _) {
+                        let mut client_point = *screen_point;
+                        if ScreenToClient(shell_view_hwnd, &mut client_point).as_bool() {
+                            foreground_candidate = Some((shell_view, client_point));
+                        }
+                    }
+                }
+                continue;
+            }
+
+            let mut client_point = *screen_point;
+            if ScreenToClient(shell_view_hwnd, &mut client_point).as_bool() {
+                return Some((shell_view, client_point));
+            }
+        }
+
+        foreground_candidate
+    }
+}
+
 fn shell_item_to_media_path(shell_item: &IShellItem) -> Option<PathBuf> {
     unsafe {
         let display_name = shell_item
@@ -526,12 +600,7 @@ fn shell_item_to_media_path(shell_item: &IShellItem) -> Option<PathBuf> {
         let path_string = display_name.to_string().ok()?;
         CoTaskMemFree(Some(display_name.0 as *const core::ffi::c_void));
 
-        let path = PathBuf::from(path_string);
-        if path.exists() && is_media_file(&path) {
-            Some(path)
-        } else {
-            None
-        }
+        normalize_media_path(PathBuf::from(path_string))
     }
 }
 
@@ -620,61 +689,27 @@ fn get_shell_data_model_file_under_cursor() -> Option<PathBuf> {
             return None;
         }
 
-        let explorer_hwnd = get_explorer_hwnd_under_cursor_or_foreground()?;
-        let explorer_hwnd_key = explorer_hwnd.0 as isize;
+        // Tabbed Explorer may expose several ShellWindows entries for one
+        // top-level window. Choose the active Shell view whose view HWND actually
+        // contains the cursor, not the first entry with a matching root HWND.
+        let (shell_view, client_point) = get_active_shell_view_under_cursor(&screen_point)?;
 
-        let shell_windows =
-            CoCreateInstance::<_, IShellWindows>(&ShellWindows, None, CLSCTX_ALL).ok()?;
-        let count = shell_windows.Count().ok()?;
-
-        for i in 0..count {
-            let variant = VARIANT::from(i);
-            let disp = match shell_windows.Item(&variant) {
-                Ok(disp) => disp,
-                Err(_) => continue,
-            };
-            let browser = match disp.cast::<windows::Win32::UI::Shell::IWebBrowser2>() {
-                Ok(browser) => browser,
-                Err(_) => continue,
-            };
-            let browser_hwnd = match browser.HWND() {
-                Ok(browser_hwnd) => browser_hwnd,
-                Err(_) => continue,
-            };
-            if browser_hwnd.0 != explorer_hwnd_key {
-                continue;
-            }
-
-            let service_provider = browser.cast::<IServiceProvider>().ok()?;
-            let shell_browser: IShellBrowser =
-                service_provider.QueryService(&SID_STopLevelBrowser).ok()?;
-            let shell_view = shell_browser.QueryActiveShellView().ok()?;
-            let shell_view_hwnd = shell_view.GetWindow().ok()?;
-
-            let mut client_point = screen_point;
-            if !ScreenToClient(shell_view_hwnd, &mut client_point).as_bool() {
-                return None;
-            }
-
-            // Primary data-model hit test. If the active Shell view exposes it,
-            // this returns the real IShellItem under x/y without MSAA/UIA text scraping.
-            if let Ok(hit_test) = shell_view.cast::<INameSpaceTreeControl>() {
-                if let Ok(shell_item) = hit_test.HitTest(&client_point) {
-                    if let Some(path) = shell_item_to_media_path(&shell_item) {
-                        return Some(path);
-                    }
-                }
-            }
-
-            // Fallback for Shell views that do not expose HitTest in this binding:
-            // use IFolderView item positions and convert the matched PIDL to IShellItem.
-            if let Ok(folder_view) = shell_view.cast::<IFolderView>() {
-                if let Some(path) = hit_test_folder_view_by_position(&folder_view, &client_point) {
+        // Primary data-model hit test. If the active Shell view exposes it,
+        // this returns the real IShellItem under x/y without MSAA/UIA text scraping.
+        if let Ok(hit_test) = shell_view.cast::<INameSpaceTreeControl>() {
+            if let Ok(shell_item) = hit_test.HitTest(&client_point) {
+                if let Some(path) = shell_item_to_media_path(&shell_item) {
                     return Some(path);
                 }
             }
+        }
 
-            return None;
+        // Fallback for Shell views that do not expose HitTest in this binding:
+        // use IFolderView item positions and convert the matched PIDL to IShellItem.
+        if let Ok(folder_view) = shell_view.cast::<IFolderView>() {
+            if let Some(path) = hit_test_folder_view_by_position(&folder_view, &client_point) {
+                return Some(path);
+            }
         }
     }
 
@@ -2291,6 +2326,13 @@ pub fn run_explorer_hook() {
                 // While moving (including list scrolling), avoid heavy accessibility
                 // resolution and wait until hover is stable before probing media.
                 if last_file.is_some() {
+                    if let Some(current_file) = get_file_under_cursor(uia.as_ref()) {
+                        if last_file.as_ref() == Some(&current_file) {
+                            hover_start = Some(Instant::now());
+                            continue;
+                        }
+                    }
+
                     hide_preview();
                     last_file = None;
                     video_hover_guard_until = None;
