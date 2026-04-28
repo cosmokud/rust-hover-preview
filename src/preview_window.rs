@@ -938,13 +938,10 @@ fn get_video_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
         .ok()?;
 
     let output_str = String::from_utf8_lossy(&output.stdout);
-    let parts: Vec<&str> = output_str.trim().split('x').collect();
-    if parts.len() == 2 {
-        let width = parts[0].parse().ok()?;
-        let height = parts[1].parse().ok()?;
-        return Some((width, height));
-    }
-    None
+    let mut parts = output_str.trim().split('x').filter(|part| !part.is_empty());
+    let width = parts.next()?.parse().ok()?;
+    let height = parts.next()?.parse().ok()?;
+    Some((width, height))
 }
 
 fn parse_cropdetect_line(line: &str) -> Option<VideoCrop> {
