@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.1.8] - 2026-04-29
+
+### Added
+
+- Added optional off-trigger key support so previews can be suppressed while a configured modifier key is held.
+- Added active Explorer Shell view detection and Shell view media indexing for more reliable file resolution.
+- Added media indexing from configured search roots to broaden Explorer hover matching.
+
+### Changed
+
+- Improved Explorer media path normalization, URL handling, and URL decoding.
+- Cached Explorer real folder lookups to reduce repeated Shell resolution work.
+- Updated Windows installer build orchestration to use the PowerShell helper in CI.
+
+### Fixed
+
+- Removed branch-triggered release deployment so installer publishing only follows the intended release flow.
+
 ## [0.1.7] - 2026-04-28
 
 ### Added
