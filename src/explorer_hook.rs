@@ -1,4 +1,7 @@
-use crate::preview_window::{hide_preview, is_cursor_over_image_preview, is_cursor_over_video_preview, show_preview, show_preview_keyboard};
+use crate::preview_window::{
+    hide_preview, is_cursor_over_image_preview, is_cursor_over_video_preview, show_preview,
+    show_preview_keyboard,
+};
 use crate::{CONFIG, RUNNING};
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
@@ -13,28 +16,24 @@ use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_ALL, COINIT_APARTMENTTHREADED,
 };
 use windows::Win32::System::Variant::VariantClear;
-use windows::Win32::UI::Shell::{IShellWindows, ShellWindows};
 use windows::Win32::UI::Accessibility::{CUIAutomation, IUIAutomation};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetAsyncKeyState, VK_DOWN, VK_END, VK_HOME, VK_LEFT, VK_NEXT, VK_PRIOR,
-    VK_RIGHT, VK_UP,
+    GetAsyncKeyState, VK_DOWN, VK_END, VK_HOME, VK_LEFT, VK_NEXT, VK_PRIOR, VK_RIGHT, VK_UP,
 };
+use windows::Win32::UI::Shell::{IShellWindows, ShellWindows};
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetClassNameW, GetCursorPos, GetForegroundWindow, GetWindowPlacement,
-    GetWindowRect, GetWindowThreadProcessId, IsIconic, IsWindowVisible, WindowFromPoint,
-    WINDOWPLACEMENT, SW_SHOWMAXIMIZED,
+    GetClassNameW, GetCursorPos, GetForegroundWindow, GetWindowPlacement, GetWindowRect,
+    GetWindowThreadProcessId, IsIconic, IsWindowVisible, WindowFromPoint, SW_SHOWMAXIMIZED,
+    WINDOWPLACEMENT,
 };
 
 // Supported image extensions
 const IMAGE_EXTENSIONS: &[&str] = &[
-    "jpg", "jpeg", "jpe", "jfif", "png", "gif", "bmp", "ico", "tiff", "tif",
-    "webp",
+    "jpg", "jpeg", "jpe", "jfif", "png", "gif", "bmp", "ico", "tiff", "tif", "webp",
 ];
 
 // Supported video extensions
-const VIDEO_EXTENSIONS: &[&str] = &[
-    "mp4", "webm", "mkv", "avi", "mov", "wmv", "flv", "m4v",
-];
+const VIDEO_EXTENSIONS: &[&str] = &["mp4", "webm", "mkv", "avi", "mov", "wmv", "flv", "m4v"];
 
 struct FolderMediaIndex {
     folder: String,
@@ -51,8 +50,7 @@ struct ExplorerFoldersCache {
 const FOLDER_INDEX_TTL_MS: u64 = 60000;
 const EXPLORER_FOLDERS_CACHE_TTL_MS: u64 = 250;
 
-static FOLDER_MEDIA_INDEX: Lazy<Mutex<Option<FolderMediaIndex>>> =
-    Lazy::new(|| Mutex::new(None));
+static FOLDER_MEDIA_INDEX: Lazy<Mutex<Option<FolderMediaIndex>>> = Lazy::new(|| Mutex::new(None));
 static EXPLORER_FOLDERS_CACHE: Lazy<Mutex<Option<ExplorerFoldersCache>>> =
     Lazy::new(|| Mutex::new(None));
 
@@ -143,8 +141,7 @@ fn lookup_media_in_folder_index(
                 if let Some(candidate_ext) = path.extension().and_then(|s| s.to_str()) {
                     let candidate_ext_lower = candidate_ext.to_ascii_lowercase();
                     if candidate_ext_lower == item_ext
-                        || (is_jpeg_extension(&candidate_ext_lower)
-                            && is_jpeg_extension(item_ext))
+                        || (is_jpeg_extension(&candidate_ext_lower) && is_jpeg_extension(item_ext))
                     {
                         return Some(path.clone());
                     }
@@ -230,8 +227,7 @@ fn get_all_explorer_folders() -> Vec<(HWND, String)> {
                 for i in 0..count {
                     let variant = VARIANT::from(i);
                     if let Ok(disp) = shell_windows.Item(&variant) {
-                        if let Ok(browser) =
-                            disp.cast::<windows::Win32::UI::Shell::IWebBrowser2>()
+                        if let Ok(browser) = disp.cast::<windows::Win32::UI::Shell::IWebBrowser2>()
                         {
                             if let Ok(browser_hwnd) = browser.HWND() {
                                 let hwnd = browser_hwnd.0 as isize;
@@ -319,24 +315,44 @@ fn get_current_explorer_folder() -> Option<String> {
 
 /// Names that indicate container elements, not actual files
 const CONTAINER_NAMES: &[&str] = &[
-    "Items View", "Folder View", "Shell Folder View", "ShellView",
-    "UIItemsView", "DirectUIHWND", "Search Results", "File list",
-    "Name", "Date modified", "Type", "Size", "Date", "Date created",
-    "Details", "List", "Content", "Tiles", "Large icons", "Medium icons",
-    "Small icons", "Extra large icons", "Item", "Group", "Header",
+    "Items View",
+    "Folder View",
+    "Shell Folder View",
+    "ShellView",
+    "UIItemsView",
+    "DirectUIHWND",
+    "Search Results",
+    "File list",
+    "Name",
+    "Date modified",
+    "Type",
+    "Size",
+    "Date",
+    "Date created",
+    "Details",
+    "List",
+    "Content",
+    "Tiles",
+    "Large icons",
+    "Medium icons",
+    "Small icons",
+    "Extra large icons",
+    "Item",
+    "Group",
+    "Header",
 ];
 
 /// Patterns that suggest a value might be a folder path rather than a file
-const FOLDER_PATTERNS: &[&str] = &[
-    "search-ms:", "shell:", "::{",
-];
+const FOLDER_PATTERNS: &[&str] = &["search-ms:", "shell:", "::{"];
 
 /// Check if a name is a container/UI element name rather than an actual file
 fn is_container_name(name: &str) -> bool {
     if name.is_empty() {
         return true;
     }
-    CONTAINER_NAMES.iter().any(|&c| name.eq_ignore_ascii_case(c))
+    CONTAINER_NAMES
+        .iter()
+        .any(|&c| name.eq_ignore_ascii_case(c))
 }
 
 /// Check if a value looks like a valid file path (not a shell special path)
@@ -391,10 +407,7 @@ fn is_variant_under_cursor(
         let right = left.saturating_add(width);
         let bottom = top.saturating_add(height);
 
-        cursor_pos.x >= left
-            && cursor_pos.x < right
-            && cursor_pos.y >= top
-            && cursor_pos.y < bottom
+        cursor_pos.x >= left && cursor_pos.x < right && cursor_pos.y >= top && cursor_pos.y < bottom
     }
 }
 
@@ -524,7 +537,9 @@ fn try_get_item_from_parent(
     unsafe {
         // Try to get parent accessible object
         if let Ok(parent_disp) = acc.accParent() {
-            if let Ok(parent_acc) = parent_disp.cast::<windows::Win32::UI::Accessibility::IAccessible>() {
+            if let Ok(parent_acc) =
+                parent_disp.cast::<windows::Win32::UI::Accessibility::IAccessible>()
+            {
                 let default_variant = VARIANT::default();
 
                 // Try to get name from parent
@@ -536,7 +551,7 @@ fn try_get_item_from_parent(
                         }
                     }
                 }
-                
+
                 // Try to get value (path) from parent
                 if is_variant_under_cursor(&parent_acc, &default_variant, cursor_pos) {
                     if let Ok(value) = parent_acc.get_accValue(&default_variant) {
@@ -549,14 +564,14 @@ fn try_get_item_from_parent(
                         }
                     }
                 }
-                
+
                 // Try child enumeration to find focused/selected item
                 if let Some(result) = try_get_focused_child(&parent_acc, cursor_pos) {
                     return Some(result);
                 }
             }
         }
-        
+
         // Try getting focused element within the accessible object
         if let Ok(mut focus) = acc.accFocus() {
             let focus_result = (|| -> Option<AccessibilityResult> {
@@ -595,14 +610,14 @@ fn try_get_focused_child(
         if let Ok(count) = acc.accChildCount() {
             // Limit iteration to prevent hanging
             let max_check = (count as i32).min(100);
-            
+
             for i in 1..=max_check {
                 let child_var = VARIANT::from(i);
 
                 if !is_variant_under_cursor(acc, &child_var, cursor_pos) {
                     continue;
                 }
-                
+
                 // Check state for focus/hot tracking
                 if let Ok(state) = acc.get_accState(&child_var) {
                     let state_val = state.as_raw().Anonymous.Anonymous.Anonymous.uintVal;
@@ -614,7 +629,7 @@ fn try_get_focused_child(
                                 return Some(AccessibilityResult::FileName(name_str));
                             }
                         }
-                        
+
                         // Also try value for full path
                         if let Ok(value) = acc.get_accValue(&child_var) {
                             let value_str = value.to_string();
@@ -642,12 +657,14 @@ fn try_deep_parent_search(
 ) -> Option<AccessibilityResult> {
     unsafe {
         let mut current_acc = acc.clone();
-        
+
         // Walk up to 5 levels of parent hierarchy
         for _ in 0..5 {
             // Try to get parent
             if let Ok(parent_disp) = current_acc.accParent() {
-                if let Ok(parent_acc) = parent_disp.cast::<windows::Win32::UI::Accessibility::IAccessible>() {
+                if let Ok(parent_acc) =
+                    parent_disp.cast::<windows::Win32::UI::Accessibility::IAccessible>()
+                {
                     let default_variant = VARIANT::default();
 
                     // Try getting name from parent
@@ -667,7 +684,7 @@ fn try_deep_parent_search(
                             }
                         }
                     }
-                    
+
                     // Try getting value from parent (may contain path)
                     if is_variant_under_cursor(&parent_acc, &default_variant, cursor_pos) {
                         if let Ok(value) = parent_acc.get_accValue(&default_variant) {
@@ -680,12 +697,12 @@ fn try_deep_parent_search(
                             }
                         }
                     }
-                    
+
                     // Try to find selected/focused child of this parent
                     if let Some(result) = try_get_focused_child(&parent_acc, cursor_pos) {
                         return Some(result);
                     }
-                    
+
                     current_acc = parent_acc;
                 } else {
                     break;
@@ -772,10 +789,13 @@ fn get_file_under_cursor() -> Option<PathBuf> {
                     return Some(path);
                 }
             }
-            
+
             // Also try treating item_name as a potential full path
             let potential_path = PathBuf::from(&item_name);
-            if potential_path.is_absolute() && potential_path.exists() && is_media_file(&potential_path) {
+            if potential_path.is_absolute()
+                && potential_path.exists()
+                && is_media_file(&potential_path)
+            {
                 return Some(potential_path);
             }
 
@@ -814,7 +834,7 @@ fn is_window_fullscreen(hwnd: HWND) -> bool {
         if GetWindowRect(hwnd, &mut window_rect).is_err() {
             return false;
         }
-        
+
         // Get screen dimensions
         let screen_width = windows::Win32::UI::WindowsAndMessaging::GetSystemMetrics(
             windows::Win32::UI::WindowsAndMessaging::SM_CXSCREEN,
@@ -822,11 +842,11 @@ fn is_window_fullscreen(hwnd: HWND) -> bool {
         let screen_height = windows::Win32::UI::WindowsAndMessaging::GetSystemMetrics(
             windows::Win32::UI::WindowsAndMessaging::SM_CYSCREEN,
         );
-        
+
         // Check if window covers entire screen (with small tolerance for borders)
         let width = window_rect.right - window_rect.left;
         let height = window_rect.bottom - window_rect.top;
-        
+
         width >= screen_width && height >= screen_height
     }
 }
@@ -839,12 +859,12 @@ fn is_explorer_hidden_by_foreground() -> bool {
         if foreground.is_invalid() {
             return false;
         }
-        
+
         // If foreground IS Explorer, it's not hidden
         if is_explorer_window(foreground) {
             return false;
         }
-        
+
         // Check if foreground is maximized or fullscreen
         is_window_maximized(foreground) || is_window_fullscreen(foreground)
     }
@@ -861,7 +881,7 @@ fn get_explorer_window_counts() -> (usize, usize) {
     unsafe {
         let mut total = 0;
         let mut visible = 0;
-        
+
         if let Ok(shell_windows) =
             CoCreateInstance::<_, IShellWindows>(&ShellWindows, None, CLSCTX_ALL)
         {
@@ -869,13 +889,12 @@ fn get_explorer_window_counts() -> (usize, usize) {
                 for i in 0..count {
                     let variant = VARIANT::from(i);
                     if let Ok(disp) = shell_windows.Item(&variant) {
-                        if let Ok(browser) =
-                            disp.cast::<windows::Win32::UI::Shell::IWebBrowser2>()
+                        if let Ok(browser) = disp.cast::<windows::Win32::UI::Shell::IWebBrowser2>()
                         {
                             if let Ok(browser_hwnd) = browser.HWND() {
                                 let hwnd = HWND(browser_hwnd.0 as *mut _);
                                 total += 1;
-                                
+
                                 // Check if window is visible and not minimized
                                 if IsWindowVisible(hwnd).as_bool() && !is_window_minimized(hwnd) {
                                     visible += 1;
@@ -886,7 +905,7 @@ fn get_explorer_window_counts() -> (usize, usize) {
                 }
             }
         }
-        
+
         (total, visible)
     }
 }
@@ -912,23 +931,23 @@ fn get_explorer_state() -> ExplorerState {
     if is_foreground_explorer() {
         return ExplorerState::ActiveFocus;
     }
-    
+
     // Check if foreground is maximized/fullscreen (cheap check)
     if is_explorer_hidden_by_foreground() {
         return ExplorerState::HiddenByForeground;
     }
-    
+
     // Need to check Explorer window states (more expensive, uses COM)
     let (total, visible) = get_explorer_window_counts();
-    
+
     if total == 0 {
         return ExplorerState::NoExplorerWindows;
     }
-    
+
     if visible == 0 {
         return ExplorerState::AllMinimized;
     }
-    
+
     // Explorer windows exist and are visible, but not in foreground
     ExplorerState::VisibleNotFocused
 }
@@ -938,8 +957,7 @@ fn get_explorer_state() -> ExplorerState {
 fn is_keyboard_navigation_input_detected() -> bool {
     unsafe {
         let navigation_keys = [
-            VK_UP, VK_DOWN, VK_LEFT, VK_RIGHT, VK_HOME, VK_END, VK_PRIOR,
-            VK_NEXT,
+            VK_UP, VK_DOWN, VK_LEFT, VK_RIGHT, VK_HOME, VK_END, VK_PRIOR, VK_NEXT,
         ];
 
         navigation_keys.iter().any(|&key| {
@@ -975,7 +993,7 @@ fn is_cursor_over_explorer_full() -> bool {
                     return true;
                 }
             }
-            
+
             // Also check by class/process
             if is_explorer_window(current_hwnd) {
                 return true;
@@ -1129,9 +1147,8 @@ pub fn run_explorer_hook() {
     }
 
     // Create UI Automation instance for keyboard focus detection (cached for the lifetime of the loop)
-    let uia: Option<IUIAutomation> = unsafe {
-        CoCreateInstance(&CUIAutomation, None, CLSCTX_ALL).ok()
-    };
+    let uia: Option<IUIAutomation> =
+        unsafe { CoCreateInstance(&CUIAutomation, None, CLSCTX_ALL).ok() };
 
     let mut last_file: Option<PathBuf> = None;
     let mut hover_start: Option<Instant> = None;
@@ -1153,26 +1170,26 @@ pub fn run_explorer_hook() {
     let mut last_folder_probe = Instant::now();
     let mut last_hover_probe = Instant::now();
     let mut last_keyboard_focus_probe = Instant::now();
-    
+
     // State for optimized polling
     let mut last_state_check = Instant::now();
     let mut current_state = ExplorerState::NoExplorerWindows;
-    
+
     // Polling intervals based on state
-    const DEEP_SLEEP_MS: u64 = 1000;   // No Explorer windows - check once per second
-    const LONG_SLEEP_MS: u64 = 500;    // All minimized or hidden - check twice per second
-    const MEDIUM_SLEEP_MS: u64 = 150;  // Visible but not focused - moderate checking
-    const ACTIVE_POLL_MS: u64 = 30;    // Active focus - responsive polling
+    const DEEP_SLEEP_MS: u64 = 1000; // No Explorer windows - check once per second
+    const LONG_SLEEP_MS: u64 = 500; // All minimized or hidden - check twice per second
+    const MEDIUM_SLEEP_MS: u64 = 150; // Visible but not focused - moderate checking
+    const ACTIVE_POLL_MS: u64 = 30; // Active focus - responsive polling
     const VIDEO_HOVER_DISMISS_GRACE_MS: u64 = 350;
     const FOLDER_PROBE_MS: u64 = 200;
     const HOVER_PROBE_MS: u64 = 120;
     const KEYBOARD_FOCUS_PROBE_MS: u64 = 80;
-    
+
     // How often to re-evaluate the state when in sleep modes
-    const STATE_RECHECK_DEEP_MS: u64 = 2000;    // When no Explorer windows
-    const STATE_RECHECK_LONG_MS: u64 = 1000;    // When minimized/hidden
-    const STATE_RECHECK_MEDIUM_MS: u64 = 300;   // When visible but not focused
-    const STATE_RECHECK_ACTIVE_MS: u64 = 100;   // When active
+    const STATE_RECHECK_DEEP_MS: u64 = 2000; // When no Explorer windows
+    const STATE_RECHECK_LONG_MS: u64 = 1000; // When minimized/hidden
+    const STATE_RECHECK_MEDIUM_MS: u64 = 300; // When visible but not focused
+    const STATE_RECHECK_ACTIVE_MS: u64 = 100; // When active
 
     while RUNNING.load(Ordering::SeqCst) {
         // Check if preview is enabled
@@ -1180,7 +1197,7 @@ pub fn run_explorer_hook() {
             .lock()
             .map(|c| (c.preview_enabled, c.hover_delay_ms))
             .unwrap_or((true, 0));
-        
+
         if !preview_enabled {
             if last_file.is_some() || keyboard_file.is_some() {
                 hide_preview();
@@ -1200,7 +1217,7 @@ pub fn run_explorer_hook() {
             std::thread::sleep(Duration::from_millis(LONG_SLEEP_MS));
             continue;
         }
-        
+
         let hover_delay = Duration::from_millis(hover_delay_ms);
 
         // Determine sleep duration and whether to recheck state based on current state
@@ -1211,17 +1228,17 @@ pub fn run_explorer_hook() {
             ExplorerState::VisibleNotFocused => (MEDIUM_SLEEP_MS, STATE_RECHECK_MEDIUM_MS),
             ExplorerState::ActiveFocus => (ACTIVE_POLL_MS, STATE_RECHECK_ACTIVE_MS),
         };
-        
+
         // Periodically re-evaluate the state
         if last_state_check.elapsed() > Duration::from_millis(state_recheck_ms) {
             current_state = get_explorer_state();
             last_state_check = Instant::now();
         }
-        
+
         // If Explorer is not accessible, hide preview and sleep
         match current_state {
-            ExplorerState::NoExplorerWindows 
-            | ExplorerState::AllMinimized 
+            ExplorerState::NoExplorerWindows
+            | ExplorerState::AllMinimized
             | ExplorerState::HiddenByForeground => {
                 if last_file.is_some() || keyboard_file.is_some() {
                     hide_preview();
@@ -1400,7 +1417,7 @@ pub fn run_explorer_hook() {
                         continue;
                     }
                 }
-                
+
                 // While moving (including list scrolling), avoid heavy accessibility
                 // resolution and wait until hover is stable before probing media.
                 if last_file.is_some() {
@@ -1419,12 +1436,11 @@ pub fn run_explorer_hook() {
                     >= Duration::from_millis(KEYBOARD_FOCUS_PROBE_MS)
             {
                 last_keyboard_focus_probe = Instant::now();
-                if let Some(focused_info) = uia.as_ref().and_then(|a| get_focused_explorer_item(a)) {
+                if let Some(focused_info) = uia.as_ref().and_then(|a| get_focused_explorer_item(a))
+                {
                     let focused_name = match &focused_info.result {
                         AccessibilityResult::FileName(name) => name.clone(),
-                        AccessibilityResult::FullPath(path) => {
-                            path.to_string_lossy().to_string()
-                        }
+                        AccessibilityResult::FullPath(path) => path.to_string_lossy().to_string(),
                     };
 
                     if last_focused_name.is_none() {
@@ -1453,7 +1469,9 @@ pub fn run_explorer_hook() {
                                     video_hover_guard_until = if is_video_file(&path) {
                                         Some(
                                             Instant::now()
-                                                + Duration::from_millis(VIDEO_HOVER_DISMISS_GRACE_MS),
+                                                + Duration::from_millis(
+                                                    VIDEO_HOVER_DISMISS_GRACE_MS,
+                                                ),
                                         )
                                     } else {
                                         None
@@ -1574,6 +1592,3 @@ pub fn run_explorer_hook() {
         CoUninitialize();
     }
 }
-
-
-

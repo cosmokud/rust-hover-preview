@@ -35,3 +35,4 @@ GEMINI.md
 .opencode/
 .codex/
 docs/translations/ # generated content you don't want in the graph
+RTK.md

@@ -44,7 +44,7 @@ impl AppConfig {
                 config.apply_ini(&ini);
             }
         }
-        
+
         // Always save to ensure new fields are written to config file
         config.save();
         config
@@ -56,12 +56,36 @@ impl AppConfig {
                 let _ = fs::create_dir_all(parent);
             }
             let mut ini = Ini::new();
-            ini.set(CONFIG_SECTION, "run_at_startup", Some(self.run_at_startup.to_string()));
-            ini.set(CONFIG_SECTION, "hover_delay_ms", Some(self.hover_delay_ms.to_string()));
-            ini.set(CONFIG_SECTION, "preview_enabled", Some(self.preview_enabled.to_string()));
-            ini.set(CONFIG_SECTION, "confirm_file_type", Some(self.confirm_file_type.to_string()));
-            ini.set(CONFIG_SECTION, "follow_cursor", Some(self.follow_cursor.to_string()));
-            ini.set(CONFIG_SECTION, "video_volume", Some(self.video_volume.to_string()));
+            ini.set(
+                CONFIG_SECTION,
+                "run_at_startup",
+                Some(self.run_at_startup.to_string()),
+            );
+            ini.set(
+                CONFIG_SECTION,
+                "hover_delay_ms",
+                Some(self.hover_delay_ms.to_string()),
+            );
+            ini.set(
+                CONFIG_SECTION,
+                "preview_enabled",
+                Some(self.preview_enabled.to_string()),
+            );
+            ini.set(
+                CONFIG_SECTION,
+                "confirm_file_type",
+                Some(self.confirm_file_type.to_string()),
+            );
+            ini.set(
+                CONFIG_SECTION,
+                "follow_cursor",
+                Some(self.follow_cursor.to_string()),
+            );
+            ini.set(
+                CONFIG_SECTION,
+                "video_volume",
+                Some(self.video_volume.to_string()),
+            );
             let _ = ini.write(path.to_string_lossy().as_ref());
         }
     }

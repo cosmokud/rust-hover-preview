@@ -5,16 +5,16 @@ use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Shell::{
-    Shell_NotifyIconW, ShellExecuteW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE,
+    ShellExecuteW, Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE,
     NOTIFYICONDATAW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DispatchMessageW,
-    GetCursorPos, LoadImageW, PeekMessageW, PostQuitMessage, RegisterClassExW, RegisterWindowMessageW,
-    SetForegroundWindow, TrackPopupMenu, TranslateMessage, CS_HREDRAW, CS_VREDRAW, HICON, IMAGE_ICON,
-    LR_DEFAULTSIZE, LR_SHARED, MF_CHECKED, MF_POPUP, MF_STRING, MF_UNCHECKED, MSG, PM_REMOVE,
-    SW_SHOWNORMAL, TPM_BOTTOMALIGN, TPM_LEFTALIGN, WM_COMMAND, WM_DESTROY, WM_LBUTTONUP, WM_RBUTTONUP,
-    WM_USER, WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_POPUP,
+    GetCursorPos, LoadImageW, PeekMessageW, PostQuitMessage, RegisterClassExW,
+    RegisterWindowMessageW, SetForegroundWindow, TrackPopupMenu, TranslateMessage, CS_HREDRAW,
+    CS_VREDRAW, HICON, IMAGE_ICON, LR_DEFAULTSIZE, LR_SHARED, MF_CHECKED, MF_POPUP, MF_STRING,
+    MF_UNCHECKED, MSG, PM_REMOVE, SW_SHOWNORMAL, TPM_BOTTOMALIGN, TPM_LEFTALIGN, WM_COMMAND,
+    WM_DESTROY, WM_LBUTTONUP, WM_RBUTTONUP, WM_USER, WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_POPUP,
 };
 
 const WM_TRAYICON: u32 = WM_USER + 1;
@@ -22,18 +22,18 @@ const ID_TRAY_EXIT: u16 = 1001;
 const ID_TRAY_STARTUP: u16 = 1002;
 const ID_TRAY_ENABLE: u16 = 1003;
 const ID_TRAY_CONFIRM_FILE_TYPE: u16 = 1004;
-const ID_TRAY_VOLUME_MAX: u16 = 1010;      // 100%
-const ID_TRAY_VOLUME_HIGH: u16 = 1011;     // 80%
-const ID_TRAY_VOLUME_MEDIUM: u16 = 1012;   // 50%
-const ID_TRAY_VOLUME_LOW: u16 = 1013;      // 25%
+const ID_TRAY_VOLUME_MAX: u16 = 1010; // 100%
+const ID_TRAY_VOLUME_HIGH: u16 = 1011; // 80%
+const ID_TRAY_VOLUME_MEDIUM: u16 = 1012; // 50%
+const ID_TRAY_VOLUME_LOW: u16 = 1013; // 25%
 const ID_TRAY_VOLUME_VERY_LOW: u16 = 1014; // 10%
-const ID_TRAY_VOLUME_MUTE: u16 = 1015;     // 0%
+const ID_TRAY_VOLUME_MUTE: u16 = 1015; // 0%
 const ID_TRAY_POSITION_FOLLOW: u16 = 1020; // Follow cursor
-const ID_TRAY_POSITION_BEST: u16 = 1021;   // Best position
-const ID_TRAY_DELAY_INSTANT: u16 = 1030;   // 0ms
+const ID_TRAY_POSITION_BEST: u16 = 1021; // Best position
+const ID_TRAY_DELAY_INSTANT: u16 = 1030; // 0ms
 const ID_TRAY_DELAY_VERY_FAST: u16 = 1031; // 200ms
-const ID_TRAY_DELAY_MEDIUM: u16 = 1032;    // 500ms
-const ID_TRAY_DELAY_SLOW: u16 = 1033;      // 1000ms
+const ID_TRAY_DELAY_MEDIUM: u16 = 1032; // 500ms
+const ID_TRAY_DELAY_SLOW: u16 = 1033; // 1000ms
 const ID_TRAY_OPEN_CONFIG: u16 = 1040;
 
 const TRAY_CLASS: PCWSTR = w!("RustHoverPreviewTrayClass");
@@ -108,12 +108,27 @@ unsafe fn show_context_menu(hwnd: HWND) {
 
     // Add "Enable Preview" with checkmark
     let preview_enabled = CONFIG.lock().map(|c| c.preview_enabled).unwrap_or(true);
-    let enable_flags = MF_STRING | if preview_enabled { MF_CHECKED } else { MF_UNCHECKED };
-    let _ = AppendMenuW(menu, enable_flags, ID_TRAY_ENABLE as usize, w!("Enable Preview"));
+    let enable_flags = MF_STRING
+        | if preview_enabled {
+            MF_CHECKED
+        } else {
+            MF_UNCHECKED
+        };
+    let _ = AppendMenuW(
+        menu,
+        enable_flags,
+        ID_TRAY_ENABLE as usize,
+        w!("Enable Preview"),
+    );
 
     // Add "Confirm File Type" with checkmark (content/header sniffing)
     let confirm_file_type = CONFIG.lock().map(|c| c.confirm_file_type).unwrap_or(false);
-    let confirm_flags = MF_STRING | if confirm_file_type { MF_CHECKED } else { MF_UNCHECKED };
+    let confirm_flags = MF_STRING
+        | if confirm_file_type {
+            MF_CHECKED
+        } else {
+            MF_UNCHECKED
+        };
     let _ = AppendMenuW(
         menu,
         confirm_flags,
@@ -125,7 +140,14 @@ unsafe fn show_context_menu(hwnd: HWND) {
     let hover_delay_ms = CONFIG.lock().map(|c| c.hover_delay_ms).unwrap_or(0);
     let delay_menu = CreatePopupMenu().unwrap();
 
-    let delay_flag = |delay: u64| MF_STRING | if hover_delay_ms == delay { MF_CHECKED } else { MF_UNCHECKED };
+    let delay_flag = |delay: u64| {
+        MF_STRING
+            | if hover_delay_ms == delay {
+                MF_CHECKED
+            } else {
+                MF_UNCHECKED
+            }
+    };
     let _ = AppendMenuW(
         delay_menu,
         delay_flag(0),
@@ -151,39 +173,118 @@ unsafe fn show_context_menu(hwnd: HWND) {
         w!("Slow (1000 ms)"),
     );
 
-    let _ = AppendMenuW(menu, MF_STRING | MF_POPUP, delay_menu.0 as usize, w!("Preview Delay"));
+    let _ = AppendMenuW(
+        menu,
+        MF_STRING | MF_POPUP,
+        delay_menu.0 as usize,
+        w!("Preview Delay"),
+    );
 
     // Add Volume submenu
     let current_volume = CONFIG.lock().map(|c| c.video_volume).unwrap_or(0);
     let volume_menu = CreatePopupMenu().unwrap();
-    
-    let vol_flag = |vol: u32| MF_STRING | if current_volume == vol { MF_CHECKED } else { MF_UNCHECKED };
-    let _ = AppendMenuW(volume_menu, vol_flag(100), ID_TRAY_VOLUME_MAX as usize, w!("Max (100%)"));
-    let _ = AppendMenuW(volume_menu, vol_flag(80), ID_TRAY_VOLUME_HIGH as usize, w!("High (80%)"));
-    let _ = AppendMenuW(volume_menu, vol_flag(50), ID_TRAY_VOLUME_MEDIUM as usize, w!("Medium (50%)"));
-    let _ = AppendMenuW(volume_menu, vol_flag(25), ID_TRAY_VOLUME_LOW as usize, w!("Low (25%)"));
-    let _ = AppendMenuW(volume_menu, vol_flag(10), ID_TRAY_VOLUME_VERY_LOW as usize, w!("Very Low (10%)"));
-    let _ = AppendMenuW(volume_menu, vol_flag(0), ID_TRAY_VOLUME_MUTE as usize, w!("Mute (0%)"));
-    
-    let _ = AppendMenuW(menu, MF_STRING | MF_POPUP, volume_menu.0 as usize, w!("Video Volume"));
+
+    let vol_flag = |vol: u32| {
+        MF_STRING
+            | if current_volume == vol {
+                MF_CHECKED
+            } else {
+                MF_UNCHECKED
+            }
+    };
+    let _ = AppendMenuW(
+        volume_menu,
+        vol_flag(100),
+        ID_TRAY_VOLUME_MAX as usize,
+        w!("Max (100%)"),
+    );
+    let _ = AppendMenuW(
+        volume_menu,
+        vol_flag(80),
+        ID_TRAY_VOLUME_HIGH as usize,
+        w!("High (80%)"),
+    );
+    let _ = AppendMenuW(
+        volume_menu,
+        vol_flag(50),
+        ID_TRAY_VOLUME_MEDIUM as usize,
+        w!("Medium (50%)"),
+    );
+    let _ = AppendMenuW(
+        volume_menu,
+        vol_flag(25),
+        ID_TRAY_VOLUME_LOW as usize,
+        w!("Low (25%)"),
+    );
+    let _ = AppendMenuW(
+        volume_menu,
+        vol_flag(10),
+        ID_TRAY_VOLUME_VERY_LOW as usize,
+        w!("Very Low (10%)"),
+    );
+    let _ = AppendMenuW(
+        volume_menu,
+        vol_flag(0),
+        ID_TRAY_VOLUME_MUTE as usize,
+        w!("Mute (0%)"),
+    );
+
+    let _ = AppendMenuW(
+        menu,
+        MF_STRING | MF_POPUP,
+        volume_menu.0 as usize,
+        w!("Video Volume"),
+    );
 
     // Add Cursor Position submenu
     let follow_cursor = CONFIG.lock().map(|c| c.follow_cursor).unwrap_or(false);
     let position_menu = CreatePopupMenu().unwrap();
-    
-    let pos_flag = |follow: bool| MF_STRING | if follow_cursor == follow { MF_CHECKED } else { MF_UNCHECKED };
-    let _ = AppendMenuW(position_menu, pos_flag(true), ID_TRAY_POSITION_FOLLOW as usize, w!("Follow Cursor"));
-    let _ = AppendMenuW(position_menu, pos_flag(false), ID_TRAY_POSITION_BEST as usize, w!("Best Position"));
-    
-    let _ = AppendMenuW(menu, MF_STRING | MF_POPUP, position_menu.0 as usize, w!("Preview Position"));
+
+    let pos_flag = |follow: bool| {
+        MF_STRING
+            | if follow_cursor == follow {
+                MF_CHECKED
+            } else {
+                MF_UNCHECKED
+            }
+    };
+    let _ = AppendMenuW(
+        position_menu,
+        pos_flag(true),
+        ID_TRAY_POSITION_FOLLOW as usize,
+        w!("Follow Cursor"),
+    );
+    let _ = AppendMenuW(
+        position_menu,
+        pos_flag(false),
+        ID_TRAY_POSITION_BEST as usize,
+        w!("Best Position"),
+    );
+
+    let _ = AppendMenuW(
+        menu,
+        MF_STRING | MF_POPUP,
+        position_menu.0 as usize,
+        w!("Preview Position"),
+    );
 
     // Add "Run at Startup" with checkmark
     let startup_enabled = CONFIG.lock().map(|c| c.run_at_startup).unwrap_or(false);
-    let flags = MF_STRING | if startup_enabled { MF_CHECKED } else { MF_UNCHECKED };
+    let flags = MF_STRING
+        | if startup_enabled {
+            MF_CHECKED
+        } else {
+            MF_UNCHECKED
+        };
     let _ = AppendMenuW(menu, flags, ID_TRAY_STARTUP as usize, w!("Run at Startup"));
 
     // Add "Edit Config.ini"
-    let _ = AppendMenuW(menu, MF_STRING, ID_TRAY_OPEN_CONFIG as usize, w!("Edit Config.ini"));
+    let _ = AppendMenuW(
+        menu,
+        MF_STRING,
+        ID_TRAY_OPEN_CONFIG as usize,
+        w!("Edit Config.ini"),
+    );
 
     // Add Exit
     let _ = AppendMenuW(menu, MF_STRING, ID_TRAY_EXIT as usize, w!("Exit"));
@@ -193,7 +294,16 @@ unsafe fn show_context_menu(hwnd: HWND) {
     let _ = GetCursorPos(&mut pt);
 
     let _ = SetForegroundWindow(hwnd).ok();
-    let _ = TrackPopupMenu(menu, TPM_LEFTALIGN | TPM_BOTTOMALIGN, pt.x, pt.y, 0, hwnd, None).ok();
+    let _ = TrackPopupMenu(
+        menu,
+        TPM_LEFTALIGN | TPM_BOTTOMALIGN,
+        pt.x,
+        pt.y,
+        0,
+        hwnd,
+        None,
+    )
+    .ok();
     let _ = DestroyMenu(menu);
 }
 
@@ -288,7 +398,7 @@ unsafe fn add_tray_icon(hwnd: HWND) -> bool {
     } else {
         HICON::default()
     };
-    
+
     // Fallback to system icon if custom icon failed
     let hicon = if hicon.0.is_null() {
         match LoadImageW(
