@@ -2,7 +2,7 @@ use crate::{CONFIG, RUNNING};
 use gif::DecodeOptions;
 use image::GenericImageView;
 use once_cell::sync::Lazy;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::fs::File;
 use std::io::BufReader;
 use std::os::windows::process::CommandExt;
@@ -53,6 +53,8 @@ static VIDEO_PID: AtomicU32 = AtomicU32::new(0);
 static NOACTIVATE_MONITOR_STARTED: AtomicBool = AtomicBool::new(false);
 
 static CURRENT_MEDIA: Lazy<Mutex<Option<MediaData>>> = Lazy::new(|| Mutex::new(None));
+static VIDEO_GEOMETRY_CACHE: Lazy<Mutex<HashMap<PathBuf, VideoGeometry>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
 
 pub enum PreviewMessage {
     Show(PathBuf, i32, i32),
@@ -92,6 +94,21 @@ struct MediaData {
     // For video playback using ffplay
     video_process: Option<Child>,
     loading_start: Option<Instant>,
+}
+
+#[derive(Clone, Copy)]
+struct VideoCrop {
+    width: u32,
+    height: u32,
+    x: u32,
+    y: u32,
+}
+
+#[derive(Clone, Copy)]
+struct VideoGeometry {
+    width: u32,
+    height: u32,
+    crop: Option<VideoCrop>,
 }
 
 impl MediaData {
@@ -851,10 +868,13 @@ fn load_static_image(path: &PathBuf, max_width: u32, max_height: u32) -> Option<
 
 /// Extract video thumbnail using ffmpeg and create frames for preview
 fn load_video_thumbnail(path: &PathBuf, max_width: u32, max_height: u32) -> Option<MediaData> {
-    // Try to use ffprobe to get video dimensions
-    let dimensions = get_video_dimensions(path).unwrap_or((1920, 1080));
+    let geometry = get_video_geometry(path).unwrap_or(VideoGeometry {
+        width: 1920,
+        height: 1080,
+        crop: None,
+    });
     let (target_width, target_height) =
-        scale_dimensions(dimensions.0, dimensions.1, max_width, max_height);
+        scale_dimensions(geometry.width, geometry.height, max_width, max_height);
 
     // Create a placeholder frame (dark gray) while video plays
     let placeholder_pixels = vec![40u8; (target_width * target_height * 4) as usize];
@@ -881,6 +901,11 @@ fn load_video_thumbnail(path: &PathBuf, max_width: u32, max_height: u32) -> Opti
 
 // Windows constant for hiding console window
 const CREATE_NO_WINDOW: u32 = 0x08000000;
+const VIDEO_CROPDETECT_LIMIT: &str = "24";
+const VIDEO_CROPDETECT_ROUND: &str = "16";
+const VIDEO_CROPDETECT_FRAMES: &str = "48";
+const VIDEO_CROP_MAX_AXIS_TRIM_RATIO: f32 = 0.10;
+const VIDEO_CROP_MAX_ASYMMETRY_PX: i32 = 12;
 
 /// Get video dimensions using ffprobe
 fn get_video_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
@@ -914,6 +939,169 @@ fn get_video_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
         return Some((width, height));
     }
     None
+}
+
+fn parse_cropdetect_line(line: &str) -> Option<VideoCrop> {
+    let idx = line.rfind("crop=")?;
+    let token = line[idx + 5..]
+        .split_whitespace()
+        .next()
+        .unwrap_or_default();
+    let mut parts = token.split(':');
+    let width: u32 = parts.next()?.parse().ok()?;
+    let height: u32 = parts.next()?.parse().ok()?;
+    let x: u32 = parts.next()?.parse().ok()?;
+    let y: u32 = parts.next()?.parse().ok()?;
+    if parts.next().is_some() {
+        return None;
+    }
+
+    Some(VideoCrop {
+        width,
+        height,
+        x,
+        y,
+    })
+}
+
+fn validate_detected_crop(crop: VideoCrop, src_w: u32, src_h: u32) -> bool {
+    if crop.width == 0
+        || crop.height == 0
+        || crop.width > src_w
+        || crop.height > src_h
+    {
+        return false;
+    }
+
+    let right = crop.x.saturating_add(crop.width);
+    let bottom = crop.y.saturating_add(crop.height);
+    if right > src_w || bottom > src_h {
+        return false;
+    }
+
+    let trim_left = crop.x as i32;
+    let trim_top = crop.y as i32;
+    let trim_right = src_w.saturating_sub(right) as i32;
+    let trim_bottom = src_h.saturating_sub(bottom) as i32;
+    let trim_x = src_w.saturating_sub(crop.width);
+    let trim_y = src_h.saturating_sub(crop.height);
+
+    if trim_x == 0 && trim_y == 0 {
+        return false;
+    }
+
+    let trim_x_ratio = trim_x as f32 / src_w as f32;
+    let trim_y_ratio = trim_y as f32 / src_h as f32;
+    if trim_x_ratio > VIDEO_CROP_MAX_AXIS_TRIM_RATIO
+        || trim_y_ratio > VIDEO_CROP_MAX_AXIS_TRIM_RATIO
+    {
+        return false;
+    }
+
+    (trim_left - trim_right).abs() <= VIDEO_CROP_MAX_ASYMMETRY_PX
+        && (trim_top - trim_bottom).abs() <= VIDEO_CROP_MAX_ASYMMETRY_PX
+}
+
+fn detect_video_crop(path: &PathBuf, src_w: u32, src_h: u32) -> Option<VideoCrop> {
+    let filter = format!(
+        "cropdetect={}:{}:0",
+        VIDEO_CROPDETECT_LIMIT, VIDEO_CROPDETECT_ROUND
+    );
+
+    let output = Command::new("ffmpeg")
+        .args([
+            "-v",
+            "info",
+            "-err_detect",
+            "ignore_err",
+            "-fflags",
+            "+genpts+discardcorrupt+igndts",
+            "-i",
+        ])
+        .arg(path)
+        .args([
+            "-frames:v",
+            VIDEO_CROPDETECT_FRAMES,
+            "-vf",
+            &filter,
+            "-f",
+            "null",
+            "-",
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .ok()?;
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let mut counts: HashMap<(u32, u32, u32, u32), u32> = HashMap::new();
+    for line in stderr.lines() {
+        if let Some(crop) = parse_cropdetect_line(line) {
+            *counts
+                .entry((crop.width, crop.height, crop.x, crop.y))
+                .or_insert(0) += 1;
+        }
+    }
+
+    let mut best: Option<(VideoCrop, u32)> = None;
+    for ((width, height, x, y), count) in counts {
+        let crop = VideoCrop {
+            width,
+            height,
+            x,
+            y,
+        };
+        if !validate_detected_crop(crop, src_w, src_h) {
+            continue;
+        }
+
+        match best {
+            Some((existing, existing_count)) => {
+                let existing_area = (existing.width as u64) * (existing.height as u64);
+                let candidate_area = (crop.width as u64) * (crop.height as u64);
+                if count > existing_count
+                    || (count == existing_count && candidate_area > existing_area)
+                {
+                    best = Some((crop, count));
+                }
+            }
+            None => best = Some((crop, count)),
+        }
+    }
+
+    best.map(|(crop, _)| crop)
+}
+
+fn get_video_geometry(path: &PathBuf) -> Option<VideoGeometry> {
+    if let Ok(cache) = VIDEO_GEOMETRY_CACHE.lock() {
+        if let Some(cached) = cache.get(path) {
+            return Some(*cached);
+        }
+    }
+
+    let (src_w, src_h) = get_video_dimensions(path)?;
+    let crop = detect_video_crop(path, src_w, src_h);
+
+    let geometry = if let Some(crop) = crop {
+        VideoGeometry {
+            width: crop.width,
+            height: crop.height,
+            crop: Some(crop),
+        }
+    } else {
+        VideoGeometry {
+            width: src_w,
+            height: src_h,
+            crop: None,
+        }
+    };
+
+    if let Ok(mut cache) = VIDEO_GEOMETRY_CACHE.lock() {
+        cache.insert(path.clone(), geometry);
+    }
+
+    Some(geometry)
 }
 
 /// Data passed to the EnumWindows callback to find ffplay window
@@ -1095,6 +1283,29 @@ fn start_video_playback(path: &PathBuf, x: i32, y: i32, width: i32, height: i32)
         // Convert percentage to ffplay volume filter (0-100 maps to 0.0-1.0)
         let volume_filter = format!("volume={:.2}", volume as f64 / 100.0);
         cmd.args(["-af", &volume_filter]);
+    }
+
+    if width > 0 && height > 0 {
+        // Remove encoded edge padding (if detected), then fit while preserving aspect.
+        let vf = if let Some(geometry) = get_video_geometry(path) {
+            if let Some(crop) = geometry.crop {
+                format!(
+                    "crop={}:{}:{}:{},scale={}:{}:flags=lanczos:force_original_aspect_ratio=decrease:reset_sar=1",
+                    crop.width, crop.height, crop.x, crop.y, width, height
+                )
+            } else {
+                format!(
+                    "scale={}:{}:flags=lanczos:force_original_aspect_ratio=decrease:reset_sar=1",
+                    width, height
+                )
+            }
+        } else {
+            format!(
+                "scale={}:{}:flags=lanczos:force_original_aspect_ratio=decrease:reset_sar=1",
+                width, height
+            )
+        };
+        cmd.args(["-vf", &vf]);
     }
 
     let child = cmd
@@ -1280,7 +1491,9 @@ fn load_media(
 /// Get original dimensions of media for positioning calculations
 fn get_media_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
     if is_video_file(path) {
-        return get_video_dimensions(path).or(Some((1920, 1080)));
+        return get_video_geometry(path)
+            .map(|g| (g.width, g.height))
+            .or(Some((1920, 1080)));
     }
 
     if is_confirm_file_type_enabled() {
