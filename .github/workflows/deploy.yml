@@ -1,12 +1,4 @@
-name: Deploy
-
-on:
-  push:
-    tags:
-      - "v*.*.*"
-  workflow_dispatch:
-
-jobs:
+﻿jobs:
   windows-installers:
     runs-on: windows-latest
     permissions:
@@ -39,6 +31,7 @@ jobs:
           path: |
             target/packager/*.exe
             target/packager/*.msi
+            target/release/rust-hover-preview.exe
           if-no-files-found: error
 
       - name: Create GitHub release
@@ -53,3 +46,4 @@ jobs:
           files: |
             target/packager/*.exe
             target/packager/*.msi
+            target/release/rust-hover-preview.exe
