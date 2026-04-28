@@ -32,7 +32,7 @@ jobs:
 
       - name: Build Windows installers
         shell: pwsh
-        run: cargo packager --release
+        run: .\build-installers.ps1
 
       - name: Upload installer artifacts
         uses: actions/upload-artifact@v4
