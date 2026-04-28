@@ -1,0 +1,61 @@
+name: Manual Deploy By Tag
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag_to_build:
+        description: "The exact tag to build and release (e.g., v0.1.7)"
+        required: true
+        type: string
+
+jobs:
+  windows-installers:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Checks out the specific tag you enter in the manual trigger
+          ref: ${{ inputs.tag_to_build }}
+
+      - name: Install Rust (MSVC)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable-x86_64-pc-windows-msvc
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-packager
+        shell: pwsh
+        run: cargo install cargo-packager --locked
+
+      - name: Build Windows installers
+        shell: pwsh
+        run: .\build-installers.ps1
+
+      - name: Upload installer artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-hover-preview-installers-${{ inputs.tag_to_build }}
+          path: |
+            target/packager/*.exe
+            target/packager/*.msi
+          if-no-files-found: error
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag_to_build }}
+          name: ${{ inputs.tag_to_build }}
+          prerelease: false
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          # Prevents an older version from becoming the "Latest" release
+          make_latest: false
+          files: |
+            target/packager/*.exe
+            target/packager/*.msi
