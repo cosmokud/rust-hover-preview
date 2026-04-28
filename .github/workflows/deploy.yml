@@ -5,15 +5,43 @@ on:
     tags:
       - "v*.*.*"
       - "!*-*"
-  workflow_dispatch:
 
 jobs:
   windows-installers:
     runs-on: windows-latest
     permissions:
       contents: write
+    # SECURITY: Ensure this job strictly runs on tags
+    if: startsWith(github.ref, 'refs/tags/')
 
     steps:
+      # IDEMPOTENCY: Only run this strict check on the very first attempt.
+      # If you click "Re-run failed jobs", this skips so you can finish the release.
+      - name: Fail if release already exists for tag
+        if: github.run_attempt == '1'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          api_url="https://api.github.com/repos/${REPO}/releases/tags/${TAG}"
+          status=$(curl -sS -o release.json -w "%{http_code}" \
+            -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "${api_url}")
+          if [[ "${status}" == "200" ]]; then
+            echo "release already exists for tag ${TAG}; refusing to overwrite"
+            cat release.json
+            exit 1
+          fi
+          if [[ "${status}" != "404" ]]; then
+            echo "unexpected API status while checking tag ${TAG}: ${status}"
+            cat release.json || true
+            exit 1
+          fi
+
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -44,7 +72,6 @@ jobs:
           if-no-files-found: error
 
       - name: Extract Changelog
-        if: startsWith(github.ref, 'refs/tags/')
         shell: bash
         run: |
           TAG_NAME="${{ github.ref_name }}"
@@ -54,7 +81,6 @@ jobs:
           awk '/^## \['"$VERSION"'\]/{flag=1; next} /^## \[/{flag=0} flag' CHANGELOG.md > release_notes.md
 
       - name: Create GitHub release
-        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
