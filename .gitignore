@@ -27,10 +27,11 @@ graphify-out/manifest.json
 graphify-out/cost.json
 
 # .graphifyignore
-AGENTS.md          # graphify install files — don't extract your own instructions as knowledge
+AGENTS.md
 CLAUDE.md
 GEMINI.md
 .graphify_python
 .gemini/
 .opencode/
+.codex/
 docs/translations/ # generated content you don't want in the graph
