@@ -53,3 +53,28 @@ winres = "0.1"
 opt-level = 3
 lto = true
 strip = true
+
+[package.metadata.packager]
+product-name = "Rust Hover Preview"
+identifier = "dev.rust-hover-preview.app"
+publisher = "Rust Hover Preview Contributors"
+description = "Windows 11 system tray app that shows image and video previews on hover in Explorer"
+license-file = "LICENSE"
+icons = ["assets/icon.ico"]
+formats = ["nsis", "wix"]
+out-dir = "target/packager"
+binaries-dir = "target/release"
+before-packaging-command = "cargo build --release"
+
+[[package.metadata.packager.binaries]]
+path = "rust-hover-preview"
+main = true
+
+[package.metadata.packager.nsis]
+install-mode = "currentUser"
+installer-icon = "assets/icon.ico"
+appdata-paths = ["$LOCALAPPDATA/$PRODUCTNAME"]
+
+[package.metadata.packager.wix]
+template = "packaging/wix/per-user-localappdata.wxs"
+languages = ["en-US"]
