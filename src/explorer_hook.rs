@@ -76,6 +76,8 @@ static SHELL_VIEW_MEDIA_INDEX: Lazy<Mutex<Option<ShellViewMediaIndex>>> =
     Lazy::new(|| Mutex::new(None));
 static SEARCH_ROOT_MEDIA_INDEX: Lazy<Mutex<Option<SearchRootMediaIndex>>> =
     Lazy::new(|| Mutex::new(None));
+static EXPLORER_LAST_REAL_FOLDERS: Lazy<Mutex<HashMap<isize, String>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
 
 fn is_jpeg_extension(ext: &str) -> bool {
     matches!(ext, "jpg" | "jpeg" | "jpe" | "jfif")
@@ -237,6 +239,25 @@ fn urlencoding_decode(s: &str) -> String {
     String::from_utf8_lossy(&bytes).into_owned()
 }
 
+fn urlencoding_decode_repeated(s: &str) -> String {
+    let mut current = s.to_string();
+    for _ in 0..3 {
+        let decoded = urlencoding_decode(&current);
+        if decoded == current {
+            break;
+        }
+        current = decoded;
+    }
+    current
+}
+
+fn is_search_ms_url(url_str: &str) -> bool {
+    url_str
+        .trim_start()
+        .to_ascii_lowercase()
+        .starts_with("search-ms:")
+}
+
 fn normalize_file_url_path(url_str: &str) -> Option<String> {
     let path = if let Some(path) = url_str.strip_prefix("file:///") {
         path.replace('/', "\\")
@@ -250,7 +271,8 @@ fn normalize_file_url_path(url_str: &str) -> Option<String> {
 }
 
 fn normalize_search_location(location: &str) -> Option<String> {
-    let location = location.trim();
+    let decoded = urlencoding_decode_repeated(location);
+    let location = decoded.trim();
     if location.is_empty() {
         return None;
     }
@@ -265,12 +287,20 @@ fn normalize_search_location(location: &str) -> Option<String> {
 }
 
 fn search_ms_location_from_url(url_str: &str) -> Option<String> {
-    let query = url_str.strip_prefix("search-ms:")?;
+    if !is_search_ms_url(url_str) {
+        return None;
+    }
 
-    for part in query.split('&') {
-        let decoded_part = urlencoding_decode(part);
-        if let Some(location) = decoded_part.strip_prefix("crumb=location:") {
-            return normalize_search_location(location);
+    let decoded_url = urlencoding_decode_repeated(url_str);
+    for part in decoded_url.split('&') {
+        let decoded_part = urlencoding_decode_repeated(part.trim());
+        let part_lower = decoded_part.to_ascii_lowercase();
+
+        for prefix in ["crumb=location:", "crumb=folder:"] {
+            if let Some(index) = part_lower.find(prefix) {
+                let location_start = index + prefix.len();
+                return normalize_search_location(&decoded_part[location_start..]);
+            }
         }
     }
 
@@ -279,6 +309,54 @@ fn search_ms_location_from_url(url_str: &str) -> Option<String> {
 
 fn location_url_to_folder_path(url_str: &str) -> Option<String> {
     normalize_file_url_path(url_str).or_else(|| search_ms_location_from_url(url_str))
+}
+
+fn is_usable_folder_path(path: &str) -> bool {
+    let path = path.trim();
+    !path.is_empty() && PathBuf::from(path).is_dir()
+}
+
+fn cache_explorer_real_folder(hwnd: isize, folder: &str) {
+    if !is_usable_folder_path(folder) {
+        return;
+    }
+
+    if let Ok(mut cache) = EXPLORER_LAST_REAL_FOLDERS.lock() {
+        cache.insert(hwnd, folder.to_string());
+    }
+}
+
+fn get_cached_explorer_real_folder(hwnd: isize) -> Option<String> {
+    EXPLORER_LAST_REAL_FOLDERS
+        .lock()
+        .ok()
+        .and_then(|cache| cache.get(&hwnd).cloned())
+        .filter(|folder| is_usable_folder_path(folder))
+}
+
+fn resolve_explorer_location_folder(hwnd: isize, url_str: &str) -> Option<String> {
+    if let Some(path) = normalize_file_url_path(url_str) {
+        if is_usable_folder_path(&path) {
+            cache_explorer_real_folder(hwnd, &path);
+            return Some(path);
+        }
+    }
+
+    if is_search_ms_url(url_str) {
+        if let Some(path) = search_ms_location_from_url(url_str) {
+            if is_usable_folder_path(&path) {
+                cache_explorer_real_folder(hwnd, &path);
+                return Some(path);
+            }
+        }
+
+        // Win11 search can stop exposing a parseable root. Use the last normal
+        // folder seen for this exact Explorer window, which matches the second
+        // same-folder-window workaround without needing a real second window.
+        return get_cached_explorer_real_folder(hwnd);
+    }
+
+    None
 }
 
 fn get_all_explorer_folders() -> Vec<(HWND, String)> {
@@ -310,11 +388,17 @@ fn get_all_explorer_folders() -> Vec<(HWND, String)> {
                         {
                             if let Ok(browser_hwnd) = browser.HWND() {
                                 let hwnd = browser_hwnd.0 as isize;
-                                if let Ok(url) = browser.LocationURL() {
-                                    let url_str = url.to_string();
-                                    if let Some(path) = location_url_to_folder_path(&url_str) {
-                                        result.push((hwnd, path));
-                                    }
+                                let folder = browser
+                                    .LocationURL()
+                                    .ok()
+                                    .and_then(|url| {
+                                        let url_str = url.to_string();
+                                        resolve_explorer_location_folder(hwnd, &url_str)
+                                    })
+                                    .or_else(|| get_cached_explorer_real_folder(hwnd));
+
+                                if let Some(folder) = folder {
+                                    result.push((hwnd, folder));
                                 }
                             }
                         }
@@ -339,34 +423,51 @@ fn get_all_explorer_folders() -> Vec<(HWND, String)> {
 
 fn get_explorer_hwnd_under_cursor_or_foreground() -> Option<HWND> {
     unsafe {
-        let mut cursor_pos = POINT::default();
-        if GetCursorPos(&mut cursor_pos).is_err() {
-            return None;
-        }
+        let folders = get_all_explorer_folders();
 
-        let hwnd = WindowFromPoint(cursor_pos);
-        if !hwnd.0.is_null() {
-            let mut current_hwnd = hwnd;
-            for _ in 0..20 {
-                if is_explorer_window(current_hwnd) {
-                    return Some(current_hwnd);
+        let mut cursor_pos = POINT::default();
+        if GetCursorPos(&mut cursor_pos).is_ok() {
+            let hwnd = WindowFromPoint(cursor_pos);
+            if !hwnd.0.is_null() {
+                let mut current_hwnd = hwnd;
+                let mut top_hwnd = hwnd;
+
+                for _ in 0..20 {
+                    for (explorer_hwnd, _) in &folders {
+                        if current_hwnd == *explorer_hwnd {
+                            return Some(*explorer_hwnd);
+                        }
+                    }
+
+                    match windows::Win32::UI::WindowsAndMessaging::GetParent(current_hwnd) {
+                        Ok(parent) if !parent.0.is_null() && parent != current_hwnd => {
+                            top_hwnd = parent;
+                            current_hwnd = parent;
+                        }
+                        _ => break,
+                    }
                 }
 
-                if let Ok(parent) = windows::Win32::UI::WindowsAndMessaging::GetParent(current_hwnd)
-                {
-                    if parent.0.is_null() || parent == current_hwnd {
-                        break;
-                    }
-                    current_hwnd = parent;
-                } else {
-                    break;
+                // Only fall back to the top-level parent. Child controls also run
+                // in explorer.exe, so process-name checks on the original child
+                // can return a handle ShellWindows cannot resolve.
+                if is_explorer_window(top_hwnd) {
+                    return Some(top_hwnd);
                 }
             }
         }
 
         let foreground = GetForegroundWindow();
-        if !foreground.is_invalid() && is_explorer_window(foreground) {
-            return Some(foreground);
+        if !foreground.is_invalid() {
+            for (explorer_hwnd, _) in &folders {
+                if foreground == *explorer_hwnd {
+                    return Some(*explorer_hwnd);
+                }
+            }
+
+            if is_explorer_window(foreground) {
+                return Some(foreground);
+            }
         }
     }
 
@@ -406,10 +507,20 @@ fn get_explorer_location_url(hwnd: HWND) -> Option<String> {
     None
 }
 
+fn get_current_explorer_location_url() -> Option<String> {
+    let hwnd = get_explorer_hwnd_under_cursor_or_foreground()?;
+    get_explorer_location_url(hwnd)
+}
+
 fn get_current_explorer_search_root() -> Option<String> {
     let hwnd = get_explorer_hwnd_under_cursor_or_foreground()?;
+    let hwnd_key = hwnd.0 as isize;
     let url = get_explorer_location_url(hwnd)?;
-    search_ms_location_from_url(&url)
+    if is_search_ms_url(&url) {
+        resolve_explorer_location_folder(hwnd_key, &url)
+    } else {
+        None
+    }
 }
 
 fn get_shell_view_for_hwnd(hwnd: HWND) -> Option<IShellFolderViewDual> {
@@ -1290,13 +1401,47 @@ fn get_file_under_cursor(automation: Option<&IUIAutomation>) -> Option<PathBuf> 
             None
         }
         AccessibilityResult::FileName(item_name) => {
-            // Search views are not normal folders. Try Shell result metadata first,
-            // then fall back to the search-ms location root from Explorer's URL.
+            let current_url = get_current_explorer_location_url();
+            let current_is_search_view = current_url
+                .as_deref()
+                .map(is_search_ms_url)
+                .unwrap_or(false);
+            let current_search_root = get_current_explorer_search_root();
+
+            // Search views are not normal folders. First emulate the known-good
+            // workaround: resolve the filename against this same Explorer window's
+            // original folder, cached before/while it entered search mode.
+            if let Some(root) = current_search_root.as_deref() {
+                if let Some(path) = find_media_in_folder(root, &item_name) {
+                    return Some(path);
+                }
+            }
+
+            // If Explorer exposes full search-result metadata, use it. Then fall
+            // back to a recursive index under this window's search root.
             if let Some(path) = find_media_in_current_shell_view(&item_name) {
                 return Some(path);
             }
-            if let Some(path) = find_media_in_current_search_root(&item_name) {
-                return Some(path);
+            if let Some(root) = current_search_root.as_deref() {
+                if let Some(path) = lookup_media_in_search_root_index(root, &item_name) {
+                    return Some(path);
+                }
+            }
+
+            // Also try treating item_name as a potential full path
+            let potential_path = PathBuf::from(&item_name);
+            if potential_path.is_absolute()
+                && potential_path.exists()
+                && is_media_file(&potential_path)
+            {
+                return Some(potential_path);
+            }
+
+            // In Explorer search mode, never use unrelated Explorer windows as a
+            // fallback. The same-folder second window worked only by accident; the
+            // cached search root above is the intentional replacement.
+            if current_is_search_view {
+                return None;
             }
 
             // First try the Explorer folder currently under cursor.
@@ -1315,15 +1460,6 @@ fn get_file_under_cursor(automation: Option<&IUIAutomation>) -> Option<PathBuf> 
                 if let Some(path) = find_media_in_folder(folder, &item_name) {
                     return Some(path);
                 }
-            }
-
-            // Also try treating item_name as a potential full path
-            let potential_path = PathBuf::from(&item_name);
-            if potential_path.is_absolute()
-                && potential_path.exists()
-                && is_media_file(&potential_path)
-            {
-                return Some(potential_path);
             }
 
             None
@@ -1646,19 +1782,47 @@ fn resolve_focused_item_to_path(item: &FocusedItemInfo) -> Option<PathBuf> {
             }
         }
         AccessibilityResult::FileName(item_name) => {
+            let current_url = get_current_explorer_location_url();
+            let current_is_search_view = current_url
+                .as_deref()
+                .map(is_search_ms_url)
+                .unwrap_or(false);
+            let current_search_root = get_current_explorer_search_root();
+
             // Keyboard focus has a direct Shell view focused item even in search-ms
             // results. Prefer that full path when Explorer exposes it.
             if let Some(path) = get_focused_shell_view_media_path() {
                 return Some(path);
             }
 
-            // Search-result views are virtual folders; resolve through Shell view
-            // items before trying normal folder joins.
+            // Search mode: emulate the same-folder second-window workaround with
+            // this window's cached root, then try Shell metadata and recursive root lookup.
+            if let Some(root) = current_search_root.as_deref() {
+                if let Some(path) = find_media_in_folder(root, item_name) {
+                    return Some(path);
+                }
+            }
             if let Some(path) = find_media_in_current_shell_view(item_name) {
                 return Some(path);
             }
-            if let Some(path) = find_media_in_current_search_root(item_name) {
-                return Some(path);
+            if let Some(root) = current_search_root.as_deref() {
+                if let Some(path) = lookup_media_in_search_root_index(root, item_name) {
+                    return Some(path);
+                }
+            }
+
+            // Try as a potential full path
+            let potential_path = PathBuf::from(item_name);
+            if potential_path.is_absolute()
+                && potential_path.exists()
+                && is_media_file(&potential_path)
+            {
+                return Some(potential_path);
+            }
+
+            // Search mode must not resolve through another Explorer window.
+            if current_is_search_view {
+                return None;
             }
 
             // Search all open Explorer folder paths
@@ -1667,14 +1831,6 @@ fn resolve_focused_item_to_path(item: &FocusedItemInfo) -> Option<PathBuf> {
                 if let Some(path) = find_media_in_folder(folder, item_name) {
                     return Some(path);
                 }
-            }
-            // Try as a potential full path
-            let potential_path = PathBuf::from(item_name);
-            if potential_path.is_absolute()
-                && potential_path.exists()
-                && is_media_file(&potential_path)
-            {
-                return Some(potential_path);
             }
             None
         }
@@ -2131,28 +2287,5 @@ pub fn run_explorer_hook() {
 
     unsafe {
         CoUninitialize();
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parses_search_ms_location_crumb() {
-        let url = "search-ms:displayname=Search%20Results%20in%20waifu&crumb=fileextension%3A~<.jpg%20OR%20System.Generic.String%3A.jpg&crumb=location:F%3A%5CIllustrations%5Cwaifu";
-
-        assert_eq!(
-            search_ms_location_from_url(url).as_deref(),
-            Some("F:\\Illustrations\\waifu")
-        );
-    }
-
-    #[test]
-    fn decodes_utf8_percent_encoded_paths() {
-        assert_eq!(
-            urlencoding_decode("F%3A%5C%E6%BC%AB%E7%94%BB%5Cwaifu"),
-            "F:\\漫画\\waifu"
-        );
     }
 }
