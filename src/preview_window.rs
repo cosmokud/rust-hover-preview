@@ -3,8 +3,9 @@ use gif::DecodeOptions;
 use image::GenericImageView;
 use once_cell::sync::Lazy;
 use std::collections::{HashMap, VecDeque};
-use std::fs::File;
-use std::io::BufReader;
+use std::env;
+use std::fs::{File, OpenOptions};
+use std::io::{BufReader, Write};
 use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
@@ -25,8 +26,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     MoveWindow, PeekMessageW, RegisterClassExW, SetLayeredWindowAttributes, SetWindowLongPtrW,
     SetWindowPos, ShowWindow, TranslateMessage, CS_HREDRAW, CS_VREDRAW, GWL_EXSTYLE, GW_OWNER,
     HWND_TOPMOST, IDC_ARROW, LWA_ALPHA, MSG, PM_REMOVE, SM_CXSCREEN, SM_CYSCREEN, SWP_NOACTIVATE,
-    SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SW_HIDE, SW_SHOWNOACTIVATE, WNDCLASSEXW,
-    WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SW_HIDE, SW_SHOWNOACTIVATE, WNDCLASSEXW, WS_EX_LAYERED,
+    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
 const PREVIEW_CLASS: PCWSTR = w!("RustHoverPreviewWindow");
@@ -245,7 +246,13 @@ pub fn show_preview(path: &PathBuf, x: i32, y: i32) {
     }
 }
 
-pub fn show_preview_keyboard(path: &PathBuf, item_left: i32, item_top: i32, item_right: i32, item_bottom: i32) {
+pub fn show_preview_keyboard(
+    path: &PathBuf,
+    item_left: i32,
+    item_top: i32,
+    item_right: i32,
+    item_bottom: i32,
+) {
     if let Ok(sender) = PREVIEW_SENDER.lock() {
         if let Some(ref tx) = *sender {
             let _ = tx.send(PreviewMessage::ShowKeyboard(
@@ -296,7 +303,9 @@ pub fn is_cursor_over_image_preview() -> bool {
 pub fn is_cursor_over_video_preview() -> bool {
     unsafe {
         use windows::Win32::Foundation::POINT;
-        use windows::Win32::UI::WindowsAndMessaging::{GetCursorPos, GetWindowThreadProcessId, WindowFromPoint};
+        use windows::Win32::UI::WindowsAndMessaging::{
+            GetCursorPos, GetWindowThreadProcessId, WindowFromPoint,
+        };
 
         let mut cursor_pos = POINT::default();
         if GetCursorPos(&mut cursor_pos).is_err() {
@@ -584,9 +593,7 @@ fn load_animated_gif(
                 delay_ms,
             ) {
                 let frame_bytes = img.pixels.len();
-                if streamed_bytes.saturating_add(frame_bytes)
-                    > MAX_STREAMED_ANIMATION_BYTES
-                {
+                if streamed_bytes.saturating_add(frame_bytes) > MAX_STREAMED_ANIMATION_BYTES {
                     break;
                 }
                 if let Ok(mut frames) = shared_clone.lock() {
@@ -788,8 +795,7 @@ fn load_animated_webp(
                         delay_ms,
                     ) {
                         let frame_bytes = img.pixels.len();
-                        if streamed_bytes.saturating_add(frame_bytes)
-                            > MAX_STREAMED_ANIMATION_BYTES
+                        if streamed_bytes.saturating_add(frame_bytes) > MAX_STREAMED_ANIMATION_BYTES
                         {
                             break;
                         }
@@ -965,11 +971,7 @@ fn parse_cropdetect_line(line: &str) -> Option<VideoCrop> {
 }
 
 fn validate_detected_crop(crop: VideoCrop, src_w: u32, src_h: u32) -> bool {
-    if crop.width == 0
-        || crop.height == 0
-        || crop.width > src_w
-        || crop.height > src_h
-    {
+    if crop.width == 0 || crop.height == 0 || crop.width > src_w || crop.height > src_h {
         return false;
     }
 
@@ -1102,6 +1104,43 @@ fn get_video_geometry(path: &PathBuf) -> Option<VideoGeometry> {
     }
 
     Some(geometry)
+}
+
+fn log_video_preview(
+    path: &PathBuf,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+    vf: Option<&str>,
+    geometry: Option<VideoGeometry>,
+) {
+    let log_path = env::temp_dir().join("rust-hover-preview-video.log");
+    let Ok(mut file) = OpenOptions::new().create(true).append(true).open(log_path) else {
+        return;
+    };
+
+    let crop = geometry
+        .and_then(|g| g.crop)
+        .map(|c| format!("{}:{}:{}:{}", c.width, c.height, c.x, c.y))
+        .unwrap_or_else(|| "none".to_string());
+    let geom = geometry
+        .map(|g| format!("{}x{}", g.width, g.height))
+        .unwrap_or_else(|| "none".to_string());
+    let vf = vf.unwrap_or("none");
+
+    let _ = writeln!(
+        file,
+        "path=\"{}\" pos={}x{} window={}x{} geometry={} crop={} vf=\"{}\"",
+        path.display(),
+        x,
+        y,
+        width,
+        height,
+        geom,
+        crop,
+        vf
+    );
 }
 
 /// Data passed to the EnumWindows callback to find ffplay window
@@ -1285,31 +1324,29 @@ fn start_video_playback(path: &PathBuf, x: i32, y: i32, width: i32, height: i32)
         cmd.args(["-af", &volume_filter]);
     }
 
-    if width > 0 && height > 0 {
-        // Produce frames at the exact preview size. Layout already preserves aspect,
-        // so this avoids a second ffplay fit pass that can add black bars.
-        let vf = if let Some(geometry) = get_video_geometry(path) {
-            if let Some(crop) = geometry.crop {
-                format!(
-                    "crop={}:{}:{}:{},scale={}:{}:flags=lanczos,setsar=1",
-                    crop.width, crop.height, crop.x, crop.y, width, height
-                )
-            } else {
-                format!("scale={}:{}:flags=lanczos,setsar=1", width, height)
-            }
+    let geometry = get_video_geometry(path);
+    let vf = geometry.map(|geometry| {
+        if let Some(crop) = geometry.crop {
+            format!(
+                "crop={}:{}:{}:{},setsar=1",
+                crop.width, crop.height, crop.x, crop.y
+            )
         } else {
-            format!("scale={}:{}:flags=lanczos,setsar=1", width, height)
-        };
+            "setsar=1".to_string()
+        }
+    });
+    log_video_preview(path, x, y, width, height, vf.as_deref(), geometry);
+    if let Some(vf) = vf.as_deref() {
         cmd.args(["-vf", &vf]);
     }
 
     let child = cmd
         .args([
             "-err_detect",
-            "ignore_err",   // Ignore header/stream errors
+            "ignore_err", // Ignore header/stream errors
             "-fflags",
             "+genpts+discardcorrupt+igndts", // Handle missing timestamps & corrupt data
-            "-framedrop",   // Drop undecodable frames instead of stalling
+            "-framedrop",                    // Drop undecodable frames instead of stalling
             "-loop",
             "0",         // Loop forever
             "-noborder", // No window border
@@ -1464,9 +1501,7 @@ fn load_media(
 
     if matches!(guessed_format, Some(image::ImageFormat::WebP)) || is_webp_file(path) {
         // Try animated WebP first
-        if let Some(media) =
-            load_animated_webp(path, max_width, max_height, Arc::clone(&cancel))
-        {
+        if let Some(media) = load_animated_webp(path, max_width, max_height, Arc::clone(&cancel)) {
             return Some(media);
         }
         if cancel.load(Ordering::Acquire) {
@@ -1801,23 +1836,24 @@ unsafe extern "system" fn window_proc(
                         }
 
                         // If we're still waiting for streamed frames, overlay a loading spinner
-                        let paint_pixels: std::borrow::Cow<[u8]> = if media.should_draw_streaming_overlay() {
-                            let elapsed = media
-                                .loading_start
-                                .map(|s| s.elapsed().as_secs_f32())
-                                .unwrap_or(0.0);
-                            let angle = elapsed * 2.0 * std::f32::consts::PI * 1.2;
-                            let mut buf = media.current_pixels().to_vec();
-                            overlay_loading_spinner(
-                                &mut buf,
-                                media.current_width(),
-                                media.current_height(),
-                                angle,
-                            );
-                            std::borrow::Cow::Owned(buf)
-                        } else {
-                            std::borrow::Cow::Borrowed(media.current_pixels())
-                        };
+                        let paint_pixels: std::borrow::Cow<[u8]> =
+                            if media.should_draw_streaming_overlay() {
+                                let elapsed = media
+                                    .loading_start
+                                    .map(|s| s.elapsed().as_secs_f32())
+                                    .unwrap_or(0.0);
+                                let angle = elapsed * 2.0 * std::f32::consts::PI * 1.2;
+                                let mut buf = media.current_pixels().to_vec();
+                                overlay_loading_spinner(
+                                    &mut buf,
+                                    media.current_width(),
+                                    media.current_height(),
+                                    angle,
+                                );
+                                std::borrow::Cow::Owned(buf)
+                            } else {
+                                std::borrow::Cow::Borrowed(media.current_pixels())
+                            };
 
                         // Create bitmap info
                         let bmi = BITMAPINFO {
@@ -1896,9 +1932,19 @@ fn compute_mouse_layout(
                 cursor_x + offset,
                 cursor_y + offset,
             ), // BR
-            (cursor_x - offset, screen_height - cursor_y - offset, 0, cursor_y + offset), // BL
-            (screen_width - cursor_x - offset, cursor_y - offset, cursor_x + offset, 0),  // TR
-            (cursor_x - offset, cursor_y - offset, 0, 0),                                  // TL
+            (
+                cursor_x - offset,
+                screen_height - cursor_y - offset,
+                0,
+                cursor_y + offset,
+            ), // BL
+            (
+                screen_width - cursor_x - offset,
+                cursor_y - offset,
+                cursor_x + offset,
+                0,
+            ), // TR
+            (cursor_x - offset, cursor_y - offset, 0, 0), // TL
         ];
 
         let mut best_quadrant = 0;
@@ -1938,11 +1984,21 @@ fn compute_mouse_layout(
             0 => (cursor_x + offset, cursor_y + offset),
             1 => (cursor_x - offset - media_width, cursor_y + offset),
             2 => (cursor_x + offset, cursor_y - offset - media_height),
-            3 => (cursor_x - offset - media_width, cursor_y - offset - media_height),
+            3 => (
+                cursor_x - offset - media_width,
+                cursor_y - offset - media_height,
+            ),
             _ => (cursor_x + offset, cursor_y + offset),
         };
 
-        Some(PreviewLayout { pos_x, pos_y, max_width, max_height, preview_w, preview_h })
+        Some(PreviewLayout {
+            pos_x,
+            pos_y,
+            max_width,
+            max_height,
+            preview_w,
+            preview_h,
+        })
     } else {
         let left_width = cursor_x - offset;
         let right_width = screen_width - cursor_x - offset;
@@ -1956,14 +2012,13 @@ fn compute_mouse_layout(
         let right_scale_y = full_height as f32 / orig_h as f32;
         let right_scale = right_scale_x.min(right_scale_y).min(1.0);
 
-        let (use_left, max_width, max_height) =
-            if left_scale > right_scale && left_width > 0 {
-                (true, left_width.max(1) as u32, full_height as u32)
-            } else if right_width > 0 {
-                (false, right_width.max(1) as u32, full_height as u32)
-            } else {
-                return None;
-            };
+        let (use_left, max_width, max_height) = if left_scale > right_scale && left_width > 0 {
+            (true, left_width.max(1) as u32, full_height as u32)
+        } else if right_width > 0 {
+            (false, right_width.max(1) as u32, full_height as u32)
+        } else {
+            return None;
+        };
 
         let (preview_w, preview_h) =
             scale_dimensions(orig_dims.0, orig_dims.1, max_width, max_height);
@@ -1981,7 +2036,14 @@ fn compute_mouse_layout(
         };
         let pos_y = (screen_height - media_height) / 2;
 
-        Some(PreviewLayout { pos_x, pos_y, max_width, max_height, preview_w, preview_h })
+        Some(PreviewLayout {
+            pos_x,
+            pos_y,
+            max_width,
+            max_height,
+            preview_w,
+            preview_h,
+        })
     }
 }
 
@@ -2004,11 +2066,26 @@ fn compute_keyboard_layout(
         // Quadrant-based positioning relative to item rect edges
         let quadrants = [
             // Bottom-Right of item
-            (screen_width - item_right - gap, screen_height - item_bottom - gap, item_right + gap, item_bottom + gap),
+            (
+                screen_width - item_right - gap,
+                screen_height - item_bottom - gap,
+                item_right + gap,
+                item_bottom + gap,
+            ),
             // Bottom-Left of item
-            (item_left - gap, screen_height - item_bottom - gap, 0, item_bottom + gap),
+            (
+                item_left - gap,
+                screen_height - item_bottom - gap,
+                0,
+                item_bottom + gap,
+            ),
             // Top-Right of item
-            (screen_width - item_right - gap, item_top - gap, item_right + gap, 0),
+            (
+                screen_width - item_right - gap,
+                item_top - gap,
+                item_right + gap,
+                0,
+            ),
             // Top-Left of item
             (item_left - gap, item_top - gap, 0, 0),
         ];
@@ -2054,7 +2131,14 @@ fn compute_keyboard_layout(
             _ => (item_right + gap, item_bottom + gap),
         };
 
-        Some(PreviewLayout { pos_x, pos_y, max_width, max_height, preview_w, preview_h })
+        Some(PreviewLayout {
+            pos_x,
+            pos_y,
+            max_width,
+            max_height,
+            preview_w,
+            preview_h,
+        })
     } else {
         // Best spot mode: choose left or right side of item
         let left_width = item_left - gap;
@@ -2069,14 +2153,13 @@ fn compute_keyboard_layout(
         let right_scale_y = full_height as f32 / orig_h as f32;
         let right_scale = right_scale_x.min(right_scale_y).min(1.0);
 
-        let (use_left, max_width, max_height) =
-            if left_scale > right_scale && left_width > 0 {
-                (true, left_width.max(1) as u32, full_height as u32)
-            } else if right_width > 0 {
-                (false, right_width.max(1) as u32, full_height as u32)
-            } else {
-                return None;
-            };
+        let (use_left, max_width, max_height) = if left_scale > right_scale && left_width > 0 {
+            (true, left_width.max(1) as u32, full_height as u32)
+        } else if right_width > 0 {
+            (false, right_width.max(1) as u32, full_height as u32)
+        } else {
+            return None;
+        };
 
         let (preview_w, preview_h) =
             scale_dimensions(orig_dims.0, orig_dims.1, max_width, max_height);
@@ -2094,7 +2177,14 @@ fn compute_keyboard_layout(
         };
         let pos_y = (screen_height - media_height) / 2;
 
-        Some(PreviewLayout { pos_x, pos_y, max_width, max_height, preview_w, preview_h })
+        Some(PreviewLayout {
+            pos_x,
+            pos_y,
+            max_width,
+            max_height,
+            preview_w,
+            preview_h,
+        })
     }
 }
 
@@ -2158,10 +2248,8 @@ pub fn run_preview_window() {
 
         // Background loading support
         let (load_tx, load_rx): (Sender<LoadResult>, Receiver<LoadResult>) = channel();
-        let load_request_slot: LoadRequestSlot =
-            Arc::new((Mutex::new(None), Condvar::new()));
-        let load_worker =
-            spawn_load_worker(Arc::clone(&load_request_slot), load_tx);
+        let load_request_slot: LoadRequestSlot = Arc::new((Mutex::new(None), Condvar::new()));
+        let load_worker = spawn_load_worker(Arc::clone(&load_request_slot), load_tx);
         let mut current_generation: u64 = 0;
         let mut pending_load: Option<PendingLoad> = None;
         let mut pending_load_cancel: Option<Arc<AtomicBool>> = None;
@@ -2178,11 +2266,12 @@ pub fn run_preview_window() {
 
             // Periodically re-assert topmost on the video window to prevent it
             // from falling behind Explorer or other windows (Bug 2 fix)
-            if current_video_path.is_some() && last_topmost_check.elapsed() >= Duration::from_millis(200) {
+            if current_video_path.is_some()
+                && last_topmost_check.elapsed() >= Duration::from_millis(200)
+            {
                 last_topmost_check = Instant::now();
-                let _ = ensure_video_window_topmost(
-                    video_pos.0, video_pos.1, video_pos.2, video_pos.3,
-                );
+                let _ =
+                    ensure_video_window_topmost(video_pos.0, video_pos.1, video_pos.2, video_pos.3);
             }
 
             // Advance animation frames if needed
@@ -2305,7 +2394,12 @@ pub fn run_preview_window() {
                         if let Some(orig_dims) = get_media_dimensions(&path) {
                             let is_video = is_video_file(&path);
                             if let Some(layout) = compute_mouse_layout(
-                                x, y, orig_dims, follow_cursor, screen_width, screen_height,
+                                x,
+                                y,
+                                orig_dims,
+                                follow_cursor,
+                                screen_width,
+                                screen_height,
                             ) {
                                 show_is_video = is_video;
                                 show_layout = Some(layout);
@@ -2321,7 +2415,14 @@ pub fn run_preview_window() {
                         if let Some(orig_dims) = get_media_dimensions(&path) {
                             let is_video = is_video_file(&path);
                             if let Some(layout) = compute_keyboard_layout(
-                                il, it, ir, ib, orig_dims, follow_cursor, screen_width, screen_height,
+                                il,
+                                it,
+                                ir,
+                                ib,
+                                orig_dims,
+                                follow_cursor,
+                                screen_width,
+                                screen_height,
                             ) {
                                 show_is_video = is_video;
                                 show_layout = Some(layout);
@@ -2381,8 +2482,8 @@ pub fn run_preview_window() {
                             let _ = ShowWindow(hwnd, SW_HIDE);
 
                             let process_running = is_video_process_running();
-                            let should_start = current_video_path.as_ref() != Some(&path)
-                                || !process_running;
+                            let should_start =
+                                current_video_path.as_ref() != Some(&path) || !process_running;
 
                             if should_start {
                                 if let Ok(mut media_guard) = CURRENT_MEDIA.lock() {
