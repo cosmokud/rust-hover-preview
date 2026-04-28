@@ -30,12 +30,14 @@ Inspired by QTTabBar (QuizoApps) hover preview.
 
 ## Installation (Recommended)
 
-Download the prebuilt executable from the repository **Releases** tab:
+Download prebuilt assets from the repository **Releases** tab:
 
 1. Open [Releases](../../releases)
-2. Download the latest `rust-hover-preview.exe` asset
-3. Place it in any folder you prefer (for example: `C:\Tools\RustHoverPreview`)
-4. Launch `rust-hover-preview.exe`
+2. Download one of the latest assets:
+   - `.msi` installer (recommended for most users)
+   - `.exe` portable build
+3. If you downloaded `.msi`, run the installer. If you downloaded `.exe`, place it in any folder you prefer (for example: `C:\Tools\RustHoverPreview`)
+4. Launch Rust Hover Preview
 
 No Rust toolchain is needed when installing from Releases.
 

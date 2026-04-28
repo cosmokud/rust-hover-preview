@@ -1,6 +1,6 @@
 [package]
 name = "rust-hover-preview"
-version = "0.1.6"
+version = "0.1.7"
 edition = "2021"
 description = "Windows 11 system tray app that shows image and video previews on hover in Explorer"
 authors = ["Rust Hover Preview Contributors"]
