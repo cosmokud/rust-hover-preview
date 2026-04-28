@@ -20,7 +20,7 @@ use windows::Win32::UI::Accessibility::{CUIAutomation, IUIAutomation};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, VK_DOWN, VK_END, VK_HOME, VK_LEFT, VK_NEXT, VK_PRIOR, VK_RIGHT, VK_UP,
 };
-use windows::Win32::UI::Shell::{IShellWindows, ShellWindows};
+use windows::Win32::UI::Shell::{IShellFolderViewDual, IShellWindows, ShellWindows};
 use windows::Win32::UI::WindowsAndMessaging::{
     GetClassNameW, GetCursorPos, GetForegroundWindow, GetWindowPlacement, GetWindowRect,
     GetWindowThreadProcessId, IsIconic, IsWindowVisible, WindowFromPoint, SW_SHOWMAXIMIZED,
@@ -47,11 +47,22 @@ struct ExplorerFoldersCache {
     folders: Vec<(isize, String)>,
 }
 
+struct ShellViewMediaIndex {
+    hwnd: isize,
+    built_at: Instant,
+    by_display_name: HashMap<String, PathBuf>,
+    by_file_name: HashMap<String, PathBuf>,
+}
+
 const FOLDER_INDEX_TTL_MS: u64 = 60000;
 const EXPLORER_FOLDERS_CACHE_TTL_MS: u64 = 250;
+const SHELL_VIEW_INDEX_TTL_MS: u64 = 500;
+const SHELL_VIEW_INDEX_MAX_ITEMS: i32 = 5000;
 
 static FOLDER_MEDIA_INDEX: Lazy<Mutex<Option<FolderMediaIndex>>> = Lazy::new(|| Mutex::new(None));
 static EXPLORER_FOLDERS_CACHE: Lazy<Mutex<Option<ExplorerFoldersCache>>> =
+    Lazy::new(|| Mutex::new(None));
+static SHELL_VIEW_MEDIA_INDEX: Lazy<Mutex<Option<ShellViewMediaIndex>>> =
     Lazy::new(|| Mutex::new(None));
 
 fn is_jpeg_extension(ext: &str) -> bool {
@@ -261,6 +272,159 @@ fn get_all_explorer_folders() -> Vec<(HWND, String)> {
         .into_iter()
         .map(|(hwnd, folder)| (HWND(hwnd as *mut _), folder))
         .collect()
+}
+
+fn get_explorer_hwnd_under_cursor_or_foreground() -> Option<HWND> {
+    unsafe {
+        let mut cursor_pos = POINT::default();
+        if GetCursorPos(&mut cursor_pos).is_err() {
+            return None;
+        }
+
+        let hwnd = WindowFromPoint(cursor_pos);
+        if !hwnd.0.is_null() {
+            let mut current_hwnd = hwnd;
+            for _ in 0..20 {
+                if is_explorer_window(current_hwnd) {
+                    return Some(current_hwnd);
+                }
+
+                if let Ok(parent) = windows::Win32::UI::WindowsAndMessaging::GetParent(current_hwnd)
+                {
+                    if parent.0.is_null() || parent == current_hwnd {
+                        break;
+                    }
+                    current_hwnd = parent;
+                } else {
+                    break;
+                }
+            }
+        }
+
+        let foreground = GetForegroundWindow();
+        if !foreground.is_invalid() && is_explorer_window(foreground) {
+            return Some(foreground);
+        }
+    }
+
+    None
+}
+
+fn build_shell_view_media_index(hwnd: HWND) -> Option<ShellViewMediaIndex> {
+    let hwnd_key = hwnd.0 as isize;
+    let mut by_display_name = HashMap::new();
+    let mut by_file_name = HashMap::new();
+
+    unsafe {
+        let shell_windows =
+            CoCreateInstance::<_, IShellWindows>(&ShellWindows, None, CLSCTX_ALL).ok()?;
+        let count = shell_windows.Count().ok()?;
+
+        for i in 0..count {
+            let variant = VARIANT::from(i);
+            let disp = match shell_windows.Item(&variant) {
+                Ok(disp) => disp,
+                Err(_) => continue,
+            };
+            let browser = match disp.cast::<windows::Win32::UI::Shell::IWebBrowser2>() {
+                Ok(browser) => browser,
+                Err(_) => continue,
+            };
+            let browser_hwnd = match browser.HWND() {
+                Ok(browser_hwnd) => browser_hwnd,
+                Err(_) => continue,
+            };
+            if browser_hwnd.0 != hwnd_key as isize {
+                continue;
+            }
+
+            let document = browser.Document().ok()?;
+            let shell_view = document.cast::<IShellFolderViewDual>().ok()?;
+            let folder = shell_view.Folder().ok()?;
+            let items = folder.Items().ok()?;
+            let item_count = items.Count().ok()?.min(SHELL_VIEW_INDEX_MAX_ITEMS);
+
+            for item_index in 0..item_count {
+                let item_variant = VARIANT::from(item_index);
+                let item = match items.Item(&item_variant) {
+                    Ok(item) => item,
+                    Err(_) => continue,
+                };
+
+                let path_str = match item.Path() {
+                    Ok(path) => path.to_string(),
+                    Err(_) => continue,
+                };
+                let path = PathBuf::from(path_str);
+                if !path.exists() || !is_media_file(&path) {
+                    continue;
+                }
+
+                if let Ok(name) = item.Name() {
+                    by_display_name
+                        .entry(name.to_string().to_ascii_lowercase())
+                        .or_insert_with(|| path.clone());
+                }
+
+                if let Some(file_name) = path.file_name().and_then(|s| s.to_str()) {
+                    by_file_name
+                        .entry(file_name.to_ascii_lowercase())
+                        .or_insert_with(|| path.clone());
+                }
+            }
+
+            return Some(ShellViewMediaIndex {
+                hwnd: hwnd_key,
+                built_at: Instant::now(),
+                by_display_name,
+                by_file_name,
+            });
+        }
+    }
+
+    None
+}
+
+fn find_media_in_shell_view(hwnd: HWND, item_name: &str) -> Option<PathBuf> {
+    let item_name = item_name.trim();
+    if item_name.is_empty() {
+        return None;
+    }
+
+    let hwnd_key = hwnd.0 as isize;
+    if let Ok(cache) = SHELL_VIEW_MEDIA_INDEX.lock() {
+        if let Some(index) = cache.as_ref() {
+            if index.hwnd == hwnd_key
+                && index.built_at.elapsed() <= Duration::from_millis(SHELL_VIEW_INDEX_TTL_MS)
+            {
+                let item_name_lower = item_name.to_ascii_lowercase();
+                return index
+                    .by_file_name
+                    .get(&item_name_lower)
+                    .or_else(|| index.by_display_name.get(&item_name_lower))
+                    .cloned();
+            }
+        }
+    }
+
+    let index = build_shell_view_media_index(hwnd)?;
+    let item_name_lower = item_name.to_ascii_lowercase();
+    let result = index
+        .by_file_name
+        .get(&item_name_lower)
+        .or_else(|| index.by_display_name.get(&item_name_lower))
+        .cloned();
+
+    if let Ok(mut cache) = SHELL_VIEW_MEDIA_INDEX.lock() {
+        *cache = Some(index);
+    }
+
+    result
+}
+
+fn find_media_in_current_shell_view(item_name: &str) -> Option<PathBuf> {
+    let hwnd = get_explorer_hwnd_under_cursor_or_foreground()?;
+    find_media_in_shell_view(hwnd, item_name)
 }
 
 /// Find which Explorer folder the cursor is currently over
@@ -758,7 +922,6 @@ fn find_media_in_folder(folder: &str, item_name: &str) -> Option<PathBuf> {
     lookup_media_in_folder_index(&folder_path, &folder_key, item_name)
 }
 
-/// Try to find an image or video file under the cursor
 fn get_file_under_cursor() -> Option<PathBuf> {
     // Get the item info under cursor
     let item_info = get_item_under_cursor()?;
@@ -774,8 +937,17 @@ fn get_file_under_cursor() -> Option<PathBuf> {
         AccessibilityResult::FileName(item_name) => {
             // First try the Explorer folder currently under cursor.
             // This avoids accidental matches from other windows/tabs.
-            if let Some(folder) = get_current_explorer_folder() {
-                if let Some(path) = find_media_in_folder(&folder, &item_name) {
+            let current_folder = get_current_explorer_folder();
+            if let Some(folder) = current_folder.as_ref() {
+                if let Some(path) = find_media_in_folder(folder, &item_name) {
+                    return Some(path);
+                }
+            }
+
+            // Search-result views expose virtual/search folders through ShellWindows,
+            // while FolderItems still keep each result's real filesystem path.
+            if current_folder.is_none() {
+                if let Some(path) = find_media_in_current_shell_view(&item_name) {
                     return Some(path);
                 }
             }
@@ -1109,7 +1281,6 @@ fn get_focused_explorer_item(automation: &IUIAutomation) -> Option<FocusedItemIn
     }
 }
 
-/// Resolve a FocusedItemInfo to a media file path, similar to get_file_under_cursor
 fn resolve_focused_item_to_path(item: &FocusedItemInfo) -> Option<PathBuf> {
     match &item.result {
         AccessibilityResult::FullPath(path) => {
@@ -1120,6 +1291,12 @@ fn resolve_focused_item_to_path(item: &FocusedItemInfo) -> Option<PathBuf> {
             }
         }
         AccessibilityResult::FileName(item_name) => {
+            // Search-result views are virtual folders; resolve through Shell view
+            // items before trying normal folder joins.
+            if let Some(path) = find_media_in_current_shell_view(item_name) {
+                return Some(path);
+            }
+
             // Search all open Explorer folder paths
             let all_folders = get_all_explorer_folders();
             for (_, folder) in &all_folders {
