@@ -102,6 +102,8 @@ Example:
 run_at_startup=true
 hover_delay_ms=0
 preview_enabled=true
+enable_off_trigger_key=true
+off_trigger_key=alt
 follow_cursor=false
 video_volume=0
 ```

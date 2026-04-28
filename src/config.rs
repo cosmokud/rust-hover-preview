@@ -10,6 +10,8 @@ pub struct AppConfig {
     pub run_at_startup: bool,
     pub hover_delay_ms: u64,
     pub preview_enabled: bool,
+    pub enable_off_trigger_key: bool,
+    pub off_trigger_key: String,
     pub confirm_file_type: bool,
     pub follow_cursor: bool,
     pub video_volume: u32,
@@ -21,6 +23,8 @@ impl Default for AppConfig {
             run_at_startup: true,
             hover_delay_ms: 0,
             preview_enabled: true,
+            enable_off_trigger_key: true,
+            off_trigger_key: "alt".to_string(),
             confirm_file_type: false,
             follow_cursor: false,
             video_volume: 0, // Mute by default
@@ -73,6 +77,16 @@ impl AppConfig {
             );
             ini.set(
                 CONFIG_SECTION,
+                "enable_off_trigger_key",
+                Some(self.enable_off_trigger_key.to_string()),
+            );
+            ini.set(
+                CONFIG_SECTION,
+                "off_trigger_key",
+                Some(self.off_trigger_key.clone()),
+            );
+            ini.set(
+                CONFIG_SECTION,
                 "confirm_file_type",
                 Some(self.confirm_file_type.to_string()),
             );
@@ -99,6 +113,15 @@ impl AppConfig {
         }
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "preview_enabled") {
             self.preview_enabled = value;
+        }
+        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "enable_off_trigger_key") {
+            self.enable_off_trigger_key = value;
+        }
+        if let Some(value) = ini.get(CONFIG_SECTION, "off_trigger_key") {
+            let value = value.trim();
+            if !value.is_empty() {
+                self.off_trigger_key = value.to_string();
+            }
         }
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "confirm_file_type") {
             self.confirm_file_type = value;

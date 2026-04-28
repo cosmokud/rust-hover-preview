@@ -22,6 +22,7 @@ const ID_TRAY_EXIT: u16 = 1001;
 const ID_TRAY_STARTUP: u16 = 1002;
 const ID_TRAY_ENABLE: u16 = 1003;
 const ID_TRAY_CONFIRM_FILE_TYPE: u16 = 1004;
+const ID_TRAY_ENABLE_OFF_TRIGGER_KEY: u16 = 1005;
 const ID_TRAY_VOLUME_MAX: u16 = 1010; // 100%
 const ID_TRAY_VOLUME_HIGH: u16 = 1011; // 80%
 const ID_TRAY_VOLUME_MEDIUM: u16 = 1012; // 50%
@@ -77,6 +78,9 @@ unsafe extern "system" fn tray_window_proc(
                 ID_TRAY_CONFIRM_FILE_TYPE => {
                     toggle_confirm_file_type();
                 }
+                ID_TRAY_ENABLE_OFF_TRIGGER_KEY => {
+                    toggle_enable_off_trigger_key();
+                }
                 ID_TRAY_VOLUME_MAX => set_volume(100),
                 ID_TRAY_VOLUME_HIGH => set_volume(80),
                 ID_TRAY_VOLUME_MEDIUM => set_volume(50),
@@ -119,6 +123,24 @@ unsafe fn show_context_menu(hwnd: HWND) {
         enable_flags,
         ID_TRAY_ENABLE as usize,
         w!("Enable Preview"),
+    );
+
+    // Add "Enable Off Trigger Key" with checkmark
+    let enable_off_trigger_key = CONFIG
+        .lock()
+        .map(|c| c.enable_off_trigger_key)
+        .unwrap_or(true);
+    let off_trigger_flags = MF_STRING
+        | if enable_off_trigger_key {
+            MF_CHECKED
+        } else {
+            MF_UNCHECKED
+        };
+    let _ = AppendMenuW(
+        menu,
+        off_trigger_flags,
+        ID_TRAY_ENABLE_OFF_TRIGGER_KEY as usize,
+        w!("Enable Off Trigger Key"),
     );
 
     // Add "Confirm File Type" with checkmark (content/header sniffing)
@@ -323,6 +345,13 @@ fn toggle_startup() {
 fn toggle_preview_enabled() {
     if let Ok(mut config) = CONFIG.lock() {
         config.preview_enabled = !config.preview_enabled;
+        config.save();
+    }
+}
+
+fn toggle_enable_off_trigger_key() {
+    if let Ok(mut config) = CONFIG.lock() {
+        config.enable_off_trigger_key = !config.enable_off_trigger_key;
         config.save();
     }
 }
