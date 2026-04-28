@@ -18,7 +18,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          # Checks out the specific tag you enter in the manual trigger
           ref: ${{ inputs.tag_to_build }}
 
       - name: Install Rust (MSVC)
@@ -47,15 +46,24 @@ jobs:
             target/release/rust-hover-preview.exe
           if-no-files-found: error
 
+      - name: Extract Changelog
+        shell: bash
+        run: |
+          TAG_NAME="${{ inputs.tag_to_build }}"
+          VERSION="${TAG_NAME#v}"
+
+          # Extract changelog section for the current version
+          awk '/^## \['"$VERSION"'\]/{flag=1; next} /^## \[/{flag=0} flag' CHANGELOG.md > release_notes.md
+
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.tag_to_build }}
           name: ${{ inputs.tag_to_build }}
+          body_path: release_notes.md
           prerelease: false
           generate_release_notes: true
           fail_on_unmatched_files: true
-          # Prevents an older version from becoming the "Latest" release
           make_latest: false
           files: |
             target/packager/*.exe
