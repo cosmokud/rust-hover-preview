@@ -15,24 +15,3 @@ target/
 #  and can be added to the global gitignore or merged into this file.  For a more nuclear
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
-
-
-# optional: commit for shared extraction speed, skip to keep repo small
-graphify-out/cache/
-
-# mtime-based, invalid after git clone - always gitignore this
-graphify-out/manifest.json
-
-# local token tracking, not useful to share
-graphify-out/cost.json
-
-# .graphifyignore
-AGENTS.md
-CLAUDE.md
-GEMINI.md
-.graphify_python
-.gemini/
-.opencode/
-.codex/
-docs/translations/ # generated content you don't want in the graph
-RTK.md
