@@ -761,31 +761,33 @@ fn get_shell_view_for_hwnd(hwnd: HWND) -> Option<IShellFolderViewDual> {
     None
 }
 
-fn get_focused_shell_view_media_path() -> Option<PathBuf> {
-    let hwnd = get_explorer_hwnd_under_cursor_or_foreground()?;
-    let shell_view = get_shell_view_for_hwnd(hwnd)?;
+fn get_focused_shell_view_media_path(item: &FocusedItemInfo) -> Option<PathBuf> {
+    let focus_point = POINT {
+        x: item.rect.left + (item.rect.right - item.rect.left) / 2,
+        y: item.rect.top + (item.rect.bottom - item.rect.top) / 2,
+    };
+    let (shell_view, _) = get_active_shell_view_under_cursor(&focus_point)?;
+    let folder_view = shell_view.cast::<IFolderView>().ok()?;
 
     unsafe {
-        if let Ok(item) = shell_view.FocusedItem() {
-            if let Ok(path) = item.Path() {
-                let path = PathBuf::from(path.to_string());
-                if path.exists() && is_media_file(&path) {
-                    return Some(path);
-                }
-            }
-        }
+        for item_index in [
+            folder_view.GetFocusedItem().ok(),
+            folder_view.GetSelectionMarkedItem().ok(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            let pidl = match folder_view.Item(item_index) {
+                Ok(pidl) if !pidl.is_null() => pidl,
+                _ => continue,
+            };
+            let shell_item = shell_item_from_view_pidl(&folder_view, pidl);
+            CoTaskMemFree(Some(pidl as *const core::ffi::c_void));
 
-        if let Ok(items) = shell_view.SelectedItems() {
-            if items.Count().unwrap_or(0) > 0 {
-                let first = VARIANT::from(0);
-                if let Ok(item) = items.Item(&first) {
-                    if let Ok(path) = item.Path() {
-                        let path = PathBuf::from(path.to_string());
-                        if path.exists() && is_media_file(&path) {
-                            return Some(path);
-                        }
-                    }
-                }
+            if let Some(path) =
+                shell_item.and_then(|shell_item| shell_item_to_media_path(&shell_item))
+            {
+                return Some(path);
             }
         }
     }
@@ -1838,6 +1840,70 @@ fn is_keyboard_navigation_input_detected() -> bool {
     }
 }
 
+fn off_trigger_key_to_vk(key: &str) -> Option<i32> {
+    let key = key.trim().to_ascii_lowercase();
+    let vk = match key.as_str() {
+        "alt" | "menu" => 0x12,
+        "shift" => 0x10,
+        "ctrl" | "control" => 0x11,
+        "win" | "windows" | "meta" => 0x5B,
+        "space" => 0x20,
+        "tab" => 0x09,
+        "enter" | "return" => 0x0D,
+        "esc" | "escape" => 0x1B,
+        "backspace" => 0x08,
+        "capslock" | "caps_lock" => 0x14,
+        "left" => 0x25,
+        "up" => 0x26,
+        "right" => 0x27,
+        "down" => 0x28,
+        "insert" | "ins" => 0x2D,
+        "delete" | "del" => 0x2E,
+        "home" => 0x24,
+        "end" => 0x23,
+        "pageup" | "pgup" => 0x21,
+        "pagedown" | "pgdn" => 0x22,
+        "lshift" | "leftshift" => 0xA0,
+        "rshift" | "rightshift" => 0xA1,
+        "lctrl" | "leftctrl" | "lcontrol" | "leftcontrol" => 0xA2,
+        "rctrl" | "rightctrl" | "rcontrol" | "rightcontrol" => 0xA3,
+        "lalt" | "leftalt" => 0xA4,
+        "ralt" | "rightalt" => 0xA5,
+        key if key.len() == 1 => {
+            let byte = key.as_bytes()[0];
+            if byte.is_ascii_alphabetic() {
+                byte.to_ascii_uppercase() as i32
+            } else if byte.is_ascii_digit() {
+                byte as i32
+            } else {
+                return None;
+            }
+        }
+        key if key.starts_with('f') => {
+            let n = key[1..].parse::<i32>().ok()?;
+            if (1..=24).contains(&n) {
+                0x70 + (n - 1)
+            } else {
+                return None;
+            }
+        }
+        _ => return None,
+    };
+
+    Some(vk)
+}
+
+fn is_off_trigger_key_down(key: &str) -> bool {
+    let Some(vk) = off_trigger_key_to_vk(key) else {
+        return false;
+    };
+
+    unsafe {
+        let state = GetAsyncKeyState(vk) as u16;
+        (state & 0x8000) != 0
+    }
+}
+
 /// Check if cursor is currently over an Explorer window (regardless of foreground)
 /// This is the expensive check that uses COM
 fn is_cursor_over_explorer_full() -> bool {
@@ -1999,7 +2065,7 @@ fn resolve_focused_item_to_path(item: &FocusedItemInfo) -> Option<PathBuf> {
 
             // Keyboard focus has a direct Shell view focused item even in search-ms
             // results. Prefer that full path when Explorer exposes it.
-            if let Some(path) = get_focused_shell_view_media_path() {
+            if let Some(path) = get_focused_shell_view_media_path(item) {
                 return Some(path);
             }
 
@@ -2098,10 +2164,34 @@ pub fn run_explorer_hook() {
 
     while RUNNING.load(Ordering::SeqCst) {
         // Check if preview is enabled
-        let (preview_enabled, hover_delay_ms) = CONFIG
+        let (preview_enabled, hover_delay_ms, enable_off_trigger_key, off_trigger_key) = CONFIG
             .lock()
-            .map(|c| (c.preview_enabled, c.hover_delay_ms))
-            .unwrap_or((true, 0));
+            .map(|c| {
+                (
+                    c.preview_enabled,
+                    c.hover_delay_ms,
+                    c.enable_off_trigger_key,
+                    c.off_trigger_key.clone(),
+                )
+            })
+            .unwrap_or((true, 0, true, "alt".to_string()));
+
+        let off_trigger_active =
+            enable_off_trigger_key && is_off_trigger_key_down(&off_trigger_key);
+
+        if off_trigger_active {
+            if last_file.is_some() || keyboard_file.is_some() {
+                hide_preview();
+            }
+            keyboard_file = None;
+            last_file = None;
+            hover_start = None;
+            last_focused_name = None;
+            is_keyboard_hover = false;
+            video_hover_guard_until = None;
+            std::thread::sleep(Duration::from_millis(ACTIVE_POLL_MS));
+            continue;
+        }
 
         if !preview_enabled {
             if last_file.is_some() || keyboard_file.is_some() {
@@ -2189,6 +2279,29 @@ pub fn run_explorer_hook() {
             let mut cursor_pos = POINT::default();
             if GetCursorPos(&mut cursor_pos).is_err() {
                 continue;
+            }
+
+            // Close as soon as the cursor touches the preview window. Do this
+            // before slower folder/hover probes so the preview does not linger
+            // under the pointer.
+            if last_file.is_some() || keyboard_file.is_some() || is_keyboard_hover {
+                let over_image_preview = is_cursor_over_image_preview();
+                let over_video_preview = is_cursor_over_video_preview();
+                if over_image_preview || over_video_preview {
+                    let guard_active = video_hover_guard_until
+                        .map(|until| Instant::now() < until)
+                        .unwrap_or(false);
+
+                    if !over_video_preview || !guard_active {
+                        hide_preview();
+                        last_file = None;
+                        keyboard_file = None;
+                        is_keyboard_hover = false;
+                        video_hover_guard_until = None;
+                        hover_start = Some(Instant::now());
+                        continue;
+                    }
+                }
             }
 
             // Detect folder navigation/opening and suspend preview until user input.
