@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.1.7] - 2026-04-28
+
+### Added
+
+- Added Windows installer packaging via `cargo packager`, producing release `.exe` and `.msi` assets in CI.
+- Added `build-installers.ps1` helper flow for local installer generation with artifact validation.
+
+### Changed
+
+- Updated deploy workflow release packaging to publish `target/packager/*.exe` and `target/packager/*.msi` on `v*.*.*` tags.
+- Refactored preview window, media loading, and video-dimension internals for clearer structure and maintainability.
+- Improved installer build orchestration with a WiX fallback path for constrained local sessions.
+
+### Fixed
+
+- Added explicit Windows Installer (`msiserver`) availability checks before MSI generation.
+- Improved installer-build error handling and output validation to fail fast when packaging artifacts are missing.
+
 ## [0.1.6] - 2026-04-06
 
 ### Changed
