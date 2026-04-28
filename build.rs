@@ -1,4 +1,8 @@
 fn main() {
+    // Avoid Cargo scanning the entire repo tree (can fail on locked temp dirs).
+    println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=assets/icon.ico");
+
     // Only run on Windows
     #[cfg(target_os = "windows")]
     {

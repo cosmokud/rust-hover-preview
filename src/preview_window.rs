@@ -1286,24 +1286,19 @@ fn start_video_playback(path: &PathBuf, x: i32, y: i32, width: i32, height: i32)
     }
 
     if width > 0 && height > 0 {
-        // Remove encoded edge padding (if detected), then fit while preserving aspect.
+        // Produce frames at the exact preview size. Layout already preserves aspect,
+        // so this avoids a second ffplay fit pass that can add black bars.
         let vf = if let Some(geometry) = get_video_geometry(path) {
             if let Some(crop) = geometry.crop {
                 format!(
-                    "crop={}:{}:{}:{},scale={}:{}:flags=lanczos:force_original_aspect_ratio=decrease:reset_sar=1",
+                    "crop={}:{}:{}:{},scale={}:{}:flags=lanczos,setsar=1",
                     crop.width, crop.height, crop.x, crop.y, width, height
                 )
             } else {
-                format!(
-                    "scale={}:{}:flags=lanczos:force_original_aspect_ratio=decrease:reset_sar=1",
-                    width, height
-                )
+                format!("scale={}:{}:flags=lanczos,setsar=1", width, height)
             }
         } else {
-            format!(
-                "scale={}:{}:flags=lanczos:force_original_aspect_ratio=decrease:reset_sar=1",
-                width, height
-            )
+            format!("scale={}:{}:flags=lanczos,setsar=1", width, height)
         };
         cmd.args(["-vf", &vf]);
     }
