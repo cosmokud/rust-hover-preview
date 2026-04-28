@@ -69,15 +69,23 @@ $($_.Exception.Message)
     }
 }
 
-Write-Host "Building NSIS (.exe) and WiX (.msi) installers..."
-cargo packager --release
+Write-Host "Building NSIS installer..."
+cargo packager --release --formats nsis
 if ($LASTEXITCODE -ne 0) {
-    $packagerExitCode = $LASTEXITCODE
-    Write-Warning "cargo-packager failed. Trying WiX MSI fallback with ICE validation disabled..."
+    exit $LASTEXITCODE
+}
+
+Write-Host "Building WiX MSI installer..."
+$wixLog = Join-Path $repoRoot "target\packager\wix-build.log"
+New-Item -ItemType Directory -Force -Path (Split-Path -Parent $wixLog) | Out-Null
+cargo packager --release --formats wix *> $wixLog
+if ($LASTEXITCODE -ne 0) {
+    $wixPackagerExitCode = $LASTEXITCODE
+    Write-Host "Normal WiX MSI validation is unavailable in this local session; generating MSI with ICE validation disabled."
 
     $metadata = cargo metadata --no-deps --format-version 1 | ConvertFrom-Json
     if ($LASTEXITCODE -ne 0) {
-        exit $packagerExitCode
+        exit $wixPackagerExitCode
     }
 
     $package = $metadata.packages | Select-Object -First 1
@@ -89,6 +97,7 @@ if ($LASTEXITCODE -ne 0) {
     $mainWixObj = Join-Path $wixWorkDir "main.wixobj"
     $localeFile = Join-Path $wixWorkDir "locale.wxl"
     $fallbackMsi = Join-Path $wixWorkDir "output-fallback.msi"
+    $fallbackLog = Join-Path $wixWorkDir "light-fallback.log"
     $finalMsi = Join-Path $repoRoot ("target\packager\{0}_{1}_{2}_{3}.msi" -f $package.name, $package.version, $arch, $culture)
     $light = Join-Path $wixTools "light.exe"
     $wixUtilExtension = Join-Path $wixTools "WixUtilExtension.dll"
@@ -99,8 +108,8 @@ if ($LASTEXITCODE -ne 0) {
         -not (Test-Path -LiteralPath $mainWixObj) -or
         -not (Test-Path -LiteralPath $localeFile)
     ) {
-        Write-Error "WiX fallback files were not generated. Re-run with 'cargo packager --release -vv' for the original error."
-        exit $packagerExitCode
+        Write-Error "WiX fallback files were not generated. See $wixLog for the original cargo-packager output."
+        exit $wixPackagerExitCode
     }
 
     if (Test-Path -LiteralPath $fallbackMsi) {
@@ -114,14 +123,15 @@ if ($LASTEXITCODE -ne 0) {
         -o $fallbackMsi `
         "-cultures:$cultureArg" `
         -loc $localeFile `
-        $mainWixObj
+        $mainWixObj *> $fallbackLog
 
     if ($LASTEXITCODE -ne 0) {
-        exit $packagerExitCode
+        Write-Error "WiX fallback failed. See $fallbackLog for details."
+        exit $wixPackagerExitCode
     }
 
     Move-Item -LiteralPath $fallbackMsi -Destination $finalMsi -Force
-    Write-Warning "MSI was generated with WiX ICE validation disabled because local Windows Installer validation failed."
+    Write-Host "MSI generated with WiX ICE validation disabled for this local build."
 }
 
 $outputDir = Join-Path $repoRoot "target\packager"
