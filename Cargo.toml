@@ -71,7 +71,7 @@ path = "rust-hover-preview"
 main = true
 
 [package.metadata.packager.nsis]
-install-mode = "currentUser"
+installMode = "currentUser"
 installer-icon = "assets/icon.ico"
 appdata-paths = ["$LOCALAPPDATA/$PRODUCTNAME"]
 
