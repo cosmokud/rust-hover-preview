@@ -1,4 +1,4 @@
-name: Manual Deploy By Tag
+﻿name: Manual Deploy By Tag
 
 on:
   workflow_dispatch:
@@ -44,6 +44,7 @@ jobs:
           path: |
             target/packager/*.exe
             target/packager/*.msi
+            target/release/rust-hover-preview.exe
           if-no-files-found: error
 
       - name: Create GitHub release
@@ -59,3 +60,4 @@ jobs:
           files: |
             target/packager/*.exe
             target/packager/*.msi
+            target/release/rust-hover-preview.exe
