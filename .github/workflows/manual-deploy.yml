@@ -15,6 +15,41 @@ jobs:
       contents: write
 
     steps:
+      # SECURITY: Validate input to prevent someone from typing "main" or injecting shell commands
+      - name: Validate tag format
+        shell: bash
+        run: |
+          if [[ ! "${{ inputs.tag_to_build }}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+            echo "Error: Tag must start with 'v' followed by semantic versioning (e.g., v1.0.0)"
+            exit 1
+          fi
+
+      # IDEMPOTENCY: Check if release already exists.
+      # Prevents you from accidentally overwriting a good release via a typo in the manual input.
+      - name: Fail if release already exists
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag_to_build }}
+          REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          api_url="https://api.github.com/repos/${REPO}/releases/tags/${TAG}"
+          status=$(curl -sS -o release.json -w "%{http_code}" \
+            -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "${api_url}")
+          if [[ "${status}" == "200" ]]; then
+            echo "release already exists for tag ${TAG}; refusing to overwrite"
+            cat release.json
+            exit 1
+          fi
+          if [[ "${status}" != "404" ]]; then
+            echo "unexpected API status while checking tag ${TAG}: ${status}"
+            cat release.json || true
+            exit 1
+          fi
+
       - name: Checkout
         uses: actions/checkout@v4
         with:
