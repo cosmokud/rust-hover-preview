@@ -43,12 +43,23 @@ jobs:
             target/release/rust-hover-preview.exe
           if-no-files-found: error
 
+      - name: Extract Changelog
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          TAG_NAME="${{ github.ref_name }}"
+          VERSION="${TAG_NAME#v}"
+
+          # Extract changelog section for the current version
+          awk '/^## \['"$VERSION"'\]/{flag=1; next} /^## \[/{flag=0} flag' CHANGELOG.md > release_notes.md
+
       - name: Create GitHub release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
+          body_path: release_notes.md
           prerelease: false
           generate_release_notes: true
           fail_on_unmatched_files: true
