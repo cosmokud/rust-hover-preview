@@ -1,4 +1,12 @@
-﻿jobs:
+﻿name: Deploy
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+
+jobs:
   windows-installers:
     runs-on: windows-latest
     permissions:
