@@ -12,15 +12,21 @@ use std::sync::{atomic::Ordering, Mutex};
 use std::time::{Duration, Instant};
 use windows::core::{Interface, VARIANT};
 use windows::Win32::Foundation::{HWND, POINT, RECT};
+use windows::Win32::Graphics::Gdi::ScreenToClient;
 use windows::Win32::System::Com::{
-    CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_ALL, COINIT_APARTMENTTHREADED,
+    CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, IServiceProvider, CLSCTX_ALL,
+    COINIT_APARTMENTTHREADED,
 };
 use windows::Win32::System::Variant::VariantClear;
 use windows::Win32::UI::Accessibility::{CUIAutomation, IUIAutomation};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, VK_DOWN, VK_END, VK_HOME, VK_LEFT, VK_NEXT, VK_PRIOR, VK_RIGHT, VK_UP,
 };
-use windows::Win32::UI::Shell::{IShellFolderViewDual, IShellWindows, ShellWindows};
+use windows::Win32::UI::Shell::{
+    IFolderView, INameSpaceTreeControl, IShellBrowser, IShellFolder, IShellFolderViewDual,
+    IShellItem, IShellWindows, SHCreateItemFromIDList, SHCreateItemWithParent,
+    SID_STopLevelBrowser, ShellWindows, SIGDN_DESKTOPABSOLUTEPARSING, SVGIO_ALLVIEW,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
     GetClassNameW, GetCursorPos, GetForegroundWindow, GetWindowPlacement, GetWindowRect,
     GetWindowThreadProcessId, IsIconic, IsWindowVisible, WindowFromPoint, SW_SHOWMAXIMIZED,
@@ -510,6 +516,169 @@ fn get_explorer_location_url(hwnd: HWND) -> Option<String> {
 fn get_current_explorer_location_url() -> Option<String> {
     let hwnd = get_explorer_hwnd_under_cursor_or_foreground()?;
     get_explorer_location_url(hwnd)
+}
+
+fn shell_item_to_media_path(shell_item: &IShellItem) -> Option<PathBuf> {
+    unsafe {
+        let display_name = shell_item
+            .GetDisplayName(SIGDN_DESKTOPABSOLUTEPARSING)
+            .ok()?;
+        let path_string = display_name.to_string().ok()?;
+        CoTaskMemFree(Some(display_name.0 as *const core::ffi::c_void));
+
+        let path = PathBuf::from(path_string);
+        if path.exists() && is_media_file(&path) {
+            Some(path)
+        } else {
+            None
+        }
+    }
+}
+
+fn shell_item_from_view_pidl(
+    folder_view: &IFolderView,
+    pidl: *mut windows::Win32::UI::Shell::Common::ITEMIDLIST,
+) -> Option<IShellItem> {
+    unsafe {
+        let direct = SHCreateItemFromIDList::<IShellItem>(pidl).ok();
+        if direct.is_some() {
+            return direct;
+        }
+
+        let shell_folder = folder_view.GetFolder::<IShellFolder>().ok()?;
+        SHCreateItemWithParent::<_, IShellItem>(None, &shell_folder, pidl).ok()
+    }
+}
+
+fn hit_test_folder_view_by_position(
+    folder_view: &IFolderView,
+    client_point: &POINT,
+) -> Option<PathBuf> {
+    unsafe {
+        let count = folder_view.ItemCount(SVGIO_ALLVIEW).ok()?.clamp(0, 10000);
+        let mut spacing = POINT { x: 0, y: 0 };
+        let _ = folder_view.GetSpacing(&mut spacing);
+        if spacing.x <= 0 {
+            spacing.x = 220;
+        }
+        if spacing.y <= 0 {
+            spacing.y = 24;
+        }
+
+        let mut best: Option<(i32, IShellItem)> = None;
+        for item_index in 0..count {
+            let pidl = match folder_view.Item(item_index) {
+                Ok(pidl) if !pidl.is_null() => pidl,
+                _ => continue,
+            };
+
+            let position = folder_view.GetItemPosition(pidl).ok();
+            let shell_item = shell_item_from_view_pidl(folder_view, pidl);
+            CoTaskMemFree(Some(pidl as *const core::ffi::c_void));
+
+            let (position, shell_item) = match (position, shell_item) {
+                (Some(position), Some(shell_item)) => (position, shell_item),
+                _ => continue,
+            };
+
+            let row_top = position.y - (spacing.y / 3).max(1);
+            let row_bottom = position.y + spacing.y.max(1);
+            let col_left = position.x - (spacing.x / 3).max(1);
+            let col_right = position.x + (spacing.x * 2).max(1);
+
+            if client_point.y < row_top || client_point.y > row_bottom {
+                continue;
+            }
+
+            let x_penalty = if client_point.x < col_left {
+                col_left - client_point.x
+            } else if client_point.x > col_right {
+                client_point.x - col_right
+            } else {
+                0
+            };
+            let y_score = (client_point.y - position.y).abs();
+            let score = y_score + x_penalty;
+
+            if best
+                .as_ref()
+                .map(|(best_score, _)| score < *best_score)
+                .unwrap_or(true)
+            {
+                best = Some((score, shell_item));
+            }
+        }
+
+        best.and_then(|(_, shell_item)| shell_item_to_media_path(&shell_item))
+    }
+}
+
+fn get_shell_data_model_file_under_cursor() -> Option<PathBuf> {
+    unsafe {
+        let mut screen_point = POINT::default();
+        if GetCursorPos(&mut screen_point).is_err() {
+            return None;
+        }
+
+        let explorer_hwnd = get_explorer_hwnd_under_cursor_or_foreground()?;
+        let explorer_hwnd_key = explorer_hwnd.0 as isize;
+
+        let shell_windows =
+            CoCreateInstance::<_, IShellWindows>(&ShellWindows, None, CLSCTX_ALL).ok()?;
+        let count = shell_windows.Count().ok()?;
+
+        for i in 0..count {
+            let variant = VARIANT::from(i);
+            let disp = match shell_windows.Item(&variant) {
+                Ok(disp) => disp,
+                Err(_) => continue,
+            };
+            let browser = match disp.cast::<windows::Win32::UI::Shell::IWebBrowser2>() {
+                Ok(browser) => browser,
+                Err(_) => continue,
+            };
+            let browser_hwnd = match browser.HWND() {
+                Ok(browser_hwnd) => browser_hwnd,
+                Err(_) => continue,
+            };
+            if browser_hwnd.0 != explorer_hwnd_key {
+                continue;
+            }
+
+            let service_provider = browser.cast::<IServiceProvider>().ok()?;
+            let shell_browser: IShellBrowser =
+                service_provider.QueryService(&SID_STopLevelBrowser).ok()?;
+            let shell_view = shell_browser.QueryActiveShellView().ok()?;
+            let shell_view_hwnd = shell_view.GetWindow().ok()?;
+
+            let mut client_point = screen_point;
+            if !ScreenToClient(shell_view_hwnd, &mut client_point).as_bool() {
+                return None;
+            }
+
+            // Primary data-model hit test. If the active Shell view exposes it,
+            // this returns the real IShellItem under x/y without MSAA/UIA text scraping.
+            if let Ok(hit_test) = shell_view.cast::<INameSpaceTreeControl>() {
+                if let Ok(shell_item) = hit_test.HitTest(&client_point) {
+                    if let Some(path) = shell_item_to_media_path(&shell_item) {
+                        return Some(path);
+                    }
+                }
+            }
+
+            // Fallback for Shell views that do not expose HitTest in this binding:
+            // use IFolderView item positions and convert the matched PIDL to IShellItem.
+            if let Ok(folder_view) = shell_view.cast::<IFolderView>() {
+                if let Some(path) = hit_test_folder_view_by_position(&folder_view, &client_point) {
+                    return Some(path);
+                }
+            }
+
+            return None;
+        }
+    }
+
+    None
 }
 
 fn get_current_explorer_search_root() -> Option<String> {
@@ -1387,6 +1556,10 @@ fn get_item_under_cursor_uia(automation: &IUIAutomation) -> Option<Accessibility
 }
 
 fn get_file_under_cursor(automation: Option<&IUIAutomation>) -> Option<PathBuf> {
+    if let Some(path) = get_shell_data_model_file_under_cursor() {
+        return Some(path);
+    }
+
     // Get the item info under cursor. MSAA misses some Win11 search-result rows,
     // so fall back to UI Automation point lookup before resolving the path.
     let item_info =
