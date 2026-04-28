@@ -15,7 +15,8 @@ Inspired by QTTabBar (QuizoApps) hover preview.
 - Mouse-hover and keyboard-navigation previews in Explorer
 - Static image previews plus animated GIF/WebP playback
 - Video previews through FFmpeg (`ffplay` + `ffprobe`)
-- Tray controls for enable/disable, delay, positioning, startup, and volume
+- Tray controls for enable/disable, delay, positioning, startup, off-trigger key, and volume
+- Explorer Shell view detection, folder caching, and path normalization for reliable hover matching
 - Topmost, non-activating preview windows designed to avoid focus stealing
 
 ## Supported Formats
@@ -83,6 +84,7 @@ ffprobe -version
 - **Preview Delay**: `Instant (0 ms)`, `Fast (200 ms)`, `Medium (500 ms)`, `Slow (1000 ms)`
 - **Video Volume**: `Max (100%)`, `High (80%)`, `Medium (50%)`, `Low (25%)`, `Very Low (10%)`, `Mute (0%)`
 - **Preview Position**: `Follow Cursor` or `Best Position`
+- **Off Trigger Key**: Temporarily suppress previews while the configured key is held
 - **Run at Startup**: Add/remove startup entry in Windows
 - **Edit Config.ini**: Open configuration file in your default editor
 - **Exit**: Close the application
@@ -107,6 +109,8 @@ off_trigger_key=alt
 follow_cursor=false
 video_volume=0
 ```
+
+When `enable_off_trigger_key` is enabled, hold the configured `off_trigger_key` to keep previews hidden while browsing Explorer.
 
 ## Build from Source
 
