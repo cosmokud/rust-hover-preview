@@ -9,7 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 
 - Restored the default NSIS older-version prompt while keeping the installer-side process shutdown, config default completion, and old-folder migration logic.
-- Synced the `run_at_startup` setting to the Windows startup registry on app launch so autorun is enabled by default on first run.
+- Limited automatic startup registration to first install and first portable run, while leaving later launches and updates to the user's saved setting.
+- Removed custom installer `taskkill` actions and returned running-app shutdown to cargo-packager's default Windows installer behavior.
 - Updated release metadata for v0.1.10.
 
 ## [0.1.9] - 2026-04-29
