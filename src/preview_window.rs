@@ -1,4 +1,4 @@
-use crate::config::TransparentBackground;
+use crate::config::{sanitize_webp_playback_fps, TransparentBackground, DEFAULT_WEBP_PLAYBACK_FPS};
 use crate::{CONFIG, RUNNING};
 use gif::DecodeOptions;
 use image::GenericImageView;
@@ -40,7 +40,7 @@ const PREVIEW_CLASS: PCWSTR = w!("RustHoverPreviewWindow");
 const VIDEO_EXTENSIONS: &[&str] = &["mp4", "webm", "mkv", "avi", "mov", "wmv", "flv", "m4v"];
 const MAX_STREAMED_ANIMATION_FRAMES: usize = 300;
 const MAX_STREAMED_ANIMATION_BYTES: usize = 256 * 1024 * 1024;
-const MIN_ANIMATION_FRAME_DELAY_MS: u32 = 33;
+const MIN_GIF_ANIMATION_FRAME_DELAY_MS: u32 = 33;
 const ANIMATION_STARTUP_PREBUFFER_FRAMES: usize = 12;
 const ANIMATION_STARTUP_PREBUFFER_MS: u32 = 500;
 const CONFIG_RELOAD_INTERVAL_MS: u64 = 250;
@@ -166,7 +166,10 @@ impl MediaData {
 
         // Allow skipping multiple frames per call to keep up with real time.
         for _ in 0..frame_count {
-            let delay = Duration::from_millis(self.frames[self.current_frame].delay_ms as u64);
+            let delay = Duration::from_millis(effective_frame_delay_ms(
+                &self.media_type,
+                self.frames[self.current_frame].delay_ms,
+            ) as u64);
             if self.last_frame_time.elapsed() >= delay {
                 let next = self.current_frame + 1;
                 if next < frame_count {
@@ -462,6 +465,24 @@ fn current_transparent_background() -> TransparentBackground {
         .unwrap_or(TransparentBackground::Transparent)
 }
 
+fn current_webp_playback_fps() -> u32 {
+    CONFIG
+        .lock()
+        .map(|cfg| sanitize_webp_playback_fps(cfg.webp_playback_fps))
+        .unwrap_or(DEFAULT_WEBP_PLAYBACK_FPS)
+}
+
+fn effective_frame_delay_ms(media_type: &MediaType, source_delay_ms: u32) -> u32 {
+    match media_type {
+        MediaType::AnimatedWebP => {
+            let fps = current_webp_playback_fps();
+            let min_delay_ms = (1000 / fps).max(1);
+            source_delay_ms.max(min_delay_ms)
+        }
+        _ => source_delay_ms,
+    }
+}
+
 fn checkerboard_color(x: u32, y: u32) -> (u8, u8, u8) {
     if ((x / 16) + (y / 16)) % 2 == 0 {
         (224, 224, 224)
@@ -648,7 +669,7 @@ fn load_animated_gif(
         };
 
         composite_gif_frame(&mut canvas, frame, gif_width, gif_height);
-        let delay_ms = (frame.delay as u32 * 10).max(MIN_ANIMATION_FRAME_DELAY_MS);
+        let delay_ms = (frame.delay as u32 * 10).max(MIN_GIF_ANIMATION_FRAME_DELAY_MS);
         let img = decode_gif_frame_to_image(
             &canvas,
             gif_width,
@@ -727,7 +748,7 @@ fn load_animated_gif(
                 continue;
             }
 
-            let delay_ms = (frame.delay as u32 * 10).max(MIN_ANIMATION_FRAME_DELAY_MS);
+            let delay_ms = (frame.delay as u32 * 10).max(MIN_GIF_ANIMATION_FRAME_DELAY_MS);
             if let Some(img) = decode_gif_frame_to_image(
                 &canvas,
                 gif_width,
@@ -857,8 +878,7 @@ fn load_animated_webp(
         };
 
         let timestamp = frame.timestamp();
-        let delay_ms =
-            (timestamp - previous_timestamp).max(MIN_ANIMATION_FRAME_DELAY_MS as i32) as u32;
+        let delay_ms = (timestamp - previous_timestamp).max(0) as u32;
         previous_timestamp = timestamp;
 
         let img = decode_webp_animation_frame_to_image(
@@ -930,8 +950,7 @@ fn load_animated_webp(
             }
 
             let timestamp = frame.timestamp();
-            let delay_ms =
-                (timestamp - previous_timestamp).max(MIN_ANIMATION_FRAME_DELAY_MS as i32) as u32;
+            let delay_ms = (timestamp - previous_timestamp).max(0) as u32;
             previous_timestamp = timestamp;
 
             if frame_idx < skip_frames {
