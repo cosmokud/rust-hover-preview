@@ -59,7 +59,7 @@ impl Default for AppConfig {
             confirm_file_type: false,
             follow_cursor: false,
             turbo_mode: true,
-            transparent_background: TransparentBackground::Transparent,
+            transparent_background: TransparentBackground::Black,
             video_volume: 0, // Mute by default
         }
     }
