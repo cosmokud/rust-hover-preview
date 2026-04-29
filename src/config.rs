@@ -14,6 +14,7 @@ pub struct AppConfig {
     pub off_trigger_key: String,
     pub confirm_file_type: bool,
     pub follow_cursor: bool,
+    pub turbo_mode: bool,
     pub video_volume: u32,
 }
 
@@ -27,6 +28,7 @@ impl Default for AppConfig {
             off_trigger_key: "alt".to_string(),
             confirm_file_type: false,
             follow_cursor: false,
+            turbo_mode: false,
             video_volume: 0, // Mute by default
         }
     }
@@ -97,6 +99,11 @@ impl AppConfig {
             );
             ini.set(
                 CONFIG_SECTION,
+                "turbo_mode",
+                Some(self.turbo_mode.to_string()),
+            );
+            ini.set(
+                CONFIG_SECTION,
                 "video_volume",
                 Some(self.video_volume.to_string()),
             );
@@ -128,6 +135,9 @@ impl AppConfig {
         }
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "follow_cursor") {
             self.follow_cursor = value;
+        }
+        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "turbo_mode") {
+            self.turbo_mode = value;
         }
         if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "video_volume") {
             if let Ok(value) = u32::try_from(value) {
