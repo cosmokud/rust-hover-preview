@@ -2122,6 +2122,7 @@ pub fn run_explorer_hook() {
         unsafe { CoCreateInstance(&CUIAutomation, None, CLSCTX_ALL).ok() };
 
     let mut last_file: Option<PathBuf> = None;
+    let mut suppressed_hover_file: Option<PathBuf> = None;
     let mut hover_start: Option<Instant> = None;
     let mut last_cursor_pos = POINT::default();
 
@@ -2164,17 +2165,23 @@ pub fn run_explorer_hook() {
 
     while RUNNING.load(Ordering::SeqCst) {
         // Check if preview is enabled
-        let (preview_enabled, hover_delay_ms, enable_off_trigger_key, off_trigger_key) = CONFIG
-            .lock()
-            .map(|c| {
-                (
-                    c.preview_enabled,
-                    c.hover_delay_ms,
-                    c.enable_off_trigger_key,
-                    c.off_trigger_key.clone(),
-                )
-            })
-            .unwrap_or((true, 0, true, "alt".to_string()));
+        let (preview_enabled, hover_delay_ms, enable_off_trigger_key, off_trigger_key, turbo_mode) =
+            CONFIG
+                .lock()
+                .map(|c| {
+                    (
+                        c.preview_enabled,
+                        c.hover_delay_ms,
+                        c.enable_off_trigger_key,
+                        c.off_trigger_key.clone(),
+                        c.turbo_mode,
+                    )
+                })
+                .unwrap_or((true, 0, true, "alt".to_string(), false));
+
+        if turbo_mode {
+            suppressed_hover_file = None;
+        }
 
         let off_trigger_active =
             enable_off_trigger_key && is_off_trigger_key_down(&off_trigger_key);
@@ -2185,6 +2192,7 @@ pub fn run_explorer_hook() {
             }
             keyboard_file = None;
             last_file = None;
+            suppressed_hover_file = None;
             hover_start = None;
             last_focused_name = None;
             is_keyboard_hover = false;
@@ -2197,6 +2205,7 @@ pub fn run_explorer_hook() {
             if last_file.is_some() || keyboard_file.is_some() {
                 hide_preview();
                 last_file = None;
+                suppressed_hover_file = None;
                 hover_start = None;
             }
             keyboard_file = None;
@@ -2293,6 +2302,9 @@ pub fn run_explorer_hook() {
                         .unwrap_or(false);
 
                     if !over_video_preview || !guard_active {
+                        if !turbo_mode {
+                            suppressed_hover_file = last_file.clone();
+                        }
                         hide_preview();
                         last_file = None;
                         keyboard_file = None;
@@ -2325,6 +2337,7 @@ pub fn run_explorer_hook() {
                             hide_preview();
                         }
                         last_file = None;
+                        suppressed_hover_file = None;
                         keyboard_file = None;
                         is_keyboard_hover = false;
                         video_hover_guard_until = None;
@@ -2425,6 +2438,9 @@ pub fn run_explorer_hook() {
                         // right after ffplay appears under the cursor.
                         if !over_video_preview || !guard_active {
                             if last_file.is_some() {
+                                if !turbo_mode {
+                                    suppressed_hover_file = last_file.clone();
+                                }
                                 hide_preview();
                                 last_file = None;
                             }
@@ -2444,6 +2460,7 @@ pub fn run_explorer_hook() {
                             hover_start = Some(Instant::now());
                             continue;
                         }
+                        suppressed_hover_file = None;
                     }
 
                     hide_preview();
@@ -2479,6 +2496,7 @@ pub fn run_explorer_hook() {
                             if last_file.is_some() && !is_keyboard_hover {
                                 hide_preview();
                                 last_file = None;
+                                suppressed_hover_file = None;
                                 hover_start = None;
                             }
 
@@ -2532,6 +2550,7 @@ pub fn run_explorer_hook() {
                         if last_file.is_some() && !is_keyboard_hover {
                             hide_preview();
                             last_file = None;
+                            suppressed_hover_file = None;
                             hover_start = None;
                         }
 
@@ -2590,6 +2609,10 @@ pub fn run_explorer_hook() {
                     // Try to get file under cursor
                     if let Some(file_path) = get_file_under_cursor(uia.as_ref()) {
                         if last_file.as_ref() != Some(&file_path) {
+                            if !turbo_mode && suppressed_hover_file.as_ref() == Some(&file_path) {
+                                continue;
+                            }
+                            suppressed_hover_file = None;
                             last_file = Some(file_path.clone());
                             video_hover_guard_until = if is_video_file(&file_path) {
                                 Some(
@@ -2604,6 +2627,7 @@ pub fn run_explorer_hook() {
                     } else {
                         // No file found while mouse is stationary.
                         // Keep current preview state; dismissal should happen only on mouse move.
+                        suppressed_hover_file = None;
                     }
                 }
             } else {
