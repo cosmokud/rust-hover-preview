@@ -426,7 +426,10 @@ fn rgba_to_bgra(rgba: &[u8]) -> Vec<u8> {
 fn current_transparent_background() -> TransparentBackground {
     CONFIG
         .lock()
-        .map(|cfg| cfg.transparent_background)
+        .map(|mut cfg| {
+            cfg.reload_from_disk();
+            cfg.transparent_background
+        })
         .unwrap_or(TransparentBackground::Transparent)
 }
 
@@ -1388,7 +1391,13 @@ fn set_noactivate_for_process(pid: u32) {
 /// Start ffplay for video preview with configurable volume
 fn start_video_playback(path: &PathBuf, x: i32, y: i32, width: i32, height: i32) -> Option<Child> {
     // Get volume setting from config (0-100)
-    let volume = CONFIG.lock().map(|c| c.video_volume).unwrap_or(0);
+    let volume = CONFIG
+        .lock()
+        .map(|mut c| {
+            c.reload_from_disk();
+            c.video_volume
+        })
+        .unwrap_or(0);
 
     // Use ffplay for video playback - borderless, positioned at preview location
     let mut cmd = Command::new("ffplay");
@@ -2509,7 +2518,13 @@ pub fn run_preview_window() {
                     PreviewMessage::Show(path, x, y) => {
                         let screen_width = GetSystemMetrics(SM_CXSCREEN);
                         let screen_height = GetSystemMetrics(SM_CYSCREEN);
-                        let follow_cursor = CONFIG.lock().map(|c| c.follow_cursor).unwrap_or(true);
+                        let follow_cursor = CONFIG
+                            .lock()
+                            .map(|mut c| {
+                                c.reload_from_disk();
+                                c.follow_cursor
+                            })
+                            .unwrap_or(true);
 
                         if let Some(orig_dims) = get_media_dimensions(&path) {
                             let is_video = is_video_file(&path);
@@ -2530,7 +2545,13 @@ pub fn run_preview_window() {
                     PreviewMessage::ShowKeyboard(path, il, it, ir, ib) => {
                         let screen_width = GetSystemMetrics(SM_CXSCREEN);
                         let screen_height = GetSystemMetrics(SM_CYSCREEN);
-                        let follow_cursor = CONFIG.lock().map(|c| c.follow_cursor).unwrap_or(true);
+                        let follow_cursor = CONFIG
+                            .lock()
+                            .map(|mut c| {
+                                c.reload_from_disk();
+                                c.follow_cursor
+                            })
+                            .unwrap_or(true);
 
                         if let Some(orig_dims) = get_media_dimensions(&path) {
                             let is_video = is_video_file(&path);

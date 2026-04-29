@@ -82,9 +82,9 @@ ffprobe -version
 
 - **Enable Preview**: Turn previews on or off
 - **Preview Delay**: `Instant (0 ms)`, `Fast (200 ms)`, `Medium (500 ms)`, `Slow (1000 ms)`
+- **Same File Rehover Delay**: delay before the same file can preview again after the preview self-dismisses
 - **Video Volume**: `Max (100%)`, `High (80%)`, `Medium (50%)`, `Low (25%)`, `Very Low (10%)`, `Mute (0%)`
 - **Preview Position**: `Follow Cursor` or `Best Position`
-- **Turbo Mode**: Preserve immediate same-file re-triggering after preview self-dismiss
 - **Transparent Background**: `Transparent`, `Black`, `White`, or `Checkerboard`
 - **Off Trigger Key**: Temporarily suppress previews while the configured key is held
 - **Run at Startup**: Add/remove startup entry in Windows
@@ -110,7 +110,6 @@ preview_enabled=true
 enable_off_trigger_key=true
 off_trigger_key=alt
 follow_cursor=false
-turbo_mode=true
 transparent_background=transparent
 video_volume=0
 ```

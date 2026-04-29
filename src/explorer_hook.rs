@@ -2177,26 +2177,20 @@ pub fn run_explorer_hook() {
             hover_delay_ms,
             enable_off_trigger_key,
             off_trigger_key,
-            turbo_mode,
             same_file_rehover_delay_ms,
         ) = CONFIG
             .lock()
-            .map(|c| {
+            .map(|mut c| {
+                c.reload_from_disk();
                 (
                     c.preview_enabled,
                     c.hover_delay_ms,
                     c.enable_off_trigger_key,
                     c.off_trigger_key.clone(),
-                    c.turbo_mode,
                     c.same_file_rehover_delay_ms,
                 )
             })
-            .unwrap_or((true, 0, true, "alt".to_string(), false, 200));
-
-        if turbo_mode {
-            suppressed_hover_file = None;
-            suppressed_hover_started_at = None;
-        }
+            .unwrap_or((true, 0, true, "alt".to_string(), 200));
 
         let off_trigger_active =
             enable_off_trigger_key && is_off_trigger_key_down(&off_trigger_key);
@@ -2319,10 +2313,8 @@ pub fn run_explorer_hook() {
                         .unwrap_or(false);
 
                     if !over_video_preview || !guard_active {
-                        if !turbo_mode {
-                            suppressed_hover_file = last_file.clone();
-                            suppressed_hover_started_at = Some(Instant::now());
-                        }
+                        suppressed_hover_file = last_file.clone();
+                        suppressed_hover_started_at = Some(Instant::now());
                         hide_preview();
                         last_file = None;
                         keyboard_file = None;
@@ -2442,16 +2434,14 @@ pub fn run_explorer_hook() {
                 last_focused_name = None;
                 allow_keyboard_preview_on_first_observation = false;
 
-                if !turbo_mode {
-                    if let Some(suppressed_file) = suppressed_hover_file.as_ref() {
-                        if let Some(current_file) = get_file_under_cursor(uia.as_ref()) {
-                            if same_path(suppressed_file, &current_file) {
-                                hover_start = Some(Instant::now());
-                                continue;
-                            }
-                            suppressed_hover_file = None;
-                            suppressed_hover_started_at = None;
+                if let Some(suppressed_file) = suppressed_hover_file.as_ref() {
+                    if let Some(current_file) = get_file_under_cursor(uia.as_ref()) {
+                        if same_path(suppressed_file, &current_file) {
+                            hover_start = Some(Instant::now());
+                            continue;
                         }
+                        suppressed_hover_file = None;
+                        suppressed_hover_started_at = None;
                     }
                 }
 
@@ -2470,10 +2460,8 @@ pub fn run_explorer_hook() {
                         // right after ffplay appears under the cursor.
                         if !over_video_preview || !guard_active {
                             if last_file.is_some() {
-                                if !turbo_mode {
-                                    suppressed_hover_file = last_file.clone();
-                                    suppressed_hover_started_at = Some(Instant::now());
-                                }
+                                suppressed_hover_file = last_file.clone();
+                                suppressed_hover_started_at = Some(Instant::now());
                                 hide_preview();
                                 last_file = None;
                             }
@@ -2499,7 +2487,7 @@ pub fn run_explorer_hook() {
                         }
                         suppressed_hover_file = None;
                         suppressed_hover_started_at = None;
-                    } else if !turbo_mode {
+                    } else {
                         suppressed_hover_file = last_file.clone();
                         suppressed_hover_started_at = Some(Instant::now());
                     }
@@ -2656,11 +2644,10 @@ pub fn run_explorer_hook() {
                             .map(|last| same_path(last, &file_path))
                             .unwrap_or(false)
                         {
-                            if !turbo_mode
-                                && suppressed_hover_file
-                                    .as_ref()
-                                    .map(|suppressed| same_path(suppressed, &file_path))
-                                    .unwrap_or(false)
+                            if suppressed_hover_file
+                                .as_ref()
+                                .map(|suppressed| same_path(suppressed, &file_path))
+                                .unwrap_or(false)
                                 && suppressed_hover_started_at
                                     .map(|started| {
                                         started.elapsed()
