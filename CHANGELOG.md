@@ -4,6 +4,29 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.1.9] - 2026-04-29
+
+### Added
+
+- Added transparent-background preview modes for PNG/WebP transparency: transparent, black, white, and checkerboard.
+- Added configurable same-file rehover delay with a 750 ms default and tray controls.
+- Added installer migration cleanup for the old `%LOCALAPPDATA%\Rust Hover Preview` install folder.
+
+### Changed
+
+- Switched animated WebP playback to Google's libwebp via `webp-animation` for smoother startup and playback.
+- Moved per-user installer output to `%LOCALAPPDATA%\rust-hover-preview` while keeping the display name `Rust Hover Preview`.
+- Switched configuration path resolution to the `directories` crate while keeping config at `%APPDATA%\rust-hover-preview\config.ini`.
+- Updated the tray off-trigger label to show the configured key, such as `Enable Off Trigger Key (Alt)`.
+
+### Fixed
+
+- Hardened preview hide behavior so stuck video previews are hidden and ffplay is stopped more aggressively.
+- Added Explorer COM/UIA slow-probe backoff and cache clearing to reduce runaway polling after Explorer gets sluggish.
+- Fixed repeated same-file hover retrigger timing after the preview self-dismisses.
+- Fixed transparent PNG/WebP rendering artifacts by compositing alpha explicitly for each transparency mode.
+- Removed unused Explorer helper functions that produced dead-code warnings.
+
 ## [0.1.8] - 2026-04-29
 
 ### Added
