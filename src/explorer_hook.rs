@@ -74,6 +74,7 @@ const SHELL_VIEW_INDEX_MAX_ITEMS: i32 = 5000;
 const SEARCH_ROOT_INDEX_TTL_MS: u64 = 60000;
 const SEARCH_ROOT_INDEX_MAX_DIRS: usize = 20000;
 const SEARCH_ROOT_INDEX_MAX_FILES: usize = 50000;
+const EXPLORER_PROBE_SLOW_MS: u64 = 700;
 
 static FOLDER_MEDIA_INDEX: Lazy<Mutex<Option<FolderMediaIndex>>> = Lazy::new(|| Mutex::new(None));
 static EXPLORER_FOLDERS_CACHE: Lazy<Mutex<Option<ExplorerFoldersCache>>> =
@@ -84,6 +85,18 @@ static SEARCH_ROOT_MEDIA_INDEX: Lazy<Mutex<Option<SearchRootMediaIndex>>> =
     Lazy::new(|| Mutex::new(None));
 static EXPLORER_LAST_REAL_FOLDERS: Lazy<Mutex<HashMap<isize, String>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
+
+fn clear_explorer_runtime_caches() {
+    if let Ok(mut cache) = EXPLORER_FOLDERS_CACHE.lock() {
+        *cache = None;
+    }
+    if let Ok(mut cache) = SHELL_VIEW_MEDIA_INDEX.lock() {
+        *cache = None;
+    }
+    if let Ok(mut cache) = SEARCH_ROOT_MEDIA_INDEX.lock() {
+        *cache = None;
+    }
+}
 
 fn is_jpeg_extension(ext: &str) -> bool {
     matches!(ext, "jpg" | "jpeg" | "jpe" | "jfif")
@@ -1683,6 +1696,23 @@ fn get_file_under_cursor(automation: Option<&IUIAutomation>) -> Option<PathBuf> 
     }
 }
 
+fn get_file_under_cursor_checked(
+    automation: Option<&IUIAutomation>,
+    slow_probe_count: &mut u32,
+) -> Option<PathBuf> {
+    let started = Instant::now();
+    let result = get_file_under_cursor(automation);
+
+    if started.elapsed() >= Duration::from_millis(EXPLORER_PROBE_SLOW_MS) {
+        *slow_probe_count = slow_probe_count.saturating_add(1);
+        clear_explorer_runtime_caches();
+    } else if result.is_some() {
+        *slow_probe_count = 0;
+    }
+
+    result
+}
+
 /// Quick check if foreground window is Explorer (cheap, no COM)
 fn is_foreground_explorer() -> bool {
     unsafe {
@@ -2163,6 +2193,9 @@ pub fn run_explorer_hook() {
     const FOLDER_PROBE_MS: u64 = 200;
     const HOVER_PROBE_MS: u64 = 120;
     const KEYBOARD_FOCUS_PROBE_MS: u64 = 80;
+    const CONFIG_RELOAD_INTERVAL_MS: u64 = 250;
+    const EXPLORER_SLOW_PROBE_LIMIT: u32 = 3;
+    const EXPLORER_PROBE_BACKOFF_MS: u64 = 1500;
 
     // How often to re-evaluate the state when in sleep modes
     const STATE_RECHECK_DEEP_MS: u64 = 2000; // When no Explorer windows
@@ -2170,27 +2203,73 @@ pub fn run_explorer_hook() {
     const STATE_RECHECK_MEDIUM_MS: u64 = 300; // When visible but not focused
     const STATE_RECHECK_ACTIVE_MS: u64 = 100; // When active
 
+    let mut config_snapshot = CONFIG
+        .lock()
+        .map(|mut c| {
+            c.reload_from_disk();
+            (
+                c.preview_enabled,
+                c.hover_delay_ms,
+                c.enable_off_trigger_key,
+                c.off_trigger_key.clone(),
+                c.same_file_rehover_delay_ms,
+            )
+        })
+        .unwrap_or((true, 0, true, "alt".to_string(), 750));
+    let mut last_config_reload = Instant::now();
+    let mut slow_explorer_probe_count = 0u32;
+    let mut explorer_probe_backoff_until: Option<Instant> = None;
+
     while RUNNING.load(Ordering::SeqCst) {
-        // Check if preview is enabled
+        if slow_explorer_probe_count >= EXPLORER_SLOW_PROBE_LIMIT {
+            explorer_probe_backoff_until =
+                Some(Instant::now() + Duration::from_millis(EXPLORER_PROBE_BACKOFF_MS));
+            clear_explorer_runtime_caches();
+            continue;
+        }
+
+        if let Some(until) = explorer_probe_backoff_until {
+            if Instant::now() < until {
+                if last_file.is_some() || keyboard_file.is_some() || is_keyboard_hover {
+                    hide_preview();
+                }
+                last_file = None;
+                keyboard_file = None;
+                is_keyboard_hover = false;
+                hover_start = None;
+                video_hover_guard_until = None;
+                std::thread::sleep(Duration::from_millis(MEDIUM_SLEEP_MS));
+                continue;
+            }
+
+            explorer_probe_backoff_until = None;
+            slow_explorer_probe_count = 0;
+            clear_explorer_runtime_caches();
+            current_state = get_explorer_state();
+            last_state_check = Instant::now();
+        }
+
+        if last_config_reload.elapsed() >= Duration::from_millis(CONFIG_RELOAD_INTERVAL_MS) {
+            last_config_reload = Instant::now();
+            if let Ok(mut config) = CONFIG.lock() {
+                config.reload_from_disk();
+                config_snapshot = (
+                    config.preview_enabled,
+                    config.hover_delay_ms,
+                    config.enable_off_trigger_key,
+                    config.off_trigger_key.clone(),
+                    config.same_file_rehover_delay_ms,
+                );
+            }
+        }
+
         let (
             preview_enabled,
             hover_delay_ms,
             enable_off_trigger_key,
             off_trigger_key,
             same_file_rehover_delay_ms,
-        ) = CONFIG
-            .lock()
-            .map(|mut c| {
-                c.reload_from_disk();
-                (
-                    c.preview_enabled,
-                    c.hover_delay_ms,
-                    c.enable_off_trigger_key,
-                    c.off_trigger_key.clone(),
-                    c.same_file_rehover_delay_ms,
-                )
-            })
-            .unwrap_or((true, 0, true, "alt".to_string(), 200));
+        ) = config_snapshot.clone();
 
         let off_trigger_active =
             enable_off_trigger_key && is_off_trigger_key_down(&off_trigger_key);
@@ -2435,7 +2514,9 @@ pub fn run_explorer_hook() {
                 allow_keyboard_preview_on_first_observation = false;
 
                 if let Some(suppressed_file) = suppressed_hover_file.as_ref() {
-                    if let Some(current_file) = get_file_under_cursor(uia.as_ref()) {
+                    if let Some(current_file) =
+                        get_file_under_cursor_checked(uia.as_ref(), &mut slow_explorer_probe_count)
+                    {
                         if same_path(suppressed_file, &current_file) {
                             hover_start = Some(Instant::now());
                             continue;
@@ -2476,7 +2557,9 @@ pub fn run_explorer_hook() {
                 // While moving (including list scrolling), avoid heavy accessibility
                 // resolution and wait until hover is stable before probing media.
                 if last_file.is_some() {
-                    if let Some(current_file) = get_file_under_cursor(uia.as_ref()) {
+                    if let Some(current_file) =
+                        get_file_under_cursor_checked(uia.as_ref(), &mut slow_explorer_probe_count)
+                    {
                         if last_file
                             .as_ref()
                             .map(|last| same_path(last, &current_file))
@@ -2638,7 +2721,9 @@ pub fn run_explorer_hook() {
                     last_hover_probe = Instant::now();
 
                     // Try to get file under cursor
-                    if let Some(file_path) = get_file_under_cursor(uia.as_ref()) {
+                    if let Some(file_path) =
+                        get_file_under_cursor_checked(uia.as_ref(), &mut slow_explorer_probe_count)
+                    {
                         if !last_file
                             .as_ref()
                             .map(|last| same_path(last, &file_path))
