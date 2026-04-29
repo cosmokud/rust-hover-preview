@@ -44,6 +44,7 @@ pub struct AppConfig {
     pub confirm_file_type: bool,
     pub follow_cursor: bool,
     pub turbo_mode: bool,
+    pub same_file_rehover_delay_ms: u64,
     pub transparent_background: TransparentBackground,
     pub video_volume: u32,
 }
@@ -59,6 +60,7 @@ impl Default for AppConfig {
             confirm_file_type: false,
             follow_cursor: false,
             turbo_mode: true,
+            same_file_rehover_delay_ms: 200,
             transparent_background: TransparentBackground::Black,
             video_volume: 0, // Mute by default
         }
@@ -135,6 +137,11 @@ impl AppConfig {
             );
             ini.set(
                 CONFIG_SECTION,
+                "same_file_rehover_delay_ms",
+                Some(self.same_file_rehover_delay_ms.to_string()),
+            );
+            ini.set(
+                CONFIG_SECTION,
                 "transparent_background",
                 Some(self.transparent_background.as_str().to_string()),
             );
@@ -174,6 +181,9 @@ impl AppConfig {
         }
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "turbo_mode") {
             self.turbo_mode = value;
+        }
+        if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "same_file_rehover_delay_ms") {
+            self.same_file_rehover_delay_ms = value;
         }
         if let Some(value) = ini.get(CONFIG_SECTION, "transparent_background") {
             if let Some(background) = TransparentBackground::from_str(&value) {
