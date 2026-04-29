@@ -1,3 +1,4 @@
+use crate::config::TransparentBackground;
 use crate::{CONFIG, RUNNING};
 use gif::DecodeOptions;
 use image::GenericImageView;
@@ -9,24 +10,26 @@ use std::io::{BufReader, Write};
 use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
+use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 use windows::core::{w, PCWSTR};
-use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, EndPaint, InvalidateRect, SetStretchBltMode, StretchDIBits, BITMAPINFO,
-    BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, HALFTONE, PAINTSTRUCT, SRCCOPY,
+    BeginPaint, CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, EndPaint,
+    SelectObject, AC_SRC_ALPHA, AC_SRC_OVER, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, BLENDFUNCTION,
+    DIB_RGB_COLORS, PAINTSTRUCT,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DispatchMessageW, EnumWindows, GetSystemMetrics, GetWindow,
     GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, IsWindowVisible, LoadCursorW,
-    MoveWindow, PeekMessageW, RegisterClassExW, SetLayeredWindowAttributes, SetWindowLongPtrW,
-    SetWindowPos, ShowWindow, TranslateMessage, CS_HREDRAW, CS_VREDRAW, GWL_EXSTYLE, GW_OWNER,
-    HWND_TOPMOST, IDC_ARROW, LWA_ALPHA, MSG, PM_REMOVE, SM_CXSCREEN, SM_CYSCREEN, SWP_NOACTIVATE,
-    SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SW_HIDE, SW_SHOWNOACTIVATE, WNDCLASSEXW, WS_EX_LAYERED,
+    MoveWindow, PeekMessageW, RegisterClassExW, SetWindowLongPtrW, SetWindowPos, ShowWindow,
+    TranslateMessage, UpdateLayeredWindow, CS_HREDRAW, CS_VREDRAW, GWL_EXSTYLE, GW_OWNER,
+    HWND_TOPMOST, IDC_ARROW, MSG, PM_REMOVE, SM_CXSCREEN, SM_CYSCREEN, SWP_NOACTIVATE, SWP_NOMOVE,
+    SWP_NOSIZE, SWP_SHOWWINDOW, SW_HIDE, SW_SHOWNOACTIVATE, ULW_ALPHA, WNDCLASSEXW, WS_EX_LAYERED,
     WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
@@ -61,6 +64,7 @@ pub enum PreviewMessage {
     Show(PathBuf, i32, i32),
     ShowKeyboard(PathBuf, i32, i32, i32, i32),
     Hide,
+    Refresh,
 }
 
 /// Represents different types of media we can display
@@ -274,6 +278,14 @@ pub fn hide_preview() {
     }
 }
 
+pub fn refresh_preview() {
+    if let Ok(sender) = PREVIEW_SENDER.lock() {
+        if let Some(ref tx) = *sender {
+            let _ = tx.send(PreviewMessage::Refresh);
+        }
+    }
+}
+
 /// Check if cursor is currently over the IMAGE preview window only
 pub fn is_cursor_over_image_preview() -> bool {
     unsafe {
@@ -409,6 +421,75 @@ fn rgba_to_bgra(rgba: &[u8]) -> Vec<u8> {
         }
     }
     bgra
+}
+
+fn current_transparent_background() -> TransparentBackground {
+    CONFIG
+        .lock()
+        .map(|cfg| cfg.transparent_background)
+        .unwrap_or(TransparentBackground::Transparent)
+}
+
+fn checkerboard_color(x: u32, y: u32) -> (u8, u8, u8) {
+    if ((x / 16) + (y / 16)) % 2 == 0 {
+        (224, 224, 224)
+    } else {
+        (144, 144, 144)
+    }
+}
+
+fn compose_preview_pixels(
+    bgra: &[u8],
+    width: u32,
+    height: u32,
+    background: TransparentBackground,
+) -> Vec<u8> {
+    let mut out = Vec::with_capacity(bgra.len());
+
+    for (idx, px) in bgra.chunks(4).enumerate() {
+        if px.len() != 4 {
+            continue;
+        }
+
+        let b = px[0] as u32;
+        let g = px[1] as u32;
+        let r = px[2] as u32;
+        let a = px[3] as u32;
+
+        match background {
+            TransparentBackground::Transparent => {
+                out.push(((b * a + 127) / 255) as u8);
+                out.push(((g * a + 127) / 255) as u8);
+                out.push(((r * a + 127) / 255) as u8);
+                out.push(a as u8);
+            }
+            TransparentBackground::Black
+            | TransparentBackground::White
+            | TransparentBackground::Checkerboard => {
+                let x = (idx as u32) % width;
+                let y = (idx as u32) / width;
+                let (bg_b, bg_g, bg_r) = match background {
+                    TransparentBackground::Black => (0, 0, 0),
+                    TransparentBackground::White => (255, 255, 255),
+                    TransparentBackground::Checkerboard => checkerboard_color(x, y),
+                    TransparentBackground::Transparent => unreachable!(),
+                };
+                let inv_a = 255 - a;
+
+                out.push(((b * a + (bg_b as u32) * inv_a + 127) / 255) as u8);
+                out.push(((g * a + (bg_g as u32) * inv_a + 127) / 255) as u8);
+                out.push(((r * a + (bg_r as u32) * inv_a + 127) / 255) as u8);
+                out.push(255);
+            }
+        }
+    }
+
+    let expected = width as usize * height as usize * 4;
+    if out.len() < expected {
+        out.resize(expected, 0);
+    }
+
+    out
 }
 
 /// Scale image dimensions to fit within max bounds while maintaining aspect ratio
@@ -1805,6 +1886,126 @@ struct PendingLoad {
     spinner_shown: bool,
 }
 
+unsafe fn render_layered_preview(hwnd: HWND) {
+    let Some((width, height, pixels)) = (|| {
+        let media_guard = CURRENT_MEDIA.lock().ok()?;
+        let media = media_guard.as_ref()?;
+
+        if matches!(media.media_type, MediaType::Video) {
+            return None;
+        }
+
+        let width = media.current_width();
+        let height = media.current_height();
+        let expected_size = width as usize * height as usize * 4;
+        if width == 0 || height == 0 || media.current_pixels().len() < expected_size {
+            return None;
+        }
+
+        let paint_pixels = if media.should_draw_streaming_overlay() {
+            let elapsed = media
+                .loading_start
+                .map(|s| s.elapsed().as_secs_f32())
+                .unwrap_or(0.0);
+            let angle = elapsed * 2.0 * std::f32::consts::PI * 1.2;
+            let mut buf = media.current_pixels().to_vec();
+            overlay_loading_spinner(&mut buf, width, height, angle);
+            buf
+        } else {
+            media.current_pixels().to_vec()
+        };
+
+        Some((
+            width,
+            height,
+            compose_preview_pixels(
+                &paint_pixels,
+                width,
+                height,
+                current_transparent_background(),
+            ),
+        ))
+    })() else {
+        return;
+    };
+
+    let mut rect = RECT::default();
+    if GetWindowRect(hwnd, &mut rect).is_err() {
+        return;
+    }
+
+    let bmi = BITMAPINFO {
+        bmiHeader: BITMAPINFOHEADER {
+            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+            biWidth: width as i32,
+            biHeight: -(height as i32),
+            biPlanes: 1,
+            biBitCount: 32,
+            biCompression: BI_RGB.0,
+            biSizeImage: 0,
+            biXPelsPerMeter: 0,
+            biYPelsPerMeter: 0,
+            biClrUsed: 0,
+            biClrImportant: 0,
+        },
+        bmiColors: [Default::default()],
+    };
+
+    let mem_dc = CreateCompatibleDC(None);
+    if mem_dc.0.is_null() {
+        return;
+    }
+
+    let mut bits: *mut core::ffi::c_void = ptr::null_mut();
+    let Ok(bitmap) = CreateDIBSection(mem_dc, &bmi, DIB_RGB_COLORS, &mut bits, None, 0) else {
+        let _ = DeleteDC(mem_dc);
+        return;
+    };
+
+    if bits.is_null() {
+        let _ = DeleteObject(bitmap);
+        let _ = DeleteDC(mem_dc);
+        return;
+    }
+
+    ptr::copy_nonoverlapping(pixels.as_ptr(), bits as *mut u8, pixels.len());
+
+    let old_bitmap = SelectObject(mem_dc, bitmap);
+    let dst_point = POINT {
+        x: rect.left,
+        y: rect.top,
+    };
+    let size = SIZE {
+        cx: width as i32,
+        cy: height as i32,
+    };
+    let src_point = POINT { x: 0, y: 0 };
+    let blend = BLENDFUNCTION {
+        BlendOp: AC_SRC_OVER as u8,
+        BlendFlags: 0,
+        SourceConstantAlpha: 255,
+        AlphaFormat: AC_SRC_ALPHA as u8,
+    };
+
+    let _ = UpdateLayeredWindow(
+        hwnd,
+        None,
+        Some(&dst_point),
+        Some(&size),
+        mem_dc,
+        Some(&src_point),
+        COLORREF(0),
+        Some(&blend),
+        ULW_ALPHA,
+    );
+
+    if !old_bitmap.0.is_null() {
+        let _ = SelectObject(mem_dc, old_bitmap);
+    }
+    let _ = DeleteObject(bitmap);
+    let _ = DeleteDC(mem_dc);
+}
+
 unsafe extern "system" fn window_proc(
     hwnd: HWND,
     msg: u32,
@@ -1814,83 +2015,8 @@ unsafe extern "system" fn window_proc(
     match msg {
         windows::Win32::UI::WindowsAndMessaging::WM_PAINT => {
             let mut ps = PAINTSTRUCT::default();
-            let hdc = BeginPaint(hwnd, &mut ps);
-
-            if let Ok(media_guard) = CURRENT_MEDIA.lock() {
-                if let Some(ref media) = *media_guard {
-                    // Don't paint for video - ffplay handles its own window
-                    if !matches!(media.media_type, MediaType::Video) {
-                        // Validate pixel buffer before painting
-                        let expected_size = (media.current_width() as usize)
-                            * (media.current_height() as usize)
-                            * 4;
-                        if media.current_width() == 0
-                            || media.current_height() == 0
-                            || media.current_pixels().len() < expected_size
-                        {
-                            let _ = EndPaint(hwnd, &ps);
-                            return LRESULT(0);
-                        }
-
-                        // If we're still waiting for streamed frames, overlay a loading spinner
-                        let paint_pixels: std::borrow::Cow<[u8]> =
-                            if media.should_draw_streaming_overlay() {
-                                let elapsed = media
-                                    .loading_start
-                                    .map(|s| s.elapsed().as_secs_f32())
-                                    .unwrap_or(0.0);
-                                let angle = elapsed * 2.0 * std::f32::consts::PI * 1.2;
-                                let mut buf = media.current_pixels().to_vec();
-                                overlay_loading_spinner(
-                                    &mut buf,
-                                    media.current_width(),
-                                    media.current_height(),
-                                    angle,
-                                );
-                                std::borrow::Cow::Owned(buf)
-                            } else {
-                                std::borrow::Cow::Borrowed(media.current_pixels())
-                            };
-
-                        // Create bitmap info
-                        let bmi = BITMAPINFO {
-                            bmiHeader: BITMAPINFOHEADER {
-                                biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-                                biWidth: media.current_width() as i32,
-                                biHeight: -(media.current_height() as i32), // Negative for top-down
-                                biPlanes: 1,
-                                biBitCount: 32,
-                                biCompression: BI_RGB.0,
-                                biSizeImage: 0,
-                                biXPelsPerMeter: 0,
-                                biYPelsPerMeter: 0,
-                                biClrUsed: 0,
-                                biClrImportant: 0,
-                            },
-                            bmiColors: [Default::default()],
-                        };
-
-                        SetStretchBltMode(hdc, HALFTONE);
-
-                        StretchDIBits(
-                            hdc,
-                            0,
-                            0,
-                            media.current_width() as i32,
-                            media.current_height() as i32,
-                            0,
-                            0,
-                            media.current_width() as i32,
-                            media.current_height() as i32,
-                            Some(paint_pixels.as_ptr() as *const _),
-                            &bmi,
-                            DIB_RGB_COLORS,
-                            SRCCOPY,
-                        );
-                    }
-                }
-            }
-
+            let _ = BeginPaint(hwnd, &mut ps);
+            render_layered_preview(hwnd);
             let _ = EndPaint(hwnd, &ps);
             LRESULT(0)
         }
@@ -2231,9 +2357,6 @@ pub fn run_preview_window() {
         )
         .unwrap();
 
-        // Set window fully opaque (255 = no transparency)
-        SetLayeredWindowAttributes(hwnd, COLORREF(0), 255, LWA_ALPHA).ok();
-
         // Store HWND as isize
         PREVIEW_HWND.store(hwnd.0 as isize, Ordering::SeqCst);
 
@@ -2291,7 +2414,7 @@ pub fn run_preview_window() {
                 }
             }
             if needs_repaint {
-                let _ = InvalidateRect(hwnd, None, false);
+                render_layered_preview(hwnd);
             }
 
             // Check for completed background loads
@@ -2327,7 +2450,7 @@ pub fn run_preview_window() {
                             }
                             pending_load = None;
                             pending_load_cancel = None;
-                            let _ = InvalidateRect(hwnd, None, true);
+                            render_layered_preview(hwnd);
                         }
                         None => {
                             // Loading failed, hide window
@@ -2371,7 +2494,7 @@ pub fn run_preview_window() {
                         SWP_NOACTIVATE | SWP_SHOWWINDOW,
                     );
                     let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
-                    let _ = InvalidateRect(hwnd, None, true);
+                    render_layered_preview(hwnd);
                 }
             }
 
@@ -2448,6 +2571,9 @@ pub fn run_preview_window() {
                         }
                         current_video_path = None;
                         video_pos = (0, 0, 0, 0);
+                    }
+                    PreviewMessage::Refresh => {
+                        render_layered_preview(hwnd);
                     }
                 }
 
