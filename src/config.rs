@@ -58,7 +58,7 @@ impl Default for AppConfig {
             off_trigger_key: "alt".to_string(),
             confirm_file_type: false,
             follow_cursor: false,
-            same_file_rehover_delay_ms: 200,
+            same_file_rehover_delay_ms: 750,
             transparent_background: TransparentBackground::Black,
             video_volume: 0, // Mute by default
         }

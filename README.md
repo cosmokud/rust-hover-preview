@@ -105,7 +105,7 @@ Example:
 [settings]
 run_at_startup=true
 hover_delay_ms=0
-same_file_rehover_delay_ms=200
+same_file_rehover_delay_ms=750
 preview_enabled=true
 enable_off_trigger_key=true
 off_trigger_key=alt
