@@ -332,10 +332,6 @@ fn search_ms_location_from_url(url_str: &str) -> Option<String> {
     None
 }
 
-fn location_url_to_folder_path(url_str: &str) -> Option<String> {
-    normalize_file_url_path(url_str).or_else(|| search_ms_location_from_url(url_str))
-}
-
 fn is_usable_folder_path(path: &str) -> bool {
     let path = path.trim();
     !path.is_empty() && PathBuf::from(path).is_dir()
@@ -746,40 +742,6 @@ fn get_current_explorer_search_root() -> Option<String> {
     }
 }
 
-fn get_shell_view_for_hwnd(hwnd: HWND) -> Option<IShellFolderViewDual> {
-    let hwnd_key = hwnd.0 as isize;
-
-    unsafe {
-        let shell_windows =
-            CoCreateInstance::<_, IShellWindows>(&ShellWindows, None, CLSCTX_ALL).ok()?;
-        let count = shell_windows.Count().ok()?;
-
-        for i in 0..count {
-            let variant = VARIANT::from(i);
-            let disp = match shell_windows.Item(&variant) {
-                Ok(disp) => disp,
-                Err(_) => continue,
-            };
-            let browser = match disp.cast::<windows::Win32::UI::Shell::IWebBrowser2>() {
-                Ok(browser) => browser,
-                Err(_) => continue,
-            };
-            let browser_hwnd = match browser.HWND() {
-                Ok(browser_hwnd) => browser_hwnd,
-                Err(_) => continue,
-            };
-            if browser_hwnd.0 != hwnd_key {
-                continue;
-            }
-
-            let document = browser.Document().ok()?;
-            return document.cast::<IShellFolderViewDual>().ok();
-        }
-    }
-
-    None
-}
-
 fn get_focused_shell_view_media_path(item: &FocusedItemInfo) -> Option<PathBuf> {
     let focus_point = POINT {
         x: item.rect.left + (item.rect.right - item.rect.left) / 2,
@@ -1061,11 +1023,6 @@ fn lookup_media_in_search_root_index(root: &str, item_name: &str) -> Option<Path
     }
 
     None
-}
-
-fn find_media_in_current_search_root(item_name: &str) -> Option<PathBuf> {
-    let root = get_current_explorer_search_root()?;
-    lookup_media_in_search_root_index(&root, item_name)
 }
 
 /// Find which Explorer folder the cursor is currently over
