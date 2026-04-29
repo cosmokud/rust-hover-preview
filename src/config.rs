@@ -1,5 +1,5 @@
 use configparser::ini::Ini;
-use std::env;
+use directories::BaseDirs;
 use std::fs;
 use std::path::PathBuf;
 
@@ -67,9 +67,11 @@ impl Default for AppConfig {
 
 impl AppConfig {
     pub fn config_path() -> Option<PathBuf> {
-        env::var_os("APPDATA")
-            .map(PathBuf::from)
-            .map(|base| base.join("rust-hover-preview").join("config.ini"))
+        BaseDirs::new().map(|dirs| {
+            dirs.config_dir()
+                .join("rust-hover-preview")
+                .join("config.ini")
+        })
     }
 
     pub fn load() -> Self {

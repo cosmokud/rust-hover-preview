@@ -46,6 +46,7 @@ once_cell = "1.19"
 
 # For configuration storage
 configparser = "1.0"
+directories = "6.0"
 
 [build-dependencies]
 winres = "0.1"
@@ -74,7 +75,19 @@ main = true
 [package.metadata.packager.nsis]
 installMode = "currentUser"
 installer-icon = "assets/icon.ico"
-appdata-paths = ["$LOCALAPPDATA/$PRODUCTNAME"]
+appdata-paths = ["$APPDATA/rust-hover-preview"]
+preinstall-section = """
+Section PreInstall
+  StrCpy $INSTDIR "$LOCALAPPDATA\\rust-hover-preview"
+  IfFileExists "$LOCALAPPDATA\\Rust Hover Preview\\rust-hover-preview.exe" 0 +2
+    Delete "$LOCALAPPDATA\\Rust Hover Preview\\rust-hover-preview.exe"
+  IfFileExists "$LOCALAPPDATA\\Rust Hover Preview\\uninstall.exe" 0 +2
+    Delete "$LOCALAPPDATA\\Rust Hover Preview\\uninstall.exe"
+  IfFileExists "$LOCALAPPDATA\\Rust Hover Preview\\uninstaller.exe" 0 +2
+    Delete "$LOCALAPPDATA\\Rust Hover Preview\\uninstaller.exe"
+  RMDir "$LOCALAPPDATA\\Rust Hover Preview"
+SectionEnd
+"""
 
 [package.metadata.packager.wix]
 template = "packaging/wix/per-user-localappdata.wxs"
