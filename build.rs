@@ -11,7 +11,7 @@ fn main() {
         res.set("ProductName", "Rust Hover Preview");
         res.set(
             "FileDescription",
-            "Image and video preview on hover in Windows Explorer",
+            "Rust Hover Preview",
         );
         res.set("LegalCopyright", "Copyright 2026");
         if let Err(e) = res.compile() {
