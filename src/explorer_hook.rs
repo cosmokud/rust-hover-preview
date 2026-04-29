@@ -75,6 +75,7 @@ const SEARCH_ROOT_INDEX_TTL_MS: u64 = 60000;
 const SEARCH_ROOT_INDEX_MAX_DIRS: usize = 20000;
 const SEARCH_ROOT_INDEX_MAX_FILES: usize = 50000;
 const EXPLORER_PROBE_SLOW_MS: u64 = 700;
+const EXPLORER_WINDOW_CACHE_TTL_MS: u64 = 1000;
 
 static FOLDER_MEDIA_INDEX: Lazy<Mutex<Option<FolderMediaIndex>>> = Lazy::new(|| Mutex::new(None));
 static EXPLORER_FOLDERS_CACHE: Lazy<Mutex<Option<ExplorerFoldersCache>>> =
@@ -84,6 +85,8 @@ static SHELL_VIEW_MEDIA_INDEX: Lazy<Mutex<Option<ShellViewMediaIndex>>> =
 static SEARCH_ROOT_MEDIA_INDEX: Lazy<Mutex<Option<SearchRootMediaIndex>>> =
     Lazy::new(|| Mutex::new(None));
 static EXPLORER_LAST_REAL_FOLDERS: Lazy<Mutex<HashMap<isize, String>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+static EXPLORER_WINDOW_CACHE: Lazy<Mutex<HashMap<isize, (bool, Instant)>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
 fn is_jpeg_extension(ext: &str) -> bool {
@@ -887,6 +890,19 @@ fn find_media_in_current_shell_view(item_name: &str) -> Option<PathBuf> {
     find_media_in_shell_view(hwnd, item_name)
 }
 
+fn lookup_media_in_hover_folder(
+    item_name: &str,
+    current_folder_hint: Option<&str>,
+) -> Option<PathBuf> {
+    if let Some(folder) = current_folder_hint {
+        if let Some(path) = find_media_in_folder(folder, item_name) {
+            return Some(path);
+        }
+    }
+
+    get_current_explorer_folder().and_then(|folder| find_media_in_folder(&folder, item_name))
+}
+
 fn add_search_index_path(index: &mut SearchRootMediaIndex, path: &PathBuf) {
     if let Some(file_name) = path.file_name().and_then(|s| s.to_str()) {
         index
@@ -1562,7 +1578,10 @@ fn get_item_under_cursor_uia(automation: &IUIAutomation) -> Option<Accessibility
     None
 }
 
-fn get_file_under_cursor(automation: Option<&IUIAutomation>) -> Option<PathBuf> {
+fn get_file_under_cursor(
+    automation: Option<&IUIAutomation>,
+    current_folder_hint: Option<&str>,
+) -> Option<PathBuf> {
     // Prefer the cheap accessibility/UIA path first. In normal folders this
     // usually gives us a display name that we can resolve via the folder index
     // without touching Shell view enumeration.
@@ -1577,36 +1596,6 @@ fn get_file_under_cursor(automation: Option<&IUIAutomation>) -> Option<PathBuf> 
                 }
             }
             AccessibilityResult::FileName(item_name) => {
-                let current_url = get_current_explorer_location_url();
-                let current_is_search_view = current_url
-                    .as_deref()
-                    .map(is_search_ms_url)
-                    .unwrap_or(false);
-                let current_search_root = get_current_explorer_search_root();
-
-                // Search views are not normal folders. First emulate the known-good
-                // workaround: resolve the filename against this same Explorer window's
-                // original folder, cached before/while it entered search mode.
-                if let Some(root) = current_search_root.as_deref() {
-                    if let Some(path) = find_media_in_folder(root, &item_name) {
-                        return Some(path);
-                    }
-                }
-
-                // Shell-view metadata indexing is only useful for search results.
-                // In normal folders it can enumerate every item in the view, which
-                // becomes expensive in large directories.
-                if current_is_search_view {
-                    if let Some(path) = find_media_in_current_shell_view(&item_name) {
-                        return Some(path);
-                    }
-                    if let Some(root) = current_search_root.as_deref() {
-                        if let Some(path) = lookup_media_in_search_root_index(root, &item_name) {
-                            return Some(path);
-                        }
-                    }
-                }
-
                 // Also try treating item_name as a potential full path
                 let potential_path = PathBuf::from(&item_name);
                 if potential_path.is_absolute()
@@ -1616,24 +1605,35 @@ fn get_file_under_cursor(automation: Option<&IUIAutomation>) -> Option<PathBuf> 
                     return Some(potential_path);
                 }
 
-                // In Explorer search mode, never use unrelated Explorer windows as a
-                // fallback. The same-folder second window worked only by accident; the
-                // cached search root above is the intentional replacement.
-                if !current_is_search_view {
-                    // First try the Explorer folder currently under cursor.
-                    // This avoids accidental matches from other windows/tabs.
-                    if let Some(folder) = get_current_explorer_folder() {
-                        if let Some(path) = find_media_in_folder(&folder, &item_name) {
+                // Stay focused on the currently hovered Explorer folder before any
+                // broader Shell/search work.
+                if let Some(path) = lookup_media_in_hover_folder(&item_name, current_folder_hint) {
+                    return Some(path);
+                }
+
+                let current_url = get_current_explorer_location_url();
+                let current_is_search_view = current_url
+                    .as_deref()
+                    .map(is_search_ms_url)
+                    .unwrap_or(false);
+
+                if current_is_search_view {
+                    let current_search_root = get_current_explorer_search_root();
+
+                    // Search views are not normal folders. First emulate the known-good
+                    // workaround: resolve the filename against this same Explorer window's
+                    // original folder, cached before/while it entered search mode.
+                    if let Some(root) = current_search_root.as_deref() {
+                        if let Some(path) = find_media_in_folder(root, &item_name) {
                             return Some(path);
                         }
                     }
 
-                    // Fallback: search all Explorer folders (all windows and tabs)
-                    let all_folders = get_all_explorer_folders();
-
-                    // Try to find the file in ANY of the open Explorer folders
-                    for (_, folder) in &all_folders {
-                        if let Some(path) = find_media_in_folder(folder, &item_name) {
+                    if let Some(path) = find_media_in_current_shell_view(&item_name) {
+                        return Some(path);
+                    }
+                    if let Some(root) = current_search_root.as_deref() {
+                        if let Some(path) = lookup_media_in_search_root_index(root, &item_name) {
                             return Some(path);
                         }
                     }
@@ -1649,10 +1649,11 @@ fn get_file_under_cursor(automation: Option<&IUIAutomation>) -> Option<PathBuf> 
 
 fn get_file_under_cursor_checked(
     automation: Option<&IUIAutomation>,
+    current_folder_hint: Option<&str>,
     slow_probe_count: &mut u32,
 ) -> Option<PathBuf> {
     let started = Instant::now();
-    let result = get_file_under_cursor(automation);
+    let result = get_file_under_cursor(automation, current_folder_hint);
 
     if started.elapsed() >= Duration::from_millis(EXPLORER_PROBE_SLOW_MS) {
         *slow_probe_count = slow_probe_count.saturating_add(1);
@@ -1937,6 +1938,20 @@ fn is_cursor_over_explorer_full() -> bool {
 }
 
 fn is_explorer_window(hwnd: HWND) -> bool {
+    let hwnd_key = hwnd.0 as isize;
+    if hwnd_key == 0 {
+        return false;
+    }
+
+    if let Ok(cache) = EXPLORER_WINDOW_CACHE.lock() {
+        if let Some((is_explorer, cached_at)) = cache.get(&hwnd_key) {
+            if cached_at.elapsed() <= Duration::from_millis(EXPLORER_WINDOW_CACHE_TTL_MS) {
+                return *is_explorer;
+            }
+        }
+    }
+
+    let mut is_explorer = false;
     unsafe {
         let mut class_name = [0u16; 256];
         let len = GetClassNameW(hwnd, &mut class_name);
@@ -1950,37 +1965,46 @@ fn is_explorer_window(hwnd: HWND) -> bool {
 
         // Check for common Explorer window classes
         if class_str.contains("cabinetwclass") || class_str.contains("explorerwclass") {
-            return true;
-        }
+            is_explorer = true;
+        } else {
+            // Fallback: check process name
+            let mut process_id: u32 = 0;
+            GetWindowThreadProcessId(hwnd, Some(&mut process_id));
 
-        // Fallback: check process name
-        let mut process_id: u32 = 0;
-        GetWindowThreadProcessId(hwnd, Some(&mut process_id));
-
-        if let Ok(handle) = windows::Win32::System::Threading::OpenProcess(
-            windows::Win32::System::Threading::PROCESS_QUERY_LIMITED_INFORMATION,
-            false,
-            process_id,
-        ) {
-            let mut buffer = [0u16; 260];
-            let mut size = buffer.len() as u32;
-            if windows::Win32::System::Threading::QueryFullProcessImageNameW(
-                handle,
-                windows::Win32::System::Threading::PROCESS_NAME_WIN32,
-                windows::core::PWSTR(buffer.as_mut_ptr()),
-                &mut size,
-            )
-            .is_ok()
-            {
-                let path = OsString::from_wide(&buffer[..size as usize]);
-                let path_str = path.to_string_lossy().to_lowercase();
+            if let Ok(handle) = windows::Win32::System::Threading::OpenProcess(
+                windows::Win32::System::Threading::PROCESS_QUERY_LIMITED_INFORMATION,
+                false,
+                process_id,
+            ) {
+                let mut buffer = [0u16; 260];
+                let mut size = buffer.len() as u32;
+                if windows::Win32::System::Threading::QueryFullProcessImageNameW(
+                    handle,
+                    windows::Win32::System::Threading::PROCESS_NAME_WIN32,
+                    windows::core::PWSTR(buffer.as_mut_ptr()),
+                    &mut size,
+                )
+                .is_ok()
+                {
+                    let path = OsString::from_wide(&buffer[..size as usize]);
+                    let path_str = path.to_string_lossy().to_lowercase();
+                    is_explorer = path_str.contains("explorer.exe");
+                }
                 let _ = windows::Win32::Foundation::CloseHandle(handle);
-                return path_str.contains("explorer.exe");
             }
-            let _ = windows::Win32::Foundation::CloseHandle(handle);
         }
     }
-    false
+
+    if let Ok(mut cache) = EXPLORER_WINDOW_CACHE.lock() {
+        if cache.len() >= 512 {
+            cache.retain(|_, (_, cached_at)| {
+                cached_at.elapsed() <= Duration::from_millis(EXPLORER_WINDOW_CACHE_TTL_MS)
+            });
+        }
+        cache.insert(hwnd_key, (is_explorer, Instant::now()));
+    }
+
+    is_explorer
 }
 
 /// Information about a focused item from Explorer's accessibility tree
@@ -2042,33 +2066,10 @@ fn resolve_focused_item_to_path(item: &FocusedItemInfo) -> Option<PathBuf> {
             }
         }
         AccessibilityResult::FileName(item_name) => {
-            let current_url = get_current_explorer_location_url();
-            let current_is_search_view = current_url
-                .as_deref()
-                .map(is_search_ms_url)
-                .unwrap_or(false);
-            let current_search_root = get_current_explorer_search_root();
-
             // Keyboard focus has a direct Shell view focused item even in search-ms
             // results. Prefer that full path when Explorer exposes it.
             if let Some(path) = get_focused_shell_view_media_path(item) {
                 return Some(path);
-            }
-
-            // Search mode: emulate the same-folder second-window workaround with
-            // this window's cached root, then try Shell metadata and recursive root lookup.
-            if let Some(root) = current_search_root.as_deref() {
-                if let Some(path) = find_media_in_folder(root, item_name) {
-                    return Some(path);
-                }
-            }
-            if let Some(path) = find_media_in_current_shell_view(item_name) {
-                return Some(path);
-            }
-            if let Some(root) = current_search_root.as_deref() {
-                if let Some(path) = lookup_media_in_search_root_index(root, item_name) {
-                    return Some(path);
-                }
             }
 
             // Try as a potential full path
@@ -2080,18 +2081,36 @@ fn resolve_focused_item_to_path(item: &FocusedItemInfo) -> Option<PathBuf> {
                 return Some(potential_path);
             }
 
-            // Search mode must not resolve through another Explorer window.
-            if current_is_search_view {
-                return None;
+            if let Some(path) = lookup_media_in_hover_folder(item_name, None) {
+                return Some(path);
             }
 
-            // Search all open Explorer folder paths
-            let all_folders = get_all_explorer_folders();
-            for (_, folder) in &all_folders {
-                if let Some(path) = find_media_in_folder(folder, item_name) {
+            let current_url = get_current_explorer_location_url();
+            let current_is_search_view = current_url
+                .as_deref()
+                .map(is_search_ms_url)
+                .unwrap_or(false);
+
+            if current_is_search_view {
+                let current_search_root = get_current_explorer_search_root();
+
+                // Search mode: emulate the same-folder second-window workaround with
+                // this window's cached root, then try Shell metadata and recursive root lookup.
+                if let Some(root) = current_search_root.as_deref() {
+                    if let Some(path) = find_media_in_folder(root, item_name) {
+                        return Some(path);
+                    }
+                }
+                if let Some(path) = find_media_in_current_shell_view(item_name) {
                     return Some(path);
                 }
+                if let Some(root) = current_search_root.as_deref() {
+                    if let Some(path) = lookup_media_in_search_root_index(root, item_name) {
+                        return Some(path);
+                    }
+                }
             }
+
             None
         }
     }
@@ -2141,9 +2160,8 @@ pub fn run_explorer_hook() {
     const ACTIVE_POLL_MS: u64 = 30; // Active focus - responsive polling
     const VIDEO_HOVER_DISMISS_GRACE_MS: u64 = 350;
     const FOLDER_PROBE_MS: u64 = 200;
-    const HOVER_PROBE_MS: u64 = 120;
+    const HOVER_PROBE_MS: u64 = 60;
     const KEYBOARD_FOCUS_PROBE_MS: u64 = 80;
-    const CONFIG_RELOAD_INTERVAL_MS: u64 = 250;
     const EXPLORER_SLOW_PROBE_LIMIT: u32 = 3;
     const EXPLORER_PROBE_BACKOFF_MS: u64 = 1500;
 
@@ -2155,8 +2173,7 @@ pub fn run_explorer_hook() {
 
     let mut config_snapshot = CONFIG
         .lock()
-        .map(|mut c| {
-            c.reload_from_disk();
+        .map(|c| {
             (
                 c.preview_enabled,
                 c.hover_delay_ms,
@@ -2166,7 +2183,6 @@ pub fn run_explorer_hook() {
             )
         })
         .unwrap_or((true, 0, true, "alt".to_string(), 750));
-    let mut last_config_reload = Instant::now();
     let mut slow_explorer_probe_count = 0u32;
     let mut explorer_probe_backoff_until: Option<Instant> = None;
 
@@ -2198,18 +2214,14 @@ pub fn run_explorer_hook() {
             last_state_check = Instant::now();
         }
 
-        if last_config_reload.elapsed() >= Duration::from_millis(CONFIG_RELOAD_INTERVAL_MS) {
-            last_config_reload = Instant::now();
-            if let Ok(mut config) = CONFIG.lock() {
-                config.reload_from_disk();
-                config_snapshot = (
-                    config.preview_enabled,
-                    config.hover_delay_ms,
-                    config.enable_off_trigger_key,
-                    config.off_trigger_key.clone(),
-                    config.same_file_rehover_delay_ms,
-                );
-            }
+        if let Ok(config) = CONFIG.lock() {
+            config_snapshot = (
+                config.preview_enabled,
+                config.hover_delay_ms,
+                config.enable_off_trigger_key,
+                config.off_trigger_key.clone(),
+                config.same_file_rehover_delay_ms,
+            );
         }
 
         let (
@@ -2463,9 +2475,11 @@ pub fn run_explorer_hook() {
                 allow_keyboard_preview_on_first_observation = false;
 
                 if let Some(suppressed_file) = suppressed_hover_file.as_ref() {
-                    if let Some(current_file) =
-                        get_file_under_cursor_checked(uia.as_ref(), &mut slow_explorer_probe_count)
-                    {
+                    if let Some(current_file) = get_file_under_cursor_checked(
+                        uia.as_ref(),
+                        last_cursor_folder.as_deref(),
+                        &mut slow_explorer_probe_count,
+                    ) {
                         if same_path(suppressed_file, &current_file) {
                             hover_start = Some(Instant::now());
                             continue;
@@ -2506,9 +2520,11 @@ pub fn run_explorer_hook() {
                 // While moving (including list scrolling), avoid heavy accessibility
                 // resolution and wait until hover is stable before probing media.
                 if last_file.is_some() {
-                    if let Some(current_file) =
-                        get_file_under_cursor_checked(uia.as_ref(), &mut slow_explorer_probe_count)
-                    {
+                    if let Some(current_file) = get_file_under_cursor_checked(
+                        uia.as_ref(),
+                        last_cursor_folder.as_deref(),
+                        &mut slow_explorer_probe_count,
+                    ) {
                         if last_file
                             .as_ref()
                             .map(|last| same_path(last, &current_file))
@@ -2670,9 +2686,11 @@ pub fn run_explorer_hook() {
                     last_hover_probe = Instant::now();
 
                     // Try to get file under cursor
-                    if let Some(file_path) =
-                        get_file_under_cursor_checked(uia.as_ref(), &mut slow_explorer_probe_count)
-                    {
+                    if let Some(file_path) = get_file_under_cursor_checked(
+                        uia.as_ref(),
+                        last_cursor_folder.as_deref(),
+                        &mut slow_explorer_probe_count,
+                    ) {
                         if !last_file
                             .as_ref()
                             .map(|last| same_path(last, &file_path))
