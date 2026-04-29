@@ -43,7 +43,6 @@ pub struct AppConfig {
     pub off_trigger_key: String,
     pub confirm_file_type: bool,
     pub follow_cursor: bool,
-    pub turbo_mode: bool,
     pub same_file_rehover_delay_ms: u64,
     pub transparent_background: TransparentBackground,
     pub video_volume: u32,
@@ -59,7 +58,6 @@ impl Default for AppConfig {
             off_trigger_key: "alt".to_string(),
             confirm_file_type: false,
             follow_cursor: false,
-            turbo_mode: true,
             same_file_rehover_delay_ms: 200,
             transparent_background: TransparentBackground::Black,
             video_volume: 0, // Mute by default
@@ -87,6 +85,15 @@ impl AppConfig {
         // Always save to ensure new fields are written to config file
         config.save();
         config
+    }
+
+    pub fn reload_from_disk(&mut self) {
+        if let Some(path) = Self::config_path() {
+            let mut ini = Ini::new();
+            if ini.load(path.to_string_lossy().as_ref()).is_ok() {
+                self.apply_ini(&ini);
+            }
+        }
     }
 
     pub fn save(&self) {
@@ -132,11 +139,6 @@ impl AppConfig {
             );
             ini.set(
                 CONFIG_SECTION,
-                "turbo_mode",
-                Some(self.turbo_mode.to_string()),
-            );
-            ini.set(
-                CONFIG_SECTION,
                 "same_file_rehover_delay_ms",
                 Some(self.same_file_rehover_delay_ms.to_string()),
             );
@@ -178,9 +180,6 @@ impl AppConfig {
         }
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "follow_cursor") {
             self.follow_cursor = value;
-        }
-        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "turbo_mode") {
-            self.turbo_mode = value;
         }
         if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "same_file_rehover_delay_ms") {
             self.same_file_rehover_delay_ms = value;

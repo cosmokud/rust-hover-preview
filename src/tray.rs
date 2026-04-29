@@ -25,7 +25,6 @@ const ID_TRAY_STARTUP: u16 = 1002;
 const ID_TRAY_ENABLE: u16 = 1003;
 const ID_TRAY_CONFIRM_FILE_TYPE: u16 = 1004;
 const ID_TRAY_ENABLE_OFF_TRIGGER_KEY: u16 = 1005;
-const ID_TRAY_TURBO_MODE: u16 = 1006;
 const ID_TRAY_BG_TRANSPARENT: u16 = 1007;
 const ID_TRAY_BG_BLACK: u16 = 1008;
 const ID_TRAY_BG_WHITE: u16 = 1009;
@@ -42,6 +41,10 @@ const ID_TRAY_DELAY_INSTANT: u16 = 1030; // 0ms
 const ID_TRAY_DELAY_VERY_FAST: u16 = 1031; // 200ms
 const ID_TRAY_DELAY_MEDIUM: u16 = 1032; // 500ms
 const ID_TRAY_DELAY_SLOW: u16 = 1033; // 1000ms
+const ID_TRAY_REHOVER_DELAY_INSTANT: u16 = 1034; // 0ms
+const ID_TRAY_REHOVER_DELAY_FAST: u16 = 1035; // 200ms
+const ID_TRAY_REHOVER_DELAY_MEDIUM: u16 = 1036; // 500ms
+const ID_TRAY_REHOVER_DELAY_SLOW: u16 = 1037; // 1000ms
 const ID_TRAY_OPEN_CONFIG: u16 = 1040;
 
 const TRAY_CLASS: PCWSTR = w!("RustHoverPreviewTrayClass");
@@ -88,9 +91,6 @@ unsafe extern "system" fn tray_window_proc(
                 ID_TRAY_ENABLE_OFF_TRIGGER_KEY => {
                     toggle_enable_off_trigger_key();
                 }
-                ID_TRAY_TURBO_MODE => {
-                    toggle_turbo_mode();
-                }
                 ID_TRAY_BG_TRANSPARENT => {
                     set_transparent_background(TransparentBackground::Transparent)
                 }
@@ -111,6 +111,10 @@ unsafe extern "system" fn tray_window_proc(
                 ID_TRAY_DELAY_VERY_FAST => set_hover_delay(200),
                 ID_TRAY_DELAY_MEDIUM => set_hover_delay(500),
                 ID_TRAY_DELAY_SLOW => set_hover_delay(1000),
+                ID_TRAY_REHOVER_DELAY_INSTANT => set_same_file_rehover_delay(0),
+                ID_TRAY_REHOVER_DELAY_FAST => set_same_file_rehover_delay(200),
+                ID_TRAY_REHOVER_DELAY_MEDIUM => set_same_file_rehover_delay(500),
+                ID_TRAY_REHOVER_DELAY_SLOW => set_same_file_rehover_delay(1000),
                 ID_TRAY_OPEN_CONFIG => open_config_file(),
                 _ => {}
             }
@@ -127,6 +131,9 @@ unsafe extern "system" fn tray_window_proc(
 
 unsafe fn show_context_menu(hwnd: HWND) {
     let menu = CreatePopupMenu().unwrap();
+    if let Ok(mut config) = CONFIG.lock() {
+        config.reload_from_disk();
+    }
 
     // Add "Enable Preview" with checkmark
     let preview_enabled = CONFIG.lock().map(|c| c.preview_enabled).unwrap_or(true);
@@ -174,16 +181,6 @@ unsafe fn show_context_menu(hwnd: HWND) {
         confirm_flags,
         ID_TRAY_CONFIRM_FILE_TYPE as usize,
         w!("Confirm File Type"),
-    );
-
-    // Add "Turbo Mode" with checkmark
-    let turbo_mode = CONFIG.lock().map(|c| c.turbo_mode).unwrap_or(false);
-    let turbo_flags = MF_STRING | if turbo_mode { MF_CHECKED } else { MF_UNCHECKED };
-    let _ = AppendMenuW(
-        menu,
-        turbo_flags,
-        ID_TRAY_TURBO_MODE as usize,
-        w!("Turbo Mode"),
     );
 
     // Add Transparent Background submenu
@@ -267,6 +264,51 @@ unsafe fn show_context_menu(hwnd: HWND) {
         delay_flag(1000),
         ID_TRAY_DELAY_SLOW as usize,
         w!("Slow (1000 ms)"),
+    );
+
+    let same_file_rehover_delay_ms = CONFIG
+        .lock()
+        .map(|c| c.same_file_rehover_delay_ms)
+        .unwrap_or(200);
+    let rehover_delay_menu = CreatePopupMenu().unwrap();
+
+    let rehover_delay_flag = |delay: u64| {
+        MF_STRING
+            | if same_file_rehover_delay_ms == delay {
+                MF_CHECKED
+            } else {
+                MF_UNCHECKED
+            }
+    };
+    let _ = AppendMenuW(
+        rehover_delay_menu,
+        rehover_delay_flag(0),
+        ID_TRAY_REHOVER_DELAY_INSTANT as usize,
+        w!("Instant (0 ms)"),
+    );
+    let _ = AppendMenuW(
+        rehover_delay_menu,
+        rehover_delay_flag(200),
+        ID_TRAY_REHOVER_DELAY_FAST as usize,
+        w!("Fast (200 ms)"),
+    );
+    let _ = AppendMenuW(
+        rehover_delay_menu,
+        rehover_delay_flag(500),
+        ID_TRAY_REHOVER_DELAY_MEDIUM as usize,
+        w!("Medium (500 ms)"),
+    );
+    let _ = AppendMenuW(
+        rehover_delay_menu,
+        rehover_delay_flag(1000),
+        ID_TRAY_REHOVER_DELAY_SLOW as usize,
+        w!("Slow (1000 ms)"),
+    );
+    let _ = AppendMenuW(
+        delay_menu,
+        MF_STRING | MF_POPUP,
+        rehover_delay_menu.0 as usize,
+        w!("Same File Rehover Delay"),
     );
 
     let _ = AppendMenuW(
@@ -437,13 +479,6 @@ fn toggle_confirm_file_type() {
     }
 }
 
-fn toggle_turbo_mode() {
-    if let Ok(mut config) = CONFIG.lock() {
-        config.turbo_mode = !config.turbo_mode;
-        config.save();
-    }
-}
-
 fn set_transparent_background(background: TransparentBackground) {
     if let Ok(mut config) = CONFIG.lock() {
         config.transparent_background = background;
@@ -469,6 +504,13 @@ fn set_follow_cursor(follow: bool) {
 fn set_hover_delay(hover_delay_ms: u64) {
     if let Ok(mut config) = CONFIG.lock() {
         config.hover_delay_ms = hover_delay_ms;
+        config.save();
+    }
+}
+
+fn set_same_file_rehover_delay(delay_ms: u64) {
+    if let Ok(mut config) = CONFIG.lock() {
+        config.same_file_rehover_delay_ms = delay_ms;
         config.save();
     }
 }
