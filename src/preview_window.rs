@@ -23,6 +23,7 @@ use windows::Win32::Graphics::Gdi::{
     DIB_RGB_COLORS, PAINTSTRUCT,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::System::Threading::{OpenProcess, TerminateProcess, PROCESS_TERMINATE};
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DispatchMessageW, EnumWindows, GetSystemMetrics, GetWindow,
     GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, IsWindowVisible, LoadCursorW,
@@ -275,6 +276,33 @@ pub fn show_preview_keyboard(
 }
 
 pub fn hide_preview() {
+    unsafe {
+        let hwnd = HWND(PREVIEW_HWND.load(Ordering::SeqCst) as *mut _);
+        if !hwnd.is_invalid() {
+            let _ = ShowWindow(hwnd, SW_HIDE);
+        }
+    }
+
+    if let Ok(mut current) = CURRENT_MEDIA.try_lock() {
+        if let Some(ref mut media) = *current {
+            media.cancel_background_work();
+            stop_video_playback(media);
+        }
+        *current = None;
+    } else {
+        let pid = VIDEO_PID.load(Ordering::SeqCst);
+        if pid != 0 {
+            unsafe {
+                if let Ok(process) = OpenProcess(PROCESS_TERMINATE, false, pid) {
+                    let _ = TerminateProcess(process, 1);
+                    let _ = windows::Win32::Foundation::CloseHandle(process);
+                }
+            }
+            VIDEO_HWND.store(0, Ordering::SeqCst);
+            VIDEO_PID.store(0, Ordering::SeqCst);
+        }
+    }
+
     if let Ok(sender) = PREVIEW_SENDER.lock() {
         if let Some(ref tx) = *sender {
             let _ = tx.send(PreviewMessage::Hide);
