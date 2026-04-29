@@ -78,7 +78,9 @@ installer-icon = "assets/icon.ico"
 appdata-paths = ["$APPDATA/rust-hover-preview"]
 preinstall-section = """
 Section PreInstall
-  ExecWait 'taskkill /IM "rust-hover-preview.exe" /F'
+  StrCpy $9 "0"
+  IfFileExists "$APPDATA\\rust-hover-preview\\config.ini" +2 0
+    StrCpy $9 "1"
   CreateDirectory "$APPDATA\\rust-hover-preview"
   ReadINIStr $0 "$APPDATA\\rust-hover-preview\\config.ini" "settings" "run_at_startup"
   StrCmp $0 "" 0 +2
@@ -111,6 +113,8 @@ Section PreInstall
   StrCmp $0 "" 0 +2
     WriteINIStr "$APPDATA\\rust-hover-preview\\config.ini" "settings" "video_volume" "0"
   StrCpy $INSTDIR "$LOCALAPPDATA\\rust-hover-preview"
+  StrCmp $9 "1" 0 +2
+    WriteRegStr HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Run" "RustHoverPreview" "$INSTDIR\\rust-hover-preview.exe"
   IfFileExists "$LOCALAPPDATA\\Rust Hover Preview\\rust-hover-preview.exe" 0 +2
     Delete "$LOCALAPPDATA\\Rust Hover Preview\\rust-hover-preview.exe"
   IfFileExists "$LOCALAPPDATA\\Rust Hover Preview\\uninstall.exe" 0 +2

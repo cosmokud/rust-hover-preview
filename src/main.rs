@@ -51,14 +51,12 @@ fn main() {
 }
 
 fn sync_startup_setting() {
-    let run_at_startup = CONFIG
+    let should_enable_startup = CONFIG
         .lock()
-        .map(|config| config.run_at_startup)
-        .unwrap_or(true);
+        .map(|config| config.is_first_run && config.run_at_startup)
+        .unwrap_or(false);
 
-    if run_at_startup {
+    if should_enable_startup {
         startup::enable_startup();
-    } else {
-        startup::disable_startup();
     }
 }

@@ -36,6 +36,7 @@ impl TransparentBackground {
 
 #[derive(Debug, Clone)]
 pub struct AppConfig {
+    pub is_first_run: bool,
     pub run_at_startup: bool,
     pub hover_delay_ms: u64,
     pub preview_enabled: bool,
@@ -51,6 +52,7 @@ pub struct AppConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
+            is_first_run: false,
             run_at_startup: true,
             hover_delay_ms: 0,
             preview_enabled: true,
@@ -78,6 +80,7 @@ impl AppConfig {
         let mut config = Self::default();
 
         if let Some(path) = Self::config_path() {
+            config.is_first_run = !path.exists();
             let mut ini = Ini::new();
             if ini.load(path.to_string_lossy().as_ref()).is_ok() {
                 config.apply_ini(&ini);
