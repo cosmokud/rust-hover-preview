@@ -35,8 +35,8 @@ windows = { version = "0.58", features = [
 # Image handling
 image = "0.25"
 
-# Animated WebP support (direct dependency for frame-level control)
-image-webp = "0.2"
+# Animated WebP support via Google's libwebp
+webp-animation = "0.10"
 
 # Animated GIF support
 gif = "0.13"
