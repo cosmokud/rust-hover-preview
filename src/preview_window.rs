@@ -40,6 +40,9 @@ const VIDEO_EXTENSIONS: &[&str] = &["mp4", "webm", "mkv", "avi", "mov", "wmv", "
 const MAX_STREAMED_ANIMATION_FRAMES: usize = 300;
 const MAX_STREAMED_ANIMATION_BYTES: usize = 256 * 1024 * 1024;
 const MIN_ANIMATION_FRAME_DELAY_MS: u32 = 33;
+const ANIMATION_STARTUP_PREBUFFER_FRAMES: usize = 12;
+const ANIMATION_STARTUP_PREBUFFER_MS: u32 = 500;
+const CONFIG_RELOAD_INTERVAL_MS: u64 = 250;
 const STREAMING_SPINNER_MAX_MS: u64 = 1500;
 
 // Message passing for thread communication
@@ -177,10 +180,11 @@ impl MediaData {
                     advanced = true;
                 } else {
                     // Still streaming — pause on this frame until the next
-                    // one arrives.  Reset the clock so that when a new frame
-                    // does appear we resume immediately without a stutter
-                    // burst of catch-up skips.
-                    self.last_frame_time = Instant::now();
+                    // one arrives. Keep the next streamed frame immediately
+                    // eligible instead of adding another full-frame delay.
+                    self.last_frame_time = Instant::now()
+                        .checked_sub(delay)
+                        .unwrap_or_else(Instant::now);
                     break;
                 }
             } else {
@@ -426,10 +430,7 @@ fn rgba_to_bgra(rgba: &[u8]) -> Vec<u8> {
 fn current_transparent_background() -> TransparentBackground {
     CONFIG
         .lock()
-        .map(|mut cfg| {
-            cfg.reload_from_disk();
-            cfg.transparent_background
-        })
+        .map(|cfg| cfg.transparent_background)
         .unwrap_or(TransparentBackground::Transparent)
 }
 
@@ -576,7 +577,6 @@ fn composite_gif_frame(canvas: &mut [u8], frame: &gif::Frame, gif_width: u32, gi
     }
 }
 
-/// Load an animated GIF file - decodes first frame immediately, streams the rest
 fn load_animated_gif(
     path: &PathBuf,
     max_width: u32,
@@ -597,37 +597,73 @@ fn load_animated_gif(
         scale_dimensions(gif_width, gif_height, max_width, max_height);
 
     let mut canvas = vec![0u8; (gif_width * gif_height * 4) as usize];
+    let mut initial_frames = Vec::new();
+    let mut initial_bytes: usize = 0;
+    let mut buffered_ms: u32 = 0;
+    let mut reached_end = false;
 
-    // Decode first frame
-    let first_frame = decoder.read_next_frame().ok()??;
-    composite_gif_frame(&mut canvas, first_frame, gif_width, gif_height);
-    let delay_ms = (first_frame.delay as u32 * 10).max(MIN_ANIMATION_FRAME_DELAY_MS);
-    let first_image = decode_gif_frame_to_image(
-        &canvas,
-        gif_width,
-        gif_height,
-        target_width,
-        target_height,
-        delay_ms,
-    )?;
+    while initial_frames.len() < MAX_STREAMED_ANIMATION_FRAMES
+        && initial_frames.len() < ANIMATION_STARTUP_PREBUFFER_FRAMES
+        && (initial_frames.len() < 2 || buffered_ms < ANIMATION_STARTUP_PREBUFFER_MS)
+    {
+        if cancel.load(Ordering::Acquire) {
+            return None;
+        }
 
-    let has_more_frames = matches!(decoder.read_next_frame(), Ok(Some(_)));
-    if !has_more_frames {
+        let frame = match decoder.read_next_frame() {
+            Ok(Some(frame)) => frame,
+            Ok(None) => {
+                reached_end = true;
+                break;
+            }
+            Err(_) => return None,
+        };
+
+        composite_gif_frame(&mut canvas, frame, gif_width, gif_height);
+        let delay_ms = (frame.delay as u32 * 10).max(MIN_ANIMATION_FRAME_DELAY_MS);
+        let img = decode_gif_frame_to_image(
+            &canvas,
+            gif_width,
+            gif_height,
+            target_width,
+            target_height,
+            delay_ms,
+        )?;
+        initial_bytes = initial_bytes.saturating_add(img.pixels.len());
+        if initial_bytes > MAX_STREAMED_ANIMATION_BYTES {
+            return None;
+        }
+        buffered_ms = buffered_ms.saturating_add(delay_ms);
+        initial_frames.push(img);
+    }
+
+    if initial_frames.is_empty() || (reached_end && initial_frames.len() <= 1) {
         return None;
     }
 
-    let shared = Arc::new(Mutex::new(VecDeque::new()));
+    if reached_end {
+        return Some(MediaData {
+            frames: initial_frames,
+            shared_frames: None,
+            all_frames_loaded: None,
+            current_frame: 0,
+            last_frame_time: Instant::now(),
+            media_type: MediaType::AnimatedGif,
+            stream_cancel: Some(cancel),
+            video_process: None,
+            loading_start: None,
+        });
+    }
 
+    let shared = Arc::new(Mutex::new(VecDeque::new()));
     let shared_clone = Arc::clone(&shared);
     let loaded_flag = Arc::new(AtomicBool::new(false));
     let loaded_flag_clone = Arc::clone(&loaded_flag);
-    let first_frame_bytes = first_image.pixels.len();
+    let skip_frames = initial_frames.len();
 
-    // Stream remaining frames in background
     let path_clone = path.clone();
     let cancel_clone = Arc::clone(&cancel);
     std::thread::spawn(move || {
-        // Re-open and re-decode from the start to get remaining frames
         let file = match File::open(&path_clone) {
             Ok(f) => f,
             Err(_) => {
@@ -646,28 +682,24 @@ fn load_animated_gif(
         };
 
         let mut canvas = vec![0u8; (gif_width * gif_height * 4) as usize];
-        let mut frame_idx = 0;
-        let mut streamed_count: usize = 1; // first frame already decoded
-        let mut streamed_bytes: usize = first_frame_bytes;
+        let mut frame_idx = 0usize;
+        let mut streamed_count = skip_frames;
+        let mut streamed_bytes = initial_bytes;
 
         while let Ok(Some(frame)) = dec.read_next_frame() {
-            if cancel_clone.load(Ordering::Acquire) {
-                break;
-            }
-
-            if streamed_count >= MAX_STREAMED_ANIMATION_FRAMES {
+            if cancel_clone.load(Ordering::Acquire)
+                || streamed_count >= MAX_STREAMED_ANIMATION_FRAMES
+            {
                 break;
             }
 
             composite_gif_frame(&mut canvas, frame, gif_width, gif_height);
-            let delay_ms = (frame.delay as u32 * 10).max(MIN_ANIMATION_FRAME_DELAY_MS);
-
-            if frame_idx == 0 {
-                // Skip first frame, already decoded
+            if frame_idx < skip_frames {
                 frame_idx += 1;
                 continue;
             }
 
+            let delay_ms = (frame.delay as u32 * 10).max(MIN_ANIMATION_FRAME_DELAY_MS);
             if let Some(img) = decode_gif_frame_to_image(
                 &canvas,
                 gif_width,
@@ -685,9 +717,6 @@ fn load_animated_gif(
                 }
                 streamed_count += 1;
                 streamed_bytes = streamed_bytes.saturating_add(frame_bytes);
-                if streamed_count % 8 == 0 {
-                    std::thread::yield_now();
-                }
             }
             frame_idx += 1;
         }
@@ -695,7 +724,7 @@ fn load_animated_gif(
     });
 
     Some(MediaData {
-        frames: vec![first_image],
+        frames: initial_frames,
         shared_frames: Some(shared),
         all_frames_loaded: Some(loaded_flag),
         current_frame: 0,
@@ -707,7 +736,6 @@ fn load_animated_gif(
     })
 }
 
-/// Decode a single WebP frame buffer into an ImageFrame
 fn decode_webp_frame_to_image(
     buf: &[u8],
     has_alpha: bool,
@@ -717,6 +745,37 @@ fn decode_webp_frame_to_image(
     target_height: u32,
     delay_ms: u32,
 ) -> Option<ImageFrame> {
+    let expected_src = orig_width as usize * orig_height as usize * if has_alpha { 4 } else { 3 };
+    if buf.len() != expected_src {
+        return None;
+    }
+
+    if target_width == orig_width && target_height == orig_height {
+        let mut bgra = Vec::with_capacity(orig_width as usize * orig_height as usize * 4);
+        if has_alpha {
+            for chunk in buf.chunks_exact(4) {
+                bgra.push(chunk[2]);
+                bgra.push(chunk[1]);
+                bgra.push(chunk[0]);
+                bgra.push(chunk[3]);
+            }
+        } else {
+            for chunk in buf.chunks_exact(3) {
+                bgra.push(chunk[2]);
+                bgra.push(chunk[1]);
+                bgra.push(chunk[0]);
+                bgra.push(255);
+            }
+        }
+
+        return Some(ImageFrame {
+            pixels: bgra,
+            width: target_width,
+            height: target_height,
+            delay_ms,
+        });
+    }
+
     let rgba = if has_alpha {
         buf.to_vec()
     } else {
@@ -730,31 +789,14 @@ fn decode_webp_frame_to_image(
         rgba
     };
 
-    let expected_rgba = orig_width as usize * orig_height as usize * 4;
-    if rgba.len() != expected_rgba {
-        return None;
-    }
-
     let img = image::RgbaImage::from_raw(orig_width, orig_height, rgba)?;
-
-    let scaled = if target_width != orig_width || target_height != orig_height {
-        let resized = image::imageops::resize(
-            &img,
-            target_width,
-            target_height,
-            image::imageops::FilterType::Nearest,
-        );
-        resized.into_raw()
-    } else {
-        img.into_raw()
-    };
-
-    let bgra = rgba_to_bgra(&scaled);
-
-    let expected_bgra = target_width as usize * target_height as usize * 4;
-    if bgra.len() != expected_bgra {
-        return None;
-    }
+    let resized = image::imageops::resize(
+        &img,
+        target_width,
+        target_height,
+        image::imageops::FilterType::Nearest,
+    );
+    let bgra = rgba_to_bgra(&resized.into_raw());
 
     Some(ImageFrame {
         pixels: bgra,
@@ -764,7 +806,6 @@ fn decode_webp_frame_to_image(
     })
 }
 
-/// Load an animated WebP file — decodes first frame immediately, streams the rest in background.
 fn load_animated_webp(
     path: &PathBuf,
     max_width: u32,
@@ -796,7 +837,7 @@ fn load_animated_webp(
 
     let has_alpha = decoder.has_alpha();
     let num_frames = decoder.num_frames();
-    if num_frames == 0 || num_frames > 10000 {
+    if !(2..=10000).contains(&num_frames) {
         return None;
     }
 
@@ -806,28 +847,67 @@ fn load_animated_webp(
         return None;
     }
 
-    // Decode first frame immediately so the user sees something right away
     let mut buf = vec![0u8; buf_size];
-    let first_delay = match decoder.read_frame(&mut buf) {
-        Ok(d) => d.max(MIN_ANIMATION_FRAME_DELAY_MS),
-        Err(_) => return None,
-    };
-    let first_image = decode_webp_frame_to_image(
-        &buf,
-        has_alpha,
-        orig_width,
-        orig_height,
-        target_width,
-        target_height,
-        first_delay,
-    )?;
+    let mut initial_frames = Vec::new();
+    let mut initial_bytes: usize = 0;
+    let mut buffered_ms: u32 = 0;
 
-    // Shared buffer: background thread pushes decoded frames here
+    for _ in 0..num_frames {
+        if cancel.load(Ordering::Acquire) {
+            return None;
+        }
+
+        let delay_ms = match decoder.read_frame(&mut buf) {
+            Ok(delay_ms) => delay_ms.max(MIN_ANIMATION_FRAME_DELAY_MS),
+            Err(_) => break,
+        };
+        let img = decode_webp_frame_to_image(
+            &buf,
+            has_alpha,
+            orig_width,
+            orig_height,
+            target_width,
+            target_height,
+            delay_ms,
+        )?;
+        initial_bytes = initial_bytes.saturating_add(img.pixels.len());
+        if initial_bytes > MAX_STREAMED_ANIMATION_BYTES {
+            return None;
+        }
+        buffered_ms = buffered_ms.saturating_add(delay_ms);
+        initial_frames.push(img);
+
+        if initial_frames.len() >= MAX_STREAMED_ANIMATION_FRAMES
+            || (initial_frames.len() >= ANIMATION_STARTUP_PREBUFFER_FRAMES
+                || (initial_frames.len() >= 2 && buffered_ms >= ANIMATION_STARTUP_PREBUFFER_MS))
+        {
+            break;
+        }
+    }
+
+    if initial_frames.len() <= 1 {
+        return None;
+    }
+
+    if initial_frames.len() >= num_frames as usize {
+        return Some(MediaData {
+            frames: initial_frames,
+            shared_frames: None,
+            all_frames_loaded: None,
+            current_frame: 0,
+            last_frame_time: Instant::now(),
+            media_type: MediaType::AnimatedWebP,
+            stream_cancel: Some(cancel),
+            video_process: None,
+            loading_start: None,
+        });
+    }
+
     let shared = Arc::new(Mutex::new(VecDeque::new()));
     let shared_clone = Arc::clone(&shared);
     let loaded_flag = Arc::new(AtomicBool::new(false));
     let loaded_flag_clone = Arc::clone(&loaded_flag);
-    let first_frame_bytes = first_image.pixels.len();
+    let skip_frames = initial_frames.len();
 
     let path_clone = path.clone();
     let cancel_clone = Arc::clone(&cancel);
@@ -851,56 +931,49 @@ fn load_animated_webp(
         let mut buf = vec![0u8; orig_width as usize * orig_height as usize * bpp];
         let has_alpha = dec.has_alpha();
         let total = dec.num_frames();
-        let mut streamed_count: usize = 1; // first frame already decoded
-        let mut streamed_bytes: usize = first_frame_bytes;
+        let mut streamed_count = skip_frames;
+        let mut streamed_bytes = initial_bytes;
 
         for i in 0..total {
-            if cancel_clone.load(Ordering::Acquire) {
+            if cancel_clone.load(Ordering::Acquire)
+                || streamed_count >= MAX_STREAMED_ANIMATION_FRAMES
+            {
                 break;
             }
 
-            if streamed_count >= MAX_STREAMED_ANIMATION_FRAMES {
-                break;
-            }
-
-            match dec.read_frame(&mut buf) {
-                Ok(delay_ms) => {
-                    if i == 0 {
-                        continue;
-                    } // already decoded above
-                    let delay_ms = delay_ms.max(MIN_ANIMATION_FRAME_DELAY_MS);
-                    if let Some(img) = decode_webp_frame_to_image(
-                        &buf,
-                        has_alpha,
-                        orig_width,
-                        orig_height,
-                        target_width,
-                        target_height,
-                        delay_ms,
-                    ) {
-                        let frame_bytes = img.pixels.len();
-                        if streamed_bytes.saturating_add(frame_bytes) > MAX_STREAMED_ANIMATION_BYTES
-                        {
-                            break;
-                        }
-                        if let Ok(mut frames) = shared_clone.lock() {
-                            frames.push_back(img);
-                        }
-                        streamed_count += 1;
-                        streamed_bytes = streamed_bytes.saturating_add(frame_bytes);
-                        if streamed_count % 8 == 0 {
-                            std::thread::yield_now();
-                        }
-                    }
-                }
+            let delay_ms = match dec.read_frame(&mut buf) {
+                Ok(delay_ms) => delay_ms.max(MIN_ANIMATION_FRAME_DELAY_MS),
                 Err(_) => break,
+            };
+            if (i as usize) < skip_frames {
+                continue;
+            }
+
+            if let Some(img) = decode_webp_frame_to_image(
+                &buf,
+                has_alpha,
+                orig_width,
+                orig_height,
+                target_width,
+                target_height,
+                delay_ms,
+            ) {
+                let frame_bytes = img.pixels.len();
+                if streamed_bytes.saturating_add(frame_bytes) > MAX_STREAMED_ANIMATION_BYTES {
+                    break;
+                }
+                if let Ok(mut frames) = shared_clone.lock() {
+                    frames.push_back(img);
+                }
+                streamed_count += 1;
+                streamed_bytes = streamed_bytes.saturating_add(frame_bytes);
             }
         }
         loaded_flag_clone.store(true, Ordering::Release);
     });
 
     Some(MediaData {
-        frames: vec![first_image],
+        frames: initial_frames,
         shared_frames: Some(shared),
         all_frames_loaded: Some(loaded_flag),
         current_frame: 0,
@@ -1391,13 +1464,7 @@ fn set_noactivate_for_process(pid: u32) {
 /// Start ffplay for video preview with configurable volume
 fn start_video_playback(path: &PathBuf, x: i32, y: i32, width: i32, height: i32) -> Option<Child> {
     // Get volume setting from config (0-100)
-    let volume = CONFIG
-        .lock()
-        .map(|mut c| {
-            c.reload_from_disk();
-            c.video_volume
-        })
-        .unwrap_or(0);
+    let volume = CONFIG.lock().map(|c| c.video_volume).unwrap_or(0);
 
     // Use ffplay for video playback - borderless, positioned at preview location
     let mut cmd = Command::new("ffplay");
@@ -1911,7 +1978,8 @@ unsafe fn render_layered_preview(hwnd: HWND) {
             return None;
         }
 
-        let paint_pixels = if media.should_draw_streaming_overlay() {
+        let background = current_transparent_background();
+        let pixels = if media.should_draw_streaming_overlay() {
             let elapsed = media
                 .loading_start
                 .map(|s| s.elapsed().as_secs_f32())
@@ -1919,21 +1987,12 @@ unsafe fn render_layered_preview(hwnd: HWND) {
             let angle = elapsed * 2.0 * std::f32::consts::PI * 1.2;
             let mut buf = media.current_pixels().to_vec();
             overlay_loading_spinner(&mut buf, width, height, angle);
-            buf
+            compose_preview_pixels(&buf, width, height, background)
         } else {
-            media.current_pixels().to_vec()
+            compose_preview_pixels(media.current_pixels(), width, height, background)
         };
 
-        Some((
-            width,
-            height,
-            compose_preview_pixels(
-                &paint_pixels,
-                width,
-                height,
-                current_transparent_background(),
-            ),
-        ))
+        Some((width, height, pixels))
     })() else {
         return;
     };
@@ -2383,10 +2442,18 @@ pub fn run_preview_window() {
         let mut pending_load: Option<PendingLoad> = None;
         let mut pending_load_cancel: Option<Arc<AtomicBool>> = None;
         let mut last_stream_overlay_repaint = Instant::now();
+        let mut last_config_reload = Instant::now();
 
         // Message loop
         let mut msg = MSG::default();
         while RUNNING.load(Ordering::SeqCst) {
+            if last_config_reload.elapsed() >= Duration::from_millis(CONFIG_RELOAD_INTERVAL_MS) {
+                last_config_reload = Instant::now();
+                if let Ok(mut config) = CONFIG.lock() {
+                    config.reload_from_disk();
+                }
+            }
+
             // Check for Windows messages
             while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
                 let _ = TranslateMessage(&msg);
@@ -2518,13 +2585,7 @@ pub fn run_preview_window() {
                     PreviewMessage::Show(path, x, y) => {
                         let screen_width = GetSystemMetrics(SM_CXSCREEN);
                         let screen_height = GetSystemMetrics(SM_CYSCREEN);
-                        let follow_cursor = CONFIG
-                            .lock()
-                            .map(|mut c| {
-                                c.reload_from_disk();
-                                c.follow_cursor
-                            })
-                            .unwrap_or(true);
+                        let follow_cursor = CONFIG.lock().map(|c| c.follow_cursor).unwrap_or(true);
 
                         if let Some(orig_dims) = get_media_dimensions(&path) {
                             let is_video = is_video_file(&path);
@@ -2545,13 +2606,7 @@ pub fn run_preview_window() {
                     PreviewMessage::ShowKeyboard(path, il, it, ir, ib) => {
                         let screen_width = GetSystemMetrics(SM_CXSCREEN);
                         let screen_height = GetSystemMetrics(SM_CYSCREEN);
-                        let follow_cursor = CONFIG
-                            .lock()
-                            .map(|mut c| {
-                                c.reload_from_disk();
-                                c.follow_cursor
-                            })
-                            .unwrap_or(true);
+                        let follow_cursor = CONFIG.lock().map(|c| c.follow_cursor).unwrap_or(true);
 
                         if let Some(orig_dims) = get_media_dimensions(&path) {
                             let is_video = is_video_file(&path);
