@@ -1807,12 +1807,40 @@ fn get_item_under_cursor_uia(automation: &IUIAutomation) -> Option<Accessibility
     None
 }
 
+fn get_accessibility_item_under_cursor(
+    automation: Option<&IUIAutomation>,
+) -> Option<AccessibilityResult> {
+    get_item_under_cursor().or_else(|| automation.and_then(get_item_under_cursor_uia))
+}
+
+fn resolve_direct_media_path(item_info: &AccessibilityResult) -> Option<PathBuf> {
+    match item_info {
+        AccessibilityResult::FullPath(path) => {
+            if is_media_file(path) {
+                Some(path.clone())
+            } else {
+                None
+            }
+        }
+        AccessibilityResult::FileName(item_name) => {
+            let potential_path = PathBuf::from(item_name);
+            if potential_path.is_absolute()
+                && potential_path.exists()
+                && is_media_file(&potential_path)
+            {
+                Some(potential_path)
+            } else {
+                None
+            }
+        }
+    }
+}
+
 fn get_file_under_cursor_normal(
     automation: Option<&IUIAutomation>,
     current_folder_hint: Option<&str>,
 ) -> Option<PathBuf> {
-    let item_info =
-        get_item_under_cursor().or_else(|| automation.and_then(get_item_under_cursor_uia))?;
+    let item_info = get_accessibility_item_under_cursor(automation)?;
 
     match item_info {
         AccessibilityResult::FullPath(path) => {
@@ -1858,55 +1886,47 @@ fn get_file_under_cursor_search(
     current_search_root_hint: Option<&str>,
     shell_view_hwnd_hint: Option<isize>,
 ) -> Option<PathBuf> {
+    let item_info = get_accessibility_item_under_cursor(automation);
+    if let Some(path) = item_info.as_ref().and_then(resolve_direct_media_path) {
+        return Some(path);
+    }
+
     if let Some(path) = get_shell_data_model_file_under_cursor() {
         return Some(path);
     }
 
-    let item_info = automation
-        .and_then(get_item_under_cursor_uia)
-        .or_else(|| get_item_under_cursor())?;
-
-    match item_info {
+    let item_name = match item_info? {
         AccessibilityResult::FullPath(path) => {
             if is_media_file(&path) {
-                Some(path)
-            } else {
-                None
+                return Some(path);
             }
+            return None;
         }
-        AccessibilityResult::FileName(item_name) => {
-            let potential_path = PathBuf::from(&item_name);
-            if potential_path.is_absolute()
-                && potential_path.exists()
-                && is_media_file(&potential_path)
-            {
-                return Some(potential_path);
-            }
+        AccessibilityResult::FileName(item_name) => item_name,
+    };
 
-            if let Some(path) = lookup_media_in_hover_folder(&item_name, current_folder_hint) {
-                return Some(path);
-            }
+    if let Some(path) = lookup_media_in_hover_folder(&item_name, current_folder_hint) {
+        return Some(path);
+    }
 
-            if let Some(shell_view_hwnd) = shell_view_hwnd_hint {
-                if let Some(path) = find_media_in_shell_view(shell_view_hwnd, &item_name) {
-                    return Some(path);
-                }
-            } else if let Some(path) = find_media_in_current_shell_view(&item_name) {
-                return Some(path);
-            }
+    if let Some(shell_view_hwnd) = shell_view_hwnd_hint {
+        if let Some(path) = find_media_in_shell_view(shell_view_hwnd, &item_name) {
+            return Some(path);
+        }
+    } else if let Some(path) = find_media_in_current_shell_view(&item_name) {
+        return Some(path);
+    }
 
-            if let Some(root) = current_search_root_hint {
-                if let Some(path) = find_media_in_folder(root, &item_name) {
-                    return Some(path);
-                }
-                if let Some(path) = lookup_media_in_search_root_index(root, &item_name) {
-                    return Some(path);
-                }
-            }
-
-            None
+    if let Some(root) = current_search_root_hint {
+        if let Some(path) = find_media_in_folder(root, &item_name) {
+            return Some(path);
+        }
+        if let Some(path) = lookup_media_in_search_root_index(root, &item_name) {
+            return Some(path);
         }
     }
+
+    None
 }
 
 fn get_file_under_cursor(
