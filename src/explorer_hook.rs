@@ -4,14 +4,14 @@ use crate::preview_window::{
 };
 use crate::{CONFIG, RUNNING};
 use once_cell::sync::Lazy;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::os::windows::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
 use std::sync::{atomic::Ordering, Mutex};
 use std::time::{Duration, Instant};
 use windows::core::{Interface, VARIANT};
-use windows::Win32::Foundation::{HWND, POINT, RECT};
+use windows::Win32::Foundation::{BOOL, HWND, POINT, RECT};
 use windows::Win32::Graphics::Gdi::ScreenToClient;
 use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, IServiceProvider, CLSCTX_ALL,
@@ -23,9 +23,10 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, VK_DOWN, VK_END, VK_HOME, VK_LEFT, VK_NEXT, VK_PRIOR, VK_RIGHT, VK_UP,
 };
 use windows::Win32::UI::Shell::{
-    IFolderView, INameSpaceTreeControl, IShellBrowser, IShellFolder, IShellFolderViewDual,
-    IShellItem, IShellView, IShellWindows, SHCreateItemFromIDList, SHCreateItemWithParent,
-    SID_STopLevelBrowser, ShellWindows, SIGDN_DESKTOPABSOLUTEPARSING, SVGIO_ALLVIEW,
+    IFolderView, IFolderView2, INameSpaceTreeControl, IPersistFolder2, IShellBrowser, IShellFolder,
+    IShellFolderViewDual, IShellItem, IShellView, IShellWindows, SHCreateItemFromIDList,
+    SHCreateItemWithParent, SID_STopLevelBrowser, ShellWindows, SIGDN_DESKTOPABSOLUTEPARSING,
+    SVGIO_ALLVIEW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     GetClassNameW, GetCursorPos, GetForegroundWindow, GetWindowPlacement, GetWindowRect,
@@ -68,6 +69,7 @@ struct ActiveShellViewContext {
     browser_hwnd: isize,
     shell_view_hwnd: isize,
     location_url: Option<String>,
+    folder_path: Option<String>,
     shell_view: IShellView,
     client_point: POINT,
 }
@@ -81,9 +83,12 @@ const SEARCH_ROOT_INDEX_MAX_DIRS: usize = 20000;
 const SEARCH_ROOT_INDEX_MAX_FILES: usize = 50000;
 const EXPLORER_PROBE_SLOW_MS: u64 = 700;
 const EXPLORER_WINDOW_CACHE_TTL_MS: u64 = 1000;
+const FOLDER_INDEX_CACHE_MAX_ENTRIES: usize = 16;
 
 static FOLDER_MEDIA_INDEX: Lazy<Mutex<HashMap<String, FolderMediaIndex>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
+static FOLDER_INDEX_BUILDING: Lazy<Mutex<HashSet<String>>> =
+    Lazy::new(|| Mutex::new(HashSet::new()));
 static EXPLORER_FOLDERS_CACHE: Lazy<Mutex<Option<ExplorerFoldersCache>>> =
     Lazy::new(|| Mutex::new(None));
 static SHELL_VIEW_MEDIA_INDEX: Lazy<Mutex<HashMap<isize, ShellViewMediaIndex>>> =
@@ -136,6 +141,66 @@ fn build_folder_media_index(folder_path: &PathBuf, _folder_key: &str) -> Option<
     })
 }
 
+fn trim_folder_index_cache(cache: &mut HashMap<String, FolderMediaIndex>) {
+    if cache.len() <= FOLDER_INDEX_CACHE_MAX_ENTRIES {
+        return;
+    }
+
+    let mut oldest_key: Option<String> = None;
+    let mut oldest_age = Duration::ZERO;
+    for (folder, index) in cache.iter() {
+        let age = index.built_at.elapsed();
+        if oldest_key.is_none() || age > oldest_age {
+            oldest_key = Some(folder.clone());
+            oldest_age = age;
+        }
+    }
+
+    if let Some(oldest_key) = oldest_key {
+        cache.remove(&oldest_key);
+    }
+}
+
+fn queue_folder_index_build(folder_path: PathBuf, folder_key: String) {
+    let should_build = {
+        let cache_is_fresh = FOLDER_MEDIA_INDEX
+            .lock()
+            .ok()
+            .and_then(|cache| cache.get(&folder_key).map(|index| index.built_at.elapsed()))
+            .map(|age| age <= Duration::from_millis(FOLDER_INDEX_TTL_MS))
+            .unwrap_or(false);
+        if cache_is_fresh {
+            false
+        } else if let Ok(mut building) = FOLDER_INDEX_BUILDING.lock() {
+            if building.contains(&folder_key) {
+                false
+            } else {
+                building.insert(folder_key.clone());
+                true
+            }
+        } else {
+            false
+        }
+    };
+
+    if !should_build {
+        return;
+    }
+
+    std::thread::spawn(move || {
+        let built_index = build_folder_media_index(&folder_path, &folder_key);
+        if let Some(index) = built_index {
+            if let Ok(mut cache) = FOLDER_MEDIA_INDEX.lock() {
+                cache.insert(folder_key.clone(), index);
+                trim_folder_index_cache(&mut cache);
+            }
+        }
+        if let Ok(mut building) = FOLDER_INDEX_BUILDING.lock() {
+            building.remove(&folder_key);
+        }
+    });
+}
+
 fn lookup_media_in_folder_index(
     folder_path: &PathBuf,
     folder_key: &str,
@@ -160,8 +225,9 @@ fn lookup_media_in_folder_index(
     cache.retain(|_, index| index.built_at.elapsed() <= Duration::from_millis(FOLDER_INDEX_TTL_MS));
 
     if !cache.contains_key(folder_key) {
-        let index = build_folder_media_index(folder_path, folder_key)?;
-        cache.insert(folder_key.to_string(), index);
+        drop(cache);
+        queue_folder_index_build(folder_path.clone(), folder_key.to_string());
+        return None;
     }
 
     let index = cache.get(folder_key)?;
@@ -567,6 +633,7 @@ fn get_active_shell_view_context(screen_point: &POINT) -> Option<ActiveShellView
             }
 
             let location_url = browser.LocationURL().ok().map(|url| url.to_string());
+            let folder_path = get_shell_view_folder_path(&shell_view);
             let mut client_point = *screen_point;
             if !ScreenToClient(shell_view_hwnd, &mut client_point).as_bool() {
                 continue;
@@ -576,6 +643,7 @@ fn get_active_shell_view_context(screen_point: &POINT) -> Option<ActiveShellView
                 browser_hwnd: browser_hwnd_key,
                 shell_view_hwnd: shell_view_hwnd_key,
                 location_url,
+                folder_path,
                 shell_view,
                 client_point,
             };
@@ -618,12 +686,20 @@ fn point_in_rect(point: &POINT, rect: &RECT) -> bool {
     point.x >= rect.left && point.x < rect.right && point.y >= rect.top && point.y < rect.bottom
 }
 
+fn normalize_existing_path(path: PathBuf) -> Option<PathBuf> {
+    if !path.exists() {
+        return None;
+    }
+
+    std::fs::canonicalize(&path).ok().or(Some(path))
+}
+
 fn normalize_media_path(path: PathBuf) -> Option<PathBuf> {
     if !path.exists() || !is_media_file(&path) {
         return None;
     }
 
-    std::fs::canonicalize(&path).ok().or(Some(path))
+    normalize_existing_path(path)
 }
 
 fn get_active_shell_view_under_cursor(screen_point: &POINT) -> Option<(IShellView, POINT)> {
@@ -631,7 +707,7 @@ fn get_active_shell_view_under_cursor(screen_point: &POINT) -> Option<(IShellVie
     Some((context.shell_view, context.client_point))
 }
 
-fn shell_item_to_media_path(shell_item: &IShellItem) -> Option<PathBuf> {
+fn shell_item_to_path(shell_item: &IShellItem) -> Option<PathBuf> {
     unsafe {
         let display_name = shell_item
             .GetDisplayName(SIGDN_DESKTOPABSOLUTEPARSING)
@@ -639,7 +715,26 @@ fn shell_item_to_media_path(shell_item: &IShellItem) -> Option<PathBuf> {
         let path_string = display_name.to_string().ok()?;
         CoTaskMemFree(Some(display_name.0 as *const core::ffi::c_void));
 
-        normalize_media_path(PathBuf::from(path_string))
+        normalize_existing_path(PathBuf::from(path_string))
+    }
+}
+
+fn shell_item_to_media_path(shell_item: &IShellItem) -> Option<PathBuf> {
+    shell_item_to_path(shell_item).and_then(normalize_media_path)
+}
+
+fn get_shell_view_folder_path(shell_view: &IShellView) -> Option<String> {
+    let folder_view = shell_view.cast::<IFolderView>().ok()?;
+
+    unsafe {
+        let persist_folder = folder_view.GetFolder::<IPersistFolder2>().ok()?;
+        let pidl = persist_folder.GetCurFolder().ok()?;
+        let shell_item = SHCreateItemFromIDList::<IShellItem>(pidl).ok();
+        CoTaskMemFree(Some(pidl as *const core::ffi::c_void));
+        shell_item
+            .and_then(|shell_item| shell_item_to_path(&shell_item))
+            .filter(|path| path.is_dir())
+            .map(|path| path.to_string_lossy().into_owned())
     }
 }
 
@@ -663,7 +758,6 @@ fn hit_test_folder_view_by_position(
     client_point: &POINT,
 ) -> Option<PathBuf> {
     unsafe {
-        let count = folder_view.ItemCount(SVGIO_ALLVIEW).ok()?.clamp(0, 10000);
         let mut spacing = POINT { x: 0, y: 0 };
         let _ = folder_view.GetSpacing(&mut spacing);
         if spacing.x <= 0 {
@@ -674,7 +768,34 @@ fn hit_test_folder_view_by_position(
         }
 
         let mut best: Option<(i32, i32)> = None;
-        for item_index in 0..count {
+        let visible_indices = folder_view
+            .cast::<IFolderView2>()
+            .ok()
+            .map(|folder_view2| {
+                let mut indices = Vec::new();
+                let mut next = folder_view2.GetVisibleItem(-1, BOOL(0)).ok();
+                while let Some(item_index) = next {
+                    if indices.last().copied() == Some(item_index) {
+                        break;
+                    }
+                    indices.push(item_index);
+                    if indices.len() >= 512 {
+                        break;
+                    }
+                    next = folder_view2.GetVisibleItem(item_index, BOOL(0)).ok();
+                }
+                indices
+            })
+            .filter(|indices| !indices.is_empty());
+
+        let candidate_indices: Vec<i32> = if let Some(indices) = visible_indices {
+            indices
+        } else {
+            let count = folder_view.ItemCount(SVGIO_ALLVIEW).ok()?.clamp(0, 10000);
+            (0..count).collect()
+        };
+
+        for item_index in candidate_indices {
             let pidl = match folder_view.Item(item_index) {
                 Ok(pidl) if !pidl.is_null() => pidl,
                 _ => continue,
@@ -1077,6 +1198,9 @@ fn lookup_media_in_search_root_index(root: &str, item_name: &str) -> Option<Path
 /// Find which Explorer folder the cursor is currently over
 fn get_current_explorer_folder() -> Option<String> {
     if let Some(context) = get_active_shell_view_context_at_cursor() {
+        if let Some(folder) = context.folder_path {
+            return Some(folder);
+        }
         if let Some(url) = context.location_url.as_deref() {
             if let Some(folder) = resolve_explorer_location_folder(context.browser_hwnd, url) {
                 return Some(folder);
@@ -2422,6 +2546,7 @@ pub fn run_explorer_hook() {
                 last_folder_probe = Instant::now();
                 if let Some(folder) = get_current_explorer_folder() {
                     if last_cursor_folder.as_ref() != Some(&folder) {
+                        queue_folder_index_build(PathBuf::from(&folder), folder.clone());
                         last_cursor_folder = Some(folder);
                         suspend_preview_until_user_input = true;
                         allow_keyboard_preview_on_first_observation = false;
