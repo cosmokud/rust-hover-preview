@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.1.10] - 2026-04-29
+
+### Changed
+
+- Restored the default NSIS older-version prompt while keeping the installer-side process shutdown, config default completion, and old-folder migration logic.
+- Updated release metadata for v0.1.10.
+
 ## [0.1.9] - 2026-04-29
 
 ### Added
@@ -23,7 +30,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 - Updated NSIS and WiX installers to stop a running `rust-hover-preview.exe` before replacing installed files during upgrades.
-- Removed the NSIS older-version choice page so upgrades proceed automatically through the normal Next flow.
 - Added installer-side config default completion so missing `config.ini` parameters are added without changing existing user values.
 - Hardened preview hide behavior so stuck video previews are hidden and ffplay is stopped more aggressively.
 - Added Explorer COM/UIA slow-probe backoff and cache clearing to reduce runaway polling after Explorer gets sluggish.

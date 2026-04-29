@@ -1,6 +1,6 @@
 [package]
 name = "rust-hover-preview"
-version = "0.1.9"
+version = "0.1.10"
 edition = "2021"
 description = "Windows 11 system tray app that shows image and video previews on hover in Explorer"
 authors = ["Rust Hover Preview Contributors"]
@@ -75,7 +75,6 @@ main = true
 [package.metadata.packager.nsis]
 installMode = "currentUser"
 installer-icon = "assets/icon.ico"
-template = "packaging/nsis/installer.nsi"
 appdata-paths = ["$APPDATA/rust-hover-preview"]
 preinstall-section = """
 Section PreInstall
