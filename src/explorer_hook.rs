@@ -42,7 +42,6 @@ const IMAGE_EXTENSIONS: &[&str] = &[
 const VIDEO_EXTENSIONS: &[&str] = &["mp4", "webm", "mkv", "avi", "mov", "wmv", "flv", "m4v"];
 
 struct FolderMediaIndex {
-    folder: String,
     built_at: Instant,
     by_file_name: HashMap<String, PathBuf>,
     by_stem: HashMap<String, PathBuf>,
@@ -54,17 +53,23 @@ struct ExplorerFoldersCache {
 }
 
 struct ShellViewMediaIndex {
-    hwnd: isize,
     built_at: Instant,
     by_display_name: HashMap<String, PathBuf>,
     by_file_name: HashMap<String, PathBuf>,
 }
 
 struct SearchRootMediaIndex {
-    root: String,
     built_at: Instant,
     by_file_name: HashMap<String, Vec<PathBuf>>,
     by_stem: HashMap<String, Vec<PathBuf>>,
+}
+
+struct ActiveShellViewContext {
+    browser_hwnd: isize,
+    shell_view_hwnd: isize,
+    location_url: Option<String>,
+    shell_view: IShellView,
+    client_point: POINT,
 }
 
 const FOLDER_INDEX_TTL_MS: u64 = 60000;
@@ -77,13 +82,14 @@ const SEARCH_ROOT_INDEX_MAX_FILES: usize = 50000;
 const EXPLORER_PROBE_SLOW_MS: u64 = 700;
 const EXPLORER_WINDOW_CACHE_TTL_MS: u64 = 1000;
 
-static FOLDER_MEDIA_INDEX: Lazy<Mutex<Option<FolderMediaIndex>>> = Lazy::new(|| Mutex::new(None));
+static FOLDER_MEDIA_INDEX: Lazy<Mutex<HashMap<String, FolderMediaIndex>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
 static EXPLORER_FOLDERS_CACHE: Lazy<Mutex<Option<ExplorerFoldersCache>>> =
     Lazy::new(|| Mutex::new(None));
-static SHELL_VIEW_MEDIA_INDEX: Lazy<Mutex<Option<ShellViewMediaIndex>>> =
-    Lazy::new(|| Mutex::new(None));
-static SEARCH_ROOT_MEDIA_INDEX: Lazy<Mutex<Option<SearchRootMediaIndex>>> =
-    Lazy::new(|| Mutex::new(None));
+static SHELL_VIEW_MEDIA_INDEX: Lazy<Mutex<HashMap<isize, ShellViewMediaIndex>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+static SEARCH_ROOT_MEDIA_INDEX: Lazy<Mutex<HashMap<String, SearchRootMediaIndex>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
 static EXPLORER_LAST_REAL_FOLDERS: Lazy<Mutex<HashMap<isize, String>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 static EXPLORER_WINDOW_CACHE: Lazy<Mutex<HashMap<isize, (bool, Instant)>>> =
@@ -99,7 +105,7 @@ fn clear_variant(variant: &mut VARIANT) {
     }
 }
 
-fn build_folder_media_index(folder_path: &PathBuf, folder_key: &str) -> Option<FolderMediaIndex> {
+fn build_folder_media_index(folder_path: &PathBuf, _folder_key: &str) -> Option<FolderMediaIndex> {
     let mut by_file_name = HashMap::new();
     let mut by_stem = HashMap::new();
 
@@ -124,7 +130,6 @@ fn build_folder_media_index(folder_path: &PathBuf, folder_key: &str) -> Option<F
     }
 
     Some(FolderMediaIndex {
-        folder: folder_key.to_string(),
         built_at: Instant::now(),
         by_file_name,
         by_stem,
@@ -152,19 +157,14 @@ fn lookup_media_in_folder_index(
         .map(|s| s.to_ascii_lowercase());
 
     let mut cache = FOLDER_MEDIA_INDEX.lock().ok()?;
-    let needs_rebuild = match cache.as_ref() {
-        Some(index) => {
-            index.folder != folder_key
-                || index.built_at.elapsed() > Duration::from_millis(FOLDER_INDEX_TTL_MS)
-        }
-        None => true,
-    };
+    cache.retain(|_, index| index.built_at.elapsed() <= Duration::from_millis(FOLDER_INDEX_TTL_MS));
 
-    if needs_rebuild {
-        *cache = build_folder_media_index(folder_path, folder_key);
+    if !cache.contains_key(folder_key) {
+        let index = build_folder_media_index(folder_path, folder_key)?;
+        cache.insert(folder_key.to_string(), index);
     }
 
-    let index = cache.as_ref()?;
+    let index = cache.get(folder_key)?;
 
     if let Some(path) = index.by_file_name.get(&item_name_lower) {
         return Some(path.clone());
@@ -519,29 +519,12 @@ fn get_explorer_location_url(hwnd: HWND) -> Option<String> {
     None
 }
 
-fn get_current_explorer_location_url() -> Option<String> {
-    let hwnd = get_explorer_hwnd_under_cursor_or_foreground()?;
-    get_explorer_location_url(hwnd)
-}
-
-fn point_in_rect(point: &POINT, rect: &RECT) -> bool {
-    point.x >= rect.left && point.x < rect.right && point.y >= rect.top && point.y < rect.bottom
-}
-
-fn normalize_media_path(path: PathBuf) -> Option<PathBuf> {
-    if !path.exists() || !is_media_file(&path) {
-        return None;
-    }
-
-    std::fs::canonicalize(&path).ok().or(Some(path))
-}
-
-fn get_active_shell_view_under_cursor(screen_point: &POINT) -> Option<(IShellView, POINT)> {
+fn get_active_shell_view_context(screen_point: &POINT) -> Option<ActiveShellViewContext> {
     unsafe {
         let shell_windows =
             CoCreateInstance::<_, IShellWindows>(&ShellWindows, None, CLSCTX_ALL).ok()?;
         let count = shell_windows.Count().ok()?;
-        let mut foreground_candidate: Option<(IShellView, POINT)> = None;
+        let mut foreground_candidate: Option<ActiveShellViewContext> = None;
         let foreground = GetForegroundWindow();
 
         for i in 0..count {
@@ -554,6 +537,11 @@ fn get_active_shell_view_under_cursor(screen_point: &POINT) -> Option<(IShellVie
                 Ok(browser) => browser,
                 Err(_) => continue,
             };
+            let browser_hwnd = match browser.HWND() {
+                Ok(browser_hwnd) => browser_hwnd,
+                Err(_) => continue,
+            };
+            let browser_hwnd_key = browser_hwnd.0 as isize;
             let service_provider = match browser.cast::<IServiceProvider>() {
                 Ok(service_provider) => service_provider,
                 Err(_) => continue,
@@ -571,31 +559,76 @@ fn get_active_shell_view_under_cursor(screen_point: &POINT) -> Option<(IShellVie
                 Ok(hwnd) if !hwnd.is_invalid() => hwnd,
                 _ => continue,
             };
+            let shell_view_hwnd_key = shell_view_hwnd.0 as isize;
 
             let mut rect = RECT::default();
             if GetWindowRect(shell_view_hwnd, &mut rect).is_err() {
                 continue;
             }
-            if !point_in_rect(screen_point, &rect) {
-                if let Ok(browser_hwnd) = browser.HWND() {
-                    if foreground == HWND(browser_hwnd.0 as *mut _) {
-                        let mut client_point = *screen_point;
-                        if ScreenToClient(shell_view_hwnd, &mut client_point).as_bool() {
-                            foreground_candidate = Some((shell_view, client_point));
-                        }
-                    }
-                }
+
+            let location_url = browser.LocationURL().ok().map(|url| url.to_string());
+            let mut client_point = *screen_point;
+            if !ScreenToClient(shell_view_hwnd, &mut client_point).as_bool() {
                 continue;
             }
 
-            let mut client_point = *screen_point;
-            if ScreenToClient(shell_view_hwnd, &mut client_point).as_bool() {
-                return Some((shell_view, client_point));
+            let context = ActiveShellViewContext {
+                browser_hwnd: browser_hwnd_key,
+                shell_view_hwnd: shell_view_hwnd_key,
+                location_url,
+                shell_view,
+                client_point,
+            };
+
+            if point_in_rect(screen_point, &rect) {
+                return Some(context);
+            }
+
+            if foreground == HWND(browser_hwnd.0 as *mut _) {
+                foreground_candidate = Some(context);
             }
         }
 
         foreground_candidate
     }
+}
+
+fn get_active_shell_view_context_at_cursor() -> Option<ActiveShellViewContext> {
+    unsafe {
+        let mut cursor_pos = POINT::default();
+        if GetCursorPos(&mut cursor_pos).is_err() {
+            return None;
+        }
+        get_active_shell_view_context(&cursor_pos)
+    }
+}
+
+fn get_current_explorer_location_url() -> Option<String> {
+    if let Some(context) = get_active_shell_view_context_at_cursor() {
+        if let Some(url) = context.location_url {
+            return Some(url);
+        }
+    }
+
+    let hwnd = get_explorer_hwnd_under_cursor_or_foreground()?;
+    get_explorer_location_url(hwnd)
+}
+
+fn point_in_rect(point: &POINT, rect: &RECT) -> bool {
+    point.x >= rect.left && point.x < rect.right && point.y >= rect.top && point.y < rect.bottom
+}
+
+fn normalize_media_path(path: PathBuf) -> Option<PathBuf> {
+    if !path.exists() || !is_media_file(&path) {
+        return None;
+    }
+
+    std::fs::canonicalize(&path).ok().or(Some(path))
+}
+
+fn get_active_shell_view_under_cursor(screen_point: &POINT) -> Option<(IShellView, POINT)> {
+    let context = get_active_shell_view_context(screen_point)?;
+    Some((context.shell_view, context.client_point))
 }
 
 fn shell_item_to_media_path(shell_item: &IShellItem) -> Option<PathBuf> {
@@ -729,6 +762,14 @@ fn get_shell_data_model_file_under_cursor() -> Option<PathBuf> {
 }
 
 fn get_current_explorer_search_root() -> Option<String> {
+    if let Some(context) = get_active_shell_view_context_at_cursor() {
+        if let Some(url) = context.location_url {
+            if is_search_ms_url(&url) {
+                return resolve_explorer_location_folder(context.browser_hwnd, &url);
+            }
+        }
+    }
+
     let hwnd = get_explorer_hwnd_under_cursor_or_foreground()?;
     let hwnd_key = hwnd.0 as isize;
     let url = get_explorer_location_url(hwnd)?;
@@ -773,8 +814,7 @@ fn get_focused_shell_view_media_path(item: &FocusedItemInfo) -> Option<PathBuf> 
     None
 }
 
-fn build_shell_view_media_index(hwnd: HWND) -> Option<ShellViewMediaIndex> {
-    let hwnd_key = hwnd.0 as isize;
+fn build_shell_view_media_index(view_hwnd_key: isize) -> Option<ShellViewMediaIndex> {
     let mut by_display_name = HashMap::new();
     let mut by_file_name = HashMap::new();
 
@@ -793,11 +833,24 @@ fn build_shell_view_media_index(hwnd: HWND) -> Option<ShellViewMediaIndex> {
                 Ok(browser) => browser,
                 Err(_) => continue,
             };
-            let browser_hwnd = match browser.HWND() {
-                Ok(browser_hwnd) => browser_hwnd,
+            let service_provider = match browser.cast::<IServiceProvider>() {
+                Ok(service_provider) => service_provider,
                 Err(_) => continue,
             };
-            if browser_hwnd.0 != hwnd_key as isize {
+            let shell_browser: IShellBrowser =
+                match service_provider.QueryService(&SID_STopLevelBrowser) {
+                    Ok(shell_browser) => shell_browser,
+                    Err(_) => continue,
+                };
+            let shell_view = match shell_browser.QueryActiveShellView() {
+                Ok(shell_view) => shell_view,
+                Err(_) => continue,
+            };
+            let shell_view_hwnd = match shell_view.GetWindow() {
+                Ok(hwnd) if !hwnd.is_invalid() => hwnd,
+                _ => continue,
+            };
+            if shell_view_hwnd.0 as isize != view_hwnd_key {
                 continue;
             }
 
@@ -837,7 +890,6 @@ fn build_shell_view_media_index(hwnd: HWND) -> Option<ShellViewMediaIndex> {
             }
 
             return Some(ShellViewMediaIndex {
-                hwnd: hwnd_key,
                 built_at: Instant::now(),
                 by_display_name,
                 by_file_name,
@@ -848,46 +900,37 @@ fn build_shell_view_media_index(hwnd: HWND) -> Option<ShellViewMediaIndex> {
     None
 }
 
-fn find_media_in_shell_view(hwnd: HWND, item_name: &str) -> Option<PathBuf> {
+fn find_media_in_shell_view(view_hwnd_key: isize, item_name: &str) -> Option<PathBuf> {
     let item_name = item_name.trim();
     if item_name.is_empty() {
         return None;
     }
 
-    let hwnd_key = hwnd.0 as isize;
-    if let Ok(cache) = SHELL_VIEW_MEDIA_INDEX.lock() {
-        if let Some(index) = cache.as_ref() {
-            if index.hwnd == hwnd_key
-                && index.built_at.elapsed() <= Duration::from_millis(SHELL_VIEW_INDEX_TTL_MS)
-            {
-                let item_name_lower = item_name.to_ascii_lowercase();
-                return index
-                    .by_file_name
-                    .get(&item_name_lower)
-                    .or_else(|| index.by_display_name.get(&item_name_lower))
-                    .cloned();
-            }
-        }
-    }
-
-    let index = build_shell_view_media_index(hwnd)?;
     let item_name_lower = item_name.to_ascii_lowercase();
-    let result = index
-        .by_file_name
-        .get(&item_name_lower)
-        .or_else(|| index.by_display_name.get(&item_name_lower))
-        .cloned();
+    let mut cache = SHELL_VIEW_MEDIA_INDEX.lock().ok()?;
+    cache.retain(|_, index| {
+        index.built_at.elapsed() <= Duration::from_millis(SHELL_VIEW_INDEX_TTL_MS)
+    });
 
-    if let Ok(mut cache) = SHELL_VIEW_MEDIA_INDEX.lock() {
-        *cache = Some(index);
+    if !cache.contains_key(&view_hwnd_key) {
+        let index = build_shell_view_media_index(view_hwnd_key)?;
+        cache.insert(view_hwnd_key, index);
     }
 
-    result
+    cache
+        .get(&view_hwnd_key)
+        .and_then(|index| {
+            index
+                .by_file_name
+                .get(&item_name_lower)
+                .or_else(|| index.by_display_name.get(&item_name_lower))
+        })
+        .cloned()
 }
 
 fn find_media_in_current_shell_view(item_name: &str) -> Option<PathBuf> {
-    let hwnd = get_explorer_hwnd_under_cursor_or_foreground()?;
-    find_media_in_shell_view(hwnd, item_name)
+    let context = get_active_shell_view_context_at_cursor()?;
+    find_media_in_shell_view(context.shell_view_hwnd, item_name)
 }
 
 fn lookup_media_in_hover_folder(
@@ -928,7 +971,6 @@ fn build_search_root_media_index(root: &str) -> Option<SearchRootMediaIndex> {
     }
 
     let mut index = SearchRootMediaIndex {
-        root: root.to_string(),
         built_at: Instant::now(),
         by_file_name: HashMap::new(),
         by_stem: HashMap::new(),
@@ -992,19 +1034,16 @@ fn lookup_media_in_search_root_index(root: &str, item_name: &str) -> Option<Path
         .map(|s| s.to_ascii_lowercase());
 
     let mut cache = SEARCH_ROOT_MEDIA_INDEX.lock().ok()?;
-    let needs_rebuild = match cache.as_ref() {
-        Some(index) => {
-            index.root != root
-                || index.built_at.elapsed() > Duration::from_millis(SEARCH_ROOT_INDEX_TTL_MS)
-        }
-        None => true,
-    };
+    cache.retain(|_, index| {
+        index.built_at.elapsed() <= Duration::from_millis(SEARCH_ROOT_INDEX_TTL_MS)
+    });
 
-    if needs_rebuild {
-        *cache = build_search_root_media_index(root);
+    if !cache.contains_key(root) {
+        let index = build_search_root_media_index(root)?;
+        cache.insert(root.to_string(), index);
     }
 
-    let index = cache.as_ref()?;
+    let index = cache.get(root)?;
 
     if let Some(paths) = index.by_file_name.get(&item_name_lower) {
         if let Some(path) = paths.first() {
@@ -1037,6 +1076,17 @@ fn lookup_media_in_search_root_index(root: &str, item_name: &str) -> Option<Path
 
 /// Find which Explorer folder the cursor is currently over
 fn get_current_explorer_folder() -> Option<String> {
+    if let Some(context) = get_active_shell_view_context_at_cursor() {
+        if let Some(url) = context.location_url.as_deref() {
+            if let Some(folder) = resolve_explorer_location_folder(context.browser_hwnd, url) {
+                return Some(folder);
+            }
+        }
+        if let Some(folder) = get_cached_explorer_real_folder(context.browser_hwnd) {
+            return Some(folder);
+        }
+    }
+
     unsafe {
         let mut cursor_pos = POINT::default();
         if GetCursorPos(&mut cursor_pos).is_err() {
@@ -1582,11 +1632,12 @@ fn get_file_under_cursor(
     automation: Option<&IUIAutomation>,
     current_folder_hint: Option<&str>,
 ) -> Option<PathBuf> {
-    // Prefer the cheap accessibility/UIA path first. In normal folders this
-    // usually gives us a display name that we can resolve via the folder index
-    // without touching Shell view enumeration.
-    if let Some(item_info) =
-        get_item_under_cursor().or_else(|| automation.and_then(get_item_under_cursor_uia))
+    // Prefer UI Automation for modern Explorer: it resolves the visible item
+    // under the cursor directly and avoids a lot of noisy MSAA parent walking.
+    // Fall back to MSAA only when UIA cannot identify the hovered item.
+    if let Some(item_info) = automation
+        .and_then(get_item_under_cursor_uia)
+        .or_else(|| get_item_under_cursor())
     {
         match item_info {
             AccessibilityResult::FullPath(path) => {
