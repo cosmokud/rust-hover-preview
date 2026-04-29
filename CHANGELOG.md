@@ -18,9 +18,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Moved per-user installer output to `%LOCALAPPDATA%\rust-hover-preview` while keeping the display name `Rust Hover Preview`.
 - Switched configuration path resolution to the `directories` crate while keeping config at `%APPDATA%\rust-hover-preview\config.ini`.
 - Updated the tray off-trigger label to show the configured key, such as `Enable Off Trigger Key (Alt)`.
+- Updated the tray icon tooltip to show the full `Rust Hover Preview` app name.
 
 ### Fixed
 
+- Updated NSIS and WiX installers to stop a running `rust-hover-preview.exe` before replacing installed files during upgrades.
+- Removed the NSIS older-version choice page so upgrades proceed automatically through the normal Next flow.
+- Added installer-side config default completion so missing `config.ini` parameters are added without changing existing user values.
 - Hardened preview hide behavior so stuck video previews are hidden and ffplay is stopped more aggressively.
 - Added Explorer COM/UIA slow-probe backoff and cache clearing to reduce runaway polling after Explorer gets sluggish.
 - Fixed repeated same-file hover retrigger timing after the preview self-dismisses.
