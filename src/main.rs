@@ -7,8 +7,10 @@ mod startup;
 mod tray;
 
 use once_cell::sync::Lazy;
+use std::fs;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
+use std::time::Duration;
 use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
 
 // Global state
@@ -29,6 +31,31 @@ fn main() {
         preview_window::run_preview_window();
     });
 
+    // Watch config.ini changes off the hover hot path.
+    let config_watch_handle = std::thread::spawn(|| {
+        let config_path = config::AppConfig::config_path();
+        let mut last_modified = config_path
+            .as_ref()
+            .and_then(|path| fs::metadata(path).ok())
+            .and_then(|meta| meta.modified().ok());
+
+        while RUNNING.load(Ordering::Acquire) {
+            std::thread::sleep(Duration::from_millis(1000));
+
+            let modified = config_path
+                .as_ref()
+                .and_then(|path| fs::metadata(path).ok())
+                .and_then(|meta| meta.modified().ok());
+
+            if modified != last_modified {
+                last_modified = modified;
+                if let Ok(mut config) = CONFIG.lock() {
+                    config.reload_from_disk();
+                }
+            }
+        }
+    });
+
     // Start the explorer hook in a separate thread
     let hook_handle = std::thread::spawn(|| {
         explorer_hook::run_explorer_hook();
@@ -43,6 +70,7 @@ fn main() {
     // Wait for threads to finish (with timeout)
     let _ = preview_handle.join();
     let _ = hook_handle.join();
+    let _ = config_watch_handle.join();
 
     // Cleanup COM
     unsafe {

@@ -43,7 +43,6 @@ const MAX_STREAMED_ANIMATION_BYTES: usize = 256 * 1024 * 1024;
 const MIN_GIF_ANIMATION_FRAME_DELAY_MS: u32 = 33;
 const ANIMATION_STARTUP_PREBUFFER_FRAMES: usize = 12;
 const ANIMATION_STARTUP_PREBUFFER_MS: u32 = 500;
-const CONFIG_RELOAD_INTERVAL_MS: u64 = 250;
 const STREAMING_SPINNER_MAX_MS: u64 = 1500;
 
 // Message passing for thread communication
@@ -2449,18 +2448,10 @@ pub fn run_preview_window() {
         let mut pending_load: Option<PendingLoad> = None;
         let mut pending_load_cancel: Option<Arc<AtomicBool>> = None;
         let mut last_stream_overlay_repaint = Instant::now();
-        let mut last_config_reload = Instant::now();
 
         // Message loop
         let mut msg = MSG::default();
         while RUNNING.load(Ordering::SeqCst) {
-            if last_config_reload.elapsed() >= Duration::from_millis(CONFIG_RELOAD_INTERVAL_MS) {
-                last_config_reload = Instant::now();
-                if let Ok(mut config) = CONFIG.lock() {
-                    config.reload_from_disk();
-                }
-            }
-
             // Check for Windows messages
             while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
                 let _ = TranslateMessage(&msg);
@@ -2581,8 +2572,26 @@ pub fn run_preview_window() {
                 }
             }
 
-            // Check for our custom messages
+            // Check for our custom messages. Only the newest hover target matters;
+            // collapse stale Show/Hide traffic so we do not spend time computing
+            // layouts for files the cursor has already left.
+            let mut latest_preview_msg: Option<PreviewMessage> = None;
+            let mut refresh_requested = false;
             while let Ok(preview_msg) = rx.try_recv() {
+                match preview_msg {
+                    PreviewMessage::Refresh => {
+                        if latest_preview_msg.is_none() {
+                            refresh_requested = true;
+                        }
+                    }
+                    other => {
+                        latest_preview_msg = Some(other);
+                        refresh_requested = false;
+                    }
+                }
+            }
+
+            if let Some(preview_msg) = latest_preview_msg {
                 // Common variables for Show/ShowKeyboard - set in match, used after
                 let mut show_path: Option<PathBuf> = None;
                 let mut show_layout: Option<PreviewLayout> = None;
@@ -2784,6 +2793,8 @@ pub fn run_preview_window() {
                         );
                     }
                 }
+            } else if refresh_requested {
+                render_layered_preview(hwnd);
             }
 
             std::thread::sleep(std::time::Duration::from_millis(16)); // ~60fps loop is enough and lowers idle CPU
