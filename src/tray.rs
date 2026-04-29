@@ -23,6 +23,7 @@ const ID_TRAY_STARTUP: u16 = 1002;
 const ID_TRAY_ENABLE: u16 = 1003;
 const ID_TRAY_CONFIRM_FILE_TYPE: u16 = 1004;
 const ID_TRAY_ENABLE_OFF_TRIGGER_KEY: u16 = 1005;
+const ID_TRAY_TURBO_MODE: u16 = 1006;
 const ID_TRAY_VOLUME_MAX: u16 = 1010; // 100%
 const ID_TRAY_VOLUME_HIGH: u16 = 1011; // 80%
 const ID_TRAY_VOLUME_MEDIUM: u16 = 1012; // 50%
@@ -80,6 +81,9 @@ unsafe extern "system" fn tray_window_proc(
                 }
                 ID_TRAY_ENABLE_OFF_TRIGGER_KEY => {
                     toggle_enable_off_trigger_key();
+                }
+                ID_TRAY_TURBO_MODE => {
+                    toggle_turbo_mode();
                 }
                 ID_TRAY_VOLUME_MAX => set_volume(100),
                 ID_TRAY_VOLUME_HIGH => set_volume(80),
@@ -156,6 +160,16 @@ unsafe fn show_context_menu(hwnd: HWND) {
         confirm_flags,
         ID_TRAY_CONFIRM_FILE_TYPE as usize,
         w!("Confirm File Type"),
+    );
+
+    // Add "Turbo Mode" with checkmark
+    let turbo_mode = CONFIG.lock().map(|c| c.turbo_mode).unwrap_or(false);
+    let turbo_flags = MF_STRING | if turbo_mode { MF_CHECKED } else { MF_UNCHECKED };
+    let _ = AppendMenuW(
+        menu,
+        turbo_flags,
+        ID_TRAY_TURBO_MODE as usize,
+        w!("Turbo Mode"),
     );
 
     // Add Preview Delay submenu
@@ -359,6 +373,13 @@ fn toggle_enable_off_trigger_key() {
 fn toggle_confirm_file_type() {
     if let Ok(mut config) = CONFIG.lock() {
         config.confirm_file_type = !config.confirm_file_type;
+        config.save();
+    }
+}
+
+fn toggle_turbo_mode() {
+    if let Ok(mut config) = CONFIG.lock() {
+        config.turbo_mode = !config.turbo_mode;
         config.save();
     }
 }
