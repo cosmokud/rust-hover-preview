@@ -54,10 +54,6 @@
         <Property Id="ARPNOREPAIR" Value="yes" Secure="yes" />
         <SetProperty Id="ARPNOMODIFY" Value="1" After="InstallValidate" Sequence="execute"/>
 
-        <Property Id="INSTALLDIR">
-            <RegistrySearch Id="PrevInstallDirReg" Root="HKCU" Key="Software\\{{manufacturer}}\\{{product_name}}" Name="InstallDir" Type="raw"/>
-        </Property>
-
         <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="!(loc.LaunchApp)" />
         <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOX" Value="1"/>
         <Property Id="WixShellExecTarget" Value="[!Path]" />
@@ -93,7 +89,8 @@
                 </Component>
             </Directory>
             <Directory Id="LocalAppDataFolder">
-                <Directory Id="INSTALLDIR" Name="{{product_name}}"/>
+                <Directory Id="INSTALLDIR" Name="rust-hover-preview"/>
+                <Directory Id="OLDINSTALLDIR" Name="Rust Hover Preview"/>
             </Directory>
             <Directory Id="ProgramMenuFolder">
                 <Directory Id="ApplicationProgramsFolder" Name="{{product_name}}"/>
@@ -154,6 +151,21 @@
             </Component>
         </DirectoryRef>
 
+        <DirectoryRef Id="OLDINSTALLDIR">
+            <Component Id="MigrateOldLocalAppDataInstall" Guid="*">
+                <RemoveFile Id="RemoveOldMainExe" Name="rust-hover-preview.exe" On="install" />
+                <RemoveFile Id="RemoveOldUninstallExe" Name="uninstall.exe" On="install" />
+                <RemoveFile Id="RemoveOldUninstallerExe" Name="uninstaller.exe" On="install" />
+                <RemoveFolder Id="RemoveOldInstallDirIfEmpty" On="install" />
+                <RegistryValue Root="HKCU"
+                               Key="Software\\{{manufacturer}}\\{{product_name}}\\Migration"
+                               Name="OldLocalAppDataInstall"
+                               Type="integer"
+                               Value="1"
+                               KeyPath="yes" />
+            </Component>
+        </DirectoryRef>
+
         <DirectoryRef Id="ApplicationProgramsFolder">
             <Component Id="ApplicationShortcut" Guid="*">
                 <Shortcut Id="ApplicationStartMenuShortcut"
@@ -192,6 +204,7 @@
                 Absent="disallow">
 
             <ComponentRef Id="RegistryEntries"/>
+            <ComponentRef Id="MigrateOldLocalAppDataInstall"/>
 
             {{#each resource_file_ids as |resource_file_id| ~}}
                 <ComponentRef Id="{{ resource_file_id }}"/>
