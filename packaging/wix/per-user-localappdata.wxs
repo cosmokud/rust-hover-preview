@@ -32,8 +32,7 @@
         {{/if}}
 
         <InstallExecuteSequence>
-            <Custom Action="KillRunningApp" Before="InstallValidate">NOT REMOVE</Custom>
-            <Custom Action="EnsureConfigDefaults" After="KillRunningApp">NOT REMOVE</Custom>
+            <Custom Action="EnsureConfigDefaults" Before="InstallValidate">NOT REMOVE</Custom>
             <RemoveShortcuts>Installed AND NOT UPGRADINGPRODUCTCODE</RemoveShortcuts>
         </InstallExecuteSequence>
 
@@ -55,15 +54,9 @@
         {{/if}}
         <Property Id="ARPNOREPAIR" Value="yes" Secure="yes" />
         <SetProperty Id="ARPNOMODIFY" Value="1" After="InstallValidate" Sequence="execute"/>
-        <CustomAction Id="KillRunningApp"
-                      Directory="TARGETDIR"
-                      ExeCommand='taskkill /IM rust-hover-preview.exe /F'
-                      Execute="immediate"
-                      Return="ignore"
-                      Impersonate="yes" />
         <CustomAction Id="EnsureConfigDefaults"
                       Directory="TARGETDIR"
-                      ExeCommand="powershell.exe -NoProfile -ExecutionPolicy Bypass -Command &quot;$p=Join-Path $env:APPDATA 'rust-hover-preview\config.ini'; $s=[char]91+'settings'+[char]93; New-Item -ItemType Directory -Force -Path (Split-Path $p) | Out-Null; if (-not (Test-Path $p)) { Set-Content -Path $p -Value $s }; $c=Get-Content $p -Raw; if ($c -notmatch ('(?m)^' + [regex]::Escape($s))) { Add-Content -Path $p -Value $s }; $d=[ordered]@{run_at_startup='true';hover_delay_ms='0';preview_enabled='true';enable_off_trigger_key='true';off_trigger_key='alt';confirm_file_type='false';follow_cursor='false';same_file_rehover_delay_ms='750';transparent_background='black';video_volume='0'}; foreach ($k in $d.Keys) { if ($c -notmatch ('(?m)^' + [regex]::Escape($k) + '=')) { Add-Content -Path $p -Value ($k + '=' + $d[$k]) } }&quot;"
+                      ExeCommand="powershell.exe -NoProfile -ExecutionPolicy Bypass -Command &quot;$p=Join-Path $env:APPDATA 'rust-hover-preview\config.ini'; $s=[char]91+'settings'+[char]93; $first=-not (Test-Path $p); New-Item -ItemType Directory -Force -Path (Split-Path $p) | Out-Null; if ($first) { Set-Content -Path $p -Value $s }; $c=Get-Content $p -Raw; if ($c -notmatch ('(?m)^' + [regex]::Escape($s))) { Add-Content -Path $p -Value $s }; $d=[ordered]@{run_at_startup='true';hover_delay_ms='0';preview_enabled='true';enable_off_trigger_key='true';off_trigger_key='alt';confirm_file_type='false';follow_cursor='false';same_file_rehover_delay_ms='750';transparent_background='black';video_volume='0'}; foreach ($k in $d.Keys) { if ($c -notmatch ('(?m)^' + [regex]::Escape($k) + '=')) { Add-Content -Path $p -Value ($k + '=' + $d[$k]) } }; if ($first) { New-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'RustHoverPreview' -Value (Join-Path $env:LOCALAPPDATA 'rust-hover-preview\rust-hover-preview.exe') -PropertyType String -Force | Out-Null }&quot;"
                       Execute="immediate"
                       Return="ignore"
                       Impersonate="yes" />
@@ -131,7 +124,7 @@
             </Component>
             <Component Id="Path" Guid="{{path_component_guid}}" Win64="$(var.Win64)">
                 <File Id="Path" Source="{{app_exe_source}}" Checksum="yes"/>
-                <RegistryValue Root="HKCU" Key="Software\\{{manufacturer}}\\{{product_name}}\\Components" Name="Path" Type="integer" Value="1" KeyPath="yes" />
+                <RegistryValue Root="HKCU" Key="Software\\{{manufacturer}}\\{{product_name}}\Components" Name="Path" Type="integer" Value="1" KeyPath="yes" />
                 {{#each file_associations as |association| ~}}
                 {{#each association.ext as |ext| ~}}
                 <ProgId Id="{{../../product_name}}.{{ext}}" Advertise="yes" Description="{{association.description}}">
@@ -145,7 +138,7 @@
             {{#each binaries as |bin| ~}}
             <Component Id="{{ bin.id }}" Guid="{{bin.guid}}" Win64="$(var.Win64)">
                 <File Id="Bin_{{ bin.id }}" Source="{{bin.path}}"/>
-                <RegistryValue Root="HKCU" Key="Software\\{{../manufacturer}}\\{{../product_name}}\\Components" Name="{{ bin.id }}" Type="integer" Value="1" KeyPath="yes" />
+                <RegistryValue Root="HKCU" Key="Software\\{{../manufacturer}}\\{{../product_name}}\Components" Name="{{ bin.id }}" Type="integer" Value="1" KeyPath="yes" />
             </Component>
             {{/each~}}
             {{resources}}
@@ -172,7 +165,7 @@
                 <RemoveFile Id="RemoveOldUninstallerExe" Name="uninstaller.exe" On="install" />
                 <RemoveFolder Id="RemoveOldInstallDirIfEmpty" On="install" />
                 <RegistryValue Root="HKCU"
-                               Key="Software\\{{manufacturer}}\\{{product_name}}\\Migration"
+                               Key="Software\\{{manufacturer}}\\{{product_name}}\Migration"
                                Name="OldLocalAppDataInstall"
                                Type="integer"
                                Value="1"
