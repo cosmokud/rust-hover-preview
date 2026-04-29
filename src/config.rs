@@ -5,6 +5,35 @@ use std::path::PathBuf;
 
 const CONFIG_SECTION: &str = "settings";
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransparentBackground {
+    Transparent,
+    Black,
+    White,
+    Checkerboard,
+}
+
+impl TransparentBackground {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Transparent => "transparent",
+            Self::Black => "black",
+            Self::White => "white",
+            Self::Checkerboard => "checkerboard",
+        }
+    }
+
+    fn from_str(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "transparent" => Some(Self::Transparent),
+            "black" => Some(Self::Black),
+            "white" => Some(Self::White),
+            "checkerboard" => Some(Self::Checkerboard),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct AppConfig {
     pub run_at_startup: bool,
@@ -15,6 +44,7 @@ pub struct AppConfig {
     pub confirm_file_type: bool,
     pub follow_cursor: bool,
     pub turbo_mode: bool,
+    pub transparent_background: TransparentBackground,
     pub video_volume: u32,
 }
 
@@ -28,7 +58,8 @@ impl Default for AppConfig {
             off_trigger_key: "alt".to_string(),
             confirm_file_type: false,
             follow_cursor: false,
-            turbo_mode: false,
+            turbo_mode: true,
+            transparent_background: TransparentBackground::Transparent,
             video_volume: 0, // Mute by default
         }
     }
@@ -104,6 +135,11 @@ impl AppConfig {
             );
             ini.set(
                 CONFIG_SECTION,
+                "transparent_background",
+                Some(self.transparent_background.as_str().to_string()),
+            );
+            ini.set(
+                CONFIG_SECTION,
                 "video_volume",
                 Some(self.video_volume.to_string()),
             );
@@ -138,6 +174,11 @@ impl AppConfig {
         }
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "turbo_mode") {
             self.turbo_mode = value;
+        }
+        if let Some(value) = ini.get(CONFIG_SECTION, "transparent_background") {
+            if let Some(background) = TransparentBackground::from_str(&value) {
+                self.transparent_background = background;
+            }
         }
         if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "video_volume") {
             if let Ok(value) = u32::try_from(value) {
