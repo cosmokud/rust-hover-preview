@@ -1603,14 +1603,17 @@ fn get_file_under_cursor(automation: Option<&IUIAutomation>) -> Option<PathBuf> 
                 }
             }
 
-            // If Explorer exposes full search-result metadata, use it. Then fall
-            // back to a recursive index under this window's search root.
-            if let Some(path) = find_media_in_current_shell_view(&item_name) {
-                return Some(path);
-            }
-            if let Some(root) = current_search_root.as_deref() {
-                if let Some(path) = lookup_media_in_search_root_index(root, &item_name) {
+            // Shell-view metadata indexing is only useful for search results.
+            // In normal folders it can enumerate every item in the view, which
+            // becomes expensive in large directories.
+            if current_is_search_view {
+                if let Some(path) = find_media_in_current_shell_view(&item_name) {
                     return Some(path);
+                }
+                if let Some(root) = current_search_root.as_deref() {
+                    if let Some(path) = lookup_media_in_search_root_index(root, &item_name) {
+                        return Some(path);
+                    }
                 }
             }
 
@@ -1663,7 +1666,7 @@ fn get_file_under_cursor_checked(
     if started.elapsed() >= Duration::from_millis(EXPLORER_PROBE_SLOW_MS) {
         *slow_probe_count = slow_probe_count.saturating_add(1);
         clear_explorer_runtime_caches();
-    } else if result.is_some() {
+    } else {
         *slow_probe_count = 0;
     }
 
@@ -2178,11 +2181,12 @@ pub fn run_explorer_hook() {
     let mut explorer_probe_backoff_until: Option<Instant> = None;
 
     while RUNNING.load(Ordering::SeqCst) {
-        if slow_explorer_probe_count >= EXPLORER_SLOW_PROBE_LIMIT {
+        if slow_explorer_probe_count >= EXPLORER_SLOW_PROBE_LIMIT
+            && explorer_probe_backoff_until.is_none()
+        {
             explorer_probe_backoff_until =
                 Some(Instant::now() + Duration::from_millis(EXPLORER_PROBE_BACKOFF_MS));
             clear_explorer_runtime_caches();
-            continue;
         }
 
         if let Some(until) = explorer_probe_backoff_until {
