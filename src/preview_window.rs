@@ -736,70 +736,41 @@ fn load_animated_gif(
     })
 }
 
-fn decode_webp_frame_to_image(
-    buf: &[u8],
-    has_alpha: bool,
+fn decode_webp_animation_frame_to_image(
+    bgra: &[u8],
     orig_width: u32,
     orig_height: u32,
     target_width: u32,
     target_height: u32,
     delay_ms: u32,
 ) -> Option<ImageFrame> {
-    let expected_src = orig_width as usize * orig_height as usize * if has_alpha { 4 } else { 3 };
-    if buf.len() != expected_src {
+    let expected_bgra = orig_width as usize * orig_height as usize * 4;
+    if bgra.len() != expected_bgra {
         return None;
     }
 
-    if target_width == orig_width && target_height == orig_height {
-        let mut bgra = Vec::with_capacity(orig_width as usize * orig_height as usize * 4);
-        if has_alpha {
-            for chunk in buf.chunks_exact(4) {
-                bgra.push(chunk[2]);
-                bgra.push(chunk[1]);
-                bgra.push(chunk[0]);
-                bgra.push(chunk[3]);
-            }
-        } else {
-            for chunk in buf.chunks_exact(3) {
-                bgra.push(chunk[2]);
-                bgra.push(chunk[1]);
-                bgra.push(chunk[0]);
-                bgra.push(255);
-            }
-        }
-
-        return Some(ImageFrame {
-            pixels: bgra,
-            width: target_width,
-            height: target_height,
-            delay_ms,
-        });
-    }
-
-    let rgba = if has_alpha {
-        buf.to_vec()
+    let pixels = if target_width == orig_width && target_height == orig_height {
+        bgra.to_vec()
     } else {
-        let mut rgba = Vec::with_capacity(orig_width as usize * orig_height as usize * 4);
-        for chunk in buf.chunks_exact(3) {
-            rgba.push(chunk[0]);
-            rgba.push(chunk[1]);
+        let mut rgba = Vec::with_capacity(expected_bgra);
+        for chunk in bgra.chunks_exact(4) {
             rgba.push(chunk[2]);
-            rgba.push(255);
+            rgba.push(chunk[1]);
+            rgba.push(chunk[0]);
+            rgba.push(chunk[3]);
         }
-        rgba
+        let img = image::RgbaImage::from_raw(orig_width, orig_height, rgba)?;
+        let resized = image::imageops::resize(
+            &img,
+            target_width,
+            target_height,
+            image::imageops::FilterType::Nearest,
+        );
+        rgba_to_bgra(&resized.into_raw())
     };
 
-    let img = image::RgbaImage::from_raw(orig_width, orig_height, rgba)?;
-    let resized = image::imageops::resize(
-        &img,
-        target_width,
-        target_height,
-        image::imageops::FilterType::Nearest,
-    );
-    let bgra = rgba_to_bgra(&resized.into_raw());
-
     Some(ImageFrame {
-        pixels: bgra,
+        pixels,
         width: target_width,
         height: target_height,
         delay_ms,
@@ -816,13 +787,12 @@ fn load_animated_webp(
         return None;
     }
 
-    let file = File::open(path).ok()?;
-    let reader = BufReader::new(file);
-    let mut decoder = image_webp::WebPDecoder::new(reader).ok()?;
-
-    if !decoder.is_animated() {
-        return None;
-    }
+    let buffer = Arc::new(std::fs::read(path).ok()?);
+    let options = webp_animation::DecoderOptions {
+        use_threads: true,
+        color_mode: webp_animation::ColorMode::Bgra,
+    };
+    let decoder = webp_animation::Decoder::new_with_options(buffer.as_slice(), options).ok()?;
 
     let (orig_width, orig_height) = decoder.dimensions();
     if orig_width == 0 || orig_height == 0 || orig_width > 16384 || orig_height > 16384 {
@@ -835,35 +805,36 @@ fn load_animated_webp(
         return None;
     }
 
-    let has_alpha = decoder.has_alpha();
-    let num_frames = decoder.num_frames();
-    if !(2..=10000).contains(&num_frames) {
-        return None;
-    }
-
-    let bytes_per_pixel: usize = if has_alpha { 4 } else { 3 };
-    let buf_size = orig_width as usize * orig_height as usize * bytes_per_pixel;
-    if buf_size > 100_000_000 {
-        return None;
-    }
-
-    let mut buf = vec![0u8; buf_size];
     let mut initial_frames = Vec::new();
     let mut initial_bytes: usize = 0;
     let mut buffered_ms: u32 = 0;
+    let mut previous_timestamp = 0i32;
+    let mut reached_end = false;
+    let mut iterator = decoder.into_iter();
 
-    for _ in 0..num_frames {
+    while initial_frames.len() < MAX_STREAMED_ANIMATION_FRAMES
+        && initial_frames.len() < ANIMATION_STARTUP_PREBUFFER_FRAMES
+        && (initial_frames.len() < 2 || buffered_ms < ANIMATION_STARTUP_PREBUFFER_MS)
+    {
         if cancel.load(Ordering::Acquire) {
             return None;
         }
 
-        let delay_ms = match decoder.read_frame(&mut buf) {
-            Ok(delay_ms) => delay_ms.max(MIN_ANIMATION_FRAME_DELAY_MS),
-            Err(_) => break,
+        let frame = match iterator.next() {
+            Some(frame) => frame,
+            None => {
+                reached_end = true;
+                break;
+            }
         };
-        let img = decode_webp_frame_to_image(
-            &buf,
-            has_alpha,
+
+        let timestamp = frame.timestamp();
+        let delay_ms =
+            (timestamp - previous_timestamp).max(MIN_ANIMATION_FRAME_DELAY_MS as i32) as u32;
+        previous_timestamp = timestamp;
+
+        let img = decode_webp_animation_frame_to_image(
+            frame.data(),
             orig_width,
             orig_height,
             target_width,
@@ -876,20 +847,13 @@ fn load_animated_webp(
         }
         buffered_ms = buffered_ms.saturating_add(delay_ms);
         initial_frames.push(img);
-
-        if initial_frames.len() >= MAX_STREAMED_ANIMATION_FRAMES
-            || (initial_frames.len() >= ANIMATION_STARTUP_PREBUFFER_FRAMES
-                || (initial_frames.len() >= 2 && buffered_ms >= ANIMATION_STARTUP_PREBUFFER_MS))
-        {
-            break;
-        }
     }
 
-    if initial_frames.len() <= 1 {
+    if initial_frames.is_empty() || (reached_end && initial_frames.len() <= 1) {
         return None;
     }
 
-    if initial_frames.len() >= num_frames as usize {
+    if reached_end {
         return Some(MediaData {
             frames: initial_frames,
             shared_frames: None,
@@ -909,49 +873,45 @@ fn load_animated_webp(
     let loaded_flag_clone = Arc::clone(&loaded_flag);
     let skip_frames = initial_frames.len();
 
-    let path_clone = path.clone();
+    drop(iterator);
+    let buffer_clone = Arc::clone(&buffer);
     let cancel_clone = Arc::clone(&cancel);
     std::thread::spawn(move || {
-        let file = match File::open(&path_clone) {
-            Ok(f) => f,
-            Err(_) => {
-                loaded_flag_clone.store(true, Ordering::Release);
-                return;
-            }
+        let options = webp_animation::DecoderOptions {
+            use_threads: true,
+            color_mode: webp_animation::ColorMode::Bgra,
         };
-        let mut dec = match image_webp::WebPDecoder::new(BufReader::new(file)) {
-            Ok(d) => d,
-            Err(_) => {
-                loaded_flag_clone.store(true, Ordering::Release);
-                return;
-            }
-        };
+        let decoder =
+            match webp_animation::Decoder::new_with_options(buffer_clone.as_slice(), options) {
+                Ok(decoder) => decoder,
+                Err(_) => {
+                    loaded_flag_clone.store(true, Ordering::Release);
+                    return;
+                }
+            };
 
-        let bpp: usize = if dec.has_alpha() { 4 } else { 3 };
-        let mut buf = vec![0u8; orig_width as usize * orig_height as usize * bpp];
-        let has_alpha = dec.has_alpha();
-        let total = dec.num_frames();
+        let mut previous_timestamp = 0i32;
         let mut streamed_count = skip_frames;
         let mut streamed_bytes = initial_bytes;
 
-        for i in 0..total {
+        for (frame_idx, frame) in decoder.into_iter().enumerate() {
             if cancel_clone.load(Ordering::Acquire)
                 || streamed_count >= MAX_STREAMED_ANIMATION_FRAMES
             {
                 break;
             }
 
-            let delay_ms = match dec.read_frame(&mut buf) {
-                Ok(delay_ms) => delay_ms.max(MIN_ANIMATION_FRAME_DELAY_MS),
-                Err(_) => break,
-            };
-            if (i as usize) < skip_frames {
+            let timestamp = frame.timestamp();
+            let delay_ms =
+                (timestamp - previous_timestamp).max(MIN_ANIMATION_FRAME_DELAY_MS as i32) as u32;
+            previous_timestamp = timestamp;
+
+            if frame_idx < skip_frames {
                 continue;
             }
 
-            if let Some(img) = decode_webp_frame_to_image(
-                &buf,
-                has_alpha,
+            if let Some(img) = decode_webp_animation_frame_to_image(
+                frame.data(),
                 orig_width,
                 orig_height,
                 target_width,
