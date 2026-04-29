@@ -155,21 +155,31 @@ unsafe fn show_context_menu(hwnd: HWND) {
     );
 
     // Add "Enable Off Trigger Key" with checkmark
-    let enable_off_trigger_key = CONFIG
+    let (enable_off_trigger_key, off_trigger_key) = CONFIG
         .lock()
-        .map(|c| c.enable_off_trigger_key)
-        .unwrap_or(true);
+        .map(|c| (c.enable_off_trigger_key, c.off_trigger_key.clone()))
+        .unwrap_or((true, "alt".to_string()));
     let off_trigger_flags = MF_STRING
         | if enable_off_trigger_key {
             MF_CHECKED
         } else {
             MF_UNCHECKED
         };
+    let mut off_trigger_key_chars = off_trigger_key.chars();
+    let off_trigger_key_display = match off_trigger_key_chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + off_trigger_key_chars.as_str(),
+        None => off_trigger_key,
+    };
+    let off_trigger_label = format!("Enable Off Trigger Key ({})", off_trigger_key_display);
+    let off_trigger_label_wide: Vec<u16> = off_trigger_label
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
     let _ = AppendMenuW(
         menu,
         off_trigger_flags,
         ID_TRAY_ENABLE_OFF_TRIGGER_KEY as usize,
-        w!("Enable Off Trigger Key"),
+        PCWSTR(off_trigger_label_wide.as_ptr()),
     );
 
     // Add "Confirm File Type" with checkmark (content/header sniffing)
