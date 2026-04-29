@@ -45,6 +45,8 @@ const ID_TRAY_REHOVER_DELAY_INSTANT: u16 = 1034; // 0ms
 const ID_TRAY_REHOVER_DELAY_FAST: u16 = 1035; // 200ms
 const ID_TRAY_REHOVER_DELAY_MEDIUM: u16 = 1036; // 500ms
 const ID_TRAY_REHOVER_DELAY_SLOW: u16 = 1037; // 1000ms
+const ID_TRAY_DELAY_FAST_PLUS: u16 = 1038; // 750ms
+const ID_TRAY_REHOVER_DELAY_FAST_PLUS: u16 = 1039; // 750ms
 const ID_TRAY_OPEN_CONFIG: u16 = 1040;
 
 const TRAY_CLASS: PCWSTR = w!("RustHoverPreviewTrayClass");
@@ -110,10 +112,12 @@ unsafe extern "system" fn tray_window_proc(
                 ID_TRAY_DELAY_INSTANT => set_hover_delay(0),
                 ID_TRAY_DELAY_VERY_FAST => set_hover_delay(200),
                 ID_TRAY_DELAY_MEDIUM => set_hover_delay(500),
+                ID_TRAY_DELAY_FAST_PLUS => set_hover_delay(750),
                 ID_TRAY_DELAY_SLOW => set_hover_delay(1000),
                 ID_TRAY_REHOVER_DELAY_INSTANT => set_same_file_rehover_delay(0),
                 ID_TRAY_REHOVER_DELAY_FAST => set_same_file_rehover_delay(200),
                 ID_TRAY_REHOVER_DELAY_MEDIUM => set_same_file_rehover_delay(500),
+                ID_TRAY_REHOVER_DELAY_FAST_PLUS => set_same_file_rehover_delay(750),
                 ID_TRAY_REHOVER_DELAY_SLOW => set_same_file_rehover_delay(1000),
                 ID_TRAY_OPEN_CONFIG => open_config_file(),
                 _ => {}
@@ -261,15 +265,28 @@ unsafe fn show_context_menu(hwnd: HWND) {
     );
     let _ = AppendMenuW(
         delay_menu,
+        delay_flag(750),
+        ID_TRAY_DELAY_FAST_PLUS as usize,
+        w!("Relaxed (750 ms)"),
+    );
+    let _ = AppendMenuW(
+        delay_menu,
         delay_flag(1000),
         ID_TRAY_DELAY_SLOW as usize,
         w!("Slow (1000 ms)"),
     );
 
+    let _ = AppendMenuW(
+        menu,
+        MF_STRING | MF_POPUP,
+        delay_menu.0 as usize,
+        w!("Preview Delay"),
+    );
+
     let same_file_rehover_delay_ms = CONFIG
         .lock()
         .map(|c| c.same_file_rehover_delay_ms)
-        .unwrap_or(200);
+        .unwrap_or(750);
     let rehover_delay_menu = CreatePopupMenu().unwrap();
 
     let rehover_delay_flag = |delay: u64| {
@@ -300,22 +317,21 @@ unsafe fn show_context_menu(hwnd: HWND) {
     );
     let _ = AppendMenuW(
         rehover_delay_menu,
+        rehover_delay_flag(750),
+        ID_TRAY_REHOVER_DELAY_FAST_PLUS as usize,
+        w!("Relaxed (750 ms)"),
+    );
+    let _ = AppendMenuW(
+        rehover_delay_menu,
         rehover_delay_flag(1000),
         ID_TRAY_REHOVER_DELAY_SLOW as usize,
         w!("Slow (1000 ms)"),
     );
     let _ = AppendMenuW(
-        delay_menu,
+        menu,
         MF_STRING | MF_POPUP,
         rehover_delay_menu.0 as usize,
         w!("Same File Rehover Delay"),
-    );
-
-    let _ = AppendMenuW(
-        menu,
-        MF_STRING | MF_POPUP,
-        delay_menu.0 as usize,
-        w!("Preview Delay"),
     );
 
     // Add Volume submenu
