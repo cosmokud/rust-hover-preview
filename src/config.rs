@@ -4,6 +4,16 @@ use std::fs;
 use std::path::PathBuf;
 
 const CONFIG_SECTION: &str = "settings";
+pub const DEFAULT_WEBP_PLAYBACK_FPS: u32 = 90;
+pub const MAX_WEBP_PLAYBACK_FPS: u32 = 90;
+
+pub fn sanitize_webp_playback_fps(value: u32) -> u32 {
+    match value {
+        0 => DEFAULT_WEBP_PLAYBACK_FPS,
+        1..=MAX_WEBP_PLAYBACK_FPS => value,
+        _ => MAX_WEBP_PLAYBACK_FPS,
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TransparentBackground {
@@ -45,6 +55,7 @@ pub struct AppConfig {
     pub confirm_file_type: bool,
     pub follow_cursor: bool,
     pub same_file_rehover_delay_ms: u64,
+    pub webp_playback_fps: u32,
     pub transparent_background: TransparentBackground,
     pub video_volume: u32,
 }
@@ -61,6 +72,7 @@ impl Default for AppConfig {
             confirm_file_type: false,
             follow_cursor: false,
             same_file_rehover_delay_ms: 750,
+            webp_playback_fps: DEFAULT_WEBP_PLAYBACK_FPS,
             transparent_background: TransparentBackground::Black,
             video_volume: 0, // Mute by default
         }
@@ -149,6 +161,11 @@ impl AppConfig {
             );
             ini.set(
                 CONFIG_SECTION,
+                "webp_playback_fps",
+                Some(sanitize_webp_playback_fps(self.webp_playback_fps).to_string()),
+            );
+            ini.set(
+                CONFIG_SECTION,
                 "transparent_background",
                 Some(self.transparent_background.as_str().to_string()),
             );
@@ -188,6 +205,11 @@ impl AppConfig {
         }
         if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "same_file_rehover_delay_ms") {
             self.same_file_rehover_delay_ms = value;
+        }
+        if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "webp_playback_fps") {
+            if let Ok(value) = u32::try_from(value) {
+                self.webp_playback_fps = sanitize_webp_playback_fps(value);
+            }
         }
         if let Some(value) = ini.get(CONFIG_SECTION, "transparent_background") {
             if let Some(background) = TransparentBackground::from_str(&value) {
