@@ -2429,6 +2429,18 @@ pub fn run_explorer_hook() {
                 last_focused_name = None;
                 allow_keyboard_preview_on_first_observation = false;
 
+                if !turbo_mode {
+                    if let Some(suppressed_file) = suppressed_hover_file.as_ref() {
+                        if let Some(current_file) = get_file_under_cursor(uia.as_ref()) {
+                            if same_path(suppressed_file, &current_file) {
+                                hover_start = Some(Instant::now());
+                                continue;
+                            }
+                            suppressed_hover_file = None;
+                        }
+                    }
+                }
+
                 // Dismiss preview only when the mouse has actually moved onto it.
                 // This avoids blocking keyboard navigation when the cursor is static.
                 if !is_keyboard_hover {
@@ -2625,14 +2637,6 @@ pub fn run_explorer_hook() {
                             .map(|last| same_path(last, &file_path))
                             .unwrap_or(false)
                         {
-                            if !turbo_mode
-                                && suppressed_hover_file
-                                    .as_ref()
-                                    .map(|suppressed| same_path(suppressed, &file_path))
-                                    .unwrap_or(false)
-                            {
-                                continue;
-                            }
                             suppressed_hover_file = None;
                             last_file = Some(file_path.clone());
                             video_hover_guard_until = if is_video_file(&file_path) {
