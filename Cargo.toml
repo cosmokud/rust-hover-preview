@@ -1,6 +1,6 @@
 [package]
 name = "rust-hover-preview"
-version = "0.1.10"
+version = "0.1.11"
 edition = "2021"
 description = "Windows 11 system tray app that shows image and video previews on hover in Explorer"
 authors = ["Rust Hover Preview Contributors"]
@@ -128,3 +128,4 @@ SectionEnd
 [package.metadata.packager.wix]
 template = "packaging/wix/per-user-localappdata.wxs"
 languages = ["en-US"]
+

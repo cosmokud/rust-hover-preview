@@ -1,8 +1,15 @@
-# Changelog
+﻿# Changelog
 
-All notable changes to this project will be documented in this file.
+## [0.1.11] - 2026-04-30
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+### Added
+
+- Added WebP playback FPS configuration with sanitization logic to prevent invalid values
+
+### Changed
+
+- Refactored file handling logic in Explorer hook; removed unused cache clearing function and optimized item retrieval
+- Improved Windows resource file description and search view metadata handling
 
 ## [0.1.10] - 2026-04-29
 
