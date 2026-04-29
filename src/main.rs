@@ -17,6 +17,8 @@ pub static CONFIG: Lazy<Mutex<config::AppConfig>> =
     Lazy::new(|| Mutex::new(config::AppConfig::load()));
 
 fn main() {
+    sync_startup_setting();
+
     // Initialize COM
     unsafe {
         let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
@@ -45,5 +47,18 @@ fn main() {
     // Cleanup COM
     unsafe {
         CoUninitialize();
+    }
+}
+
+fn sync_startup_setting() {
+    let run_at_startup = CONFIG
+        .lock()
+        .map(|config| config.run_at_startup)
+        .unwrap_or(true);
+
+    if run_at_startup {
+        startup::enable_startup();
+    } else {
+        startup::disable_startup();
     }
 }
