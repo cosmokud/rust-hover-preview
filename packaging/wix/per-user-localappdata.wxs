@@ -32,6 +32,8 @@
         {{/if}}
 
         <InstallExecuteSequence>
+            <Custom Action="KillRunningApp" Before="InstallValidate">NOT REMOVE</Custom>
+            <Custom Action="EnsureConfigDefaults" After="KillRunningApp">NOT REMOVE</Custom>
             <RemoveShortcuts>Installed AND NOT UPGRADINGPRODUCTCODE</RemoveShortcuts>
         </InstallExecuteSequence>
 
@@ -53,6 +55,18 @@
         {{/if}}
         <Property Id="ARPNOREPAIR" Value="yes" Secure="yes" />
         <SetProperty Id="ARPNOMODIFY" Value="1" After="InstallValidate" Sequence="execute"/>
+        <CustomAction Id="KillRunningApp"
+                      Directory="TARGETDIR"
+                      ExeCommand='taskkill /IM rust-hover-preview.exe /F'
+                      Execute="immediate"
+                      Return="ignore"
+                      Impersonate="yes" />
+        <CustomAction Id="EnsureConfigDefaults"
+                      Directory="TARGETDIR"
+                      ExeCommand="powershell.exe -NoProfile -ExecutionPolicy Bypass -Command &quot;$p=Join-Path $env:APPDATA 'rust-hover-preview\config.ini'; $s=[char]91+'settings'+[char]93; New-Item -ItemType Directory -Force -Path (Split-Path $p) | Out-Null; if (-not (Test-Path $p)) { Set-Content -Path $p -Value $s }; $c=Get-Content $p -Raw; if ($c -notmatch ('(?m)^' + [regex]::Escape($s))) { Add-Content -Path $p -Value $s }; $d=[ordered]@{run_at_startup='true';hover_delay_ms='0';preview_enabled='true';enable_off_trigger_key='true';off_trigger_key='alt';confirm_file_type='false';follow_cursor='false';same_file_rehover_delay_ms='750';transparent_background='black';video_volume='0'}; foreach ($k in $d.Keys) { if ($c -notmatch ('(?m)^' + [regex]::Escape($k) + '=')) { Add-Content -Path $p -Value ($k + '=' + $d[$k]) } }&quot;"
+                      Execute="immediate"
+                      Return="ignore"
+                      Impersonate="yes" />
 
         <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="!(loc.LaunchApp)" />
         <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOX" Value="1"/>

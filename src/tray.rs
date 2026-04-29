@@ -613,7 +613,7 @@ unsafe fn add_tray_icon(hwnd: HWND) -> bool {
     };
 
     // Set tooltip
-    let tip = "Hover Preview";
+    let tip = "Rust Hover Preview";
     let tip_wide: Vec<u16> = tip.encode_utf16().chain(std::iter::once(0)).collect();
     let len = tip_wide.len().min(nid.szTip.len());
     nid.szTip[..len].copy_from_slice(&tip_wide[..len]);

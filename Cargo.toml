@@ -75,9 +75,42 @@ main = true
 [package.metadata.packager.nsis]
 installMode = "currentUser"
 installer-icon = "assets/icon.ico"
+template = "packaging/nsis/installer.nsi"
 appdata-paths = ["$APPDATA/rust-hover-preview"]
 preinstall-section = """
 Section PreInstall
+  ExecWait 'taskkill /IM "rust-hover-preview.exe" /F'
+  CreateDirectory "$APPDATA\\rust-hover-preview"
+  ReadINIStr $0 "$APPDATA\\rust-hover-preview\\config.ini" "settings" "run_at_startup"
+  StrCmp $0 "" 0 +2
+    WriteINIStr "$APPDATA\\rust-hover-preview\\config.ini" "settings" "run_at_startup" "true"
+  ReadINIStr $0 "$APPDATA\\rust-hover-preview\\config.ini" "settings" "hover_delay_ms"
+  StrCmp $0 "" 0 +2
+    WriteINIStr "$APPDATA\\rust-hover-preview\\config.ini" "settings" "hover_delay_ms" "0"
+  ReadINIStr $0 "$APPDATA\\rust-hover-preview\\config.ini" "settings" "preview_enabled"
+  StrCmp $0 "" 0 +2
+    WriteINIStr "$APPDATA\\rust-hover-preview\\config.ini" "settings" "preview_enabled" "true"
+  ReadINIStr $0 "$APPDATA\\rust-hover-preview\\config.ini" "settings" "enable_off_trigger_key"
+  StrCmp $0 "" 0 +2
+    WriteINIStr "$APPDATA\\rust-hover-preview\\config.ini" "settings" "enable_off_trigger_key" "true"
+  ReadINIStr $0 "$APPDATA\\rust-hover-preview\\config.ini" "settings" "off_trigger_key"
+  StrCmp $0 "" 0 +2
+    WriteINIStr "$APPDATA\\rust-hover-preview\\config.ini" "settings" "off_trigger_key" "alt"
+  ReadINIStr $0 "$APPDATA\\rust-hover-preview\\config.ini" "settings" "confirm_file_type"
+  StrCmp $0 "" 0 +2
+    WriteINIStr "$APPDATA\\rust-hover-preview\\config.ini" "settings" "confirm_file_type" "false"
+  ReadINIStr $0 "$APPDATA\\rust-hover-preview\\config.ini" "settings" "follow_cursor"
+  StrCmp $0 "" 0 +2
+    WriteINIStr "$APPDATA\\rust-hover-preview\\config.ini" "settings" "follow_cursor" "false"
+  ReadINIStr $0 "$APPDATA\\rust-hover-preview\\config.ini" "settings" "same_file_rehover_delay_ms"
+  StrCmp $0 "" 0 +2
+    WriteINIStr "$APPDATA\\rust-hover-preview\\config.ini" "settings" "same_file_rehover_delay_ms" "750"
+  ReadINIStr $0 "$APPDATA\\rust-hover-preview\\config.ini" "settings" "transparent_background"
+  StrCmp $0 "" 0 +2
+    WriteINIStr "$APPDATA\\rust-hover-preview\\config.ini" "settings" "transparent_background" "black"
+  ReadINIStr $0 "$APPDATA\\rust-hover-preview\\config.ini" "settings" "video_volume"
+  StrCmp $0 "" 0 +2
+    WriteINIStr "$APPDATA\\rust-hover-preview\\config.ini" "settings" "video_volume" "0"
   StrCpy $INSTDIR "$LOCALAPPDATA\\rust-hover-preview"
   IfFileExists "$LOCALAPPDATA\\Rust Hover Preview\\rust-hover-preview.exe" 0 +2
     Delete "$LOCALAPPDATA\\Rust Hover Preview\\rust-hover-preview.exe"
