@@ -1,6 +1,6 @@
 # Rust Hover Preview
 
-![Rust](https://img.shields.io/badge/Rust-1.75+-orange?logo=rust)
+![Rust](https://img.shields.io/badge/Rust-1.70+-orange?logo=rust)
 ![Windows](https://img.shields.io/badge/Platform-Windows-blue?logo=windows)
 ![License](https://img.shields.io/badge/License-MIT-green)
 
@@ -13,7 +13,7 @@ Inspired by QTTabBar (QuizoApps) hover preview.
 ## Highlights
 
 - Mouse-hover and keyboard-navigation previews in Explorer
-- Static image previews plus animated GIF/WebP playback
+- Static image previews plus animated GIF playback and libwebp-backed animated WebP playback
 - Video previews through FFmpeg (`ffplay` + `ffprobe`)
 - Tray controls for enable/disable, delay, positioning, startup, off-trigger key, and volume
 - Explorer Shell view detection, folder caching, and path normalization for reliable hover matching
@@ -37,7 +37,7 @@ Download prebuilt assets from the repository **Releases** tab:
 2. Download one of the latest assets:
    - `.msi` installer (recommended for most users)
    - `.exe` portable build
-3. If you downloaded `.msi`, run the installer. If you downloaded `.exe`, place it in any folder you prefer (for example: `C:\Tools\RustHoverPreview`)
+3. If you downloaded `.msi`, run the installer. It installs to `%LOCALAPPDATA%\rust-hover-preview`. If you downloaded `.exe`, place it in any folder you prefer (for example: `C:\Tools\RustHoverPreview`)
 4. Launch Rust Hover Preview
 
 No Rust toolchain is needed when installing from Releases.
@@ -81,12 +81,12 @@ ffprobe -version
 ## System Tray Menu
 
 - **Enable Preview**: Turn previews on or off
-- **Preview Delay**: `Instant (0 ms)`, `Fast (200 ms)`, `Medium (500 ms)`, `Slow (1000 ms)`
+- **Preview Delay**: `Instant (0 ms)`, `Fast (200 ms)`, `Medium (500 ms)`, `Relaxed (750 ms)`, `Slow (1000 ms)`
 - **Same File Rehover Delay**: delay before the same file can preview again after the preview self-dismisses
 - **Video Volume**: `Max (100%)`, `High (80%)`, `Medium (50%)`, `Low (25%)`, `Very Low (10%)`, `Mute (0%)`
 - **Preview Position**: `Follow Cursor` or `Best Position`
 - **Transparent Background**: `Transparent`, `Black`, `White`, or `Checkerboard`
-- **Off Trigger Key**: Temporarily suppress previews while the configured key is held
+- **Enable Off Trigger Key**: Temporarily suppress previews while the displayed configured key is held
 - **Run at Startup**: Add/remove startup entry in Windows
 - **Edit Config.ini**: Open configuration file in your default editor
 - **Exit**: Close the application
@@ -146,6 +146,8 @@ target/release/rust-hover-preview.exe
 - Uses Windows accessibility APIs (MSAA + UI Automation) to resolve hovered/focused Explorer items
 - Uses Shell COM APIs to identify active Explorer windows and folders
 - Uses GDI for image rendering in a layered topmost preview window
+- Uses Google's libwebp through `webp-animation` for animated WebP decoding
+- Uses `directories` for Windows roaming configuration paths
 - Uses `ffprobe` for video dimensions and `ffplay` for video playback
 - Uses the registry (`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`) for startup control
 
