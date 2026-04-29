@@ -11,19 +11,22 @@ use std::path::{Path, PathBuf};
 use std::sync::{atomic::Ordering, Mutex};
 use std::time::{Duration, Instant};
 use windows::core::{Interface, VARIANT};
-use windows::Win32::Foundation::{BOOL, HWND, POINT, RECT};
+use windows::Win32::Foundation::{HWND, POINT, RECT};
 use windows::Win32::Graphics::Gdi::ScreenToClient;
 use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, IServiceProvider, CLSCTX_ALL,
     COINIT_APARTMENTTHREADED,
 };
 use windows::Win32::System::Variant::VariantClear;
-use windows::Win32::UI::Accessibility::{CUIAutomation, IUIAutomation};
+use windows::Win32::UI::Accessibility::{
+    CUIAutomation, IUIAutomation, IUIAutomationElement, IUIAutomationLegacyIAccessiblePattern,
+    UIA_DataItemControlTypeId, UIA_LegacyIAccessiblePatternId, UIA_ListItemControlTypeId,
+};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, VK_DOWN, VK_END, VK_HOME, VK_LEFT, VK_NEXT, VK_PRIOR, VK_RIGHT, VK_UP,
 };
 use windows::Win32::UI::Shell::{
-    IFolderView, IFolderView2, INameSpaceTreeControl, IPersistFolder2, IShellBrowser, IShellFolder,
+    IFolderView, INameSpaceTreeControl, IPersistFolder2, IShellBrowser, IShellFolder,
     IShellFolderViewDual, IShellItem, IShellView, IShellWindows, SHCreateItemFromIDList,
     SHCreateItemWithParent, SID_STopLevelBrowser, ShellWindows, SIGDN_DESKTOPABSOLUTEPARSING,
     SVGIO_ALLVIEW,
@@ -768,34 +771,8 @@ fn hit_test_folder_view_by_position(
         }
 
         let mut best: Option<(i32, i32)> = None;
-        let visible_indices = folder_view
-            .cast::<IFolderView2>()
-            .ok()
-            .map(|folder_view2| {
-                let mut indices = Vec::new();
-                let mut next = folder_view2.GetVisibleItem(-1, BOOL(0)).ok();
-                while let Some(item_index) = next {
-                    if indices.last().copied() == Some(item_index) {
-                        break;
-                    }
-                    indices.push(item_index);
-                    if indices.len() >= 512 {
-                        break;
-                    }
-                    next = folder_view2.GetVisibleItem(item_index, BOOL(0)).ok();
-                }
-                indices
-            })
-            .filter(|indices| !indices.is_empty());
-
-        let candidate_indices: Vec<i32> = if let Some(indices) = visible_indices {
-            indices
-        } else {
-            let count = folder_view.ItemCount(SVGIO_ALLVIEW).ok()?.clamp(0, 10000);
-            (0..count).collect()
-        };
-
-        for item_index in candidate_indices {
+        let count = folder_view.ItemCount(SVGIO_ALLVIEW).ok()?.clamp(0, 10000);
+        for item_index in 0..count {
             let pidl = match folder_view.Item(item_index) {
                 Ok(pidl) if !pidl.is_null() => pidl,
                 _ => continue,
@@ -848,38 +825,34 @@ fn hit_test_folder_view_by_position(
     }
 }
 
-fn get_shell_data_model_file_under_cursor() -> Option<PathBuf> {
-    unsafe {
-        let mut screen_point = POINT::default();
-        if GetCursorPos(&mut screen_point).is_err() {
-            return None;
-        }
-
-        // Tabbed Explorer may expose several ShellWindows entries for one
-        // top-level window. Choose the active Shell view whose view HWND actually
-        // contains the cursor, not the first entry with a matching root HWND.
-        let (shell_view, client_point) = get_active_shell_view_under_cursor(&screen_point)?;
-
-        // Primary data-model hit test. If the active Shell view exposes it,
-        // this returns the real IShellItem under x/y without MSAA/UIA text scraping.
-        if let Ok(hit_test) = shell_view.cast::<INameSpaceTreeControl>() {
-            if let Ok(shell_item) = hit_test.HitTest(&client_point) {
+fn get_shell_data_model_file_from_context(context: &ActiveShellViewContext) -> Option<PathBuf> {
+    if let Ok(hit_test) = context.shell_view.cast::<INameSpaceTreeControl>() {
+        unsafe {
+            if let Ok(shell_item) = hit_test.HitTest(&context.client_point) {
                 if let Some(path) = shell_item_to_media_path(&shell_item) {
                     return Some(path);
                 }
             }
         }
-
-        // Fallback for Shell views that do not expose HitTest in this binding:
-        // use IFolderView item positions and convert the matched PIDL to IShellItem.
-        if let Ok(folder_view) = shell_view.cast::<IFolderView>() {
-            if let Some(path) = hit_test_folder_view_by_position(&folder_view, &client_point) {
-                return Some(path);
-            }
-        }
     }
 
     None
+}
+
+fn get_shell_data_model_fallback_file_from_context(
+    context: &ActiveShellViewContext,
+) -> Option<PathBuf> {
+    if let Ok(folder_view) = context.shell_view.cast::<IFolderView>() {
+        return hit_test_folder_view_by_position(&folder_view, &context.client_point);
+    }
+
+    None
+}
+
+fn get_shell_data_model_file_under_cursor() -> Option<PathBuf> {
+    let context = get_active_shell_view_context_at_cursor()?;
+    get_shell_data_model_file_from_context(&context)
+        .or_else(|| get_shell_data_model_fallback_file_from_context(&context))
 }
 
 fn get_current_explorer_search_root() -> Option<String> {
@@ -1720,6 +1693,56 @@ fn accessibility_result_from_name(name: String) -> Option<AccessibilityResult> {
     Some(AccessibilityResult::FileName(name))
 }
 
+fn accessibility_result_from_legacy_pattern(
+    pattern: &IUIAutomationLegacyIAccessiblePattern,
+) -> Option<AccessibilityResult> {
+    unsafe {
+        for candidate in [
+            pattern.CurrentValue().ok().map(|s| s.to_string()),
+            pattern.CurrentDescription().ok().map(|s| s.to_string()),
+            pattern.CurrentName().ok().map(|s| s.to_string()),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if let Some(result) = accessibility_result_from_name(candidate) {
+                return Some(result);
+            }
+        }
+    }
+
+    None
+}
+
+fn accessibility_result_from_uia_element(
+    element: &IUIAutomationElement,
+) -> Option<AccessibilityResult> {
+    unsafe {
+        if let Ok(name) = element.CurrentName() {
+            if let Some(result) = accessibility_result_from_name(name.to_string()) {
+                return Some(result);
+            }
+        }
+
+        let control_type = element.CurrentControlType().ok();
+        if control_type == Some(UIA_ListItemControlTypeId)
+            || control_type == Some(UIA_DataItemControlTypeId)
+        {
+            if let Ok(pattern) = element
+                .GetCurrentPatternAs::<IUIAutomationLegacyIAccessiblePattern>(
+                    UIA_LegacyIAccessiblePatternId,
+                )
+            {
+                if let Some(result) = accessibility_result_from_legacy_pattern(&pattern) {
+                    return Some(result);
+                }
+            }
+        }
+    }
+
+    None
+}
+
 fn get_item_under_cursor_uia(automation: &IUIAutomation) -> Option<AccessibilityResult> {
     unsafe {
         let mut cursor_pos = POINT::default();
@@ -1728,7 +1751,7 @@ fn get_item_under_cursor_uia(automation: &IUIAutomation) -> Option<Accessibility
         }
 
         let mut element = automation.ElementFromPoint(cursor_pos).ok()?;
-        let walker = automation.RawViewWalker().ok()?;
+        let walker = automation.ControlViewWalker().ok()?;
 
         for _ in 0..8 {
             if let Ok(rect) = element.CurrentBoundingRectangle() {
@@ -1737,10 +1760,8 @@ fn get_item_under_cursor_uia(automation: &IUIAutomation) -> Option<Accessibility
                     && rect.top <= cursor_pos.y
                     && cursor_pos.y <= rect.bottom
                 {
-                    if let Ok(name) = element.CurrentName() {
-                        if let Some(result) = accessibility_result_from_name(name.to_string()) {
-                            return Some(result);
-                        }
+                    if let Some(result) = accessibility_result_from_uia_element(&element) {
+                        return Some(result);
                     }
                 }
             }
@@ -1756,6 +1777,40 @@ fn get_file_under_cursor(
     automation: Option<&IUIAutomation>,
     current_folder_hint: Option<&str>,
 ) -> Option<PathBuf> {
+    let active_context = get_active_shell_view_context_at_cursor();
+    if let Some(path) = active_context
+        .as_ref()
+        .and_then(get_shell_data_model_file_from_context)
+    {
+        return Some(path);
+    }
+
+    let active_folder_hint = active_context
+        .as_ref()
+        .and_then(|context| context.folder_path.clone());
+    let effective_folder_hint = current_folder_hint.or(active_folder_hint.as_deref());
+    let current_url = active_context
+        .as_ref()
+        .and_then(|context| context.location_url.clone());
+    let current_is_search_view = current_url
+        .as_deref()
+        .map(is_search_ms_url)
+        .unwrap_or(false);
+    let current_search_root = if current_is_search_view {
+        active_context
+            .as_ref()
+            .and_then(|context| {
+                context
+                    .location_url
+                    .as_deref()
+                    .and_then(|url| resolve_explorer_location_folder(context.browser_hwnd, url))
+                    .or_else(|| get_cached_explorer_real_folder(context.browser_hwnd))
+            })
+            .or_else(get_current_explorer_search_root)
+    } else {
+        None
+    };
+
     // Prefer UI Automation for modern Explorer: it resolves the visible item
     // under the cursor directly and avoids a lot of noisy MSAA parent walking.
     // Fall back to MSAA only when UIA cannot identify the hovered item.
@@ -1782,30 +1837,21 @@ fn get_file_under_cursor(
 
                 // Stay focused on the currently hovered Explorer folder before any
                 // broader Shell/search work.
-                if let Some(path) = lookup_media_in_hover_folder(&item_name, current_folder_hint) {
+                if let Some(path) = lookup_media_in_hover_folder(&item_name, effective_folder_hint)
+                {
                     return Some(path);
                 }
 
-                let current_url = get_current_explorer_location_url();
-                let current_is_search_view = current_url
-                    .as_deref()
-                    .map(is_search_ms_url)
-                    .unwrap_or(false);
-
                 if current_is_search_view {
-                    let current_search_root = get_current_explorer_search_root();
-
-                    // Search views are not normal folders. First emulate the known-good
-                    // workaround: resolve the filename against this same Explorer window's
-                    // original folder, cached before/while it entered search mode.
+                    if let Some(path) = active_context.as_ref().and_then(|context| {
+                        find_media_in_shell_view(context.shell_view_hwnd, &item_name)
+                    }) {
+                        return Some(path);
+                    }
                     if let Some(root) = current_search_root.as_deref() {
                         if let Some(path) = find_media_in_folder(root, &item_name) {
                             return Some(path);
                         }
-                    }
-
-                    if let Some(path) = find_media_in_current_shell_view(&item_name) {
-                        return Some(path);
                     }
                     if let Some(root) = current_search_root.as_deref() {
                         if let Some(path) = lookup_media_in_search_root_index(root, &item_name) {
@@ -1817,9 +1863,10 @@ fn get_file_under_cursor(
         }
     }
 
-    // Fall back to the Shell data model only when the cheaper path could not
-    // resolve the hovered item. This keeps large directories responsive.
-    get_shell_data_model_file_under_cursor()
+    active_context
+        .as_ref()
+        .and_then(get_shell_data_model_fallback_file_from_context)
+        .or_else(get_shell_data_model_file_under_cursor)
 }
 
 fn get_file_under_cursor_checked(
