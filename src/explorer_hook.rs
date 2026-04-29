@@ -210,6 +210,12 @@ fn is_media_file(path: &PathBuf) -> bool {
     is_image_file(path) || is_video_file(path)
 }
 
+fn same_path(a: &PathBuf, b: &PathBuf) -> bool {
+    a == b
+        || a.to_string_lossy()
+            .eq_ignore_ascii_case(&b.to_string_lossy())
+}
+
 fn urlencoding_decode(s: &str) -> String {
     let mut bytes = Vec::with_capacity(s.len());
     let mut chars = s.as_bytes().iter().copied().peekable();
@@ -2456,11 +2462,17 @@ pub fn run_explorer_hook() {
                 // resolution and wait until hover is stable before probing media.
                 if last_file.is_some() {
                     if let Some(current_file) = get_file_under_cursor(uia.as_ref()) {
-                        if last_file.as_ref() == Some(&current_file) {
+                        if last_file
+                            .as_ref()
+                            .map(|last| same_path(last, &current_file))
+                            .unwrap_or(false)
+                        {
                             hover_start = Some(Instant::now());
                             continue;
                         }
                         suppressed_hover_file = None;
+                    } else if !turbo_mode {
+                        suppressed_hover_file = last_file.clone();
                     }
 
                     hide_preview();
@@ -2608,8 +2620,17 @@ pub fn run_explorer_hook() {
 
                     // Try to get file under cursor
                     if let Some(file_path) = get_file_under_cursor(uia.as_ref()) {
-                        if last_file.as_ref() != Some(&file_path) {
-                            if !turbo_mode && suppressed_hover_file.as_ref() == Some(&file_path) {
+                        if !last_file
+                            .as_ref()
+                            .map(|last| same_path(last, &file_path))
+                            .unwrap_or(false)
+                        {
+                            if !turbo_mode
+                                && suppressed_hover_file
+                                    .as_ref()
+                                    .map(|suppressed| same_path(suppressed, &file_path))
+                                    .unwrap_or(false)
+                            {
                                 continue;
                             }
                             suppressed_hover_file = None;
@@ -2627,7 +2648,6 @@ pub fn run_explorer_hook() {
                     } else {
                         // No file found while mouse is stationary.
                         // Keep current preview state; dismissal should happen only on mouse move.
-                        suppressed_hover_file = None;
                     }
                 }
             } else {

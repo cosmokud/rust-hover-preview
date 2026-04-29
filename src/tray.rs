@@ -1,3 +1,5 @@
+use crate::config::TransparentBackground;
+use crate::preview_window::refresh_preview;
 use crate::{startup, CONFIG, RUNNING};
 use std::os::windows::ffi::OsStrExt;
 use std::sync::atomic::Ordering;
@@ -24,6 +26,10 @@ const ID_TRAY_ENABLE: u16 = 1003;
 const ID_TRAY_CONFIRM_FILE_TYPE: u16 = 1004;
 const ID_TRAY_ENABLE_OFF_TRIGGER_KEY: u16 = 1005;
 const ID_TRAY_TURBO_MODE: u16 = 1006;
+const ID_TRAY_BG_TRANSPARENT: u16 = 1007;
+const ID_TRAY_BG_BLACK: u16 = 1008;
+const ID_TRAY_BG_WHITE: u16 = 1009;
+const ID_TRAY_BG_CHECKERBOARD: u16 = 1016;
 const ID_TRAY_VOLUME_MAX: u16 = 1010; // 100%
 const ID_TRAY_VOLUME_HIGH: u16 = 1011; // 80%
 const ID_TRAY_VOLUME_MEDIUM: u16 = 1012; // 50%
@@ -84,6 +90,14 @@ unsafe extern "system" fn tray_window_proc(
                 }
                 ID_TRAY_TURBO_MODE => {
                     toggle_turbo_mode();
+                }
+                ID_TRAY_BG_TRANSPARENT => {
+                    set_transparent_background(TransparentBackground::Transparent)
+                }
+                ID_TRAY_BG_BLACK => set_transparent_background(TransparentBackground::Black),
+                ID_TRAY_BG_WHITE => set_transparent_background(TransparentBackground::White),
+                ID_TRAY_BG_CHECKERBOARD => {
+                    set_transparent_background(TransparentBackground::Checkerboard)
                 }
                 ID_TRAY_VOLUME_MAX => set_volume(100),
                 ID_TRAY_VOLUME_HIGH => set_volume(80),
@@ -170,6 +184,52 @@ unsafe fn show_context_menu(hwnd: HWND) {
         turbo_flags,
         ID_TRAY_TURBO_MODE as usize,
         w!("Turbo Mode"),
+    );
+
+    // Add Transparent Background submenu
+    let transparent_background = CONFIG
+        .lock()
+        .map(|c| c.transparent_background)
+        .unwrap_or(TransparentBackground::Transparent);
+    let background_menu = CreatePopupMenu().unwrap();
+
+    let bg_flag = |background: TransparentBackground| {
+        MF_STRING
+            | if transparent_background == background {
+                MF_CHECKED
+            } else {
+                MF_UNCHECKED
+            }
+    };
+    let _ = AppendMenuW(
+        background_menu,
+        bg_flag(TransparentBackground::Transparent),
+        ID_TRAY_BG_TRANSPARENT as usize,
+        w!("Transparent"),
+    );
+    let _ = AppendMenuW(
+        background_menu,
+        bg_flag(TransparentBackground::Black),
+        ID_TRAY_BG_BLACK as usize,
+        w!("Black"),
+    );
+    let _ = AppendMenuW(
+        background_menu,
+        bg_flag(TransparentBackground::White),
+        ID_TRAY_BG_WHITE as usize,
+        w!("White"),
+    );
+    let _ = AppendMenuW(
+        background_menu,
+        bg_flag(TransparentBackground::Checkerboard),
+        ID_TRAY_BG_CHECKERBOARD as usize,
+        w!("Checkerboard"),
+    );
+    let _ = AppendMenuW(
+        menu,
+        MF_STRING | MF_POPUP,
+        background_menu.0 as usize,
+        w!("Transparent Background"),
     );
 
     // Add Preview Delay submenu
@@ -382,6 +442,14 @@ fn toggle_turbo_mode() {
         config.turbo_mode = !config.turbo_mode;
         config.save();
     }
+}
+
+fn set_transparent_background(background: TransparentBackground) {
+    if let Ok(mut config) = CONFIG.lock() {
+        config.transparent_background = background;
+        config.save();
+    }
+    refresh_preview();
 }
 
 fn set_volume(volume: u32) {
