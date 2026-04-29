@@ -2648,14 +2648,16 @@ pub fn run_explorer_hook() {
                                 .as_ref()
                                 .map(|suppressed| same_path(suppressed, &file_path))
                                 .unwrap_or(false)
-                                && suppressed_hover_started_at
-                                    .map(|started| {
-                                        started.elapsed()
-                                            < Duration::from_millis(same_file_rehover_delay_ms)
-                                    })
-                                    .unwrap_or(false)
                             {
-                                continue;
+                                let required_delay = hover_delay_ms.max(same_file_rehover_delay_ms);
+                                if suppressed_hover_started_at
+                                    .map(|started| {
+                                        started.elapsed() < Duration::from_millis(required_delay)
+                                    })
+                                    .unwrap_or(true)
+                                {
+                                    continue;
+                                }
                             }
                             suppressed_hover_file = None;
                             suppressed_hover_started_at = None;
