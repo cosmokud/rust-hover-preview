@@ -1,15 +1,36 @@
 ﻿# Changelog
 
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+
 ## [0.1.11] - 2026-04-30
 
 ### Added
 
-- Added WebP playback FPS configuration with sanitization logic to prevent invalid values
+- Added WebP playback FPS configuration with sanitization logic to prevent invalid values (default: 90 FPS, range: 1-90)
+- Added `HoverResolverHints` struct to pass contextual hints during file resolution for improved accuracy
+- Added `ActiveShellViewContext` struct for unified shell view context retrieval with URL, folder path, and client coordinates
+- Added legacy support for shell view media indexing and retrieval functions
+- Added media path resolution functions to improve file handling and content type detection
+- Added `ShellViewMediaIndex` with additional fields (root folder, stem lookups) and improved search efficiency
+- Added `FolderIndexCache` with max-entry management for controlled memory usage
 
 ### Changed
 
-- Refactored file handling logic in Explorer hook; removed unused cache clearing function and optimized item retrieval
-- Improved Windows resource file description and search view metadata handling
+- Major refactoring of Explorer hook file retrieval logic for improved performance and reduced latency
+- Refactored shell data model retrieval logic; streamlined context handling in Explorer hook
+- Refactored accessibility item retrieval and media path resolution for improved reliability
+- Refactored `ActiveShellViewContext` and updated media index constants (TTL: 5000ms, max items: 50000)
+- Refactored legacy functions and improved Explorer window detection logic
+- Refactored Windows resource file description formatting and improved search view metadata handling
+- Updated preview window message handling: collapse stale Show/Hide traffic to avoid computing layouts for files cursor has already left
+- Renamed `MIN_ANIMATION_FRAME_DELAY_MS` to `MIN_GIF_ANIMATION_FRAME_DELAY_MS` for clarity
+- Removed redundant path retrieval from cursor in `get_file_under_cursor` function
+
+### Fixed
+
+- Fixed WebP animation frame delay to properly respect per-frame timestamps instead of clamping to minimum delay
 
 ## [0.1.10] - 2026-04-29
 
@@ -113,7 +134,7 @@
 
 ### Fixed
 
-- Eliminated residual previews caused by leftover keyboard state when opening folders; preview now only appears after actual user movement or navigation.
+- Eliminated residual previews caused by leftover keyboard state when opening folders; preview now only appears after explicit user movement or navigation.
 
 ## [0.1.3] - 2026-03-03
 
