@@ -89,6 +89,7 @@ const FOLDER_INDEX_TTL_MS: u64 = 60000;
 const EXPLORER_FOLDERS_CACHE_TTL_MS: u64 = 250;
 const SHELL_VIEW_INDEX_TTL_MS: u64 = 5000;
 const SHELL_VIEW_INDEX_MAX_ITEMS: i32 = 50000;
+const SHELL_VIEW_INDEX_SYNC_ITEM_LIMIT: i32 = 1000;
 const SEARCH_ROOT_INDEX_TTL_MS: u64 = 60000;
 const SEARCH_ROOT_INDEX_MAX_DIRS: usize = 20000;
 const SEARCH_ROOT_INDEX_MAX_FILES: usize = 50000;
@@ -108,10 +109,27 @@ static LEGACY_SEARCH_SHELL_VIEW_MEDIA_INDEX: Lazy<Mutex<HashMap<isize, ShellView
     Lazy::new(|| Mutex::new(HashMap::new()));
 static SEARCH_ROOT_MEDIA_INDEX: Lazy<Mutex<HashMap<String, SearchRootMediaIndex>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
+static SEARCH_ROOT_INDEX_BUILDING: Lazy<Mutex<HashSet<String>>> =
+    Lazy::new(|| Mutex::new(HashSet::new()));
 static EXPLORER_LAST_REAL_FOLDERS: Lazy<Mutex<HashMap<isize, String>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 static EXPLORER_WINDOW_CACHE: Lazy<Mutex<HashMap<isize, (bool, Instant)>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
+
+fn clear_shell_view_probe_caches() {
+    if let Ok(mut cache) = SHELL_VIEW_MEDIA_INDEX.lock() {
+        cache.clear();
+    }
+    if let Ok(mut cache) = LEGACY_SEARCH_SHELL_VIEW_MEDIA_INDEX.lock() {
+        cache.clear();
+    }
+    if let Ok(mut cache) = EXPLORER_FOLDERS_CACHE.lock() {
+        *cache = None;
+    }
+    if let Ok(mut cache) = EXPLORER_WINDOW_CACHE.lock() {
+        cache.clear();
+    }
+}
 
 fn is_jpeg_extension(ext: &str) -> bool {
     matches!(ext, "jpg" | "jpeg" | "jpe" | "jfif")
@@ -1147,7 +1165,11 @@ fn build_shell_view_media_index(view_hwnd_key: isize) -> Option<ShellViewMediaIn
             let shell_view = document.cast::<IShellFolderViewDual>().ok()?;
             let folder = shell_view.Folder().ok()?;
             let items = folder.Items().ok()?;
-            let item_count = items.Count().ok()?.min(SHELL_VIEW_INDEX_MAX_ITEMS);
+            let item_count = items.Count().ok()?;
+            if item_count > SHELL_VIEW_INDEX_SYNC_ITEM_LIMIT {
+                return None;
+            }
+            let item_count = item_count.min(SHELL_VIEW_INDEX_MAX_ITEMS);
 
             for item_index in 0..item_count {
                 let item_variant = VARIANT::from(item_index);
@@ -1234,7 +1256,11 @@ fn build_legacy_search_shell_view_media_index(
             let shell_view = document.cast::<IShellFolderViewDual>().ok()?;
             let folder = shell_view.Folder().ok()?;
             let items = folder.Items().ok()?;
-            let item_count = items.Count().ok()?.min(SHELL_VIEW_INDEX_MAX_ITEMS);
+            let item_count = items.Count().ok()?;
+            if item_count > SHELL_VIEW_INDEX_SYNC_ITEM_LIMIT {
+                return None;
+            }
+            let item_count = item_count.min(SHELL_VIEW_INDEX_MAX_ITEMS);
 
             for item_index in 0..item_count {
                 let item_variant = VARIANT::from(item_index);
@@ -1474,12 +1500,10 @@ fn build_search_root_media_index(root: &str) -> Option<SearchRootMediaIndex> {
     Some(index)
 }
 
-fn lookup_media_in_search_root_index(root: &str, item_name: &str) -> Option<PathBuf> {
-    let item_name = item_name.trim();
-    if item_name.is_empty() {
-        return None;
-    }
-
+fn lookup_path_in_search_root_index(
+    index: &SearchRootMediaIndex,
+    item_name: &str,
+) -> Option<PathBuf> {
     let item_name_lower = item_name.to_ascii_lowercase();
     let item_stem_lower = Path::new(item_name)
         .file_stem()
@@ -1490,123 +1514,15 @@ fn lookup_media_in_search_root_index(root: &str, item_name: &str) -> Option<Path
         .and_then(|s| s.to_str())
         .map(|s| s.to_ascii_lowercase());
 
-    if let Ok(mut cache) = SEARCH_ROOT_MEDIA_INDEX.lock() {
-        cache.retain(|_, index| {
-            index.built_at.elapsed() <= Duration::from_millis(SEARCH_ROOT_INDEX_TTL_MS)
-        });
-
-        if !cache.contains_key(root) {
-            if let Some(index) = build_search_root_media_index(root) {
-                cache.insert(root.to_string(), index);
-            }
-        }
-
-        if let Some(index) = cache.get(root) {
-            if let Some(paths) = index.by_file_name.get(&item_name_lower) {
-                if let Some(path) = paths.first() {
-                    return Some(path.clone());
-                }
-            }
-
-            if let Some(stem_key) = item_stem_lower.as_ref() {
-                if let Some(paths) = index.by_stem.get(stem_key) {
-                    for path in paths {
-                        if let Some(item_ext) = item_ext_lower.as_deref() {
-                            if let Some(candidate_ext) = path.extension().and_then(|s| s.to_str()) {
-                                let candidate_ext_lower = candidate_ext.to_ascii_lowercase();
-                                if candidate_ext_lower == item_ext
-                                    || (is_jpeg_extension(&candidate_ext_lower)
-                                        && is_jpeg_extension(item_ext))
-                                {
-                                    return Some(path.clone());
-                                }
-                            }
-                        } else {
-                            return Some(path.clone());
-                        }
-                    }
-                }
-            }
+    if let Some(paths) = index.by_file_name.get(&item_name_lower) {
+        if let Some(path) = paths.first() {
+            return Some(path.clone());
         }
     }
 
-    let path = find_media_in_search_root_direct(root, item_name)?;
-
-    if let Ok(mut cache) = SEARCH_ROOT_MEDIA_INDEX.lock() {
-        cache.retain(|_, index| {
-            index.built_at.elapsed() <= Duration::from_millis(SEARCH_ROOT_INDEX_TTL_MS)
-        });
-        let index = cache
-            .entry(root.to_string())
-            .or_insert_with(|| SearchRootMediaIndex {
-                built_at: Instant::now(),
-                by_file_name: HashMap::new(),
-                by_stem: HashMap::new(),
-            });
-        add_search_index_path(index, &path);
-        index.built_at = Instant::now();
-    }
-
-    Some(path)
-}
-
-fn find_media_in_search_root_direct(root: &str, item_name: &str) -> Option<PathBuf> {
-    let item_name = item_name.trim();
-    if item_name.is_empty() {
-        return None;
-    }
-
-    let root_path = PathBuf::from(root);
-    if !root_path.is_dir() {
-        return None;
-    }
-
-    let item_stem_lower = Path::new(item_name)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .map(|s| s.to_ascii_lowercase());
-    let item_ext_lower = Path::new(item_name)
-        .extension()
-        .and_then(|s| s.to_str())
-        .map(|s| s.to_ascii_lowercase());
-    let mut dirs = vec![root_path];
-
-    while let Some(dir) = dirs.pop() {
-        let entries = match std::fs::read_dir(&dir) {
-            Ok(entries) => entries,
-            Err(_) => continue,
-        };
-
-        for entry in entries.flatten() {
-            let file_type = match entry.file_type() {
-                Ok(file_type) => file_type,
-                Err(_) => continue,
-            };
-            let path = entry.path();
-
-            if file_type.is_dir() {
-                dirs.push(path);
-                continue;
-            }
-
-            if !file_type.is_file() || !is_media_file(&path) {
-                continue;
-            }
-
-            if let Some(file_name) = path.file_name().and_then(|s| s.to_str()) {
-                if file_name.eq_ignore_ascii_case(item_name) {
-                    return Some(path);
-                }
-            }
-
-            if let Some(stem_key) = item_stem_lower.as_deref() {
-                let Some(candidate_stem) = path.file_stem().and_then(|s| s.to_str()) else {
-                    continue;
-                };
-                if !candidate_stem.eq_ignore_ascii_case(stem_key) {
-                    continue;
-                }
-
+    if let Some(stem_key) = item_stem_lower.as_ref() {
+        if let Some(paths) = index.by_stem.get(stem_key) {
+            for path in paths {
                 if let Some(item_ext) = item_ext_lower.as_deref() {
                     if let Some(candidate_ext) = path.extension().and_then(|s| s.to_str()) {
                         let candidate_ext_lower = candidate_ext.to_ascii_lowercase();
@@ -1614,14 +1530,87 @@ fn find_media_in_search_root_direct(root: &str, item_name: &str) -> Option<PathB
                             || (is_jpeg_extension(&candidate_ext_lower)
                                 && is_jpeg_extension(item_ext))
                         {
-                            return Some(path);
+                            return Some(path.clone());
                         }
                     }
                 } else {
-                    return Some(path);
+                    return Some(path.clone());
                 }
             }
         }
+    }
+
+    None
+}
+
+fn queue_search_root_index_build(root: String) {
+    let root_path = PathBuf::from(&root);
+    if !root_path.is_dir() {
+        return;
+    }
+
+    let should_build = {
+        let cache_is_fresh = SEARCH_ROOT_MEDIA_INDEX
+            .lock()
+            .ok()
+            .and_then(|cache| cache.get(&root).map(|index| index.built_at.elapsed()))
+            .map(|age| age <= Duration::from_millis(SEARCH_ROOT_INDEX_TTL_MS))
+            .unwrap_or(false);
+
+        if cache_is_fresh {
+            false
+        } else if let Ok(mut building) = SEARCH_ROOT_INDEX_BUILDING.lock() {
+            if building.contains(&root) {
+                false
+            } else {
+                building.insert(root.clone());
+                true
+            }
+        } else {
+            false
+        }
+    };
+
+    if !should_build {
+        return;
+    }
+
+    std::thread::spawn(move || {
+        let built_index = build_search_root_media_index(&root);
+        if let Some(index) = built_index {
+            if let Ok(mut cache) = SEARCH_ROOT_MEDIA_INDEX.lock() {
+                cache.insert(root.clone(), index);
+            }
+        }
+        if let Ok(mut building) = SEARCH_ROOT_INDEX_BUILDING.lock() {
+            building.remove(&root);
+        }
+    });
+}
+
+fn lookup_media_in_search_root_index(root: &str, item_name: &str) -> Option<PathBuf> {
+    let item_name = item_name.trim();
+    if item_name.is_empty() {
+        return None;
+    }
+
+    let mut has_fresh_index = false;
+
+    if let Ok(mut cache) = SEARCH_ROOT_MEDIA_INDEX.lock() {
+        cache.retain(|_, index| {
+            index.built_at.elapsed() <= Duration::from_millis(SEARCH_ROOT_INDEX_TTL_MS)
+        });
+
+        if let Some(index) = cache.get(root) {
+            has_fresh_index = true;
+            if let Some(path) = lookup_path_in_search_root_index(index, item_name) {
+                return Some(path);
+            }
+        }
+    }
+
+    if !has_fresh_index {
+        queue_search_root_index_build(root.to_string());
     }
 
     None
@@ -2909,6 +2898,16 @@ pub fn run_explorer_hook() {
         {
             explorer_probe_backoff_until =
                 Some(Instant::now() + Duration::from_millis(EXPLORER_PROBE_BACKOFF_MS));
+            clear_shell_view_probe_caches();
+            hide_preview();
+            last_file = None;
+            keyboard_file = None;
+            is_keyboard_hover = false;
+            suppressed_hover_file = None;
+            suppressed_hover_started_at = None;
+            stationary_search_miss_started_at = None;
+            hover_start = None;
+            video_hover_guard_until = None;
         }
 
         if let Some(until) = explorer_probe_backoff_until {
@@ -3441,14 +3440,19 @@ pub fn run_explorer_hook() {
                     } else {
                         let search_view_active =
                             hover_resolver_hints.is_search_view || is_current_search_view_legacy();
-                        if search_view_active && last_file.is_some() {
+                        if search_view_active {
                             let miss_started =
                                 stationary_search_miss_started_at.get_or_insert_with(Instant::now);
                             if miss_started.elapsed()
                                 >= Duration::from_millis(STATIONARY_SEARCH_MISS_HIDE_MS)
                             {
-                                suppressed_hover_file = last_file.clone();
-                                suppressed_hover_started_at = Some(Instant::now());
+                                if last_file.is_some() {
+                                    suppressed_hover_file = last_file.clone();
+                                    suppressed_hover_started_at = Some(Instant::now());
+                                } else {
+                                    suppressed_hover_file = None;
+                                    suppressed_hover_started_at = None;
+                                }
                                 hide_preview();
                                 last_file = None;
                                 stationary_search_miss_started_at = None;
