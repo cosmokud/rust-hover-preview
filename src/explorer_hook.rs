@@ -1,6 +1,6 @@
 use crate::preview_window::{
-    hide_preview, is_cursor_over_image_preview, is_cursor_over_video_preview, preview_targets_path,
-    show_preview, show_preview_keyboard,
+    hide_preview, is_cursor_over_image_preview, is_cursor_over_video_preview, show_preview,
+    show_preview_keyboard,
 };
 use crate::{CONFIG, RUNNING};
 use once_cell::sync::Lazy;
@@ -234,44 +234,44 @@ fn lookup_media_in_folder_index(
         .and_then(|s| s.to_str())
         .map(|s| s.to_ascii_lowercase());
 
-    let mut cache = FOLDER_MEDIA_INDEX.lock().ok()?;
-    cache.retain(|_, index| index.built_at.elapsed() <= Duration::from_millis(FOLDER_INDEX_TTL_MS));
+    if let Ok(mut cache) = FOLDER_MEDIA_INDEX.lock() {
+        cache.retain(|_, index| {
+            index.built_at.elapsed() <= Duration::from_millis(FOLDER_INDEX_TTL_MS)
+        });
 
-    if !cache.contains_key(folder_key) {
-        let index = build_folder_media_index(folder_path, folder_key)?;
-        cache.insert(folder_key.to_string(), index);
-        trim_folder_index_cache(&mut cache);
-    }
+        if let Some(index) = cache.get(folder_key) {
+            if let Some(path) = index.by_file_name.get(&item_name_lower) {
+                return Some(path.clone());
+            }
 
-    let index = cache.get(folder_key)?;
-
-    if let Some(path) = index.by_file_name.get(&item_name_lower) {
-        return Some(path.clone());
-    }
-
-    if let Some(stem_key) = item_stem_lower.as_ref() {
-        if let Some(path) = index.by_stem.get(stem_key) {
-            if let Some(item_ext) = item_ext_lower.as_deref() {
-                if let Some(candidate_ext) = path.extension().and_then(|s| s.to_str()) {
-                    let candidate_ext_lower = candidate_ext.to_ascii_lowercase();
-                    if candidate_ext_lower == item_ext
-                        || (is_jpeg_extension(&candidate_ext_lower) && is_jpeg_extension(item_ext))
-                    {
+            if let Some(stem_key) = item_stem_lower.as_ref() {
+                if let Some(path) = index.by_stem.get(stem_key) {
+                    if let Some(item_ext) = item_ext_lower.as_deref() {
+                        if let Some(candidate_ext) = path.extension().and_then(|s| s.to_str()) {
+                            let candidate_ext_lower = candidate_ext.to_ascii_lowercase();
+                            if candidate_ext_lower == item_ext
+                                || (is_jpeg_extension(&candidate_ext_lower)
+                                    && is_jpeg_extension(item_ext))
+                            {
+                                return Some(path.clone());
+                            }
+                        }
+                    } else {
                         return Some(path.clone());
                     }
                 }
-            } else {
-                return Some(path.clone());
+            }
+
+            if item_ext_lower.is_none() {
+                if let Some(path) = index.by_stem.get(&item_name_lower) {
+                    return Some(path.clone());
+                }
             }
         }
     }
 
-    if item_ext_lower.is_none() {
-        if let Some(path) = index.by_stem.get(&item_name_lower) {
-            return Some(path.clone());
-        }
-    }
-
+    // Never block hover polling on a huge folder scan. Queue async build instead.
+    queue_folder_index_build(folder_path.clone(), folder_key.to_string());
     None
 }
 
@@ -2218,8 +2218,12 @@ fn get_accessibility_item_under_cursor(
 
 fn get_file_under_cursor_normal(
     automation: Option<&IUIAutomation>,
-    current_folder_hint: Option<&str>,
+    hints: &HoverResolverHints,
 ) -> Option<PathBuf> {
+    if let Some(path) = get_shell_data_model_file_under_cursor_fast() {
+        return Some(path);
+    }
+
     let item_info = get_accessibility_item_under_cursor(automation)?;
 
     match item_info {
@@ -2231,18 +2235,17 @@ fn get_file_under_cursor_normal(
             }
         }
         AccessibilityResult::FileName(item_name) => {
-            if let Some(folder) = current_folder_hint
+            if let Some(path) = resolve_media_path_from_text(&item_name) {
+                return Some(path);
+            }
+
+            if let Some(folder) = hints
+                .current_folder
+                .as_deref()
                 .map(str::to_string)
                 .or_else(get_current_explorer_folder)
             {
                 if let Some(path) = find_media_in_folder(&folder, &item_name) {
-                    return Some(path);
-                }
-            }
-
-            let all_folders = get_all_explorer_folders();
-            for (_, folder) in &all_folders {
-                if let Some(path) = find_media_in_folder(folder, &item_name) {
                     return Some(path);
                 }
             }
@@ -2253,6 +2256,16 @@ fn get_file_under_cursor_normal(
                 && is_media_file(&potential_path)
             {
                 return Some(potential_path);
+            }
+
+            // Last-resort fallback only when we have no active-view context.
+            if hints.current_folder.is_none() {
+                let all_folders = get_all_explorer_folders();
+                for (_, folder) in &all_folders {
+                    if let Some(path) = find_media_in_folder(folder, &item_name) {
+                        return Some(path);
+                    }
+                }
             }
 
             None
@@ -2337,7 +2350,7 @@ fn get_file_under_cursor(
         return get_file_under_cursor_search_legacy(automation, hints);
     }
 
-    get_file_under_cursor_normal(automation, hints.current_folder.as_deref())
+    get_file_under_cursor_normal(automation, hints)
 }
 
 fn get_file_under_cursor_checked(
@@ -2827,7 +2840,6 @@ pub fn run_explorer_hook() {
         unsafe { CoCreateInstance(&CUIAutomation, None, CLSCTX_ALL).ok() };
 
     let mut last_file: Option<PathBuf> = None;
-    let mut last_preview_request_at: Option<Instant> = None;
     let mut suppressed_hover_file: Option<PathBuf> = None;
     let mut suppressed_hover_started_at: Option<Instant> = None;
     let mut hover_start: Option<Instant> = None;
@@ -2867,7 +2879,6 @@ pub fn run_explorer_hook() {
     const HOVER_PROBE_MS: u64 = 60;
     const KEYBOARD_FOCUS_PROBE_MS: u64 = 80;
     const STATIONARY_SEARCH_MISS_HIDE_MS: u64 = 180;
-    const PREVIEW_STUCK_RETRY_MS: u64 = 250;
     const EXPLORER_SLOW_PROBE_LIMIT: u32 = 3;
     const EXPLORER_PROBE_BACKOFF_MS: u64 = 1500;
 
@@ -3425,26 +3436,6 @@ pub fn run_explorer_hook() {
                             } else {
                                 None
                             };
-                            last_preview_request_at = Some(Instant::now());
-                            show_preview(&file_path, cursor_pos.x, cursor_pos.y);
-                        } else if last_preview_request_at
-                            .map(|started| {
-                                started.elapsed() >= Duration::from_millis(PREVIEW_STUCK_RETRY_MS)
-                            })
-                            .unwrap_or(false)
-                            && !preview_targets_path(&file_path)
-                        {
-                            hide_preview();
-                            stationary_search_miss_started_at = None;
-                            video_hover_guard_until = if is_video_file(&file_path) {
-                                Some(
-                                    Instant::now()
-                                        + Duration::from_millis(VIDEO_HOVER_DISMISS_GRACE_MS),
-                                )
-                            } else {
-                                None
-                            };
-                            last_preview_request_at = Some(Instant::now());
                             show_preview(&file_path, cursor_pos.x, cursor_pos.y);
                         }
                     } else {
