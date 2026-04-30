@@ -760,6 +760,12 @@ fn get_explorer_location_url(hwnd: HWND) -> Option<String> {
 }
 
 fn get_current_explorer_location_url_legacy() -> Option<String> {
+    if let Some(context) = get_active_shell_view_context_at_cursor() {
+        if let Some(url) = context.location_url {
+            return Some(url);
+        }
+    }
+
     let hwnd = get_explorer_hwnd_under_cursor_or_foreground_legacy()?;
     get_explorer_location_url(hwnd)
 }
@@ -1083,6 +1089,14 @@ fn get_current_explorer_search_root() -> Option<String> {
 }
 
 fn get_current_explorer_search_root_legacy() -> Option<String> {
+    if let Some(context) = get_active_shell_view_context_at_cursor() {
+        if let Some(url) = context.location_url.as_deref() {
+            if is_search_ms_url(url) {
+                return location_url_to_folder_path_legacy(url);
+            }
+        }
+    }
+
     let url = get_current_explorer_location_url_legacy()?;
     if is_search_ms_url(&url) {
         location_url_to_folder_path_legacy(&url)
@@ -1404,6 +1418,12 @@ fn find_media_in_current_shell_view(item_name: &str) -> Option<PathBuf> {
 }
 
 fn find_media_in_current_shell_view_legacy(item_name: &str) -> Option<PathBuf> {
+    if let Some(context) = get_active_shell_view_context_at_cursor() {
+        if let Some(path) = find_media_in_shell_view(context.shell_view_hwnd, item_name) {
+            return Some(path);
+        }
+    }
+
     let hwnd = get_explorer_hwnd_under_cursor_or_foreground_legacy()?;
     find_media_in_shell_view_legacy(hwnd.0 as isize, item_name)
 }
