@@ -2596,9 +2596,11 @@ pub fn run_preview_window() {
                 let mut show_path: Option<PathBuf> = None;
                 let mut show_layout: Option<PreviewLayout> = None;
                 let mut show_is_video: bool = false;
+                let mut show_requested = false;
 
                 match preview_msg {
                     PreviewMessage::Show(path, x, y) => {
+                        show_requested = true;
                         let screen_width = GetSystemMetrics(SM_CXSCREEN);
                         let screen_height = GetSystemMetrics(SM_CYSCREEN);
                         let follow_cursor = CONFIG.lock().map(|c| c.follow_cursor).unwrap_or(true);
@@ -2620,6 +2622,7 @@ pub fn run_preview_window() {
                         }
                     }
                     PreviewMessage::ShowKeyboard(path, il, it, ir, ib) => {
+                        show_requested = true;
                         let screen_width = GetSystemMetrics(SM_CXSCREEN);
                         let screen_height = GetSystemMetrics(SM_CYSCREEN);
                         let follow_cursor = CONFIG.lock().map(|c| c.follow_cursor).unwrap_or(true);
@@ -2792,6 +2795,27 @@ pub fn run_preview_window() {
                             },
                         );
                     }
+                } else if show_requested {
+                    // A newer hover target could not produce a layout/path. Treat it
+                    // like a hide so stale async loads cannot resurrect old previews.
+                    current_generation += 1;
+                    pending_load = None;
+                    clear_load_request(&load_request_slot);
+                    if let Some(cancel) = pending_load_cancel.take() {
+                        cancel.store(true, Ordering::Release);
+                    }
+
+                    let _ = ShowWindow(hwnd, SW_HIDE);
+
+                    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+                        if let Some(ref mut media) = *current {
+                            media.cancel_background_work();
+                            stop_video_playback(media);
+                        }
+                        *current = None;
+                    }
+                    current_video_path = None;
+                    video_pos = (0, 0, 0, 0);
                 }
             } else if refresh_requested {
                 render_layered_preview(hwnd);
