@@ -69,7 +69,6 @@ struct SearchRootMediaIndex {
 }
 
 struct ActiveShellViewContext {
-    browser_hwnd: isize,
     shell_view_hwnd: isize,
     location_url: Option<String>,
     folder_path: Option<String>,
@@ -87,8 +86,8 @@ struct HoverResolverHints {
 
 const FOLDER_INDEX_TTL_MS: u64 = 60000;
 const EXPLORER_FOLDERS_CACHE_TTL_MS: u64 = 250;
-const SHELL_VIEW_INDEX_TTL_MS: u64 = 500;
-const SHELL_VIEW_INDEX_MAX_ITEMS: i32 = 5000;
+const SHELL_VIEW_INDEX_TTL_MS: u64 = 5000;
+const SHELL_VIEW_INDEX_MAX_ITEMS: i32 = 50000;
 const SEARCH_ROOT_INDEX_TTL_MS: u64 = 60000;
 const SEARCH_ROOT_INDEX_MAX_DIRS: usize = 20000;
 const SEARCH_ROOT_INDEX_MAX_FILES: usize = 50000;
@@ -618,7 +617,6 @@ fn get_active_shell_view_context(screen_point: &POINT) -> Option<ActiveShellView
                 Ok(browser_hwnd) => browser_hwnd,
                 Err(_) => continue,
             };
-            let browser_hwnd_key = browser_hwnd.0 as isize;
             let service_provider = match browser.cast::<IServiceProvider>() {
                 Ok(service_provider) => service_provider,
                 Err(_) => continue,
@@ -651,7 +649,6 @@ fn get_active_shell_view_context(screen_point: &POINT) -> Option<ActiveShellView
             }
 
             let context = ActiveShellViewContext {
-                browser_hwnd: browser_hwnd_key,
                 shell_view_hwnd: shell_view_hwnd_key,
                 location_url,
                 folder_path,
@@ -703,8 +700,8 @@ fn get_current_hover_resolver_hints() -> HoverResolverHints {
         if let Some(url) = context.location_url.as_deref() {
             hints.is_search_view = is_search_ms_url(url);
             if hints.is_search_view {
-                hints.search_root = resolve_explorer_location_folder(context.browser_hwnd, url)
-                    .or_else(|| get_cached_explorer_real_folder(context.browser_hwnd));
+                hints.search_root = resolve_explorer_location_folder(context.shell_view_hwnd, url)
+                    .or_else(|| get_cached_explorer_real_folder(context.shell_view_hwnd));
             }
         }
     }
@@ -805,7 +802,10 @@ fn hit_test_folder_view_by_position(
         }
 
         let mut best: Option<(i32, i32)> = None;
-        let count = folder_view.ItemCount(SVGIO_ALLVIEW).ok()?.clamp(0, 10000);
+        let count = folder_view
+            .ItemCount(SVGIO_ALLVIEW)
+            .ok()?
+            .clamp(0, SHELL_VIEW_INDEX_MAX_ITEMS);
         for item_index in 0..count {
             let pidl = match folder_view.Item(item_index) {
                 Ok(pidl) if !pidl.is_null() => pidl,
@@ -893,7 +893,8 @@ fn get_current_explorer_search_root() -> Option<String> {
     if let Some(context) = get_active_shell_view_context_at_cursor() {
         if let Some(url) = context.location_url {
             if is_search_ms_url(&url) {
-                return resolve_explorer_location_folder(context.browser_hwnd, &url);
+                return resolve_explorer_location_folder(context.shell_view_hwnd, &url)
+                    .or_else(|| get_cached_explorer_real_folder(context.shell_view_hwnd));
             }
         }
     }
@@ -1161,27 +1162,123 @@ fn lookup_media_in_search_root_index(root: &str, item_name: &str) -> Option<Path
         .and_then(|s| s.to_str())
         .map(|s| s.to_ascii_lowercase());
 
-    let mut cache = SEARCH_ROOT_MEDIA_INDEX.lock().ok()?;
-    cache.retain(|_, index| {
-        index.built_at.elapsed() <= Duration::from_millis(SEARCH_ROOT_INDEX_TTL_MS)
-    });
+    if let Ok(mut cache) = SEARCH_ROOT_MEDIA_INDEX.lock() {
+        cache.retain(|_, index| {
+            index.built_at.elapsed() <= Duration::from_millis(SEARCH_ROOT_INDEX_TTL_MS)
+        });
 
-    if !cache.contains_key(root) {
-        let index = build_search_root_media_index(root)?;
-        cache.insert(root.to_string(), index);
-    }
+        if !cache.contains_key(root) {
+            if let Some(index) = build_search_root_media_index(root) {
+                cache.insert(root.to_string(), index);
+            }
+        }
 
-    let index = cache.get(root)?;
+        if let Some(index) = cache.get(root) {
+            if let Some(paths) = index.by_file_name.get(&item_name_lower) {
+                if let Some(path) = paths.first() {
+                    return Some(path.clone());
+                }
+            }
 
-    if let Some(paths) = index.by_file_name.get(&item_name_lower) {
-        if let Some(path) = paths.first() {
-            return Some(path.clone());
+            if let Some(stem_key) = item_stem_lower.as_ref() {
+                if let Some(paths) = index.by_stem.get(stem_key) {
+                    for path in paths {
+                        if let Some(item_ext) = item_ext_lower.as_deref() {
+                            if let Some(candidate_ext) = path.extension().and_then(|s| s.to_str()) {
+                                let candidate_ext_lower = candidate_ext.to_ascii_lowercase();
+                                if candidate_ext_lower == item_ext
+                                    || (is_jpeg_extension(&candidate_ext_lower)
+                                        && is_jpeg_extension(item_ext))
+                                {
+                                    return Some(path.clone());
+                                }
+                            }
+                        } else {
+                            return Some(path.clone());
+                        }
+                    }
+                }
+            }
         }
     }
 
-    if let Some(stem_key) = item_stem_lower.as_ref() {
-        if let Some(paths) = index.by_stem.get(stem_key) {
-            for path in paths {
+    let path = find_media_in_search_root_direct(root, item_name)?;
+
+    if let Ok(mut cache) = SEARCH_ROOT_MEDIA_INDEX.lock() {
+        cache.retain(|_, index| {
+            index.built_at.elapsed() <= Duration::from_millis(SEARCH_ROOT_INDEX_TTL_MS)
+        });
+        let index = cache
+            .entry(root.to_string())
+            .or_insert_with(|| SearchRootMediaIndex {
+                built_at: Instant::now(),
+                by_file_name: HashMap::new(),
+                by_stem: HashMap::new(),
+            });
+        add_search_index_path(index, &path);
+        index.built_at = Instant::now();
+    }
+
+    Some(path)
+}
+
+fn find_media_in_search_root_direct(root: &str, item_name: &str) -> Option<PathBuf> {
+    let item_name = item_name.trim();
+    if item_name.is_empty() {
+        return None;
+    }
+
+    let root_path = PathBuf::from(root);
+    if !root_path.is_dir() {
+        return None;
+    }
+
+    let item_stem_lower = Path::new(item_name)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_ascii_lowercase());
+    let item_ext_lower = Path::new(item_name)
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_ascii_lowercase());
+    let mut dirs = vec![root_path];
+
+    while let Some(dir) = dirs.pop() {
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(_) => continue,
+        };
+
+        for entry in entries.flatten() {
+            let file_type = match entry.file_type() {
+                Ok(file_type) => file_type,
+                Err(_) => continue,
+            };
+            let path = entry.path();
+
+            if file_type.is_dir() {
+                dirs.push(path);
+                continue;
+            }
+
+            if !file_type.is_file() || !is_media_file(&path) {
+                continue;
+            }
+
+            if let Some(file_name) = path.file_name().and_then(|s| s.to_str()) {
+                if file_name.eq_ignore_ascii_case(item_name) {
+                    return Some(path);
+                }
+            }
+
+            if let Some(stem_key) = item_stem_lower.as_deref() {
+                let Some(candidate_stem) = path.file_stem().and_then(|s| s.to_str()) else {
+                    continue;
+                };
+                if !candidate_stem.eq_ignore_ascii_case(stem_key) {
+                    continue;
+                }
+
                 if let Some(item_ext) = item_ext_lower.as_deref() {
                     if let Some(candidate_ext) = path.extension().and_then(|s| s.to_str()) {
                         let candidate_ext_lower = candidate_ext.to_ascii_lowercase();
@@ -1189,11 +1286,11 @@ fn lookup_media_in_search_root_index(root: &str, item_name: &str) -> Option<Path
                             || (is_jpeg_extension(&candidate_ext_lower)
                                 && is_jpeg_extension(item_ext))
                         {
-                            return Some(path.clone());
+                            return Some(path);
                         }
                     }
                 } else {
-                    return Some(path.clone());
+                    return Some(path);
                 }
             }
         }
@@ -1209,11 +1306,11 @@ fn get_current_explorer_folder() -> Option<String> {
             return Some(folder);
         }
         if let Some(url) = context.location_url.as_deref() {
-            if let Some(folder) = resolve_explorer_location_folder(context.browser_hwnd, url) {
+            if let Some(folder) = resolve_explorer_location_folder(context.shell_view_hwnd, url) {
                 return Some(folder);
             }
         }
-        if let Some(folder) = get_cached_explorer_real_folder(context.browser_hwnd) {
+        if let Some(folder) = get_cached_explorer_real_folder(context.shell_view_hwnd) {
             return Some(folder);
         }
     }
