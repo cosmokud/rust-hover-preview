@@ -403,10 +403,6 @@ fn search_ms_location_from_url(url_str: &str) -> Option<String> {
     None
 }
 
-fn location_url_to_folder_path_legacy(url_str: &str) -> Option<String> {
-    normalize_file_url_path(url_str).or_else(|| search_ms_location_from_url(url_str))
-}
-
 fn is_usable_folder_path(path: &str) -> bool {
     let path = path.trim();
     !path.is_empty() && PathBuf::from(path).is_dir()
@@ -692,34 +688,48 @@ fn get_explorer_hwnd_under_cursor_or_foreground() -> Option<HWND> {
 
 fn get_explorer_hwnd_under_cursor_or_foreground_legacy() -> Option<HWND> {
     unsafe {
-        let mut cursor_pos = POINT::default();
-        if GetCursorPos(&mut cursor_pos).is_err() {
-            return None;
-        }
+        let folders = get_all_explorer_folders();
 
-        let hwnd = WindowFromPoint(cursor_pos);
-        if !hwnd.0.is_null() {
-            let mut current_hwnd = hwnd;
-            for _ in 0..20 {
-                if is_explorer_window(current_hwnd) {
-                    return Some(current_hwnd);
+        let mut cursor_pos = POINT::default();
+        if GetCursorPos(&mut cursor_pos).is_ok() {
+            let hwnd = WindowFromPoint(cursor_pos);
+            if !hwnd.0.is_null() {
+                let mut current_hwnd = hwnd;
+                let mut top_hwnd = hwnd;
+
+                for _ in 0..20 {
+                    for (explorer_hwnd, _) in &folders {
+                        if current_hwnd == *explorer_hwnd {
+                            return Some(*explorer_hwnd);
+                        }
+                    }
+
+                    match windows::Win32::UI::WindowsAndMessaging::GetParent(current_hwnd) {
+                        Ok(parent) if !parent.0.is_null() && parent != current_hwnd => {
+                            top_hwnd = parent;
+                            current_hwnd = parent;
+                        }
+                        _ => break,
+                    }
                 }
 
-                if let Ok(parent) = windows::Win32::UI::WindowsAndMessaging::GetParent(current_hwnd)
-                {
-                    if parent.0.is_null() || parent == current_hwnd {
-                        break;
-                    }
-                    current_hwnd = parent;
-                } else {
-                    break;
+                if is_explorer_window(top_hwnd) {
+                    return Some(top_hwnd);
                 }
             }
         }
 
         let foreground = GetForegroundWindow();
-        if !foreground.is_invalid() && is_explorer_window(foreground) {
-            return Some(foreground);
+        if !foreground.is_invalid() {
+            for (explorer_hwnd, _) in &folders {
+                if foreground == *explorer_hwnd {
+                    return Some(*explorer_hwnd);
+                }
+            }
+
+            if is_explorer_window(foreground) {
+                return Some(foreground);
+            }
         }
     }
 
@@ -775,6 +785,8 @@ fn get_active_shell_view_context(screen_point: &POINT) -> Option<ActiveShellView
         let shell_windows =
             CoCreateInstance::<_, IShellWindows>(&ShellWindows, None, CLSCTX_ALL).ok()?;
         let count = shell_windows.Count().ok()?;
+        let cursor_hwnd = WindowFromPoint(*screen_point);
+        let mut rect_candidate: Option<ActiveShellViewContext> = None;
         let mut foreground_candidate: Option<ActiveShellViewContext> = None;
         let foreground = GetForegroundWindow();
 
@@ -809,6 +821,9 @@ fn get_active_shell_view_context(screen_point: &POINT) -> Option<ActiveShellView
                 Ok(hwnd) if !hwnd.is_invalid() => hwnd,
                 _ => continue,
             };
+            if !IsWindowVisible(shell_view_hwnd).as_bool() || is_window_minimized(shell_view_hwnd) {
+                continue;
+            }
             let shell_view_hwnd_key = shell_view_hwnd.0 as isize;
 
             let mut rect = RECT::default();
@@ -831,8 +846,13 @@ fn get_active_shell_view_context(screen_point: &POINT) -> Option<ActiveShellView
                 client_point,
             };
 
-            if point_in_rect(screen_point, &rect) {
+            if !cursor_hwnd.is_invalid() && hwnd_is_same_or_ancestor(cursor_hwnd, shell_view_hwnd) {
                 return Some(context);
+            }
+
+            if point_in_rect(screen_point, &rect) && rect_candidate.is_none() {
+                rect_candidate = Some(context);
+                continue;
             }
 
             if foreground == HWND(browser_hwnd.0 as *mut _) {
@@ -840,7 +860,7 @@ fn get_active_shell_view_context(screen_point: &POINT) -> Option<ActiveShellView
             }
         }
 
-        foreground_candidate
+        rect_candidate.or(foreground_candidate)
     }
 }
 
@@ -863,6 +883,28 @@ fn get_current_explorer_location_url() -> Option<String> {
 
     let hwnd = get_explorer_hwnd_under_cursor_or_foreground()?;
     get_explorer_location_url(hwnd)
+}
+
+fn hwnd_is_same_or_ancestor(child: HWND, ancestor: HWND) -> bool {
+    if child.is_invalid() || ancestor.is_invalid() {
+        return false;
+    }
+
+    let mut current = child;
+    for _ in 0..32 {
+        if current == ancestor {
+            return true;
+        }
+
+        match unsafe { windows::Win32::UI::WindowsAndMessaging::GetParent(current) } {
+            Ok(parent) if !parent.is_invalid() && parent != current => {
+                current = parent;
+            }
+            _ => break,
+        }
+    }
+
+    false
 }
 
 fn is_current_search_view_legacy() -> bool {
@@ -1092,14 +1134,18 @@ fn get_current_explorer_search_root_legacy() -> Option<String> {
     if let Some(context) = get_active_shell_view_context_at_cursor() {
         if let Some(url) = context.location_url.as_deref() {
             if is_search_ms_url(url) {
-                return location_url_to_folder_path_legacy(url);
+                return resolve_explorer_location_folder(context.shell_view_hwnd, url)
+                    .or_else(|| get_shell_view_search_root(context.shell_view_hwnd))
+                    .or_else(|| get_cached_explorer_real_folder(context.shell_view_hwnd));
             }
         }
     }
 
-    let url = get_current_explorer_location_url_legacy()?;
+    let hwnd = get_explorer_hwnd_under_cursor_or_foreground_legacy()?;
+    let hwnd_key = hwnd.0 as isize;
+    let url = get_explorer_location_url(hwnd)?;
     if is_search_ms_url(&url) {
-        location_url_to_folder_path_legacy(&url)
+        resolve_explorer_location_folder(hwnd_key, &url)
     } else {
         None
     }
@@ -1586,11 +1632,6 @@ fn lookup_media_in_search_root_index(root: &str, item_name: &str) -> Option<Path
     }
 
     Some(path)
-}
-
-fn find_media_in_current_search_root_legacy(item_name: &str) -> Option<PathBuf> {
-    let root = get_current_explorer_search_root_legacy()?;
-    lookup_media_in_search_root_index(&root, item_name)
 }
 
 fn find_media_in_search_root_direct(root: &str, item_name: &str) -> Option<PathBuf> {
@@ -2259,19 +2300,6 @@ fn get_accessibility_item_under_cursor(
     get_item_under_cursor().or_else(|| automation.and_then(get_item_under_cursor_uia))
 }
 
-fn resolve_direct_media_path(item_info: &AccessibilityResult) -> Option<PathBuf> {
-    match item_info {
-        AccessibilityResult::FullPath(path) => {
-            if is_media_file(path) {
-                Some(path.clone())
-            } else {
-                None
-            }
-        }
-        AccessibilityResult::FileName(item_name) => resolve_media_path_from_text(item_name),
-    }
-}
-
 fn get_file_under_cursor_normal(
     automation: Option<&IUIAutomation>,
     current_folder_hint: Option<&str>,
@@ -2317,6 +2345,10 @@ fn get_file_under_cursor_normal(
 }
 
 fn get_file_under_cursor_search_legacy(automation: Option<&IUIAutomation>) -> Option<PathBuf> {
+    if let Some(path) = get_shell_data_model_file_under_cursor() {
+        return Some(path);
+    }
+
     let item_info = get_accessibility_item_under_cursor(automation)?;
 
     match item_info {
@@ -2328,11 +2360,34 @@ fn get_file_under_cursor_search_legacy(automation: Option<&IUIAutomation>) -> Op
             }
         }
         AccessibilityResult::FileName(item_name) => {
+            let current_url = get_current_explorer_location_url_legacy();
+            let current_is_search_view = current_url
+                .as_deref()
+                .map(is_search_ms_url)
+                .unwrap_or(false);
+            let current_search_root = get_current_explorer_search_root_legacy();
+
+            if let Some(root) = current_search_root.as_deref() {
+                if let Some(path) = find_media_in_folder(root, &item_name) {
+                    return Some(path);
+                }
+            }
+
             if let Some(path) = find_media_in_current_shell_view_legacy(&item_name) {
                 return Some(path);
             }
-            if let Some(path) = find_media_in_current_search_root_legacy(&item_name) {
+            if let Some(root) = current_search_root.as_deref() {
+                if let Some(path) = lookup_media_in_search_root_index(root, &item_name) {
+                    return Some(path);
+                }
+            }
+
+            if let Some(path) = resolve_media_path_from_text(&item_name) {
                 return Some(path);
+            }
+
+            if current_is_search_view {
+                return None;
             }
 
             if let Some(folder) = get_current_explorer_folder() {
@@ -2348,79 +2403,21 @@ fn get_file_under_cursor_search_legacy(automation: Option<&IUIAutomation>) -> Op
                 }
             }
 
-            resolve_media_path_from_text(&item_name)
+            None
         }
     }
-}
-
-fn get_file_under_cursor_search(
-    automation: Option<&IUIAutomation>,
-    current_folder_hint: Option<&str>,
-    current_search_root_hint: Option<&str>,
-    shell_view_hwnd_hint: Option<isize>,
-) -> Option<PathBuf> {
-    let item_info = get_accessibility_item_under_cursor(automation);
-    if let Some(path) = item_info.as_ref().and_then(resolve_direct_media_path) {
-        return Some(path);
-    }
-
-    if let Some(path) = get_shell_data_model_file_under_cursor() {
-        return Some(path);
-    }
-
-    let search_root = current_search_root_hint
-        .map(|root| root.to_string())
-        .or_else(|| shell_view_hwnd_hint.and_then(get_shell_view_search_root));
-
-    let item_name = match item_info? {
-        AccessibilityResult::FullPath(path) => {
-            if is_media_file(&path) {
-                return Some(path);
-            }
-            return None;
-        }
-        AccessibilityResult::FileName(item_name) => item_name,
-    };
-
-    if let Some(shell_view_hwnd) = shell_view_hwnd_hint {
-        if let Some(path) = find_media_in_shell_view(shell_view_hwnd, &item_name) {
-            return Some(path);
-        }
-    } else if let Some(path) = find_media_in_current_shell_view(&item_name) {
-        return Some(path);
-    }
-
-    if let Some(path) = lookup_media_in_hover_folder(&item_name, current_folder_hint) {
-        return Some(path);
-    }
-
-    if let Some(root) = search_root.as_deref() {
-        if let Some(path) = find_media_in_folder(root, &item_name) {
-            return Some(path);
-        }
-        if let Some(path) = lookup_media_in_search_root_index(root, &item_name) {
-            return Some(path);
-        }
-    }
-
-    None
 }
 
 fn get_file_under_cursor(
     automation: Option<&IUIAutomation>,
     hints: &HoverResolverHints,
 ) -> Option<PathBuf> {
-    if is_current_search_view_legacy() {
-        return get_file_under_cursor_search_legacy(automation);
+    if let Some(path) = get_shell_data_model_file_under_cursor() {
+        return Some(path);
     }
 
-    if hints.is_search_view {
-        return get_file_under_cursor_search(
-            automation,
-            hints.current_folder.as_deref(),
-            hints.search_root.as_deref(),
-            hints.shell_view_hwnd,
-        );
+    if hints.is_search_view || is_current_search_view_legacy() {
+        return get_file_under_cursor_search_legacy(automation);
     }
 
     get_file_under_cursor_normal(automation, hints.current_folder.as_deref())
