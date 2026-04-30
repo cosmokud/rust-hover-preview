@@ -2412,10 +2412,6 @@ fn get_file_under_cursor(
     automation: Option<&IUIAutomation>,
     hints: &HoverResolverHints,
 ) -> Option<PathBuf> {
-    if let Some(path) = get_shell_data_model_file_under_cursor() {
-        return Some(path);
-    }
-
     if hints.is_search_view || is_current_search_view_legacy() {
         return get_file_under_cursor_search_legacy(automation);
     }
