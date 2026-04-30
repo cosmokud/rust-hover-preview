@@ -60,6 +60,8 @@ struct ShellViewMediaIndex {
     built_at: Instant,
     by_display_name: HashMap<String, PathBuf>,
     by_file_name: HashMap<String, PathBuf>,
+    by_stem: HashMap<String, PathBuf>,
+    root_folder: Option<String>,
 }
 
 struct SearchRootMediaIndex {
@@ -447,6 +449,58 @@ fn resolve_explorer_location_folder(hwnd: isize, url_str: &str) -> Option<String
     None
 }
 
+fn merge_common_folder_root(current: Option<PathBuf>, path: &Path) -> Option<PathBuf> {
+    let candidate_dir = path.parent()?.to_path_buf();
+
+    match current {
+        Some(existing) => existing
+            .ancestors()
+            .find(|ancestor| candidate_dir.starts_with(ancestor))
+            .map(|ancestor| ancestor.to_path_buf()),
+        None => Some(candidate_dir),
+    }
+}
+
+fn get_shell_view_search_root(view_hwnd_key: isize) -> Option<String> {
+    let mut cache = SHELL_VIEW_MEDIA_INDEX.lock().ok()?;
+    cache.retain(|_, index| {
+        index.built_at.elapsed() <= Duration::from_millis(SHELL_VIEW_INDEX_TTL_MS)
+    });
+
+    if !cache.contains_key(&view_hwnd_key) {
+        let index = build_shell_view_media_index(view_hwnd_key)?;
+        cache.insert(view_hwnd_key, index);
+    }
+
+    cache
+        .get(&view_hwnd_key)
+        .and_then(|index| index.root_folder.clone())
+}
+
+fn resolve_search_root_from_context(context: &ActiveShellViewContext) -> Option<String> {
+    if let Some(url) = context.location_url.as_deref() {
+        if let Some(root) = resolve_explorer_location_folder(context.shell_view_hwnd, url) {
+            return Some(root);
+        }
+    }
+
+    if let Some(folder) = context
+        .folder_path
+        .as_deref()
+        .filter(|folder| is_usable_folder_path(folder))
+    {
+        cache_explorer_real_folder(context.shell_view_hwnd, folder);
+        return Some(folder.to_string());
+    }
+
+    if let Some(root) = get_shell_view_search_root(context.shell_view_hwnd) {
+        cache_explorer_real_folder(context.shell_view_hwnd, &root);
+        return Some(root);
+    }
+
+    get_cached_explorer_real_folder(context.shell_view_hwnd)
+}
+
 fn get_all_explorer_folders() -> Vec<(HWND, String)> {
     if let Ok(cache) = EXPLORER_FOLDERS_CACHE.lock() {
         if let Some(cache_entry) = cache.as_ref() {
@@ -700,8 +754,10 @@ fn get_current_hover_resolver_hints() -> HoverResolverHints {
         if let Some(url) = context.location_url.as_deref() {
             hints.is_search_view = is_search_ms_url(url);
             if hints.is_search_view {
-                hints.search_root = resolve_explorer_location_folder(context.shell_view_hwnd, url)
-                    .or_else(|| get_cached_explorer_real_folder(context.shell_view_hwnd));
+                hints.search_root = resolve_search_root_from_context(&context);
+                if hints.current_folder.is_none() {
+                    hints.current_folder = hints.search_root.clone();
+                }
             }
         }
     }
@@ -891,10 +947,9 @@ fn get_shell_data_model_file_under_cursor() -> Option<PathBuf> {
 
 fn get_current_explorer_search_root() -> Option<String> {
     if let Some(context) = get_active_shell_view_context_at_cursor() {
-        if let Some(url) = context.location_url {
-            if is_search_ms_url(&url) {
-                return resolve_explorer_location_folder(context.shell_view_hwnd, &url)
-                    .or_else(|| get_cached_explorer_real_folder(context.shell_view_hwnd));
+        if let Some(url) = context.location_url.as_deref() {
+            if is_search_ms_url(url) {
+                return resolve_search_root_from_context(&context);
             }
         }
     }
@@ -946,6 +1001,8 @@ fn get_focused_shell_view_media_path(item: &FocusedItemInfo) -> Option<PathBuf> 
 fn build_shell_view_media_index(view_hwnd_key: isize) -> Option<ShellViewMediaIndex> {
     let mut by_display_name = HashMap::new();
     let mut by_file_name = HashMap::new();
+    let mut by_stem = HashMap::new();
+    let mut root_folder: Option<PathBuf> = None;
 
     unsafe {
         let shell_windows =
@@ -1016,12 +1073,22 @@ fn build_shell_view_media_index(view_hwnd_key: isize) -> Option<ShellViewMediaIn
                         .entry(file_name.to_ascii_lowercase())
                         .or_insert_with(|| path.clone());
                 }
+
+                if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                    by_stem
+                        .entry(stem.to_ascii_lowercase())
+                        .or_insert_with(|| path.clone());
+                }
+
+                root_folder = merge_common_folder_root(root_folder, &path);
             }
 
             return Some(ShellViewMediaIndex {
                 built_at: Instant::now(),
                 by_display_name,
                 by_file_name,
+                by_stem,
+                root_folder: root_folder.map(|path| path.to_string_lossy().into_owned()),
             });
         }
     }
@@ -1036,6 +1103,14 @@ fn find_media_in_shell_view(view_hwnd_key: isize, item_name: &str) -> Option<Pat
     }
 
     let item_name_lower = item_name.to_ascii_lowercase();
+    let item_stem_lower = Path::new(item_name)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_ascii_lowercase());
+    let item_ext_lower = Path::new(item_name)
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_ascii_lowercase());
     let mut cache = SHELL_VIEW_MEDIA_INDEX.lock().ok()?;
     cache.retain(|_, index| {
         index.built_at.elapsed() <= Duration::from_millis(SHELL_VIEW_INDEX_TTL_MS)
@@ -1046,15 +1121,40 @@ fn find_media_in_shell_view(view_hwnd_key: isize, item_name: &str) -> Option<Pat
         cache.insert(view_hwnd_key, index);
     }
 
-    cache
-        .get(&view_hwnd_key)
-        .and_then(|index| {
-            index
-                .by_file_name
-                .get(&item_name_lower)
-                .or_else(|| index.by_display_name.get(&item_name_lower))
-        })
-        .cloned()
+    let index = cache.get(&view_hwnd_key)?;
+
+    if let Some(path) = index
+        .by_file_name
+        .get(&item_name_lower)
+        .or_else(|| index.by_display_name.get(&item_name_lower))
+    {
+        return Some(path.clone());
+    }
+
+    if let Some(stem_key) = item_stem_lower.as_ref() {
+        if let Some(path) = index.by_stem.get(stem_key) {
+            if let Some(item_ext) = item_ext_lower.as_deref() {
+                if let Some(candidate_ext) = path.extension().and_then(|s| s.to_str()) {
+                    let candidate_ext_lower = candidate_ext.to_ascii_lowercase();
+                    if candidate_ext_lower == item_ext
+                        || (is_jpeg_extension(&candidate_ext_lower) && is_jpeg_extension(item_ext))
+                    {
+                        return Some(path.clone());
+                    }
+                }
+            } else {
+                return Some(path.clone());
+            }
+        }
+    }
+
+    if item_ext_lower.is_none() {
+        if let Some(path) = index.by_stem.get(&item_name_lower) {
+            return Some(path.clone());
+        }
+    }
+
+    None
 }
 
 fn find_media_in_current_shell_view(item_name: &str) -> Option<PathBuf> {
@@ -1306,6 +1406,11 @@ fn get_current_explorer_folder() -> Option<String> {
             return Some(folder);
         }
         if let Some(url) = context.location_url.as_deref() {
+            if is_search_ms_url(url) {
+                if let Some(folder) = resolve_search_root_from_context(&context) {
+                    return Some(folder);
+                }
+            }
             if let Some(folder) = resolve_explorer_location_folder(context.shell_view_hwnd, url) {
                 return Some(folder);
             }
@@ -1992,6 +2097,10 @@ fn get_file_under_cursor_search(
         return Some(path);
     }
 
+    let search_root = current_search_root_hint
+        .map(|root| root.to_string())
+        .or_else(|| shell_view_hwnd_hint.and_then(get_shell_view_search_root));
+
     let item_name = match item_info? {
         AccessibilityResult::FullPath(path) => {
             if is_media_file(&path) {
@@ -2002,10 +2111,6 @@ fn get_file_under_cursor_search(
         AccessibilityResult::FileName(item_name) => item_name,
     };
 
-    if let Some(path) = lookup_media_in_hover_folder(&item_name, current_folder_hint) {
-        return Some(path);
-    }
-
     if let Some(shell_view_hwnd) = shell_view_hwnd_hint {
         if let Some(path) = find_media_in_shell_view(shell_view_hwnd, &item_name) {
             return Some(path);
@@ -2014,7 +2119,11 @@ fn get_file_under_cursor_search(
         return Some(path);
     }
 
-    if let Some(root) = current_search_root_hint {
+    if let Some(path) = lookup_media_in_hover_folder(&item_name, current_folder_hint) {
+        return Some(path);
+    }
+
+    if let Some(root) = search_root.as_deref() {
         if let Some(path) = find_media_in_folder(root, &item_name) {
             return Some(path);
         }
