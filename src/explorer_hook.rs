@@ -2218,8 +2218,12 @@ fn get_accessibility_item_under_cursor(
 
 fn get_file_under_cursor_normal(
     automation: Option<&IUIAutomation>,
-    current_folder_hint: Option<&str>,
+    hints: &HoverResolverHints,
 ) -> Option<PathBuf> {
+    if let Some(path) = get_shell_data_model_file_under_cursor_fast() {
+        return Some(path);
+    }
+
     let item_info = get_accessibility_item_under_cursor(automation)?;
 
     match item_info {
@@ -2231,18 +2235,21 @@ fn get_file_under_cursor_normal(
             }
         }
         AccessibilityResult::FileName(item_name) => {
-            if let Some(folder) = current_folder_hint
+            if let Some(path) = hints
+                .shell_view_hwnd
+                .and_then(|view_hwnd| find_media_in_shell_view(view_hwnd, &item_name))
+                .or_else(|| find_media_in_current_shell_view(&item_name))
+            {
+                return Some(path);
+            }
+
+            if let Some(folder) = hints
+                .current_folder
+                .as_deref()
                 .map(str::to_string)
                 .or_else(get_current_explorer_folder)
             {
                 if let Some(path) = find_media_in_folder(&folder, &item_name) {
-                    return Some(path);
-                }
-            }
-
-            let all_folders = get_all_explorer_folders();
-            for (_, folder) in &all_folders {
-                if let Some(path) = find_media_in_folder(folder, &item_name) {
                     return Some(path);
                 }
             }
@@ -2253,6 +2260,15 @@ fn get_file_under_cursor_normal(
                 && is_media_file(&potential_path)
             {
                 return Some(potential_path);
+            }
+
+            if hints.current_folder.is_none() && hints.shell_view_hwnd.is_none() {
+                let all_folders = get_all_explorer_folders();
+                for (_, folder) in &all_folders {
+                    if let Some(path) = find_media_in_folder(folder, &item_name) {
+                        return Some(path);
+                    }
+                }
             }
 
             None
@@ -2337,7 +2353,7 @@ fn get_file_under_cursor(
         return get_file_under_cursor_search_legacy(automation, hints);
     }
 
-    get_file_under_cursor_normal(automation, hints.current_folder.as_deref())
+    get_file_under_cursor_normal(automation, hints)
 }
 
 fn get_file_under_cursor_checked(
