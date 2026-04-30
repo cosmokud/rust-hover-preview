@@ -29,7 +29,6 @@ use windows::Win32::UI::Shell::{
     IFolderView, INameSpaceTreeControl, IPersistFolder2, IShellBrowser, IShellFolder,
     IShellFolderViewDual, IShellItem, IShellView, IShellWindows, SHCreateItemFromIDList,
     SHCreateItemWithParent, SID_STopLevelBrowser, ShellWindows, SIGDN_DESKTOPABSOLUTEPARSING,
-    SVGIO_ALLVIEW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     GetClassNameW, GetCursorPos, GetForegroundWindow, GetWindowPlacement, GetWindowRect,
@@ -1011,78 +1010,6 @@ fn shell_item_from_view_pidl(
     }
 }
 
-fn hit_test_folder_view_by_position(
-    folder_view: &IFolderView,
-    client_point: &POINT,
-) -> Option<PathBuf> {
-    unsafe {
-        let mut spacing = POINT { x: 0, y: 0 };
-        let _ = folder_view.GetSpacing(&mut spacing);
-        if spacing.x <= 0 {
-            spacing.x = 220;
-        }
-        if spacing.y <= 0 {
-            spacing.y = 24;
-        }
-
-        let mut best: Option<(i32, i32)> = None;
-        let count = folder_view
-            .ItemCount(SVGIO_ALLVIEW)
-            .ok()?
-            .clamp(0, SHELL_VIEW_INDEX_MAX_ITEMS);
-        for item_index in 0..count {
-            let pidl = match folder_view.Item(item_index) {
-                Ok(pidl) if !pidl.is_null() => pidl,
-                _ => continue,
-            };
-
-            let position = folder_view.GetItemPosition(pidl).ok();
-            CoTaskMemFree(Some(pidl as *const core::ffi::c_void));
-
-            let position = match position {
-                Some(position) => position,
-                None => continue,
-            };
-
-            let row_top = position.y - (spacing.y / 3).max(1);
-            let row_bottom = position.y + spacing.y.max(1);
-            let col_left = position.x - (spacing.x / 3).max(1);
-            let col_right = position.x + (spacing.x * 2).max(1);
-
-            if client_point.y < row_top || client_point.y > row_bottom {
-                continue;
-            }
-
-            let x_penalty = if client_point.x < col_left {
-                col_left - client_point.x
-            } else if client_point.x > col_right {
-                client_point.x - col_right
-            } else {
-                0
-            };
-            let y_score = (client_point.y - position.y).abs();
-            let score = y_score + x_penalty;
-
-            if best
-                .as_ref()
-                .map(|(best_score, _)| score < *best_score)
-                .unwrap_or(true)
-            {
-                best = Some((score, item_index));
-            }
-        }
-
-        let (_, best_index) = best?;
-        let pidl = match folder_view.Item(best_index) {
-            Ok(pidl) if !pidl.is_null() => pidl,
-            _ => return None,
-        };
-        let shell_item = shell_item_from_view_pidl(folder_view, pidl);
-        CoTaskMemFree(Some(pidl as *const core::ffi::c_void));
-        shell_item.and_then(|shell_item| shell_item_to_media_path(&shell_item))
-    }
-}
-
 fn get_shell_data_model_file_from_context(context: &ActiveShellViewContext) -> Option<PathBuf> {
     if let Ok(hit_test) = context.shell_view.cast::<INameSpaceTreeControl>() {
         unsafe {
@@ -1097,20 +1024,9 @@ fn get_shell_data_model_file_from_context(context: &ActiveShellViewContext) -> O
     None
 }
 
-fn get_shell_data_model_fallback_file_from_context(
-    context: &ActiveShellViewContext,
-) -> Option<PathBuf> {
-    if let Ok(folder_view) = context.shell_view.cast::<IFolderView>() {
-        return hit_test_folder_view_by_position(&folder_view, &context.client_point);
-    }
-
-    None
-}
-
-fn get_shell_data_model_file_under_cursor() -> Option<PathBuf> {
+fn get_shell_data_model_file_under_cursor_fast() -> Option<PathBuf> {
     let context = get_active_shell_view_context_at_cursor()?;
     get_shell_data_model_file_from_context(&context)
-        .or_else(|| get_shell_data_model_fallback_file_from_context(&context))
 }
 
 fn get_current_explorer_search_root() -> Option<String> {
@@ -2344,8 +2260,11 @@ fn get_file_under_cursor_normal(
     }
 }
 
-fn get_file_under_cursor_search_legacy(automation: Option<&IUIAutomation>) -> Option<PathBuf> {
-    if let Some(path) = get_shell_data_model_file_under_cursor() {
+fn get_file_under_cursor_search_legacy(
+    automation: Option<&IUIAutomation>,
+    hints: &HoverResolverHints,
+) -> Option<PathBuf> {
+    if let Some(path) = get_shell_data_model_file_under_cursor_fast() {
         return Some(path);
     }
 
@@ -2360,12 +2279,18 @@ fn get_file_under_cursor_search_legacy(automation: Option<&IUIAutomation>) -> Op
             }
         }
         AccessibilityResult::FileName(item_name) => {
-            let current_url = get_current_explorer_location_url_legacy();
-            let current_is_search_view = current_url
-                .as_deref()
-                .map(is_search_ms_url)
-                .unwrap_or(false);
-            let current_search_root = get_current_explorer_search_root_legacy();
+            if let Some(path) = resolve_media_path_from_text(&item_name) {
+                return Some(path);
+            }
+
+            let current_is_search_view = hints.is_search_view || is_current_search_view_legacy();
+            let current_search_root = hints.search_root.clone().or_else(|| {
+                if current_is_search_view {
+                    get_current_explorer_search_root_legacy()
+                } else {
+                    None
+                }
+            });
 
             if let Some(root) = current_search_root.as_deref() {
                 if let Some(path) = find_media_in_folder(root, &item_name) {
@@ -2380,10 +2305,6 @@ fn get_file_under_cursor_search_legacy(automation: Option<&IUIAutomation>) -> Op
                 if let Some(path) = lookup_media_in_search_root_index(root, &item_name) {
                     return Some(path);
                 }
-            }
-
-            if let Some(path) = resolve_media_path_from_text(&item_name) {
-                return Some(path);
             }
 
             if current_is_search_view {
@@ -2413,7 +2334,7 @@ fn get_file_under_cursor(
     hints: &HoverResolverHints,
 ) -> Option<PathBuf> {
     if hints.is_search_view || is_current_search_view_legacy() {
-        return get_file_under_cursor_search_legacy(automation);
+        return get_file_under_cursor_search_legacy(automation, hints);
     }
 
     get_file_under_cursor_normal(automation, hints.current_folder.as_deref())
