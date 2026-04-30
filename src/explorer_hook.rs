@@ -2836,6 +2836,8 @@ pub fn run_explorer_hook() {
     let mut keyboard_file: Option<PathBuf> = None;
     let mut last_focused_name: Option<String> = None;
     let mut is_keyboard_hover = false;
+    let mut suppress_preview_until_cursor_leaves_preview = false;
+    let mut stationary_search_miss_started_at: Option<Instant> = None;
     // Short grace after starting a video preview to avoid instant self-dismiss
     // while ffplay window is still initializing under the cursor.
     let mut video_hover_guard_until: Option<Instant> = None;
@@ -2863,6 +2865,7 @@ pub fn run_explorer_hook() {
     const FOLDER_PROBE_MS: u64 = 200;
     const HOVER_PROBE_MS: u64 = 60;
     const KEYBOARD_FOCUS_PROBE_MS: u64 = 80;
+    const STATIONARY_SEARCH_MISS_HIDE_MS: u64 = 180;
     const EXPLORER_SLOW_PROBE_LIMIT: u32 = 3;
     const EXPLORER_PROBE_BACKOFF_MS: u64 = 1500;
 
@@ -2944,6 +2947,7 @@ pub fn run_explorer_hook() {
             last_file = None;
             suppressed_hover_file = None;
             suppressed_hover_started_at = None;
+            stationary_search_miss_started_at = None;
             hover_start = None;
             last_focused_name = None;
             is_keyboard_hover = false;
@@ -2958,6 +2962,7 @@ pub fn run_explorer_hook() {
                 last_file = None;
                 suppressed_hover_file = None;
                 suppressed_hover_started_at = None;
+                stationary_search_miss_started_at = None;
                 hover_start = None;
             }
             keyboard_file = None;
@@ -3000,6 +3005,7 @@ pub fn run_explorer_hook() {
                 if last_file.is_some() || keyboard_file.is_some() {
                     hide_preview();
                     last_file = None;
+                    stationary_search_miss_started_at = None;
                     hover_start = None;
                     keyboard_file = None;
                     last_focused_name = None;
@@ -3016,6 +3022,7 @@ pub fn run_explorer_hook() {
                     if last_file.is_some() || keyboard_file.is_some() {
                         hide_preview();
                         last_file = None;
+                        stationary_search_miss_started_at = None;
                         hover_start = None;
                         keyboard_file = None;
                         last_focused_name = None;
@@ -3043,29 +3050,42 @@ pub fn run_explorer_hook() {
                 continue;
             }
 
-            // Close as soon as the cursor touches the preview window. Do this
-            // before slower folder/hover probes so the preview does not linger
-            // under the pointer.
-            if last_file.is_some() || keyboard_file.is_some() || is_keyboard_hover {
-                let over_image_preview = is_cursor_over_image_preview();
-                let over_video_preview = is_cursor_over_video_preview();
-                if over_image_preview || over_video_preview {
-                    let guard_active = video_hover_guard_until
-                        .map(|until| Instant::now() < until)
-                        .unwrap_or(false);
+            // Close as soon as the cursor touches the preview window. Keep
+            // suppressing preview until the cursor leaves so a delayed spinner
+            // or background load result cannot resurrect a stuck preview under
+            // the pointer.
+            let over_image_preview = is_cursor_over_image_preview();
+            let over_video_preview = is_cursor_over_video_preview();
+            let over_any_preview = over_image_preview || over_video_preview;
+            let guard_active = video_hover_guard_until
+                .map(|until| Instant::now() < until)
+                .unwrap_or(false);
+            let should_dismiss_for_preview_hover =
+                over_image_preview || (over_video_preview && !guard_active);
 
-                    if !over_video_preview || !guard_active {
-                        suppressed_hover_file = last_file.clone();
-                        suppressed_hover_started_at = Some(Instant::now());
-                        hide_preview();
-                        last_file = None;
-                        keyboard_file = None;
-                        is_keyboard_hover = false;
-                        video_hover_guard_until = None;
-                        hover_start = Some(Instant::now());
-                        continue;
-                    }
+            if should_dismiss_for_preview_hover
+                || (suppress_preview_until_cursor_leaves_preview && over_any_preview)
+            {
+                suppress_preview_until_cursor_leaves_preview = true;
+                if last_file.is_some() {
+                    suppressed_hover_file = last_file.clone();
+                    suppressed_hover_started_at = Some(Instant::now());
                 }
+                hide_preview();
+                last_file = None;
+                keyboard_file = None;
+                is_keyboard_hover = false;
+                stationary_search_miss_started_at = None;
+                video_hover_guard_until = None;
+                hover_start = Some(Instant::now());
+                continue;
+            }
+
+            if suppress_preview_until_cursor_leaves_preview {
+                suppress_preview_until_cursor_leaves_preview = false;
+                hover_start = Some(Instant::now());
+                last_cursor_pos = cursor_pos;
+                continue;
             }
 
             // Detect folder navigation/opening and suspend preview until user input.
@@ -3093,6 +3113,7 @@ pub fn run_explorer_hook() {
                         last_file = None;
                         suppressed_hover_file = None;
                         suppressed_hover_started_at = None;
+                        stationary_search_miss_started_at = None;
                         keyboard_file = None;
                         is_keyboard_hover = false;
                         video_hover_guard_until = None;
@@ -3165,6 +3186,7 @@ pub fn run_explorer_hook() {
 
             if moved {
                 last_cursor_pos = cursor_pos;
+                stationary_search_miss_started_at = None;
 
                 // Mouse movement always takes priority - dismiss keyboard hover
                 if is_keyboard_hover {
@@ -3190,34 +3212,7 @@ pub fn run_explorer_hook() {
                         }
                         suppressed_hover_file = None;
                         suppressed_hover_started_at = None;
-                    }
-                }
-
-                // Dismiss preview only when the mouse has actually moved onto it.
-                // This avoids blocking keyboard navigation when the cursor is static.
-                if !is_keyboard_hover {
-                    let over_image_preview = is_cursor_over_image_preview();
-                    let over_video_preview = is_cursor_over_video_preview();
-
-                    if over_image_preview || over_video_preview {
-                        let guard_active = video_hover_guard_until
-                            .map(|until| Instant::now() < until)
-                            .unwrap_or(false);
-
-                        // For video, keep the short spawn grace to prevent instant close
-                        // right after ffplay appears under the cursor.
-                        if !over_video_preview || !guard_active {
-                            if last_file.is_some() {
-                                suppressed_hover_file = last_file.clone();
-                                suppressed_hover_started_at = Some(Instant::now());
-                                hide_preview();
-                                last_file = None;
-                            }
-                            video_hover_guard_until = None;
-                        }
-
-                        hover_start = Some(Instant::now());
-                        continue;
+                        stationary_search_miss_started_at = None;
                     }
                 }
 
@@ -3239,6 +3234,7 @@ pub fn run_explorer_hook() {
                         }
                         suppressed_hover_file = None;
                         suppressed_hover_started_at = None;
+                        stationary_search_miss_started_at = None;
                     } else {
                         suppressed_hover_file = last_file.clone();
                         suppressed_hover_started_at = Some(Instant::now());
@@ -3417,6 +3413,7 @@ pub fn run_explorer_hook() {
                             }
                             suppressed_hover_file = None;
                             suppressed_hover_started_at = None;
+                            stationary_search_miss_started_at = None;
                             last_file = Some(file_path.clone());
                             video_hover_guard_until = if is_video_file(&file_path) {
                                 Some(
@@ -3429,12 +3426,31 @@ pub fn run_explorer_hook() {
                             show_preview(&file_path, cursor_pos.x, cursor_pos.y);
                         }
                     } else {
-                        // No file found while mouse is stationary.
-                        // Keep current preview state; dismissal should happen only on mouse move.
+                        let search_view_active =
+                            hover_resolver_hints.is_search_view || is_current_search_view_legacy();
+                        if search_view_active && last_file.is_some() {
+                            let miss_started =
+                                stationary_search_miss_started_at.get_or_insert_with(Instant::now);
+                            if miss_started.elapsed()
+                                >= Duration::from_millis(STATIONARY_SEARCH_MISS_HIDE_MS)
+                            {
+                                suppressed_hover_file = last_file.clone();
+                                suppressed_hover_started_at = Some(Instant::now());
+                                hide_preview();
+                                last_file = None;
+                                stationary_search_miss_started_at = None;
+                                video_hover_guard_until = None;
+                                hover_start = Some(Instant::now());
+                                continue;
+                            }
+                        } else {
+                            stationary_search_miss_started_at = None;
+                        }
                     }
                 }
             } else {
                 // Initialize hover_start if not moving
+                stationary_search_miss_started_at = None;
                 hover_start = Some(Instant::now());
             }
         }
