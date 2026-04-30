@@ -60,6 +60,7 @@ static VIDEO_PID: AtomicU32 = AtomicU32::new(0);
 static NOACTIVATE_MONITOR_STARTED: AtomicBool = AtomicBool::new(false);
 
 static CURRENT_MEDIA: Lazy<Mutex<Option<MediaData>>> = Lazy::new(|| Mutex::new(None));
+static CURRENT_PREVIEW_TARGET: Lazy<Mutex<Option<PathBuf>>> = Lazy::new(|| Mutex::new(None));
 static VIDEO_GEOMETRY_CACHE: Lazy<Mutex<HashMap<PathBuf, VideoGeometry>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
@@ -68,6 +69,30 @@ pub enum PreviewMessage {
     ShowKeyboard(PathBuf, i32, i32, i32, i32),
     Hide,
     Refresh,
+}
+
+fn same_preview_path(a: &PathBuf, b: &PathBuf) -> bool {
+    a == b
+        || a.to_string_lossy()
+            .eq_ignore_ascii_case(&b.to_string_lossy())
+}
+
+fn set_current_preview_target(path: Option<PathBuf>) {
+    if let Ok(mut current_target) = CURRENT_PREVIEW_TARGET.lock() {
+        *current_target = path;
+    }
+}
+
+pub fn preview_targets_path(path: &PathBuf) -> bool {
+    CURRENT_PREVIEW_TARGET
+        .lock()
+        .ok()
+        .and_then(|current_target| {
+            current_target
+                .as_ref()
+                .map(|current| same_preview_path(current, path))
+        })
+        .unwrap_or(false)
 }
 
 /// Represents different types of media we can display
@@ -304,6 +329,8 @@ pub fn hide_preview() {
             VIDEO_PID.store(0, Ordering::SeqCst);
         }
     }
+
+    set_current_preview_target(None);
 
     if let Ok(sender) = PREVIEW_SENDER.lock() {
         if let Some(ref tx) = *sender {
@@ -2596,9 +2623,11 @@ pub fn run_preview_window() {
                 let mut show_path: Option<PathBuf> = None;
                 let mut show_layout: Option<PreviewLayout> = None;
                 let mut show_is_video: bool = false;
+                let mut requested_path: Option<PathBuf> = None;
 
                 match preview_msg {
                     PreviewMessage::Show(path, x, y) => {
+                        requested_path = Some(path.clone());
                         let screen_width = GetSystemMetrics(SM_CXSCREEN);
                         let screen_height = GetSystemMetrics(SM_CYSCREEN);
                         let follow_cursor = CONFIG.lock().map(|c| c.follow_cursor).unwrap_or(true);
@@ -2620,6 +2649,7 @@ pub fn run_preview_window() {
                         }
                     }
                     PreviewMessage::ShowKeyboard(path, il, it, ir, ib) => {
+                        requested_path = Some(path.clone());
                         let screen_width = GetSystemMetrics(SM_CXSCREEN);
                         let screen_height = GetSystemMetrics(SM_CYSCREEN);
                         let follow_cursor = CONFIG.lock().map(|c| c.follow_cursor).unwrap_or(true);
@@ -2663,6 +2693,7 @@ pub fn run_preview_window() {
                         }
                         current_video_path = None;
                         video_pos = (0, 0, 0, 0);
+                        set_current_preview_target(None);
                     }
                     PreviewMessage::Refresh => {
                         render_layered_preview(hwnd);
@@ -2671,6 +2702,7 @@ pub fn run_preview_window() {
 
                 // Shared load/display logic for Show and ShowKeyboard
                 if let (Some(path), Some(layout)) = (show_path, show_layout) {
+                    set_current_preview_target(Some(path.clone()));
                     let pos_x = layout.pos_x;
                     let pos_y = layout.pos_y;
                     let media_width = layout.preview_w as i32;
@@ -2792,6 +2824,8 @@ pub fn run_preview_window() {
                             },
                         );
                     }
+                } else if requested_path.is_some() {
+                    set_current_preview_target(None);
                 }
             } else if refresh_requested {
                 render_layered_preview(hwnd);

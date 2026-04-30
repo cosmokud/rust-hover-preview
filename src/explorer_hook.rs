@@ -1,6 +1,6 @@
 use crate::preview_window::{
-    hide_preview, is_cursor_over_image_preview, is_cursor_over_video_preview, show_preview,
-    show_preview_keyboard,
+    hide_preview, is_cursor_over_image_preview, is_cursor_over_video_preview, preview_targets_path,
+    show_preview, show_preview_keyboard,
 };
 use crate::{CONFIG, RUNNING};
 use once_cell::sync::Lazy;
@@ -2827,6 +2827,7 @@ pub fn run_explorer_hook() {
         unsafe { CoCreateInstance(&CUIAutomation, None, CLSCTX_ALL).ok() };
 
     let mut last_file: Option<PathBuf> = None;
+    let mut last_preview_request_at: Option<Instant> = None;
     let mut suppressed_hover_file: Option<PathBuf> = None;
     let mut suppressed_hover_started_at: Option<Instant> = None;
     let mut hover_start: Option<Instant> = None;
@@ -2866,6 +2867,7 @@ pub fn run_explorer_hook() {
     const HOVER_PROBE_MS: u64 = 60;
     const KEYBOARD_FOCUS_PROBE_MS: u64 = 80;
     const STATIONARY_SEARCH_MISS_HIDE_MS: u64 = 180;
+    const PREVIEW_STUCK_RETRY_MS: u64 = 250;
     const EXPLORER_SLOW_PROBE_LIMIT: u32 = 3;
     const EXPLORER_PROBE_BACKOFF_MS: u64 = 1500;
 
@@ -3423,6 +3425,26 @@ pub fn run_explorer_hook() {
                             } else {
                                 None
                             };
+                            last_preview_request_at = Some(Instant::now());
+                            show_preview(&file_path, cursor_pos.x, cursor_pos.y);
+                        } else if last_preview_request_at
+                            .map(|started| {
+                                started.elapsed() >= Duration::from_millis(PREVIEW_STUCK_RETRY_MS)
+                            })
+                            .unwrap_or(false)
+                            && !preview_targets_path(&file_path)
+                        {
+                            hide_preview();
+                            stationary_search_miss_started_at = None;
+                            video_hover_guard_until = if is_video_file(&file_path) {
+                                Some(
+                                    Instant::now()
+                                        + Duration::from_millis(VIDEO_HOVER_DISMISS_GRACE_MS),
+                                )
+                            } else {
+                                None
+                            };
+                            last_preview_request_at = Some(Instant::now());
                             show_preview(&file_path, cursor_pos.x, cursor_pos.y);
                         }
                     } else {
