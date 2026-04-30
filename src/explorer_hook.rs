@@ -406,6 +406,64 @@ fn is_usable_folder_path(path: &str) -> bool {
     !path.is_empty() && PathBuf::from(path).is_dir()
 }
 
+fn resolve_media_path_candidate(text: &str) -> Option<PathBuf> {
+    let candidate = text.trim().trim_matches(|c| c == '"' || c == '\'');
+    if candidate.is_empty() {
+        return None;
+    }
+
+    let normalized = normalize_file_url_path(candidate).unwrap_or_else(|| candidate.to_string());
+    if !is_valid_file_path(&normalized) {
+        return None;
+    }
+
+    let path = PathBuf::from(normalized);
+    if path.exists() && is_media_file(&path) {
+        Some(path)
+    } else {
+        None
+    }
+}
+
+fn resolve_media_path_from_text(text: &str) -> Option<PathBuf> {
+    let text = text.trim();
+    if text.is_empty() {
+        return None;
+    }
+
+    if let Some(path) = resolve_media_path_candidate(text) {
+        return Some(path);
+    }
+
+    let chars: Vec<(usize, char)> = text.char_indices().collect();
+    for window in chars.windows(3) {
+        let [(start, drive), (_, colon), (_, slash)] = window else {
+            continue;
+        };
+        if !drive.is_ascii_alphabetic() || *colon != ':' || (*slash != '\\' && *slash != '/') {
+            continue;
+        }
+
+        let candidate = &text[*start..];
+        if let Some(path) = resolve_media_path_candidate(candidate) {
+            return Some(path);
+        }
+
+        let mut ends: Vec<usize> = candidate.char_indices().map(|(idx, _)| idx).collect();
+        ends.push(candidate.len());
+        for end in ends.into_iter().rev() {
+            if end <= 3 {
+                continue;
+            }
+            if let Some(path) = resolve_media_path_candidate(&candidate[..end]) {
+                return Some(path);
+            }
+        }
+    }
+
+    None
+}
+
 fn cache_explorer_real_folder(hwnd: isize, folder: &str) {
     if !is_usable_folder_path(folder) {
         return;
@@ -499,6 +557,16 @@ fn resolve_search_root_from_context(context: &ActiveShellViewContext) -> Option<
     }
 
     get_cached_explorer_real_folder(context.shell_view_hwnd)
+}
+
+fn is_probable_search_view_context(context: &ActiveShellViewContext) -> bool {
+    context
+        .location_url
+        .as_deref()
+        .map(is_search_ms_url)
+        .unwrap_or(false)
+        || (context.folder_path.is_none()
+            && get_shell_view_search_root(context.shell_view_hwnd).is_some())
 }
 
 fn get_all_explorer_folders() -> Vec<(HWND, String)> {
@@ -751,13 +819,11 @@ fn get_current_hover_resolver_hints() -> HoverResolverHints {
         hints.current_folder = context.folder_path.clone();
         hints.shell_view_hwnd = Some(context.shell_view_hwnd);
 
-        if let Some(url) = context.location_url.as_deref() {
-            hints.is_search_view = is_search_ms_url(url);
-            if hints.is_search_view {
-                hints.search_root = resolve_search_root_from_context(&context);
-                if hints.current_folder.is_none() {
-                    hints.current_folder = hints.search_root.clone();
-                }
+        hints.is_search_view = is_probable_search_view_context(&context);
+        if hints.is_search_view {
+            hints.search_root = resolve_search_root_from_context(&context);
+            if hints.current_folder.is_none() {
+                hints.current_folder = hints.search_root.clone();
             }
         }
     }
@@ -947,10 +1013,8 @@ fn get_shell_data_model_file_under_cursor() -> Option<PathBuf> {
 
 fn get_current_explorer_search_root() -> Option<String> {
     if let Some(context) = get_active_shell_view_context_at_cursor() {
-        if let Some(url) = context.location_url.as_deref() {
-            if is_search_ms_url(url) {
-                return resolve_search_root_from_context(&context);
-            }
+        if is_probable_search_view_context(&context) {
+            return resolve_search_root_from_context(&context);
         }
     }
 
@@ -1405,12 +1469,12 @@ fn get_current_explorer_folder() -> Option<String> {
         if let Some(folder) = context.folder_path {
             return Some(folder);
         }
-        if let Some(url) = context.location_url.as_deref() {
-            if is_search_ms_url(url) {
-                if let Some(folder) = resolve_search_root_from_context(&context) {
-                    return Some(folder);
-                }
+        if is_probable_search_view_context(&context) {
+            if let Some(folder) = resolve_search_root_from_context(&context) {
+                return Some(folder);
             }
+        }
+        if let Some(url) = context.location_url.as_deref() {
             if let Some(folder) = resolve_explorer_location_folder(context.shell_view_hwnd, url) {
                 return Some(folder);
             }
@@ -1594,12 +1658,8 @@ fn get_item_under_cursor() -> Option<AccessibilityResult> {
                 if is_variant_under_cursor(acc, &child_variant, &cursor_pos) {
                     if let Ok(value) = acc.get_accValue(&child_variant) {
                         let value_str = value.to_string();
-                        // Check if it's a valid full path (not shell:, search-ms:, etc.)
-                        if is_valid_file_path(&value_str) {
-                            let path = PathBuf::from(&value_str);
-                            if path.exists() && is_media_file(&path) {
-                                return Some(AccessibilityResult::FullPath(path));
-                            }
+                        if let Some(path) = resolve_media_path_from_text(&value_str) {
+                            return Some(AccessibilityResult::FullPath(path));
                         }
                     }
                 }
@@ -1609,12 +1669,8 @@ fn get_item_under_cursor() -> Option<AccessibilityResult> {
                     if let Ok(name) = acc.get_accName(&child_variant) {
                         let name_str = name.to_string();
                         if !is_container_name(&name_str) {
-                            // Check if the name itself is a full path (can happen in search)
-                            if is_valid_file_path(&name_str) {
-                                let path = PathBuf::from(&name_str);
-                                if path.exists() && is_media_file(&path) {
-                                    return Some(AccessibilityResult::FullPath(path));
-                                }
+                            if let Some(path) = resolve_media_path_from_text(&name_str) {
+                                return Some(AccessibilityResult::FullPath(path));
                             }
                             return Some(AccessibilityResult::FileName(name_str));
                         }
@@ -1627,12 +1683,8 @@ fn get_item_under_cursor() -> Option<AccessibilityResult> {
                     if let Ok(name) = acc.get_accName(&default_variant) {
                         let name_str = name.to_string();
                         if !is_container_name(&name_str) {
-                            // Check if the name itself is a full path
-                            if is_valid_file_path(&name_str) {
-                                let path = PathBuf::from(&name_str);
-                                if path.exists() && is_media_file(&path) {
-                                    return Some(AccessibilityResult::FullPath(path));
-                                }
+                            if let Some(path) = resolve_media_path_from_text(&name_str) {
+                                return Some(AccessibilityResult::FullPath(path));
                             }
                             return Some(AccessibilityResult::FileName(name_str));
                         }
@@ -1658,12 +1710,8 @@ fn get_item_under_cursor() -> Option<AccessibilityResult> {
                 if is_variant_under_cursor(acc, &child_variant, &cursor_pos) {
                     if let Ok(desc) = acc.get_accDescription(&child_variant) {
                         let desc_str = desc.to_string();
-                        // Check for path in description
-                        if is_valid_file_path(&desc_str) {
-                            let path = PathBuf::from(&desc_str);
-                            if path.exists() && is_media_file(&path) {
-                                return Some(AccessibilityResult::FullPath(path));
-                            }
+                        if let Some(path) = resolve_media_path_from_text(&desc_str) {
+                            return Some(AccessibilityResult::FullPath(path));
                         }
                     }
                 }
@@ -1702,6 +1750,9 @@ fn try_get_item_from_parent(
                     if let Ok(name) = parent_acc.get_accName(&default_variant) {
                         let name_str = name.to_string();
                         if !is_container_name(&name_str) {
+                            if let Some(path) = resolve_media_path_from_text(&name_str) {
+                                return Some(AccessibilityResult::FullPath(path));
+                            }
                             return Some(AccessibilityResult::FileName(name_str));
                         }
                     }
@@ -1711,11 +1762,8 @@ fn try_get_item_from_parent(
                 if is_variant_under_cursor(&parent_acc, &default_variant, cursor_pos) {
                     if let Ok(value) = parent_acc.get_accValue(&default_variant) {
                         let value_str = value.to_string();
-                        if !value_str.is_empty() {
-                            let path = PathBuf::from(&value_str);
-                            if path.is_absolute() && path.exists() && is_media_file(&path) {
-                                return Some(AccessibilityResult::FullPath(path));
-                            }
+                        if let Some(path) = resolve_media_path_from_text(&value_str) {
+                            return Some(AccessibilityResult::FullPath(path));
                         }
                     }
                 }
@@ -1781,6 +1829,9 @@ fn try_get_focused_child(
                         if let Ok(name) = acc.get_accName(&child_var) {
                             let name_str = name.to_string();
                             if !is_container_name(&name_str) {
+                                if let Some(path) = resolve_media_path_from_text(&name_str) {
+                                    return Some(AccessibilityResult::FullPath(path));
+                                }
                                 return Some(AccessibilityResult::FileName(name_str));
                             }
                         }
@@ -1788,11 +1839,8 @@ fn try_get_focused_child(
                         // Also try value for full path
                         if let Ok(value) = acc.get_accValue(&child_var) {
                             let value_str = value.to_string();
-                            if !value_str.is_empty() {
-                                let path = PathBuf::from(&value_str);
-                                if path.is_absolute() && path.exists() && is_media_file(&path) {
-                                    return Some(AccessibilityResult::FullPath(path));
-                                }
+                            if let Some(path) = resolve_media_path_from_text(&value_str) {
+                                return Some(AccessibilityResult::FullPath(path));
                             }
                         }
                     }
@@ -1827,14 +1875,9 @@ fn try_deep_parent_search(
                         if let Ok(name) = parent_acc.get_accName(&default_variant) {
                             let name_str = name.to_string();
                             if !is_container_name(&name_str) {
-                                // Check if it's a full path
-                                if is_valid_file_path(&name_str) {
-                                    let path = PathBuf::from(&name_str);
-                                    if path.exists() && is_media_file(&path) {
-                                        return Some(AccessibilityResult::FullPath(path));
-                                    }
+                                if let Some(path) = resolve_media_path_from_text(&name_str) {
+                                    return Some(AccessibilityResult::FullPath(path));
                                 }
-                                // It's a filename
                                 return Some(AccessibilityResult::FileName(name_str));
                             }
                         }
@@ -1844,11 +1887,8 @@ fn try_deep_parent_search(
                     if is_variant_under_cursor(&parent_acc, &default_variant, cursor_pos) {
                         if let Ok(value) = parent_acc.get_accValue(&default_variant) {
                             let value_str = value.to_string();
-                            if is_valid_file_path(&value_str) {
-                                let path = PathBuf::from(&value_str);
-                                if path.exists() && is_media_file(&path) {
-                                    return Some(AccessibilityResult::FullPath(path));
-                                }
+                            if let Some(path) = resolve_media_path_from_text(&value_str) {
+                                return Some(AccessibilityResult::FullPath(path));
                             }
                         }
                     }
@@ -1919,11 +1959,8 @@ fn accessibility_result_from_name(name: String) -> Option<AccessibilityResult> {
         return None;
     }
 
-    if is_valid_file_path(&name) {
-        let path = PathBuf::from(&name);
-        if path.exists() && is_media_file(&path) {
-            return Some(AccessibilityResult::FullPath(path));
-        }
+    if let Some(path) = resolve_media_path_from_text(&name) {
+        return Some(AccessibilityResult::FullPath(path));
     }
 
     Some(AccessibilityResult::FileName(name))
@@ -2024,17 +2061,7 @@ fn resolve_direct_media_path(item_info: &AccessibilityResult) -> Option<PathBuf>
                 None
             }
         }
-        AccessibilityResult::FileName(item_name) => {
-            let potential_path = PathBuf::from(item_name);
-            if potential_path.is_absolute()
-                && potential_path.exists()
-                && is_media_file(&potential_path)
-            {
-                Some(potential_path)
-            } else {
-                None
-            }
-        }
+        AccessibilityResult::FileName(item_name) => resolve_media_path_from_text(item_name),
     }
 }
 
