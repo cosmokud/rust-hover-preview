@@ -12,6 +12,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
+use windows::Win32::UI::HiDpi::{
+    SetProcessDpiAwareness, SetProcessDpiAwarenessContext,
+    DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, PROCESS_PER_MONITOR_DPI_AWARE,
+};
 
 // Global state
 pub static RUNNING: AtomicBool = AtomicBool::new(true);
@@ -19,6 +23,7 @@ pub static CONFIG: Lazy<Mutex<config::AppConfig>> =
     Lazy::new(|| Mutex::new(config::AppConfig::load()));
 
 fn main() {
+    configure_dpi_awareness();
     sync_startup_setting();
 
     // Initialize COM
@@ -75,6 +80,15 @@ fn main() {
     // Cleanup COM
     unsafe {
         CoUninitialize();
+    }
+}
+
+fn configure_dpi_awareness() {
+    unsafe {
+        // Prefer per-monitor v2 to avoid DPI scaling artifacts on layered windows.
+        if SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2).is_err() {
+            let _ = SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE);
+        }
     }
 }
 
