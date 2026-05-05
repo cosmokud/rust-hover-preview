@@ -18,6 +18,7 @@ Inspired by QTTabBar (QuizoApps) hover preview.
 - Tray controls for enable/disable, delay, positioning, startup, off-trigger key, and volume
 - Explorer Shell view detection, folder caching, and path normalization for reliable hover matching
 - Topmost, non-activating preview windows designed to avoid focus stealing
+- Per-monitor DPI awareness to reduce scaling artifacts on high-DPI displays
 
 ## Supported Formats
 
@@ -143,12 +144,15 @@ target/release/rust-hover-preview.exe
 
 ## Architecture Notes
 
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the full system overview.
+
 - Uses Windows accessibility APIs (MSAA + UI Automation) to resolve hovered/focused Explorer items
 - Uses Shell COM APIs to identify active Explorer windows and folders
 - Uses GDI for image rendering in a layered topmost preview window
 - Uses Google's libwebp through `webp-animation` for animated WebP decoding
 - Uses `directories` for Windows roaming configuration paths
 - Uses `ffprobe` for video dimensions and `ffplay` for video playback
+- Sets per-monitor DPI awareness (v2 with fallback) on startup to prevent scaling artifacts on layered windows
 - Uses the registry (`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`) for startup control
 
 ## License

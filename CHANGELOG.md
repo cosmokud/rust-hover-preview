@@ -4,6 +4,23 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.1.13-rc.1] - 2026-05-05
+
+### Added
+
+- Added per-monitor DPI awareness configuration (with fallback) to prevent scaling artifacts on high-DPI displays
+
+### Changed
+
+- Switched MSVC linking to use rust-lld via .cargo/config.toml
+- Documentation: renamed TODO section to Known Issues
+- Documentation: cleared the resolved high-DPI preview issue from Known Issues
+- Documentation: added ARCHITECTURE.md with a full system overview
+
+### Fixed
+
+- Fixed hover preview rendering issues on Windows UI scaling above 100%
+
 ## [0.1.12] - 2026-04-30
 
 ### Added
