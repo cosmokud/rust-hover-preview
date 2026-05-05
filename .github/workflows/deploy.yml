@@ -67,7 +67,6 @@ jobs:
           name: rust-hover-preview-installers-${{ github.ref_name }}
           path: |
             target/packager/*.exe
-            target/packager/*.msi
             target/release/rust-hover-preview.exe
           if-no-files-found: error
 
@@ -91,5 +90,4 @@ jobs:
           fail_on_unmatched_files: true
           files: |
             target/packager/*.exe
-            target/packager/*.msi
             target/release/rust-hover-preview.exe
