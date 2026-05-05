@@ -34,104 +34,10 @@ $($_.Exception.Message)
 Write-Host "Using cargo-packager tool cache:"
 Write-Host $packagerToolsRoot
 
-$windowsInstallerService = Get-Service -Name msiserver -ErrorAction SilentlyContinue
-if (-not $windowsInstallerService) {
-    Write-Error "Windows Installer service (msiserver) was not found. WiX cannot build MSI packages without it."
-    exit 1
-}
-
-if ($windowsInstallerService.StartType -eq "Disabled") {
-    Write-Error "Windows Installer service (msiserver) is disabled. Enable it before building the MSI installer."
-    exit 1
-}
-
-if ($windowsInstallerService.Status -ne "Running") {
-    try {
-        Write-Host "Starting Windows Installer service for WiX MSI validation..."
-        Start-Service -Name msiserver -ErrorAction Stop
-    }
-    catch {
-        Write-Error @"
-WiX light.exe needs the Windows Installer service for MSI validation, but the
-service could not be started.
-
-Start it from an elevated PowerShell session:
-  Start-Service msiserver
-
-Or enable it if it is disabled:
-  Set-Service msiserver -StartupType Manual
-  Start-Service msiserver
-
-Original error:
-$($_.Exception.Message)
-"@
-        exit 1
-    }
-}
-
 Write-Host "Building NSIS installer..."
 cargo packager --release --formats nsis
 if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
-}
-
-Write-Host "Building WiX MSI installer..."
-$wixLog = Join-Path $repoRoot "target\packager\wix-build.log"
-New-Item -ItemType Directory -Force -Path (Split-Path -Parent $wixLog) | Out-Null
-cargo packager --release --formats wix *> $wixLog
-if ($LASTEXITCODE -ne 0) {
-    $wixPackagerExitCode = $LASTEXITCODE
-    Write-Host "Normal WiX MSI validation is unavailable in this local session; generating MSI with ICE validation disabled."
-
-    $metadata = cargo metadata --no-deps --format-version 1 | ConvertFrom-Json
-    if ($LASTEXITCODE -ne 0) {
-        exit $wixPackagerExitCode
-    }
-
-    $package = $metadata.packages | Select-Object -First 1
-    $arch = "x64"
-    $culture = "en-US"
-    $cultureArg = "en-us"
-    $wixTools = Join-Path $packagerToolsRoot "WixTools"
-    $wixWorkDir = Join-Path $repoRoot "target\packager\.cargo-packager\wix\$arch"
-    $mainWixObj = Join-Path $wixWorkDir "main.wixobj"
-    $localeFile = Join-Path $wixWorkDir "locale.wxl"
-    $fallbackMsi = Join-Path $wixWorkDir "output-fallback.msi"
-    $fallbackLog = Join-Path $wixWorkDir "light-fallback.log"
-    $finalMsi = Join-Path $repoRoot ("target\packager\{0}_{1}_{2}_{3}.msi" -f $package.name, $package.version, $arch, $culture)
-    $light = Join-Path $wixTools "light.exe"
-    $wixUtilExtension = Join-Path $wixTools "WixUtilExtension.dll"
-    $wixUiExtension = Join-Path $wixTools "WixUIExtension.dll"
-
-    if (
-        -not (Test-Path -LiteralPath $light) -or
-        -not (Test-Path -LiteralPath $mainWixObj) -or
-        -not (Test-Path -LiteralPath $localeFile)
-    ) {
-        Write-Error "WiX fallback files were not generated. See $wixLog for the original cargo-packager output."
-        exit $wixPackagerExitCode
-    }
-
-    if (Test-Path -LiteralPath $fallbackMsi) {
-        Remove-Item -LiteralPath $fallbackMsi -Force
-    }
-
-    & $light `
-        -ext $wixUtilExtension `
-        -ext $wixUiExtension `
-        -sval `
-        -o $fallbackMsi `
-        "-cultures:$cultureArg" `
-        -loc $localeFile `
-        $mainWixObj *> $fallbackLog
-
-    if ($LASTEXITCODE -ne 0) {
-        Write-Error "WiX fallback failed. See $fallbackLog for details."
-        exit $wixPackagerExitCode
-    }
-
-    Move-Item -LiteralPath $fallbackMsi -Destination $finalMsi -Force
-    Write-Host "MSI generated with WiX ICE validation disabled for this local build."
 }
 
 $outputDir = Join-Path $repoRoot "target\packager"
@@ -146,11 +52,12 @@ if (-not (Test-Path -LiteralPath $resolvedOutputDir)) {
     exit 0
 }
 
+# Look specifically for the NSIS executable
 $installers = Get-ChildItem -LiteralPath $resolvedOutputDir -File |
-    Where-Object { $_.Extension -in ".exe", ".msi" }
+    Where-Object { $_.Extension -eq ".exe" }
 
 if (-not $installers) {
-    Write-Warning "No .exe or .msi installers were found in the output directory."
+    Write-Warning "No .exe installers were found in the output directory."
     exit 0
 }
 
