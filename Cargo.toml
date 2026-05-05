@@ -1,6 +1,6 @@
 [package]
 name = "rust-hover-preview"
-version = "0.1.12"
+version = "0.1.12-rc.1"
 edition = "2021"
 description = "Windows 11 system tray app that shows image and video previews on hover in Explorer"
 authors = ["Rust Hover Preview Contributors"]
@@ -13,6 +13,7 @@ build = "build.rs"
 # Windows API bindings
 windows = { version = "0.58", features = [
     "Win32_Foundation",
+    "Win32_UI_HiDpi",
     "Win32_UI_WindowsAndMessaging",
     "Win32_UI_Shell",
     "Win32_UI_Shell_Common",
