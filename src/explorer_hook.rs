@@ -96,6 +96,8 @@ const SEARCH_ROOT_INDEX_MAX_FILES: usize = 50000;
 const EXPLORER_PROBE_SLOW_MS: u64 = 700;
 const EXPLORER_WINDOW_CACHE_TTL_MS: u64 = 1000;
 const FOLDER_INDEX_CACHE_MAX_ENTRIES: usize = 16;
+const EXPLORER_REAL_FOLDER_CACHE_MAX_ENTRIES: usize = 256;
+const SEARCH_ROOT_CACHE_MAX_ENTRIES: usize = 8;
 
 static FOLDER_MEDIA_INDEX: Lazy<Mutex<HashMap<String, FolderMediaIndex>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
@@ -127,6 +129,9 @@ fn clear_shell_view_probe_caches() {
         *cache = None;
     }
     if let Ok(mut cache) = EXPLORER_WINDOW_CACHE.lock() {
+        cache.clear();
+    }
+    if let Ok(mut cache) = EXPLORER_LAST_REAL_FOLDERS.lock() {
         cache.clear();
     }
 }
@@ -489,6 +494,11 @@ fn cache_explorer_real_folder(hwnd: isize, folder: &str) {
     }
 
     if let Ok(mut cache) = EXPLORER_LAST_REAL_FOLDERS.lock() {
+        if !cache.contains_key(&hwnd) && cache.len() >= EXPLORER_REAL_FOLDER_CACHE_MAX_ENTRIES {
+            if let Some(old_key) = cache.keys().next().copied() {
+                cache.remove(&old_key);
+            }
+        }
         cache.insert(hwnd, folder.to_string());
     }
 }
@@ -987,8 +997,9 @@ fn shell_item_to_path(shell_item: &IShellItem) -> Option<PathBuf> {
         let display_name = shell_item
             .GetDisplayName(SIGDN_DESKTOPABSOLUTEPARSING)
             .ok()?;
-        let path_string = display_name.to_string().ok()?;
+        let path_string = display_name.to_string().ok();
         CoTaskMemFree(Some(display_name.0 as *const core::ffi::c_void));
+        let path_string = path_string?;
 
         normalize_existing_path(PathBuf::from(path_string))
     }
@@ -1580,6 +1591,20 @@ fn queue_search_root_index_build(root: String) {
         if let Some(index) = built_index {
             if let Ok(mut cache) = SEARCH_ROOT_MEDIA_INDEX.lock() {
                 cache.insert(root.clone(), index);
+                if cache.len() > SEARCH_ROOT_CACHE_MAX_ENTRIES {
+                    let mut oldest_key: Option<String> = None;
+                    let mut oldest_age = Duration::ZERO;
+                    for (cache_root, cache_index) in cache.iter() {
+                        let age = cache_index.built_at.elapsed();
+                        if oldest_key.is_none() || age > oldest_age {
+                            oldest_key = Some(cache_root.clone());
+                            oldest_age = age;
+                        }
+                    }
+                    if let Some(oldest_key) = oldest_key {
+                        cache.remove(&oldest_key);
+                    }
+                }
             }
         }
         if let Ok(mut building) = SEARCH_ROOT_INDEX_BUILDING.lock() {

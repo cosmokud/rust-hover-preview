@@ -44,6 +44,7 @@ const MIN_GIF_ANIMATION_FRAME_DELAY_MS: u32 = 33;
 const ANIMATION_STARTUP_PREBUFFER_FRAMES: usize = 12;
 const ANIMATION_STARTUP_PREBUFFER_MS: u32 = 500;
 const STREAMING_SPINNER_MAX_MS: u64 = 1500;
+const VIDEO_GEOMETRY_CACHE_MAX_ENTRIES: usize = 512;
 
 // Message passing for thread communication
 pub static PREVIEW_SENDER: Lazy<Mutex<Option<Sender<PreviewMessage>>>> =
@@ -1260,6 +1261,9 @@ fn get_video_geometry(path: &PathBuf) -> Option<VideoGeometry> {
     };
 
     if let Ok(mut cache) = VIDEO_GEOMETRY_CACHE.lock() {
+        if !cache.contains_key(path) && cache.len() >= VIDEO_GEOMETRY_CACHE_MAX_ENTRIES {
+            cache.clear();
+        }
         cache.insert(path.clone(), geometry);
     }
 
