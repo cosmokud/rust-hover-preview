@@ -115,9 +115,29 @@ struct VideoCrop {
 
 #[derive(Clone, Copy)]
 struct VideoGeometry {
+    // Display-space dimensions after applying sample aspect ratio.
     width: u32,
     height: u32,
+    // Pixel-space dimensions (before SAR scaling).
+    pixel_width: u32,
+    pixel_height: u32,
+    sample_aspect_num: u32,
+    sample_aspect_den: u32,
     crop: Option<VideoCrop>,
+}
+
+impl VideoGeometry {
+    fn needs_square_pixel_override(&self) -> bool {
+        self.sample_aspect_num == self.sample_aspect_den
+    }
+}
+
+#[derive(Clone, Copy)]
+struct VideoStreamInfo {
+    width: u32,
+    height: u32,
+    sample_aspect_num: u32,
+    sample_aspect_den: u32,
 }
 
 impl MediaData {
@@ -1041,6 +1061,10 @@ fn load_video_thumbnail(path: &PathBuf, max_width: u32, max_height: u32) -> Opti
     let geometry = get_video_geometry(path).unwrap_or(VideoGeometry {
         width: 1920,
         height: 1080,
+        pixel_width: 1920,
+        pixel_height: 1080,
+        sample_aspect_num: 1,
+        sample_aspect_den: 1,
         crop: None,
     });
     let (target_width, target_height) =
@@ -1077,8 +1101,40 @@ const VIDEO_CROPDETECT_FRAMES: &str = "48";
 const VIDEO_CROP_MAX_AXIS_TRIM_RATIO: f32 = 0.10;
 const VIDEO_CROP_MAX_ASYMMETRY_PX: i32 = 12;
 
-/// Get video dimensions using ffprobe
-fn get_video_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
+fn parse_sample_aspect_ratio(value: &str) -> Option<(u32, u32)> {
+    let trimmed = value.trim();
+    let delimiter = if trimmed.contains(':') {
+        ':'
+    } else if trimmed.contains('/') {
+        '/'
+    } else {
+        return None;
+    };
+    let mut parts = trimmed.split(delimiter);
+    let num: u32 = parts.next()?.parse().ok()?;
+    let den: u32 = parts.next()?.parse().ok()?;
+    if parts.next().is_some() || num == 0 || den == 0 {
+        return None;
+    }
+    Some((num, den))
+}
+
+fn apply_sample_aspect_ratio(width: u32, height: u32, sar_num: u32, sar_den: u32) -> (u32, u32) {
+    if width == 0 || height == 0 {
+        return (width.max(1), height.max(1));
+    }
+    if sar_num == 0 || sar_den == 0 || sar_num == sar_den {
+        return (width, height);
+    }
+
+    let scaled_width =
+        ((width as u64).saturating_mul(sar_num as u64) + (sar_den as u64 / 2)) / sar_den as u64;
+    let display_width = scaled_width.clamp(1, u32::MAX as u64) as u32;
+    (display_width, height)
+}
+
+/// Get video stream dimensions and sample aspect ratio using ffprobe
+fn get_video_stream_info(path: &PathBuf) -> Option<VideoStreamInfo> {
     let output = Command::new("ffprobe")
         .args([
             "-v",
@@ -1090,9 +1146,9 @@ fn get_video_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
             "-select_streams",
             "v:0",
             "-show_entries",
-            "stream=width,height",
+            "stream=width,height,sample_aspect_ratio",
             "-of",
-            "csv=s=x:p=0",
+            "csv=p=0",
         ])
         .arg(path)
         .stdout(Stdio::piped())
@@ -1102,10 +1158,20 @@ fn get_video_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
         .ok()?;
 
     let output_str = String::from_utf8_lossy(&output.stdout);
-    let mut parts = output_str.trim().split('x').filter(|part| !part.is_empty());
+    let mut parts = output_str.trim().split(',').map(str::trim);
     let width = parts.next()?.parse().ok()?;
     let height = parts.next()?.parse().ok()?;
-    Some((width, height))
+    let (sample_aspect_num, sample_aspect_den) = parts
+        .next()
+        .and_then(parse_sample_aspect_ratio)
+        .unwrap_or((1, 1));
+
+    Some(VideoStreamInfo {
+        width,
+        height,
+        sample_aspect_num,
+        sample_aspect_den,
+    })
 }
 
 fn parse_cropdetect_line(line: &str) -> Option<VideoCrop> {
@@ -1243,21 +1309,26 @@ fn get_video_geometry(path: &PathBuf) -> Option<VideoGeometry> {
         }
     }
 
-    let (src_w, src_h) = get_video_dimensions(path)?;
+    let stream = get_video_stream_info(path)?;
+    let src_w = stream.width;
+    let src_h = stream.height;
     let crop = detect_video_crop(path, src_w, src_h);
+    let (pixel_w, pixel_h) = crop.map(|c| (c.width, c.height)).unwrap_or((src_w, src_h));
+    let (display_w, display_h) = apply_sample_aspect_ratio(
+        pixel_w,
+        pixel_h,
+        stream.sample_aspect_num,
+        stream.sample_aspect_den,
+    );
 
-    let geometry = if let Some(crop) = crop {
-        VideoGeometry {
-            width: crop.width,
-            height: crop.height,
-            crop: Some(crop),
-        }
-    } else {
-        VideoGeometry {
-            width: src_w,
-            height: src_h,
-            crop: None,
-        }
+    let geometry = VideoGeometry {
+        width: display_w,
+        height: display_h,
+        pixel_width: pixel_w,
+        pixel_height: pixel_h,
+        sample_aspect_num: stream.sample_aspect_num,
+        sample_aspect_den: stream.sample_aspect_den,
+        crop,
     };
 
     if let Ok(mut cache) = VIDEO_GEOMETRY_CACHE.lock() {
@@ -1291,17 +1362,25 @@ fn log_video_preview(
     let geom = geometry
         .map(|g| format!("{}x{}", g.width, g.height))
         .unwrap_or_else(|| "none".to_string());
+    let pixel_geom = geometry
+        .map(|g| format!("{}x{}", g.pixel_width, g.pixel_height))
+        .unwrap_or_else(|| "none".to_string());
+    let sar = geometry
+        .map(|g| format!("{}:{}", g.sample_aspect_num, g.sample_aspect_den))
+        .unwrap_or_else(|| "none".to_string());
     let vf = vf.unwrap_or("none");
 
     let _ = writeln!(
         file,
-        "path=\"{}\" pos={}x{} window={}x{} geometry={} crop={} vf=\"{}\"",
+        "path=\"{}\" pos={}x{} window={}x{} geometry={} pixel_geometry={} sar={} crop={} vf=\"{}\"",
         path.display(),
         x,
         y,
         width,
         height,
         geom,
+        pixel_geom,
+        sar,
         crop,
         vf
     );
@@ -1489,14 +1568,24 @@ fn start_video_playback(path: &PathBuf, x: i32, y: i32, width: i32, height: i32)
     }
 
     let geometry = get_video_geometry(path);
-    let vf = geometry.map(|geometry| {
+    let vf = geometry.and_then(|geometry| {
+        let force_square = geometry.needs_square_pixel_override();
         if let Some(crop) = geometry.crop {
-            format!(
-                "crop={}:{}:{}:{},setsar=1",
-                crop.width, crop.height, crop.x, crop.y
-            )
+            if force_square {
+                Some(format!(
+                    "crop={}:{}:{}:{},setsar=1",
+                    crop.width, crop.height, crop.x, crop.y
+                ))
+            } else {
+                Some(format!(
+                    "crop={}:{}:{}:{}",
+                    crop.width, crop.height, crop.x, crop.y
+                ))
+            }
+        } else if force_square {
+            Some("setsar=1".to_string())
         } else {
-            "setsar=1".to_string()
+            None
         }
     });
     log_video_preview(path, x, y, width, height, vf.as_deref(), geometry);
@@ -2836,5 +2925,32 @@ pub fn run_preview_window() {
         let (_, cvar) = &*load_request_slot;
         cvar.notify_all();
         let _ = load_worker.join();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{apply_sample_aspect_ratio, parse_sample_aspect_ratio};
+
+    #[test]
+    fn parse_sample_aspect_ratio_accepts_colon() {
+        assert_eq!(parse_sample_aspect_ratio("12:17"), Some((12, 17)));
+    }
+
+    #[test]
+    fn parse_sample_aspect_ratio_rejects_invalid_values() {
+        assert_eq!(parse_sample_aspect_ratio("N/A"), None);
+        assert_eq!(parse_sample_aspect_ratio("12:0"), None);
+        assert_eq!(parse_sample_aspect_ratio("abc"), None);
+    }
+
+    #[test]
+    fn apply_sample_aspect_ratio_keeps_square_pixels() {
+        assert_eq!(apply_sample_aspect_ratio(1920, 1080, 1, 1), (1920, 1080));
+    }
+
+    #[test]
+    fn apply_sample_aspect_ratio_scales_non_square_pixels() {
+        assert_eq!(apply_sample_aspect_ratio(1920, 1080, 12, 17), (1355, 1080));
     }
 }
