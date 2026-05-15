@@ -1409,6 +1409,21 @@ fn build_video_filter(geometry: VideoGeometry) -> Option<String> {
     }
 }
 
+fn log_video_spawn_error(path: &PathBuf, vf: Option<&str>, error: &str) {
+    let log_path = env::temp_dir().join("rust-hover-preview-video.log");
+    let Ok(mut file) = OpenOptions::new().create(true).append(true).open(log_path) else {
+        return;
+    };
+    let vf = vf.unwrap_or("none");
+    let _ = writeln!(
+        file,
+        "path=\"{}\" spawn_error=\"{}\" vf=\"{}\"",
+        path.display(),
+        error.replace('\"', "'"),
+        vf
+    );
+}
+
 /// Data passed to the EnumWindows callback to find ffplay window
 struct EnumWindowsData {
     target_pid: u32,
@@ -1597,7 +1612,7 @@ fn start_video_playback(path: &PathBuf, x: i32, y: i32, width: i32, height: i32)
         cmd.args(["-vf", &vf]);
     }
 
-    let child = cmd
+    let spawn_result = cmd
         .args([
             "-err_detect",
             "ignore_err", // Ignore header/stream errors
@@ -1624,8 +1639,14 @@ fn start_video_playback(path: &PathBuf, x: i32, y: i32, width: i32, height: i32)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .creation_flags(CREATE_NO_WINDOW) // Hide the console window
-        .spawn()
-        .ok();
+        .spawn();
+    let child = match spawn_result {
+        Ok(child) => Some(child),
+        Err(err) => {
+            log_video_spawn_error(path, vf.as_deref(), &err.to_string());
+            None
+        }
+    };
 
     // After spawning, try to set WS_EX_NOACTIVATE on the ffplay window
     // to prevent it from stealing focus
@@ -2815,6 +2836,7 @@ pub fn run_preview_window() {
                                     media_width,
                                     media_height,
                                 );
+                                let spawn_failed = video_process.is_none();
 
                                 if let Ok(mut current) = CURRENT_MEDIA.lock() {
                                     let mut data = media_data;
@@ -2822,14 +2844,31 @@ pub fn run_preview_window() {
                                     *current = Some(data);
                                 }
 
-                                current_video_path = Some(path.clone());
-                                video_pos = (pos_x, pos_y, media_width, media_height);
-                                let _ = ensure_video_window_topmost(
-                                    pos_x,
-                                    pos_y,
-                                    media_width,
-                                    media_height,
-                                );
+                                if spawn_failed {
+                                    // Safety fallback: if ffplay fails, keep showing the in-app
+                                    // placeholder frame instead of disappearing entirely.
+                                    current_video_path = None;
+                                    video_pos = (0, 0, 0, 0);
+                                    let _ = MoveWindow(
+                                        hwnd,
+                                        pos_x,
+                                        pos_y,
+                                        preview_w as i32,
+                                        preview_h as i32,
+                                        true,
+                                    );
+                                    let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+                                    render_layered_preview(hwnd);
+                                } else {
+                                    current_video_path = Some(path.clone());
+                                    video_pos = (pos_x, pos_y, media_width, media_height);
+                                    let _ = ensure_video_window_topmost(
+                                        pos_x,
+                                        pos_y,
+                                        media_width,
+                                        media_height,
+                                    );
+                                }
                             } else {
                                 video_pos = (pos_x, pos_y, media_width, media_height);
                                 let _ = ensure_video_window_topmost(
