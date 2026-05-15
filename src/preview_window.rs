@@ -1386,6 +1386,29 @@ fn log_video_preview(
     );
 }
 
+fn build_video_filter(geometry: VideoGeometry) -> Option<String> {
+    const SCALE_TO_SQUARE_PIXELS: &str = "scale=iw*sar:ih,setsar=1";
+
+    let force_square = geometry.needs_square_pixel_override();
+    if let Some(crop) = geometry.crop {
+        if force_square {
+            Some(format!(
+                "crop={}:{}:{}:{},setsar=1",
+                crop.width, crop.height, crop.x, crop.y
+            ))
+        } else {
+            Some(format!(
+                "crop={}:{}:{}:{},{}",
+                crop.width, crop.height, crop.x, crop.y, SCALE_TO_SQUARE_PIXELS
+            ))
+        }
+    } else if force_square {
+        Some("setsar=1".to_string())
+    } else {
+        Some(SCALE_TO_SQUARE_PIXELS.to_string())
+    }
+}
+
 /// Data passed to the EnumWindows callback to find ffplay window
 struct EnumWindowsData {
     target_pid: u32,
@@ -1568,26 +1591,7 @@ fn start_video_playback(path: &PathBuf, x: i32, y: i32, width: i32, height: i32)
     }
 
     let geometry = get_video_geometry(path);
-    let vf = geometry.and_then(|geometry| {
-        let force_square = geometry.needs_square_pixel_override();
-        if let Some(crop) = geometry.crop {
-            if force_square {
-                Some(format!(
-                    "crop={}:{}:{}:{},setsar=1",
-                    crop.width, crop.height, crop.x, crop.y
-                ))
-            } else {
-                Some(format!(
-                    "crop={}:{}:{}:{}",
-                    crop.width, crop.height, crop.x, crop.y
-                ))
-            }
-        } else if force_square {
-            Some("setsar=1".to_string())
-        } else {
-            None
-        }
-    });
+    let vf = geometry.and_then(build_video_filter);
     log_video_preview(path, x, y, width, height, vf.as_deref(), geometry);
     if let Some(vf) = vf.as_deref() {
         cmd.args(["-vf", &vf]);
@@ -2930,7 +2934,9 @@ pub fn run_preview_window() {
 
 #[cfg(test)]
 mod tests {
-    use super::{apply_sample_aspect_ratio, parse_sample_aspect_ratio};
+    use super::{
+        apply_sample_aspect_ratio, build_video_filter, parse_sample_aspect_ratio, VideoGeometry,
+    };
 
     #[test]
     fn parse_sample_aspect_ratio_accepts_colon() {
@@ -2952,5 +2958,36 @@ mod tests {
     #[test]
     fn apply_sample_aspect_ratio_scales_non_square_pixels() {
         assert_eq!(apply_sample_aspect_ratio(1920, 1080, 12, 17), (1355, 1080));
+    }
+
+    #[test]
+    fn build_video_filter_scales_non_square_pixels() {
+        let geometry = VideoGeometry {
+            width: 1355,
+            height: 1080,
+            pixel_width: 1920,
+            pixel_height: 1080,
+            sample_aspect_num: 12,
+            sample_aspect_den: 17,
+            crop: None,
+        };
+        assert_eq!(
+            build_video_filter(geometry).as_deref(),
+            Some("scale=iw*sar:ih,setsar=1")
+        );
+    }
+
+    #[test]
+    fn build_video_filter_keeps_square_pixel_path() {
+        let geometry = VideoGeometry {
+            width: 1920,
+            height: 1080,
+            pixel_width: 1920,
+            pixel_height: 1080,
+            sample_aspect_num: 1,
+            sample_aspect_den: 1,
+            crop: None,
+        };
+        assert_eq!(build_video_filter(geometry).as_deref(), Some("setsar=1"));
     }
 }
