@@ -100,7 +100,10 @@ const FOLDER_INDEX_CACHE_MAX_ENTRIES: usize = 16;
 const EXPLORER_REAL_FOLDER_CACHE_MAX_ENTRIES: usize = 256;
 const SEARCH_ROOT_CACHE_MAX_ENTRIES: usize = 8;
 const FOLDER_PROBE_MS: u64 = 200;
-const ACTIVE_PREVIEW_FOLDER_PROBE_MS: u64 = 60;
+const VK_BACK_CODE: i32 = 0x08;
+const VK_CONTROL_CODE: i32 = 0x11;
+const VK_MENU_CODE: i32 = 0x12;
+const VK_T_CODE: i32 = 0x54;
 
 static FOLDER_MEDIA_INDEX: Lazy<Mutex<HashMap<String, FolderMediaIndex>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
@@ -2551,12 +2554,43 @@ fn is_keyboard_navigation_input_detected() -> bool {
     }
 }
 
-fn folder_probe_interval_ms(preview_active: bool) -> u64 {
-    if preview_active {
-        ACTIVE_PREVIEW_FOLDER_PROBE_MS
-    } else {
-        FOLDER_PROBE_MS
-    }
+fn folder_probe_interval_ms(_preview_active: bool) -> u64 {
+    FOLDER_PROBE_MS
+}
+
+fn is_key_down_state(state: u16) -> bool {
+    (state & 0x8000) != 0
+}
+
+fn is_key_down(vk: i32) -> bool {
+    unsafe { is_key_down_state(GetAsyncKeyState(vk) as u16) }
+}
+
+fn is_explorer_navigation_shortcut_key(key_vk: i32, alt_down: bool, ctrl_down: bool) -> bool {
+    key_vk == VK_BACK_CODE
+        || (alt_down
+            && matches!(
+                key_vk,
+                key if key == VK_LEFT.0 as i32 || key == VK_RIGHT.0 as i32 || key == VK_UP.0 as i32
+            ))
+        || (ctrl_down && key_vk == VK_T_CODE)
+}
+
+fn is_explorer_navigation_shortcut_detected() -> bool {
+    let alt_down = is_key_down(VK_MENU_CODE);
+    let ctrl_down = is_key_down(VK_CONTROL_CODE);
+    let shortcut_keys = [
+        VK_BACK_CODE,
+        VK_LEFT.0 as i32,
+        VK_RIGHT.0 as i32,
+        VK_UP.0 as i32,
+        VK_T_CODE,
+    ];
+
+    shortcut_keys.iter().any(|&key_vk| unsafe {
+        is_pressed_or_down_state(GetAsyncKeyState(key_vk) as u16)
+            && is_explorer_navigation_shortcut_key(key_vk, alt_down, ctrl_down)
+    })
 }
 
 fn hover_location_key(hints: &HoverResolverHints) -> Option<String> {
@@ -3117,6 +3151,27 @@ pub fn run_explorer_hook() {
                 continue;
             }
 
+            if is_explorer_navigation_shortcut_detected() {
+                if last_file.is_some() || keyboard_file.is_some() || is_keyboard_hover {
+                    hide_preview();
+                }
+                last_file = None;
+                keyboard_file = None;
+                is_keyboard_hover = false;
+                suppressed_hover_file = None;
+                suppressed_hover_started_at = None;
+                stationary_search_miss_started_at = None;
+                hover_start = None;
+                last_focused_name = None;
+                video_hover_guard_until = None;
+                suspend_preview_until_user_input = true;
+                allow_keyboard_preview_on_first_observation = false;
+                folder_change_time = Some(Instant::now());
+                suspended_initial_focus = None;
+                last_cursor_pos = cursor_pos;
+                continue;
+            }
+
             // Close as soon as the cursor touches the preview window. Keep
             // suppressing preview until the cursor leaves so a delayed spinner
             // or background load result cannot resurrect a stuck preview under
@@ -3554,12 +3609,43 @@ mod tests {
     }
 
     #[test]
-    fn folder_probe_runs_faster_while_preview_is_visible() {
-        assert_eq!(
-            folder_probe_interval_ms(true),
-            ACTIVE_PREVIEW_FOLDER_PROBE_MS
-        );
-        assert!(folder_probe_interval_ms(true) < folder_probe_interval_ms(false));
+    fn folder_probe_uses_standard_interval_while_preview_is_visible() {
+        assert_eq!(folder_probe_interval_ms(true), FOLDER_PROBE_MS);
+        assert_eq!(folder_probe_interval_ms(false), FOLDER_PROBE_MS);
+    }
+
+    #[test]
+    fn explorer_navigation_shortcut_keys_cover_windows_11_navigation() {
+        assert!(is_explorer_navigation_shortcut_key(
+            VK_LEFT.0 as i32,
+            true,
+            false
+        ));
+        assert!(is_explorer_navigation_shortcut_key(
+            VK_RIGHT.0 as i32,
+            true,
+            false
+        ));
+        assert!(is_explorer_navigation_shortcut_key(
+            VK_UP.0 as i32,
+            true,
+            false
+        ));
+        assert!(is_explorer_navigation_shortcut_key(
+            VK_BACK_CODE,
+            false,
+            false
+        ));
+        assert!(is_explorer_navigation_shortcut_key(VK_T_CODE, false, true));
+
+        assert!(!is_explorer_navigation_shortcut_key(
+            VK_LEFT.0 as i32,
+            false,
+            false
+        ));
+        assert!(!is_explorer_navigation_shortcut_key(
+            VK_T_CODE, false, false
+        ));
     }
 
     #[test]
