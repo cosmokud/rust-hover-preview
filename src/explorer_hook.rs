@@ -24,6 +24,7 @@ use windows::Win32::UI::Accessibility::{
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, VK_DOWN, VK_END, VK_HOME, VK_LEFT, VK_NEXT, VK_PRIOR, VK_RIGHT, VK_UP,
+    VK_XBUTTON1, VK_XBUTTON2,
 };
 use windows::Win32::UI::Shell::{
     IFolderView, INameSpaceTreeControl, IPersistFolder2, IShellBrowser, IShellFolder,
@@ -2593,6 +2594,20 @@ fn is_explorer_navigation_shortcut_detected() -> bool {
     })
 }
 
+fn mouse_navigation_buttons() -> [windows::Win32::UI::Input::KeyboardAndMouse::VIRTUAL_KEY; 2] {
+    [VK_XBUTTON1, VK_XBUTTON2]
+}
+
+fn is_mouse_navigation_button_detected() -> bool {
+    mouse_navigation_buttons()
+        .iter()
+        .any(|&key| unsafe { is_pressed_or_down_state(GetAsyncKeyState(key.0 as i32) as u16) })
+}
+
+fn is_immediate_explorer_navigation_input_detected() -> bool {
+    is_explorer_navigation_shortcut_detected() || is_mouse_navigation_button_detected()
+}
+
 fn hover_location_key(hints: &HoverResolverHints) -> Option<String> {
     hints
         .current_folder
@@ -3151,7 +3166,7 @@ pub fn run_explorer_hook() {
                 continue;
             }
 
-            if is_explorer_navigation_shortcut_detected() {
+            if is_immediate_explorer_navigation_input_detected() {
                 if last_file.is_some() || keyboard_file.is_some() || is_keyboard_hover {
                     hide_preview();
                 }
@@ -3646,6 +3661,14 @@ mod tests {
         assert!(!is_explorer_navigation_shortcut_key(
             VK_T_CODE, false, false
         ));
+    }
+
+    #[test]
+    fn mouse_navigation_buttons_are_navigation_inputs() {
+        let buttons = mouse_navigation_buttons();
+
+        assert!(buttons.contains(&VK_XBUTTON1));
+        assert!(buttons.contains(&VK_XBUTTON2));
     }
 
     #[test]
