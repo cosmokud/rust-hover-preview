@@ -24,6 +24,7 @@ use windows::Win32::UI::Accessibility::{
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, VK_DOWN, VK_END, VK_HOME, VK_LEFT, VK_NEXT, VK_PRIOR, VK_RIGHT, VK_UP,
+    VK_XBUTTON1, VK_XBUTTON2,
 };
 use windows::Win32::UI::Shell::{
     IFolderView, INameSpaceTreeControl, IPersistFolder2, IShellBrowser, IShellFolder,
@@ -2542,7 +2543,26 @@ fn is_keyboard_navigation_input_detected() -> bool {
 
         navigation_keys.iter().any(|&key| {
             let state = GetAsyncKeyState(key.0 as i32) as u16;
-            (state & 0x8000) != 0 || (state & 0x0001) != 0
+            is_pressed_or_down_state(state)
+        })
+    }
+}
+
+fn is_pressed_or_down_state(state: u16) -> bool {
+    (state & 0x8000) != 0 || (state & 0x0001) != 0
+}
+
+fn mouse_navigation_keys() -> [windows::Win32::UI::Input::KeyboardAndMouse::VIRTUAL_KEY; 2] {
+    [VK_XBUTTON1, VK_XBUTTON2]
+}
+
+/// Detect mouse back/forward navigation buttons.
+/// They can navigate Explorer without moving the cursor or changing keyboard focus first.
+fn is_mouse_navigation_input_detected() -> bool {
+    unsafe {
+        mouse_navigation_keys().iter().any(|&key| {
+            let state = GetAsyncKeyState(key.0 as i32) as u16;
+            is_pressed_or_down_state(state)
         })
     }
 }
@@ -3087,6 +3107,27 @@ pub fn run_explorer_hook() {
                 continue;
             }
 
+            if is_mouse_navigation_input_detected() {
+                if last_file.is_some() || keyboard_file.is_some() || is_keyboard_hover {
+                    hide_preview();
+                }
+                last_file = None;
+                keyboard_file = None;
+                is_keyboard_hover = false;
+                suppressed_hover_file = None;
+                suppressed_hover_started_at = None;
+                stationary_search_miss_started_at = None;
+                hover_start = None;
+                last_focused_name = None;
+                video_hover_guard_until = None;
+                suspend_preview_until_user_input = true;
+                allow_keyboard_preview_on_first_observation = false;
+                folder_change_time = Some(Instant::now());
+                suspended_initial_focus = None;
+                last_cursor_pos = cursor_pos;
+                continue;
+            }
+
             // Close as soon as the cursor touches the preview window. Keep
             // suppressing preview until the cursor leaves so a delayed spinner
             // or background load result cannot resurrect a stuck preview under
@@ -3500,5 +3541,26 @@ pub fn run_explorer_hook() {
 
     unsafe {
         CoUninitialize();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pressed_or_currently_down_key_state_counts_as_input() {
+        assert!(is_pressed_or_down_state(0x0001));
+        assert!(is_pressed_or_down_state(0x8000));
+        assert!(is_pressed_or_down_state(0x8001));
+        assert!(!is_pressed_or_down_state(0x0000));
+    }
+
+    #[test]
+    fn mouse_navigation_keys_include_back_and_forward_buttons() {
+        let keys = mouse_navigation_keys();
+
+        assert!(keys.contains(&VK_XBUTTON1));
+        assert!(keys.contains(&VK_XBUTTON2));
     }
 }
