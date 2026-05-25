@@ -24,7 +24,6 @@ use windows::Win32::UI::Accessibility::{
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, VK_DOWN, VK_END, VK_HOME, VK_LEFT, VK_NEXT, VK_PRIOR, VK_RIGHT, VK_UP,
-    VK_XBUTTON1, VK_XBUTTON2,
 };
 use windows::Win32::UI::Shell::{
     IFolderView, INameSpaceTreeControl, IPersistFolder2, IShellBrowser, IShellFolder,
@@ -81,6 +80,7 @@ struct ActiveShellViewContext {
 #[derive(Clone, Default)]
 struct HoverResolverHints {
     current_folder: Option<String>,
+    location_url: Option<String>,
     is_search_view: bool,
     search_root: Option<String>,
     shell_view_hwnd: Option<isize>,
@@ -99,6 +99,8 @@ const EXPLORER_WINDOW_CACHE_TTL_MS: u64 = 1000;
 const FOLDER_INDEX_CACHE_MAX_ENTRIES: usize = 16;
 const EXPLORER_REAL_FOLDER_CACHE_MAX_ENTRIES: usize = 256;
 const SEARCH_ROOT_CACHE_MAX_ENTRIES: usize = 8;
+const FOLDER_PROBE_MS: u64 = 200;
+const ACTIVE_PREVIEW_FOLDER_PROBE_MS: u64 = 60;
 
 static FOLDER_MEDIA_INDEX: Lazy<Mutex<HashMap<String, FolderMediaIndex>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
@@ -947,6 +949,7 @@ fn get_current_hover_resolver_hints() -> HoverResolverHints {
 
     if let Some(context) = get_active_shell_view_context_at_cursor() {
         hints.current_folder = context.folder_path.clone();
+        hints.location_url = context.location_url.clone();
         hints.shell_view_hwnd = Some(context.shell_view_hwnd);
 
         hints.is_search_view = is_probable_search_view_context(&context);
@@ -2548,23 +2551,31 @@ fn is_keyboard_navigation_input_detected() -> bool {
     }
 }
 
+fn folder_probe_interval_ms(preview_active: bool) -> u64 {
+    if preview_active {
+        ACTIVE_PREVIEW_FOLDER_PROBE_MS
+    } else {
+        FOLDER_PROBE_MS
+    }
+}
+
+fn hover_location_key(hints: &HoverResolverHints) -> Option<String> {
+    hints
+        .current_folder
+        .as_ref()
+        .map(|folder| format!("folder:{folder}"))
+        .or_else(|| {
+            hints
+                .search_root
+                .as_ref()
+                .map(|root| format!("search:{root}"))
+        })
+        .or_else(|| hints.location_url.as_ref().map(|url| format!("url:{url}")))
+        .or_else(|| hints.shell_view_hwnd.map(|hwnd| format!("view:{hwnd}")))
+}
+
 fn is_pressed_or_down_state(state: u16) -> bool {
     (state & 0x8000) != 0 || (state & 0x0001) != 0
-}
-
-fn mouse_navigation_keys() -> [windows::Win32::UI::Input::KeyboardAndMouse::VIRTUAL_KEY; 2] {
-    [VK_XBUTTON1, VK_XBUTTON2]
-}
-
-/// Detect mouse back/forward navigation buttons.
-/// They can navigate Explorer without moving the cursor or changing keyboard focus first.
-fn is_mouse_navigation_input_detected() -> bool {
-    unsafe {
-        mouse_navigation_keys().iter().any(|&key| {
-            let state = GetAsyncKeyState(key.0 as i32) as u16;
-            is_pressed_or_down_state(state)
-        })
-    }
 }
 
 fn off_trigger_key_to_vk(key: &str) -> Option<i32> {
@@ -2889,7 +2900,7 @@ pub fn run_explorer_hook() {
     // while ffplay window is still initializing under the cursor.
     let mut video_hover_guard_until: Option<Instant> = None;
     // Folder/input gate state: suppress preview after folder changes until explicit user input.
-    let mut last_cursor_folder: Option<String> = None;
+    let mut last_cursor_location: Option<String> = None;
     let mut hover_resolver_hints = HoverResolverHints::default();
     let mut suspend_preview_until_user_input = false;
     let mut allow_keyboard_preview_on_first_observation = false;
@@ -2909,7 +2920,6 @@ pub fn run_explorer_hook() {
     const MEDIUM_SLEEP_MS: u64 = 150; // Visible but not focused - moderate checking
     const ACTIVE_POLL_MS: u64 = 30; // Active focus - responsive polling
     const VIDEO_HOVER_DISMISS_GRACE_MS: u64 = 350;
-    const FOLDER_PROBE_MS: u64 = 200;
     const HOVER_PROBE_MS: u64 = 60;
     const KEYBOARD_FOCUS_PROBE_MS: u64 = 80;
     const STATIONARY_SEARCH_MISS_HIDE_MS: u64 = 180;
@@ -3028,7 +3038,7 @@ pub fn run_explorer_hook() {
             video_hover_guard_until = None;
             suspend_preview_until_user_input = false;
             allow_keyboard_preview_on_first_observation = false;
-            last_cursor_folder = None;
+            last_cursor_location = None;
             hover_resolver_hints = HoverResolverHints::default();
             folder_change_time = None;
             suspended_initial_focus = None;
@@ -3107,27 +3117,6 @@ pub fn run_explorer_hook() {
                 continue;
             }
 
-            if is_mouse_navigation_input_detected() {
-                if last_file.is_some() || keyboard_file.is_some() || is_keyboard_hover {
-                    hide_preview();
-                }
-                last_file = None;
-                keyboard_file = None;
-                is_keyboard_hover = false;
-                suppressed_hover_file = None;
-                suppressed_hover_started_at = None;
-                stationary_search_miss_started_at = None;
-                hover_start = None;
-                last_focused_name = None;
-                video_hover_guard_until = None;
-                suspend_preview_until_user_input = true;
-                allow_keyboard_preview_on_first_observation = false;
-                folder_change_time = Some(Instant::now());
-                suspended_initial_focus = None;
-                last_cursor_pos = cursor_pos;
-                continue;
-            }
-
             // Close as soon as the cursor touches the preview window. Keep
             // suppressing preview until the cursor leaves so a delayed spinner
             // or background load result cannot resurrect a stuck preview under
@@ -3166,14 +3155,22 @@ pub fn run_explorer_hook() {
                 continue;
             }
 
-            // Detect folder navigation/opening and suspend preview until user input.
-            if last_folder_probe.elapsed() >= Duration::from_millis(FOLDER_PROBE_MS) {
+            // Detect folder/navigation changes and suspend preview until user input.
+            // Probe at active-poll cadence only while a preview is visible; idle
+            // polling keeps the slower cadence to avoid extra COM work.
+            let preview_active =
+                last_file.is_some() || keyboard_file.is_some() || is_keyboard_hover;
+            if last_folder_probe.elapsed()
+                >= Duration::from_millis(folder_probe_interval_ms(preview_active))
+            {
                 last_folder_probe = Instant::now();
                 hover_resolver_hints = get_current_hover_resolver_hints();
-                if let Some(folder) = hover_resolver_hints.current_folder.clone() {
-                    if last_cursor_folder.as_ref() != Some(&folder) {
-                        queue_folder_index_build(PathBuf::from(&folder), folder.clone());
-                        last_cursor_folder = Some(folder);
+                if let Some(location_key) = hover_location_key(&hover_resolver_hints) {
+                    if last_cursor_location.as_ref() != Some(&location_key) {
+                        if let Some(folder) = hover_resolver_hints.current_folder.clone() {
+                            queue_folder_index_build(PathBuf::from(&folder), folder);
+                        }
+                        last_cursor_location = Some(location_key);
                         suspend_preview_until_user_input = true;
                         allow_keyboard_preview_on_first_observation = false;
                         folder_change_time = Some(Instant::now());
@@ -3557,10 +3554,38 @@ mod tests {
     }
 
     #[test]
-    fn mouse_navigation_keys_include_back_and_forward_buttons() {
-        let keys = mouse_navigation_keys();
+    fn folder_probe_runs_faster_while_preview_is_visible() {
+        assert_eq!(
+            folder_probe_interval_ms(true),
+            ACTIVE_PREVIEW_FOLDER_PROBE_MS
+        );
+        assert!(folder_probe_interval_ms(true) < folder_probe_interval_ms(false));
+    }
 
-        assert!(keys.contains(&VK_XBUTTON1));
-        assert!(keys.contains(&VK_XBUTTON2));
+    #[test]
+    fn hover_location_key_uses_folder_before_url() {
+        let hints = HoverResolverHints {
+            current_folder: Some("C:\\Users\\HDP\\Pictures".to_string()),
+            location_url: Some("file:///C:/Users/HDP/Pictures".to_string()),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            hover_location_key(&hints).as_deref(),
+            Some("folder:C:\\Users\\HDP\\Pictures")
+        );
+    }
+
+    #[test]
+    fn hover_location_key_falls_back_to_url() {
+        let hints = HoverResolverHints {
+            location_url: Some("file:///C:/Users/HDP".to_string()),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            hover_location_key(&hints).as_deref(),
+            Some("url:file:///C:/Users/HDP")
+        );
     }
 }
