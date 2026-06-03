@@ -6,12 +6,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [0.1.13] - 2026-06-03
 
+### Changed
+
+- Release 0.1.13: bump version and update changelog
+
+## [0.1.13-rc.2] - 2026-06-03
+
+### Added
+
+- Added features section to TODO.md for document support
+
+### Changed
+
+- Bumped version to 0.1.13-rc.2 in Cargo.toml and Cargo.lock
+- Increased cache limits for explorer and video geometry to improve performance
+- Removed the tag exclusion pattern from the deploy workflow and simplified tag handling
+
+## [0.1.13-rc.1] - 2026-06-03
+
 ### Added
 
 - Added per-monitor DPI awareness configuration (with fallback) to prevent scaling artifacts on high-DPI displays
 
 ### Changed
 
+- Removed MSI installer references from deployment workflows and scripts
 - Switched MSVC linking to use rust-lld via .cargo/config.toml
 - Documentation: renamed TODO section to Known Issues
 - Documentation: cleared the resolved high-DPI preview issue from Known Issues
