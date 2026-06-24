@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- Handled multi-monitor virtual screen and display changes
 - Bumped version to 0.1.14-rc.1 in Cargo.toml and Cargo.lock
 
 ## [0.1.13] - 2026-06-03
