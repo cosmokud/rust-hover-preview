@@ -29,9 +29,10 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, IsWindowVisible, LoadCursorW,
     MoveWindow, PeekMessageW, RegisterClassExW, SetWindowLongPtrW, SetWindowPos, ShowWindow,
     TranslateMessage, UpdateLayeredWindow, CS_HREDRAW, CS_VREDRAW, GWL_EXSTYLE, GW_OWNER,
-    HWND_TOPMOST, IDC_ARROW, MSG, PM_REMOVE, SM_CXSCREEN, SM_CYSCREEN, SWP_NOACTIVATE, SWP_NOMOVE,
-    SWP_NOSIZE, SWP_SHOWWINDOW, SW_HIDE, SW_SHOWNOACTIVATE, ULW_ALPHA, WNDCLASSEXW, WS_EX_LAYERED,
-    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    HWND_TOPMOST, IDC_ARROW, MSG, PM_REMOVE, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN,
+    SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW,
+    SW_HIDE, SW_SHOWNOACTIVATE, ULW_ALPHA, WM_DISPLAYCHANGE, WM_DPICHANGED, WNDCLASSEXW,
+    WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
 const PREVIEW_CLASS: PCWSTR = w!("RustHoverPreviewWindow");
@@ -2084,6 +2085,18 @@ unsafe fn render_layered_preview(hwnd: HWND) {
     let _ = DeleteDC(mem_dc);
 }
 
+unsafe fn reset_preview_after_display_change(hwnd: HWND) {
+    let _ = ShowWindow(hwnd, SW_HIDE);
+
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        if let Some(ref mut media) = *current {
+            media.cancel_background_work();
+            stop_video_playback(media);
+        }
+        *current = None;
+    }
+}
+
 unsafe extern "system" fn window_proc(
     hwnd: HWND,
     msg: u32,
@@ -2091,6 +2104,10 @@ unsafe extern "system" fn window_proc(
     lparam: LPARAM,
 ) -> LRESULT {
     match msg {
+        WM_DISPLAYCHANGE | WM_DPICHANGED => {
+            reset_preview_after_display_change(hwnd);
+            LRESULT(0)
+        }
         windows::Win32::UI::WindowsAndMessaging::WM_PAINT => {
             let mut ps = PAINTSTRUCT::default();
             let _ = BeginPaint(hwnd, &mut ps);
@@ -2113,14 +2130,43 @@ struct PreviewLayout {
     preview_h: u32,
 }
 
+#[derive(Clone, Copy)]
+struct ScreenBounds {
+    left: i32,
+    top: i32,
+    right: i32,
+    bottom: i32,
+}
+
+impl ScreenBounds {
+    fn height(self) -> i32 {
+        self.bottom - self.top
+    }
+}
+
+fn virtual_screen_bounds() -> ScreenBounds {
+    unsafe {
+        let left = GetSystemMetrics(SM_XVIRTUALSCREEN);
+        let top = GetSystemMetrics(SM_YVIRTUALSCREEN);
+        let width = GetSystemMetrics(SM_CXVIRTUALSCREEN).max(1);
+        let height = GetSystemMetrics(SM_CYVIRTUALSCREEN).max(1);
+
+        ScreenBounds {
+            left,
+            top,
+            right: left + width,
+            bottom: top + height,
+        }
+    }
+}
+
 /// Compute preview layout for mouse hover (relative to cursor position)
 fn compute_mouse_layout(
     cursor_x: i32,
     cursor_y: i32,
     orig_dims: (u32, u32),
     follow_cursor: bool,
-    screen_width: i32,
-    screen_height: i32,
+    bounds: ScreenBounds,
 ) -> Option<PreviewLayout> {
     let offset = 20;
     let (orig_w, orig_h) = (orig_dims.0 as i32, orig_dims.1 as i32);
@@ -2128,24 +2174,29 @@ fn compute_mouse_layout(
     if follow_cursor {
         let quadrants = [
             (
-                screen_width - cursor_x - offset,
-                screen_height - cursor_y - offset,
+                bounds.right - cursor_x - offset,
+                bounds.bottom - cursor_y - offset,
                 cursor_x + offset,
                 cursor_y + offset,
             ), // BR
             (
-                cursor_x - offset,
-                screen_height - cursor_y - offset,
-                0,
+                cursor_x - bounds.left - offset,
+                bounds.bottom - cursor_y - offset,
+                bounds.left,
                 cursor_y + offset,
             ), // BL
             (
-                screen_width - cursor_x - offset,
-                cursor_y - offset,
+                bounds.right - cursor_x - offset,
+                cursor_y - bounds.top - offset,
                 cursor_x + offset,
-                0,
+                bounds.top,
             ), // TR
-            (cursor_x - offset, cursor_y - offset, 0, 0), // TL
+            (
+                cursor_x - bounds.left - offset,
+                cursor_y - bounds.top - offset,
+                bounds.left,
+                bounds.top,
+            ), // TL
         ];
 
         let mut best_quadrant = 0;
@@ -2201,9 +2252,9 @@ fn compute_mouse_layout(
             preview_h,
         })
     } else {
-        let left_width = cursor_x - offset;
-        let right_width = screen_width - cursor_x - offset;
-        let full_height = screen_height;
+        let left_width = cursor_x - bounds.left - offset;
+        let right_width = bounds.right - cursor_x - offset;
+        let full_height = bounds.height();
 
         let left_scale_x = left_width as f32 / orig_w as f32;
         let left_scale_y = full_height as f32 / orig_h as f32;
@@ -2235,7 +2286,7 @@ fn compute_mouse_layout(
         } else {
             cursor_x + offset
         };
-        let pos_y = (screen_height - media_height) / 2;
+        let pos_y = bounds.top + (full_height - media_height) / 2;
 
         Some(PreviewLayout {
             pos_x,
@@ -2257,8 +2308,7 @@ fn compute_keyboard_layout(
     item_bottom: i32,
     orig_dims: (u32, u32),
     follow_cursor: bool,
-    screen_width: i32,
-    screen_height: i32,
+    bounds: ScreenBounds,
 ) -> Option<PreviewLayout> {
     let gap = 10;
     let (orig_w, orig_h) = (orig_dims.0 as i32, orig_dims.1 as i32);
@@ -2268,27 +2318,32 @@ fn compute_keyboard_layout(
         let quadrants = [
             // Bottom-Right of item
             (
-                screen_width - item_right - gap,
-                screen_height - item_bottom - gap,
+                bounds.right - item_right - gap,
+                bounds.bottom - item_bottom - gap,
                 item_right + gap,
                 item_bottom + gap,
             ),
             // Bottom-Left of item
             (
-                item_left - gap,
-                screen_height - item_bottom - gap,
-                0,
+                item_left - bounds.left - gap,
+                bounds.bottom - item_bottom - gap,
+                bounds.left,
                 item_bottom + gap,
             ),
             // Top-Right of item
             (
-                screen_width - item_right - gap,
-                item_top - gap,
+                bounds.right - item_right - gap,
+                item_top - bounds.top - gap,
                 item_right + gap,
-                0,
+                bounds.top,
             ),
             // Top-Left of item
-            (item_left - gap, item_top - gap, 0, 0),
+            (
+                item_left - bounds.left - gap,
+                item_top - bounds.top - gap,
+                bounds.left,
+                bounds.top,
+            ),
         ];
 
         let mut best_quadrant = 0;
@@ -2342,9 +2397,9 @@ fn compute_keyboard_layout(
         })
     } else {
         // Best spot mode: choose left or right side of item
-        let left_width = item_left - gap;
-        let right_width = screen_width - item_right - gap;
-        let full_height = screen_height;
+        let left_width = item_left - bounds.left - gap;
+        let right_width = bounds.right - item_right - gap;
+        let full_height = bounds.height();
 
         let left_scale_x = left_width as f32 / orig_w as f32;
         let left_scale_y = full_height as f32 / orig_h as f32;
@@ -2376,7 +2431,7 @@ fn compute_keyboard_layout(
         } else {
             item_right + gap
         };
-        let pos_y = (screen_height - media_height) / 2;
+        let pos_y = bounds.top + (full_height - media_height) / 2;
 
         Some(PreviewLayout {
             pos_x,
@@ -2605,20 +2660,14 @@ pub fn run_preview_window() {
                 match preview_msg {
                     PreviewMessage::Show(path, x, y) => {
                         show_requested = true;
-                        let screen_width = GetSystemMetrics(SM_CXSCREEN);
-                        let screen_height = GetSystemMetrics(SM_CYSCREEN);
+                        let bounds = virtual_screen_bounds();
                         let follow_cursor = CONFIG.lock().map(|c| c.follow_cursor).unwrap_or(true);
 
                         if let Some(orig_dims) = get_media_dimensions(&path) {
                             let is_video = is_video_file(&path);
-                            if let Some(layout) = compute_mouse_layout(
-                                x,
-                                y,
-                                orig_dims,
-                                follow_cursor,
-                                screen_width,
-                                screen_height,
-                            ) {
+                            if let Some(layout) =
+                                compute_mouse_layout(x, y, orig_dims, follow_cursor, bounds)
+                            {
                                 show_is_video = is_video;
                                 show_layout = Some(layout);
                                 show_path = Some(path);
@@ -2627,8 +2676,7 @@ pub fn run_preview_window() {
                     }
                     PreviewMessage::ShowKeyboard(path, il, it, ir, ib) => {
                         show_requested = true;
-                        let screen_width = GetSystemMetrics(SM_CXSCREEN);
-                        let screen_height = GetSystemMetrics(SM_CYSCREEN);
+                        let bounds = virtual_screen_bounds();
                         let follow_cursor = CONFIG.lock().map(|c| c.follow_cursor).unwrap_or(true);
 
                         if let Some(orig_dims) = get_media_dimensions(&path) {
@@ -2640,8 +2688,7 @@ pub fn run_preview_window() {
                                 ib,
                                 orig_dims,
                                 follow_cursor,
-                                screen_width,
-                                screen_height,
+                                bounds,
                             ) {
                                 show_is_video = is_video;
                                 show_layout = Some(layout);
@@ -2836,5 +2883,46 @@ pub fn run_preview_window() {
         let (_, cvar) = &*load_request_slot;
         cvar.notify_all();
         let _ = load_worker.join();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mouse_layout_respects_virtual_screen_origin() {
+        let bounds = ScreenBounds {
+            left: -3440,
+            top: 0,
+            right: 3840,
+            bottom: 2160,
+        };
+
+        let layout = compute_mouse_layout(-3300, 1000, (800, 600), true, bounds)
+            .expect("layout should fit on the left monitor");
+
+        assert!(layout.pos_x >= bounds.left);
+        assert!(layout.pos_x + layout.preview_w as i32 <= bounds.right);
+        assert!(layout.pos_y >= bounds.top);
+        assert!(layout.pos_y + layout.preview_h as i32 <= bounds.bottom);
+    }
+
+    #[test]
+    fn keyboard_layout_respects_virtual_screen_origin() {
+        let bounds = ScreenBounds {
+            left: -3440,
+            top: 0,
+            right: 3840,
+            bottom: 2160,
+        };
+
+        let layout = compute_keyboard_layout(-3200, 900, -3000, 1100, (800, 600), true, bounds)
+            .expect("layout should fit near the selected item");
+
+        assert!(layout.pos_x >= bounds.left);
+        assert!(layout.pos_x + layout.preview_w as i32 <= bounds.right);
+        assert!(layout.pos_y >= bounds.top);
+        assert!(layout.pos_y + layout.preview_h as i32 <= bounds.bottom);
     }
 }

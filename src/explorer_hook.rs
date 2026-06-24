@@ -32,8 +32,9 @@ use windows::Win32::UI::Shell::{
     SHCreateItemWithParent, SID_STopLevelBrowser, ShellWindows, SIGDN_DESKTOPABSOLUTEPARSING,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetClassNameW, GetCursorPos, GetForegroundWindow, GetWindowPlacement, GetWindowRect,
-    GetWindowThreadProcessId, IsIconic, IsWindowVisible, WindowFromPoint, SW_SHOWMAXIMIZED,
+    GetClassNameW, GetCursorPos, GetForegroundWindow, GetSystemMetrics, GetWindowPlacement,
+    GetWindowRect, GetWindowThreadProcessId, IsIconic, IsWindowVisible, WindowFromPoint,
+    SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SW_SHOWMAXIMIZED,
     WINDOWPLACEMENT,
 };
 
@@ -70,6 +71,14 @@ struct SearchRootMediaIndex {
     by_stem: HashMap<String, Vec<PathBuf>>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct DisplaySignature {
+    left: i32,
+    top: i32,
+    width: i32,
+    height: i32,
+}
+
 struct ActiveShellViewContext {
     shell_view_hwnd: isize,
     location_url: Option<String>,
@@ -101,6 +110,8 @@ const FOLDER_INDEX_CACHE_MAX_ENTRIES: usize = 16;
 const EXPLORER_REAL_FOLDER_CACHE_MAX_ENTRIES: usize = 256;
 const SEARCH_ROOT_CACHE_MAX_ENTRIES: usize = 8;
 const FOLDER_PROBE_MS: u64 = 200;
+const IDLE_FOLDER_PROBE_MS: u64 = 750;
+const DISPLAY_CHANGE_BACKOFF_MS: u64 = 1500;
 const VK_BACK_CODE: i32 = 0x08;
 const VK_CONTROL_CODE: i32 = 0x11;
 const VK_MENU_CODE: i32 = 0x12;
@@ -141,6 +152,32 @@ fn clear_shell_view_probe_caches() {
     if let Ok(mut cache) = EXPLORER_LAST_REAL_FOLDERS.lock() {
         cache.clear();
     }
+}
+
+fn current_display_signature() -> Option<DisplaySignature> {
+    unsafe {
+        let width = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+        let height = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+        if width <= 0 || height <= 0 {
+            return None;
+        }
+
+        Some(DisplaySignature {
+            left: GetSystemMetrics(SM_XVIRTUALSCREEN),
+            top: GetSystemMetrics(SM_YVIRTUALSCREEN),
+            width,
+            height,
+        })
+    }
+}
+
+fn display_signature_changed(
+    previous: Option<DisplaySignature>,
+    current: DisplaySignature,
+) -> bool {
+    previous
+        .map(|signature| signature != current)
+        .unwrap_or(false)
 }
 
 fn is_jpeg_extension(ext: &str) -> bool {
@@ -2555,8 +2592,12 @@ fn is_keyboard_navigation_input_detected() -> bool {
     }
 }
 
-fn folder_probe_interval_ms(_preview_active: bool) -> u64 {
-    FOLDER_PROBE_MS
+fn folder_probe_interval_ms(preview_active: bool) -> u64 {
+    if preview_active {
+        FOLDER_PROBE_MS
+    } else {
+        IDLE_FOLDER_PROBE_MS
+    }
 }
 
 fn is_key_down_state(state: u16) -> bool {
@@ -2995,8 +3036,36 @@ pub fn run_explorer_hook() {
         .unwrap_or((true, 0, true, "alt".to_string(), 750));
     let mut slow_explorer_probe_count = 0u32;
     let mut explorer_probe_backoff_until: Option<Instant> = None;
+    let mut last_display_signature = current_display_signature();
 
     while RUNNING.load(Ordering::SeqCst) {
+        if let Some(display_signature) = current_display_signature() {
+            if display_signature_changed(last_display_signature, display_signature) {
+                last_display_signature = Some(display_signature);
+                clear_shell_view_probe_caches();
+                hide_preview();
+                last_file = None;
+                keyboard_file = None;
+                is_keyboard_hover = false;
+                suppressed_hover_file = None;
+                suppressed_hover_started_at = None;
+                stationary_search_miss_started_at = None;
+                hover_start = None;
+                video_hover_guard_until = None;
+                suspend_preview_until_user_input = true;
+                allow_keyboard_preview_on_first_observation = false;
+                folder_change_time = Some(Instant::now());
+                suspended_initial_focus = None;
+                hover_resolver_hints = HoverResolverHints::default();
+                last_cursor_location = None;
+                slow_explorer_probe_count = 0;
+                explorer_probe_backoff_until =
+                    Some(Instant::now() + Duration::from_millis(DISPLAY_CHANGE_BACKOFF_MS));
+            } else {
+                last_display_signature = Some(display_signature);
+            }
+        }
+
         if slow_explorer_probe_count >= EXPLORER_SLOW_PROBE_LIMIT
             && explorer_probe_backoff_until.is_none()
         {
@@ -3626,7 +3695,38 @@ mod tests {
     #[test]
     fn folder_probe_uses_standard_interval_while_preview_is_visible() {
         assert_eq!(folder_probe_interval_ms(true), FOLDER_PROBE_MS);
-        assert_eq!(folder_probe_interval_ms(false), FOLDER_PROBE_MS);
+    }
+
+    #[test]
+    fn folder_probe_uses_slower_interval_while_idle() {
+        assert_eq!(folder_probe_interval_ms(false), IDLE_FOLDER_PROBE_MS);
+        assert!(IDLE_FOLDER_PROBE_MS > FOLDER_PROBE_MS);
+    }
+
+    #[test]
+    fn display_signature_change_is_detected() {
+        let previous = DisplaySignature {
+            left: 0,
+            top: 0,
+            width: 3440,
+            height: 1440,
+        };
+        let same = DisplaySignature {
+            left: 0,
+            top: 0,
+            width: 3440,
+            height: 1440,
+        };
+        let changed = DisplaySignature {
+            left: 0,
+            top: 0,
+            width: 3840,
+            height: 2160,
+        };
+
+        assert!(!display_signature_changed(Some(previous), same));
+        assert!(display_signature_changed(Some(previous), changed));
+        assert!(!display_signature_changed(None, changed));
     }
 
     #[test]
