@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.1.14-rc.1] - 2026-06-24
+
+### Changed
+
+- Bumped version to 0.1.14-rc.1 in Cargo.toml and Cargo.lock
+
 ## [0.1.13] - 2026-06-03
 
 ### Changed
