@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{atomic::Ordering, Mutex};
 use std::time::{Duration, Instant};
 use windows::core::{Interface, VARIANT};
-use windows::Win32::Foundation::{HWND, POINT, RECT};
+use windows::Win32::Foundation::{BOOL, HWND, LPARAM, POINT, RECT};
 use windows::Win32::Graphics::Gdi::ScreenToClient;
 use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, IServiceProvider, CLSCTX_ALL,
@@ -32,10 +32,10 @@ use windows::Win32::UI::Shell::{
     SHCreateItemWithParent, SID_STopLevelBrowser, ShellWindows, SIGDN_DESKTOPABSOLUTEPARSING,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetClassNameW, GetCursorPos, GetForegroundWindow, GetSystemMetrics, GetWindowPlacement,
-    GetWindowRect, GetWindowThreadProcessId, IsIconic, IsWindowVisible, WindowFromPoint,
-    SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SW_SHOWMAXIMIZED,
-    WINDOWPLACEMENT,
+    EnumWindows, GetClassNameW, GetCursorPos, GetForegroundWindow, GetSystemMetrics,
+    GetWindowPlacement, GetWindowRect, GetWindowThreadProcessId, IsIconic, IsWindowVisible,
+    WindowFromPoint, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
+    SW_SHOWMAXIMIZED, WINDOWPLACEMENT,
 };
 
 // Supported image extensions
@@ -69,6 +69,11 @@ struct SearchRootMediaIndex {
     built_at: Instant,
     by_file_name: HashMap<String, Vec<PathBuf>>,
     by_stem: HashMap<String, Vec<PathBuf>>,
+}
+
+struct ExplorerWindowCounts {
+    total: usize,
+    visible: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -112,6 +117,8 @@ const SEARCH_ROOT_CACHE_MAX_ENTRIES: usize = 8;
 const FOLDER_PROBE_MS: u64 = 200;
 const IDLE_FOLDER_PROBE_MS: u64 = 750;
 const DISPLAY_CHANGE_BACKOFF_MS: u64 = 1500;
+const KEYBOARD_FOCUS_INPUT_GRACE_MS: u64 = 500;
+const HOVER_RESOLVER_INPUT_GRACE_MS: u64 = 1500;
 const VK_BACK_CODE: i32 = 0x08;
 const VK_CONTROL_CODE: i32 = 0x11;
 const VK_MENU_CODE: i32 = 0x12;
@@ -178,6 +185,30 @@ fn display_signature_changed(
     previous
         .map(|signature| signature != current)
         .unwrap_or(false)
+}
+
+fn recent_elapsed_within(elapsed: Option<Duration>, limit_ms: u64) -> bool {
+    elapsed
+        .map(|elapsed| elapsed <= Duration::from_millis(limit_ms))
+        .unwrap_or(false)
+}
+
+fn should_probe_keyboard_focus(recent_navigation_elapsed: Option<Duration>) -> bool {
+    recent_elapsed_within(recent_navigation_elapsed, KEYBOARD_FOCUS_INPUT_GRACE_MS)
+}
+
+fn should_probe_hover_resolver(
+    preview_active: bool,
+    cursor_moved: bool,
+    recent_input_elapsed: Option<Duration>,
+) -> bool {
+    preview_active
+        || cursor_moved
+        || recent_elapsed_within(recent_input_elapsed, HOVER_RESOLVER_INPUT_GRACE_MS)
+}
+
+fn should_probe_stationary_hover(already_probed: bool) -> bool {
+    !already_probed
 }
 
 fn is_jpeg_extension(ext: &str) -> bool {
@@ -2500,39 +2531,52 @@ fn is_window_minimized(hwnd: HWND) -> bool {
     unsafe { IsIconic(hwnd).as_bool() }
 }
 
-/// Get count of Explorer windows and count of visible (not minimized) ones
-/// Returns (total_count, visible_count)
-fn get_explorer_window_counts() -> (usize, usize) {
+fn explorer_browser_class_matches(hwnd: HWND) -> bool {
     unsafe {
-        let mut total = 0;
-        let mut visible = 0;
-
-        if let Ok(shell_windows) =
-            CoCreateInstance::<_, IShellWindows>(&ShellWindows, None, CLSCTX_ALL)
-        {
-            if let Ok(count) = shell_windows.Count() {
-                for i in 0..count {
-                    let variant = VARIANT::from(i);
-                    if let Ok(disp) = shell_windows.Item(&variant) {
-                        if let Ok(browser) = disp.cast::<windows::Win32::UI::Shell::IWebBrowser2>()
-                        {
-                            if let Ok(browser_hwnd) = browser.HWND() {
-                                let hwnd = HWND(browser_hwnd.0 as *mut _);
-                                total += 1;
-
-                                // Check if window is visible and not minimized
-                                if IsWindowVisible(hwnd).as_bool() && !is_window_minimized(hwnd) {
-                                    visible += 1;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+        let mut class_name = [0u16; 256];
+        let len = GetClassNameW(hwnd, &mut class_name);
+        if len <= 0 {
+            return false;
         }
 
-        (total, visible)
+        let class_str = OsString::from_wide(&class_name[..len as usize])
+            .to_string_lossy()
+            .to_lowercase();
+
+        class_str.contains("cabinetwclass") || class_str.contains("explorerwclass")
     }
+}
+
+unsafe extern "system" fn enum_explorer_windows_callback(hwnd: HWND, lparam: LPARAM) -> BOOL {
+    let counts = &mut *(lparam.0 as *mut ExplorerWindowCounts);
+
+    if explorer_browser_class_matches(hwnd) {
+        counts.total += 1;
+        if IsWindowVisible(hwnd).as_bool() && !is_window_minimized(hwnd) {
+            counts.visible += 1;
+        }
+    }
+
+    BOOL(1)
+}
+
+/// Get count of Explorer windows and count of visible (not minimized) ones.
+/// Uses top-level HWND enumeration instead of ShellWindows COM to avoid
+/// making Explorer's shell automation providers allocate during idle polling.
+fn get_explorer_window_counts() -> (usize, usize) {
+    let mut counts = ExplorerWindowCounts {
+        total: 0,
+        visible: 0,
+    };
+
+    unsafe {
+        let _ = EnumWindows(
+            Some(enum_explorer_windows_callback),
+            LPARAM(&mut counts as *mut ExplorerWindowCounts as isize),
+        );
+    }
+
+    (counts.total, counts.visible)
 }
 
 /// Enum representing the state of Explorer windows for CPU optimization
@@ -2562,7 +2606,7 @@ fn get_explorer_state() -> ExplorerState {
         return ExplorerState::HiddenByForeground;
     }
 
-    // Need to check Explorer window states (more expensive, uses COM)
+    // Check Explorer browser windows without ShellWindows COM.
     let (total, visible) = get_explorer_window_counts();
 
     if total == 0 {
@@ -2643,10 +2687,6 @@ fn is_mouse_navigation_button_detected() -> bool {
     mouse_navigation_buttons()
         .iter()
         .any(|&key| unsafe { is_pressed_or_down_state(GetAsyncKeyState(key.0 as i32) as u16) })
-}
-
-fn is_immediate_explorer_navigation_input_detected() -> bool {
-    is_explorer_navigation_shortcut_detected() || is_mouse_navigation_button_detected()
 }
 
 fn hover_location_key(hints: &HoverResolverHints) -> Option<String> {
@@ -2732,8 +2772,9 @@ fn is_off_trigger_key_down(key: &str) -> bool {
     }
 }
 
-/// Check if cursor is currently over an Explorer window (regardless of foreground)
-/// This is the expensive check that uses COM
+/// Check if cursor is currently over an Explorer window (regardless of foreground).
+/// Keep this HWND/class based; calling ShellWindows here caused Explorer-side
+/// COM providers to allocate while we were merely checking cursor position.
 fn is_cursor_over_explorer_full() -> bool {
     unsafe {
         let mut cursor_pos = POINT::default();
@@ -2749,17 +2790,8 @@ fn is_cursor_over_explorer_full() -> bool {
 
         // Walk up parent windows to find Explorer window
         let mut current_hwnd = hwnd;
-        let folders = get_all_explorer_folders();
 
         for _ in 0..20 {
-            // Check if this window is an Explorer window
-            for (explorer_hwnd, _) in &folders {
-                if current_hwnd == *explorer_hwnd {
-                    return true;
-                }
-            }
-
-            // Also check by class/process
             if is_explorer_window(current_hwnd) {
                 return true;
             }
@@ -2999,6 +3031,9 @@ pub fn run_explorer_hook() {
     let mut last_folder_probe = Instant::now();
     let mut last_hover_probe = Instant::now();
     let mut last_keyboard_focus_probe = Instant::now();
+    let mut last_user_input_at: Option<Instant> = None;
+    let mut last_keyboard_navigation_input_at: Option<Instant> = None;
+    let mut stationary_hover_probe_done = false;
 
     // State for optimized polling
     let mut last_state_check = Instant::now();
@@ -3052,6 +3087,7 @@ pub fn run_explorer_hook() {
                 stationary_search_miss_started_at = None;
                 hover_start = None;
                 video_hover_guard_until = None;
+                stationary_hover_probe_done = false;
                 suspend_preview_until_user_input = true;
                 allow_keyboard_preview_on_first_observation = false;
                 folder_change_time = Some(Instant::now());
@@ -3081,6 +3117,7 @@ pub fn run_explorer_hook() {
             stationary_search_miss_started_at = None;
             hover_start = None;
             video_hover_guard_until = None;
+            stationary_hover_probe_done = false;
         }
 
         if let Some(until) = explorer_probe_backoff_until {
@@ -3093,6 +3130,7 @@ pub fn run_explorer_hook() {
                 is_keyboard_hover = false;
                 hover_start = None;
                 video_hover_guard_until = None;
+                stationary_hover_probe_done = false;
                 std::thread::sleep(Duration::from_millis(MEDIUM_SLEEP_MS));
                 continue;
             }
@@ -3235,7 +3273,22 @@ pub fn run_explorer_hook() {
                 continue;
             }
 
-            if is_immediate_explorer_navigation_input_detected() {
+            let loop_now = Instant::now();
+            let moved = (cursor_pos.x - last_cursor_pos.x).abs() > 5
+                || (cursor_pos.y - last_cursor_pos.y).abs() > 5;
+            let explorer_navigation_shortcut_input = is_explorer_navigation_shortcut_detected();
+            let keyboard_navigation_input =
+                explorer_navigation_shortcut_input || is_keyboard_navigation_input_detected();
+            let mouse_navigation_input = is_mouse_navigation_button_detected();
+
+            if moved || keyboard_navigation_input || mouse_navigation_input {
+                last_user_input_at = Some(loop_now);
+            }
+            if keyboard_navigation_input {
+                last_keyboard_navigation_input_at = Some(loop_now);
+            }
+
+            if explorer_navigation_shortcut_input || mouse_navigation_input {
                 if last_file.is_some() || keyboard_file.is_some() || is_keyboard_hover {
                     hide_preview();
                 }
@@ -3253,6 +3306,7 @@ pub fn run_explorer_hook() {
                 folder_change_time = Some(Instant::now());
                 suspended_initial_focus = None;
                 last_cursor_pos = cursor_pos;
+                stationary_hover_probe_done = false;
                 continue;
             }
 
@@ -3283,12 +3337,14 @@ pub fn run_explorer_hook() {
                 is_keyboard_hover = false;
                 stationary_search_miss_started_at = None;
                 video_hover_guard_until = None;
+                stationary_hover_probe_done = false;
                 hover_start = Some(Instant::now());
                 continue;
             }
 
             if suppress_preview_until_cursor_leaves_preview {
                 suppress_preview_until_cursor_leaves_preview = false;
+                stationary_hover_probe_done = false;
                 hover_start = Some(Instant::now());
                 last_cursor_pos = cursor_pos;
                 continue;
@@ -3301,6 +3357,11 @@ pub fn run_explorer_hook() {
                 last_file.is_some() || keyboard_file.is_some() || is_keyboard_hover;
             if last_folder_probe.elapsed()
                 >= Duration::from_millis(folder_probe_interval_ms(preview_active))
+                && should_probe_hover_resolver(
+                    preview_active,
+                    moved,
+                    last_user_input_at.map(|at| at.elapsed()),
+                )
             {
                 last_folder_probe = Instant::now();
                 hover_resolver_hints = get_current_hover_resolver_hints();
@@ -3318,6 +3379,7 @@ pub fn run_explorer_hook() {
                         last_focused_name = None;
                         // Reset cursor baseline so we don't mistake stale delta for movement.
                         last_cursor_pos = cursor_pos;
+                        stationary_hover_probe_done = false;
                         // Drain stale GetAsyncKeyState flags from prior navigation
                         let _ = is_keyboard_navigation_input_detected();
 
@@ -3335,10 +3397,6 @@ pub fn run_explorer_hook() {
                 }
             }
 
-            // If cursor moved significantly, check what's under it
-            let moved = (cursor_pos.x - last_cursor_pos.x).abs() > 5
-                || (cursor_pos.y - last_cursor_pos.y).abs() > 5;
-
             // Hard gate: after folder change, do not preview until explicit user input.
             if suspend_preview_until_user_input {
                 // Cooldown: ignore all input for 150ms after folder change to let
@@ -3353,6 +3411,7 @@ pub fn run_explorer_hook() {
                     suspend_preview_until_user_input = false;
                     allow_keyboard_preview_on_first_observation = false;
                     hover_start = Some(Instant::now());
+                    stationary_hover_probe_done = false;
                     suspended_initial_focus = None;
                     folder_change_time = None;
                 } else {
@@ -3361,7 +3420,9 @@ pub fn run_explorer_hook() {
                     // (whose "pressed since last check" bit can carry stale state
                     // from the navigation that opened this folder).
                     let mut keyboard_unlocked = false;
-                    if is_foreground_explorer()
+                    if should_probe_keyboard_focus(
+                        last_keyboard_navigation_input_at.map(|at| at.elapsed()),
+                    ) && is_foreground_explorer()
                         && last_keyboard_focus_probe.elapsed()
                             >= Duration::from_millis(KEYBOARD_FOCUS_PROBE_MS)
                     {
@@ -3401,6 +3462,7 @@ pub fn run_explorer_hook() {
             if moved {
                 last_cursor_pos = cursor_pos;
                 stationary_search_miss_started_at = None;
+                stationary_hover_probe_done = false;
 
                 // Mouse movement always takes priority - dismiss keyboard hover
                 if is_keyboard_hover {
@@ -3464,7 +3526,8 @@ pub fn run_explorer_hook() {
 
             // Mouse is stationary - check for keyboard navigation
             // Only when Explorer is the foreground window (keyboard input goes there)
-            if is_foreground_explorer()
+            if should_probe_keyboard_focus(last_keyboard_navigation_input_at.map(|at| at.elapsed()))
+                && is_foreground_explorer()
                 && last_keyboard_focus_probe.elapsed()
                     >= Duration::from_millis(KEYBOARD_FOCUS_PROBE_MS)
             {
@@ -3594,10 +3657,31 @@ pub fn run_explorer_hook() {
             // Check if we've hovered long enough (mouse hover)
             if let Some(start) = hover_start {
                 if start.elapsed() >= hover_delay {
+                    if !should_probe_stationary_hover(stationary_hover_probe_done) {
+                        if let Some(miss_started) = stationary_search_miss_started_at {
+                            if miss_started.elapsed()
+                                >= Duration::from_millis(STATIONARY_SEARCH_MISS_HIDE_MS)
+                            {
+                                if last_file.is_some() {
+                                    suppressed_hover_file = last_file.clone();
+                                    suppressed_hover_started_at = Some(Instant::now());
+                                } else {
+                                    suppressed_hover_file = None;
+                                    suppressed_hover_started_at = None;
+                                }
+                                hide_preview();
+                                last_file = None;
+                                stationary_search_miss_started_at = None;
+                                video_hover_guard_until = None;
+                            }
+                        }
+                        continue;
+                    }
                     if last_hover_probe.elapsed() < Duration::from_millis(HOVER_PROBE_MS) {
                         continue;
                     }
                     last_hover_probe = Instant::now();
+                    stationary_hover_probe_done = true;
 
                     // Try to get file under cursor
                     if let Some(file_path) = get_file_under_cursor_checked(
@@ -3670,6 +3754,7 @@ pub fn run_explorer_hook() {
             } else {
                 // Initialize hover_start if not moving
                 stationary_search_miss_started_at = None;
+                stationary_hover_probe_done = false;
                 hover_start = Some(Instant::now());
             }
         }
@@ -3727,6 +3812,40 @@ mod tests {
         assert!(!display_signature_changed(Some(previous), same));
         assert!(display_signature_changed(Some(previous), changed));
         assert!(!display_signature_changed(None, changed));
+    }
+
+    #[test]
+    fn keyboard_focus_probe_requires_recent_navigation_input() {
+        assert!(!should_probe_keyboard_focus(None));
+        assert!(should_probe_keyboard_focus(Some(Duration::from_millis(
+            KEYBOARD_FOCUS_INPUT_GRACE_MS - 1
+        ))));
+        assert!(!should_probe_keyboard_focus(Some(Duration::from_millis(
+            KEYBOARD_FOCUS_INPUT_GRACE_MS + 1
+        ))));
+    }
+
+    #[test]
+    fn hover_resolver_probe_skips_idle_without_recent_input() {
+        assert!(!should_probe_hover_resolver(false, false, None));
+        assert!(!should_probe_hover_resolver(
+            false,
+            false,
+            Some(Duration::from_millis(HOVER_RESOLVER_INPUT_GRACE_MS + 1))
+        ));
+        assert!(should_probe_hover_resolver(true, false, None));
+        assert!(should_probe_hover_resolver(false, true, None));
+        assert!(should_probe_hover_resolver(
+            false,
+            false,
+            Some(Duration::from_millis(HOVER_RESOLVER_INPUT_GRACE_MS - 1))
+        ));
+    }
+
+    #[test]
+    fn stationary_hover_probe_runs_once_until_reset() {
+        assert!(should_probe_stationary_hover(false));
+        assert!(!should_probe_stationary_hover(true));
     }
 
     #[test]
