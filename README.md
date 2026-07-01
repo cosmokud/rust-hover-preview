@@ -19,6 +19,7 @@ Inspired by QTTabBar (QuizoApps) hover preview.
 - Explorer Shell view detection, folder caching, and path normalization for reliable hover matching
 - Topmost, non-activating preview windows designed to avoid focus stealing
 - Per-monitor DPI awareness to reduce scaling artifacts on high-DPI displays
+- EnumWindows-based Explorer detection with CabinetWClass/ExplorerWClass class matching to keep idle polling light and avoid Explorer-side COM allocations, plus input-grace helpers that throttle hover and keyboard focus probes to recent user activity
 
 ## Supported Formats
 
@@ -154,6 +155,8 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full system overview.
 - Uses `ffprobe` for video dimensions and `ffplay` for video playback
 - Sets per-monitor DPI awareness (v2 with fallback) on startup to prevent scaling artifacts on layered windows
 - Uses the registry (`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`) for startup control
+- Counts and classifies Explorer browser windows via EnumWindows and CabinetWClass/ExplorerWClass class matching, so idle polling never spins up Explorer's shell automation providers
+- Gates hover and keyboard focus probes behind input-grace windows (recent_elapsed_within, should_probe_keyboard_focus, should_probe_hover_resolver, should_probe_stationary_hover) and a stationary_hover_probe_done latch to avoid redundant accessibility work for a parked cursor
 
 ## License
 
