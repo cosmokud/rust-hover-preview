@@ -1,15 +1,24 @@
-﻿# Changelog
+# Changelog
 
 All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+
+## [0.1.14-rc.2] - 2026-07-01
+
+### Changed
+
+- Improved Explorer detection by switching from ShellWindows COM enumeration to EnumWindows with class-based matching (CabinetWClass/ExplorerWClass) so idle polling no longer triggers Explorer-side COM provider allocations.
+- Simplified the cursor-over-Explorer check to a pure HWND/class walk now that ShellWindows is no longer called during cursor polling.
+- Made hover and keyboard focus probing input-aware: introduced input-grace constants and helpers (recent_elapsed_within, should_probe_keyboard_focus, should_probe_hover_resolver, should_probe_stationary_hover) that track the last user/keyboard input times and only run probes when input is recent or the preview is already active.
+- Added a stationary_hover_probe_done flag so the stationary-hover probe runs at most once per stable hover and is reset on movement, folder change, or suppression, avoiding repeated accessibility work for the same parked cursor.
+- Bumped version to 0.1.14-rc.2 in Cargo.toml and Cargo.lock
 
 ## [0.1.14-rc.1] - 2026-06-24
 
 ### Changed
 
 - Handled multi-monitor virtual screen and display changes
-- Bumped version to 0.1.14-rc.1 in Cargo.toml and Cargo.lock
 
 ## [0.1.13] - 2026-06-03
 

@@ -8,7 +8,7 @@ Rust Hover Preview is a Windows 11 tray application that watches File Explorer f
 
 - Main thread initializes COM, config, DPI awareness, then runs the tray event loop.
 - Preview thread owns the layered preview window and media decoding/rendering.
-- Explorer hook thread polls Explorer state with UI Automation/MSAA and Shell COM APIs.
+- Explorer hook thread polls Explorer state with UI Automation/MSAA and Shell COM APIs, and uses EnumWindows with CabinetWClass/ExplorerWClass class matching to count and classify Explorer browser windows so idle polling never spins up Explorer's shell automation providers.
 - Config watcher thread reloads `config.ini` when it changes on disk.
 
 ## Core Modules
@@ -28,7 +28,7 @@ Rust Hover Preview is a Windows 11 tray application that watches File Explorer f
 
 ## Explorer Hook Flow
 
-1. Detect active Explorer window and focused or hovered item.
+1. Detect active Explorer window and focused or hovered item via HWND/class matching and UI Automation, with input-grace helpers (should_probe_keyboard_focus, should_probe_hover_resolver, should_probe_stationary_hover) throttling probes to recent user activity and a stationary_hover_probe_done latch capping stationary-hover work to a single probe per parked cursor.
 2. Normalize the resolved path and validate the file extension.
 3. Send `Show` or `Hide` messages to the preview thread via channel.
 4. Cache folder and Shell view data to reduce repeated COM work.
