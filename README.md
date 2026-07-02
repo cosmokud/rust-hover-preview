@@ -33,17 +33,20 @@ Inspired by QTTabBar (QuizoApps) hover preview.
 
 ## Installation (Recommended)
 
-Download the prebuilt installer from the repository **Releases** tab:
+Each release provides two asset options:
+
+- **`RustHoverPreview-<version>-setup.exe`** — the NSIS installer. Run it to install to `%LOCALAPPDATA%\rust-hover-preview` with an optional startup entry.
+- **`rust-hover-preview.exe`** — the standalone portable binary. Place it in any folder on your PC (for example: `C:\Tools\RustHoverPreview`) and run it directly. No installation needed.
 
 1. Open [Releases](../../releases)
-2. Download `RustHoverPreview-<version>-setup.exe` from the latest release
-3. Run the installer. It installs to `%LOCALAPPDATA%\rust-hover-preview` and optionally adds a startup entry
-4. Launch Rust Hover Preview from the Start Menu or the installed location
+2. Download your preferred asset
+3. Run the installer or place the portable binary wherever you like
+4. Launch Rust Hover Preview
 
 No Rust toolchain is needed when installing from Releases.
 
 > **Note for existing users upgrading from an earlier version:**  
-> If you previously used a portable `.exe` build, you can continue using it by placing the standalone binary from the release in any folder you prefer (for example: `C:\Tools\RustHoverPreview`). The installer handles upgrades automatically.
+> The installer handles upgrades automatically, cleaning up the old `%LOCALAPPDATA%\Rust Hover Preview` folder if present.
 
 ## Optional: Enable Video Preview (FFmpeg)
 
@@ -90,7 +93,7 @@ ffprobe -version
 - **Preview Position**: `Follow Cursor` or `Best Position`
 - **Transparent Background**: `Transparent`, `Black`, `White`, or `Checkerboard`
 - **Enable Off Trigger Key**: Temporarily suppress previews while the displayed configured key is held
-- **Confirm File Type**: When enabled, validates file content signatures (magic bytes) against the extension to avoid loading mislabeled files
+- **Confirm File Type**: When enabled, validates file content signatures (magic bytes) against the extension to avoid loading mislabeled files. If previews don't appear for certain files that should be supported, try enabling this option — the app will attempt to decode them by their true content type rather than relying solely on the file extension.
 - **Run at Startup**: Add/remove startup entry in Windows
 - **Edit Config.ini**: Open configuration file in your default editor
 - **Exit**: Close the application
