@@ -33,16 +33,17 @@ Inspired by QTTabBar (QuizoApps) hover preview.
 
 ## Installation (Recommended)
 
-Download prebuilt assets from the repository **Releases** tab:
+Download the prebuilt installer from the repository **Releases** tab:
 
 1. Open [Releases](../../releases)
-2. Download one of the latest assets:
-   - `.msi` installer (recommended for most users)
-   - `.exe` portable build
-3. If you downloaded `.msi`, run the installer. It installs to `%LOCALAPPDATA%\rust-hover-preview`. If you downloaded `.exe`, place it in any folder you prefer (for example: `C:\Tools\RustHoverPreview`)
-4. Launch Rust Hover Preview
+2. Download `RustHoverPreview-<version>-setup.exe` from the latest release
+3. Run the installer. It installs to `%LOCALAPPDATA%\rust-hover-preview` and optionally adds a startup entry
+4. Launch Rust Hover Preview from the Start Menu or the installed location
 
 No Rust toolchain is needed when installing from Releases.
+
+> **Note for existing users upgrading from an earlier version:**  
+> If you previously used a portable `.exe` build, you can continue using it by placing the standalone binary from the release in any folder you prefer (for example: `C:\Tools\RustHoverPreview`). The installer handles upgrades automatically.
 
 ## Optional: Enable Video Preview (FFmpeg)
 
@@ -84,11 +85,12 @@ ffprobe -version
 
 - **Enable Preview**: Turn previews on or off
 - **Preview Delay**: `Instant (0 ms)`, `Fast (200 ms)`, `Medium (500 ms)`, `Relaxed (750 ms)`, `Slow (1000 ms)`
-- **Same File Rehover Delay**: delay before the same file can preview again after the preview self-dismisses
+- **Same File Rehover Delay**: `Instant (0 ms)`, `Fast (200 ms)`, `Medium (500 ms)`, `Relaxed (750 ms)`, `Slow (1000 ms)` — delay before the same file can preview again after the preview self-dismisses
 - **Video Volume**: `Max (100%)`, `High (80%)`, `Medium (50%)`, `Low (25%)`, `Very Low (10%)`, `Mute (0%)`
 - **Preview Position**: `Follow Cursor` or `Best Position`
 - **Transparent Background**: `Transparent`, `Black`, `White`, or `Checkerboard`
 - **Enable Off Trigger Key**: Temporarily suppress previews while the displayed configured key is held
+- **Confirm File Type**: When enabled, validates file content signatures (magic bytes) against the extension to avoid loading mislabeled files
 - **Run at Startup**: Add/remove startup entry in Windows
 - **Edit Config.ini**: Open configuration file in your default editor
 - **Exit**: Close the application
@@ -111,12 +113,16 @@ same_file_rehover_delay_ms=750
 preview_enabled=true
 enable_off_trigger_key=true
 off_trigger_key=alt
+confirm_file_type=false
 follow_cursor=false
-transparent_background=transparent
+transparent_background=black
+webp_playback_fps=90
 video_volume=0
 ```
 
-When `enable_off_trigger_key` is enabled, hold the configured `off_trigger_key` to keep previews hidden while browsing Explorer.
+- When `enable_off_trigger_key` is enabled, hold the configured `off_trigger_key` to keep previews hidden while browsing Explorer.
+- When `confirm_file_type` is enabled, the app validates file content signatures (magic bytes) against the extension — useful for files with incorrect extensions.
+- `webp_playback_fps` controls the maximum playback speed for animated WebP files (1–90 FPS; 0 resets to the default of 90).
 
 ## Build from Source
 
