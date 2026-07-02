@@ -45,4 +45,4 @@ Configuration is stored at `%APPDATA%\rust-hover-preview\config.ini`. Changes ar
 
 - The MSVC toolchain uses `rust-lld` via .cargo/config.toml for faster, more consistent linking.
 - Windows resources are set in `build.rs` through `winres`.
-- Release installers are produced by `cargo packager` (NSIS and WiX).
+- Release installers are produced by `cargo packager` (NSIS `.exe` setup).
