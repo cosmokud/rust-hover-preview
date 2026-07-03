@@ -16,7 +16,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     RegisterWindowMessageW, SetForegroundWindow, TrackPopupMenu, TranslateMessage, CS_HREDRAW,
     CS_VREDRAW, HICON, IMAGE_ICON, LR_DEFAULTSIZE, LR_SHARED, MF_CHECKED, MF_POPUP, MF_STRING,
     MF_UNCHECKED, MSG, PM_REMOVE, SW_SHOWNORMAL, TPM_BOTTOMALIGN, TPM_LEFTALIGN, WM_COMMAND,
-    WM_DESTROY, WM_LBUTTONUP, WM_RBUTTONUP, WM_USER, WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_POPUP,
+    WM_DESTROY, WM_LBUTTONUP, WM_POWERBROADCAST, WM_RBUTTONUP, WM_USER, WNDCLASSEXW,
+    WS_EX_TOOLWINDOW, WS_POPUP, PBT_APMRESUMEAUTOMATIC, PBT_APMRESUMESUSPEND,
 };
 
 const WM_TRAYICON: u32 = WM_USER + 1;
@@ -127,6 +128,18 @@ unsafe extern "system" fn tray_window_proc(
         WM_DESTROY => {
             remove_tray_icon(hwnd);
             PostQuitMessage(0);
+            LRESULT(0)
+        }
+        WM_POWERBROADCAST => {
+            let power_event = wparam.0 as u32;
+            if power_event == PBT_APMRESUMEAUTOMATIC
+                || power_event == PBT_APMRESUMESUSPEND
+            {
+                // System resumed from sleep — re-add tray icon in case
+                // DWM/Explorer restart affected its visibility.
+                remove_tray_icon(hwnd);
+                let _ = add_tray_icon(hwnd);
+            }
             LRESULT(0)
         }
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
