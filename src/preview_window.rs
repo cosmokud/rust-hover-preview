@@ -30,8 +30,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     MoveWindow, PeekMessageW, RegisterClassExW, SetWindowLongPtrW, SetWindowPos, ShowWindow,
     TranslateMessage, UpdateLayeredWindow, CS_HREDRAW, CS_VREDRAW, GWL_EXSTYLE, GW_OWNER,
     HWND_TOPMOST, IDC_ARROW, MSG, PM_REMOVE, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN,
-    SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW,
-    SW_HIDE, SW_SHOWNOACTIVATE, ULW_ALPHA, WM_DISPLAYCHANGE, WM_DPICHANGED, WNDCLASSEXW,
+    SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW,
+    SW_HIDE, SW_SHOWNOACTIVATE, ULW_ALPHA, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_POWERBROADCAST,
+    PBT_APMRESUMEAUTOMATIC, PBT_APMRESUMESUSPEND, PBT_APMSUSPEND, PBT_APMSTANDBY, WNDCLASSEXW,
     WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
@@ -60,6 +61,8 @@ static VIDEO_HWND: AtomicIsize = AtomicIsize::new(0);
 static VIDEO_PID: AtomicU32 = AtomicU32::new(0);
 // Guard to ensure we only run a single style-monitor thread.
 static NOACTIVATE_MONITOR_STARTED: AtomicBool = AtomicBool::new(false);
+// Flag set when the system resumes from sleep, so the main loop can reset state.
+static RESUME_FROM_SLEEP: AtomicBool = AtomicBool::new(false);
 
 static CURRENT_MEDIA: Lazy<Mutex<Option<MediaData>>> = Lazy::new(|| Mutex::new(None));
 static VIDEO_GEOMETRY_CACHE: Lazy<Mutex<HashMap<PathBuf, VideoGeometry>>> =
@@ -2108,6 +2111,25 @@ unsafe extern "system" fn window_proc(
             reset_preview_after_display_change(hwnd);
             LRESULT(0)
         }
+        WM_POWERBROADCAST => {
+            let power_event = wparam.0 as u32;
+            match power_event {
+                PBT_APMRESUMEAUTOMATIC | PBT_APMRESUMESUSPEND => {
+                    // System resumed from sleep — DWM has restarted and the
+                    // layered window's composition surface was destroyed.
+                    // Reset the preview so the next hover creates everything fresh.
+                    reset_preview_after_display_change(hwnd);
+                    RESUME_FROM_SLEEP.store(true, Ordering::Release);
+                }
+                PBT_APMSUSPEND | PBT_APMSTANDBY => {
+                    // System is going to sleep. Clean up video playback and
+                    // background decoding to avoid resource leaks.
+                    reset_preview_after_display_change(hwnd);
+                }
+                _ => {}
+            }
+            LRESULT(0)
+        }
         windows::Win32::UI::WindowsAndMessaging::WM_PAINT => {
             let mut ps = PAINTSTRUCT::default();
             let _ = BeginPaint(hwnd, &mut ps);
@@ -2515,6 +2537,37 @@ pub fn run_preview_window() {
             while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
                 let _ = TranslateMessage(&msg);
                 DispatchMessageW(&msg);
+            }
+
+            // Detect resume from sleep (WM_POWERBROADCAST handler sets this flag).
+            // DWM restarts on resume and destroys the layered window's composition
+            // surface, so we must reset all local state to force a fresh start on
+            // the next hover.
+            if RESUME_FROM_SLEEP.load(Ordering::Acquire) {
+                RESUME_FROM_SLEEP.store(false, Ordering::Release);
+                current_generation += 1;
+                pending_load = None;
+                clear_load_request(&load_request_slot);
+                if let Some(cancel) = pending_load_cancel.take() {
+                    cancel.store(true, Ordering::Release);
+                }
+                current_video_path = None;
+                video_pos = (0, 0, 0, 0);
+
+                // Re-assert layered window style after DWM restart.
+                // DWM is reinitialized during resume and the layered window's
+                // per-pixel alpha composition surface may need a fresh anchor.
+                let ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+                SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex_style | WS_EX_LAYERED.0 as isize | WS_EX_TOPMOST.0 as isize);
+                let _ = SetWindowPos(
+                    hwnd,
+                    HWND_TOPMOST,
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+                );
             }
 
             // Periodically re-assert topmost on the video window to prevent it
