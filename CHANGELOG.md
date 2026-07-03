@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.1.14-rc.3] - 2026-07-03
+
+### Added
+
+- Added system sleep/resume resilience: the preview window now handles `WM_POWERBROADCAST` events to detect system resume from sleep, resetting the layered window's composition surface (which is destroyed when DWM restarts) and re-asserting topmost/layered styles so previews continue working after wake.
+- Added `WM_POWERBROADCAST` handling in the tray window to re-add the tray icon on resume, preventing it from disappearing after DWM/Explorer restart during sleep cycles.
+- Cleaned up video playback and background decoding on system suspend/standby (`PBT_APMSUSPEND`/`PBT_APMSTANDBY`) to avoid resource leaks.
+
+### Changed
+
+- Updated installation instructions to present two clear asset options per release (NSIS installer `RustHoverPreview-<version>-setup.exe` and standalone portable binary `rust-hover-preview.exe`) with an upgrade note for existing users.
+- Updated config example in README to document the `confirm_file_type` and `webp_playback_fps` settings with explanations.
+- Bumped version to 0.1.14-rc.3 in Cargo.toml and Cargo.lock
+
 ## [0.1.14-rc.2] - 2026-07-01
 
 ### Changed

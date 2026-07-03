@@ -15,8 +15,8 @@ Rust Hover Preview is a Windows 11 tray application that watches File Explorer f
 
 - `main.rs`: process startup, COM lifecycle, DPI awareness, thread orchestration.
 - `explorer_hook.rs`: resolves hovered/focused Explorer items, handles path normalization, and sends preview messages.
-- `preview_window.rs`: layered window rendering, animation streaming for GIF/WebP, and FFmpeg-backed video playback.
-- `tray.rs`: tray icon and menu, configuration toggles, and exit flow.
+- `preview_window.rs`: layered window rendering, animation streaming for GIF/WebP, FFmpeg-backed video playback, and WM_POWERBROADCAST handling to reset state on system resume and clean up on suspend.
+- `tray.rs`: tray icon and menu, configuration toggles, exit flow, and WM_POWERBROADCAST handling to re-add the icon after DWM/Explorer restart on resume.
 - `config.rs`: INI-backed configuration with defaults and input sanitization.
 - `startup.rs`: registry integration for the Run-at-startup setting.
 
