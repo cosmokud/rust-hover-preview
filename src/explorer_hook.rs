@@ -1,6 +1,6 @@
 use crate::preview_window::{
-    hide_preview, is_cursor_over_image_preview, is_cursor_over_video_preview, show_preview,
-    show_preview_keyboard,
+    cursor_preview_hover, hide_preview, preview_screen_rect, show_preview, show_preview_keyboard,
+    PreviewCursorHover,
 };
 use crate::{CONFIG, RUNNING};
 use once_cell::sync::Lazy;
@@ -101,6 +101,132 @@ struct HoverResolverHints {
     shell_view_hwnd: Option<isize>,
 }
 
+/// "Do not preview this file" latch, shared by the mouse hover path.
+#[derive(Default)]
+struct SuppressedHover {
+    file: Option<PathBuf>,
+    started_at: Option<Instant>,
+    /// Set when a keyboard preview was dismissed by mouse movement: the latch
+    /// never expires for that file and is released only when the cursor
+    /// resolves a different file, or when a keyboard preview takes over.
+    sticky: bool,
+}
+
+impl SuppressedHover {
+    fn clear(&mut self) {
+        self.file = None;
+        self.started_at = None;
+        self.sticky = false;
+    }
+
+    fn suppress(&mut self, file: PathBuf, sticky: bool) {
+        self.file = Some(file);
+        self.started_at = Some(Instant::now());
+        self.sticky = sticky;
+    }
+
+    fn matches(&self, path: &PathBuf) -> bool {
+        self.file
+            .as_ref()
+            .map(|file| same_path(file, path))
+            .unwrap_or(false)
+    }
+
+    /// Regular latches keep the same-file rehover delay; a sticky one never lets
+    /// the suppressed file back onto the mouse path.
+    fn rehover_allowed(&self, required_delay_ms: u64) -> bool {
+        if self.sticky {
+            return false;
+        }
+
+        self.started_at
+            .map(|started| started.elapsed() >= Duration::from_millis(required_delay_ms))
+            .unwrap_or(true)
+    }
+}
+
+/// Pointer freeze for keyboard previews. A keyboard preview is placed next to
+/// the focused item, which can put it right over the parked cursor; the pointer
+/// must not take over in that case. The freeze is decided from the preview's own
+/// box at spawn time and released by a real mouse move, so cursor jitter cannot
+/// end a keyboard preview.
+#[derive(Default)]
+struct KeyboardPointerPause {
+    armed: bool,
+    /// Set on every keyboard preview spawn while the preview thread has not
+    /// published a box yet.
+    box_watch_until: Option<Instant>,
+    /// Last observed box, so a box that is still being replaced is not trusted.
+    last_box: Option<(i32, i32, i32, i32)>,
+}
+
+impl KeyboardPointerPause {
+    /// Called on every keyboard preview spawn: the box arrives once the preview
+    /// is actually on screen, and the freeze is decided from it.
+    fn watch_for_box(&mut self) {
+        self.armed = false;
+        self.last_box = None;
+        self.box_watch_until =
+            Some(Instant::now() + Duration::from_millis(KEYBOARD_PREVIEW_BOX_WATCH_MS));
+    }
+
+    fn clear(&mut self) {
+        self.armed = false;
+        self.box_watch_until = None;
+        self.last_box = None;
+    }
+
+    fn is_watching(&self) -> bool {
+        self.box_watch_until.is_some()
+    }
+
+    /// True while the pointer must not drive previews, probe them, or dismiss
+    /// them: the preview box is either known to cover the cursor, or still being
+    /// waited on.
+    fn freezes_pointer(&self) -> bool {
+        self.armed || self.box_watch_until.is_some()
+    }
+
+    /// Cursor movement that hands control back to the mouse. Small movements are
+    /// ignored on purpose so a parked mouse cannot cancel a keyboard preview.
+    fn move_threshold_px(&self) -> i32 {
+        if self.freezes_pointer() {
+            KEYBOARD_POINTER_MOVE_TOLERANCE_PX
+        } else {
+            MOUSE_MOVE_PX
+        }
+    }
+
+    /// Decide the freeze from the preview's on-screen box. A box only counts
+    /// once it survives a second observation, because a preview that is being
+    /// replaced can still report the outgoing window. `None` keeps waiting until
+    /// the watch expires, so a preview that never appears cannot freeze the
+    /// pointer forever.
+    fn evaluate_box(&mut self, cursor: POINT, preview_box: Option<(i32, i32, i32, i32)>) {
+        let Some(watch_until) = self.box_watch_until else {
+            return;
+        };
+
+        let Some(box_rect) = preview_box else {
+            self.last_box = None;
+            if Instant::now() >= watch_until {
+                self.box_watch_until = None;
+            }
+            return;
+        };
+
+        if self.last_box != Some(box_rect) {
+            self.last_box = Some(box_rect);
+            return;
+        }
+
+        let (left, top, right, bottom) = box_rect;
+        self.box_watch_until = None;
+        self.last_box = None;
+        self.armed = cursor.x >= left && cursor.x < right && cursor.y >= top && cursor.y < bottom;
+    }
+}
+
 const FOLDER_INDEX_TTL_MS: u64 = 60000;
 const EXPLORER_FOLDERS_CACHE_TTL_MS: u64 = 250;
 const SHELL_VIEW_INDEX_TTL_MS: u64 = 5000;
@@ -119,6 +245,9 @@ const IDLE_FOLDER_PROBE_MS: u64 = 750;
 const DISPLAY_CHANGE_BACKOFF_MS: u64 = 1500;
 const KEYBOARD_FOCUS_INPUT_GRACE_MS: u64 = 500;
 const HOVER_RESOLVER_INPUT_GRACE_MS: u64 = 1500;
+const MOUSE_MOVE_PX: i32 = 5;
+const KEYBOARD_POINTER_MOVE_TOLERANCE_PX: i32 = 20;
+const KEYBOARD_PREVIEW_BOX_WATCH_MS: u64 = 2500;
 const VK_BACK_CODE: i32 = 0x08;
 const VK_CONTROL_CODE: i32 = 0x11;
 const VK_MENU_CODE: i32 = 0x12;
@@ -209,6 +338,16 @@ fn should_probe_hover_resolver(
 
 fn should_probe_stationary_hover(already_probed: bool) -> bool {
     !already_probed
+}
+
+/// The pointer probe only matters while a mouse preview can be under the
+/// pointer. Keyboard previews and a frozen pointer never trigger it.
+fn should_probe_preview_hover(
+    pointer_frozen: bool,
+    mouse_preview_active: bool,
+    suppress_until_cursor_leaves: bool,
+) -> bool {
+    !pointer_frozen && (mouse_preview_active || suppress_until_cursor_leaves)
 }
 
 fn is_jpeg_extension(ext: &str) -> bool {
@@ -3007,8 +3146,8 @@ pub fn run_explorer_hook() {
         unsafe { CoCreateInstance(&CUIAutomation, None, CLSCTX_ALL).ok() };
 
     let mut last_file: Option<PathBuf> = None;
-    let mut suppressed_hover_file: Option<PathBuf> = None;
-    let mut suppressed_hover_started_at: Option<Instant> = None;
+    let mut suppressed = SuppressedHover::default();
+    let mut pointer_pause = KeyboardPointerPause::default();
     let mut hover_start: Option<Instant> = None;
     let mut last_cursor_pos = POINT::default();
 
@@ -3082,8 +3221,8 @@ pub fn run_explorer_hook() {
                 last_file = None;
                 keyboard_file = None;
                 is_keyboard_hover = false;
-                suppressed_hover_file = None;
-                suppressed_hover_started_at = None;
+                suppressed.clear();
+                pointer_pause.clear();
                 stationary_search_miss_started_at = None;
                 hover_start = None;
                 video_hover_guard_until = None;
@@ -3112,8 +3251,8 @@ pub fn run_explorer_hook() {
             last_file = None;
             keyboard_file = None;
             is_keyboard_hover = false;
-            suppressed_hover_file = None;
-            suppressed_hover_started_at = None;
+            suppressed.clear();
+            pointer_pause.clear();
             stationary_search_miss_started_at = None;
             hover_start = None;
             video_hover_guard_until = None;
@@ -3168,8 +3307,8 @@ pub fn run_explorer_hook() {
             }
             keyboard_file = None;
             last_file = None;
-            suppressed_hover_file = None;
-            suppressed_hover_started_at = None;
+            suppressed.clear();
+            pointer_pause.clear();
             stationary_search_miss_started_at = None;
             hover_start = None;
             last_focused_name = None;
@@ -3183,8 +3322,8 @@ pub fn run_explorer_hook() {
             if last_file.is_some() || keyboard_file.is_some() {
                 hide_preview();
                 last_file = None;
-                suppressed_hover_file = None;
-                suppressed_hover_started_at = None;
+                suppressed.clear();
+                pointer_pause.clear();
                 stationary_search_miss_started_at = None;
                 hover_start = None;
             }
@@ -3234,6 +3373,7 @@ pub fn run_explorer_hook() {
                     last_focused_name = None;
                     is_keyboard_hover = false;
                     video_hover_guard_until = None;
+                    pointer_pause.clear();
                 }
                 std::thread::sleep(Duration::from_millis(sleep_ms));
                 continue;
@@ -3251,6 +3391,7 @@ pub fn run_explorer_hook() {
                         last_focused_name = None;
                         is_keyboard_hover = false;
                         video_hover_guard_until = None;
+                        pointer_pause.clear();
                     }
                     std::thread::sleep(Duration::from_millis(sleep_ms));
                     continue;
@@ -3274,8 +3415,9 @@ pub fn run_explorer_hook() {
             }
 
             let loop_now = Instant::now();
-            let moved = (cursor_pos.x - last_cursor_pos.x).abs() > 5
-                || (cursor_pos.y - last_cursor_pos.y).abs() > 5;
+            let move_threshold = pointer_pause.move_threshold_px();
+            let moved = (cursor_pos.x - last_cursor_pos.x).abs() > move_threshold
+                || (cursor_pos.y - last_cursor_pos.y).abs() > move_threshold;
             let explorer_navigation_shortcut_input = is_explorer_navigation_shortcut_detected();
             let keyboard_navigation_input =
                 explorer_navigation_shortcut_input || is_keyboard_navigation_input_detected();
@@ -3295,8 +3437,8 @@ pub fn run_explorer_hook() {
                 last_file = None;
                 keyboard_file = None;
                 is_keyboard_hover = false;
-                suppressed_hover_file = None;
-                suppressed_hover_started_at = None;
+                suppressed.clear();
+                pointer_pause.clear();
                 stationary_search_miss_started_at = None;
                 hover_start = None;
                 last_focused_name = None;
@@ -3310,13 +3452,31 @@ pub fn run_explorer_hook() {
                 continue;
             }
 
+            // A keyboard preview is placed next to the focused item, which can put
+            // it right over the parked cursor. Decide from the preview's own box
+            // whether the pointer is under it, and freeze every pointer-driven
+            // trigger until the mouse is moved on purpose.
+            if pointer_pause.is_watching() {
+                pointer_pause.evaluate_box(cursor_pos, preview_screen_rect());
+            }
+
             // Close as soon as the cursor touches the preview window. Keep
             // suppressing preview until the cursor leaves so a delayed spinner
             // or background load result cannot resurrect a stuck preview under
-            // the pointer.
-            let over_image_preview = is_cursor_over_image_preview();
-            let over_video_preview = is_cursor_over_video_preview();
-            let over_any_preview = over_image_preview || over_video_preview;
+            // the pointer. Keyboard previews own the screen: they may cover the
+            // parked cursor and are never dismissed by it.
+            let preview_hover = if should_probe_preview_hover(
+                is_keyboard_hover || pointer_pause.freezes_pointer(),
+                last_file.is_some(),
+                suppress_preview_until_cursor_leaves_preview,
+            ) {
+                cursor_preview_hover()
+            } else {
+                PreviewCursorHover::NONE
+            };
+            let over_image_preview = preview_hover.image;
+            let over_video_preview = preview_hover.video;
+            let over_any_preview = preview_hover.any();
             let guard_active = video_hover_guard_until
                 .map(|until| Instant::now() < until)
                 .unwrap_or(false);
@@ -3327,9 +3487,8 @@ pub fn run_explorer_hook() {
                 || (suppress_preview_until_cursor_leaves_preview && over_any_preview)
             {
                 suppress_preview_until_cursor_leaves_preview = true;
-                if last_file.is_some() {
-                    suppressed_hover_file = last_file.clone();
-                    suppressed_hover_started_at = Some(Instant::now());
+                if let Some(file) = last_file.clone() {
+                    suppressed.suppress(file, false);
                 }
                 hide_preview();
                 last_file = None;
@@ -3352,11 +3511,15 @@ pub fn run_explorer_hook() {
 
             // Detect folder/navigation changes and suspend preview until user input.
             // Probe at active-poll cadence only while a preview is visible; idle
-            // polling keeps the slower cadence to avoid extra COM work.
+            // polling keeps the slower cadence to avoid extra COM work. While the
+            // keyboard drives, this cursor-based probe stays off: it resolves the
+            // window under the pointer, which is the keyboard preview itself.
             let preview_active =
                 last_file.is_some() || keyboard_file.is_some() || is_keyboard_hover;
             if last_folder_probe.elapsed()
                 >= Duration::from_millis(folder_probe_interval_ms(preview_active))
+                && !is_keyboard_hover
+                && !pointer_pause.freezes_pointer()
                 && should_probe_hover_resolver(
                     preview_active,
                     moved,
@@ -3387,8 +3550,8 @@ pub fn run_explorer_hook() {
                             hide_preview();
                         }
                         last_file = None;
-                        suppressed_hover_file = None;
-                        suppressed_hover_started_at = None;
+                        suppressed.clear();
+                        pointer_pause.clear();
                         stationary_search_miss_started_at = None;
                         keyboard_file = None;
                         is_keyboard_hover = false;
@@ -3463,9 +3626,17 @@ pub fn run_explorer_hook() {
                 last_cursor_pos = cursor_pos;
                 stationary_search_miss_started_at = None;
                 stationary_hover_probe_done = false;
+                // A real move hands control back to the mouse.
+                pointer_pause.clear();
 
-                // Mouse movement always takes priority - dismiss keyboard hover
+                // Mouse movement always takes priority - dismiss keyboard hover.
+                // The keyboard preview may have been covering the cursor, so the
+                // file it showed stays latched until the cursor reaches another
+                // file, or the user navigates with the keyboard again.
                 if is_keyboard_hover {
+                    if let Some(file) = keyboard_file.clone() {
+                        suppressed.suppress(file, true);
+                    }
                     hide_preview();
                     keyboard_file = None;
                     is_keyboard_hover = false;
@@ -3476,18 +3647,17 @@ pub fn run_explorer_hook() {
                 last_focused_name = None;
                 allow_keyboard_preview_on_first_observation = false;
 
-                if let Some(suppressed_file) = suppressed_hover_file.as_ref() {
+                if let Some(suppressed_file) = suppressed.file.clone() {
                     if let Some(current_file) = get_file_under_cursor_checked(
                         uia.as_ref(),
                         &hover_resolver_hints,
                         &mut slow_explorer_probe_count,
                     ) {
-                        if same_path(suppressed_file, &current_file) {
+                        if same_path(&suppressed_file, &current_file) {
                             hover_start = Some(Instant::now());
                             continue;
                         }
-                        suppressed_hover_file = None;
-                        suppressed_hover_started_at = None;
+                        suppressed.clear();
                         stationary_search_miss_started_at = None;
                     }
                 }
@@ -3508,12 +3678,10 @@ pub fn run_explorer_hook() {
                             hover_start = Some(Instant::now());
                             continue;
                         }
-                        suppressed_hover_file = None;
-                        suppressed_hover_started_at = None;
+                        suppressed.clear();
                         stationary_search_miss_started_at = None;
-                    } else {
-                        suppressed_hover_file = last_file.clone();
-                        suppressed_hover_started_at = Some(Instant::now());
+                    } else if let Some(file) = last_file.clone() {
+                        suppressed.suppress(file, false);
                     }
 
                     hide_preview();
@@ -3550,8 +3718,7 @@ pub fn run_explorer_hook() {
                             if last_file.is_some() && !is_keyboard_hover {
                                 hide_preview();
                                 last_file = None;
-                                suppressed_hover_file = None;
-                                suppressed_hover_started_at = None;
+                                suppressed.clear();
                                 hover_start = None;
                             }
 
@@ -3564,6 +3731,8 @@ pub fn run_explorer_hook() {
                                     }
                                     keyboard_file = Some(path.clone());
                                     is_keyboard_hover = true;
+                                    suppress_preview_until_cursor_leaves_preview = false;
+                                    pointer_pause.watch_for_box();
                                     video_hover_guard_until = if is_video_file(&path) {
                                         Some(
                                             Instant::now()
@@ -3605,8 +3774,7 @@ pub fn run_explorer_hook() {
                         if last_file.is_some() && !is_keyboard_hover {
                             hide_preview();
                             last_file = None;
-                            suppressed_hover_file = None;
-                            suppressed_hover_started_at = None;
+                            suppressed.clear();
                             hover_start = None;
                         }
 
@@ -3619,6 +3787,8 @@ pub fn run_explorer_hook() {
                                 }
                                 keyboard_file = Some(path.clone());
                                 is_keyboard_hover = true;
+                                suppress_preview_until_cursor_leaves_preview = false;
+                                pointer_pause.watch_for_box();
                                 video_hover_guard_until = if is_video_file(&path) {
                                     Some(
                                         Instant::now()
@@ -3649,8 +3819,9 @@ pub fn run_explorer_hook() {
                 }
             }
 
-            // If keyboard hover is active, skip mouse hover delay logic
-            if is_keyboard_hover {
+            // If keyboard hover is active, or the pointer is frozen under a
+            // keyboard preview, skip mouse hover delay logic entirely.
+            if is_keyboard_hover || pointer_pause.freezes_pointer() {
                 continue;
             }
 
@@ -3662,12 +3833,9 @@ pub fn run_explorer_hook() {
                             if miss_started.elapsed()
                                 >= Duration::from_millis(STATIONARY_SEARCH_MISS_HIDE_MS)
                             {
-                                if last_file.is_some() {
-                                    suppressed_hover_file = last_file.clone();
-                                    suppressed_hover_started_at = Some(Instant::now());
-                                } else {
-                                    suppressed_hover_file = None;
-                                    suppressed_hover_started_at = None;
+                                match last_file.clone() {
+                                    Some(file) => suppressed.suppress(file, false),
+                                    None => suppressed.clear(),
                                 }
                                 hide_preview();
                                 last_file = None;
@@ -3694,23 +3862,13 @@ pub fn run_explorer_hook() {
                             .map(|last| same_path(last, &file_path))
                             .unwrap_or(false)
                         {
-                            if suppressed_hover_file
-                                .as_ref()
-                                .map(|suppressed| same_path(suppressed, &file_path))
-                                .unwrap_or(false)
-                            {
+                            if suppressed.matches(&file_path) {
                                 let required_delay = hover_delay_ms.max(same_file_rehover_delay_ms);
-                                if suppressed_hover_started_at
-                                    .map(|started| {
-                                        started.elapsed() < Duration::from_millis(required_delay)
-                                    })
-                                    .unwrap_or(true)
-                                {
+                                if !suppressed.rehover_allowed(required_delay) {
                                     continue;
                                 }
                             }
-                            suppressed_hover_file = None;
-                            suppressed_hover_started_at = None;
+                            suppressed.clear();
                             stationary_search_miss_started_at = None;
                             last_file = Some(file_path.clone());
                             video_hover_guard_until = if is_video_file(&file_path) {
@@ -3732,12 +3890,9 @@ pub fn run_explorer_hook() {
                             if miss_started.elapsed()
                                 >= Duration::from_millis(STATIONARY_SEARCH_MISS_HIDE_MS)
                             {
-                                if last_file.is_some() {
-                                    suppressed_hover_file = last_file.clone();
-                                    suppressed_hover_started_at = Some(Instant::now());
-                                } else {
-                                    suppressed_hover_file = None;
-                                    suppressed_hover_started_at = None;
+                                match last_file.clone() {
+                                    Some(file) => suppressed.suppress(file, false),
+                                    None => suppressed.clear(),
                                 }
                                 hide_preview();
                                 last_file = None;
@@ -3846,6 +4001,142 @@ mod tests {
     fn stationary_hover_probe_runs_once_until_reset() {
         assert!(should_probe_stationary_hover(false));
         assert!(!should_probe_stationary_hover(true));
+    }
+
+    #[test]
+    fn pointer_probe_is_skipped_while_the_pointer_is_frozen() {
+        assert!(!should_probe_preview_hover(false, false, false));
+        assert!(!should_probe_preview_hover(true, true, false));
+        assert!(!should_probe_preview_hover(true, false, true));
+        assert!(should_probe_preview_hover(false, true, false));
+        assert!(should_probe_preview_hover(false, false, true));
+    }
+
+    #[test]
+    fn keyboard_pointer_pause_arms_when_the_preview_box_covers_the_cursor() {
+        let mut pause = KeyboardPointerPause::default();
+        assert!(!pause.freezes_pointer());
+        assert_eq!(pause.move_threshold_px(), MOUSE_MOVE_PX);
+
+        pause.watch_for_box();
+        assert!(pause.is_watching());
+        assert!(pause.freezes_pointer());
+        assert_eq!(pause.move_threshold_px(), KEYBOARD_POINTER_MOVE_TOLERANCE_PX);
+
+        let cursor = POINT { x: 150, y: 150 };
+        let box_rect = Some((100, 100, 200, 200));
+        pause.evaluate_box(cursor, box_rect);
+        assert!(pause.is_watching());
+
+        pause.evaluate_box(cursor, box_rect);
+        assert!(pause.armed);
+        assert!(!pause.is_watching());
+        assert!(pause.freezes_pointer());
+        assert!(KEYBOARD_POINTER_MOVE_TOLERANCE_PX > MOUSE_MOVE_PX);
+    }
+
+    #[test]
+    fn keyboard_pointer_pause_stays_clear_when_the_box_misses_the_cursor() {
+        let mut pause = KeyboardPointerPause::default();
+        let cursor = POINT { x: 500, y: 500 };
+        let box_rect = Some((100, 100, 200, 200));
+
+        pause.watch_for_box();
+        pause.evaluate_box(cursor, box_rect);
+        pause.evaluate_box(cursor, box_rect);
+
+        assert!(!pause.armed);
+        assert!(!pause.freezes_pointer());
+        assert_eq!(pause.move_threshold_px(), MOUSE_MOVE_PX);
+    }
+
+    #[test]
+    fn keyboard_pointer_pause_ignores_a_box_that_is_still_being_replaced() {
+        let mut pause = KeyboardPointerPause::default();
+        let cursor = POINT { x: 150, y: 150 };
+        let first_box = Some((100, 100, 200, 200));
+        let replacing_box = Some((300, 300, 400, 400));
+
+        pause.watch_for_box();
+        pause.evaluate_box(cursor, first_box);
+        pause.evaluate_box(cursor, replacing_box);
+        assert!(!pause.armed);
+        assert!(pause.is_watching());
+
+        // The replacement box is the one that survived, and it misses the cursor.
+        pause.evaluate_box(cursor, replacing_box);
+        assert!(!pause.armed);
+        assert!(!pause.is_watching());
+    }
+
+    #[test]
+    fn keyboard_pointer_pause_keeps_watching_until_the_box_is_known() {
+        let mut pause = KeyboardPointerPause::default();
+        let cursor = POINT { x: 150, y: 150 };
+
+        pause.watch_for_box();
+        pause.evaluate_box(cursor, None);
+        assert!(pause.is_watching());
+
+        let box_rect = Some((100, 100, 200, 200));
+        pause.evaluate_box(cursor, box_rect);
+        pause.evaluate_box(cursor, box_rect);
+        assert!(pause.armed);
+        assert!(!pause.is_watching());
+    }
+
+    #[test]
+    fn keyboard_pointer_pause_resets_on_a_new_spawn_and_on_clear() {
+        let mut pause = KeyboardPointerPause::default();
+        let cursor = POINT { x: 150, y: 150 };
+        let box_rect = Some((100, 100, 200, 200));
+
+        pause.watch_for_box();
+        pause.evaluate_box(cursor, box_rect);
+        pause.evaluate_box(cursor, box_rect);
+        assert!(pause.armed);
+
+        pause.watch_for_box();
+        assert!(!pause.armed);
+        assert!(pause.is_watching());
+
+        pause.clear();
+        assert!(!pause.freezes_pointer());
+        assert!(!pause.is_watching());
+    }
+
+    #[test]
+    fn suppressed_hover_tracks_one_file_and_clears() {
+        let mut suppressed = SuppressedHover::default();
+        assert!(!suppressed.matches(&PathBuf::from("C:\\a.png")));
+
+        suppressed.suppress(PathBuf::from("C:\\a.png"), false);
+        assert!(suppressed.matches(&PathBuf::from("C:\\a.png")));
+        assert!(!suppressed.matches(&PathBuf::from("C:\\b.png")));
+
+        suppressed.clear();
+        assert!(!suppressed.matches(&PathBuf::from("C:\\a.png")));
+    }
+
+    #[test]
+    fn regular_suppression_respects_the_same_file_rehover_delay() {
+        let mut suppressed = SuppressedHover::default();
+        suppressed.suppress(PathBuf::from("C:\\a.png"), false);
+
+        assert!(!suppressed.rehover_allowed(750));
+        assert!(suppressed.rehover_allowed(0));
+    }
+
+    #[test]
+    fn sticky_suppression_keeps_the_same_file_off_the_mouse_path() {
+        let mut suppressed = SuppressedHover::default();
+        suppressed.suppress(PathBuf::from("C:\\a.png"), true);
+
+        assert!(!suppressed.rehover_allowed(0));
+        assert!(!suppressed.rehover_allowed(750));
+
+        suppressed.clear();
+        assert!(suppressed.rehover_allowed(0));
     }
 
     #[test]
