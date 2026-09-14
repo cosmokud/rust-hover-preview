@@ -6,6 +6,7 @@ mod preview_window;
 mod single_instance;
 mod startup;
 mod tray;
+mod wheel_input;
 
 use once_cell::sync::Lazy;
 use std::fs;
@@ -74,15 +75,21 @@ fn main() {
         explorer_hook::run_explorer_hook();
     });
 
+    // Watch system-wide wheel input so scrolling Explorer refreshes the preview
+    // of the item that lands under the parked cursor.
+    let wheel_handle = wheel_input::spawn_wheel_watcher();
+
     // Run the system tray (this blocks until exit)
     tray::run_tray();
 
     // Signal other threads to stop
     RUNNING.store(false, Ordering::SeqCst);
+    wheel_input::request_stop();
 
     // Wait for threads to finish (with timeout)
     let _ = preview_handle.join();
     let _ = hook_handle.join();
+    let _ = wheel_handle.join();
     let _ = config_watch_handle.join();
 
     // Cleanup COM
