@@ -3482,19 +3482,40 @@ pub fn run_explorer_hook() {
                 explorer_navigation_shortcut_input || is_keyboard_navigation_input_detected();
             let mouse_navigation_input = is_mouse_navigation_button_detected();
 
-            // A wheel tick only counts while the pointer is over Explorer: the
-            // wheel must have moved the list under the cursor, not a menu or
-            // another window that happens to sit above it. The counter is always
-            // consumed so a tick seen over something else cannot be replayed.
+            // A wheel tick only counts while the wheel is driving Explorer: the
+            // pointer is over it, or over a keyboard preview that covers the
+            // pointer while Explorer still receives the wheel. The counter is
+            // always consumed so a tick seen over something else cannot be
+            // replayed.
             let wheel_ticks = wheel_input::wheel_tick_count();
             let wheel_tick = wheel_ticks != consumed_wheel_ticks;
             if wheel_tick {
                 consumed_wheel_ticks = wheel_ticks;
             }
-            let wheel_scroll = wheel_tick && is_cursor_over_explorer_full();
+            let keyboard_owns_pointer = is_keyboard_hover || pointer_pause.freezes_pointer();
+            let wheel_scroll = wheel_tick
+                && (is_cursor_over_explorer_full()
+                    || (keyboard_owns_pointer && cursor_preview_hover().any()));
             if wheel_scroll {
                 last_wheel_tick_at = Some(loop_now);
                 scroll_probe.arm();
+
+                if keyboard_owns_pointer {
+                    // The wheel is the mouse taking over from the keyboard: close
+                    // the keyboard preview, release the pointer, and end the
+                    // recent-keyboard-input window so the keyboard cannot
+                    // re-establish its preview while the wheel is driving. The file
+                    // the keyboard showed is not latched, so the mouse may preview
+                    // it again where the cursor ends up.
+                    hide_preview();
+                    keyboard_file = None;
+                    is_keyboard_hover = false;
+                    video_hover_guard_until = None;
+                    pointer_pause.clear();
+                    last_focused_name = None;
+                    allow_keyboard_preview_on_first_observation = true;
+                    last_keyboard_navigation_input_at = None;
+                }
             }
             let scrolling = recent_elapsed_within(
                 last_wheel_tick_at.map(|at| at.elapsed()),
