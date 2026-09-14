@@ -329,70 +329,103 @@ pub fn refresh_preview() {
     }
 }
 
-/// Check if cursor is currently over the IMAGE preview window only
-pub fn is_cursor_over_image_preview() -> bool {
+/// Which preview surface the pointer is currently on.
+#[derive(Clone, Copy)]
+pub struct PreviewCursorHover {
+    pub image: bool,
+    pub video: bool,
+}
+
+impl PreviewCursorHover {
+    pub const NONE: Self = Self {
+        image: false,
+        video: false,
+    };
+
+    pub fn any(self) -> bool {
+        self.image || self.video
+    }
+}
+
+/// Single shared pointer probe for both preview kinds. Callers gate it on
+/// "a preview can be under the pointer"; the fast path keeps the cost at a few
+/// atomic reads whenever nothing is on screen.
+pub fn cursor_preview_hover() -> PreviewCursorHover {
+    let preview_hwnd = PREVIEW_HWND.load(Ordering::SeqCst);
+    let video_hwnd = VIDEO_HWND.load(Ordering::SeqCst);
+    let video_pid = VIDEO_PID.load(Ordering::SeqCst);
+
+    // PREVIEW_HWND is created once at startup and never cleared, so visibility
+    // is what tells us whether the layered window is actually on screen.
+    let preview_visible =
+        preview_hwnd != 0 && unsafe { IsWindowVisible(HWND(preview_hwnd as *mut _)).as_bool() };
+    if !preview_visible && video_hwnd == 0 && video_pid == 0 {
+        return PreviewCursorHover::NONE;
+    }
+
     unsafe {
-        use windows::Win32::Foundation::POINT;
         use windows::Win32::UI::WindowsAndMessaging::{GetCursorPos, WindowFromPoint};
 
         let mut cursor_pos = POINT::default();
         if GetCursorPos(&mut cursor_pos).is_err() {
-            return false;
+            return PreviewCursorHover::NONE;
         }
 
         let hwnd_under_cursor = WindowFromPoint(cursor_pos);
         if hwnd_under_cursor.is_invalid() {
-            return false;
+            return PreviewCursorHover::NONE;
         }
 
         let hwnd_ptr = hwnd_under_cursor.0 as isize;
+        let image = preview_hwnd != 0 && hwnd_ptr == preview_hwnd;
 
-        let preview_hwnd = PREVIEW_HWND.load(Ordering::SeqCst);
-        preview_hwnd != 0 && hwnd_ptr == preview_hwnd
+        // A hit on the stored HWND is enough; the process-ID fallback covers the
+        // race window where ffplay's window exists but VIDEO_HWND isn't stored yet.
+        let mut video = video_hwnd != 0 && hwnd_ptr == video_hwnd;
+        if !video && video_pid != 0 {
+            use windows::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId;
+
+            let mut window_pid: u32 = 0;
+            GetWindowThreadProcessId(hwnd_under_cursor, Some(&mut window_pid));
+            video = window_pid == video_pid;
+        }
+
+        PreviewCursorHover { image, video }
     }
 }
 
-/// Check if cursor is currently over the VIDEO preview window (ffplay)
-/// Also checks by process ID to handle the race condition where the ffplay
-/// window exists but VIDEO_HWND hasn't been stored yet.
-pub fn is_cursor_over_video_preview() -> bool {
+/// Screen-space box of the preview surface that is on screen right now, if any.
+/// The Explorer hook uses it to decide whether a keyboard preview was placed
+/// over the parked pointer, so a pointer sitting under the preview cannot drive
+/// previews or dismiss them.
+pub fn preview_screen_rect() -> Option<(i32, i32, i32, i32)> {
     unsafe {
-        use windows::Win32::Foundation::POINT;
-        use windows::Win32::UI::WindowsAndMessaging::{
-            GetCursorPos, GetWindowThreadProcessId, WindowFromPoint,
-        };
+        let candidates = [
+            PREVIEW_HWND.load(Ordering::SeqCst),
+            VIDEO_HWND.load(Ordering::SeqCst),
+        ];
 
-        let mut cursor_pos = POINT::default();
-        if GetCursorPos(&mut cursor_pos).is_err() {
-            return false;
-        }
+        for hwnd_value in candidates {
+            if hwnd_value == 0 {
+                continue;
+            }
 
-        let hwnd_under_cursor = WindowFromPoint(cursor_pos);
-        if hwnd_under_cursor.is_invalid() {
-            return false;
-        }
+            let hwnd = HWND(hwnd_value as *mut _);
+            if !IsWindowVisible(hwnd).as_bool() {
+                continue;
+            }
 
-        let hwnd_ptr = hwnd_under_cursor.0 as isize;
-
-        // Check by stored HWND
-        let video_hwnd = VIDEO_HWND.load(Ordering::SeqCst);
-        if video_hwnd != 0 && hwnd_ptr == video_hwnd {
-            return true;
-        }
-
-        // Also check by process ID — covers the race window where ffplay's
-        // window exists but VIDEO_HWND hasn't been discovered yet
-        let video_pid = VIDEO_PID.load(Ordering::SeqCst);
-        if video_pid != 0 {
-            let mut window_pid: u32 = 0;
-            GetWindowThreadProcessId(hwnd_under_cursor, Some(&mut window_pid));
-            if window_pid == video_pid {
-                return true;
+            let mut rect = RECT::default();
+            if GetWindowRect(hwnd, &mut rect).is_ok()
+                && rect.right > rect.left
+                && rect.bottom > rect.top
+            {
+                return Some((rect.left, rect.top, rect.right, rect.bottom));
             }
         }
-
-        false
     }
+
+    None
 }
 
 fn is_video_file(path: &PathBuf) -> bool {

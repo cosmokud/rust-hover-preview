@@ -37,6 +37,7 @@ The app runs as a single instance per user session. `main` claims a session-loca
 2. Normalize the resolved path and validate the file extension.
 3. Send `Show` or `Hide` messages to the preview thread via channel.
 4. Cache folder and Shell view data to reduce repeated COM work.
+5. Keep keyboard and mouse precedence explicit: an arrow-key preview owns the screen and is never dismissed by the parked pointer, while a mouse preview is still dismissed the moment the cursor touches it. Each keyboard spawn measures the preview's own on-screen box (`preview_screen_rect`) and, when that box covers the cursor, freezes the pointer-driven triggers — `should_probe_preview_hover`, the hover resolver/folder probe, and mouse hover previews — until the cursor is moved more than the pointer tolerance (20 px), so jitter cannot end a keyboard preview. When the mouse does take over, the file that was shown stays latched (sticky `SuppressedHover`) until the cursor resolves a different file or the keyboard is used again.
 
 ## DPI Awareness
 
@@ -49,6 +50,8 @@ The preview is bounded to the display nearest the hovered cursor or focused item
 Each update repositions the window before installing the new frame or spinner. Crossing between displays of different scale raises `WM_DPICHANGED`, which resets the preview, so installing the content first would discard it and leave the previous display's image stranded on screen. For the same reason, the layered surface is painted before the window is revealed.
 
 Preview size is derived from the media's native dimensions and the `preview_scale` setting, which is either a percentage of the native size or `fit` for the largest size the display area allows. The requested scale is always capped by the free space on the chosen side or quadrant, so a preview can never be clipped by the display edge — a large image at a small scale shrinks to fit, and a small image at 400% or fit-to-screen is reduced to whatever the display can hold. The same scaling is applied to the decode request, so image, GIF/WebP, and video previews all land at the computed size.
+
+Keyboard previews are placed next to the focused item, which can put them over a parked pointer. That is allowed: while a keyboard preview is up it stays topmost and the pointer is not treated as hovering it, so it cannot be cancelled or made to blink by a cursor that happens to sit underneath. The hook confirms this from the preview's own box (`preview_screen_rect`, taken from the layered window or the `ffplay` window once visible) rather than from a cursor position test, and holds the pointer off until the mouse is moved on purpose.
 
 ## Configuration
 

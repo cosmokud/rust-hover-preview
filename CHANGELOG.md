@@ -11,6 +11,13 @@
 
 - Bumped version to 0.1.14-rc.7 in Cargo.toml and Cargo.lock
 
+### Fixed
+
+- Keyboard previews now take priority over the pointer. A preview opened with the arrow keys is no longer dismissed when the mouse cursor happens to sit where the preview appears: it stays on top of the parked cursor instead of blinking away and reappearing on every navigation key.
+- Every keyboard preview now measures its own on-screen box once it appears, and if that box covers the mouse cursor the pointer-driven triggers are frozen until the cursor is moved on purpose: the hover resolver, the folder probe, the cursor-over-preview check, and mouse hover previews all stay off while the keyboard owns the screen. Cursor jitter below 20 px no longer counts as movement, so a parked or lightly nudged mouse cannot cancel a keyboard preview or its temporary pause.
+- The cursor-over-preview check no longer runs on every poll. It is skipped while a keyboard preview is on screen or the pointer is frozen, and outside those states it is a single shared check instead of two per tick that returns immediately without touching the cursor when no preview is on screen.
+- After the mouse takes over from a keyboard preview, nothing is previewed until the keyboard is used again or the mouse hovers a different file, so moving the mouse off a keyboard preview no longer re-previews the file that was already shown.
+
 ## [0.1.14-rc.6] - 2026-09-14
 
 ### Added
