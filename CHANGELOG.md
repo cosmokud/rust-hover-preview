@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.1.14-rc.6] - 2026-09-14
+
+### Added
+
+- Added a `Preview Scaling` tray submenu with `Fit to Screen`, `400%`, `300%`, `200%`, `150%`, `100% (Default)`, `50%`, and `25%` options, persisted through the new `preview_scale` config key.
+- `preview_scale` also accepts hand-edited values in `config.ini`: `fit` (or `fit to screen`) plus any percentage from 1 to 1000 written as `200`, `200%`, or `75`. `0` resets to the 100% default.
+
+### Changed
+
+- Preview sizing is now derived from the requested scale instead of always rendering at the media's native resolution.
+- Every requested scale is capped by the space available beside the cursor or focused item, so a preview that would cross the screen edge is scaled down to fit instead of being clipped — in both `Follow Cursor` and `Best Position` modes, and for mouse and keyboard previews.
+- `Fit to Screen` scales the preview as large as the display area allows, including enlarging images smaller than the screen.
+- Enlarged GIF and animated WebP frames now use a smooth filter instead of nearest-neighbor, avoiding blocky upscaled previews.
+- Bumped version to 0.1.14-rc.6 in Cargo.toml and Cargo.lock
+
 ## [0.1.14-rc.5] - 2026-09-14
 
 ### Changed

@@ -1,4 +1,7 @@
-use crate::config::{sanitize_webp_playback_fps, TransparentBackground, DEFAULT_WEBP_PLAYBACK_FPS};
+use crate::config::{
+    sanitize_webp_playback_fps, PreviewScale, TransparentBackground, DEFAULT_PREVIEW_SCALE_PERCENT,
+    DEFAULT_WEBP_PLAYBACK_FPS,
+};
 use crate::{CONFIG, RUNNING};
 use gif::DecodeOptions;
 use image::GenericImageView;
@@ -477,6 +480,13 @@ fn current_webp_playback_fps() -> u32 {
         .unwrap_or(DEFAULT_WEBP_PLAYBACK_FPS)
 }
 
+fn current_preview_scale() -> PreviewScale {
+    CONFIG
+        .lock()
+        .map(|cfg| cfg.preview_scale)
+        .unwrap_or(PreviewScale::Percent(DEFAULT_PREVIEW_SCALE_PERCENT))
+}
+
 fn effective_frame_delay_ms(media_type: &MediaType, source_delay_ms: u32) -> u32 {
     match media_type {
         MediaType::AnimatedWebP => {
@@ -550,25 +560,50 @@ fn compose_preview_pixels(
     out
 }
 
-/// Scale image dimensions to fit within max bounds while maintaining aspect ratio
+/// Scale media dimensions to the requested preview scale while never exceeding
+/// `max_width`/`max_height`, so the preview always stays fully inside the screen.
 fn scale_dimensions(
     orig_width: u32,
     orig_height: u32,
     max_width: u32,
     max_height: u32,
+    preview_scale: PreviewScale,
 ) -> (u32, u32) {
-    if orig_width <= max_width && orig_height <= max_height {
-        return (orig_width, orig_height);
-    }
+    let fit_scale =
+        (max_width as f32 / orig_width as f32).min(max_height as f32 / orig_height as f32);
 
-    let scale_x = max_width as f32 / orig_width as f32;
-    let scale_y = max_height as f32 / orig_height as f32;
-    let scale = scale_x.min(scale_y);
+    // A requested percentage is honored when it fits; anything larger than the
+    // available area falls back to the fit scale so nothing is ever clipped.
+    let scale = match preview_scale.target_scale() {
+        Some(target_scale) => target_scale.min(fit_scale),
+        None => fit_scale,
+    };
 
-    let new_width = (orig_width as f32 * scale).max(1.0) as u32;
-    let new_height = (orig_height as f32 * scale).max(1.0) as u32;
+    // Rounded so a fit scale lands on the exact available size, then clamped so
+    // float error can never push the preview past the screen edge.
+    let new_width = (orig_width as f32 * scale)
+        .round()
+        .clamp(1.0, max_width.max(1) as f32) as u32;
+    let new_height = (orig_height as f32 * scale)
+        .round()
+        .clamp(1.0, max_height.max(1) as f32) as u32;
 
     (new_width, new_height)
+}
+
+/// Animation frames stream continuously, so shrinking keeps the cheap nearest
+/// filter while enlarging uses a smoother filter to avoid blocky previews.
+fn frame_resize_filter(
+    orig_width: u32,
+    orig_height: u32,
+    target_width: u32,
+    target_height: u32,
+) -> image::imageops::FilterType {
+    if target_width > orig_width || target_height > orig_height {
+        image::imageops::FilterType::Triangle
+    } else {
+        image::imageops::FilterType::Nearest
+    }
 }
 
 /// Decode a single GIF frame from canvas to an ImageFrame
@@ -586,7 +621,7 @@ fn decode_gif_frame_to_image(
             &img,
             target_width,
             target_height,
-            image::imageops::FilterType::Nearest,
+            frame_resize_filter(gif_width, gif_height, target_width, target_height),
         );
         resized.into_raw()
     } else {
@@ -635,6 +670,7 @@ fn load_animated_gif(
     path: &PathBuf,
     max_width: u32,
     max_height: u32,
+    preview_scale: PreviewScale,
     cancel: Arc<AtomicBool>,
 ) -> Option<MediaData> {
     if cancel.load(Ordering::Acquire) {
@@ -648,7 +684,7 @@ fn load_animated_gif(
 
     let (gif_width, gif_height) = (decoder.width() as u32, decoder.height() as u32);
     let (target_width, target_height) =
-        scale_dimensions(gif_width, gif_height, max_width, max_height);
+        scale_dimensions(gif_width, gif_height, max_width, max_height, preview_scale);
 
     let mut canvas = vec![0u8; (gif_width * gif_height * 4) as usize];
     let mut initial_frames = Vec::new();
@@ -818,7 +854,7 @@ fn decode_webp_animation_frame_to_image(
             &img,
             target_width,
             target_height,
-            image::imageops::FilterType::Nearest,
+            frame_resize_filter(orig_width, orig_height, target_width, target_height),
         );
         rgba_to_bgra(&resized.into_raw())
     };
@@ -835,6 +871,7 @@ fn load_animated_webp(
     path: &PathBuf,
     max_width: u32,
     max_height: u32,
+    preview_scale: PreviewScale,
     cancel: Arc<AtomicBool>,
 ) -> Option<MediaData> {
     if cancel.load(Ordering::Acquire) {
@@ -854,7 +891,7 @@ fn load_animated_webp(
     }
 
     let (target_width, target_height) =
-        scale_dimensions(orig_width, orig_height, max_width, max_height);
+        scale_dimensions(orig_width, orig_height, max_width, max_height, preview_scale);
     if target_width == 0 || target_height == 0 {
         return None;
     }
@@ -998,7 +1035,12 @@ fn load_animated_webp(
 }
 
 /// Load a static image (JPG, PNG, BMP, static WebP, etc.)
-fn load_static_image(path: &PathBuf, max_width: u32, max_height: u32) -> Option<MediaData> {
+fn load_static_image(
+    path: &PathBuf,
+    max_width: u32,
+    max_height: u32,
+    preview_scale: PreviewScale,
+) -> Option<MediaData> {
     let img = if is_confirm_file_type_enabled() {
         decode_image_with_header_check(path)?
     } else {
@@ -1006,7 +1048,7 @@ fn load_static_image(path: &PathBuf, max_width: u32, max_height: u32) -> Option<
     };
     let (orig_width, orig_height) = img.dimensions();
     let (target_width, target_height) =
-        scale_dimensions(orig_width, orig_height, max_width, max_height);
+        scale_dimensions(orig_width, orig_height, max_width, max_height, preview_scale);
 
     let resized = if target_width != orig_width || target_height != orig_height {
         img.resize_exact(
@@ -1042,14 +1084,24 @@ fn load_static_image(path: &PathBuf, max_width: u32, max_height: u32) -> Option<
 }
 
 /// Extract video thumbnail using ffmpeg and create frames for preview
-fn load_video_thumbnail(path: &PathBuf, max_width: u32, max_height: u32) -> Option<MediaData> {
+fn load_video_thumbnail(
+    path: &PathBuf,
+    max_width: u32,
+    max_height: u32,
+    preview_scale: PreviewScale,
+) -> Option<MediaData> {
     let geometry = get_video_geometry(path).unwrap_or(VideoGeometry {
         width: 1920,
         height: 1080,
         crop: None,
     });
-    let (target_width, target_height) =
-        scale_dimensions(geometry.width, geometry.height, max_width, max_height);
+    let (target_width, target_height) = scale_dimensions(
+        geometry.width,
+        geometry.height,
+        max_width,
+        max_height,
+        preview_scale,
+    );
 
     // Create a placeholder frame (dark gray) while video plays
     let placeholder_pixels = vec![40u8; (target_width * target_height * 4) as usize];
@@ -1640,6 +1692,7 @@ fn load_media(
     path: &PathBuf,
     max_width: u32,
     max_height: u32,
+    preview_scale: PreviewScale,
     cancel: Arc<AtomicBool>,
 ) -> Option<MediaData> {
     if cancel.load(Ordering::Acquire) {
@@ -1647,7 +1700,7 @@ fn load_media(
     }
 
     if is_video_file(path) {
-        return load_video_thumbnail(path, max_width, max_height);
+        return load_video_thumbnail(path, max_width, max_height, preview_scale);
     }
 
     let guessed_format = if is_confirm_file_type_enabled() {
@@ -1658,33 +1711,45 @@ fn load_media(
 
     if matches!(guessed_format, Some(image::ImageFormat::Gif)) || is_gif_file(path) {
         // Try animated GIF first
-        if let Some(media) = load_animated_gif(path, max_width, max_height, Arc::clone(&cancel)) {
+        if let Some(media) = load_animated_gif(
+            path,
+            max_width,
+            max_height,
+            preview_scale,
+            Arc::clone(&cancel),
+        ) {
             return Some(media);
         }
         if cancel.load(Ordering::Acquire) {
             return None;
         }
         // Fall back to static for single-frame GIFs
-        return load_static_image(path, max_width, max_height);
+        return load_static_image(path, max_width, max_height, preview_scale);
     }
 
     if matches!(guessed_format, Some(image::ImageFormat::WebP)) || is_webp_file(path) {
         // Try animated WebP first
-        if let Some(media) = load_animated_webp(path, max_width, max_height, Arc::clone(&cancel)) {
+        if let Some(media) = load_animated_webp(
+            path,
+            max_width,
+            max_height,
+            preview_scale,
+            Arc::clone(&cancel),
+        ) {
             return Some(media);
         }
         if cancel.load(Ordering::Acquire) {
             return None;
         }
         // Fall back to static for non-animated WebP
-        return load_static_image(path, max_width, max_height);
+        return load_static_image(path, max_width, max_height, preview_scale);
     }
 
     // Default to static image
     if cancel.load(Ordering::Acquire) {
         return None;
     }
-    load_static_image(path, max_width, max_height)
+    load_static_image(path, max_width, max_height, preview_scale)
 }
 
 /// Get original dimensions of media for positioning calculations
@@ -1881,6 +1946,7 @@ struct LoadRequest {
     path: PathBuf,
     max_width: u32,
     max_height: u32,
+    preview_scale: PreviewScale,
     cancel: Arc<AtomicBool>,
 }
 
@@ -1953,6 +2019,7 @@ fn spawn_load_worker(
                     &request.path,
                     request.max_width,
                     request.max_height,
+                    request.preview_scale,
                     Arc::clone(&request.cancel),
                 )
             }))
@@ -2216,10 +2283,12 @@ fn compute_mouse_layout(
     cursor_y: i32,
     orig_dims: (u32, u32),
     follow_cursor: bool,
+    preview_scale: PreviewScale,
     bounds: ScreenBounds,
 ) -> Option<PreviewLayout> {
     let offset = 20;
     let (orig_w, orig_h) = (orig_dims.0 as i32, orig_dims.1 as i32);
+    let desired_scale = preview_scale.target_scale().unwrap_or(f32::INFINITY);
 
     if follow_cursor {
         let quadrants = [
@@ -2258,7 +2327,7 @@ fn compute_mouse_layout(
             }
             let scale_x = avail_w as f32 / orig_w as f32;
             let scale_y = avail_h as f32 / orig_h as f32;
-            let scale = scale_x.min(scale_y).min(1.0);
+            let scale = scale_x.min(scale_y).min(desired_scale);
             if scale > best_scale {
                 best_scale = scale;
                 best_quadrant = i;
@@ -2274,7 +2343,7 @@ fn compute_mouse_layout(
         let max_height = avail_h.max(1) as u32;
 
         let (preview_w, preview_h) =
-            scale_dimensions(orig_dims.0, orig_dims.1, max_width, max_height);
+            scale_dimensions(orig_dims.0, orig_dims.1, max_width, max_height, preview_scale);
         let media_width = preview_w as i32;
         let media_height = preview_h as i32;
 
@@ -2308,11 +2377,11 @@ fn compute_mouse_layout(
 
         let left_scale_x = left_width as f32 / orig_w as f32;
         let left_scale_y = full_height as f32 / orig_h as f32;
-        let left_scale = left_scale_x.min(left_scale_y).min(1.0);
+        let left_scale = left_scale_x.min(left_scale_y).min(desired_scale);
 
         let right_scale_x = right_width as f32 / orig_w as f32;
         let right_scale_y = full_height as f32 / orig_h as f32;
-        let right_scale = right_scale_x.min(right_scale_y).min(1.0);
+        let right_scale = right_scale_x.min(right_scale_y).min(desired_scale);
 
         let (use_left, max_width, max_height) = if left_scale > right_scale && left_width > 0 {
             (true, left_width.max(1) as u32, full_height as u32)
@@ -2323,7 +2392,7 @@ fn compute_mouse_layout(
         };
 
         let (preview_w, preview_h) =
-            scale_dimensions(orig_dims.0, orig_dims.1, max_width, max_height);
+            scale_dimensions(orig_dims.0, orig_dims.1, max_width, max_height, preview_scale);
         let media_width = preview_w as i32;
         let media_height = preview_h as i32;
 
@@ -2352,16 +2421,16 @@ fn compute_mouse_layout(
 /// Compute preview layout for keyboard hover (relative to item bounding rect)
 /// Positions the preview so it doesn't block the selected file item
 fn compute_keyboard_layout(
-    item_left: i32,
-    item_top: i32,
-    item_right: i32,
-    item_bottom: i32,
+    item_rect: (i32, i32, i32, i32),
     orig_dims: (u32, u32),
     follow_cursor: bool,
+    preview_scale: PreviewScale,
     bounds: ScreenBounds,
 ) -> Option<PreviewLayout> {
+    let (item_left, item_top, item_right, item_bottom) = item_rect;
     let gap = 10;
     let (orig_w, orig_h) = (orig_dims.0 as i32, orig_dims.1 as i32);
+    let desired_scale = preview_scale.target_scale().unwrap_or(f32::INFINITY);
 
     if follow_cursor {
         // Quadrant-based positioning relative to item rect edges
@@ -2405,7 +2474,7 @@ fn compute_keyboard_layout(
             }
             let scale_x = avail_w as f32 / orig_w as f32;
             let scale_y = avail_h as f32 / orig_h as f32;
-            let scale = scale_x.min(scale_y).min(1.0);
+            let scale = scale_x.min(scale_y).min(desired_scale);
             if scale > best_scale {
                 best_scale = scale;
                 best_quadrant = i;
@@ -2421,7 +2490,7 @@ fn compute_keyboard_layout(
         let max_height = avail_h.max(1) as u32;
 
         let (preview_w, preview_h) =
-            scale_dimensions(orig_dims.0, orig_dims.1, max_width, max_height);
+            scale_dimensions(orig_dims.0, orig_dims.1, max_width, max_height, preview_scale);
         let media_width = preview_w as i32;
         let media_height = preview_h as i32;
 
@@ -2453,11 +2522,11 @@ fn compute_keyboard_layout(
 
         let left_scale_x = left_width as f32 / orig_w as f32;
         let left_scale_y = full_height as f32 / orig_h as f32;
-        let left_scale = left_scale_x.min(left_scale_y).min(1.0);
+        let left_scale = left_scale_x.min(left_scale_y).min(desired_scale);
 
         let right_scale_x = right_width as f32 / orig_w as f32;
         let right_scale_y = full_height as f32 / orig_h as f32;
-        let right_scale = right_scale_x.min(right_scale_y).min(1.0);
+        let right_scale = right_scale_x.min(right_scale_y).min(desired_scale);
 
         let (use_left, max_width, max_height) = if left_scale > right_scale && left_width > 0 {
             (true, left_width.max(1) as u32, full_height as u32)
@@ -2468,7 +2537,7 @@ fn compute_keyboard_layout(
         };
 
         let (preview_w, preview_h) =
-            scale_dimensions(orig_dims.0, orig_dims.1, max_width, max_height);
+            scale_dimensions(orig_dims.0, orig_dims.1, max_width, max_height, preview_scale);
         let media_width = preview_w as i32;
         let media_height = preview_h as i32;
 
@@ -2754,6 +2823,7 @@ pub fn run_preview_window() {
                 let mut show_layout: Option<PreviewLayout> = None;
                 let mut show_is_video: bool = false;
                 let mut show_requested = false;
+                let preview_scale = current_preview_scale();
 
                 match preview_msg {
                     PreviewMessage::Show(path, x, y) => {
@@ -2763,9 +2833,14 @@ pub fn run_preview_window() {
 
                         if let Some(orig_dims) = get_media_dimensions(&path) {
                             let is_video = is_video_file(&path);
-                            if let Some(layout) =
-                                compute_mouse_layout(x, y, orig_dims, follow_cursor, bounds)
-                            {
+                            if let Some(layout) = compute_mouse_layout(
+                                x,
+                                y,
+                                orig_dims,
+                                follow_cursor,
+                                preview_scale,
+                                bounds,
+                            ) {
                                 show_is_video = is_video;
                                 show_layout = Some(layout);
                                 show_path = Some(path);
@@ -2782,12 +2857,10 @@ pub fn run_preview_window() {
                         if let Some(orig_dims) = get_media_dimensions(&path) {
                             let is_video = is_video_file(&path);
                             if let Some(layout) = compute_keyboard_layout(
-                                il,
-                                it,
-                                ir,
-                                ib,
+                                (il, it, ir, ib),
                                 orig_dims,
                                 follow_cursor,
+                                preview_scale,
                                 bounds,
                             ) {
                                 show_is_video = is_video;
@@ -2845,7 +2918,7 @@ pub fn run_preview_window() {
 
                         let no_cancel = Arc::new(AtomicBool::new(false));
                         if let Some(media_data) =
-                            load_media(&path, max_width, max_height, no_cancel)
+                            load_media(&path, max_width, max_height, preview_scale, no_cancel)
                         {
                             // For video, hide our window and use ffplay
                             let _ = ShowWindow(hwnd, SW_HIDE);
@@ -2942,6 +3015,7 @@ pub fn run_preview_window() {
                                 path,
                                 max_width,
                                 max_height,
+                                preview_scale,
                                 cancel: Arc::clone(&load_cancel),
                             },
                         );
@@ -2999,8 +3073,15 @@ mod tests {
             bottom: 2160,
         };
 
-        let layout = compute_mouse_layout(-3300, 1000, (800, 600), true, bounds)
-            .expect("layout should fit on the left monitor");
+        let layout = compute_mouse_layout(
+            -3300,
+            1000,
+            (800, 600),
+            true,
+            PreviewScale::Percent(100),
+            bounds,
+        )
+        .expect("layout should fit on the left monitor");
 
         assert!(layout.pos_x >= bounds.left);
         assert!(layout.pos_x + layout.preview_w as i32 <= bounds.right);
@@ -3017,8 +3098,14 @@ mod tests {
             bottom: 2160,
         };
 
-        let layout = compute_keyboard_layout(-3200, 900, -3000, 1100, (800, 600), true, bounds)
-            .expect("layout should fit near the selected item");
+        let layout = compute_keyboard_layout(
+            (-3200, 900, -3000, 1100),
+            (800, 600),
+            true,
+            PreviewScale::Percent(100),
+            bounds,
+        )
+        .expect("layout should fit near the selected item");
 
         assert!(layout.pos_x >= bounds.left);
         assert!(layout.pos_x + layout.preview_w as i32 <= bounds.right);
@@ -3036,8 +3123,9 @@ mod tests {
             bottom: 1080,
         };
 
-        let layout = compute_mouse_layout(3800, 540, (800, 600), false, bounds)
-            .expect("layout should fit beside the cursor");
+        let layout =
+            compute_mouse_layout(3800, 540, (800, 600), false, PreviewScale::Percent(100), bounds)
+                .expect("layout should fit beside the cursor");
 
         assert!(layout.pos_x >= bounds.left);
         assert!(layout.pos_x + layout.preview_w as i32 <= bounds.right);
@@ -3054,12 +3142,195 @@ mod tests {
             bottom: 1080,
         };
 
-        let layout = compute_keyboard_layout(3800, 400, 3900, 600, (800, 600), false, bounds)
-            .expect("layout should fit beside the selected item");
+        let layout = compute_keyboard_layout(
+            (3800, 400, 3900, 600),
+            (800, 600),
+            false,
+            PreviewScale::Percent(100),
+            bounds,
+        )
+        .expect("layout should fit beside the selected item");
 
         assert!(layout.pos_x >= bounds.left);
         assert!(layout.pos_x + layout.preview_w as i32 <= bounds.right);
         assert!(layout.pos_y >= bounds.top);
         assert!(layout.pos_y + layout.preview_h as i32 <= bounds.bottom);
+    }
+
+    #[test]
+    fn mouse_layout_default_scale_keeps_native_size() {
+        let bounds = ScreenBounds {
+            left: 0,
+            top: 0,
+            right: 3840,
+            bottom: 2160,
+        };
+
+        let layout = compute_mouse_layout(
+            1920,
+            1080,
+            (800, 600),
+            false,
+            PreviewScale::Percent(100),
+            bounds,
+        )
+        .expect("layout should fit beside the cursor");
+
+        assert_eq!((layout.preview_w, layout.preview_h), (800, 600));
+    }
+
+    #[test]
+    fn mouse_layout_percent_scale_resizes_preview() {
+        let bounds = ScreenBounds {
+            left: 0,
+            top: 0,
+            right: 3840,
+            bottom: 2160,
+        };
+
+        let scaled_up = compute_mouse_layout(
+            1920,
+            1080,
+            (100, 100),
+            false,
+            PreviewScale::Percent(400),
+            bounds,
+        )
+        .expect("layout should fit beside the cursor");
+        assert_eq!((scaled_up.preview_w, scaled_up.preview_h), (400, 400));
+
+        let scaled_down = compute_mouse_layout(
+            1920,
+            1080,
+            (800, 600),
+            false,
+            PreviewScale::Percent(25),
+            bounds,
+        )
+        .expect("layout should fit beside the cursor");
+        assert_eq!((scaled_down.preview_w, scaled_down.preview_h), (200, 150));
+    }
+
+    #[test]
+    fn mouse_layout_percent_scale_is_clamped_to_the_display() {
+        // 400% of a 1600x1200 image is far larger than this work area.
+        let bounds = ScreenBounds {
+            left: 0,
+            top: 0,
+            right: 1920,
+            bottom: 1080,
+        };
+
+        let layout = compute_mouse_layout(
+            960,
+            540,
+            (1600, 1200),
+            false,
+            PreviewScale::Percent(400),
+            bounds,
+        )
+        .expect("layout should fit beside the cursor");
+
+        assert_eq!((layout.preview_w, layout.preview_h), (940, 705));
+        assert!(layout.pos_x >= bounds.left);
+        assert!(layout.pos_x + layout.preview_w as i32 <= bounds.right);
+        assert!(layout.pos_y >= bounds.top);
+        assert!(layout.pos_y + layout.preview_h as i32 <= bounds.bottom);
+    }
+
+    #[test]
+    fn mouse_layout_fit_to_screen_scales_up_to_the_display() {
+        let bounds = ScreenBounds {
+            left: 0,
+            top: 0,
+            right: 3840,
+            bottom: 2160,
+        };
+
+        let layout = compute_mouse_layout(
+            1920,
+            540,
+            (1280, 720),
+            false,
+            PreviewScale::FitToScreen,
+            bounds,
+        )
+        .expect("layout should fit beside the cursor");
+
+        // Fills the available width beside the cursor at the native aspect ratio.
+        assert_eq!(layout.pos_x, 1940);
+        assert_eq!((layout.preview_w, layout.preview_h), (1900, 1069));
+        assert!(layout.pos_x + layout.preview_w as i32 <= bounds.right);
+    }
+
+    #[test]
+    fn keyboard_layout_fit_to_screen_scales_up_to_the_display() {
+        let bounds = ScreenBounds {
+            left: 0,
+            top: 0,
+            right: 1920,
+            bottom: 1080,
+        };
+
+        let layout = compute_keyboard_layout(
+            (400, 400, 600, 600),
+            (320, 240),
+            false,
+            PreviewScale::FitToScreen,
+            bounds,
+        )
+        .expect("layout should fit beside the selected item");
+
+        assert_eq!((layout.preview_w, layout.preview_h), (1310, 983));
+        assert!(layout.pos_x + layout.preview_w as i32 <= bounds.right);
+        assert!(layout.pos_y + layout.preview_h as i32 <= bounds.bottom);
+    }
+
+    #[test]
+    fn preview_scale_options_never_clip_in_any_position_mode() {
+        let bounds = ScreenBounds {
+            left: 0,
+            top: 0,
+            right: 1920,
+            bottom: 1080,
+        };
+        let scales = [
+            PreviewScale::FitToScreen,
+            PreviewScale::Percent(25),
+            PreviewScale::Percent(50),
+            PreviewScale::Percent(100),
+            PreviewScale::Percent(150),
+            PreviewScale::Percent(200),
+            PreviewScale::Percent(300),
+            PreviewScale::Percent(400),
+        ];
+        let dimensions = [(64, 64), (640, 480), (3000, 2000), (400, 2400)];
+
+        for follow_cursor in [true, false] {
+            for scale in scales {
+                for dims in dimensions {
+                    let mouse =
+                        compute_mouse_layout(1500, 900, dims, follow_cursor, scale, bounds)
+                            .expect("mouse layout should resolve for an on-screen cursor");
+                    assert!(mouse.pos_x >= bounds.left);
+                    assert!(mouse.pos_x + mouse.preview_w as i32 <= bounds.right);
+                    assert!(mouse.pos_y >= bounds.top);
+                    assert!(mouse.pos_y + mouse.preview_h as i32 <= bounds.bottom);
+
+                    let keyboard = compute_keyboard_layout(
+                        (700, 300, 900, 500),
+                        dims,
+                        follow_cursor,
+                        scale,
+                        bounds,
+                    )
+                    .expect("keyboard layout should resolve for an on-screen item");
+                    assert!(keyboard.pos_x >= bounds.left);
+                    assert!(keyboard.pos_x + keyboard.preview_w as i32 <= bounds.right);
+                    assert!(keyboard.pos_y >= bounds.top);
+                    assert!(keyboard.pos_y + keyboard.preview_h as i32 <= bounds.bottom);
+                }
+            }
+        }
     }
 }

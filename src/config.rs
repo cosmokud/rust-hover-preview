@@ -6,12 +6,65 @@ use std::path::PathBuf;
 const CONFIG_SECTION: &str = "settings";
 pub const DEFAULT_WEBP_PLAYBACK_FPS: u32 = 90;
 pub const MAX_WEBP_PLAYBACK_FPS: u32 = 90;
+pub const DEFAULT_PREVIEW_SCALE_PERCENT: u32 = 100;
+pub const MIN_PREVIEW_SCALE_PERCENT: u32 = 1;
+pub const MAX_PREVIEW_SCALE_PERCENT: u32 = 1000;
 
 pub fn sanitize_webp_playback_fps(value: u32) -> u32 {
     match value {
         0 => DEFAULT_WEBP_PLAYBACK_FPS,
         1..=MAX_WEBP_PLAYBACK_FPS => value,
         _ => MAX_WEBP_PLAYBACK_FPS,
+    }
+}
+
+fn sanitize_preview_scale_percent(value: u32) -> u32 {
+    if value == 0 {
+        DEFAULT_PREVIEW_SCALE_PERCENT
+    } else {
+        value.clamp(MIN_PREVIEW_SCALE_PERCENT, MAX_PREVIEW_SCALE_PERCENT)
+    }
+}
+
+/// How the preview is sized relative to the media's native pixel dimensions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PreviewScale {
+    /// Scale as large as the available display area allows.
+    FitToScreen,
+    /// Scale by a percentage of the media's native size.
+    Percent(u32),
+}
+
+impl PreviewScale {
+    pub fn as_str(self) -> String {
+        match self {
+            Self::FitToScreen => "fit".to_string(),
+            Self::Percent(percent) => sanitize_preview_scale_percent(percent).to_string(),
+        }
+    }
+
+    /// Requested scale relative to the native size, or `None` when the preview
+    /// should use the largest scale the display area allows.
+    pub fn target_scale(self) -> Option<f32> {
+        match self {
+            Self::FitToScreen => None,
+            Self::Percent(percent) => Some(sanitize_preview_scale_percent(percent) as f32 / 100.0),
+        }
+    }
+
+    fn from_str(value: &str) -> Option<Self> {
+        let normalized = value.trim().to_ascii_lowercase();
+        let normalized = normalized.trim_end_matches('%').trim();
+
+        match normalized {
+            "fit" | "fit to screen" | "fit-to-screen" | "fit_to_screen" | "fittoscreen" => {
+                Some(Self::FitToScreen)
+            }
+            _ => normalized
+                .parse::<u32>()
+                .ok()
+                .map(|percent| Self::Percent(sanitize_preview_scale_percent(percent))),
+        }
     }
 }
 
@@ -58,6 +111,7 @@ pub struct AppConfig {
     pub webp_playback_fps: u32,
     pub transparent_background: TransparentBackground,
     pub video_volume: u32,
+    pub preview_scale: PreviewScale,
 }
 
 impl Default for AppConfig {
@@ -75,6 +129,7 @@ impl Default for AppConfig {
             webp_playback_fps: DEFAULT_WEBP_PLAYBACK_FPS,
             transparent_background: TransparentBackground::Black,
             video_volume: 0, // Mute by default
+            preview_scale: PreviewScale::Percent(DEFAULT_PREVIEW_SCALE_PERCENT),
         }
     }
 }
@@ -174,6 +229,11 @@ impl AppConfig {
                 "video_volume",
                 Some(self.video_volume.to_string()),
             );
+            ini.set(
+                CONFIG_SECTION,
+                "preview_scale",
+                Some(self.preview_scale.as_str()),
+            );
             let _ = ini.write(path.to_string_lossy().as_ref());
         }
     }
@@ -221,5 +281,109 @@ impl AppConfig {
                 self.video_volume = value;
             }
         }
+        if let Some(value) = ini.get(CONFIG_SECTION, "preview_scale") {
+            if let Some(scale) = PreviewScale::from_str(&value) {
+                self.preview_scale = scale;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn preview_scale_parses_fit_variants() {
+        for value in [
+            "fit",
+            "Fit",
+            " FIT ",
+            "fit to screen",
+            "fit-to-screen",
+            "fit_to_screen",
+        ] {
+            assert_eq!(
+                PreviewScale::from_str(value),
+                Some(PreviewScale::FitToScreen),
+                "{value}"
+            );
+        }
+    }
+
+    #[test]
+    fn preview_scale_parses_percentages() {
+        assert_eq!(
+            PreviewScale::from_str("100"),
+            Some(PreviewScale::Percent(100))
+        );
+        assert_eq!(
+            PreviewScale::from_str("400%"),
+            Some(PreviewScale::Percent(400))
+        );
+        assert_eq!(PreviewScale::from_str(" 25 "), Some(PreviewScale::Percent(25)));
+        assert_eq!(
+            PreviewScale::from_str("0"),
+            Some(PreviewScale::Percent(DEFAULT_PREVIEW_SCALE_PERCENT))
+        );
+        assert_eq!(
+            PreviewScale::from_str("5000"),
+            Some(PreviewScale::Percent(MAX_PREVIEW_SCALE_PERCENT))
+        );
+    }
+
+    #[test]
+    fn preview_scale_rejects_unknown_values() {
+        for value in ["", "huge", "-50", "1.5", "fitish"] {
+            assert_eq!(PreviewScale::from_str(value), None, "{value}");
+        }
+    }
+
+    #[test]
+    fn preview_scale_round_trips_through_ini_strings() {
+        assert_eq!(
+            PreviewScale::from_str(&PreviewScale::FitToScreen.as_str()),
+            Some(PreviewScale::FitToScreen)
+        );
+        assert_eq!(
+            PreviewScale::from_str(&PreviewScale::Percent(150).as_str()),
+            Some(PreviewScale::Percent(150))
+        );
+    }
+
+    #[test]
+    fn hand_edited_ini_preview_scale_is_parsed() {
+        let path = std::env::temp_dir().join(format!(
+            "rust-hover-preview-preview-scale-{}.ini",
+            std::process::id()
+        ));
+
+        for (raw, expected) in [
+            ("[settings]\npreview_scale=fit\n", PreviewScale::FitToScreen),
+            (
+                "[settings]\npreview_scale=200\n",
+                PreviewScale::Percent(200),
+            ),
+            (
+                "[settings]\npreview_scale=200%\n",
+                PreviewScale::Percent(200),
+            ),
+            (
+                "[settings]\npreview_scale=75\n",
+                PreviewScale::Percent(75),
+            ),
+        ] {
+            fs::write(&path, raw).unwrap();
+
+            let mut ini = Ini::new();
+            ini.load(path.to_string_lossy().as_ref()).unwrap();
+            let parsed = ini
+                .get(CONFIG_SECTION, "preview_scale")
+                .and_then(|value| PreviewScale::from_str(&value));
+
+            assert_eq!(parsed, Some(expected), "{raw}");
+        }
+
+        let _ = fs::remove_file(&path);
     }
 }
