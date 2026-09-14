@@ -10,6 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Preview layout is now bounded to the display nearest the hovered cursor or focused item instead of the whole virtual desktop, so the preview no longer clips onto a neighboring monitor when multiple displays are attached.
 - The preview window is now painted before it is revealed, and the loading spinner likewise, so a new hover can no longer flash the previously previewed image for a frame at the new position and size.
+- The preview window is now repositioned before the new frame is installed. Crossing between displays of different scale raises `WM_DPICHANGED`, which resets the preview, so installing the frame first discarded it and left the previous display's image stranded on screen.
 
 ## [0.1.14-rc.3] - 2026-07-03
 
