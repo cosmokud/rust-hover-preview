@@ -3642,10 +3642,12 @@ pub fn run_explorer_hook() {
                     is_keyboard_hover = false;
                     video_hover_guard_until = None;
                 }
-                // Reset focused name tracking so keyboard navigation can be re-detected
-                // after mouse stops moving
+                // A mouse move leaves the keyboard focus baseline unknown, so the
+                // next focus observed while the user is driving with the keyboard
+                // acts immediately. Recording it as a fresh baseline instead would
+                // swallow the first key press and keep the mouse preview on screen.
                 last_focused_name = None;
-                allow_keyboard_preview_on_first_observation = false;
+                allow_keyboard_preview_on_first_observation = true;
 
                 if let Some(suppressed_file) = suppressed.file.clone() {
                     if let Some(current_file) = get_file_under_cursor_checked(
@@ -3709,8 +3711,10 @@ pub fn run_explorer_hook() {
 
                     if last_focused_name.is_none() {
                         if allow_keyboard_preview_on_first_observation {
-                            // User explicitly used keyboard right after folder change.
-                            // Allow first observed focused item to trigger preview.
+                            // The focus baseline is unknown — the mouse just moved, or
+                            // the user unlocked a folder change with the keyboard — so
+                            // this first observed item acts immediately instead of
+                            // being recorded and waiting for a second key press.
                             last_focused_name = Some(focused_name.clone());
                             allow_keyboard_preview_on_first_observation = false;
 
@@ -3763,7 +3767,8 @@ pub fn run_explorer_hook() {
                             continue;
                         }
 
-                        // First observation after mouse stopped - just record, don't trigger
+                        // Nothing to compare against yet and no keyboard input has
+                        // claimed this focus, so record it as the baseline only.
                         last_focused_name = Some(focused_name);
                     } else if last_focused_name.as_ref() != Some(&focused_name) {
                         // Focused item changed - keyboard navigation detected
