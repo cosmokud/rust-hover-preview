@@ -19,6 +19,7 @@ Inspired by QTTabBar (QuizoApps) hover preview.
 - Explorer Shell view detection, folder caching, and path normalization for reliable hover matching
 - Topmost, non-activating preview windows designed to avoid focus stealing
 - Per-monitor DPI awareness to reduce scaling artifacts on high-DPI displays
+- Display-aware placement that keeps the preview inside the monitor under the cursor or focused item, with frames painted before the window is revealed so a new hover never flashes the previous image
 - EnumWindows-based Explorer detection with CabinetWClass/ExplorerWClass class matching to keep idle polling light and avoid Explorer-side COM allocations, plus input-grace helpers that throttle hover and keyboard focus probes to recent user activity
 
 ## Supported Formats
@@ -35,7 +36,7 @@ Inspired by QTTabBar (QuizoApps) hover preview.
 
 Each release provides two asset options:
 
-- **`RustHoverPreview-<version>-setup.exe`** — the NSIS installer. Run it to install to `%LOCALAPPDATA%\rust-hover-preview` with an optional startup entry.
+- **`rust-hover-preview_<version>_x64-setup.exe`** — the NSIS installer. Run it to install to `%LOCALAPPDATA%\rust-hover-preview` with an optional startup entry.
 - **`rust-hover-preview.exe`** — the standalone portable binary. Place it in any folder on your PC (for example: `C:\Tools\RustHoverPreview`) and run it directly. No installation needed.
 
 1. Open [Releases](../../releases)
@@ -163,6 +164,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full system overview.
 - Uses `directories` for Windows roaming configuration paths
 - Uses `ffprobe` for video dimensions and `ffplay` for video playback
 - Sets per-monitor DPI awareness (v2 with fallback) on startup to prevent scaling artifacts on layered windows
+- Bounds the preview to the monitor under the cursor or focused item via `MonitorFromPoint`/`GetMonitorInfoW` (with a virtual-screen fallback) and repositions the window before installing a frame, so cross-display hops at different scale never strand a stale preview
 - Uses the registry (`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`) for startup control
 - Counts and classifies Explorer browser windows via EnumWindows and CabinetWClass/ExplorerWClass class matching, so idle polling never spins up Explorer's shell automation providers
 - Gates hover and keyboard focus probes behind input-grace windows (recent_elapsed_within, should_probe_keyboard_focus, should_probe_hover_resolver, should_probe_stationary_hover) and a stationary_hover_probe_done latch to avoid redundant accessibility work for a parked cursor

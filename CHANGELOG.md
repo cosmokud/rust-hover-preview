@@ -1,10 +1,11 @@
 # Changelog
 
-All notable changes to this project will be documented in this file.
+## [0.1.14-rc.5] - 2026-09-14
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+### Changed
 
-## [Unreleased]
+- Documentation: documented display-aware preview placement and flicker-free presentation in README.md, and added a preview placement section to ARCHITECTURE.md.
+- Corrected the NSIS installer asset name in README.md to `rust-hover-preview_<version>_x64-setup.exe`, matching the files published with each release.
 
 ### Fixed
 
