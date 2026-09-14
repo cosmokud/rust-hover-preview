@@ -3,6 +3,7 @@
 mod config;
 mod explorer_hook;
 mod preview_window;
+mod single_instance;
 mod startup;
 mod tray;
 
@@ -23,6 +24,13 @@ pub static CONFIG: Lazy<Mutex<config::AppConfig>> =
     Lazy::new(|| Mutex::new(config::AppConfig::load()));
 
 fn main() {
+    // Bail out before any hook, window, or thread is created when the app is
+    // already running, so only the first instance stays in the tray.
+    let _instance_guard = match single_instance::acquire() {
+        Some(guard) => guard,
+        None => return,
+    };
+
     configure_dpi_awareness();
     sync_startup_setting();
 

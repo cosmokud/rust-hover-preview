@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.1.14-rc.7] - 2026-09-14
+
+### Added
+
+- Added single-instance enforcement: launching the app while it is already running (desktop shortcut, Start menu, startup entry, or the `.exe` directly) now detects the running copy through a session-local named mutex (`Local\rust-hover-preview-single-instance`) and exits immediately instead of adding a second tray icon with its own Explorer hook and preview window. The instance already running is left untouched and keeps serving previews.
+- The guard is claimed before DPI setup, COM initialization, config loading, and every background thread, so a duplicate launch does no work at all. The mutex is released when the process ends — including after a crash or a forced kill — so the next launch becomes the primary instance again.
+
+### Changed
+
+- Bumped version to 0.1.14-rc.7 in Cargo.toml and Cargo.lock
+
 ## [0.1.14-rc.6] - 2026-09-14
 
 ### Added
