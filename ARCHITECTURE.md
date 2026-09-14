@@ -6,14 +6,19 @@ Rust Hover Preview is a Windows 11 tray application that watches File Explorer f
 
 ## Runtime Topology
 
-- Main thread initializes COM, config, DPI awareness, then runs the tray event loop.
+- Main thread claims the single-instance mutex, initializes COM, config, DPI awareness, then runs the tray event loop.
 - Preview thread owns the layered preview window and media decoding/rendering.
 - Explorer hook thread polls Explorer state with UI Automation/MSAA and Shell COM APIs, and uses EnumWindows with CabinetWClass/ExplorerWClass class matching to count and classify Explorer browser windows so idle polling never spins up Explorer's shell automation providers.
 - Config watcher thread reloads `config.ini` when it changes on disk.
 
+## Single Instance
+
+The app runs as a single instance per user session. `main` claims a session-local named mutex (`Local\rust-hover-preview-single-instance`) as its first step, before DPI awareness, COM initialization, config loading, and any thread is started. A second launch — from a desktop shortcut, the Start menu, the startup entry, or the `.exe` directly — finds the name already taken, closes its own handle, and returns from `main` without creating a tray icon, Explorer hook, or preview window. The guard handle is held for the lifetime of the process, so the name is released when the app exits, including after a crash or a forced kill, and the next launch becomes the primary instance. The `Local\` prefix scopes the guard to the signed-in session, so a second user signed in over Remote Desktop still gets their own instance and tray icon.
+
 ## Core Modules
 
-- `main.rs`: process startup, COM lifecycle, DPI awareness, thread orchestration.
+- `main.rs`: single-instance guard, process startup, COM lifecycle, DPI awareness, thread orchestration.
+- `single_instance.rs`: named-mutex guard that limits the app to one running instance per user session.
 - `explorer_hook.rs`: resolves hovered/focused Explorer items, handles path normalization, and sends preview messages.
 - `preview_window.rs`: layered window rendering, scale-aware sizing, animation streaming for GIF/WebP, FFmpeg-backed video playback, monitor-bounded placement with paint-before-show presentation, and WM_POWERBROADCAST handling to reset state on system resume and clean up on suspend.
 - `tray.rs`: tray icon and menu, configuration toggles, exit flow, and WM_POWERBROADCAST handling to re-add the icon after DWM/Explorer restart on resume.
