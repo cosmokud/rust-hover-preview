@@ -2639,32 +2639,38 @@ pub fn run_preview_window() {
                             let mw = media_data.current_width() as i32;
                             let mh = media_data.current_height() as i32;
 
-                            // If window wasn't shown yet (fast load), show it now
-                            if let Some(ref pl) = pending_load {
-                                if pl.generation == result.generation && !pl.spinner_shown {
-                                    let _ = MoveWindow(hwnd, pl.pos_x, pl.pos_y, mw, mh, false);
-                                    let _ = SetWindowPos(
-                                        hwnd,
-                                        HWND_TOPMOST,
-                                        pl.pos_x,
-                                        pl.pos_y,
-                                        mw,
-                                        mh,
-                                        SWP_NOACTIVATE | SWP_SHOWWINDOW,
-                                    );
-                                    let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
-                                }
-                            }
-
                             if let Ok(mut current) = CURRENT_MEDIA.lock() {
                                 if let Some(ref mut existing) = *current {
                                     existing.cancel_background_work();
                                 }
                                 *current = Some(media_data);
                             }
-                            pending_load = None;
+
+                            // A layered window keeps its surface while hidden, so
+                            // paint the new frame before revealing the window.
+                            // Showing first would flash the previous preview at
+                            // the new position and size.
+                            let pending = pending_load.take().filter(|pl| {
+                                pl.generation == result.generation && !pl.spinner_shown
+                            });
                             pending_load_cancel = None;
-                            render_layered_preview(hwnd);
+
+                            if let Some(pl) = pending {
+                                let _ = MoveWindow(hwnd, pl.pos_x, pl.pos_y, mw, mh, false);
+                                render_layered_preview(hwnd);
+                                let _ = SetWindowPos(
+                                    hwnd,
+                                    HWND_TOPMOST,
+                                    pl.pos_x,
+                                    pl.pos_y,
+                                    mw,
+                                    mh,
+                                    SWP_NOACTIVATE | SWP_SHOWWINDOW,
+                                );
+                                let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+                            } else {
+                                render_layered_preview(hwnd);
+                            }
                         }
                         None => {
                             // Loading failed, hide window
@@ -2698,6 +2704,9 @@ pub fn run_preview_window() {
                         pl.height as i32,
                         false,
                     );
+                    // Paint the spinner before revealing the window so the
+                    // previous preview cannot flash at the new position.
+                    render_layered_preview(hwnd);
                     let _ = SetWindowPos(
                         hwnd,
                         HWND_TOPMOST,
@@ -2708,7 +2717,6 @@ pub fn run_preview_window() {
                         SWP_NOACTIVATE | SWP_SHOWWINDOW,
                     );
                     let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
-                    render_layered_preview(hwnd);
                 }
             }
 
