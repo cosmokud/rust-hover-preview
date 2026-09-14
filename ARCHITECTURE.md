@@ -15,7 +15,7 @@ Rust Hover Preview is a Windows 11 tray application that watches File Explorer f
 
 - `main.rs`: process startup, COM lifecycle, DPI awareness, thread orchestration.
 - `explorer_hook.rs`: resolves hovered/focused Explorer items, handles path normalization, and sends preview messages.
-- `preview_window.rs`: layered window rendering, animation streaming for GIF/WebP, FFmpeg-backed video playback, monitor-bounded placement with paint-before-show presentation, and WM_POWERBROADCAST handling to reset state on system resume and clean up on suspend.
+- `preview_window.rs`: layered window rendering, scale-aware sizing, animation streaming for GIF/WebP, FFmpeg-backed video playback, monitor-bounded placement with paint-before-show presentation, and WM_POWERBROADCAST handling to reset state on system resume and clean up on suspend.
 - `tray.rs`: tray icon and menu, configuration toggles, exit flow, and WM_POWERBROADCAST handling to re-add the icon after DWM/Explorer restart on resume.
 - `config.rs`: INI-backed configuration with defaults and input sanitization.
 - `startup.rs`: registry integration for the Run-at-startup setting.
@@ -42,6 +42,8 @@ The app sets per-monitor DPI awareness v2 on startup, with a fallback to per-mon
 The preview is bounded to the display nearest the hovered cursor or focused item rather than the whole virtual desktop. Bounds are resolved through `MonitorFromPoint`/`GetMonitorInfoW`, falling back to the virtual screen when the monitor lookup fails, so the window no longer spills onto a neighboring display.
 
 Each update repositions the window before installing the new frame or spinner. Crossing between displays of different scale raises `WM_DPICHANGED`, which resets the preview, so installing the content first would discard it and leave the previous display's image stranded on screen. For the same reason, the layered surface is painted before the window is revealed.
+
+Preview size is derived from the media's native dimensions and the `preview_scale` setting, which is either a percentage of the native size or `fit` for the largest size the display area allows. The requested scale is always capped by the free space on the chosen side or quadrant, so a preview can never be clipped by the display edge — a large image at a small scale shrinks to fit, and a small image at 400% or fit-to-screen is reduced to whatever the display can hold. The same scaling is applied to the decode request, so image, GIF/WebP, and video previews all land at the computed size.
 
 ## Configuration
 

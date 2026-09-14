@@ -1,4 +1,4 @@
-use crate::config::TransparentBackground;
+use crate::config::{PreviewScale, TransparentBackground, DEFAULT_PREVIEW_SCALE_PERCENT};
 use crate::preview_window::refresh_preview;
 use crate::{startup, CONFIG, RUNNING};
 use std::os::windows::ffi::OsStrExt;
@@ -49,6 +49,14 @@ const ID_TRAY_REHOVER_DELAY_SLOW: u16 = 1037; // 1000ms
 const ID_TRAY_DELAY_FAST_PLUS: u16 = 1038; // 750ms
 const ID_TRAY_REHOVER_DELAY_FAST_PLUS: u16 = 1039; // 750ms
 const ID_TRAY_OPEN_CONFIG: u16 = 1040;
+const ID_TRAY_SCALE_FIT: u16 = 1041;
+const ID_TRAY_SCALE_400: u16 = 1042; // 400%
+const ID_TRAY_SCALE_300: u16 = 1043; // 300%
+const ID_TRAY_SCALE_200: u16 = 1044; // 200%
+const ID_TRAY_SCALE_150: u16 = 1045; // 150%
+const ID_TRAY_SCALE_100: u16 = 1046; // 100%
+const ID_TRAY_SCALE_50: u16 = 1047; // 50%
+const ID_TRAY_SCALE_25: u16 = 1048; // 25%
 
 const TRAY_CLASS: PCWSTR = w!("RustHoverPreviewTrayClass");
 
@@ -121,6 +129,14 @@ unsafe extern "system" fn tray_window_proc(
                 ID_TRAY_REHOVER_DELAY_FAST_PLUS => set_same_file_rehover_delay(750),
                 ID_TRAY_REHOVER_DELAY_SLOW => set_same_file_rehover_delay(1000),
                 ID_TRAY_OPEN_CONFIG => open_config_file(),
+                ID_TRAY_SCALE_FIT => set_preview_scale(PreviewScale::FitToScreen),
+                ID_TRAY_SCALE_400 => set_preview_scale(PreviewScale::Percent(400)),
+                ID_TRAY_SCALE_300 => set_preview_scale(PreviewScale::Percent(300)),
+                ID_TRAY_SCALE_200 => set_preview_scale(PreviewScale::Percent(200)),
+                ID_TRAY_SCALE_150 => set_preview_scale(PreviewScale::Percent(150)),
+                ID_TRAY_SCALE_100 => set_preview_scale(PreviewScale::Percent(100)),
+                ID_TRAY_SCALE_50 => set_preview_scale(PreviewScale::Percent(50)),
+                ID_TRAY_SCALE_25 => set_preview_scale(PreviewScale::Percent(25)),
                 _ => {}
             }
             LRESULT(0)
@@ -445,6 +461,77 @@ unsafe fn show_context_menu(hwnd: HWND) {
         w!("Preview Position"),
     );
 
+    // Add Preview Scaling submenu
+    let preview_scale = CONFIG
+        .lock()
+        .map(|c| c.preview_scale)
+        .unwrap_or(PreviewScale::Percent(DEFAULT_PREVIEW_SCALE_PERCENT));
+    let scale_menu = CreatePopupMenu().unwrap();
+
+    let scale_flag = |scale: PreviewScale| {
+        MF_STRING
+            | if preview_scale == scale {
+                MF_CHECKED
+            } else {
+                MF_UNCHECKED
+            }
+    };
+    let _ = AppendMenuW(
+        scale_menu,
+        scale_flag(PreviewScale::FitToScreen),
+        ID_TRAY_SCALE_FIT as usize,
+        w!("Fit to Screen"),
+    );
+    let _ = AppendMenuW(
+        scale_menu,
+        scale_flag(PreviewScale::Percent(400)),
+        ID_TRAY_SCALE_400 as usize,
+        w!("400%"),
+    );
+    let _ = AppendMenuW(
+        scale_menu,
+        scale_flag(PreviewScale::Percent(300)),
+        ID_TRAY_SCALE_300 as usize,
+        w!("300%"),
+    );
+    let _ = AppendMenuW(
+        scale_menu,
+        scale_flag(PreviewScale::Percent(200)),
+        ID_TRAY_SCALE_200 as usize,
+        w!("200%"),
+    );
+    let _ = AppendMenuW(
+        scale_menu,
+        scale_flag(PreviewScale::Percent(150)),
+        ID_TRAY_SCALE_150 as usize,
+        w!("150%"),
+    );
+    let _ = AppendMenuW(
+        scale_menu,
+        scale_flag(PreviewScale::Percent(100)),
+        ID_TRAY_SCALE_100 as usize,
+        w!("100% (Default)"),
+    );
+    let _ = AppendMenuW(
+        scale_menu,
+        scale_flag(PreviewScale::Percent(50)),
+        ID_TRAY_SCALE_50 as usize,
+        w!("50%"),
+    );
+    let _ = AppendMenuW(
+        scale_menu,
+        scale_flag(PreviewScale::Percent(25)),
+        ID_TRAY_SCALE_25 as usize,
+        w!("25%"),
+    );
+
+    let _ = AppendMenuW(
+        menu,
+        MF_STRING | MF_POPUP,
+        scale_menu.0 as usize,
+        w!("Preview Scaling"),
+    );
+
     // Add "Run at Startup" with checkmark
     let startup_enabled = CONFIG.lock().map(|c| c.run_at_startup).unwrap_or(false);
     let flags = MF_STRING
@@ -536,6 +623,13 @@ fn set_volume(volume: u32) {
 fn set_follow_cursor(follow: bool) {
     if let Ok(mut config) = CONFIG.lock() {
         config.follow_cursor = follow;
+        config.save();
+    }
+}
+
+fn set_preview_scale(scale: PreviewScale) {
+    if let Ok(mut config) = CONFIG.lock() {
+        config.preview_scale = scale;
         config.save();
     }
 }

@@ -15,11 +15,12 @@ Inspired by QTTabBar (QuizoApps) hover preview.
 - Mouse-hover and keyboard-navigation previews in Explorer
 - Static image previews plus animated GIF playback and libwebp-backed animated WebP playback
 - Video previews through FFmpeg (`ffplay` + `ffprobe`)
-- Tray controls for enable/disable, delay, positioning, startup, off-trigger key, and volume
+- Tray controls for enable/disable, delay, positioning, scaling, startup, off-trigger key, and volume
 - Explorer Shell view detection, folder caching, and path normalization for reliable hover matching
 - Topmost, non-activating preview windows designed to avoid focus stealing
 - Per-monitor DPI awareness to reduce scaling artifacts on high-DPI displays
 - Display-aware placement that keeps the preview inside the monitor under the cursor or focused item, with frames painted before the window is revealed so a new hover never flashes the previous image
+- Scale-aware sizing from 25% to 400% or fit-to-screen, always clamped to the space available on the display so a scaled-up preview is never clipped
 - EnumWindows-based Explorer detection with CabinetWClass/ExplorerWClass class matching to keep idle polling light and avoid Explorer-side COM allocations, plus input-grace helpers that throttle hover and keyboard focus probes to recent user activity
 
 ## Supported Formats
@@ -92,6 +93,7 @@ ffprobe -version
 - **Same File Rehover Delay**: `Instant (0 ms)`, `Fast (200 ms)`, `Medium (500 ms)`, `Relaxed (750 ms)`, `Slow (1000 ms)` — delay before the same file can preview again after the preview self-dismisses
 - **Video Volume**: `Max (100%)`, `High (80%)`, `Medium (50%)`, `Low (25%)`, `Very Low (10%)`, `Mute (0%)`
 - **Preview Position**: `Follow Cursor` or `Best Position`
+- **Preview Scaling**: `Fit to Screen`, `400%`, `300%`, `200%`, `150%`, `100% (Default)`, `50%`, `25%` — sizes the preview relative to the image or video's native resolution instead of always showing it verbatim. `Fit to Screen` enlarges the preview as much as the display allows. Any scale that would extend past the screen edge is reduced to fit, so the preview is never clipped, in both `Follow Cursor` and `Best Position` modes.
 - **Transparent Background**: `Transparent`, `Black`, `White`, or `Checkerboard`
 - **Enable Off Trigger Key**: Temporarily suppress previews while the displayed configured key is held
 - **Confirm File Type**: When enabled, validates file content signatures (magic bytes) against the extension to avoid loading mislabeled files. If previews don't appear for certain files that should be supported, try enabling this option — the app will attempt to decode them by their true content type rather than relying solely on the file extension.
@@ -122,11 +124,13 @@ follow_cursor=false
 transparent_background=black
 webp_playback_fps=90
 video_volume=0
+preview_scale=100
 ```
 
 - When `enable_off_trigger_key` is enabled, hold the configured `off_trigger_key` to keep previews hidden while browsing Explorer.
 - When `confirm_file_type` is enabled, the app validates file content signatures (magic bytes) against the extension — useful for files with incorrect extensions.
 - `webp_playback_fps` controls the maximum playback speed for animated WebP files (1–90 FPS; 0 resets to the default of 90).
+- `preview_scale` controls the preview size relative to the media's native resolution. Use `fit` to scale the preview as large as the display area allows, or a percentage between 1 and 1000 written as `200`, `200%`, or `75`. A scale larger than the available space is reduced to fit so the preview cannot be clipped; `0` resets to the default of 100.
 
 ## Build from Source
 
