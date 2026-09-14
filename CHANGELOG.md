@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added `src/wheel_input.rs`: a system-wide low-level mouse hook (`WH_MOUSE_LL`) installed on its own thread with a message pump. It publishes a monotonic wheel-tick counter that the Explorer hook consumes, giving the polling loop a signal for wheel input without touching Explorer or its accessibility providers.
 - Added single-instance enforcement: launching the app while it is already running (desktop shortcut, Start menu, startup entry, or the `.exe` directly) now detects the running copy through a session-local named mutex (`Local\rust-hover-preview-single-instance`) and exits immediately instead of adding a second tray icon with its own Explorer hook and preview window. The instance already running is left untouched and keeps serving previews.
 - The guard is claimed before DPI setup, COM initialization, config loading, and every background thread, so a duplicate launch does no work at all. The mutex is released when the process ends — including after a crash or a forced kill — so the next launch becomes the primary instance again.
 
@@ -18,6 +19,8 @@
 - The cursor-over-preview check no longer runs on every poll. It is skipped while a keyboard preview is on screen or the pointer is frozen, and outside those states it is a single shared check instead of two per tick that returns immediately without touching the cursor when no preview is on screen.
 - After the mouse takes over from a keyboard preview, nothing is previewed until the keyboard is used again or the mouse hovers a different file, so moving the mouse off a keyboard preview no longer re-previews the file that was already shown.
 - The first keyboard navigation key now switches straight to the keyboard preview. After a mouse-hover preview, the first key press used to be swallowed as a fresh focus baseline (`last_focused_name` is reset on every mouse move), so the preview only switched to the keyboard one on the second press.
+- Wheel-scrolling Explorer no longer leaves the preview stuck on the file that was under the cursor before the scroll. A wheel tick counts as user input, the hover stability window restarts while the wheel is turning, and once the list stops moving the item that landed under the parked cursor is resolved and previewed — or the preview is dropped when that item is not a media file, exactly like a mouse move off a file. A wheel scroll also releases the post-folder-change suspension, like a mouse move.
+- A scroll-driven probe only acts on an item that survives two consecutive probes, so a preview can no longer be shown for a row that is still animating away under Explorer's smooth scrolling, and a scroll that leaves the same file under the cursor keeps the current preview instead of restarting it (no image re-decode, no video or GIF restart). Ticks are only counted while the pointer is over Explorer, so scrolling a menu, a browser, or the preview window itself changes nothing.
 
 ## [0.1.14-rc.6] - 2026-09-14
 

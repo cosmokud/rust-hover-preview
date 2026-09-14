@@ -2,6 +2,7 @@ use crate::preview_window::{
     cursor_preview_hover, hide_preview, preview_screen_rect, show_preview, show_preview_keyboard,
     PreviewCursorHover,
 };
+use crate::wheel_input;
 use crate::{CONFIG, RUNNING};
 use once_cell::sync::Lazy;
 use std::collections::{HashMap, HashSet};
@@ -227,6 +228,56 @@ impl KeyboardPointerPause {
     }
 }
 
+/// Wheel-scroll settle probe. A scroll moves the list under a parked pointer,
+/// and Explorer can still be animating the scroll when the loop looks, so a
+/// scroll-driven probe only acts on an item that survives a second observation —
+/// the same rule the keyboard preview box uses. Without a scroll in flight the
+/// probe is pass-through and the single-probe-per-parked-cursor behavior stands.
+#[derive(Default)]
+struct ScrollSettleProbe {
+    pending: bool,
+    last: Option<PathBuf>,
+}
+
+impl ScrollSettleProbe {
+    /// A wheel tick arrived: the next stationary probes belong to this gesture.
+    fn arm(&mut self) {
+        self.pending = true;
+        self.last = None;
+    }
+
+    /// A real mouse move supersedes the gesture.
+    fn disarm(&mut self) {
+        self.pending = false;
+        self.last = None;
+    }
+
+    fn is_pending(&self) -> bool {
+        self.pending
+    }
+
+    /// Records the item resolved under the cursor and reports whether the probe
+    /// may act on it. A miss settles immediately: it can only dismiss, and the
+    /// mouse-move path dismisses on a miss just the same.
+    fn observe(&mut self, resolved: Option<&PathBuf>) -> bool {
+        if !self.pending {
+            return true;
+        }
+
+        let settled = match (self.last.as_ref(), resolved) {
+            (Some(previous), Some(current)) => same_path(previous, current),
+            (None, None) => true,
+            _ => false,
+        };
+
+        self.last = resolved.cloned();
+        if settled {
+            self.pending = false;
+        }
+        settled
+    }
+}
+
 const FOLDER_INDEX_TTL_MS: u64 = 60000;
 const EXPLORER_FOLDERS_CACHE_TTL_MS: u64 = 250;
 const SHELL_VIEW_INDEX_TTL_MS: u64 = 5000;
@@ -245,6 +296,7 @@ const IDLE_FOLDER_PROBE_MS: u64 = 750;
 const DISPLAY_CHANGE_BACKOFF_MS: u64 = 1500;
 const KEYBOARD_FOCUS_INPUT_GRACE_MS: u64 = 500;
 const HOVER_RESOLVER_INPUT_GRACE_MS: u64 = 1500;
+const WHEEL_SCROLL_SETTLE_MS: u64 = 150;
 const MOUSE_MOVE_PX: i32 = 5;
 const KEYBOARD_POINTER_MOVE_TOLERANCE_PX: i32 = 20;
 const KEYBOARD_PREVIEW_BOX_WATCH_MS: u64 = 2500;
@@ -3174,6 +3226,13 @@ pub fn run_explorer_hook() {
     let mut last_keyboard_navigation_input_at: Option<Instant> = None;
     let mut stationary_hover_probe_done = false;
 
+    // Wheel scrolling moves the list under a stationary pointer, so the wheel
+    // tick counter is the only signal that the hovered item changed (see
+    // `wheel_input`).
+    let mut consumed_wheel_ticks = wheel_input::wheel_tick_count();
+    let mut last_wheel_tick_at: Option<Instant> = None;
+    let mut scroll_probe = ScrollSettleProbe::default();
+
     // State for optimized polling
     let mut last_state_check = Instant::now();
     let mut current_state = ExplorerState::NoExplorerWindows;
@@ -3423,7 +3482,26 @@ pub fn run_explorer_hook() {
                 explorer_navigation_shortcut_input || is_keyboard_navigation_input_detected();
             let mouse_navigation_input = is_mouse_navigation_button_detected();
 
-            if moved || keyboard_navigation_input || mouse_navigation_input {
+            // A wheel tick only counts while the pointer is over Explorer: the
+            // wheel must have moved the list under the cursor, not a menu or
+            // another window that happens to sit above it. The counter is always
+            // consumed so a tick seen over something else cannot be replayed.
+            let wheel_ticks = wheel_input::wheel_tick_count();
+            let wheel_tick = wheel_ticks != consumed_wheel_ticks;
+            if wheel_tick {
+                consumed_wheel_ticks = wheel_ticks;
+            }
+            let wheel_scroll = wheel_tick && is_cursor_over_explorer_full();
+            if wheel_scroll {
+                last_wheel_tick_at = Some(loop_now);
+                scroll_probe.arm();
+            }
+            let scrolling = recent_elapsed_within(
+                last_wheel_tick_at.map(|at| at.elapsed()),
+                WHEEL_SCROLL_SETTLE_MS,
+            );
+
+            if moved || keyboard_navigation_input || mouse_navigation_input || wheel_scroll {
                 last_user_input_at = Some(loop_now);
             }
             if keyboard_navigation_input {
@@ -3570,7 +3648,11 @@ pub fn run_explorer_hook() {
                     }
                 }
 
-                if moved {
+                // A scroll is deliberate pointer input, so it releases the
+                // suspension exactly like a mouse move. The armed probe is used
+                // instead of the raw tick because the cooldown above bails out
+                // before this check, which would swallow a one-notch scroll.
+                if moved || scroll_probe.is_pending() {
                     suspend_preview_until_user_input = false;
                     allow_keyboard_preview_on_first_observation = false;
                     hover_start = Some(Instant::now());
@@ -3626,8 +3708,10 @@ pub fn run_explorer_hook() {
                 last_cursor_pos = cursor_pos;
                 stationary_search_miss_started_at = None;
                 stationary_hover_probe_done = false;
-                // A real move hands control back to the mouse.
+                // A real move hands control back to the mouse and ends any
+                // scroll gesture that was still settling.
                 pointer_pause.clear();
+                scroll_probe.disarm();
 
                 // Mouse movement always takes priority - dismiss keyboard hover.
                 // The keyboard preview may have been covering the cursor, so the
@@ -3691,6 +3775,17 @@ pub fn run_explorer_hook() {
                     video_hover_guard_until = None;
                 }
                 hover_start = Some(Instant::now());
+                continue;
+            }
+
+            // The wheel is still turning, so any preview on screen belongs to a
+            // file that has scrolled away. Hold the stability window open and
+            // skip the focus/hover probes: the item that lands under the cursor
+            // is resolved below once the list stops moving.
+            if scrolling {
+                hover_start = Some(loop_now);
+                stationary_search_miss_started_at = None;
+                stationary_hover_probe_done = false;
                 continue;
             }
 
@@ -3854,14 +3949,25 @@ pub fn run_explorer_hook() {
                         continue;
                     }
                     last_hover_probe = Instant::now();
-                    stationary_hover_probe_done = true;
+
+                    // A scroll gesture that has not settled yet owns the probe.
+                    let scroll_driven = scroll_probe.is_pending();
 
                     // Try to get file under cursor
-                    if let Some(file_path) = get_file_under_cursor_checked(
+                    let resolved = get_file_under_cursor_checked(
                         uia.as_ref(),
                         &hover_resolver_hints,
                         &mut slow_explorer_probe_count,
-                    ) {
+                    );
+                    // One probe per parked cursor, except while a scroll gesture is
+                    // still settling: there the latch stays open until two
+                    // consecutive probes agree on the item under the cursor.
+                    stationary_hover_probe_done = scroll_probe.observe(resolved.as_ref());
+                    if scroll_driven && !stationary_hover_probe_done {
+                        continue;
+                    }
+
+                    if let Some(file_path) = resolved {
                         if !last_file
                             .as_ref()
                             .map(|last| same_path(last, &file_path))
@@ -3887,6 +3993,22 @@ pub fn run_explorer_hook() {
                             show_preview(&file_path, cursor_pos.x, cursor_pos.y);
                         }
                     } else {
+                        if scroll_driven {
+                            // The list settled on something that is not a media
+                            // file: drop the preview that scrolled away, the same
+                            // way the mouse-move path does.
+                            match last_file.clone() {
+                                Some(file) => suppressed.suppress(file, false),
+                                None => suppressed.clear(),
+                            }
+                            hide_preview();
+                            last_file = None;
+                            stationary_search_miss_started_at = None;
+                            video_hover_guard_until = None;
+                            hover_start = Some(Instant::now());
+                            continue;
+                        }
+
                         let search_view_active =
                             hover_resolver_hints.is_search_view || is_current_search_view_legacy();
                         if search_view_active {
