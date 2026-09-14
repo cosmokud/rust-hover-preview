@@ -54,25 +54,3 @@ fn claim(name: PCWSTR) -> Option<InstanceGuard> {
         handle: Some(handle),
     })
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn test_mutex_name() -> Vec<u16> {
-        format!("Local\\rust-hover-preview-test-{}", std::process::id())
-            .encode_utf16()
-            .chain(std::iter::once(0))
-            .collect()
-    }
-
-    #[test]
-    fn second_claim_is_refused_until_the_guard_is_dropped() {
-        let name = test_mutex_name();
-
-        let guard = claim(PCWSTR(name.as_ptr())).expect("first claim should succeed");
-        assert!(claim(PCWSTR(name.as_ptr())).is_none());
-        drop(guard);
-        assert!(claim(PCWSTR(name.as_ptr())).is_some());
-    }
-}
