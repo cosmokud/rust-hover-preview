@@ -22,6 +22,7 @@ Inspired by QTTabBar (QuizoApps) hover preview.
 - Display-aware placement that keeps the preview inside the monitor under the cursor or focused item, with frames painted before the window is revealed so a new hover never flashes the previous image
 - Scale-aware sizing from 25% to 400% or fit-to-screen, always clamped to the space available on the display so a scaled-up preview is never clipped
 - EnumWindows-based Explorer detection with CabinetWClass/ExplorerWClass class matching to keep idle polling light and avoid Explorer-side COM allocations, plus input-grace helpers that throttle hover and keyboard focus probes to recent user activity
+- Wheel scrolling refreshes the preview without moving the mouse: a system-wide low-level mouse hook reports wheel input, the hover stability window restarts while the wheel turns, and the item that settles under the parked cursor is previewed — or the preview is dropped when that item is not media
 - Keyboard previews take priority over the pointer: a preview opened with the arrow keys stays on top when a parked cursor sits under it, mouse-driven triggers stay frozen until the mouse is moved on purpose, and the cursor-over-preview check is skipped instead of running on every poll
 - Single-instance enforcement: launching the app again exits immediately instead of adding a duplicate tray icon, Explorer hook, and preview window
 
@@ -175,6 +176,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full system overview.
 - Enforces a single running instance with a session-local named mutex, exiting before COM setup, hooks, or background threads start
 - Counts and classifies Explorer browser windows via EnumWindows and CabinetWClass/ExplorerWClass class matching, so idle polling never spins up Explorer's shell automation providers
 - Gates hover and keyboard focus probes behind input-grace windows (recent_elapsed_within, should_probe_keyboard_focus, should_probe_hover_resolver, should_probe_stationary_hover) and a stationary_hover_probe_done latch to avoid redundant accessibility work for a parked cursor
+- Watches wheel input with a low-level mouse hook (`WH_MOUSE_LL`) on its own message-pumping thread, so a scroll that moves the list under a parked pointer re-resolves the hovered item instead of freezing the preview until the mouse moves
 
 ## License
 

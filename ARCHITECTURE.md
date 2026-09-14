@@ -9,6 +9,7 @@ Rust Hover Preview is a Windows 11 tray application that watches File Explorer f
 - Main thread claims the single-instance mutex, initializes COM, config, DPI awareness, then runs the tray event loop.
 - Preview thread owns the layered preview window and media decoding/rendering.
 - Explorer hook thread polls Explorer state with UI Automation/MSAA and Shell COM APIs, and uses EnumWindows with CabinetWClass/ExplorerWClass class matching to count and classify Explorer browser windows so idle polling never spins up Explorer's shell automation providers.
+- Wheel watcher thread installs a system-wide low-level mouse hook (`WH_MOUSE_LL`) and pumps the messages it needs, publishing a wheel-tick counter that the Explorer hook consumes so wheel scrolling refreshes the hovered item.
 - Config watcher thread reloads `config.ini` when it changes on disk.
 
 ## Single Instance
@@ -20,6 +21,7 @@ The app runs as a single instance per user session. `main` claims a session-loca
 - `main.rs`: single-instance guard, process startup, COM lifecycle, DPI awareness, thread orchestration.
 - `single_instance.rs`: named-mutex guard that limits the app to one running instance per user session.
 - `explorer_hook.rs`: resolves hovered/focused Explorer items, handles path normalization, and sends preview messages.
+- `wheel_input.rs`: system-wide mouse-wheel hook thread that publishes a tick counter, so a scroll that moves the list under a parked pointer is visible to the polling loop.
 - `preview_window.rs`: layered window rendering, scale-aware sizing, animation streaming for GIF/WebP, FFmpeg-backed video playback, monitor-bounded placement with paint-before-show presentation, and WM_POWERBROADCAST handling to reset state on system resume and clean up on suspend.
 - `tray.rs`: tray icon and menu, configuration toggles, exit flow, and WM_POWERBROADCAST handling to re-add the icon after DWM/Explorer restart on resume.
 - `config.rs`: INI-backed configuration with defaults and input sanitization.
@@ -34,10 +36,11 @@ The app runs as a single instance per user session. `main` claims a session-loca
 ## Explorer Hook Flow
 
 1. Detect active Explorer window and focused or hovered item via HWND/class matching and UI Automation, with input-grace helpers (should_probe_keyboard_focus, should_probe_hover_resolver, should_probe_stationary_hover) throttling probes to recent user activity and a stationary_hover_probe_done latch capping stationary-hover work to a single probe per parked cursor.
-2. Normalize the resolved path and validate the file extension.
-3. Send `Show` or `Hide` messages to the preview thread via channel.
-4. Cache folder and Shell view data to reduce repeated COM work.
-5. Keep keyboard and mouse precedence explicit: an arrow-key preview owns the screen and is never dismissed by the parked pointer, while a mouse preview is still dismissed the moment the cursor touches it. Each keyboard spawn measures the preview's own on-screen box (`preview_screen_rect`) and, when that box covers the cursor, freezes the pointer-driven triggers — `should_probe_keyboard_focus`'s companion `should_probe_preview_hover`, the hover resolver/folder probe, and mouse hover previews — until the cursor is moved more than the pointer tolerance (20 px), so jitter cannot end a keyboard preview. The focused-item baseline (`last_focused_name`) is cleared on mouse movement, and the focus observed after that acts immediately, so the first navigation key switches to the keyboard preview instead of being swallowed as a fresh baseline. When the mouse does take over, the file that was shown stays latched (sticky `SuppressedHover`) until the cursor resolves a different file or the keyboard is used again.
+2. Treat a wheel tick as input when the pointer is over Explorer. The wheel moves the list under a stationary cursor, which changes the hovered item without any mouse movement: the stability window restarts while the wheel turns and the latch is reopened, so when the list settles the item that landed under the cursor is resolved and previewed (or the preview is dropped when that item is not media). A `ScrollSettleProbe` only acts on an item that survives two consecutive probes, because Explorer can still be animating the scroll.
+3. Normalize the resolved path and validate the file extension.
+4. Send `Show` or `Hide` messages to the preview thread via channel.
+5. Cache folder and Shell view data to reduce repeated COM work.
+6. Keep keyboard and mouse precedence explicit: an arrow-key preview owns the screen and is never dismissed by the parked pointer, while a mouse preview is still dismissed the moment the cursor touches it. Each keyboard spawn measures the preview's own on-screen box (`preview_screen_rect`) and, when that box covers the cursor, freezes the pointer-driven triggers — `should_probe_keyboard_focus`'s companion `should_probe_preview_hover`, the hover resolver/folder probe, and mouse hover previews — until the cursor is moved more than the pointer tolerance (20 px), so jitter cannot end a keyboard preview. The focused-item baseline (`last_focused_name`) is cleared on mouse movement, and the focus observed after that acts immediately, so the first navigation key switches to the keyboard preview instead of being swallowed as a fresh baseline. When the mouse does take over, the file that was shown stays latched (sticky `SuppressedHover`) until the cursor resolves a different file or the keyboard is used again.
 
 ## DPI Awareness
 
