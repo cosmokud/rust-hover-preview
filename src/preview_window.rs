@@ -2639,6 +2639,20 @@ pub fn run_preview_window() {
                             let mw = media_data.current_width() as i32;
                             let mh = media_data.current_height() as i32;
 
+                            let pending = pending_load.take().filter(|pl| {
+                                pl.generation == result.generation && !pl.spinner_shown
+                            });
+                            pending_load_cancel = None;
+
+                            // Move before installing the frame. Crossing between
+                            // displays of different scale sends WM_DPICHANGED,
+                            // which resets the preview and would otherwise
+                            // discard the frame we are about to show, leaving the
+                            // other display's image stranded on screen.
+                            if let Some(ref pl) = pending {
+                                let _ = MoveWindow(hwnd, pl.pos_x, pl.pos_y, mw, mh, false);
+                            }
+
                             if let Ok(mut current) = CURRENT_MEDIA.lock() {
                                 if let Some(ref mut existing) = *current {
                                     existing.cancel_background_work();
@@ -2650,14 +2664,9 @@ pub fn run_preview_window() {
                             // paint the new frame before revealing the window.
                             // Showing first would flash the previous preview at
                             // the new position and size.
-                            let pending = pending_load.take().filter(|pl| {
-                                pl.generation == result.generation && !pl.spinner_shown
-                            });
-                            pending_load_cancel = None;
+                            render_layered_preview(hwnd);
 
                             if let Some(pl) = pending {
-                                let _ = MoveWindow(hwnd, pl.pos_x, pl.pos_y, mw, mh, false);
-                                render_layered_preview(hwnd);
                                 let _ = SetWindowPos(
                                     hwnd,
                                     HWND_TOPMOST,
@@ -2668,8 +2677,6 @@ pub fn run_preview_window() {
                                     SWP_NOACTIVATE | SWP_SHOWWINDOW,
                                 );
                                 let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
-                            } else {
-                                render_layered_preview(hwnd);
                             }
                         }
                         None => {
@@ -2693,9 +2700,6 @@ pub fn run_preview_window() {
                 if !pl.spinner_shown && pl.started.elapsed() >= Duration::from_secs(2) {
                     pl.spinner_shown = true;
                     let loading = create_loading_media(pl.width, pl.height);
-                    if let Ok(mut current) = CURRENT_MEDIA.lock() {
-                        *current = Some(loading);
-                    }
                     let _ = MoveWindow(
                         hwnd,
                         pl.pos_x,
@@ -2704,6 +2708,11 @@ pub fn run_preview_window() {
                         pl.height as i32,
                         false,
                     );
+                    // Install the spinner after the move so a WM_DPICHANGED
+                    // reset from crossing displays cannot discard it.
+                    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+                        *current = Some(loading);
+                    }
                     // Paint the spinner before revealing the window so the
                     // previous preview cannot flash at the new position.
                     render_layered_preview(hwnd);
