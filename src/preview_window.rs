@@ -19,8 +19,9 @@ use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     BeginPaint, CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, EndPaint,
-    SelectObject, AC_SRC_ALPHA, AC_SRC_OVER, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, BLENDFUNCTION,
-    DIB_RGB_COLORS, PAINTSTRUCT,
+    GetMonitorInfoW, MonitorFromPoint, SelectObject, AC_SRC_ALPHA, AC_SRC_OVER, BITMAPINFO,
+    BITMAPINFOHEADER, BI_RGB, BLENDFUNCTION, DIB_RGB_COLORS, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+    PAINTSTRUCT,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::{OpenProcess, TerminateProcess, PROCESS_TERMINATE};
@@ -2182,6 +2183,33 @@ fn virtual_screen_bounds() -> ScreenBounds {
     }
 }
 
+/// Usable bounds of the display nearest to `(x, y)`. Anchoring layout to a
+/// single monitor keeps the preview from spilling onto a neighboring display
+/// when more than one is attached. Falls back to the whole virtual screen if
+/// the monitor query fails.
+fn monitor_bounds_from_point(x: i32, y: i32) -> ScreenBounds {
+    unsafe {
+        let monitor = MonitorFromPoint(POINT { x, y }, MONITOR_DEFAULTTONEAREST);
+        if !monitor.is_invalid() {
+            let mut info = MONITORINFO {
+                cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+                ..Default::default()
+            };
+            if GetMonitorInfoW(monitor, &mut info).as_bool() {
+                let work = info.rcWork;
+                return ScreenBounds {
+                    left: work.left,
+                    top: work.top,
+                    right: work.right,
+                    bottom: work.bottom,
+                };
+            }
+        }
+    }
+
+    virtual_screen_bounds()
+}
+
 /// Compute preview layout for mouse hover (relative to cursor position)
 fn compute_mouse_layout(
     cursor_x: i32,
@@ -2713,7 +2741,7 @@ pub fn run_preview_window() {
                 match preview_msg {
                     PreviewMessage::Show(path, x, y) => {
                         show_requested = true;
-                        let bounds = virtual_screen_bounds();
+                        let bounds = monitor_bounds_from_point(x, y);
                         let follow_cursor = CONFIG.lock().map(|c| c.follow_cursor).unwrap_or(true);
 
                         if let Some(orig_dims) = get_media_dimensions(&path) {
@@ -2729,7 +2757,9 @@ pub fn run_preview_window() {
                     }
                     PreviewMessage::ShowKeyboard(path, il, it, ir, ib) => {
                         show_requested = true;
-                        let bounds = virtual_screen_bounds();
+                        // The focused item lives inside the Explorer window, so
+                        // its center resolves to that window's monitor.
+                        let bounds = monitor_bounds_from_point((il + ir) / 2, (it + ib) / 2);
                         let follow_cursor = CONFIG.lock().map(|c| c.follow_cursor).unwrap_or(true);
 
                         if let Some(orig_dims) = get_media_dimensions(&path) {
@@ -2972,6 +3002,43 @@ mod tests {
 
         let layout = compute_keyboard_layout(-3200, 900, -3000, 1100, (800, 600), true, bounds)
             .expect("layout should fit near the selected item");
+
+        assert!(layout.pos_x >= bounds.left);
+        assert!(layout.pos_x + layout.preview_w as i32 <= bounds.right);
+        assert!(layout.pos_y >= bounds.top);
+        assert!(layout.pos_y + layout.preview_h as i32 <= bounds.bottom);
+    }
+
+    #[test]
+    fn mouse_best_position_stays_on_anchor_monitor() {
+        // Right-hand monitor of a two-display desktop.
+        let bounds = ScreenBounds {
+            left: 1920,
+            top: 0,
+            right: 3840,
+            bottom: 1080,
+        };
+
+        let layout = compute_mouse_layout(3800, 540, (800, 600), false, bounds)
+            .expect("layout should fit beside the cursor");
+
+        assert!(layout.pos_x >= bounds.left);
+        assert!(layout.pos_x + layout.preview_w as i32 <= bounds.right);
+        assert!(layout.pos_y >= bounds.top);
+        assert!(layout.pos_y + layout.preview_h as i32 <= bounds.bottom);
+    }
+
+    #[test]
+    fn keyboard_best_position_stays_on_anchor_monitor() {
+        let bounds = ScreenBounds {
+            left: 1920,
+            top: 0,
+            right: 3840,
+            bottom: 1080,
+        };
+
+        let layout = compute_keyboard_layout(3800, 400, 3900, 600, (800, 600), false, bounds)
+            .expect("layout should fit beside the selected item");
 
         assert!(layout.pos_x >= bounds.left);
         assert!(layout.pos_x + layout.preview_w as i32 <= bounds.right);

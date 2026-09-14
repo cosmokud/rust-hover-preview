@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Fixed
+
+- Preview layout is now bounded to the display nearest the hovered cursor or focused item instead of the whole virtual desktop, so the preview no longer clips onto a neighboring monitor when multiple displays are attached.
+
 ## [0.1.14-rc.3] - 2026-07-03
 
 ### Added
