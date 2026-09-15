@@ -14,6 +14,10 @@
 - Documentation is up to date with the release: README.md lists PDF under supported formats and states what is and is not previewed, and ARCHITECTURE.md documents the PDF path, the apartment both rendering threads initialize, the page-size cache, and the header check.
 - Bumped version to 0.2.0 in Cargo.toml and Cargo.lock
 
+### Fixed
+
+- PDF previews appear when a PDF is hovered in a normal folder view. The document was loaded through `StorageFile`, which rejects the paths the Explorer hook hands over: canonicalizing a shell path returns the verbatim form (`\\?\G:\...`) and `StorageFile.GetFileFromPathAsync` fails on it with `ERROR_BAD_PATHNAME`, so the page size could not be read, no layout was computed, and the hover showed nothing at all — no preview and no spinner. The same file previewed from a search-results view because that path is taken from the accessibility value and never canonicalized, and images were never affected because `image::open` reads verbatim paths without complaint. The file is now read with `std::fs::read` and handed to the engine as an in-memory stream, so the WinRT boundary accepts every path form the rest of the app produces — verbatim, long and UNC paths included — and the document only has to be in memory while it is parsed. Measured on the same PDFs, opening through the stream costs what the storage-file route did (about 5 ms for a 1.4 MB manual, under 1 ms for a 29 KB invoice), and the explicit `Storage` feature that route needed is gone from the manifest.
+
 ## [0.1.14] - 2026-09-15
 
 ### Added

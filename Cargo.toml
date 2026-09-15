@@ -35,7 +35,6 @@ windows = { version = "0.58", features = [
     # ships with Windows (Windows.Data.Pdf) instead of a bundled renderer.
     "Foundation",
     "Data_Pdf",
-    "Storage",
     "Storage_Streams",
     "Graphics_Imaging",
     "UI",

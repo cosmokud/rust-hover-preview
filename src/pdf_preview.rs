@@ -4,11 +4,9 @@ use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use windows::core::HSTRING;
 use windows::Data::Pdf::{PdfDocument, PdfPage, PdfPageRenderOptions};
 use windows::Graphics::Imaging::BitmapEncoder;
-use windows::Storage::StorageFile;
-use windows::Storage::Streams::{DataReader, InMemoryRandomAccessStream};
+use windows::Storage::Streams::{DataReader, DataWriter, InMemoryRandomAccessStream};
 use windows::UI::Color;
 use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
 
@@ -131,13 +129,26 @@ fn fit_page(width: f32, height: f32, max_width: u32, max_height: u32) -> Option<
     Some((target_width, target_height))
 }
 
+/// Open the document from bytes read here rather than through `StorageFile`.
+///
+/// `StorageFile.GetFileFromPathAsync` rejects the verbatim paths the Explorer
+/// hook produces when it canonicalizes a shell path (`\\?\G:\...`): it fails
+/// with `ERROR_BAD_PATHNAME` while the same file opens through a plain path,
+/// which is why a PDF previewed from a search result but not from a folder
+/// view. Reading the file here keeps the WinRT boundary on the path forms the
+/// rest of the app uses, long and UNC paths included, at the cost of holding
+/// the file in memory while it is parsed.
 fn open_document(path: &Path) -> Option<PdfDocument> {
-    let file = StorageFile::GetFileFromPathAsync(&HSTRING::from(path))
-        .ok()?
-        .get()
-        .ok()?;
+    let bytes = std::fs::read(path).ok()?;
 
-    PdfDocument::LoadFromFileAsync(&file).ok()?.get().ok()
+    let stream = InMemoryRandomAccessStream::new().ok()?;
+    let writer = DataWriter::CreateDataWriter(&stream).ok()?;
+    writer.WriteBytes(&bytes).ok()?;
+    writer.StoreAsync().ok()?.get().ok()?;
+    writer.FlushAsync().ok()?.get().ok()?;
+    stream.Seek(0).ok()?;
+
+    PdfDocument::LoadFromStreamAsync(&stream).ok()?.get().ok()
 }
 
 fn render_page(page: &PdfPage, width: u32, height: u32) -> Option<Vec<u8>> {
