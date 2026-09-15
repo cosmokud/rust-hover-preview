@@ -3,6 +3,7 @@ use crate::preview_window::{
     cursor_preview_hover, hide_preview, kill_stray_video_process, preview_screen_rect,
     show_preview, show_preview_keyboard, PreviewCursorHover,
 };
+use crate::text_formats::is_text_file;
 use crate::video_formats::is_video_file;
 use crate::wheel_input;
 use crate::{CONFIG, RUNNING};
@@ -573,7 +574,7 @@ fn is_image_file(path: &PathBuf) -> bool {
 }
 
 fn is_media_file(path: &PathBuf) -> bool {
-    is_image_file(path) || is_video_file(path) || is_pdf_file(path)
+    is_image_file(path) || is_video_file(path) || is_pdf_file(path) || is_text_file(path)
 }
 
 fn same_path(a: &PathBuf, b: &PathBuf) -> bool {

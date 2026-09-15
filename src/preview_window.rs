@@ -1,8 +1,10 @@
 use crate::config::{
-    sanitize_webp_playback_fps, PreviewScale, TransparentBackground, DEFAULT_PREVIEW_SCALE_PERCENT,
-    DEFAULT_WEBP_PLAYBACK_FPS,
+    sanitize_webp_playback_fps, MarkdownMode, PreviewScale, TextTheme, TransparentBackground,
+    DEFAULT_PREVIEW_SCALE_PERCENT, DEFAULT_WEBP_PLAYBACK_FPS,
 };
 use crate::pdf_preview;
+use crate::text_formats;
+use crate::text_preview::{self, TextPreviewOptions};
 use crate::video_formats::is_video_file;
 use crate::{CONFIG, RUNNING};
 use gif::DecodeOptions;
@@ -36,6 +38,7 @@ use windows::Win32::System::Threading::{
     OpenProcess, QueryFullProcessImageNameW, TerminateProcess, PROCESS_NAME_WIN32,
     PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE,
 };
+use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DispatchMessageW, EnumWindows, GetSystemMetrics, GetWindow,
     GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, IsWindow, IsWindowVisible,
@@ -90,6 +93,7 @@ static CURRENT_MEDIA: Lazy<Mutex<Option<MediaData>>> = Lazy::new(|| Mutex::new(N
 static VIDEO_GEOMETRY_CACHE: Lazy<Mutex<HashMap<PathBuf, VideoGeometry>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
+#[derive(Clone)]
 pub enum PreviewMessage {
     Show(PathBuf, i32, i32),
     ShowKeyboard(PathBuf, i32, i32, i32, i32),
@@ -105,6 +109,7 @@ enum MediaType {
     AnimatedWebP,
     Video,
     Pdf,
+    Text,
     Loading,
 }
 
@@ -643,15 +648,54 @@ fn current_preview_scale() -> PreviewScale {
         .unwrap_or(PreviewScale::Percent(DEFAULT_PREVIEW_SCALE_PERCENT))
 }
 
+/// The theme and Markdown rendering the configuration currently selects, read
+/// once per hover so a measure and the render that follows agree.
+fn current_text_options() -> TextPreviewOptions {
+    CONFIG
+        .lock()
+        .map(|cfg| TextPreviewOptions {
+            theme: cfg.theme,
+            markdown_mode: cfg.markdown_mode,
+        })
+        .unwrap_or(TextPreviewOptions {
+            theme: TextTheme::Light,
+            markdown_mode: MarkdownMode::Rendered,
+        })
+}
+
+/// Whether the preview on screen is a text preview, whose appearance is baked
+/// into its painted frame rather than recomposited from shared pixels.
+fn current_media_is_text() -> bool {
+    CURRENT_MEDIA
+        .lock()
+        .map(|media| {
+            matches!(
+                media.as_ref().map(|media| &media.media_type),
+                Some(MediaType::Text)
+            )
+        })
+        .unwrap_or(false)
+}
+
 /// The scale a preview is laid out and rendered with.
 ///
 /// A PDF page is a vector, so the engine draws it at whatever size it is asked
 /// for and a larger preview is sharper text rather than an enlarged raster. The
 /// configured scale could only hold that back, so a PDF always takes the space
-/// the display allows; every other format keeps the configured scale.
+/// the display allows.
+///
+/// Text is the opposite case: it is drawn at a fixed, display-scaled font size,
+/// so enlarging it would only stretch the window around text that stays the same
+/// size. `100%` is exactly the rule text wants — never enlarged, reduced only
+/// when the space beside the cursor cannot hold it — and the text renderer reads
+/// the size it is given as "as many lines and columns as fit".
+///
+/// Every other format keeps the configured scale.
 fn effective_preview_scale(path: &Path, preview_scale: PreviewScale) -> PreviewScale {
     if pdf_preview::is_pdf_file(path) {
         PreviewScale::FitToScreen
+    } else if text_formats::is_text_file(path) {
+        PreviewScale::Percent(100)
     } else {
         preview_scale
     }
@@ -1569,6 +1613,42 @@ fn load_pdf_first_page(
     })
 }
 
+/// Render a text file into the box the layout planned for it.
+///
+/// Unlike an image, text is not scaled to the box: the font is a fixed,
+/// display-scaled size, and the box decides how many lines and columns are shown.
+/// That is why the caller hands over the planned preview size rather than the
+/// free space around the cursor — the two are the same thing to this renderer,
+/// and using the planned size keeps the painted frame and the window in step.
+fn load_text_preview(
+    path: &PathBuf,
+    width: u32,
+    height: u32,
+    dpi: u32,
+    options: TextPreviewOptions,
+) -> Option<MediaData> {
+    let (pixels, width, height) = text_preview::render(path, width, height, dpi, options)?;
+
+    let frame = ImageFrame {
+        pixels,
+        width,
+        height,
+        delay_ms: 0,
+    };
+
+    Some(MediaData {
+        frames: vec![frame],
+        shared_frames: None,
+        all_frames_loaded: None,
+        current_frame: 0,
+        last_frame_time: Instant::now(),
+        media_type: MediaType::Text,
+        stream_cancel: None,
+        video_process: None,
+        loading_start: None,
+    })
+}
+
 /// Extract video thumbnail using ffmpeg and create frames for preview
 fn load_video_thumbnail(
     path: &PathBuf,
@@ -2285,12 +2365,13 @@ fn ensure_video_window_topmost(x: i32, y: i32, width: i32, height: i32) -> bool 
     true
 }
 
-/// Load media (image, animated image, or video) with appropriate loader
+/// Load media (image, animated image, text, or video) with appropriate loader
 fn load_media(
     path: &PathBuf,
     max_width: u32,
     max_height: u32,
     preview_scale: PreviewScale,
+    dpi: u32,
     cancel: Arc<AtomicBool>,
 ) -> Option<MediaData> {
     if cancel.load(Ordering::Acquire) {
@@ -2303,6 +2384,10 @@ fn load_media(
 
     if pdf_preview::is_pdf_file(path) {
         return load_pdf_first_page(path, max_width, max_height, preview_scale);
+    }
+
+    if text_formats::is_text_file(path) {
+        return load_text_preview(path, max_width, max_height, dpi, current_text_options());
     }
 
     let guessed_format = if is_confirm_file_type_enabled() {
@@ -2391,6 +2476,42 @@ fn get_media_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
     } else {
         image::image_dimensions(path).ok()
     }
+}
+
+/// The size the layout should place and scale a preview from.
+///
+/// A text file has no size of its own, so the box its first screenful wants is
+/// measured here, bounded by the display it will be shown on. That makes the
+/// measurement an intrinsic size in the same sense a PDF page's is: the layout
+/// can fit it into the space beside the cursor, and the text renderer is handed
+/// the box that comes out of that.
+fn media_dimensions(path: &PathBuf, bounds: ScreenBounds, dpi: u32) -> Option<(u32, u32)> {
+    if text_formats::is_text_file(path) {
+        let cap_width = (bounds.right - bounds.left).max(1) as u32;
+        let cap_height = bounds.height().max(1) as u32;
+        return text_preview::measure(path, cap_width, cap_height, dpi, current_text_options());
+    }
+
+    get_media_dimensions(path)
+}
+
+/// Effective DPI of the display nearest `(x, y)`, which is what a text preview's
+/// font size is scaled by. Falls back to the 96 DPI baseline when the monitor
+/// query fails, the same way the placement falls back to the virtual screen.
+fn monitor_dpi_from_point(x: i32, y: i32) -> u32 {
+    unsafe {
+        let monitor = MonitorFromPoint(POINT { x, y }, MONITOR_DEFAULTTONEAREST);
+        if !monitor.is_invalid() {
+            let mut dpi_x = 0u32;
+            let mut dpi_y = 0u32;
+            if GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y).is_ok() && dpi_x > 0
+            {
+                return dpi_x;
+            }
+        }
+    }
+
+    96
 }
 
 /// Render a single frame of the loading spinner animation (BGRA pixels)
@@ -2573,6 +2694,7 @@ struct LoadRequest {
     max_width: u32,
     max_height: u32,
     preview_scale: PreviewScale,
+    dpi: u32,
     cancel: Arc<AtomicBool>,
 }
 
@@ -2649,6 +2771,7 @@ fn spawn_load_worker(
                     request.max_width,
                     request.max_height,
                     request.preview_scale,
+                    request.dpi,
                     Arc::clone(&request.cancel),
                 )
             }))
@@ -3321,6 +3444,9 @@ pub fn run_preview_window() {
 
         // Track current video path to avoid restarting
         let mut current_video_path: Option<PathBuf> = None;
+        // The hover the preview on screen came from, so a theme or Markdown
+        // switch can rebuild it without waiting for the next hover.
+        let mut current_show: Option<PreviewMessage> = None;
         // Track video position/size for periodic topmost re-assertion
         let mut video_pos: (i32, i32, i32, i32) = (0, 0, 0, 0); // (x, y, w, h)
         let mut last_topmost_check = Instant::now();
@@ -3514,7 +3640,14 @@ pub fn run_preview_window() {
                 match preview_msg {
                     PreviewMessage::Refresh => {
                         if latest_preview_msg.is_none() {
-                            refresh_requested = true;
+                            // A text preview's colors are in the painted frame,
+                            // so a theme or Markdown switch rebuilds it from the
+                            // hover it came from; every other preview only needs
+                            // the frame composited again.
+                            match (current_media_is_text(), current_show.clone()) {
+                                (true, Some(show)) => latest_preview_msg = Some(show),
+                                _ => refresh_requested = true,
+                            }
                         }
                     }
                     other => {
@@ -3531,15 +3664,22 @@ pub fn run_preview_window() {
                 let mut show_is_video: bool = false;
                 let mut show_requested = false;
                 let mut preview_scale = current_preview_scale();
+                let mut show_dpi = 96u32;
+                let show_snapshot = matches!(
+                    preview_msg,
+                    PreviewMessage::Show(..) | PreviewMessage::ShowKeyboard(..)
+                )
+                .then(|| preview_msg.clone());
 
                 match preview_msg {
                     PreviewMessage::Show(path, x, y) => {
                         show_requested = true;
                         let bounds = monitor_bounds_from_point(x, y);
+                        let dpi = monitor_dpi_from_point(x, y);
                         let follow_cursor = CONFIG.lock().map(|c| c.follow_cursor).unwrap_or(true);
                         preview_scale = effective_preview_scale(&path, preview_scale);
 
-                        if let Some(orig_dims) = get_media_dimensions(&path) {
+                        if let Some(orig_dims) = media_dimensions(&path, bounds, dpi) {
                             let is_video = is_video_file(&path);
                             if let Some(layout) = compute_mouse_layout(
                                 x,
@@ -3552,6 +3692,7 @@ pub fn run_preview_window() {
                                 show_is_video = is_video;
                                 show_layout = Some(layout);
                                 show_path = Some(path);
+                                show_dpi = dpi;
                             }
                         }
                     }
@@ -3559,11 +3700,13 @@ pub fn run_preview_window() {
                         show_requested = true;
                         // The focused item lives inside the Explorer window, so
                         // its center resolves to that window's monitor.
-                        let bounds = monitor_bounds_from_point((il + ir) / 2, (it + ib) / 2);
+                        let center = ((il + ir) / 2, (it + ib) / 2);
+                        let bounds = monitor_bounds_from_point(center.0, center.1);
+                        let dpi = monitor_dpi_from_point(center.0, center.1);
                         let follow_cursor = CONFIG.lock().map(|c| c.follow_cursor).unwrap_or(true);
                         preview_scale = effective_preview_scale(&path, preview_scale);
 
-                        if let Some(orig_dims) = get_media_dimensions(&path) {
+                        if let Some(orig_dims) = media_dimensions(&path, bounds, dpi) {
                             let is_video = is_video_file(&path);
                             if let Some(layout) = compute_keyboard_layout(
                                 (il, it, ir, ib),
@@ -3575,6 +3718,7 @@ pub fn run_preview_window() {
                                 show_is_video = is_video;
                                 show_layout = Some(layout);
                                 show_path = Some(path);
+                                show_dpi = dpi;
                             }
                         }
                     }
@@ -3599,6 +3743,7 @@ pub fn run_preview_window() {
                         }
                         current_video_path = None;
                         video_pos = (0, 0, 0, 0);
+                        current_show = None;
                     }
                     PreviewMessage::Refresh => {
                         render_layered_preview(hwnd);
@@ -3616,6 +3761,20 @@ pub fn run_preview_window() {
                     let preview_w = layout.preview_w;
                     let preview_h = layout.preview_h;
 
+                    // A text preview is rendered at the size the layout planned
+                    // for it: text is never scaled to fill a box, so the planned
+                    // box is the box it draws into. Every other format is loaded
+                    // against the free space it may be scaled within.
+                    let (load_width, load_height) = if text_formats::is_text_file(&path) {
+                        (preview_w, preview_h)
+                    } else {
+                        (max_width, max_height)
+                    };
+
+                    if show_snapshot.is_some() {
+                        current_show = show_snapshot.clone();
+                    }
+
                     if show_is_video {
                         // Cancel any in-flight image load before switching to video.
                         current_generation += 1;
@@ -3626,9 +3785,14 @@ pub fn run_preview_window() {
                         }
 
                         let no_cancel = Arc::new(AtomicBool::new(false));
-                        if let Some(media_data) =
-                            load_media(&path, max_width, max_height, preview_scale, no_cancel)
-                        {
+                        if let Some(media_data) = load_media(
+                            &path,
+                            load_width,
+                            load_height,
+                            preview_scale,
+                            show_dpi,
+                            no_cancel,
+                        ) {
                             // For video, hide our window and use ffplay
                             let _ = ShowWindow(hwnd, SW_HIDE);
 
@@ -3727,9 +3891,10 @@ pub fn run_preview_window() {
                             LoadRequest {
                                 generation: gen,
                                 path,
-                                max_width,
-                                max_height,
+                                max_width: load_width,
+                                max_height: load_height,
                                 preview_scale,
+                                dpi: show_dpi,
                                 cancel: Arc::clone(&load_cancel),
                             },
                         );
@@ -3755,6 +3920,7 @@ pub fn run_preview_window() {
                     }
                     current_video_path = None;
                     video_pos = (0, 0, 0, 0);
+                    current_show = None;
                 }
             } else if refresh_requested {
                 render_layered_preview(hwnd);

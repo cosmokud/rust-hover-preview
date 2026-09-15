@@ -4,7 +4,7 @@
 ![Windows](https://img.shields.io/badge/Platform-Windows-blue?logo=windows)
 ![License](https://img.shields.io/badge/License-MIT-green)
 
-Rust Hover Preview is a Windows 11 system tray app that shows instant image, video, and PDF previews in File Explorer when you hover files with the mouse or navigate with the keyboard.
+Rust Hover Preview is a Windows 11 system tray app that shows instant image, video, PDF, and text previews in File Explorer when you hover files with the mouse or navigate with the keyboard.
 
 Inspired by QTTabBar (QuizoApps) hover preview.
 
@@ -17,12 +17,13 @@ Inspired by QTTabBar (QuizoApps) hover preview.
 - Animation memory is bounded by a sliding window rather than the length of the file: the decoder stays a few frames ahead of the playhead and frames already shown are released, so long or large GIF, APNG, and WebP files play to the end and loop instead of stopping early
 - Video previews through FFmpeg (`ffplay` + `ffprobe`)
 - PDF previews of the first page, rendered by the PDF engine already built into Windows — no bundled renderer, no extra install, and no new dependency
-- Tray controls for enable/disable, delay, positioning, scaling, startup, off-trigger key, and volume
+- Text and code previews colored by syntax definition, with Atom One Light and One Dark Pro bundled as the light and dark themes, and Markdown shown as the document it describes (or as highlighted source, from the tray)
+- Tray controls for enable/disable, delay, positioning, scaling, startup, off-trigger key, volume, text theme, and Markdown rendering
 - Explorer Shell view detection, folder caching, and path normalization for reliable hover matching
 - Topmost, non-activating preview windows designed to avoid focus stealing
 - Per-monitor DPI awareness to reduce scaling artifacts on high-DPI displays
 - Display-aware placement that keeps the preview inside the monitor under the cursor or focused item, with frames painted before the window is revealed so a new hover never flashes the previous image
-- Scale-aware sizing from 25% to 400% or fit-to-screen, always clamped to the space available on the display so a scaled-up preview is never clipped (PDF previews always use fit-to-screen)
+- Scale-aware sizing from 25% to 400% or fit-to-screen, always clamped to the space available on the display so a scaled-up preview is never clipped (PDF and text previews have their own sizing, described below)
 - Sleep/resume resilience: waking the system resets the layered composition surface and re-asserts the preview's topmost/layered styles, the tray icon is restored after an Explorer restart, and video playback and background decoding are torn down cleanly on suspend
 - EnumWindows-based Explorer detection with CabinetWClass/ExplorerWClass class matching to keep idle polling light and avoid Explorer-side COM allocations, plus input-grace helpers that throttle hover and keyboard focus probes to recent user activity
 - Wheel scrolling refreshes the preview without moving the mouse: a system-wide low-level mouse hook reports wheel input, the hover stability window restarts while the wheel turns, and the item that settles under the parked cursor is previewed — or the preview is dropped when that item is not media. Scrolling while a keyboard preview is on screen closes it and hands the screen back to the mouse, so the preview follows the item under the cursor instead of staying frozen while the list scrolls
@@ -46,6 +47,24 @@ The first page is rendered by the PDF engine that ships with Windows, so there i
 Because the page is drawn at the preview's size, a PDF always takes the largest size the display area allows — `Preview Scaling` does not apply to it, since a bigger preview is sharper text rather than an enlarged image.
 
 Any PDF the Windows engine can open without a password is previewed. Password-protected and damaged files are skipped rather than shown as an error, and a `.pdf` file has to contain a PDF header before it is handed to the renderer.
+
+### Text and code
+
+`txt`, `md`, `rtf`, `nfo`, `json`, `toml`, `yaml`, `xml`, `ini`, `csv`, `log`, `sql`, `py`, `js`, `ts`, `rs`, `go`, `c`, `h`, `cpp`, `cs`, `java`, `kt`, `swift`, `php`, `rb`, `lua`, `sh`, `ps1`, `bat`, `html`, `css`, and the rest of the list below
+
+The first screenful is shown, colored by the syntax definition its extension names — the TextMate grammars `bat` uses, so the colors match what an editor would show. Anything no grammar claims is still previewed, as plain text.
+
+The full list lives in `config.ini` and is meant to be edited there: add an extension the app does not know, or delete the ones you never want to see, and the change applies without a restart. A file whose extension is not in the list is not previewed at all.
+
+`.md` files are rendered as the document they describe — headings, lists, quotes, tables, links, and fenced code blocks colored with the same highlighter — and can be switched to highlighted source from the tray or with `markdown_mode`.
+
+`.rtf` files are shown as the text they carry: Word's tables are skipped and the paragraphs, tabs, and escaped characters are resolved, so a document reads without its formatting.
+
+`.nfo` files are read as CP437 art with their ANSI colors preserved, toned to the page they are drawn on so light and dark themes are both readable.
+
+Text previews are sized to their content rather than to the image scaling setting: a two-line file gets a two-line preview, a long file takes as much of the display as the space beside the cursor allows, and the font is a fixed size scaled by the display's DPI rather than a stretched image. Code, markup, and NFO art keep their columns and are clipped at the right edge; prose — a readme, a log, an `.rtf` — wraps. A file longer than the preview ends with a count of the lines left (`… 2349 more lines`).
+
+Encoding is decided from the file: UTF-8 or UTF-16 byte order marks first, then UTF-8, then the Windows code page (CP437 for NFO art). A file that is not text — an executable or archive with a text extension — is skipped rather than shown as garbage. One preview reads up to 2 MB and lays out up to 400 lines, none of which a single screenful can show.
 
 ### Videos (FFmpeg required)
 
@@ -115,7 +134,9 @@ ffprobe -version
 - **Same File Rehover Delay**: `Instant (0 ms)`, `Fast (200 ms)`, `Medium (500 ms)`, `Relaxed (750 ms)`, `Slow (1000 ms)` — delay before the same file can preview again after the preview self-dismisses
 - **Video Volume**: `Max (100%)`, `High (80%)`, `Medium (50%)`, `Low (25%)`, `Very Low (10%)`, `Mute (0%)`
 - **Preview Position**: `Follow Cursor` or `Best Position`
-- **Preview Scaling**: `Fit to Screen`, `400%`, `300%`, `200%`, `150%`, `100% (Default)`, `50%`, `25%` — sizes the preview relative to the image or video's native resolution instead of always showing it verbatim. `Fit to Screen` enlarges the preview as much as the display allows. Any scale that would extend past the screen edge is reduced to fit, so the preview is never clipped, in both `Follow Cursor` and `Best Position` modes.
+- **Text Preview Theme**: `Atom One Light (Default)` or `One Dark Pro` — the colors text and code previews are drawn with. Changing it re-renders the preview that is on screen.
+- **Markdown Preview**: `Rendered (Default)` shows a `.md` file as the document it describes, `Highlighted Source` shows the markup itself with Markdown syntax highlighting.
+- **Preview Scaling**: `Fit to Screen`, `400%`, `300%`, `200%`, `150%`, `100% (Default)`, `50%`, `25%` — sizes the preview relative to the image or video's native resolution instead of always showing it verbatim. `Fit to Screen` enlarges the preview as much as the display allows. Any scale that would extend past the screen edge is reduced to fit, so the preview is never clipped, in both `Follow Cursor` and `Best Position` modes. PDF and text previews size themselves (a PDF page is always fit to screen, and text is always drawn at its own font size), so this setting does not apply to them.
 - **Transparent Background**: `Transparent`, `Black`, `White`, or `Checkerboard`
 - **Enable Off Trigger Key**: Temporarily suppress previews while the displayed configured key is held
 - **Confirm File Type**: When enabled, validates file content signatures (magic bytes) against the extension to avoid loading mislabeled files. If previews don't appear for certain files that should be supported, try enabling this option — the app will attempt to decode them by their true content type rather than relying solely on the file extension.
@@ -147,8 +168,16 @@ transparent_background=black
 webp_playback_fps=90
 video_volume=0
 preview_scale=100
+theme=light
+markdown_mode=rendered
+
+[text]
+extensions=txt,text,log,nfo,md,markdown,json,toml,yaml,py,js,ts,rs,...
 ```
 
+- `theme` is the color theme for text and code previews: `light` (Atom One Light, the default) or `dark` (One Dark Pro). `atom one light` and `one dark pro` are accepted as well.
+- `markdown_mode` is how `.md` files are drawn: `rendered` (the default document view) or `source` (the markup with syntax highlighting).
+- `extensions` is every extension previewed as text. It is written in full when the file is created and is shortened in this example. Append an extension to preview one the app does not know, or delete entries to stop previewing them — the change is picked up without a restart. An extension is written without its dot (`py`, not `.py`), and an empty list turns text previews off, so the built-in list comes back only when the key itself is missing.
 - When `enable_off_trigger_key` is enabled, hold the configured `off_trigger_key` to keep previews hidden while browsing Explorer.
 - When `confirm_file_type` is enabled, the app validates file content signatures (magic bytes) against the extension — useful for files with incorrect extensions.
 - `webp_playback_fps` controls the maximum playback speed for animated WebP files (1–90 FPS; 0 resets to the default of 90).
@@ -186,6 +215,9 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full system overview.
 - Uses Windows accessibility APIs (MSAA + UI Automation) to resolve hovered/focused Explorer items
 - Uses Shell COM APIs to identify active Explorer windows and folders
 - Uses GDI for image rendering in a layered topmost preview window
+- Colors text and code with the TextMate grammars `bat` uses (through `syntect` and `two-face`) and lays the styled lines out into a GDI surface with Consolas, the same layered window, and the same frame shape images arrive in
+- Renders Markdown with `pulldown-cmark`, with the theme's own colors asked for by scope, so a rendered document and a highlighted source file share one palette
+- Bundles Atom One Light and One Dark Pro as TextMate themes converted from their VS Code sources (see `assets/themes/NOTICE.md`)
 - Uses Google's libwebp through `webp-animation` for animated WebP decoding
 - Uses `directories` for Windows roaming configuration paths
 - Uses `ffprobe` for video dimensions and `ffplay` for video playback

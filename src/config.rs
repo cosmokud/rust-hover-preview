@@ -3,7 +3,12 @@ use directories::BaseDirs;
 use std::fs;
 use std::path::PathBuf;
 
+use crate::text_formats::{sanitize_extensions, DEFAULT_TEXT_EXTENSIONS};
+
 const CONFIG_SECTION: &str = "settings";
+/// The text-preview extension list lives in its own section so the one long
+/// value stays easy to find and edit by hand.
+const TEXT_SECTION: &str = "text";
 pub const DEFAULT_WEBP_PLAYBACK_FPS: u32 = 90;
 pub const MAX_WEBP_PLAYBACK_FPS: u32 = 90;
 pub const DEFAULT_PREVIEW_SCALE_PERCENT: u32 = 100;
@@ -97,6 +102,56 @@ impl TransparentBackground {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextTheme {
+    /// Atom One Light.
+    Light,
+    /// One Dark Pro.
+    Dark,
+}
+
+impl TextTheme {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Light => "light",
+            Self::Dark => "dark",
+        }
+    }
+
+    fn from_str(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "light" | "atom one light" | "atom-one-light" => Some(Self::Light),
+            "dark" | "one dark pro" | "one-dark-pro" => Some(Self::Dark),
+            _ => None,
+        }
+    }
+}
+
+/// How a Markdown file is laid out: the document it describes, or the markup
+/// itself with the Markdown syntax highlighted like any other source file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MarkdownMode {
+    Rendered,
+    Source,
+}
+
+impl MarkdownMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Rendered => "rendered",
+            Self::Source => "source",
+        }
+    }
+
+    fn from_str(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "rendered" | "render" | "document" => Some(Self::Rendered),
+            "source" | "raw" | "highlighted" | "highlighted source" => Some(Self::Source),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct AppConfig {
     pub is_first_run: bool,
@@ -112,6 +167,10 @@ pub struct AppConfig {
     pub transparent_background: TransparentBackground,
     pub video_volume: u32,
     pub preview_scale: PreviewScale,
+    pub theme: TextTheme,
+    pub markdown_mode: MarkdownMode,
+    /// Extensions previewed as text, already normalized for lookup.
+    pub text_extensions: Vec<String>,
 }
 
 impl Default for AppConfig {
@@ -130,6 +189,9 @@ impl Default for AppConfig {
             transparent_background: TransparentBackground::Black,
             video_volume: 0, // Mute by default
             preview_scale: PreviewScale::Percent(DEFAULT_PREVIEW_SCALE_PERCENT),
+            theme: TextTheme::Light,
+            markdown_mode: MarkdownMode::Rendered,
+            text_extensions: sanitize_extensions(DEFAULT_TEXT_EXTENSIONS),
         }
     }
 }
@@ -234,6 +296,21 @@ impl AppConfig {
                 "preview_scale",
                 Some(self.preview_scale.as_str()),
             );
+            ini.set(
+                CONFIG_SECTION,
+                "theme",
+                Some(self.theme.as_str().to_string()),
+            );
+            ini.set(
+                CONFIG_SECTION,
+                "markdown_mode",
+                Some(self.markdown_mode.as_str().to_string()),
+            );
+            ini.set(
+                TEXT_SECTION,
+                "extensions",
+                Some(sanitize_extensions(&self.text_extensions.join(",")).join(",")),
+            );
             let _ = ini.write(path.to_string_lossy().as_ref());
         }
     }
@@ -286,5 +363,51 @@ impl AppConfig {
                 self.preview_scale = scale;
             }
         }
+        if let Some(value) = ini.get(CONFIG_SECTION, "theme") {
+            if let Some(theme) = TextTheme::from_str(&value) {
+                self.theme = theme;
+            }
+        }
+        if let Some(value) = ini.get(CONFIG_SECTION, "markdown_mode") {
+            if let Some(mode) = MarkdownMode::from_str(&value) {
+                self.markdown_mode = mode;
+            }
+        }
+        // An empty list means the user removed every extension, and the built-in
+        // list comes back only when the key itself is gone.
+        if let Some(value) = ini.get(TEXT_SECTION, "extensions") {
+            self.text_extensions = sanitize_extensions(&value);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MarkdownMode, TextTheme};
+
+    #[test]
+    fn theme_names_round_trip_and_accept_aliases() {
+        assert_eq!(TextTheme::from_str("light"), Some(TextTheme::Light));
+        assert_eq!(
+            TextTheme::from_str(" Atom One Light "),
+            Some(TextTheme::Light)
+        );
+        assert_eq!(TextTheme::from_str("DARK"), Some(TextTheme::Dark));
+        assert_eq!(TextTheme::from_str("one-dark-pro"), Some(TextTheme::Dark));
+        assert_eq!(TextTheme::from_str("solarized"), None);
+        assert_eq!(TextTheme::Light.as_str(), "light");
+        assert_eq!(TextTheme::Dark.as_str(), "dark");
+    }
+
+    #[test]
+    fn markdown_modes_round_trip_and_accept_aliases() {
+        assert_eq!(
+            MarkdownMode::from_str("rendered"),
+            Some(MarkdownMode::Rendered)
+        );
+        assert_eq!(MarkdownMode::from_str("Raw"), Some(MarkdownMode::Source));
+        assert_eq!(MarkdownMode::from_str("elsewhere"), None);
+        assert_eq!(MarkdownMode::Rendered.as_str(), "rendered");
+        assert_eq!(MarkdownMode::Source.as_str(), "source");
     }
 }
