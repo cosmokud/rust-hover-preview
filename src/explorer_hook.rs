@@ -44,8 +44,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 // Supported image extensions
 const IMAGE_EXTENSIONS: &[&str] = &[
-    "jpg", "jpeg", "jpe", "jfif", "png", "apng", "gif", "bmp", "ico", "tiff", "tif", "webp",
-    "tga", "pbm", "pgm", "ppm", "pam", "pnm", "hdr", "exr", "qoi", "ff",
+    "jpg", "jpeg", "jpe", "jfif", "png", "apng", "gif", "bmp", "ico", "tiff", "tif", "webp", "tga",
+    "pbm", "pgm", "ppm", "pam", "pnm", "hdr", "exr", "qoi", "ff",
 ];
 
 struct FolderMediaIndex {
@@ -3003,6 +3003,21 @@ fn key_is_down(vk: i32) -> bool {
     }
 }
 
+/// Whether the pointer is inside the region a scrollable text preview published,
+/// reading the cursor position here: the caller runs before the polling loop has
+/// read it for this iteration. Answers `false` without a syscall when nothing on
+/// screen scrolls.
+fn text_scroll_pointer_hold_now() -> bool {
+    let mut cursor_pos = POINT::default();
+    unsafe {
+        if GetCursorPos(&mut cursor_pos).is_err() {
+            return false;
+        }
+    }
+
+    text_scroll_pointer_hold(cursor_pos.x, cursor_pos.y)
+}
+
 /// Check if cursor is currently over an Explorer window (regardless of foreground).
 /// Keep this HWND/class based; calling ShellWindows here caused Explorer-side
 /// COM providers to allocate while we were merely checking cursor position.
@@ -3437,8 +3452,7 @@ pub fn run_explorer_hook() {
         let enable_off_trigger_key = config_snapshot.2;
         let same_file_rehover_delay_ms = config_snapshot.3;
 
-        let off_trigger_active =
-            enable_off_trigger_key && off_trigger_vk.is_some_and(key_is_down);
+        let off_trigger_active = enable_off_trigger_key && off_trigger_vk.is_some_and(key_is_down);
 
         if off_trigger_active {
             if last_file.is_some() || keyboard_file.is_some() {
@@ -3520,8 +3534,11 @@ pub fn run_explorer_hook() {
             }
             ExplorerState::VisibleNotFocused => {
                 // Explorer is visible but not focused - do a quick cursor check
-                // Only activate full polling if cursor is actually over Explorer
-                if !is_cursor_over_explorer_full() {
+                // Only activate full polling if cursor is actually over Explorer.
+                // A pointer that is using a scrollable preview is not evidence
+                // that the user has left: the preview is on top of Explorer, so
+                // the check below cannot see Explorer under it.
+                if !is_cursor_over_explorer_full() && !text_scroll_pointer_hold_now() {
                     if last_file.is_some() || keyboard_file.is_some() {
                         hide_preview();
                         last_file = None;
@@ -3553,6 +3570,19 @@ pub fn run_explorer_hook() {
             if GetCursorPos(&mut cursor_pos).is_err() {
                 continue;
             }
+
+            // Whether the pointer is using a text preview that scrolls: on the
+            // preview, or inside the margin around it — which covers the gap it
+            // crosses on its way from the file it belongs to. While that holds,
+            // the preview is something the user is reading rather than something
+            // in the way, so it is not dismissed, and the file under the pointer
+            // is not resolved, so it cannot be replaced by whatever it covers.
+            //
+            // Read once here because more than one path in this loop asks: the
+            // dismissal below, the hover resolver, the mouse hover delay, and the
+            // "Explorer is visible but not focused" branch, where a pointer that
+            // is not over Explorer is not a reason to close a preview either.
+            let text_scroll_hold = text_scroll_pointer_hold(cursor_pos.x, cursor_pos.y);
 
             let loop_now = Instant::now();
             let move_threshold = pointer_pause.move_threshold_px();
@@ -3676,14 +3706,6 @@ pub fn run_explorer_hook() {
             // or background load result cannot resurrect a stuck preview under
             // the pointer. Keyboard previews own the screen: they may cover the
             // parked cursor and are never dismissed by it.
-            //
-            // A text preview that scrolls is the exception: while the pointer is
-            // inside the region around it, the preview is something the user is
-            // reading rather than something in the way, so it is kept — and the
-            // file under the pointer is not resolved, so the preview cannot be
-            // replaced by whatever it happens to cover.
-            let text_scroll_hold = text_scroll_pointer_hold(cursor_pos.x, cursor_pos.y);
-
             let preview_hover = if should_probe_preview_hover(
                 is_keyboard_hover || pointer_pause.freezes_pointer(),
                 last_file.is_some(),
@@ -3696,11 +3718,15 @@ pub fn run_explorer_hook() {
             let over_image_preview = preview_hover.image;
             let over_video_preview = preview_hover.video;
             let over_any_preview = preview_hover.any();
+
+            // A text preview that scrolls is the exception to that rule: while the
+            // pointer is using it, the preview is kept — see `text_scroll_hold`
+            // above for what "using it" covers.
             let guard_active = video_hover_guard_until
                 .map(|until| Instant::now() < until)
                 .unwrap_or(false);
-            let should_dismiss_for_preview_hover = (over_image_preview && !text_scroll_hold)
-                || (over_video_preview && !guard_active);
+            let should_dismiss_for_preview_hover =
+                (over_image_preview && !text_scroll_hold) || (over_video_preview && !guard_active);
 
             if should_dismiss_for_preview_hover
                 || (suppress_preview_until_cursor_leaves_preview && over_any_preview)
