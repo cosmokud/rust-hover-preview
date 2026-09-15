@@ -10,7 +10,7 @@ use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::os::windows::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
-use std::sync::{atomic::Ordering, Mutex};
+use std::sync::{atomic::Ordering, Arc, Mutex};
 use std::time::{Duration, Instant};
 use windows::core::{Interface, VARIANT};
 use windows::Win32::Foundation::{BOOL, HWND, LPARAM, POINT, RECT};
@@ -54,7 +54,7 @@ struct FolderMediaIndex {
 
 struct ExplorerFoldersCache {
     built_at: Instant,
-    folders: Vec<(isize, String)>,
+    folders: Arc<Vec<(isize, String)>>,
 }
 
 struct ShellViewMediaIndex {
@@ -857,17 +857,15 @@ fn is_probable_search_view_context(context: &ActiveShellViewContext) -> bool {
             && get_shell_view_search_root(context.shell_view_hwnd).is_some())
 }
 
-fn get_all_explorer_folders() -> Vec<(HWND, String)> {
+/// Explorer windows and their folders. The cached snapshot is shared through an
+/// `Arc` so a poll tick does not clone the list and every folder string.
+fn get_all_explorer_folders() -> Arc<Vec<(isize, String)>> {
     if let Ok(cache) = EXPLORER_FOLDERS_CACHE.lock() {
         if let Some(cache_entry) = cache.as_ref() {
             if cache_entry.built_at.elapsed()
                 <= Duration::from_millis(EXPLORER_FOLDERS_CACHE_TTL_MS)
             {
-                return cache_entry
-                    .folders
-                    .iter()
-                    .map(|(hwnd, folder)| (HWND(*hwnd as *mut _), folder.clone()))
-                    .collect();
+                return Arc::clone(&cache_entry.folders);
             }
         }
     }
@@ -906,17 +904,16 @@ fn get_all_explorer_folders() -> Vec<(HWND, String)> {
         }
     }
 
+    let result = Arc::new(result);
+
     if let Ok(mut cache) = EXPLORER_FOLDERS_CACHE.lock() {
         *cache = Some(ExplorerFoldersCache {
             built_at: Instant::now(),
-            folders: result.clone(),
+            folders: Arc::clone(&result),
         });
     }
 
     result
-        .into_iter()
-        .map(|(hwnd, folder)| (HWND(hwnd as *mut _), folder))
-        .collect()
 }
 
 fn get_explorer_hwnd_under_cursor_or_foreground() -> Option<HWND> {
@@ -931,9 +928,10 @@ fn get_explorer_hwnd_under_cursor_or_foreground() -> Option<HWND> {
                 let mut top_hwnd = hwnd;
 
                 for _ in 0..20 {
-                    for (explorer_hwnd, _) in &folders {
-                        if current_hwnd == *explorer_hwnd {
-                            return Some(*explorer_hwnd);
+                    for (explorer_hwnd, _) in folders.iter() {
+                        let explorer_hwnd = HWND(*explorer_hwnd as *mut _);
+                        if current_hwnd == explorer_hwnd {
+                            return Some(explorer_hwnd);
                         }
                     }
 
@@ -957,9 +955,10 @@ fn get_explorer_hwnd_under_cursor_or_foreground() -> Option<HWND> {
 
         let foreground = GetForegroundWindow();
         if !foreground.is_invalid() {
-            for (explorer_hwnd, _) in &folders {
-                if foreground == *explorer_hwnd {
-                    return Some(*explorer_hwnd);
+            for (explorer_hwnd, _) in folders.iter() {
+                let explorer_hwnd = HWND(*explorer_hwnd as *mut _);
+                if foreground == explorer_hwnd {
+                    return Some(explorer_hwnd);
                 }
             }
 
@@ -984,9 +983,10 @@ fn get_explorer_hwnd_under_cursor_or_foreground_legacy() -> Option<HWND> {
                 let mut top_hwnd = hwnd;
 
                 for _ in 0..20 {
-                    for (explorer_hwnd, _) in &folders {
-                        if current_hwnd == *explorer_hwnd {
-                            return Some(*explorer_hwnd);
+                    for (explorer_hwnd, _) in folders.iter() {
+                        let explorer_hwnd = HWND(*explorer_hwnd as *mut _);
+                        if current_hwnd == explorer_hwnd {
+                            return Some(explorer_hwnd);
                         }
                     }
 
@@ -1007,9 +1007,10 @@ fn get_explorer_hwnd_under_cursor_or_foreground_legacy() -> Option<HWND> {
 
         let foreground = GetForegroundWindow();
         if !foreground.is_invalid() {
-            for (explorer_hwnd, _) in &folders {
-                if foreground == *explorer_hwnd {
-                    return Some(*explorer_hwnd);
+            for (explorer_hwnd, _) in folders.iter() {
+                let explorer_hwnd = HWND(*explorer_hwnd as *mut _);
+                if foreground == explorer_hwnd {
+                    return Some(explorer_hwnd);
                 }
             }
 
@@ -1941,8 +1942,8 @@ fn get_current_explorer_folder() -> Option<String> {
         // Check if any parent window is an Explorer window
         for _ in 0..20 {
             // Limit iterations
-            for (explorer_hwnd, folder) in &folders {
-                if current_hwnd == *explorer_hwnd {
+            for (explorer_hwnd, folder) in folders.iter() {
+                if current_hwnd == HWND(*explorer_hwnd as *mut _) {
                     return Some(folder.clone());
                 }
             }
@@ -1960,8 +1961,8 @@ fn get_current_explorer_folder() -> Option<String> {
 
         // Also check if the foreground window is an Explorer
         let foreground = GetForegroundWindow();
-        for (explorer_hwnd, folder) in &folders {
-            if foreground == *explorer_hwnd {
+        for (explorer_hwnd, folder) in folders.iter() {
+            if foreground == HWND(*explorer_hwnd as *mut _) {
                 return Some(folder.clone());
             }
         }
@@ -2535,7 +2536,7 @@ fn get_file_under_cursor_normal(
             // Last-resort fallback only when we have no active-view context.
             if hints.current_folder.is_none() {
                 let all_folders = get_all_explorer_folders();
-                for (_, folder) in &all_folders {
+                for (_, folder) in all_folders.iter() {
                     if let Some(path) = find_media_in_folder(folder, &item_name) {
                         return Some(path);
                     }
@@ -2605,7 +2606,7 @@ fn get_file_under_cursor_search_legacy(
             }
 
             let all_folders = get_all_explorer_folders();
-            for (_, folder) in &all_folders {
+            for (_, folder) in all_folders.iter() {
                 if let Some(path) = find_media_in_folder(folder, &item_name) {
                     return Some(path);
                 }
@@ -2715,6 +2716,22 @@ fn is_window_minimized(hwnd: HWND) -> bool {
     unsafe { IsIconic(hwnd).as_bool() }
 }
 
+/// Allocation-free equivalent of lowercasing the class name and searching for an
+/// ASCII needle. A `u16` outside ASCII becomes U+FFFD under `to_string_lossy`
+/// and can never match, so it is skipped.
+fn utf16_contains_ascii_ignore_case(haystack: &[u16], needle: &[u8]) -> bool {
+    if needle.is_empty() || haystack.len() < needle.len() {
+        return false;
+    }
+
+    haystack.windows(needle.len()).any(|window| {
+        window
+            .iter()
+            .zip(needle)
+            .all(|(ch, byte)| *ch < 0x80 && (*ch as u8).eq_ignore_ascii_case(byte))
+    })
+}
+
 fn explorer_browser_class_matches(hwnd: HWND) -> bool {
     unsafe {
         let mut class_name = [0u16; 256];
@@ -2723,11 +2740,9 @@ fn explorer_browser_class_matches(hwnd: HWND) -> bool {
             return false;
         }
 
-        let class_str = OsString::from_wide(&class_name[..len as usize])
-            .to_string_lossy()
-            .to_lowercase();
-
-        class_str.contains("cabinetwclass") || class_str.contains("explorerwclass")
+        let class_name = &class_name[..len as usize];
+        utf16_contains_ascii_ignore_case(class_name, b"cabinetwclass")
+            || utf16_contains_ascii_ignore_case(class_name, b"explorerwclass")
     }
 }
 
@@ -2978,11 +2993,8 @@ fn off_trigger_key_to_vk(key: &str) -> Option<i32> {
     Some(vk)
 }
 
-fn is_off_trigger_key_down(key: &str) -> bool {
-    let Some(vk) = off_trigger_key_to_vk(key) else {
-        return false;
-    };
-
+/// Whether the resolved off-trigger virtual key is currently held.
+fn key_is_down(vk: i32) -> bool {
     unsafe {
         let state = GetAsyncKeyState(vk) as u16;
         (state & 0x8000) != 0
@@ -3183,7 +3195,7 @@ fn resolve_focused_item_to_path(item: &FocusedItemInfo) -> Option<PathBuf> {
 
             if !current_is_search_view {
                 let all_folders = get_all_explorer_folders();
-                for (_, folder) in &all_folders {
+                for (_, folder) in all_folders.iter() {
                     if let Some(path) = find_media_in_folder(folder, item_name) {
                         return Some(path);
                     }
@@ -3301,18 +3313,24 @@ pub fn run_explorer_hook() {
     const STATE_RECHECK_MEDIUM_MS: u64 = 300; // When visible but not focused
     const STATE_RECHECK_ACTIVE_MS: u64 = 100; // When active
 
-    let mut config_snapshot = CONFIG
+    let (mut config_snapshot, mut off_trigger_vk) = CONFIG
         .lock()
         .map(|c| {
-            (
+            let snapshot = (
                 c.preview_enabled,
                 c.hover_delay_ms,
                 c.enable_off_trigger_key,
-                c.off_trigger_key.clone(),
                 c.same_file_rehover_delay_ms,
-            )
+            );
+            // Resolved once per config change instead of once per tick.
+            let vk = if c.enable_off_trigger_key {
+                off_trigger_key_to_vk(&c.off_trigger_key)
+            } else {
+                None
+            };
+            (snapshot, vk)
         })
-        .unwrap_or((true, 0, true, "alt".to_string(), 750));
+        .unwrap_or(((true, 0, true, 750), Some(0x12)));
     let mut slow_explorer_probe_count = 0u32;
     let mut explorer_probe_backoff_until: Option<Instant> = None;
     let mut last_display_signature = current_display_signature();
@@ -3403,21 +3421,22 @@ pub fn run_explorer_hook() {
                 config.preview_enabled,
                 config.hover_delay_ms,
                 config.enable_off_trigger_key,
-                config.off_trigger_key.clone(),
                 config.same_file_rehover_delay_ms,
             );
+            off_trigger_vk = if config.enable_off_trigger_key {
+                off_trigger_key_to_vk(&config.off_trigger_key)
+            } else {
+                None
+            };
         }
 
-        let (
-            preview_enabled,
-            hover_delay_ms,
-            enable_off_trigger_key,
-            off_trigger_key,
-            same_file_rehover_delay_ms,
-        ) = config_snapshot.clone();
+        let preview_enabled = config_snapshot.0;
+        let hover_delay_ms = config_snapshot.1;
+        let enable_off_trigger_key = config_snapshot.2;
+        let same_file_rehover_delay_ms = config_snapshot.3;
 
         let off_trigger_active =
-            enable_off_trigger_key && is_off_trigger_key_down(&off_trigger_key);
+            enable_off_trigger_key && off_trigger_vk.is_some_and(key_is_down);
 
         if off_trigger_active {
             if last_file.is_some() || keyboard_file.is_some() {

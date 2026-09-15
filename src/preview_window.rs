@@ -442,11 +442,61 @@ fn is_webp_file(path: &PathBuf) -> bool {
         .unwrap_or(false)
 }
 
+/// True when a `.png` file carries an animation control chunk. An APNG is an
+/// ordinary PNG plus an `acTL` chunk ahead of its first `IDAT`, so the chunk list
+/// is walked instead of decoding anything.
+fn png_has_animation_control_chunk(path: &PathBuf) -> bool {
+    use std::io::{Read, Seek, SeekFrom};
+
+    const SIGNATURE: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+
+    let Ok(file) = File::open(path) else {
+        return false;
+    };
+    let mut reader = BufReader::new(file);
+
+    let mut signature = [0u8; 8];
+    if reader.read_exact(&mut signature).is_err() || signature != SIGNATURE {
+        return false;
+    }
+
+    let mut header = [0u8; 8];
+    while reader.read_exact(&mut header).is_ok() {
+        let length = u32::from_be_bytes([header[0], header[1], header[2], header[3]]) as i64;
+        let chunk_type = &header[4..8];
+
+        if chunk_type == b"acTL" {
+            return true;
+        }
+
+        // The animation chunks precede the image data, so once the pixels start
+        // there is nothing left to find.
+        if chunk_type == b"IDAT" || chunk_type == b"IEND" {
+            return false;
+        }
+
+        // Step over the chunk body and its CRC.
+        if reader.seek(SeekFrom::Current(length + 4)).is_err() {
+            return false;
+        }
+    }
+
+    false
+}
+
 fn is_apng_file(path: &PathBuf) -> bool {
-    path.extension()
+    match path
+        .extension()
         .and_then(|ext| ext.to_str())
-        .map(|ext| ext.to_lowercase() == "apng")
-        .unwrap_or(false)
+        .map(|ext| ext.to_lowercase())
+        .as_deref()
+    {
+        Some("apng") => true,
+        // An animated PNG keeps the `.png` extension whenever it was written by
+        // an ordinary PNG encoder, so those are decided by content.
+        Some("png") => png_has_animation_control_chunk(path),
+        _ => false,
+    }
 }
 
 fn is_confirm_file_type_enabled() -> bool {
