@@ -26,32 +26,41 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 use windows::core::{w, PCWSTR, PWSTR};
 use windows::Win32::Foundation::{
-    CloseHandle, COLORREF, HANDLE, HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM,
+    CloseHandle, GlobalFree, COLORREF, HANDLE, HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM,
 };
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, EndPaint,
-    GetMonitorInfoW, MonitorFromPoint, SelectObject, AC_SRC_ALPHA, AC_SRC_OVER, BITMAPINFO,
-    BITMAPINFOHEADER, BI_RGB, BLENDFUNCTION, DIB_RGB_COLORS, HBITMAP, HDC, HGDIOBJ, MONITORINFO,
-    MONITOR_DEFAULTTONEAREST, PAINTSTRUCT,
+    BeginPaint, ClientToScreen, CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject,
+    EndPaint, GetMonitorInfoW, MonitorFromPoint, SelectObject, AC_SRC_ALPHA, AC_SRC_OVER,
+    BITMAPINFO, BITMAPINFOHEADER, BI_RGB, BLENDFUNCTION, DIB_RGB_COLORS, HBITMAP, HDC, HGDIOBJ,
+    MONITORINFO, MONITOR_DEFAULTTONEAREST, PAINTSTRUCT,
+};
+use windows::Win32::System::DataExchange::{
+    CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
+use windows::Win32::System::Ole::CF_UNICODETEXT;
 use windows::Win32::System::Threading::{
     OpenProcess, QueryFullProcessImageNameW, TerminateProcess, PROCESS_NAME_WIN32,
     PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE,
 };
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
-use windows::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture};
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    GetAsyncKeyState, ReleaseCapture, SetCapture, VK_C, VK_CONTROL,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DispatchMessageW, EnumWindows, GetSystemMetrics, GetWindow,
-    GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, IsWindow, IsWindowVisible,
-    LoadCursorW, MoveWindow, PeekMessageW, RegisterClassExW, SetWindowLongPtrW, SetWindowPos,
-    ShowWindow, TranslateMessage, UpdateLayeredWindow, CS_HREDRAW, CS_VREDRAW, GWL_EXSTYLE,
-    GW_OWNER, HWND_TOPMOST, IDC_ARROW, MSG, PBT_APMRESUMEAUTOMATIC, PBT_APMRESUMESUSPEND,
-    PBT_APMSTANDBY, PBT_APMSUSPEND, PM_REMOVE, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN,
-    SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-    SWP_SHOWWINDOW, SW_HIDE, SW_SHOWNOACTIVATE, ULW_ALPHA, WM_DISPLAYCHANGE, WM_DPICHANGED,
-    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_POWERBROADCAST, WNDCLASSEXW, WS_EX_LAYERED,
-    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DispatchMessageW,
+    EnumWindows, GetSystemMetrics, GetWindow, GetWindowLongPtrW, GetWindowRect,
+    GetWindowThreadProcessId, IsWindow, IsWindowVisible, LoadCursorW, MoveWindow, PeekMessageW,
+    RegisterClassExW, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow,
+    TrackPopupMenu, TranslateMessage, UpdateLayeredWindow, CS_HREDRAW, CS_VREDRAW, GWL_EXSTYLE,
+    GW_OWNER, HWND_TOPMOST, IDC_ARROW, MF_STRING, MSG, PBT_APMRESUMEAUTOMATIC,
+    PBT_APMRESUMESUSPEND, PBT_APMSTANDBY, PBT_APMSUSPEND, PM_REMOVE, SM_CXVIRTUALSCREEN,
+    SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SWP_FRAMECHANGED, SWP_NOACTIVATE,
+    SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SW_HIDE, SW_SHOWNOACTIVATE, TPM_LEFTALIGN,
+    TPM_NONOTIFY, TPM_RETURNCMD, TPM_TOPALIGN, ULW_ALPHA, WM_DISPLAYCHANGE, WM_DPICHANGED,
+    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_POWERBROADCAST, WM_RBUTTONUP, WNDCLASSEXW,
+    WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
 const PREVIEW_CLASS: PCWSTR = w!("RustHoverPreviewWindow");
@@ -93,9 +102,10 @@ const WHEEL_DELTA: i32 = 120;
 const TEXT_SCROLL_ANCHOR_SLACK_PIXELS: i32 = 1;
 
 /// How far either side of the scrollbar's column a press still counts as a press
-/// on the bar, in logical pixels. A press there does nothing else, so the slack
-/// only has to cover a hand that is not precise.
-const TEXT_SCROLL_BAR_PRESS_SLACK_PIXELS: f32 = 40.0;
+/// on the bar, in logical pixels. It is deliberately small: the bar is thin, so a
+/// hand aiming at it needs some slack, but everything further left is text, and a
+/// press in the text is the start of a selection rather than a scroll.
+const TEXT_SCROLL_BAR_PRESS_SLACK_PIXELS: f32 = 8.0;
 
 /// A region on screen: left, top, right, bottom.
 type ScreenRegion = (i32, i32, i32, i32);
@@ -112,6 +122,11 @@ static TEXT_SCROLL_ANCHOR: Lazy<Mutex<Option<(i32, i32)>>> = Lazy::new(|| Mutex:
 /// Whether the preview on screen is a text preview with more lines than it can
 /// show, which is the condition for everything above.
 static TEXT_PREVIEW_SCROLLABLE: AtomicBool = AtomicBool::new(false);
+
+/// Whether a pointer is using the preview on screen: any text preview in full
+/// mode, which the pointer can rest on to select from. Published beside the region
+/// so the check for it stays an atomic read.
+static TEXT_PREVIEW_HOLDING: AtomicBool = AtomicBool::new(false);
 
 /// The region that keeps a preview alive: the line from the point it was opened
 /// from to the preview, joined to the preview itself.
@@ -212,14 +227,18 @@ struct MediaData {
     video_process: Option<Child>,
     loading_start: Option<Instant>,
     /// Where a text preview is scrolled to, when it scrolls at all.
-    text_scroll: Option<TextScroll>,
+    text_state: Option<TextPreviewState>,
 }
 
-/// A text preview that is longer than its frame, and what it takes to move it.
+/// What a text preview on screen keeps so that it can be worked with: where it is
+/// scrolled to, what is selected in it, and the numbers a press is tested against.
 ///
-/// A preview of a file that fits keeps none of this: there is nothing to scroll,
-/// so the pointer over it still dismisses it the way any other preview does.
-struct TextScroll {
+/// A text preview in full mode always has one of these, whether or not the
+/// document is longer than the frame — a selection needs somewhere to live even
+/// when there is nothing to scroll. Without full mode a text preview keeps none of
+/// it: nothing scrolls, nothing is selected, and a pointer over it dismisses it the
+/// way any other preview is dismissed.
+struct TextPreviewState {
     path: PathBuf,
     options: TextPreviewOptions,
     dpi: u32,
@@ -235,9 +254,15 @@ struct TextScroll {
     scrollbar: Option<text_preview::ScrollBar>,
     /// Whether the pointer is currently dragging the thumb.
     dragging: bool,
+    /// The painted lines, which is what a press is turned back into a place in the
+    /// text against, and what a selection is copied from.
+    lines: Vec<text_preview::FrameLine>,
+    /// What is selected in the frame on screen, and whether a drag is extending it.
+    selection: Option<text_preview::Selection>,
+    selecting: bool,
 }
 
-impl TextScroll {
+impl TextPreviewState {
     fn max_first_line(&self) -> usize {
         self.scrollable_lines.saturating_sub(self.visible_lines)
     }
@@ -762,11 +787,13 @@ fn current_text_options() -> TextPreviewOptions {
             theme: cfg.theme,
             markdown_mode: cfg.markdown_mode,
             font_scale_percent: cfg.text_font_scale_percent,
+            full_mode: cfg.text_preview_full_mode,
         })
         .unwrap_or(TextPreviewOptions {
             theme: TextTheme::Light,
             markdown_mode: MarkdownMode::Rendered,
             font_scale_percent: DEFAULT_TEXT_FONT_SCALE_PERCENT,
+            full_mode: true,
         })
 }
 
@@ -1130,7 +1157,7 @@ fn load_animated_gif(
             stream_cancel: Some(cancel),
             video_process: None,
             loading_start: None,
-            text_scroll: None,
+            text_state: None,
         });
     }
 
@@ -1215,7 +1242,7 @@ fn load_animated_gif(
         stream_cancel: Some(cancel),
         video_process: None,
         loading_start: Some(Instant::now()),
-        text_scroll: None,
+        text_state: None,
     })
 }
 
@@ -1340,7 +1367,7 @@ fn load_animated_apng(
             stream_cancel: Some(cancel),
             video_process: None,
             loading_start: None,
-            text_scroll: None,
+            text_state: None,
         });
     }
 
@@ -1412,7 +1439,7 @@ fn load_animated_apng(
         stream_cancel: Some(cancel),
         video_process: None,
         loading_start: Some(Instant::now()),
-        text_scroll: None,
+        text_state: None,
     })
 }
 
@@ -1548,7 +1575,7 @@ fn load_animated_webp(
             stream_cancel: Some(cancel),
             video_process: None,
             loading_start: None,
-            text_scroll: None,
+            text_state: None,
         });
     }
 
@@ -1631,7 +1658,7 @@ fn load_animated_webp(
         stream_cancel: Some(cancel),
         video_process: None,
         loading_start: Some(Instant::now()),
-        text_scroll: None,
+        text_state: None,
     })
 }
 
@@ -1686,7 +1713,7 @@ fn load_static_image(
         stream_cancel: None,
         video_process: None,
         loading_start: None,
-        text_scroll: None,
+        text_state: None,
     })
 }
 
@@ -1729,7 +1756,7 @@ fn load_pdf_first_page(
         stream_cancel: None,
         video_process: None,
         loading_start: None,
-        text_scroll: None,
+        text_state: None,
     })
 }
 
@@ -1747,9 +1774,12 @@ fn load_text_preview(
     dpi: u32,
     options: TextPreviewOptions,
 ) -> Option<MediaData> {
-    let frame = text_preview::render_scrolled(path, 0, width, height, dpi, options)?;
+    let frame = text_preview::render_scrolled(path, 0, width, height, dpi, options, None)?;
 
-    let scroll = frame.scrollable().then(|| TextScroll {
+    // Any text preview in full mode keeps its state, scrollable or not: the
+    // pointer rests on it, its text can be selected, and a document that happens to
+    // fit is simply one that cannot be scrolled.
+    let state = options.full_mode.then(|| TextPreviewState {
         path: path.to_path_buf(),
         options,
         dpi,
@@ -1761,6 +1791,9 @@ fn load_text_preview(
         total_lines: frame.total_lines,
         scrollbar: frame.scrollbar,
         dragging: false,
+        lines: frame.lines,
+        selection: None,
+        selecting: false,
     });
 
     let frame = ImageFrame {
@@ -1780,7 +1813,7 @@ fn load_text_preview(
         stream_cancel: None,
         video_process: None,
         loading_start: None,
-        text_scroll: scroll,
+        text_state: state,
     })
 }
 
@@ -1824,7 +1857,7 @@ fn load_video_thumbnail(
         stream_cancel: None,
         video_process: None,
         loading_start: None,
-        text_scroll: None,
+        text_state: None,
     })
 }
 
@@ -2744,7 +2777,7 @@ fn create_loading_media(width: u32, height: u32) -> MediaData {
         stream_cancel: None,
         video_process: None,
         loading_start: Some(Instant::now()),
-        text_scroll: None,
+        text_state: None,
     }
 }
 
@@ -3130,18 +3163,25 @@ unsafe fn render_layered_preview(hwnd: HWND) {
 /// and the wheel hook asks the same question before it decides whether the wheel
 /// belongs to Explorer or to the preview.
 unsafe fn publish_text_scroll_keep_alive(hwnd: HWND) {
-    let dpi = CURRENT_MEDIA.lock().ok().and_then(|media| {
+    let state = CURRENT_MEDIA.lock().ok().and_then(|media| {
         let media = media.as_ref()?;
-        let scroll = media.text_scroll.as_ref()?;
-        if !matches!(media.media_type, MediaType::Text) || !scroll.can_scroll() {
+        if !matches!(media.media_type, MediaType::Text) {
             return None;
         }
-        Some(scroll.dpi)
+        let state = media.text_state.as_ref()?;
+        Some((state.dpi, state.can_scroll()))
     });
 
-    TEXT_PREVIEW_SCROLLABLE.store(dpi.is_some(), Ordering::Release);
+    // The wheel only belongs to a preview that can move under it, but the pointer
+    // is held by any text preview in full mode: selecting and copying needs a
+    // pointer that can rest on the preview whether or not it scrolls.
+    TEXT_PREVIEW_SCROLLABLE.store(
+        state.map(|(_, can_scroll)| can_scroll).unwrap_or(false),
+        Ordering::Release,
+    );
+    TEXT_PREVIEW_HOLDING.store(state.is_some(), Ordering::Release);
 
-    let keep_alive = dpi.and_then(|_| {
+    let keep_alive = state.and_then(|_| {
         let mut rect = RECT::default();
         if GetWindowRect(hwnd, &mut rect).is_err() {
             return None;
@@ -3175,6 +3215,7 @@ fn set_text_scroll_anchor(x: i32, y: i32) {
 
 fn clear_text_scroll_keep_alive() {
     TEXT_PREVIEW_SCROLLABLE.store(false, Ordering::Release);
+    TEXT_PREVIEW_HOLDING.store(false, Ordering::Release);
     if let Ok(mut published) = TEXT_SCROLL_KEEP_ALIVE.lock() {
         *published = None;
     }
@@ -3189,11 +3230,11 @@ pub fn text_preview_scrollable() -> bool {
     TEXT_PREVIEW_SCROLLABLE.load(Ordering::Acquire)
 }
 
-/// Whether the pointer is inside the region that keeps a scrollable text preview
-/// alive. Answered from a published rectangle, so the Explorer hook can ask on
-/// every poll tick.
+/// Whether the pointer is inside the region that keeps a text preview alive.
+/// Answered from a published rectangle, so the Explorer hook can ask on every poll
+/// tick.
 pub fn text_scroll_pointer_hold(x: i32, y: i32) -> bool {
-    if !text_preview_scrollable() {
+    if !TEXT_PREVIEW_HOLDING.load(Ordering::Acquire) {
         return false;
     }
 
@@ -3226,7 +3267,7 @@ fn text_scroll_target(lines: i64) -> Option<usize> {
     CURRENT_MEDIA.lock().ok().and_then(|media| {
         media
             .as_ref()
-            .and_then(|media| media.text_scroll.as_ref())
+            .and_then(|media| media.text_state.as_ref())
             .map(|scroll| scroll.scrolled_by(lines))
     })
 }
@@ -3243,7 +3284,7 @@ unsafe fn scroll_text_preview(hwnd: HWND, first_line: usize) {
     let Some((path, options, dpi, width, height, current)) =
         CURRENT_MEDIA.lock().ok().and_then(|media| {
             media.as_ref().and_then(|media| {
-                media.text_scroll.as_ref().map(|scroll| {
+                media.text_state.as_ref().map(|scroll| {
                     (
                         scroll.path.clone(),
                         scroll.options,
@@ -3263,7 +3304,10 @@ unsafe fn scroll_text_preview(hwnd: HWND, first_line: usize) {
         return;
     }
 
-    let Some(frame) = text_preview::render_scrolled(&path, first_line, width, height, dpi, options)
+    // A selection is a range of the frame that is on screen, so it is dropped
+    // rather than left pointing at lines that have moved.
+    let Some(frame) =
+        text_preview::render_scrolled(&path, first_line, width, height, dpi, options, None)
     else {
         return;
     };
@@ -3274,7 +3318,7 @@ unsafe fn scroll_text_preview(hwnd: HWND, first_line: usize) {
         };
 
         // The hover may have moved on while this frame was rendered.
-        if media.text_scroll.as_ref().map(|scroll| &scroll.path) != Some(&path) {
+        if media.text_state.as_ref().map(|state| &state.path) != Some(&path) {
             return;
         }
 
@@ -3285,10 +3329,68 @@ unsafe fn scroll_text_preview(hwnd: HWND, first_line: usize) {
             delay_ms: 0,
         };
 
-        if let Some(scroll) = media.text_scroll.as_mut() {
-            scroll.first_line = frame.first_line;
-            scroll.visible_lines = frame.visible_lines;
-            scroll.scrollbar = frame.scrollbar;
+        if let Some(state) = media.text_state.as_mut() {
+            state.first_line = frame.first_line;
+            state.visible_lines = frame.visible_lines;
+            state.scrollbar = frame.scrollbar;
+            state.lines = frame.lines;
+            state.selection = None;
+        }
+    }
+
+    render_layered_preview(hwnd);
+}
+
+/// Repaint the text preview where it is, with whatever is selected in it now.
+///
+/// A selection is painted into the frame rather than drawn over it, so changing
+/// one costs a re-render of the window that is on screen — a screenful of lines,
+/// all of which are cached after the first pass.
+unsafe fn repaint_text_preview(hwnd: HWND) {
+    let Some((path, options, dpi, width, height, first_line, selection)) =
+        CURRENT_MEDIA.lock().ok().and_then(|media| {
+            media.as_ref().and_then(|media| {
+                media.text_state.as_ref().map(|state| {
+                    (
+                        state.path.clone(),
+                        state.options,
+                        state.dpi,
+                        state.width,
+                        state.height,
+                        state.first_line,
+                        state.selection,
+                    )
+                })
+            })
+        })
+    else {
+        return;
+    };
+
+    let Some(frame) =
+        text_preview::render_scrolled(&path, first_line, width, height, dpi, options, selection)
+    else {
+        return;
+    };
+
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        let Some(media) = media.as_mut() else {
+            return;
+        };
+
+        if media.text_state.as_ref().map(|state| &state.path) != Some(&path) {
+            return;
+        }
+
+        media.frames[0] = ImageFrame {
+            pixels: frame.pixels,
+            width: frame.width,
+            height: frame.height,
+            delay_ms: 0,
+        };
+
+        if let Some(state) = media.text_state.as_mut() {
+            state.lines = frame.lines;
         }
     }
 
@@ -3300,7 +3402,7 @@ unsafe fn scroll_text_preview(hwnd: HWND, first_line: usize) {
 fn text_scroll_drag_target(x: i32, y: i32) -> Option<usize> {
     CURRENT_MEDIA.lock().ok().and_then(|media| {
         let media = media.as_ref()?;
-        let scroll = media.text_scroll.as_ref()?;
+        let scroll = media.text_state.as_ref()?;
         let scrollbar = scroll.scrollbar?;
 
         // The whole column counts, not just the groove: the bar is thin, and a
@@ -3325,7 +3427,7 @@ fn text_scroll_drag_target(x: i32, y: i32) -> Option<usize> {
 /// The document line a drag to `y` in window coordinates asks for.
 fn drag_target_for_y(y: i32) -> Option<usize> {
     CURRENT_MEDIA.lock().ok().and_then(|media| {
-        let scroll = media.as_ref()?.text_scroll.as_ref()?;
+        let scroll = media.as_ref()?.text_state.as_ref()?;
         let scrollbar = scroll.scrollbar?;
         Some(text_preview::scroll_line_at_track_y(
             scrollbar.track,
@@ -3344,7 +3446,7 @@ fn set_text_scroll_dragging(dragging: bool) -> bool {
 
     media
         .as_mut()
-        .and_then(|media| media.text_scroll.as_mut())
+        .and_then(|media| media.text_state.as_mut())
         .map(|scroll| {
             let was = scroll.dragging;
             scroll.dragging = dragging;
@@ -3359,11 +3461,213 @@ fn is_text_scroll_dragging() -> bool {
         .map(|media| {
             media
                 .as_ref()
-                .and_then(|media| media.text_scroll.as_ref())
-                .map(|scroll| scroll.dragging)
+                .and_then(|media| media.text_state.as_ref())
+                .map(|state| state.dragging)
                 .unwrap_or(false)
         })
         .unwrap_or(false)
+}
+
+/// Start selecting from a point in the preview. Answers whether there was anything
+/// to select, which is what tells a press on a text preview from a press on one of
+/// the other formats.
+fn begin_text_selection(x: i32, y: i32) -> bool {
+    let Ok(mut media) = CURRENT_MEDIA.lock() else {
+        return false;
+    };
+
+    let Some(state) = media.as_mut().and_then(|media| media.text_state.as_mut()) else {
+        return false;
+    };
+    if state.lines.is_empty() {
+        return false;
+    }
+
+    // A press with no drag behind it is an empty selection, which is what clears
+    // whatever was selected before.
+    let at = text_preview::position_in(&state.lines, x, y);
+    state.selection = Some(text_preview::Selection {
+        anchor: at,
+        caret: at,
+    });
+    state.selecting = true;
+    true
+}
+
+/// Move the end of a selection to a point. Answers whether a drag is running, so
+/// the caller knows whether it is the one holding the capture.
+fn extend_text_selection(x: i32, y: i32) -> Option<bool> {
+    let Ok(mut media) = CURRENT_MEDIA.lock() else {
+        return None;
+    };
+
+    let state = media.as_mut()?.text_state.as_mut()?;
+    if !state.selecting {
+        return Some(false);
+    }
+
+    let at = text_preview::position_in(&state.lines, x, y);
+    let changed = state
+        .selection
+        .map(|selection| selection.caret != at)
+        .unwrap_or(false);
+
+    if changed {
+        if let Some(selection) = state.selection.as_mut() {
+            selection.caret = at;
+        }
+    } else {
+        return Some(false);
+    }
+
+    Some(true)
+}
+
+/// End a selection drag. Answers whether one was running.
+fn end_text_selection() -> bool {
+    let Ok(mut media) = CURRENT_MEDIA.lock() else {
+        return false;
+    };
+
+    media
+        .as_mut()
+        .and_then(|media| media.text_state.as_mut())
+        .map(|state| std::mem::replace(&mut state.selecting, false))
+        .unwrap_or(false)
+}
+
+/// Whether the text preview on screen has something selected, which is what makes
+/// a Ctrl+C the preview's to answer.
+fn has_text_selection() -> bool {
+    CURRENT_MEDIA
+        .lock()
+        .map(|media| {
+            media
+                .as_ref()
+                .and_then(|media| media.text_state.as_ref())
+                .and_then(|state| state.selection)
+                .map(|selection| !selection.is_empty())
+                .unwrap_or(false)
+        })
+        .unwrap_or(false)
+}
+
+/// What a Copy takes from the preview on screen: what is selected, or — with
+/// nothing selected — everything the frame shows.
+fn text_preview_clipboard_text() -> Option<String> {
+    CURRENT_MEDIA.lock().ok().and_then(|media| {
+        let media = media.as_ref()?;
+        let state = media.text_state.as_ref()?;
+
+        Some(match state.selection {
+            Some(selection) if !selection.is_empty() => {
+                text_preview::text_in(&state.lines, selection)
+            }
+            _ => text_preview::frame_text(&state.lines),
+        })
+    })
+}
+
+/// Copy the text preview to the clipboard, answering whether there was anything to
+/// copy.
+///
+/// The clipboard is owned by one window at a time, so this opens it, hands over a
+/// movable block of UTF-16, and closes it again; a failure at any step leaves the
+/// previous clipboard contents alone.
+unsafe fn copy_text_preview(hwnd: HWND) -> bool {
+    let Some(text) = text_preview_clipboard_text().filter(|text| !text.is_empty()) else {
+        return false;
+    };
+
+    if OpenClipboard(hwnd).is_err() {
+        return false;
+    }
+
+    let _ = EmptyClipboard();
+
+    let units: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+    let mut copied = false;
+
+    if let Ok(block) = GlobalAlloc(GMEM_MOVEABLE, units.len() * std::mem::size_of::<u16>()) {
+        let target = GlobalLock(block) as *mut u16;
+        if target.is_null() {
+            let _ = GlobalFree(block);
+        } else {
+            std::ptr::copy_nonoverlapping(units.as_ptr(), target, units.len());
+            let _ = GlobalUnlock(block);
+
+            if SetClipboardData(CF_UNICODETEXT.0 as u32, HANDLE(block.0)).is_err() {
+                let _ = GlobalFree(block);
+            } else {
+                // The clipboard owns the block now.
+                copied = true;
+            }
+        }
+    }
+
+    let _ = CloseClipboard();
+    copied
+}
+
+/// Ask for Ctrl+C to copy the preview's selection.
+///
+/// The preview never takes focus, so a keystroke never arrives as a message: it is
+/// read the way the rest of the app reads the keys that belong to it, by asking
+/// whether Ctrl is down and C has been pressed since the last time this was asked.
+/// Nothing is read at all unless there is a selection, so a Ctrl+C meant for
+/// something else is left alone.
+fn text_preview_copy_requested() -> bool {
+    if !has_text_selection() {
+        return false;
+    }
+
+    unsafe {
+        let control = GetAsyncKeyState(VK_CONTROL.0 as i32) as u16 & 0x8000 != 0;
+        let just_pressed = GetAsyncKeyState(VK_C.0 as i32) & 1 != 0;
+        control && just_pressed
+    }
+}
+
+/// The one thing the preview's own menu does: put what is selected on the
+/// clipboard.
+const ID_TEXT_PREVIEW_COPY: usize = 1;
+
+/// Show the preview's context menu at a point in window coordinates and act on
+/// what it returns.
+///
+/// The menu is asked for its command rather than posting one, so it needs no
+/// message loop of its own and the preview never has to take focus to be worked
+/// with.
+unsafe fn show_text_preview_menu(hwnd: HWND, x: i32, y: i32) {
+    let Ok(menu) = CreatePopupMenu() else {
+        return;
+    };
+
+    let _ = AppendMenuW(menu, MF_STRING, ID_TEXT_PREVIEW_COPY, w!("Copy"));
+
+    let mut point = POINT { x, y };
+    let _ = ClientToScreen(hwnd, &mut point);
+
+    // A menu belongs to the window in front of it, and this one is never in front:
+    // asking for the foreground is what lets the menu see the click that chooses
+    // from it.
+    let _ = SetForegroundWindow(hwnd);
+
+    let command = TrackPopupMenu(
+        menu,
+        TPM_RETURNCMD | TPM_NONOTIFY | TPM_LEFTALIGN | TPM_TOPALIGN,
+        point.x,
+        point.y,
+        0,
+        hwnd,
+        None,
+    );
+
+    let _ = DestroyMenu(menu);
+
+    if command.0 as usize == ID_TEXT_PREVIEW_COPY {
+        copy_text_preview(hwnd);
+    }
 }
 
 unsafe fn reset_preview_after_display_change(hwnd: HWND) {
@@ -3399,27 +3703,42 @@ unsafe extern "system" fn window_proc(
         }
         WM_LBUTTONDOWN => {
             // A press on the scrollbar starts a drag from where it landed, so the
-            // thumb follows the pointer from the first click.
+            // thumb follows the pointer from the first click. Anywhere else, a
+            // press on a text preview starts a selection.
             let (x, y) = message_point(lparam);
             if let Some(first_line) = text_scroll_drag_target(x, y) {
                 set_text_scroll_dragging(true);
                 let _ = SetCapture(hwnd);
                 scroll_text_preview(hwnd, first_line);
+            } else if begin_text_selection(x, y) {
+                let _ = SetCapture(hwnd);
+                repaint_text_preview(hwnd);
             }
             LRESULT(0)
         }
         WM_MOUSEMOVE => {
+            let (x, y) = message_point(lparam);
             if is_text_scroll_dragging() {
-                let (_, y) = message_point(lparam);
                 if let Some(first_line) = drag_target_for_y(y) {
                     scroll_text_preview(hwnd, first_line);
                 }
+            } else if extend_text_selection(x, y) == Some(true) {
+                repaint_text_preview(hwnd);
             }
             LRESULT(0)
         }
         WM_LBUTTONUP => {
-            if set_text_scroll_dragging(false) {
+            if set_text_scroll_dragging(false) || end_text_selection() {
                 let _ = ReleaseCapture();
+            }
+            LRESULT(0)
+        }
+        WM_RBUTTONUP => {
+            // The menu is the preview's own, so it opens where it was asked for,
+            // and the press that asks for it does not dismiss the preview.
+            let (x, y) = message_point(lparam);
+            if TEXT_PREVIEW_HOLDING.load(Ordering::Acquire) {
+                show_text_preview_menu(hwnd, x, y);
             }
             LRESULT(0)
         }
@@ -4412,6 +4731,13 @@ pub fn run_preview_window() {
                 render_layered_preview(hwnd);
             }
 
+            // Ctrl+C over a text preview copies what is selected in it. The key is
+            // polled rather than waited for: the preview never takes focus, so it
+            // would never receive the keystroke as a message.
+            if text_preview_copy_requested() {
+                copy_text_preview(hwnd);
+            }
+
             // Keep the pointer region in step with the window rather than only
             // with the paints: the window is moved when a frame is installed, and
             // the Explorer hook reads this on every one of its own ticks.
@@ -4569,16 +4895,60 @@ mod tests {
         assert!(region.0 > anchor.0 - 2);
     }
 
+    /// Full mode is what a preview keeps its state for: with it off there is
+    /// nothing to select into, nothing to scroll and no region to hold a pointer
+    /// with, so a text preview is only ever a picture of a file.
+    #[test]
+    fn only_full_mode_gives_a_text_preview_a_state() {
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            "rust-hover-preview-state-{}.txt",
+            std::process::id()
+        ));
+        std::fs::write(&path, b"one\ntwo\nthree\n").unwrap();
+
+        let options = |full_mode| crate::text_preview::TextPreviewOptions {
+            theme: crate::config::TextTheme::Light,
+            markdown_mode: crate::config::MarkdownMode::Rendered,
+            font_scale_percent: 100,
+            full_mode,
+        };
+
+        let normal = super::load_text_preview(&path, 400, 300, 96, options(false)).unwrap();
+        assert!(
+            normal.text_state.is_none(),
+            "a preview that cannot be worked with keeps nothing to work with"
+        );
+        assert_eq!(normal.frames.len(), 1);
+
+        let full = super::load_text_preview(&path, 400, 300, 96, options(true)).unwrap();
+        let state = full.text_state.expect("full mode keeps its state");
+        assert!(state.selection.is_none());
+        assert!(!state.selecting);
+        assert!(!state.dragging);
+        assert!(
+            !state.lines.is_empty(),
+            "the painted lines are what a press is read against"
+        );
+        assert!(
+            !state.can_scroll(),
+            "a three-line file has nothing to scroll, but is still selectable"
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
     /// The wheel and a drag both move a preview through this: a step is counted
     /// from where it is now and stops at either end of the document.
     #[test]
     fn scrolling_a_text_preview_stops_at_both_ends() {
-        let scroll = super::TextScroll {
+        let scroll = super::TextPreviewState {
             path: PathBuf::from("preview.txt"),
             options: crate::text_preview::TextPreviewOptions {
                 theme: crate::config::TextTheme::Light,
                 markdown_mode: crate::config::MarkdownMode::Rendered,
                 font_scale_percent: 100,
+                full_mode: true,
             },
             dpi: 96,
             width: 800,
@@ -4589,6 +4959,9 @@ mod tests {
             total_lines: 200,
             scrollbar: None,
             dragging: false,
+            lines: Vec::new(),
+            selection: None,
+            selecting: false,
         };
 
         assert!(scroll.can_scroll());
@@ -4599,7 +4972,7 @@ mod tests {
         assert_eq!(scroll.scrolled_by(-1000), 0);
 
         // A document that fits has nowhere to go.
-        let fits = super::TextScroll {
+        let fits = super::TextPreviewState {
             visible_lines: 200,
             scrollable_lines: 200,
             total_lines: 200,
