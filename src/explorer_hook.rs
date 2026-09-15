@@ -3928,14 +3928,14 @@ pub fn run_explorer_hook() {
                 }
             }
 
-            // A move is "the mouse driving Explorer" — resolve the item under the
-            // cursor, and drop the preview when that is no longer the file it shows.
-            // It is not that while the pointer is using a scrollable text preview:
-            // the preview is drawn over the list, so the item under the pointer is
-            // the preview rather than the file, and resolving it would find the
-            // wrong thing or nothing at all and close a preview the user is
-            // reaching for.
-            if moved && !text_scroll_hold {
+            // A move is "the mouse driving Explorer": resolve the item under the
+            // cursor, and drop the preview when that is no longer the file it
+            // shows. Another file always takes over, even while the pointer is
+            // inside a scrollable preview's region — the region is only about the
+            // pointer being on its way to the preview or on it, and the block
+            // below tells those two apart by whether anything is under the pointer
+            // at all.
+            if moved {
                 last_cursor_pos = cursor_pos;
                 stationary_search_miss_started_at = None;
                 stationary_hover_probe_done = false;
@@ -3982,6 +3982,7 @@ pub fn run_explorer_hook() {
                 // While moving (including list scrolling), avoid heavy accessibility
                 // resolution and wait until hover is stable before probing media.
                 if last_file.is_some() {
+                    let mut keep_while_scrolling_preview = false;
                     if let Some(current_file) = get_file_under_cursor_checked(
                         uia.as_ref(),
                         &hover_resolver_hints,
@@ -3995,15 +3996,26 @@ pub fn run_explorer_hook() {
                             hover_start = Some(Instant::now());
                             continue;
                         }
+                        // Another file is under the pointer, so this is a hover like
+                        // any other and the preview gives way to it — even while the
+                        // pointer is inside a scrollable preview's region, which is
+                        // why the check below is the "no file at all" case only.
                         suppressed.clear();
                         stationary_search_miss_started_at = None;
+                    } else if text_scroll_hold {
+                        // Nothing under the pointer: it is on its way to (or on) the
+                        // scrollable preview, which is not the user leaving the file
+                        // it shows.
+                        keep_while_scrolling_preview = true;
                     } else if let Some(file) = last_file.clone() {
                         suppressed.suppress(file, false);
                     }
 
-                    hide_preview();
-                    last_file = None;
-                    video_hover_guard_until = None;
+                    if !keep_while_scrolling_preview {
+                        hide_preview();
+                        last_file = None;
+                        video_hover_guard_until = None;
+                    }
                 }
                 hover_start = Some(Instant::now());
                 continue;
