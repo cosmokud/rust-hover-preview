@@ -42,7 +42,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 // Supported image extensions
 const IMAGE_EXTENSIONS: &[&str] = &[
-    "jpg", "jpeg", "jpe", "jfif", "png", "gif", "bmp", "ico", "tiff", "tif", "webp",
+    "jpg", "jpeg", "jpe", "jfif", "png", "apng", "gif", "bmp", "ico", "tiff", "tif", "webp",
+    "tga", "pbm", "pgm", "ppm", "pam", "pnm", "hdr", "exr", "qoi", "ff",
 ];
 
 struct FolderMediaIndex {
