@@ -299,10 +299,6 @@ const DISPLAY_CHANGE_BACKOFF_MS: u64 = 1500;
 const KEYBOARD_FOCUS_INPUT_GRACE_MS: u64 = 500;
 const HOVER_RESOLVER_INPUT_GRACE_MS: u64 = 1500;
 const WHEEL_SCROLL_SETTLE_MS: u64 = 150;
-/// How long a pointer that was using a scrollable text preview keeps the preview
-/// alive after it was last inside the region, so the instant between two frames
-/// cannot be read as the user leaving.
-const HOVER_HOLD_GRACE_MS: u64 = 400;
 const MOUSE_MOVE_PX: i32 = 5;
 const KEYBOARD_POINTER_MOVE_TOLERANCE_PX: i32 = 20;
 const KEYBOARD_PREVIEW_BOX_WATCH_MS: u64 = 2500;
@@ -3261,12 +3257,6 @@ pub fn run_explorer_hook() {
     let mut pointer_pause = KeyboardPointerPause::default();
     let mut hover_start: Option<Instant> = None;
     let mut last_cursor_pos = POINT::default();
-    // While the pointer is using a scrollable text preview, and for a moment
-    // after it was last seen doing so. The grace covers the instants where the
-    // preview is between frames — a repaint or a new frame arriving clears the
-    // media the region is derived from — so a flicker cannot be read as the user
-    // having left a preview they are in the middle of using.
-    let mut text_scroll_hold_until: Option<Instant> = None;
 
     // Keyboard hover state
     let mut keyboard_file: Option<PathBuf> = None;
@@ -3594,14 +3584,10 @@ pub fn run_explorer_hook() {
             // is not over Explorer is not a reason to close a preview either.
             let loop_now = Instant::now();
 
+            // Read straight from the published region, with nothing held over from
+            // the last tick: the moment the pointer is out of it, the preview is
+            // treated the way it was before the pointer ever touched it.
             let text_scroll_hold = text_scroll_pointer_hold(cursor_pos.x, cursor_pos.y);
-            if text_scroll_hold {
-                text_scroll_hold_until =
-                    Some(loop_now + Duration::from_millis(HOVER_HOLD_GRACE_MS));
-            }
-            let text_scroll_hold = text_scroll_hold_until
-                .map(|until| loop_now < until)
-                .unwrap_or(false);
 
             let move_threshold = pointer_pause.move_threshold_px();
             let moved = (cursor_pos.x - last_cursor_pos.x).abs() > move_threshold
