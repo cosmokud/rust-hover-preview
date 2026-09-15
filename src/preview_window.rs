@@ -7,6 +7,7 @@ use crate::{CONFIG, RUNNING};
 use gif::DecodeOptions;
 use image::{AnimationDecoder, GenericImageView};
 use once_cell::sync::Lazy;
+use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::env;
 use std::fs::{File, OpenOptions};
@@ -26,8 +27,8 @@ use windows::Win32::Foundation::{
 use windows::Win32::Graphics::Gdi::{
     BeginPaint, CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, EndPaint,
     GetMonitorInfoW, MonitorFromPoint, SelectObject, AC_SRC_ALPHA, AC_SRC_OVER, BITMAPINFO,
-    BITMAPINFOHEADER, BI_RGB, BLENDFUNCTION, DIB_RGB_COLORS, MONITORINFO, MONITOR_DEFAULTTONEAREST,
-    PAINTSTRUCT,
+    BITMAPINFOHEADER, BI_RGB, BLENDFUNCTION, DIB_RGB_COLORS, HBITMAP, HDC, HGDIOBJ, MONITORINFO,
+    MONITOR_DEFAULTTONEAREST, PAINTSTRUCT,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::{
@@ -36,9 +37,10 @@ use windows::Win32::System::Threading::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DispatchMessageW, EnumWindows, GetSystemMetrics, GetWindow,
-    GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, IsWindowVisible, LoadCursorW,
-    MoveWindow, PeekMessageW, RegisterClassExW, SetWindowLongPtrW, SetWindowPos, ShowWindow,
-    TranslateMessage, UpdateLayeredWindow, CS_HREDRAW, CS_VREDRAW, GWL_EXSTYLE, GW_OWNER,
+    GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, IsWindow, IsWindowVisible,
+    LoadCursorW, MoveWindow, PeekMessageW, RegisterClassExW, SetWindowLongPtrW, SetWindowPos,
+    ShowWindow, TranslateMessage, UpdateLayeredWindow, CS_HREDRAW, CS_VREDRAW, GWL_EXSTYLE,
+    GW_OWNER,
     HWND_TOPMOST, IDC_ARROW, MSG, PM_REMOVE, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN,
     SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW,
     SW_HIDE, SW_SHOWNOACTIVATE, ULW_ALPHA, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_POWERBROADCAST,
@@ -48,8 +50,16 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 const PREVIEW_CLASS: PCWSTR = w!("RustHoverPreviewWindow");
 
-const MAX_STREAMED_ANIMATION_FRAMES: usize = 300;
-const MAX_STREAMED_ANIMATION_BYTES: usize = 256 * 1024 * 1024;
+/// Budget for the frames one animation keeps decoded. An animation that fits is
+/// decoded once and loops from memory; a larger one plays through a sliding
+/// window and its decoder starts over when the animation wraps.
+const ANIMATION_RETAINED_BYTES: usize = 128 * 1024 * 1024;
+/// Frames the streaming decoder may keep queued ahead of playback before it
+/// waits, so decoding can never run away from what is on screen.
+const ANIMATION_QUEUE_FRAMES: usize = 6;
+/// How much already-played footage piles up behind the playhead before it is
+/// released. Releasing in blocks keeps the sliding window from moving per frame.
+const ANIMATION_RELEASE_BYTES: usize = 16 * 1024 * 1024;
 const MIN_ANIMATION_FRAME_DELAY_MS: u32 = 33;
 const ANIMATION_STARTUP_PREBUFFER_FRAMES: usize = 12;
 const ANIMATION_STARTUP_PREBUFFER_MS: u32 = 500;
@@ -104,11 +114,20 @@ struct ImageFrame {
     delay_ms: u32, // Delay before next frame (for animations)
 }
 
+/// Frames an animated preview streams while it plays. The decoder appends to the
+/// queue and the player drains it; `released` records that the player gave back
+/// frames it already showed, after which the animation can no longer loop from
+/// memory and the decoder has to start the file over.
+struct StreamedFrames {
+    queue: VecDeque<ImageFrame>,
+    released: bool,
+}
+
 /// Media data that can be either static or animated
 struct MediaData {
     frames: Vec<ImageFrame>,
     /// Shared frame queue for streaming decode (animated formats append here)
-    shared_frames: Option<Arc<Mutex<VecDeque<ImageFrame>>>>,
+    shared_frames: Option<Arc<Mutex<StreamedFrames>>>,
     /// Signal from the background thread that all frames have been decoded
     all_frames_loaded: Option<Arc<AtomicBool>>,
     current_frame: usize,
@@ -157,15 +176,64 @@ impl MediaData {
         }
     }
 
-    /// Pull any newly decoded frames from the shared buffer
+    /// Pull newly decoded frames from the shared buffer, then give back the
+    /// frames that have already been played.
+    ///
+    /// Frames are only taken while the retained window has room: the decoder
+    /// waits once its queue is full, so this is what keeps a long animation from
+    /// decoding itself into memory faster than it is shown.
     fn sync_shared_frames(&mut self) {
-        if let Some(ref shared) = self.shared_frames {
-            if let Ok(mut shared_frames) = shared.lock() {
-                if !shared_frames.is_empty() {
-                    self.frames.extend(shared_frames.drain(..));
+        let Some(shared) = self.shared_frames.clone() else {
+            return;
+        };
+
+        let retained_bytes: usize = self.frames.iter().map(|frame| frame.pixels.len()).sum();
+        if retained_bytes < ANIMATION_RETAINED_BYTES {
+            let result = shared.lock();
+            if let Ok(mut streamed) = result {
+                if !streamed.queue.is_empty() {
+                    self.frames.extend(streamed.queue.drain(..));
                 }
             }
         }
+
+        self.release_played_frames();
+    }
+
+    /// Whether the player has given back frames it already showed.
+    fn frames_were_released(&self) -> bool {
+        self.shared_frames
+            .as_ref()
+            .and_then(|shared| shared.lock().ok().map(|streamed| streamed.released))
+            .unwrap_or(false)
+    }
+
+    /// Give back the frames behind the playhead once enough of them have piled up.
+    /// Without this a long animation would either stop part-way at a fixed size
+    /// cap or keep its whole decoded length in memory; with it, playback stays
+    /// inside a fixed window while the decoder replays the file to loop.
+    fn release_played_frames(&mut self) {
+        let Some(shared) = self.shared_frames.clone() else {
+            return;
+        };
+
+        let keep_from = self.current_frame.saturating_sub(1);
+        if keep_from == 0 {
+            return;
+        }
+
+        let played_bytes: usize = self.frames[..keep_from]
+            .iter()
+            .map(|frame| frame.pixels.len())
+            .sum();
+        if played_bytes < ANIMATION_RELEASE_BYTES {
+            return;
+        }
+
+        self.frames.drain(..keep_from);
+        self.current_frame -= keep_from;
+
+        mark_streamed_frames_released(&shared);
     }
 
     fn advance_frame(&mut self) -> bool {
@@ -193,15 +261,18 @@ impl MediaData {
                     self.current_frame = next;
                     self.last_frame_time += delay;
                     advanced = true;
-                } else if fully_loaded {
-                    // All frames decoded — safe to loop back to start
+                } else if fully_loaded && !self.frames_were_released() {
+                    // All frames decoded and still in memory — safe to loop back
+                    // to start
                     self.current_frame = 0;
                     self.last_frame_time += delay;
                     advanced = true;
                 } else {
-                    // Still streaming — pause on this frame until the next
-                    // one arrives. Keep the next streamed frame immediately
-                    // eligible instead of adding another full-frame delay.
+                    // Still streaming, or the start of the animation has been
+                    // released to stay inside the memory window: hold this frame
+                    // until the next one arrives. Keep the next streamed frame
+                    // immediately eligible instead of adding another full-frame
+                    // delay.
                     self.last_frame_time = Instant::now()
                         .checked_sub(delay)
                         .unwrap_or_else(Instant::now);
@@ -589,58 +660,92 @@ fn checkerboard_color(x: u32, y: u32) -> (u8, u8, u8) {
     }
 }
 
-fn compose_preview_pixels(
+/// Compose `bgra` into `out` (BGRA, top-down) with `background` applied to the
+/// alpha channel.
+///
+/// Writes into the caller's buffer so a repaint can target the layered window's
+/// DIB directly, and walks it row by row so the per-pixel background position is
+/// a row/column counter instead of a division.
+fn compose_preview_pixels_into(
     bgra: &[u8],
     width: u32,
     height: u32,
     background: TransparentBackground,
-) -> Vec<u8> {
-    let mut out = Vec::with_capacity(bgra.len());
+    out: &mut [u8],
+) {
+    let width = width as usize;
+    let expected = width * height as usize * 4;
+    if width == 0 || out.len() < expected {
+        return;
+    }
 
-    for (idx, px) in bgra.chunks(4).enumerate() {
-        if px.len() != 4 {
-            continue;
-        }
+    // A short source used to end up zero padded; keep that.
+    let usable = bgra.len() / 4 * 4;
+    if usable < expected {
+        out[usable..expected].fill(0);
+    }
 
-        let b = px[0] as u32;
-        let g = px[1] as u32;
-        let r = px[2] as u32;
-        let a = px[3] as u32;
+    let row_bytes = width * 4;
+    for (y, (src_row, dst_row)) in bgra
+        .chunks_exact(row_bytes)
+        .zip(out[..expected].chunks_exact_mut(row_bytes))
+        .enumerate()
+    {
+        compose_preview_row(src_row, dst_row, background, y as u32);
+    }
+}
 
-        match background {
-            TransparentBackground::Transparent => {
-                out.push(((b * a + 127) / 255) as u8);
-                out.push(((g * a + 127) / 255) as u8);
-                out.push(((r * a + 127) / 255) as u8);
-                out.push(a as u8);
+fn compose_preview_row(
+    src_row: &[u8],
+    dst_row: &mut [u8],
+    background: TransparentBackground,
+    y: u32,
+) {
+    match background {
+        TransparentBackground::Transparent => {
+            for (px, dst) in src_row.chunks_exact(4).zip(dst_row.chunks_exact_mut(4)) {
+                let b = px[0] as u32;
+                let g = px[1] as u32;
+                let r = px[2] as u32;
+                let a = px[3] as u32;
+
+                dst[0] = ((b * a + 127) / 255) as u8;
+                dst[1] = ((g * a + 127) / 255) as u8;
+                dst[2] = ((r * a + 127) / 255) as u8;
+                dst[3] = a as u8;
             }
-            TransparentBackground::Black
-            | TransparentBackground::White
-            | TransparentBackground::Checkerboard => {
-                let x = (idx as u32) % width;
-                let y = (idx as u32) / width;
+        }
+        TransparentBackground::Black
+        | TransparentBackground::White
+        | TransparentBackground::Checkerboard => {
+            for (x, (px, dst)) in src_row
+                .chunks_exact(4)
+                .zip(dst_row.chunks_exact_mut(4))
+                .enumerate()
+            {
+                let b = px[0] as u32;
+                let g = px[1] as u32;
+                let r = px[2] as u32;
+                let a = px[3] as u32;
+
                 let (bg_b, bg_g, bg_r) = match background {
-                    TransparentBackground::Black => (0, 0, 0),
-                    TransparentBackground::White => (255, 255, 255),
-                    TransparentBackground::Checkerboard => checkerboard_color(x, y),
+                    TransparentBackground::Black => (0u32, 0u32, 0u32),
+                    TransparentBackground::White => (255u32, 255u32, 255u32),
+                    TransparentBackground::Checkerboard => {
+                        let (cr, cg, cb) = checkerboard_color(x as u32, y);
+                        (cb as u32, cg as u32, cr as u32)
+                    }
                     TransparentBackground::Transparent => unreachable!(),
                 };
                 let inv_a = 255 - a;
 
-                out.push(((b * a + (bg_b as u32) * inv_a + 127) / 255) as u8);
-                out.push(((g * a + (bg_g as u32) * inv_a + 127) / 255) as u8);
-                out.push(((r * a + (bg_r as u32) * inv_a + 127) / 255) as u8);
-                out.push(255);
+                dst[0] = ((b * a + bg_b * inv_a + 127) / 255) as u8;
+                dst[1] = ((g * a + bg_g * inv_a + 127) / 255) as u8;
+                dst[2] = ((r * a + bg_r * inv_a + 127) / 255) as u8;
+                dst[3] = 255;
             }
         }
     }
-
-    let expected = width as usize * height as usize * 4;
-    if out.len() < expected {
-        out.resize(expected, 0);
-    }
-
-    out
 }
 
 /// Scale media dimensions to the requested preview scale while never exceeding
@@ -749,6 +854,43 @@ fn composite_gif_frame(canvas: &mut [u8], frame: &gif::Frame, gif_width: u32, gi
     }
 }
 
+/// Waits while the player is far enough behind that decoding should pause.
+/// Returns false when the preview was cancelled while waiting.
+fn await_frame_queue_room(
+    shared: &Arc<Mutex<StreamedFrames>>,
+    cancel: &Arc<AtomicBool>,
+) -> bool {
+    while !cancel.load(Ordering::Acquire) {
+        let queued = shared
+            .lock()
+            .map(|streamed| streamed.queue.len())
+            .unwrap_or(0);
+        if queued < ANIMATION_QUEUE_FRAMES {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+
+    false
+}
+
+/// Whether the player has released the frames it already showed, which means the
+/// file has to be decoded again to play the animation another time.
+fn streamed_frames_released(shared: &Arc<Mutex<StreamedFrames>>) -> bool {
+    shared
+        .lock()
+        .map(|streamed| streamed.released)
+        .unwrap_or(false)
+}
+
+/// Records that the player gave back frames it already showed.
+fn mark_streamed_frames_released(shared: &Arc<Mutex<StreamedFrames>>) {
+    let result = shared.lock();
+    if let Ok(mut streamed) = result {
+        streamed.released = true;
+    }
+}
+
 fn load_animated_gif(
     path: &PathBuf,
     max_width: u32,
@@ -775,8 +917,7 @@ fn load_animated_gif(
     let mut buffered_ms: u32 = 0;
     let mut reached_end = false;
 
-    while initial_frames.len() < MAX_STREAMED_ANIMATION_FRAMES
-        && initial_frames.len() < ANIMATION_STARTUP_PREBUFFER_FRAMES
+    while initial_frames.len() < ANIMATION_STARTUP_PREBUFFER_FRAMES
         && (initial_frames.len() < 2 || buffered_ms < ANIMATION_STARTUP_PREBUFFER_MS)
     {
         if cancel.load(Ordering::Acquire) {
@@ -803,7 +944,7 @@ fn load_animated_gif(
             delay_ms,
         )?;
         initial_bytes = initial_bytes.saturating_add(img.pixels.len());
-        if initial_bytes > MAX_STREAMED_ANIMATION_BYTES {
+        if initial_bytes > ANIMATION_RETAINED_BYTES {
             return None;
         }
         buffered_ms = buffered_ms.saturating_add(delay_ms);
@@ -828,7 +969,10 @@ fn load_animated_gif(
         });
     }
 
-    let shared = Arc::new(Mutex::new(VecDeque::new()));
+    let shared = Arc::new(Mutex::new(StreamedFrames {
+        queue: VecDeque::new(),
+        released: false,
+    }));
     let shared_clone = Arc::clone(&shared);
     let loaded_flag = Arc::new(AtomicBool::new(false));
     let loaded_flag_clone = Arc::clone(&loaded_flag);
@@ -837,62 +981,62 @@ fn load_animated_gif(
     let path_clone = path.clone();
     let cancel_clone = Arc::clone(&cancel);
     std::thread::spawn(move || {
-        let file = match File::open(&path_clone) {
-            Ok(f) => f,
-            Err(_) => {
-                loaded_flag_clone.store(true, Ordering::Release);
-                return;
-            }
-        };
-        let mut dec = DecodeOptions::new();
-        dec.set_color_output(gif::ColorOutput::RGBA);
-        let mut dec = match dec.read_info(BufReader::new(file)) {
-            Ok(d) => d,
-            Err(_) => {
-                loaded_flag_clone.store(true, Ordering::Release);
-                return;
-            }
-        };
+        let mut skip = skip_frames;
 
-        let mut canvas = vec![0u8; (gif_width * gif_height * 4) as usize];
-        let mut frame_idx = 0usize;
-        let mut streamed_count = skip_frames;
-        let mut streamed_bytes = initial_bytes;
+        loop {
+            let file = match File::open(&path_clone) {
+                Ok(f) => f,
+                Err(_) => break,
+            };
+            let mut dec = DecodeOptions::new();
+            dec.set_color_output(gif::ColorOutput::RGBA);
+            let mut dec = match dec.read_info(BufReader::new(file)) {
+                Ok(d) => d,
+                Err(_) => break,
+            };
 
-        while let Ok(Some(frame)) = dec.read_next_frame() {
-            if cancel_clone.load(Ordering::Acquire)
-                || streamed_count >= MAX_STREAMED_ANIMATION_FRAMES
-            {
-                break;
-            }
+            let mut canvas = vec![0u8; (gif_width * gif_height * 4) as usize];
+            let mut frame_idx = 0usize;
+            let mut cancelled = false;
 
-            composite_gif_frame(&mut canvas, frame, gif_width, gif_height);
-            if frame_idx < skip_frames {
-                frame_idx += 1;
-                continue;
-            }
-
-            let delay_ms = (frame.delay as u32 * 10).max(MIN_ANIMATION_FRAME_DELAY_MS);
-            if let Some(img) = decode_gif_frame_to_image(
-                &canvas,
-                gif_width,
-                gif_height,
-                target_width,
-                target_height,
-                delay_ms,
-            ) {
-                let frame_bytes = img.pixels.len();
-                if streamed_bytes.saturating_add(frame_bytes) > MAX_STREAMED_ANIMATION_BYTES {
+            while let Ok(Some(frame)) = dec.read_next_frame() {
+                if cancel_clone.load(Ordering::Acquire)
+                    || !await_frame_queue_room(&shared_clone, &cancel_clone)
+                {
+                    cancelled = true;
                     break;
                 }
-                if let Ok(mut frames) = shared_clone.lock() {
-                    frames.push_back(img);
+
+                composite_gif_frame(&mut canvas, frame, gif_width, gif_height);
+                if frame_idx < skip {
+                    frame_idx += 1;
+                    continue;
                 }
-                streamed_count += 1;
-                streamed_bytes = streamed_bytes.saturating_add(frame_bytes);
+
+                let delay_ms = (frame.delay as u32 * 10).max(MIN_ANIMATION_FRAME_DELAY_MS);
+                if let Some(img) = decode_gif_frame_to_image(
+                    &canvas,
+                    gif_width,
+                    gif_height,
+                    target_width,
+                    target_height,
+                    delay_ms,
+                ) {
+                    if let Ok(mut streamed) = shared_clone.lock() {
+                        streamed.queue.push_back(img);
+                    }
+                }
+                frame_idx += 1;
             }
-            frame_idx += 1;
+
+            // The player gave back the frames it already showed, so the file is
+            // decoded again to play the animation another time.
+            if cancelled || !streamed_frames_released(&shared_clone) {
+                break;
+            }
+            skip = 0;
         }
+
         loaded_flag_clone.store(true, Ordering::Release);
     });
 
@@ -974,8 +1118,7 @@ fn load_animated_apng(
     let mut reached_end = false;
     let mut target_size: Option<(u32, u32)> = None;
 
-    while initial_frames.len() < MAX_STREAMED_ANIMATION_FRAMES
-        && initial_frames.len() < ANIMATION_STARTUP_PREBUFFER_FRAMES
+    while initial_frames.len() < ANIMATION_STARTUP_PREBUFFER_FRAMES
         && (initial_frames.len() < 2 || buffered_ms < ANIMATION_STARTUP_PREBUFFER_MS)
     {
         if cancel.load(Ordering::Acquire) {
@@ -1009,7 +1152,7 @@ fn load_animated_apng(
         let delay_ms = apng_frame_delay_ms(&frame);
         let img = decode_apng_frame_to_image(frame.buffer(), target_width, target_height, delay_ms);
         initial_bytes = initial_bytes.saturating_add(img.pixels.len());
-        if initial_bytes > MAX_STREAMED_ANIMATION_BYTES {
+        if initial_bytes > ANIMATION_RETAINED_BYTES {
             return None;
         }
         buffered_ms = buffered_ms.saturating_add(delay_ms);
@@ -1034,7 +1177,10 @@ fn load_animated_apng(
         });
     }
 
-    let shared = Arc::new(Mutex::new(VecDeque::new()));
+    let shared = Arc::new(Mutex::new(StreamedFrames {
+        queue: VecDeque::new(),
+        released: false,
+    }));
     let shared_clone = Arc::clone(&shared);
     let loaded_flag = Arc::new(AtomicBool::new(false));
     let loaded_flag_clone = Arc::clone(&loaded_flag);
@@ -1044,41 +1190,46 @@ fn load_animated_apng(
     let path_clone = path.clone();
     let cancel_clone = Arc::clone(&cancel);
     std::thread::spawn(move || {
-        let frames = match apng_frames(&path_clone) {
-            Some(frames) => frames,
-            None => {
-                loaded_flag_clone.store(true, Ordering::Release);
-                return;
-            }
-        };
+        let mut skip = skip_frames;
 
-        let mut streamed_count = skip_frames;
-        let mut streamed_bytes = initial_bytes;
-
-        for frame in frames.skip(skip_frames) {
-            let frame = match frame {
-                Ok(frame) => frame,
-                Err(_) => break,
+        loop {
+            let frames = match apng_frames(&path_clone) {
+                Some(frames) => frames,
+                None => break,
             };
 
-            if cancel_clone.load(Ordering::Acquire)
-                || streamed_count >= MAX_STREAMED_ANIMATION_FRAMES
-            {
-                break;
+            let mut cancelled = false;
+            for frame in frames.skip(skip) {
+                let frame = match frame {
+                    Ok(frame) => frame,
+                    Err(_) => break,
+                };
+
+                if cancel_clone.load(Ordering::Acquire)
+                    || !await_frame_queue_room(&shared_clone, &cancel_clone)
+                {
+                    cancelled = true;
+                    break;
+                }
+
+                let delay_ms = apng_frame_delay_ms(&frame);
+                let img = decode_apng_frame_to_image(
+                    frame.buffer(),
+                    target_width,
+                    target_height,
+                    delay_ms,
+                );
+                if let Ok(mut streamed) = shared_clone.lock() {
+                    streamed.queue.push_back(img);
+                }
             }
 
-            let delay_ms = apng_frame_delay_ms(&frame);
-            let img =
-                decode_apng_frame_to_image(frame.buffer(), target_width, target_height, delay_ms);
-            let frame_bytes = img.pixels.len();
-            if streamed_bytes.saturating_add(frame_bytes) > MAX_STREAMED_ANIMATION_BYTES {
+            // The player gave back the frames it already showed, so the file is
+            // decoded again to play the animation another time.
+            if cancelled || !streamed_frames_released(&shared_clone) {
                 break;
             }
-            if let Ok(mut queue) = shared_clone.lock() {
-                queue.push_back(img);
-            }
-            streamed_count += 1;
-            streamed_bytes = streamed_bytes.saturating_add(frame_bytes);
+            skip = 0;
         }
 
         loaded_flag_clone.store(true, Ordering::Release);
@@ -1174,8 +1325,7 @@ fn load_animated_webp(
     let mut reached_end = false;
     let mut iterator = decoder.into_iter();
 
-    while initial_frames.len() < MAX_STREAMED_ANIMATION_FRAMES
-        && initial_frames.len() < ANIMATION_STARTUP_PREBUFFER_FRAMES
+    while initial_frames.len() < ANIMATION_STARTUP_PREBUFFER_FRAMES
         && (initial_frames.len() < 2 || buffered_ms < ANIMATION_STARTUP_PREBUFFER_MS)
     {
         if cancel.load(Ordering::Acquire) {
@@ -1203,7 +1353,7 @@ fn load_animated_webp(
             delay_ms,
         )?;
         initial_bytes = initial_bytes.saturating_add(img.pixels.len());
-        if initial_bytes > MAX_STREAMED_ANIMATION_BYTES {
+        if initial_bytes > ANIMATION_RETAINED_BYTES {
             return None;
         }
         buffered_ms = buffered_ms.saturating_add(delay_ms);
@@ -1228,7 +1378,10 @@ fn load_animated_webp(
         });
     }
 
-    let shared = Arc::new(Mutex::new(VecDeque::new()));
+    let shared = Arc::new(Mutex::new(StreamedFrames {
+        queue: VecDeque::new(),
+        released: false,
+    }));
     let shared_clone = Arc::clone(&shared);
     let loaded_flag = Arc::new(AtomicBool::new(false));
     let loaded_flag_clone = Arc::clone(&loaded_flag);
@@ -1238,56 +1391,60 @@ fn load_animated_webp(
     let buffer_clone = Arc::clone(&buffer);
     let cancel_clone = Arc::clone(&cancel);
     std::thread::spawn(move || {
-        let options = webp_animation::DecoderOptions {
-            use_threads: true,
-            color_mode: webp_animation::ColorMode::Bgra,
-        };
-        let decoder =
-            match webp_animation::Decoder::new_with_options(buffer_clone.as_slice(), options) {
+        let mut skip = skip_frames;
+
+        loop {
+            let options = webp_animation::DecoderOptions {
+                use_threads: true,
+                color_mode: webp_animation::ColorMode::Bgra,
+            };
+            let decoder = match webp_animation::Decoder::new_with_options(
+                buffer_clone.as_slice(),
+                options,
+            ) {
                 Ok(decoder) => decoder,
-                Err(_) => {
-                    loaded_flag_clone.store(true, Ordering::Release);
-                    return;
-                }
+                Err(_) => break,
             };
 
-        let mut previous_timestamp = 0i32;
-        let mut streamed_count = skip_frames;
-        let mut streamed_bytes = initial_bytes;
+            let mut previous_timestamp = 0i32;
+            let mut cancelled = false;
 
-        for (frame_idx, frame) in decoder.into_iter().enumerate() {
-            if cancel_clone.load(Ordering::Acquire)
-                || streamed_count >= MAX_STREAMED_ANIMATION_FRAMES
-            {
-                break;
-            }
-
-            let timestamp = frame.timestamp();
-            let delay_ms = (timestamp - previous_timestamp).max(0) as u32;
-            previous_timestamp = timestamp;
-
-            if frame_idx < skip_frames {
-                continue;
-            }
-
-            if let Some(img) = decode_webp_animation_frame_to_image(
-                frame.data(),
-                orig_width,
-                orig_height,
-                target_width,
-                target_height,
-                delay_ms,
-            ) {
-                let frame_bytes = img.pixels.len();
-                if streamed_bytes.saturating_add(frame_bytes) > MAX_STREAMED_ANIMATION_BYTES {
+            for (frame_idx, frame) in decoder.into_iter().enumerate() {
+                if cancel_clone.load(Ordering::Acquire)
+                    || !await_frame_queue_room(&shared_clone, &cancel_clone)
+                {
+                    cancelled = true;
                     break;
                 }
-                if let Ok(mut frames) = shared_clone.lock() {
-                    frames.push_back(img);
+
+                let timestamp = frame.timestamp();
+                let delay_ms = (timestamp - previous_timestamp).max(0) as u32;
+                previous_timestamp = timestamp;
+
+                if frame_idx < skip {
+                    continue;
                 }
-                streamed_count += 1;
-                streamed_bytes = streamed_bytes.saturating_add(frame_bytes);
+
+                if let Some(img) = decode_webp_animation_frame_to_image(
+                    frame.data(),
+                    orig_width,
+                    orig_height,
+                    target_width,
+                    target_height,
+                    delay_ms,
+                ) {
+                    if let Ok(mut streamed) = shared_clone.lock() {
+                        streamed.queue.push_back(img);
+                    }
+                }
             }
+
+            // The player gave back the frames it already showed, so the file is
+            // decoded again to play the animation another time.
+            if cancelled || !streamed_frames_released(&shared_clone) {
+                break;
+            }
+            skip = 0;
         }
         loaded_flag_clone.store(true, Ordering::Release);
     });
@@ -1687,9 +1844,53 @@ unsafe extern "system" fn enum_windows_callback(
     windows::Win32::Foundation::BOOL(1)
 }
 
+/// Style and raise a known ffplay window.
+unsafe fn apply_noactivate_to_hwnd(hwnd: HWND) -> bool {
+    // Store the video window HWND for cursor-over-preview detection
+    VIDEO_HWND.store(hwnd.0 as isize, Ordering::SeqCst);
+
+    // Add WS_EX_NOACTIVATE and WS_EX_TOPMOST to its extended style
+    let current_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+    let new_style = current_style
+        | WS_EX_NOACTIVATE.0 as isize
+        | WS_EX_TOOLWINDOW.0 as isize
+        | WS_EX_TOPMOST.0 as isize;
+    SetWindowLongPtrW(hwnd, GWL_EXSTYLE, new_style);
+
+    // Force the video preview window to topmost so it doesn't hide behind Explorer
+    let _ = SetWindowPos(
+        hwnd,
+        HWND_TOPMOST,
+        0,
+        0,
+        0,
+        0,
+        SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
+    );
+    let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+    true
+}
+
 /// Apply WS_EX_NOACTIVATE style to a window
 /// Returns true if the window was found and modified
 unsafe fn try_apply_noactivate_style(pid: u32) -> bool {
+    // Reuse the window already found while it still exists and still belongs to
+    // the player. This runs every few milliseconds for as long as a video plays,
+    // so the desktop enumeration below is needed once, or again if ffplay
+    // recreates its window (the cached handle stops being a window).
+    let cached = VIDEO_HWND.load(Ordering::SeqCst);
+    if cached != 0 {
+        let hwnd = HWND(cached as *mut std::ffi::c_void);
+        if IsWindow(hwnd).as_bool() {
+            let mut window_pid: u32 = 0;
+            GetWindowThreadProcessId(hwnd, Some(&mut window_pid));
+            if window_pid == pid {
+                return apply_noactivate_to_hwnd(hwnd);
+            }
+        }
+        VIDEO_HWND.store(0, Ordering::SeqCst);
+    }
+
     let mut data = EnumWindowsData {
         target_pid: pid,
         found_hwnd: HWND::default(),
@@ -1702,29 +1903,7 @@ unsafe fn try_apply_noactivate_style(pid: u32) -> bool {
     );
 
     if !data.found_hwnd.is_invalid() {
-        // Store the video window HWND for cursor-over-preview detection
-        VIDEO_HWND.store(data.found_hwnd.0 as isize, Ordering::SeqCst);
-
-        // Found the window, add WS_EX_NOACTIVATE and WS_EX_TOPMOST to its extended style
-        let current_style = GetWindowLongPtrW(data.found_hwnd, GWL_EXSTYLE);
-        let new_style = current_style
-            | WS_EX_NOACTIVATE.0 as isize
-            | WS_EX_TOOLWINDOW.0 as isize
-            | WS_EX_TOPMOST.0 as isize;
-        SetWindowLongPtrW(data.found_hwnd, GWL_EXSTYLE, new_style);
-
-        // Force the video preview window to topmost so it doesn't hide behind Explorer
-        let _ = SetWindowPos(
-            data.found_hwnd,
-            HWND_TOPMOST,
-            0,
-            0,
-            0,
-            0,
-            SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
-        );
-        let _ = ShowWindow(data.found_hwnd, SW_SHOWNOACTIVATE);
-        return true;
+        return apply_noactivate_to_hwnd(data.found_hwnd);
     }
 
     VIDEO_HWND.store(0, Ordering::SeqCst);
@@ -2423,8 +2602,112 @@ struct PendingLoad {
     spinner_shown: bool,
 }
 
+/// Reusable layered-window surface: one memory DC with one DIB section selected
+/// into it, replaced only when the preview dimensions change.
+///
+/// A repaint used to create and destroy both objects and allocate a fresh
+/// `width * height * 4` block for every animation frame. The surface belongs to
+/// the preview thread, which owns the window and every repaint.
+struct LayeredSurface {
+    mem_dc: HDC,
+    bitmap: HBITMAP,
+    old_bitmap: HGDIOBJ,
+    bits: *mut u8,
+    width: u32,
+    height: u32,
+}
+
+impl Drop for LayeredSurface {
+    fn drop(&mut self) {
+        unsafe {
+            if !self.old_bitmap.0.is_null() {
+                let _ = SelectObject(self.mem_dc, self.old_bitmap);
+            }
+            let _ = DeleteObject(self.bitmap);
+            let _ = DeleteDC(self.mem_dc);
+        }
+    }
+}
+
+thread_local! {
+    static LAYERED_SURFACE: RefCell<Option<LayeredSurface>> = const { RefCell::new(None) };
+    /// Mutable frame copy for the loading spinner, which is overlaid before the
+    /// frame is composed.
+    static OVERLAY_SCRATCH: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
+}
+
+/// DIB bits for a `width` x `height` frame, reusing the cached surface when the
+/// size is unchanged. `None` means the surface could not be created and the
+/// frame is skipped, as a failed `CreateDIBSection` did before.
+fn ensure_layered_surface(width: u32, height: u32) -> Option<*mut u8> {
+    LAYERED_SURFACE.with(|cell| {
+        let mut surface = cell.borrow_mut();
+
+        if let Some(existing) = surface.as_ref() {
+            if existing.width == width && existing.height == height {
+                return Some(existing.bits);
+            }
+        }
+
+        // Dropping the previous surface releases its DC and bitmap.
+        *surface = None;
+
+        let bmi = BITMAPINFO {
+            bmiHeader: BITMAPINFOHEADER {
+                biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                biWidth: width as i32,
+                biHeight: -(height as i32),
+                biPlanes: 1,
+                biBitCount: 32,
+                biCompression: BI_RGB.0,
+                biSizeImage: 0,
+                biXPelsPerMeter: 0,
+                biYPelsPerMeter: 0,
+                biClrUsed: 0,
+                biClrImportant: 0,
+            },
+            bmiColors: [Default::default()],
+        };
+
+        unsafe {
+            let mem_dc = CreateCompatibleDC(None);
+            if mem_dc.0.is_null() {
+                return None;
+            }
+
+            let mut bits: *mut core::ffi::c_void = ptr::null_mut();
+            let Ok(bitmap) = CreateDIBSection(mem_dc, &bmi, DIB_RGB_COLORS, &mut bits, None, 0)
+            else {
+                let _ = DeleteDC(mem_dc);
+                return None;
+            };
+
+            if bits.is_null() {
+                let _ = DeleteObject(bitmap);
+                let _ = DeleteDC(mem_dc);
+                return None;
+            }
+
+            // Kept selected for the surface's lifetime: `UpdateLayeredWindow`
+            // reads the bitmap through this DC.
+            let old_bitmap = SelectObject(mem_dc, bitmap);
+
+            *surface = Some(LayeredSurface {
+                mem_dc,
+                bitmap,
+                old_bitmap,
+                bits: bits as *mut u8,
+                width,
+                height,
+            });
+
+            Some(bits as *mut u8)
+        }
+    })
+}
+
 unsafe fn render_layered_preview(hwnd: HWND) {
-    let Some((width, height, pixels)) = (|| {
+    let Some((width, height)) = (|| {
         let media_guard = CURRENT_MEDIA.lock().ok()?;
         let media = media_guard.as_ref()?;
 
@@ -2440,20 +2723,27 @@ unsafe fn render_layered_preview(hwnd: HWND) {
         }
 
         let background = current_transparent_background();
-        let pixels = if media.should_draw_streaming_overlay() {
+        let bits = ensure_layered_surface(width, height)?;
+        let out = unsafe { std::slice::from_raw_parts_mut(bits, expected_size) };
+
+        if media.should_draw_streaming_overlay() {
             let elapsed = media
                 .loading_start
                 .map(|s| s.elapsed().as_secs_f32())
                 .unwrap_or(0.0);
             let angle = elapsed * 2.0 * std::f32::consts::PI * 1.2;
-            let mut buf = media.current_pixels().to_vec();
-            overlay_loading_spinner(&mut buf, width, height, angle);
-            compose_preview_pixels(&buf, width, height, background)
+            OVERLAY_SCRATCH.with(|cell| {
+                let mut buf = cell.borrow_mut();
+                buf.clear();
+                buf.extend_from_slice(&media.current_pixels()[..expected_size]);
+                overlay_loading_spinner(&mut buf, width, height, angle);
+                compose_preview_pixels_into(&buf, width, height, background, out);
+            });
         } else {
-            compose_preview_pixels(media.current_pixels(), width, height, background)
-        };
+            compose_preview_pixels_into(media.current_pixels(), width, height, background, out);
+        }
 
-        Some((width, height, pixels))
+        Some((width, height))
     })() else {
         return;
     };
@@ -2463,43 +2753,12 @@ unsafe fn render_layered_preview(hwnd: HWND) {
         return;
     }
 
-    let bmi = BITMAPINFO {
-        bmiHeader: BITMAPINFOHEADER {
-            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-            biWidth: width as i32,
-            biHeight: -(height as i32),
-            biPlanes: 1,
-            biBitCount: 32,
-            biCompression: BI_RGB.0,
-            biSizeImage: 0,
-            biXPelsPerMeter: 0,
-            biYPelsPerMeter: 0,
-            biClrUsed: 0,
-            biClrImportant: 0,
-        },
-        bmiColors: [Default::default()],
-    };
-
-    let mem_dc = CreateCompatibleDC(None);
-    if mem_dc.0.is_null() {
-        return;
-    }
-
-    let mut bits: *mut core::ffi::c_void = ptr::null_mut();
-    let Ok(bitmap) = CreateDIBSection(mem_dc, &bmi, DIB_RGB_COLORS, &mut bits, None, 0) else {
-        let _ = DeleteDC(mem_dc);
+    let Some(mem_dc) =
+        LAYERED_SURFACE.with(|cell| cell.borrow().as_ref().map(|surface| surface.mem_dc))
+    else {
         return;
     };
 
-    if bits.is_null() {
-        let _ = DeleteObject(bitmap);
-        let _ = DeleteDC(mem_dc);
-        return;
-    }
-
-    ptr::copy_nonoverlapping(pixels.as_ptr(), bits as *mut u8, pixels.len());
-
-    let old_bitmap = SelectObject(mem_dc, bitmap);
     let dst_point = POINT {
         x: rect.left,
         y: rect.top,
@@ -2527,12 +2786,6 @@ unsafe fn render_layered_preview(hwnd: HWND) {
         Some(&blend),
         ULW_ALPHA,
     );
-
-    if !old_bitmap.0.is_null() {
-        let _ = SelectObject(mem_dc, old_bitmap);
-    }
-    let _ = DeleteObject(bitmap);
-    let _ = DeleteDC(mem_dc);
 }
 
 unsafe fn reset_preview_after_display_change(hwnd: HWND) {
