@@ -1,5 +1,16 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- Video previews now cover the formats FFmpeg natively demuxes instead of the eight hardcoded extensions: the list grew from `mp4`/`webm`/`mkv`/`avi`/`mov`/`wmv`/`flv`/`m4v` to the whole MPEG-TS family (`.ts`, `.m2ts`, `.mts`, `.m2t`, `.tr`, `.tp`, `.tod`), MPEG-PS and elementary streams (`.mpg`, `.mpeg`, `.mpe`, `.m2p`, `.vob`, `.vro`, `.m1v`, `.m2v`, `.mpv`), Windows and TiVo recordings (`.wtv`, `.dvr-ms`, `.ty`, `.ty+`), raw codec streams (`.h264`, `.h26l`, `.264`, `.avc`, `.h265`, `.hevc`, `.265`, `.h266`, `.vvc`, `.266`, `.vc1`, `.rcv`, `.av1`, `.obu`, `.evc`, `.apv`, `.avs`, `.avs2`, `.avs3`, `.cavs`, `.drc`, `.vc2`), ISO base media variants (`.3gp`, `.3g2`, `.mj2`, `.psp`, `.ismv`, `.f4v`, `.qt`, `.divx`), RealMedia (`.rm`, `.rmvb`), Flash (`.swf`), Ogg (`.ogv`, `.ogm`), MXF/GXF (`.mxf`, `.gxf`), DV (`.dv`, `.dif`), NUT, NSV, IVF, Y4M, MJPEG (`.mjpg`, `.mjpeg`), and the game and camcorder containers FFmpeg reads (`.bik`, `.bk2`, `.smk`, `.roq`, `.mve`, `.cpk`, `.thp`, `.usm`, `.moflex`, `.xmv`, `.mvi`, `.mxg`, `.rsd`, `.str`, `.cin`, `.c93`, `.cdxl`, `.xl`, `.flm`, `.yop`, `.imx`, `.dav`, `.viv`, `.ivr`, `.vw`, `.cdg`, `.pmp`, `.kux`, `.ifv`).
+- `.ts` and `.mts` are shared with TypeScript sources, so those two extensions are no longer decided by name alone: the file is probed with a 2 KB read that requires an MPEG-TS sync byte (`0x47`) at a 188-, 192- or 204-byte packet stride and at the alignment the file starts at. Standard transport streams, BDAV/AVCHD `.m2ts` layouts (whose packets begin with a 4-byte timestamp) and DVB captures with FEC all pass, while a TypeScript file no longer starts `ffplay`. The probe only runs for the two ambiguous extensions, so every other hover stays a plain extension lookup.
+
+### Changed
+
+- The video extension list moved into a single `src/video_formats.rs` module exposing `is_video_file`, replacing the identical eight-extension constant and extension check that were duplicated in `explorer_hook.rs` and `preview_window.rs`.
+
 ## [0.1.14-rc.8] - 2026-09-15
 
 ### Added
