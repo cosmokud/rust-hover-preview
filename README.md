@@ -34,7 +34,11 @@ Inspired by QTTabBar (QuizoApps) hover preview.
 
 ### Videos (FFmpeg required)
 
-`mp4`, `webm`, `mkv`, `avi`, `mov`, `wmv`, `flv`, `m4v`
+`mp4`, `webm`, `mkv`, `avi`, `mov`, `wmv`, `flv`, `m4v`, `ts`, `m2ts`, `mts`, `mpg`, `mpeg`, `vob`, `3gp`, `ogv`, `rmvb`, `asf`, `divx`, `f4v`, `mxf`, `dv`
+
+All video files supported by FFmpeg work as well — any container it can demux and any raw video stream it can decode (`.tp`, `.tr`, `.tod`, `.wtv`, `.ty`, `.vro`, `.nut`, `.gxf`, `.nsv`, `.ivf`, `.y4m`, `.obu`, `.h264`, `.h265`, `.h266`, `.vc1`, `.av1`, `.avs2`, `.avs3`, and camcorder or game formats such as `.bik`, `.bk2`, `.smk`, `.mve`, `.cpk`, `.thp`, `.usm`, `.pmp`, `.kux`, `.dav`). The complete list lives in `src/video_formats.rs`.
+
+`.ts` and `.mts` are shared with TypeScript sources, so those two are accepted only when the file actually contains MPEG-TS packets; a TypeScript file is not previewed.
 
 ## Installation (Recommended)
 

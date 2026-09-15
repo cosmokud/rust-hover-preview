@@ -6,6 +6,7 @@ mod preview_window;
 mod single_instance;
 mod startup;
 mod tray;
+mod video_formats;
 mod wheel_input;
 
 use once_cell::sync::Lazy;
