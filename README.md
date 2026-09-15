@@ -22,7 +22,7 @@ Inspired by QTTabBar (QuizoApps) hover preview.
 - Topmost, non-activating preview windows designed to avoid focus stealing
 - Per-monitor DPI awareness to reduce scaling artifacts on high-DPI displays
 - Display-aware placement that keeps the preview inside the monitor under the cursor or focused item, with frames painted before the window is revealed so a new hover never flashes the previous image
-- Scale-aware sizing from 25% to 400% or fit-to-screen, always clamped to the space available on the display so a scaled-up preview is never clipped
+- Scale-aware sizing from 25% to 400% or fit-to-screen, always clamped to the space available on the display so a scaled-up preview is never clipped (PDF previews always use fit-to-screen)
 - Sleep/resume resilience: waking the system resets the layered composition surface and re-asserts the preview's topmost/layered styles, the tray icon is restored after an Explorer restart, and video playback and background decoding are torn down cleanly on suspend
 - EnumWindows-based Explorer detection with CabinetWClass/ExplorerWClass class matching to keep idle polling light and avoid Explorer-side COM allocations, plus input-grace helpers that throttle hover and keyboard focus probes to recent user activity
 - Wheel scrolling refreshes the preview without moving the mouse: a system-wide low-level mouse hook reports wheel input, the hover stability window restarts while the wheel turns, and the item that settles under the parked cursor is previewed — or the preview is dropped when that item is not media. Scrolling while a keyboard preview is on screen closes it and hands the screen back to the mouse, so the preview follows the item under the cursor instead of staying frozen while the list scrolls
@@ -42,6 +42,8 @@ Inspired by QTTabBar (QuizoApps) hover preview.
 `pdf`
 
 The first page is rendered by the PDF engine that ships with Windows, so there is no renderer to bundle and nothing to install. The page is rendered at the exact size the preview asks for, which keeps a scaled-up preview sharp instead of enlarging a thumbnail, and the page size is read from the file itself, so anything that is not A4 or Letter is placed correctly.
+
+Because the page is drawn at the preview's size, a PDF always takes the largest size the display area allows — `Preview Scaling` does not apply to it, since a bigger preview is sharper text rather than an enlarged image.
 
 Any PDF the Windows engine can open without a password is previewed. Password-protected and damaged files are skipped rather than shown as an error, and a `.pdf` file has to contain a PDF header before it is handed to the renderer.
 
