@@ -62,11 +62,17 @@ The full list lives in `config.ini` and is meant to be edited there: add an exte
 
 `.nfo` files are read as CP437 art with their ANSI colors preserved, toned to the page they are drawn on so light and dark themes are both readable.
 
-Text previews are sized to their content rather than to the image scaling setting: a two-line file gets a two-line preview, a long file takes as much of the display as the space beside the cursor allows, and the font is a fixed size scaled by the display's DPI rather than a stretched image. `Text Preview Font Size` sets that size — the glyphs, the line spacing and the margin scale together, so 200% is the same page twice the size and shows fewer lines, not the same lines stretched. Code, markup, and NFO art keep their columns and are clipped at the right edge; prose — a readme, a log, an `.rtf` — wraps. A file longer than the preview ends with a count of the lines left (`… 2349 more lines`).
+Text previews are sized to their content rather than to the image scaling setting: a two-line file gets a two-line preview, a long file takes as much of the display as the space beside the cursor allows, and the font is a fixed size scaled by the display's DPI rather than a stretched image. `Text Preview Font Size` sets that size — the glyphs, the line spacing and the margin scale together, so 200% is the same page twice the size and shows fewer lines, not the same lines stretched. Code, markup, and NFO art keep their columns and are clipped at the right edge; prose — a readme, a log, an `.rtf` — wraps.
 
-Text previews can be turned off entirely with `Enable TXT Preview`, which leaves the extension list as it is; the list is the other half of the gate, and `false` in `text_preview_enabled` is the same switch from `config.ini`.
+### Scrolling a text preview
 
-Encoding is decided from the file: UTF-8 or UTF-16 byte order marks first, then UTF-8, then the Windows code page (CP437 for NFO art). A file that is not text — an executable or archive with a text extension — is skipped rather than shown as garbage. One preview reads up to 2 MB and lays out up to 400 lines, none of which a single screenful can show.
+When a file is longer than the preview, the preview grows a scrollbar instead of stopping at the bottom of the page. Moving the pointer onto the preview keeps it there — the usual rule is that touching a preview dismisses it — and from there the wheel scrolls the text, or the thumb can be dragged. The pointer can stray a comfortable margin around the preview, off the thin scrollbar and even off the window itself, without the preview closing; it closes when the pointer leaves that margin, or when another file is hovered.
+
+Scrolling does not re-read the file. For source files only the lines coming into view are highlighted — the parser's state is carried along as you go, with a checkpoint every few dozen lines so a jump in either direction is bounded — and the text itself is read once, up to the read cap. A rendered Markdown document is walked in one pass (its line breaks are only known once the block before it has been read) but only the visible lines are kept. Scrolling is fastest where it matters most: a hundred-thousand-line source file opens as quickly as a short one.
+
+Text previews can be turned off entirely with `Enable Text Preview`, which leaves the extension list as it is; the list is the other half of the gate, and `false` in `text_preview_enabled` is the same switch from `config.ini`.
+
+Encoding is decided from the file: UTF-8 or UTF-16 byte order marks first, then UTF-8, then the Windows code page (CP437 for NFO art). A file that is not text — an executable or archive with a text extension — is skipped rather than shown as garbage. One preview reads up to 2 MB, and a preview can be scrolled through its first 2000 lines; a file cut off at either bound says so on its last line.
 
 ### Videos (FFmpeg required)
 
@@ -136,9 +142,9 @@ ffprobe -version
 - **Same File Rehover Delay**: `Instant (0 ms)`, `Fast (200 ms)`, `Medium (500 ms)`, `Relaxed (750 ms)`, `Slow (1000 ms)` — delay before the same file can preview again after the preview self-dismisses
 - **Video Volume**: `Max (100%)`, `High (80%)`, `Medium (50%)`, `Low (25%)`, `Very Low (10%)`, `Mute (0%)`
 - **Preview Position**: `Follow Cursor` or `Best Position` — `Best Position` places the preview beside the cursor (or the focused item) and centers it on the same line, moving it only as far as a display edge requires, so a small preview appears where you are looking rather than in the middle of the screen. `Follow Cursor` places it in the roomiest quadrant around the cursor.
-- **Enable TXT Preview**: Turn text and code previews on or off, ahead of the extension list — turning them off leaves the list alone and turning them back on restores it.
+- **Enable Text Preview**: Turn text and code previews on or off, ahead of the extension list — turning them off leaves the list alone and turning them back on restores it.
 - **Text Preview Theme**: `Atom One Light (Default)` or `One Dark Pro` — the colors text and code previews are drawn with. Changing it re-renders the preview that is on screen.
-- **Text Preview Font Size**: `25%`, `50%`, `100% (Default)`, `125%`, `150%`, `175%`, `200%`, `250%`, `300%`, `400%` — the size the text is drawn at, for rendered Markdown as much as for source files. The whole page scales with it (glyphs, line spacing and margin together), so a bigger preview holds fewer lines rather than the same lines stretched. Any hand-edited value in `config.ini` is honored, including one between these steps.
+- **Text Preview Font Size**: `100%`, `125% (Default)`, `150%`, `175%`, `200%`, `250%`, `300%`, `400%` — the size the text is drawn at, for rendered Markdown as much as for source files. The whole page scales with it (glyphs, line spacing and margin together), so a bigger preview holds fewer lines rather than the same lines stretched. Any hand-edited value in `config.ini` is honored, including one between these steps.
 - **Markdown Preview**: `Rendered (Default)` shows a `.md` file as the document it describes, `Highlighted Source` shows the markup itself with Markdown syntax highlighting.
 - **Preview Scaling**: `Fit to Screen`, `400%`, `300%`, `200%`, `150%`, `100% (Default)`, `50%`, `25%` — sizes the preview relative to the image or video's native resolution instead of always showing it verbatim. `Fit to Screen` enlarges the preview as much as the display allows. Any scale that would extend past the screen edge is reduced to fit, so the preview is never clipped, in both `Follow Cursor` and `Best Position` modes. PDF and text previews size themselves (a PDF page is always fit to screen, and text is always drawn at its own font size), so this setting does not apply to them.
 - **Transparent Background**: `Transparent`, `Black`, `White`, or `Checkerboard`
@@ -175,7 +181,7 @@ preview_scale=100
 theme=light
 markdown_mode=rendered
 text_preview_enabled=true
-text_font_scale=100
+text_font_scale=125
 
 [text]
 extensions=txt,text,log,nfo,md,markdown,json,toml,yaml,py,js,ts,rs,...
@@ -183,8 +189,8 @@ extensions=txt,text,log,nfo,md,markdown,json,toml,yaml,py,js,ts,rs,...
 
 - `theme` is the color theme for text and code previews: `light` (Atom One Light, the default) or `dark` (One Dark Pro). `atom one light` and `one dark pro` are accepted as well.
 - `markdown_mode` is how `.md` files are drawn: `rendered` (the default document view) or `source` (the markup with syntax highlighting).
-- `text_preview_enabled` is the `Enable TXT Preview` toggle: `false` stops text previews without touching the extension list.
-- `text_font_scale` is the size text is drawn at, as a percentage between 1 and 1000 (`150` or `150%`; `0` resets to the default of 100). The tray offers steps from 25% to 400%, and a value between those steps is used as written.
+- `text_preview_enabled` is the `Enable Text Preview` toggle: `false` stops text previews without touching the extension list.
+- `text_font_scale` is the size text is drawn at, as a percentage between 1 and 1000 (`150` or `150%`; `0` resets to the default of 125). The tray offers steps from 100% to 400%, and a value between those steps is used as written.
 - `extensions` is every extension previewed as text. It is written in full when the file is created and is shortened in this example. Append an extension to preview one the app does not know, or delete entries to stop previewing them — the change is picked up without a restart. An extension is written without its dot (`py`, not `.py`), and an empty list turns text previews off, so the built-in list comes back only when the key itself is missing.
 - When `enable_off_trigger_key` is enabled, hold the configured `off_trigger_key` to keep previews hidden while browsing Explorer.
 - When `confirm_file_type` is enabled, the app validates file content signatures (magic bytes) against the extension — useful for files with incorrect extensions.

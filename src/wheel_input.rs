@@ -6,19 +6,28 @@
 //! messages without touching Explorer, and the hook thread publishes a monotonic
 //! tick counter that the polling loop consumes to re-resolve the item under the
 //! cursor once the list settles.
+//!
+//! The same hook is what lets a scrollable text preview take the wheel: the
+//! preview window never has focus, so Windows would deliver its wheel messages to
+//! Explorer instead. When the pointer is inside the region a scrollable preview
+//! published, the message is swallowed here and counted for the preview thread.
 
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicI32, AtomicU32, AtomicU64, Ordering};
 use std::time::Duration;
-use windows::Win32::Foundation::{HINSTANCE, LPARAM, LRESULT, WPARAM};
+use windows::Win32::Foundation::{HINSTANCE, LPARAM, LRESULT, POINT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, GetMessageW, PostThreadMessageW, SetWindowsHookExW, UnhookWindowsHookEx,
-    HC_ACTION, MSG, WH_MOUSE_LL, WM_MOUSEHWHEEL, WM_MOUSEWHEEL, WM_QUIT,
+    HC_ACTION, MSG, MSLLHOOKSTRUCT, WH_MOUSE_LL, WM_MOUSEHWHEEL, WM_MOUSEWHEEL, WM_QUIT,
 };
 
 /// Wheel messages seen since startup; the hook thread is the only writer.
 static WHEEL_TICKS: AtomicU64 = AtomicU64::new(0);
+
+/// Wheel notches handed to a text preview. Signed: up is positive. Swapped to
+/// zero by the preview thread, so a notch is counted once.
+static TEXT_SCROLL_DELTA: AtomicI32 = AtomicI32::new(0);
 
 /// Thread running the hook's message pump, published so shutdown can wake it.
 static WHEEL_THREAD_ID: AtomicU32 = AtomicU32::new(0);
@@ -26,6 +35,12 @@ static WHEEL_THREAD_ID: AtomicU32 = AtomicU32::new(0);
 /// Number of wheel messages seen so far, counted across the whole desktop.
 pub fn wheel_tick_count() -> u64 {
     WHEEL_TICKS.load(Ordering::Relaxed)
+}
+
+/// Wheel notches a text preview has been given since this was last called, in
+/// wheel units (120 to a notch).
+pub fn take_text_scroll_delta() -> i32 {
+    TEXT_SCROLL_DELTA.swap(0, Ordering::AcqRel)
 }
 
 /// Starts the hook thread and waits until it is ready to be stopped, so a
@@ -82,13 +97,66 @@ fn run_wheel_watcher() {
 }
 
 unsafe extern "system" fn wheel_hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    // Keep this callback to a single atomic: every wheel message on the desktop
-    // waits for it to return.
+    // Keep this callback cheap: every wheel message on the desktop waits for it
+    // to return, so it reads one rectangle without blocking and otherwise touches
+    // a single atomic.
     if code == HC_ACTION as i32
         && (wparam.0 == WM_MOUSEWHEEL as usize || wparam.0 == WM_MOUSEHWHEEL as usize)
     {
+        if let Some(region) = crate::preview_window::text_scroll_keep_alive_try() {
+            let point = (*(lparam.0 as *const MSLLHOOKSTRUCT)).pt;
+            if point_in_region(point, region) {
+                // The wheel is the preview's, not Explorer's: count it for the
+                // preview thread and swallow the message so the list behind the
+                // preview does not move as well.
+                if wparam.0 == WM_MOUSEWHEEL as usize {
+                    let notches = (wparam.0 >> 16) as u16 as i16 as i32;
+                    TEXT_SCROLL_DELTA.fetch_add(notches, Ordering::AcqRel);
+                }
+                return LRESULT(1);
+            }
+        }
+
         WHEEL_TICKS.fetch_add(1, Ordering::Relaxed);
     }
 
     CallNextHookEx(None, code, wparam, lparam)
+}
+
+fn point_in_region(point: POINT, region: (i32, i32, i32, i32)) -> bool {
+    let (left, top, right, bottom) = region;
+    point.x >= left && point.x < right && point.y >= top && point.y < bottom
+}
+
+#[cfg(test)]
+mod tests {
+    use super::point_in_region;
+
+    #[test]
+    fn the_keep_alive_region_holds_the_pointer_inside_its_edges() {
+        let region = (10, 20, 110, 220);
+
+        assert!(point_in_region(
+            windows::Win32::Foundation::POINT { x: 10, y: 20 },
+            region
+        ));
+        assert!(point_in_region(
+            windows::Win32::Foundation::POINT { x: 109, y: 219 },
+            region
+        ));
+        // The far edges are outside, so a region and its neighbour never both
+        // claim the same pixel.
+        assert!(!point_in_region(
+            windows::Win32::Foundation::POINT { x: 110, y: 100 },
+            region
+        ));
+        assert!(!point_in_region(
+            windows::Win32::Foundation::POINT { x: 100, y: 220 },
+            region
+        ));
+        assert!(!point_in_region(
+            windows::Win32::Foundation::POINT { x: 0, y: 0 },
+            region
+        ));
+    }
 }

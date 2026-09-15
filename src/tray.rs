@@ -65,8 +65,6 @@ const ID_TRAY_THEME_DARK: u16 = 1051; // One Dark Pro
 const ID_TRAY_MARKDOWN_RENDERED: u16 = 1052; // Rendered document
 const ID_TRAY_MARKDOWN_SOURCE: u16 = 1053; // Highlighted Markdown source
 const ID_TRAY_TEXT_ENABLE: u16 = 1060; // Text previews on/off
-const ID_TRAY_FONT_25: u16 = 1070;
-const ID_TRAY_FONT_50: u16 = 1071;
 const ID_TRAY_FONT_100: u16 = 1072;
 const ID_TRAY_FONT_125: u16 = 1073;
 const ID_TRAY_FONT_150: u16 = 1074;
@@ -160,8 +158,6 @@ unsafe extern "system" fn tray_window_proc(
                 ID_TRAY_MARKDOWN_RENDERED => set_markdown_mode(MarkdownMode::Rendered),
                 ID_TRAY_MARKDOWN_SOURCE => set_markdown_mode(MarkdownMode::Source),
                 ID_TRAY_TEXT_ENABLE => toggle_text_preview_enabled(),
-                ID_TRAY_FONT_25 => set_text_font_scale(25),
-                ID_TRAY_FONT_50 => set_text_font_scale(50),
                 ID_TRAY_FONT_100 => set_text_font_scale(100),
                 ID_TRAY_FONT_125 => set_text_font_scale(125),
                 ID_TRAY_FONT_150 => set_text_font_scale(150),
@@ -320,7 +316,7 @@ unsafe fn show_context_menu(hwnd: HWND) {
         menu,
         text_enable_flags,
         ID_TRAY_TEXT_ENABLE as usize,
-        w!("Enable TXT Preview"),
+        w!("Enable Text Preview"),
     );
 
     // Add Text Preview Theme submenu
@@ -372,27 +368,15 @@ unsafe fn show_context_menu(hwnd: HWND) {
     };
     let _ = AppendMenuW(
         font_menu,
-        font_flag(25),
-        ID_TRAY_FONT_25 as usize,
-        w!("25%"),
-    );
-    let _ = AppendMenuW(
-        font_menu,
-        font_flag(50),
-        ID_TRAY_FONT_50 as usize,
-        w!("50%"),
-    );
-    let _ = AppendMenuW(
-        font_menu,
         font_flag(100),
         ID_TRAY_FONT_100 as usize,
-        w!("100% (Default)"),
+        w!("100%"),
     );
     let _ = AppendMenuW(
         font_menu,
         font_flag(125),
         ID_TRAY_FONT_125 as usize,
-        w!("125%"),
+        w!("125% (Default)"),
     );
     let _ = AppendMenuW(
         font_menu,
