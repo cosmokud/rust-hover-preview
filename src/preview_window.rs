@@ -2,6 +2,7 @@ use crate::config::{
     sanitize_webp_playback_fps, PreviewScale, TransparentBackground, DEFAULT_PREVIEW_SCALE_PERCENT,
     DEFAULT_WEBP_PLAYBACK_FPS,
 };
+use crate::video_formats::is_video_file;
 use crate::{CONFIG, RUNNING};
 use gif::DecodeOptions;
 use image::GenericImageView;
@@ -42,8 +43,6 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 const PREVIEW_CLASS: PCWSTR = w!("RustHoverPreviewWindow");
 
-// Video extensions for detection
-const VIDEO_EXTENSIONS: &[&str] = &["mp4", "webm", "mkv", "avi", "mov", "wmv", "flv", "m4v"];
 const MAX_STREAMED_ANIMATION_FRAMES: usize = 300;
 const MAX_STREAMED_ANIMATION_BYTES: usize = 256 * 1024 * 1024;
 const MIN_GIF_ANIMATION_FRAME_DELAY_MS: u32 = 33;
@@ -426,13 +425,6 @@ pub fn preview_screen_rect() -> Option<(i32, i32, i32, i32)> {
     }
 
     None
-}
-
-fn is_video_file(path: &PathBuf) -> bool {
-    path.extension()
-        .and_then(|ext| ext.to_str())
-        .map(|ext| VIDEO_EXTENSIONS.contains(&ext.to_lowercase().as_str()))
-        .unwrap_or(false)
 }
 
 fn is_gif_file(path: &PathBuf) -> bool {

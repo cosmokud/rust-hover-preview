@@ -2,6 +2,7 @@ use crate::preview_window::{
     cursor_preview_hover, hide_preview, preview_screen_rect, show_preview, show_preview_keyboard,
     PreviewCursorHover,
 };
+use crate::video_formats::is_video_file;
 use crate::wheel_input;
 use crate::{CONFIG, RUNNING};
 use once_cell::sync::Lazy;
@@ -43,9 +44,6 @@ use windows::Win32::UI::WindowsAndMessaging::{
 const IMAGE_EXTENSIONS: &[&str] = &[
     "jpg", "jpeg", "jpe", "jfif", "png", "gif", "bmp", "ico", "tiff", "tif", "webp",
 ];
-
-// Supported video extensions
-const VIDEO_EXTENSIONS: &[&str] = &["mp4", "webm", "mkv", "avi", "mov", "wmv", "flv", "m4v"];
 
 struct FolderMediaIndex {
     built_at: Instant,
@@ -568,13 +566,6 @@ fn is_image_file(path: &PathBuf) -> bool {
     path.extension()
         .and_then(|ext| ext.to_str())
         .map(|ext| IMAGE_EXTENSIONS.contains(&ext.to_lowercase().as_str()))
-        .unwrap_or(false)
-}
-
-fn is_video_file(path: &PathBuf) -> bool {
-    path.extension()
-        .and_then(|ext| ext.to_str())
-        .map(|ext| VIDEO_EXTENSIONS.contains(&ext.to_lowercase().as_str()))
         .unwrap_or(false)
 }
 
