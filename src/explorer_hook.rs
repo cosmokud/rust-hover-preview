@@ -299,6 +299,10 @@ const DISPLAY_CHANGE_BACKOFF_MS: u64 = 1500;
 const KEYBOARD_FOCUS_INPUT_GRACE_MS: u64 = 500;
 const HOVER_RESOLVER_INPUT_GRACE_MS: u64 = 1500;
 const WHEEL_SCROLL_SETTLE_MS: u64 = 150;
+/// How long a pointer that was using a scrollable text preview keeps the preview
+/// alive after it was last inside the region, so the instant between two frames
+/// cannot be read as the user leaving.
+const HOVER_HOLD_GRACE_MS: u64 = 400;
 const MOUSE_MOVE_PX: i32 = 5;
 const KEYBOARD_POINTER_MOVE_TOLERANCE_PX: i32 = 20;
 const KEYBOARD_PREVIEW_BOX_WATCH_MS: u64 = 2500;
@@ -3257,6 +3261,12 @@ pub fn run_explorer_hook() {
     let mut pointer_pause = KeyboardPointerPause::default();
     let mut hover_start: Option<Instant> = None;
     let mut last_cursor_pos = POINT::default();
+    // While the pointer is using a scrollable text preview, and for a moment
+    // after it was last seen doing so. The grace covers the instants where the
+    // preview is between frames — a repaint or a new frame arriving clears the
+    // media the region is derived from — so a flicker cannot be read as the user
+    // having left a preview they are in the middle of using.
+    let mut text_scroll_hold_until: Option<Instant> = None;
 
     // Keyboard hover state
     let mut keyboard_file: Option<PathBuf> = None;
@@ -3582,9 +3592,17 @@ pub fn run_explorer_hook() {
             // dismissal below, the hover resolver, the mouse hover delay, and the
             // "Explorer is visible but not focused" branch, where a pointer that
             // is not over Explorer is not a reason to close a preview either.
-            let text_scroll_hold = text_scroll_pointer_hold(cursor_pos.x, cursor_pos.y);
-
             let loop_now = Instant::now();
+
+            let text_scroll_hold = text_scroll_pointer_hold(cursor_pos.x, cursor_pos.y);
+            if text_scroll_hold {
+                text_scroll_hold_until =
+                    Some(loop_now + Duration::from_millis(HOVER_HOLD_GRACE_MS));
+            }
+            let text_scroll_hold = text_scroll_hold_until
+                .map(|until| loop_now < until)
+                .unwrap_or(false);
+
             let move_threshold = pointer_pause.move_threshold_px();
             let moved = (cursor_pos.x - last_cursor_pos.x).abs() > move_threshold
                 || (cursor_pos.y - last_cursor_pos.y).abs() > move_threshold;
@@ -3910,7 +3928,14 @@ pub fn run_explorer_hook() {
                 }
             }
 
-            if moved {
+            // A move is "the mouse driving Explorer" — resolve the item under the
+            // cursor, and drop the preview when that is no longer the file it shows.
+            // It is not that while the pointer is using a scrollable text preview:
+            // the preview is drawn over the list, so the item under the pointer is
+            // the preview rather than the file, and resolving it would find the
+            // wrong thing or nothing at all and close a preview the user is
+            // reaching for.
+            if moved && !text_scroll_hold {
                 last_cursor_pos = cursor_pos;
                 stationary_search_miss_started_at = None;
                 stationary_hover_probe_done = false;

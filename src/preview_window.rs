@@ -46,13 +46,12 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, IsWindow, IsWindowVisible,
     LoadCursorW, MoveWindow, PeekMessageW, RegisterClassExW, SetWindowLongPtrW, SetWindowPos,
     ShowWindow, TranslateMessage, UpdateLayeredWindow, CS_HREDRAW, CS_VREDRAW, GWL_EXSTYLE,
-    GW_OWNER,
-    HWND_TOPMOST, IDC_ARROW, MSG, PM_REMOVE, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN,
-    SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW,
-    SW_HIDE, SW_SHOWNOACTIVATE, ULW_ALPHA, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_LBUTTONDOWN,
-    WM_LBUTTONUP, WM_MOUSEMOVE, WM_POWERBROADCAST,
-    PBT_APMRESUMEAUTOMATIC, PBT_APMRESUMESUSPEND, PBT_APMSUSPEND, PBT_APMSTANDBY, WNDCLASSEXW,
-    WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    GW_OWNER, HWND_TOPMOST, IDC_ARROW, MSG, PBT_APMRESUMEAUTOMATIC, PBT_APMRESUMESUSPEND,
+    PBT_APMSTANDBY, PBT_APMSUSPEND, PM_REMOVE, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN,
+    SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+    SWP_SHOWWINDOW, SW_HIDE, SW_SHOWNOACTIVATE, ULW_ALPHA, WM_DISPLAYCHANGE, WM_DPICHANGED,
+    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_POWERBROADCAST, WNDCLASSEXW, WS_EX_LAYERED,
+    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
 const PREVIEW_CLASS: PCWSTR = w!("RustHoverPreviewWindow");
@@ -88,20 +87,49 @@ static PREVIEW_HWND: AtomicIsize = AtomicIsize::new(0);
 const TEXT_SCROLL_LINES_PER_NOTCH: i64 = 3;
 const WHEEL_DELTA: i32 = 120;
 
-/// How far around a scrollable text preview the pointer can stray without the
-/// preview giving up on it, in logical pixels. The scrollbar is a few pixels
-/// wide, so a drag that drifts off it — or off the window — has to stay inside
-/// the region that keeps the preview alive.
-const TEXT_SCROLL_KEEP_ALIVE_PADDING_PIXELS: f32 = 26.0;
+/// How far around the preview, and around the path from the file to it, the
+/// pointer can stray and still be treated as using the preview, in logical
+/// pixels. Generous on purpose: the scrollbar is a few pixels wide and the gap
+/// the pointer crosses is small, so the region has to forgive both a hand that
+/// drifts and a pointer that is still on its way.
+const TEXT_SCROLL_HOLD_PADDING_PIXELS: f32 = 40.0;
+
+/// A region on screen: left, top, right, bottom.
+type ScreenRegion = (i32, i32, i32, i32);
 
 /// The region that keeps a scrollable text preview on screen, in screen
 /// coordinates, or `None` when the preview on screen does not scroll.
-static TEXT_SCROLL_KEEP_ALIVE: Lazy<Mutex<Option<(i32, i32, i32, i32)>>> =
-    Lazy::new(|| Mutex::new(None));
+static TEXT_SCROLL_KEEP_ALIVE: Lazy<Mutex<Option<ScreenRegion>>> = Lazy::new(|| Mutex::new(None));
+
+/// Where the preview that is on screen was opened from: the cursor that hovered
+/// the file, or the middle of the focused item. The hold region is built from
+/// this point and the preview's box, so the whole path between them is inside it.
+static TEXT_SCROLL_ANCHOR: Lazy<Mutex<Option<(i32, i32)>>> = Lazy::new(|| Mutex::new(None));
 
 /// Whether the preview on screen is a text preview with more lines than it can
 /// show, which is the condition for everything above.
 static TEXT_PREVIEW_SCROLLABLE: AtomicBool = AtomicBool::new(false);
+
+/// The region that keeps a preview alive: the box from the point it was opened
+/// from to the preview itself, padded.
+///
+/// A preview is placed beside what it belongs to rather than over it, so the
+/// pointer has to travel to reach it — across a gap, sometimes against the side
+/// the placement chose. Joining the two means that journey never leaves the
+/// region, however the preview ended up placed relative to the cursor.
+fn text_scroll_hold_region(
+    preview: ScreenRegion,
+    anchor: (i32, i32),
+    padding: i32,
+) -> ScreenRegion {
+    let (left, top, right, bottom) = preview;
+    (
+        left.min(anchor.0) - padding,
+        top.min(anchor.1) - padding,
+        right.max(anchor.0) + padding,
+        bottom.max(anchor.1) + padding,
+    )
+}
 
 // Track the ffplay video window HWND for cursor-over-preview detection
 static VIDEO_HWND: AtomicIsize = AtomicIsize::new(0);
@@ -980,10 +1008,7 @@ fn composite_gif_frame(canvas: &mut [u8], frame: &gif::Frame, gif_width: u32, gi
 
 /// Waits while the player is far enough behind that decoding should pause.
 /// Returns false when the preview was cancelled while waiting.
-fn await_frame_queue_room(
-    shared: &Arc<Mutex<StreamedFrames>>,
-    cancel: &Arc<AtomicBool>,
-) -> bool {
+fn await_frame_queue_room(shared: &Arc<Mutex<StreamedFrames>>, cancel: &Arc<AtomicBool>) -> bool {
     while !cancel.load(Ordering::Acquire) {
         let queued = shared
             .lock()
@@ -1440,8 +1465,13 @@ fn load_animated_webp(
         return None;
     }
 
-    let (target_width, target_height) =
-        scale_dimensions(orig_width, orig_height, max_width, max_height, preview_scale);
+    let (target_width, target_height) = scale_dimensions(
+        orig_width,
+        orig_height,
+        max_width,
+        max_height,
+        preview_scale,
+    );
     if target_width == 0 || target_height == 0 {
         return None;
     }
@@ -1527,13 +1557,11 @@ fn load_animated_webp(
                 use_threads: true,
                 color_mode: webp_animation::ColorMode::Bgra,
             };
-            let decoder = match webp_animation::Decoder::new_with_options(
-                buffer_clone.as_slice(),
-                options,
-            ) {
-                Ok(decoder) => decoder,
-                Err(_) => break,
-            };
+            let decoder =
+                match webp_animation::Decoder::new_with_options(buffer_clone.as_slice(), options) {
+                    Ok(decoder) => decoder,
+                    Err(_) => break,
+                };
 
             let mut previous_timestamp = 0i32;
             let mut cancelled = false;
@@ -1605,8 +1633,13 @@ fn load_static_image(
         image::open(path).ok()?
     };
     let (orig_width, orig_height) = img.dimensions();
-    let (target_width, target_height) =
-        scale_dimensions(orig_width, orig_height, max_width, max_height, preview_scale);
+    let (target_width, target_height) = scale_dimensions(
+        orig_width,
+        orig_height,
+        max_width,
+        max_height,
+        preview_scale,
+    );
 
     let resized = if target_width != orig_width || target_height != orig_height {
         img.resize_exact(
@@ -1693,7 +1726,7 @@ fn load_pdf_first_page(
 /// free space around the cursor — the two are the same thing to this renderer,
 /// and using the planned size keeps the painted frame and the window in step.
 fn load_text_preview(
-    path: &PathBuf,
+    path: &Path,
     width: u32,
     height: u32,
     dpi: u32,
@@ -1702,7 +1735,7 @@ fn load_text_preview(
     let frame = text_preview::render_scrolled(path, 0, width, height, dpi, options)?;
 
     let scroll = frame.scrollable().then(|| TextScroll {
-        path: path.clone(),
+        path: path.to_path_buf(),
         options,
         dpi,
         width: frame.width,
@@ -3082,17 +3115,14 @@ unsafe fn render_layered_preview(hwnd: HWND) {
 /// and the wheel hook asks the same question before it decides whether the wheel
 /// belongs to Explorer or to the preview.
 unsafe fn publish_text_scroll_keep_alive(hwnd: HWND) {
-    let dpi = CURRENT_MEDIA
-        .lock()
-        .ok()
-        .and_then(|media| {
-            let media = media.as_ref()?;
-            let scroll = media.text_scroll.as_ref()?;
-            if !matches!(media.media_type, MediaType::Text) || !scroll.can_scroll() {
-                return None;
-            }
-            Some(scroll.dpi)
-        });
+    let dpi = CURRENT_MEDIA.lock().ok().and_then(|media| {
+        let media = media.as_ref()?;
+        let scroll = media.text_scroll.as_ref()?;
+        if !matches!(media.media_type, MediaType::Text) || !scroll.can_scroll() {
+            return None;
+        }
+        Some(scroll.dpi)
+    });
 
     TEXT_PREVIEW_SCROLLABLE.store(dpi.is_some(), Ordering::Release);
 
@@ -3102,13 +3132,18 @@ unsafe fn publish_text_scroll_keep_alive(hwnd: HWND) {
             return None;
         }
 
-        let padding = (TEXT_SCROLL_KEEP_ALIVE_PADDING_PIXELS * dpi as f32 / 96.0).round() as i32;
-        Some((
-            rect.left - padding,
-            rect.top - padding,
-            rect.right + padding,
-            rect.bottom + padding,
-        ))
+        let preview = (rect.left, rect.top, rect.right, rect.bottom);
+        let anchor = TEXT_SCROLL_ANCHOR
+            .lock()
+            .ok()
+            .and_then(|anchor| *anchor)
+            // Without an anchor — a preview that was already on screen when this
+            // started, say — the preview's own corner stands in for it, which
+            // leaves the margin around the preview itself.
+            .unwrap_or((preview.0, preview.1));
+
+        let padding = (TEXT_SCROLL_HOLD_PADDING_PIXELS * dpi as f32 / 96.0).round() as i32;
+        Some(text_scroll_hold_region(preview, anchor, padding))
     });
 
     if let Ok(mut published) = TEXT_SCROLL_KEEP_ALIVE.lock() {
@@ -3116,10 +3151,21 @@ unsafe fn publish_text_scroll_keep_alive(hwnd: HWND) {
     }
 }
 
+/// Remember the point a preview was opened from, which is what the hold region
+/// stretches back to.
+fn set_text_scroll_anchor(x: i32, y: i32) {
+    if let Ok(mut anchor) = TEXT_SCROLL_ANCHOR.lock() {
+        *anchor = Some((x, y));
+    }
+}
+
 fn clear_text_scroll_keep_alive() {
     TEXT_PREVIEW_SCROLLABLE.store(false, Ordering::Release);
     if let Ok(mut published) = TEXT_SCROLL_KEEP_ALIVE.lock() {
         *published = None;
+    }
+    if let Ok(mut anchor) = TEXT_SCROLL_ANCHOR.lock() {
+        *anchor = None;
     }
 }
 
@@ -3155,20 +3201,20 @@ pub fn text_scroll_keep_alive_try() -> Option<(i32, i32, i32, i32)> {
         return None;
     }
 
-    TEXT_SCROLL_KEEP_ALIVE.try_lock().ok().and_then(|held| *held)
+    TEXT_SCROLL_KEEP_ALIVE
+        .try_lock()
+        .ok()
+        .and_then(|held| *held)
 }
 
 /// Where a scroll of `lines` from the preview's current position lands.
 fn text_scroll_target(lines: i64) -> Option<usize> {
-    CURRENT_MEDIA
-        .lock()
-        .ok()
-        .and_then(|media| {
-            media
-                .as_ref()
-                .and_then(|media| media.text_scroll.as_ref())
-                .map(|scroll| scroll.scrolled_by(lines))
-        })
+    CURRENT_MEDIA.lock().ok().and_then(|media| {
+        media
+            .as_ref()
+            .and_then(|media| media.text_scroll.as_ref())
+            .map(|scroll| scroll.scrolled_by(lines))
+    })
 }
 
 /// Move the text preview on screen to `first_line` and repaint it.
@@ -3246,12 +3292,9 @@ fn text_scroll_drag_target(x: i32, y: i32) -> Option<usize> {
         // The whole column counts, not just the groove: the bar is thin, and a
         // press a few pixels to its left is a press on the bar as far as the user
         // is concerned.
+        let slack = (TEXT_SCROLL_HOLD_PADDING_PIXELS * scroll.dpi as f32 / 96.0).round() as i32;
         let (left, top, right, bottom) = scrollbar.track;
-        if x < left - TEXT_SCROLL_KEEP_ALIVE_PADDING_PIXELS as i32
-            || x >= right + TEXT_SCROLL_KEEP_ALIVE_PADDING_PIXELS as i32
-            || y < top
-            || y >= bottom
-        {
+        if x < left - slack || x >= right + slack || y < top || y >= bottom {
             return None;
         }
 
@@ -3541,8 +3584,13 @@ fn compute_mouse_layout(
         let max_width = avail_w.max(1) as u32;
         let max_height = avail_h.max(1) as u32;
 
-        let (preview_w, preview_h) =
-            scale_dimensions(orig_dims.0, orig_dims.1, max_width, max_height, preview_scale);
+        let (preview_w, preview_h) = scale_dimensions(
+            orig_dims.0,
+            orig_dims.1,
+            max_width,
+            max_height,
+            preview_scale,
+        );
         let media_width = preview_w as i32;
         let media_height = preview_h as i32;
 
@@ -3590,8 +3638,13 @@ fn compute_mouse_layout(
             return None;
         };
 
-        let (preview_w, preview_h) =
-            scale_dimensions(orig_dims.0, orig_dims.1, max_width, max_height, preview_scale);
+        let (preview_w, preview_h) = scale_dimensions(
+            orig_dims.0,
+            orig_dims.1,
+            max_width,
+            max_height,
+            preview_scale,
+        );
         let media_width = preview_w as i32;
         let media_height = preview_h as i32;
 
@@ -3693,8 +3746,13 @@ fn compute_keyboard_layout(
         let max_width = avail_w.max(1) as u32;
         let max_height = avail_h.max(1) as u32;
 
-        let (preview_w, preview_h) =
-            scale_dimensions(orig_dims.0, orig_dims.1, max_width, max_height, preview_scale);
+        let (preview_w, preview_h) = scale_dimensions(
+            orig_dims.0,
+            orig_dims.1,
+            max_width,
+            max_height,
+            preview_scale,
+        );
         let media_width = preview_w as i32;
         let media_height = preview_h as i32;
 
@@ -3740,8 +3798,13 @@ fn compute_keyboard_layout(
             return None;
         };
 
-        let (preview_w, preview_h) =
-            scale_dimensions(orig_dims.0, orig_dims.1, max_width, max_height, preview_scale);
+        let (preview_w, preview_h) = scale_dimensions(
+            orig_dims.0,
+            orig_dims.1,
+            max_width,
+            max_height,
+            preview_scale,
+        );
         let media_width = preview_w as i32;
         let media_height = preview_h as i32;
 
@@ -3868,7 +3931,11 @@ pub fn run_preview_window() {
                 // DWM is reinitialized during resume and the layered window's
                 // per-pixel alpha composition surface may need a fresh anchor.
                 let ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-                SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex_style | WS_EX_LAYERED.0 as isize | WS_EX_TOPMOST.0 as isize);
+                SetWindowLongPtrW(
+                    hwnd,
+                    GWL_EXSTYLE,
+                    ex_style | WS_EX_LAYERED.0 as isize | WS_EX_TOPMOST.0 as isize,
+                );
                 let _ = SetWindowPos(
                     hwnd,
                     HWND_TOPMOST,
@@ -4013,11 +4080,14 @@ pub fn run_preview_window() {
 
             // A wheel notch over a scrollable text preview belongs to the preview:
             // the wheel hook swallowed it so Explorer does not scroll, and left
-            // the ticks here.
+            // the ticks here. Rotating the wheel forward scrolls back towards the
+            // start of the document, which is the opposite of the sign the
+            // message carries.
             let scroll_delta = wheel_input::take_text_scroll_delta();
             if scroll_delta != 0 {
-                let lines = (scroll_delta / WHEEL_DELTA) as i64 * TEXT_SCROLL_LINES_PER_NOTCH;
-                if lines != 0 {
+                let notches = (scroll_delta / WHEEL_DELTA) as i64;
+                if notches != 0 {
+                    let lines = -notches * TEXT_SCROLL_LINES_PER_NOTCH;
                     if let Some(first_line) = text_scroll_target(lines) {
                         scroll_text_preview(hwnd, first_line);
                     }
@@ -4067,6 +4137,12 @@ pub fn run_preview_window() {
                 match preview_msg {
                     PreviewMessage::Show(path, x, y) => {
                         show_requested = true;
+                        // Remember where this preview was opened from: the region
+                        // that keeps a scrollable preview alive stretches from
+                        // here to the preview, so the pointer can travel between
+                        // the two without losing it.
+                        set_text_scroll_anchor(x, y);
+
                         let bounds = monitor_bounds_from_point(x, y);
                         let dpi = monitor_dpi_from_point(x, y);
                         let follow_cursor = CONFIG.lock().map(|c| c.follow_cursor).unwrap_or(true);
@@ -4094,6 +4170,8 @@ pub fn run_preview_window() {
                         // The focused item lives inside the Explorer window, so
                         // its center resolves to that window's monitor.
                         let center = ((il + ir) / 2, (it + ib) / 2);
+                        set_text_scroll_anchor(center.0, center.1);
+
                         let bounds = monitor_bounds_from_point(center.0, center.1);
                         let dpi = monitor_dpi_from_point(center.0, center.1);
                         let follow_cursor = CONFIG.lock().map(|c| c.follow_cursor).unwrap_or(true);
@@ -4341,7 +4419,10 @@ pub fn run_preview_window() {
 
 #[cfg(test)]
 mod tests {
-    use super::{centered_top, compute_keyboard_layout, compute_mouse_layout, ScreenBounds};
+    use super::{
+        centered_top, compute_keyboard_layout, compute_mouse_layout, text_scroll_hold_region,
+        ScreenBounds,
+    };
     use crate::config::PreviewScale;
     use std::path::PathBuf;
 
@@ -4443,6 +4524,25 @@ mod tests {
 
         assert_eq!(layout.pos_x, 310);
         assert_eq!(layout.pos_y, 160);
+    }
+
+    /// The region that keeps a preview alive joins the point it was opened from
+    /// to the preview, so the pointer can take any path between the two.
+    #[test]
+    fn the_hold_region_stretches_from_the_file_to_the_preview() {
+        // A preview placed to the right of the cursor: the region spans the gap
+        // and covers both ends.
+        let region = text_scroll_hold_region((620, 300, 1020, 700), (600, 500), 40);
+        assert_eq!(region, (560, 260, 1060, 740));
+        assert!(region.0 <= 600 && region.2 >= 620);
+
+        // Placed to the left instead, and taller than the cursor's row.
+        let region = text_scroll_hold_region((200, 100, 600, 500), (620, 300), 40);
+        assert_eq!(region, (160, 60, 660, 540));
+
+        // A preview the pointer is already inside still gets its margin.
+        let region = text_scroll_hold_region((100, 100, 500, 400), (300, 250), 40);
+        assert_eq!(region, (60, 60, 540, 440));
     }
 
     /// The wheel and a drag both move a preview through this: a step is counted

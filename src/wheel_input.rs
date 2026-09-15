@@ -104,13 +104,17 @@ unsafe extern "system" fn wheel_hook_proc(code: i32, wparam: WPARAM, lparam: LPA
         && (wparam.0 == WM_MOUSEWHEEL as usize || wparam.0 == WM_MOUSEHWHEEL as usize)
     {
         if let Some(region) = crate::preview_window::text_scroll_keep_alive_try() {
-            let point = (*(lparam.0 as *const MSLLHOOKSTRUCT)).pt;
+            let info = &*(lparam.0 as *const MSLLHOOKSTRUCT);
+            let point = info.pt;
             if point_in_region(point, region) {
                 // The wheel is the preview's, not Explorer's: count it for the
                 // preview thread and swallow the message so the list behind the
-                // preview does not move as well.
+                // preview does not move as well. A low-level hook carries the
+                // delta in the high word of `mouseData` — the message's own
+                // `wParam` is not filled in here, which is why reading it there
+                // would count every notch as zero.
                 if wparam.0 == WM_MOUSEWHEEL as usize {
-                    let notches = (wparam.0 >> 16) as u16 as i16 as i32;
+                    let notches = (info.mouseData >> 16) as u16 as i16 as i32;
                     TEXT_SCROLL_DELTA.fetch_add(notches, Ordering::AcqRel);
                 }
                 return LRESULT(1);
