@@ -1,8 +1,8 @@
 [package]
 name = "rust-hover-preview"
-version = "0.1.14"
+version = "0.2.0"
 edition = "2021"
-description = "Windows 11 system tray app that shows image and video previews on hover in Explorer"
+description = "Windows 11 system tray app that shows image, video, and PDF previews on hover in Explorer"
 authors = ["Rust Hover Preview Contributors"]
 license = "MIT"
 readme = "README.md"
@@ -31,6 +31,14 @@ windows = { version = "0.58", features = [
     "Win32_Media_MediaFoundation",
     "Win32_Graphics_Direct3D11",
     "Win32_Graphics_Dxgi_Common",
+    # WinRT namespaces: PDF first-page rendering through the PDF engine that
+    # ships with Windows (Windows.Data.Pdf) instead of a bundled renderer.
+    "Foundation",
+    "Data_Pdf",
+    "Storage",
+    "Storage_Streams",
+    "Graphics_Imaging",
+    "UI",
     "implement",
 ]}
 
@@ -62,7 +70,7 @@ strip = true
 product-name = "Rust Hover Preview"
 identifier = "dev.rust-hover-preview.app"
 publisher = "Rust Hover Preview Contributors"
-description = "Windows 11 system tray app that shows image and video previews on hover in Explorer"
+description = "Windows 11 system tray app that shows image, video, and PDF previews on hover in Explorer"
 license-file = "LICENSE"
 icons = ["assets/icon.ico"]
 formats = ["nsis", "wix"]

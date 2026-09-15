@@ -2,6 +2,7 @@ use crate::config::{
     sanitize_webp_playback_fps, PreviewScale, TransparentBackground, DEFAULT_PREVIEW_SCALE_PERCENT,
     DEFAULT_WEBP_PLAYBACK_FPS,
 };
+use crate::pdf_preview;
 use crate::video_formats::is_video_file;
 use crate::{CONFIG, RUNNING};
 use gif::DecodeOptions;
@@ -103,6 +104,7 @@ enum MediaType {
     AnimatedApng,
     AnimatedWebP,
     Video,
+    Pdf,
     Loading,
 }
 
@@ -1511,6 +1513,48 @@ fn load_static_image(
     })
 }
 
+/// Render the first page of a PDF through the PDF engine built into Windows.
+fn load_pdf_first_page(
+    path: &PathBuf,
+    max_width: u32,
+    max_height: u32,
+    preview_scale: PreviewScale,
+) -> Option<MediaData> {
+    let (page_width, page_height) = pdf_preview::page_dimensions(path).unwrap_or((
+        pdf_preview::DEFAULT_PAGE_WIDTH,
+        pdf_preview::DEFAULT_PAGE_HEIGHT,
+    ));
+    let (target_width, target_height) = scale_dimensions(
+        page_width,
+        page_height,
+        max_width,
+        max_height,
+        preview_scale,
+    );
+
+    let (pixels, width, height) =
+        pdf_preview::render_first_page(path, target_width, target_height)?;
+
+    let frame = ImageFrame {
+        pixels,
+        width,
+        height,
+        delay_ms: 0,
+    };
+
+    Some(MediaData {
+        frames: vec![frame],
+        shared_frames: None,
+        all_frames_loaded: None,
+        current_frame: 0,
+        last_frame_time: Instant::now(),
+        media_type: MediaType::Pdf,
+        stream_cancel: None,
+        video_process: None,
+        loading_start: None,
+    })
+}
+
 /// Extract video thumbnail using ffmpeg and create frames for preview
 fn load_video_thumbnail(
     path: &PathBuf,
@@ -2243,6 +2287,10 @@ fn load_media(
         return load_video_thumbnail(path, max_width, max_height, preview_scale);
     }
 
+    if pdf_preview::is_pdf_file(path) {
+        return load_pdf_first_page(path, max_width, max_height, preview_scale);
+    }
+
     let guessed_format = if is_confirm_file_type_enabled() {
         guessed_image_format(path)
     } else {
@@ -2316,6 +2364,12 @@ fn get_media_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
         return get_video_geometry(path)
             .map(|g| (g.width, g.height))
             .or(Some((1920, 1080)));
+    }
+
+    // A PDF is measured from its own first page; one that cannot be read as a
+    // PDF reports no dimensions, which drops the preview instead of guessing.
+    if pdf_preview::is_pdf_file(path) {
+        return pdf_preview::page_dimensions(path);
     }
 
     if is_confirm_file_type_enabled() {
@@ -2530,6 +2584,9 @@ fn spawn_load_worker(
     result_tx: Sender<LoadResult>,
 ) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
+        // Rendering a PDF page goes through Windows.Data.Pdf on this thread.
+        pdf_preview::initialize_apartment();
+
         while RUNNING.load(Ordering::Acquire) {
             let mut request = {
                 let (lock, cvar) = &*request_slot;
@@ -3196,6 +3253,10 @@ fn compute_keyboard_layout(
 }
 
 pub fn run_preview_window() {
+    // Page sizes come from Windows.Data.Pdf, so this thread needs an apartment
+    // before the first layout asks for one.
+    pdf_preview::initialize_apartment();
+
     let (tx, rx): (Sender<PreviewMessage>, Receiver<PreviewMessage>) = channel();
 
     // Store sender for other threads to use

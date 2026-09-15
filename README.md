@@ -4,7 +4,7 @@
 ![Windows](https://img.shields.io/badge/Platform-Windows-blue?logo=windows)
 ![License](https://img.shields.io/badge/License-MIT-green)
 
-Rust Hover Preview is a Windows 11 system tray app that shows instant image and video previews in File Explorer when you hover files with the mouse or navigate with the keyboard.
+Rust Hover Preview is a Windows 11 system tray app that shows instant image, video, and PDF previews in File Explorer when you hover files with the mouse or navigate with the keyboard.
 
 Inspired by QTTabBar (QuizoApps) hover preview.
 
@@ -16,6 +16,7 @@ Inspired by QTTabBar (QuizoApps) hover preview.
 - Static image previews plus animated GIF, APNG, and libwebp-backed animated WebP playback
 - Animation memory is bounded by a sliding window rather than the length of the file: the decoder stays a few frames ahead of the playhead and frames already shown are released, so long or large GIF, APNG, and WebP files play to the end and loop instead of stopping early
 - Video previews through FFmpeg (`ffplay` + `ffprobe`)
+- PDF previews of the first page, rendered by the PDF engine already built into Windows — no bundled renderer, no extra install, and no new dependency
 - Tray controls for enable/disable, delay, positioning, scaling, startup, off-trigger key, and volume
 - Explorer Shell view detection, folder caching, and path normalization for reliable hover matching
 - Topmost, non-activating preview windows designed to avoid focus stealing
@@ -35,6 +36,14 @@ Inspired by QTTabBar (QuizoApps) hover preview.
 `jpg`, `jpeg`, `jpe`, `jfif`, `png`, `apng`, `gif`, `bmp`, `ico`, `tiff`, `tif`, `webp`, `tga`, `pbm`, `pgm`, `ppm`, `pam`, `pnm`, `hdr`, `exr`, `qoi`, `ff`
 
 `apng` files with multiple frames play as animations; single-frame ones show as static images. Animation is detected from the file's content rather than the extension, so a `.png` file carrying an `acTL` chunk ahead of its image data animates as well, and every other `.png` stays a static image.
+
+### PDF
+
+`pdf`
+
+The first page is rendered by the PDF engine that ships with Windows, so there is no renderer to bundle and nothing to install. The page is rendered at the exact size the preview asks for, which keeps a scaled-up preview sharp instead of enlarging a thumbnail, and the page size is read from the file itself, so anything that is not A4 or Letter is placed correctly.
+
+Any PDF the Windows engine can open without a password is previewed. Password-protected and damaged files are skipped rather than shown as an error, and a `.pdf` file has to contain a PDF header before it is handed to the renderer.
 
 ### Videos (FFmpeg required)
 

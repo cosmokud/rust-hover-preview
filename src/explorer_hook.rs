@@ -1,3 +1,4 @@
+use crate::pdf_preview::is_pdf_file;
 use crate::preview_window::{
     cursor_preview_hover, hide_preview, kill_stray_video_process, preview_screen_rect,
     show_preview, show_preview_keyboard, PreviewCursorHover,
@@ -572,7 +573,7 @@ fn is_image_file(path: &PathBuf) -> bool {
 }
 
 fn is_media_file(path: &PathBuf) -> bool {
-    is_image_file(path) || is_video_file(path)
+    is_image_file(path) || is_video_file(path) || is_pdf_file(path)
 }
 
 fn same_path(a: &PathBuf, b: &PathBuf) -> bool {
