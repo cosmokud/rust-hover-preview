@@ -92,9 +92,10 @@ const WHEEL_DELTA: i32 = 120;
 /// to keep the pixel under a hand at rest inside the region.
 const TEXT_SCROLL_ANCHOR_SLACK_PIXELS: i32 = 1;
 
-/// How much slack the region keeps above and below the preview, in logical
-/// pixels, for a hand aiming at a scrollbar a few pixels wide.
-const TEXT_SCROLL_HOLD_PADDING_PIXELS: f32 = 40.0;
+/// How far either side of the scrollbar's column a press still counts as a press
+/// on the bar, in logical pixels. A press there does nothing else, so the slack
+/// only has to cover a hand that is not precise.
+const TEXT_SCROLL_BAR_PRESS_SLACK_PIXELS: f32 = 40.0;
 
 /// A region on screen: left, top, right, bottom.
 type ScreenRegion = (i32, i32, i32, i32);
@@ -120,17 +121,9 @@ static TEXT_PREVIEW_SCROLLABLE: AtomicBool = AtomicBool::new(false);
 /// the placement chose. Joining the two means that journey never leaves the
 /// region, however the preview ended up placed relative to the cursor, and it
 /// keeps the region off everything else: one pixel behind the point the preview
-/// was opened from, so the strip beside the file list is as narrow as it can be
-/// and hovering another file is a hover like any other.
-///
-/// Vertically the region is the preview plus the slack a hand aiming for the
-/// scrollbar needs, joined to the pointer's own row so the line between the two
-/// is inside it as well.
-fn text_scroll_hold_region(
-    preview: ScreenRegion,
-    anchor: (i32, i32),
-    padding: i32,
-) -> ScreenRegion {
+/// was opened from and no slack beyond the preview, so what it covers away from
+/// the preview is a single row of the file list.
+fn text_scroll_hold_region(preview: ScreenRegion, anchor: (i32, i32)) -> ScreenRegion {
     let (left, top, right, bottom) = preview;
 
     let (region_left, region_right) = if anchor.0 < left {
@@ -147,9 +140,9 @@ fn text_scroll_hold_region(
 
     (
         region_left,
-        (top - padding).min(anchor.1),
+        top.min(anchor.1),
         region_right,
-        (bottom + padding).max(anchor.1),
+        bottom.max(anchor.1),
     )
 }
 
@@ -3148,7 +3141,7 @@ unsafe fn publish_text_scroll_keep_alive(hwnd: HWND) {
 
     TEXT_PREVIEW_SCROLLABLE.store(dpi.is_some(), Ordering::Release);
 
-    let keep_alive = dpi.and_then(|dpi| {
+    let keep_alive = dpi.and_then(|_| {
         let mut rect = RECT::default();
         if GetWindowRect(hwnd, &mut rect).is_err() {
             return None;
@@ -3161,11 +3154,10 @@ unsafe fn publish_text_scroll_keep_alive(hwnd: HWND) {
             .and_then(|anchor| *anchor)
             // Without an anchor — a preview that was already on screen when this
             // started, say — the preview's own corner stands in for it, which
-            // leaves the margin around the preview itself.
+            // leaves the region as the preview alone.
             .unwrap_or((preview.0, preview.1));
 
-        let padding = (TEXT_SCROLL_HOLD_PADDING_PIXELS * dpi as f32 / 96.0).round() as i32;
-        Some(text_scroll_hold_region(preview, anchor, padding))
+        Some(text_scroll_hold_region(preview, anchor))
     });
 
     if let Ok(mut published) = TEXT_SCROLL_KEEP_ALIVE.lock() {
@@ -3314,7 +3306,7 @@ fn text_scroll_drag_target(x: i32, y: i32) -> Option<usize> {
         // The whole column counts, not just the groove: the bar is thin, and a
         // press a few pixels to its left is a press on the bar as far as the user
         // is concerned.
-        let slack = (TEXT_SCROLL_HOLD_PADDING_PIXELS * scroll.dpi as f32 / 96.0).round() as i32;
+        let slack = (TEXT_SCROLL_BAR_PRESS_SLACK_PIXELS * scroll.dpi as f32 / 96.0).round() as i32;
         let (left, top, right, bottom) = scrollbar.track;
         if x < left - slack || x >= right + slack || y < top || y >= bottom {
             return None;
@@ -4549,30 +4541,32 @@ mod tests {
     }
 
     /// The region that keeps a preview alive joins the point it was opened from
-    /// to the preview: one pixel behind that point along the way, and the preview
-    /// plus its slack across it.
+    /// to the preview: one pixel behind that point along the way, and no slack
+    /// beyond the preview.
     #[test]
     fn the_hold_region_stretches_from_the_file_to_the_preview() {
         // A preview placed to the right of the cursor: the region starts one
         // pixel behind the pointer — a step further takes the pointer out of it —
-        // and runs to the preview's right edge.
-        let region = text_scroll_hold_region((620, 300, 1020, 700), (600, 500), 40);
-        assert_eq!(region, (599, 260, 1020, 740));
+        // and its edge is the preview's own.
+        let region = text_scroll_hold_region((620, 300, 1020, 700), (600, 500));
+        assert_eq!(region, (599, 300, 1020, 700));
 
         // Placed to the left instead: the mirror image.
-        let region = text_scroll_hold_region((200, 100, 600, 500), (620, 300), 40);
-        assert_eq!(region, (200, 60, 621, 540));
+        let region = text_scroll_hold_region((200, 100, 600, 500), (620, 300));
+        assert_eq!(region, (200, 100, 621, 500));
 
         // A preview in the pointer's own column is just the preview, joined to the
         // pointer's row.
-        let region = text_scroll_hold_region((300, 100, 500, 400), (400, 600), 40);
-        assert_eq!(region, (300, 60, 500, 600));
+        let region = text_scroll_hold_region((300, 100, 500, 400), (400, 600));
+        assert_eq!(region, (300, 100, 500, 600));
 
-        // The point the preview was opened from is inside its own region.
+        // The point the preview was opened from is inside its own region, and one
+        // pixel further back is not.
         let anchor = (900, 400);
-        let region = text_scroll_hold_region((920, 300, 1300, 700), anchor, 40);
+        let region = text_scroll_hold_region((920, 300, 1300, 700), anchor);
         assert!(region.0 <= anchor.0 && region.2 >= anchor.0);
         assert!(region.1 <= anchor.1 && region.3 >= anchor.1);
+        assert!(region.0 > anchor.0 - 2);
     }
 
     /// The wheel and a drag both move a preview through this: a step is counted
