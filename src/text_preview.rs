@@ -115,6 +115,11 @@ pub struct TextPreviewOptions {
     /// part of what a parsed document is cached by: the same styled lines are
     /// drawn at any size.
     pub font_scale_percent: u32,
+    /// Whether the preview is more than something to look at: it scrolls when the
+    /// document is longer than the frame, its text can be selected and copied, and
+    /// it keeps the room the scrollbar needs. With it off a frame is a frame: the
+    /// text a box cannot hold is said in a line, and nothing responds to a pointer.
+    pub full_mode: bool,
 }
 
 /// A vertical scrollbar inside a frame, in frame coordinates: the groove it runs
@@ -125,7 +130,52 @@ pub struct ScrollBar {
     pub thumb: (i32, i32, i32, i32),
 }
 
-/// One painted text preview: its pixels and what it took to lay it out.
+/// One run of text as it was painted, with where it landed. The frame keeps these
+/// so that a point on the preview can be turned back into a place in the text, and
+/// so that a selection has something to be measured against and copied from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FrameRun {
+    /// Left edge, in frame coordinates.
+    pub x: i32,
+    pub width: i32,
+    /// The characters the run shows, which is what a selection counts in.
+    pub text: String,
+}
+
+/// One painted line, in frame coordinates.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FrameLine {
+    pub top: i32,
+    pub height: i32,
+    pub runs: Vec<FrameRun>,
+}
+
+/// A range of a text preview a reader has selected: where the drag started and
+/// where it is now, both as (frame line, character).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Selection {
+    pub anchor: (usize, usize),
+    pub caret: (usize, usize),
+}
+
+impl Selection {
+    /// The selection in reading order, so a drag that runs backwards selects the
+    /// same text as one that runs forwards.
+    pub fn ordered(self) -> ((usize, usize), (usize, usize)) {
+        if self.anchor <= self.caret {
+            (self.anchor, self.caret)
+        } else {
+            (self.caret, self.anchor)
+        }
+    }
+
+    pub fn is_empty(self) -> bool {
+        self.anchor == self.caret
+    }
+}
+
+/// One painted text preview: its pixels, what it took to lay it out, and where the
+/// text landed.
 pub struct TextFrame {
     pub pixels: Vec<u8>,
     pub width: u32,
@@ -140,13 +190,104 @@ pub struct TextFrame {
     /// Present when the document is longer than the frame, which is also the only
     /// case in which the preview scrolls.
     pub scrollbar: Option<ScrollBar>,
+    /// The painted lines, in frame coordinates.
+    pub lines: Vec<FrameLine>,
 }
 
 impl TextFrame {
     /// Whether more of the document can be reached by scrolling.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn scrollable(&self) -> bool {
         self.scrollbar.is_some()
     }
+}
+
+/// Where a point falls in painted lines: the line under it and the character
+/// within that line.
+///
+/// A point between two lines takes the nearer one, and a point past the end of a
+/// line takes the nearest end of it, so a drag that runs off the text still selects
+/// the line it was on rather than losing it.
+pub fn position_in(lines: &[FrameLine], x: i32, y: i32) -> (usize, usize) {
+    let Some((line_index, line)) = lines.iter().enumerate().min_by_key(|(_, line)| {
+        let middle = line.top + line.height / 2;
+        (middle - y).abs()
+    }) else {
+        return (0, 0);
+    };
+
+    let mut characters = 0usize;
+    let mut closest = 0usize;
+    let mut closest_distance = i32::MAX;
+
+    for run in &line.runs {
+        let count = run.text.chars().count() as i32;
+        if count == 0 {
+            continue;
+        }
+        let advance = (run.width as f32 / count as f32).max(1.0);
+        let within = (((x - run.x) as f32 / advance).round() as i32).clamp(0, count);
+        let edge = run.x + (within as f32 * advance).round() as i32;
+        let distance = (edge - x).abs();
+        if distance < closest_distance {
+            closest_distance = distance;
+            closest = characters + within as usize;
+        }
+        characters += count as usize;
+    }
+
+    (line_index, closest)
+}
+
+/// The text of painted lines, either everything they show or the part a selection
+/// covers, as it will be pasted: the lines it touches, each cut to the part that
+/// was selected, joined with Windows line endings.
+///
+/// What painted lines hold is what the frame shows, so a line clipped at the right
+/// edge copies the part that was read off the screen.
+pub fn text_in(lines: &[FrameLine], selection: Selection) -> String {
+    let ((start_line, start_char), (end_line, end_char)) = selection.ordered();
+    let mut selected: Vec<String> = Vec::new();
+
+    for (index, line) in lines.iter().enumerate() {
+        if index < start_line || index > end_line {
+            continue;
+        }
+
+        let from = if index == start_line { start_char } else { 0 };
+        let to = if index == end_line {
+            end_char
+        } else {
+            usize::MAX
+        };
+        let mut characters = String::new();
+        let mut position = 0usize;
+
+        for run in &line.runs {
+            for character in run.text.chars() {
+                if position >= from && position < to {
+                    characters.push(character);
+                }
+                position += 1;
+            }
+        }
+
+        selected.push(characters);
+    }
+
+    selected.join("\r\n")
+}
+
+/// Everything the painted lines show, which is what a Copy with nothing selected
+/// takes.
+pub fn frame_text(lines: &[FrameLine]) -> String {
+    text_in(
+        lines,
+        Selection {
+            anchor: (0, 0),
+            caret: (usize::MAX, usize::MAX),
+        },
+    )
 }
 
 /// The size the preview of `path` wants inside `max_width` x `max_height`.
@@ -171,7 +312,16 @@ pub fn measure(
     }
 
     let result = TextMetrics::new(dc, dpi, options.font_scale_percent).map(|metrics| {
-        let laid_out = layout(&document, theme, &metrics, 0, max_width, max_height, 0);
+        let laid_out = layout(
+            &document,
+            theme,
+            &metrics,
+            0,
+            max_width,
+            max_height,
+            0,
+            options.full_mode,
+        );
         (laid_out.width, laid_out.height)
     });
 
@@ -196,6 +346,7 @@ pub fn render_scrolled(
     height: u32,
     dpi: u32,
     options: TextPreviewOptions,
+    selection: Option<Selection>,
 ) -> Option<TextFrame> {
     if width == 0 || height == 0 {
         return None;
@@ -211,8 +362,17 @@ pub fn render_scrolled(
     // Whether there is a scrollbar depends on how many lines fit, and the bar
     // takes room the text would otherwise use — so the layout is asked once to
     // find that out and again with the room kept aside.
-    let mut laid_out = layout(&document, theme, &metrics, first_line, width, height, 0);
-    let scrollable = scrollable_lines > laid_out.visible_lines;
+    let mut laid_out = layout(
+        &document,
+        theme,
+        &metrics,
+        first_line,
+        width,
+        height,
+        0,
+        options.full_mode,
+    );
+    let scrollable = options.full_mode && scrollable_lines > laid_out.visible_lines;
     if scrollable {
         laid_out = layout(
             &document,
@@ -222,6 +382,7 @@ pub fn render_scrolled(
             width,
             height,
             metrics.scrollbar_space(),
+            options.full_mode,
         );
     }
 
@@ -245,9 +406,27 @@ pub fn render_scrolled(
             theme,
             &metrics,
             scrollbar.as_ref(),
-            first_line,
+            selection,
         );
     }
+
+    let lines = laid_out
+        .lines
+        .iter()
+        .map(|line| FrameLine {
+            top: line.top,
+            height: line.height,
+            runs: line
+                .runs
+                .iter()
+                .map(|run| FrameRun {
+                    x: run.x,
+                    width: run.width,
+                    text: run.text.clone(),
+                })
+                .collect(),
+        })
+        .collect();
 
     Some(TextFrame {
         pixels: surface.pixels(),
@@ -258,6 +437,7 @@ pub fn render_scrolled(
         scrollable_lines,
         total_lines: document.doc.total_lines(),
         scrollbar,
+        lines,
     })
 }
 
@@ -1966,7 +2146,10 @@ struct BodyLayout {
 /// Lines are clipped at the right edge rather than wrapped — column-aligned code
 /// reads better unwrapped — and only the lines the frame shows are ever styled,
 /// which is what keeps a preview of a large file cheap. `scrollbar_space` is room
-/// kept clear at the right edge for a scrollbar the caller is about to draw.
+/// kept clear at the right edge for a scrollbar the caller is about to draw, and
+/// `full_mode` says whether there is a scrollbar to reach the rest of the document
+/// at all: without one, what the box cannot hold is said in a line.
+#[allow(clippy::too_many_arguments)] // Each one is a distinct number about the request.
 fn layout(
     document: &CachedDocument,
     theme: &LoadedTheme,
@@ -1975,6 +2158,7 @@ fn layout(
     box_width: u32,
     box_height: u32,
     scrollbar_space: i32,
+    full_mode: bool,
 ) -> LaidOut {
     let doc = &document.doc;
     let padding = metrics.padding;
@@ -1996,9 +2180,12 @@ fn layout(
         .min(scrollable_lines.max(1));
     let first_line = first_line.min(scrollable_lines.saturating_sub(capacity));
 
-    // A file that was cut at the read cap keeps a line for the note that says so:
-    // what is below it cannot be reached by scrolling either.
-    let note_height = if doc.read_truncated {
+    // A line is kept for a note whenever the frame cannot show everything and no
+    // scrollbar will say so: a file that was cut at the read cap, whose remainder
+    // cannot be reached by scrolling either, and a document in a preview that does
+    // not scroll at all.
+    let note_needed = doc.read_truncated || (!full_mode && scrollable_lines > capacity);
+    let note_height = if note_needed {
         metrics.line_height[BODY_LEVEL as usize]
     } else {
         0
@@ -2013,12 +2200,16 @@ fn layout(
         note_height,
     );
 
-    if doc.read_truncated {
+    if note_needed {
         let bottom = box_height.max(1) as i32 - padding;
         if body.y + note_height <= bottom {
             let remaining = doc.total_lines().saturating_sub(first_line + body.emitted);
             let text = if remaining > 0 {
-                format!("… {remaining} more lines (file truncated)")
+                if doc.read_truncated {
+                    format!("… {remaining} more lines (file truncated)")
+                } else {
+                    format!("… {remaining} more lines")
+                }
             } else {
                 "… the rest of the file is not shown".to_string()
             };
@@ -2549,8 +2740,75 @@ fn colorref(color: [u8; 3]) -> COLORREF {
     COLORREF(color[0] as u32 | ((color[1] as u32) << 8) | ((color[2] as u32) << 16))
 }
 
-/// Paint the background, the block decorations, the text, and the scrollbar when
-/// the document is longer than the frame.
+/// The part of a line's selection that falls inside one of its runs, as character
+/// offsets within that run, or `None` when the selection does not touch it.
+///
+/// A line is painted run by run — one per token, which is where the colors change —
+/// so a selection, which is measured in the line's characters, has to be mapped
+/// back onto the run it lands in. `run_start` is how many characters of the line
+/// come before this run.
+fn selected_part(
+    line_index: usize,
+    run_start: usize,
+    run_characters: usize,
+    selection: Selection,
+) -> Option<(usize, usize)> {
+    let ((start_line, start_char), (end_line, end_char)) = selection.ordered();
+    if line_index < start_line || line_index > end_line || run_characters == 0 {
+        return None;
+    }
+
+    let line_from = if line_index == start_line {
+        start_char
+    } else {
+        0
+    };
+    let line_to = if line_index == end_line {
+        end_char
+    } else {
+        usize::MAX
+    };
+
+    let from = line_from.saturating_sub(run_start).min(run_characters);
+    let to = line_to.saturating_sub(run_start).min(run_characters);
+
+    (from < to).then_some((from, to))
+}
+
+/// Draw one piece of a run at `x`, filling its rectangle with its background as it
+/// goes, so a piece of a selected run carries the highlight instead of the page.
+unsafe fn paint_run(
+    surface: &DibSurface,
+    text: &str,
+    x: i32,
+    top: i32,
+    rect: RECT,
+    foreground: [u8; 3],
+    background: [u8; 3],
+) {
+    if text.is_empty() {
+        return;
+    }
+
+    let wide: Vec<u16> = text.encode_utf16().collect();
+    SetTextColor(surface.dc, colorref(foreground));
+    SetBkColor(surface.dc, colorref(background));
+    SetBkMode(surface.dc, OPAQUE);
+
+    let _ = ExtTextOutW(
+        surface.dc,
+        x,
+        top,
+        ETO_OPAQUE | ETO_CLIPPED,
+        Some(&rect),
+        PCWSTR(wide.as_ptr()),
+        wide.len() as u32,
+        None,
+    );
+}
+
+/// Paint the background, the block decorations, the text and a selection, and the
+/// scrollbar when the document is longer than the frame.
 ///
 /// Every run is drawn with an opaque background rectangle, so the page color
 /// fills the box and the pieces GDI leaves alone (the space a clipped line did
@@ -2561,11 +2819,21 @@ unsafe fn paint(
     theme: &LoadedTheme,
     metrics: &TextMetrics,
     scrollbar: Option<&ScrollBar>,
-    _first_line: usize,
+    selection: Option<Selection>,
 ) {
     let width = surface.width as i32;
     let page = rgb(theme.background());
     let band = blend(page, rgb(theme.foreground()), 0.08);
+    // A selection is drawn with the theme's own highlight where it has one, and
+    // with a shade of the page where it does not.
+    let highlight = theme
+        .theme()
+        .settings
+        .selection
+        .map(rgb)
+        .unwrap_or_else(|| blend(page, rgb(theme.foreground()), 0.25));
+    let highlight_foreground = theme.theme().settings.selection_foreground.map(rgb);
+    let selection = selection.filter(|selection| !selection.is_empty());
 
     fill_rect(
         surface,
@@ -2611,8 +2879,16 @@ unsafe fn paint(
     let mut previous_font: Option<HGDIOBJ> = None;
     let mut selected: Option<TextStyleKey> = None;
 
-    for line in &laid_out.lines {
+    for (line_index, line) in laid_out.lines.iter().enumerate() {
+        let mut run_start = 0usize;
+
         for run in &line.runs {
+            let run_characters = run.text.chars().count();
+            let selected_part = selection.and_then(|selection| {
+                selected_part(line_index, run_start, run_characters, selection)
+            });
+            run_start += run_characters;
+
             let key = TextStyleKey::of(&run.style);
             if selected.as_ref() != Some(&key) {
                 let font = fonts.get(&run.style, metrics.scale);
@@ -2623,8 +2899,7 @@ unsafe fn paint(
                 selected = Some(key);
             }
 
-            let wide: Vec<u16> = run.text.encode_utf16().collect();
-            if wide.is_empty() {
+            if run.text.is_empty() {
                 continue;
             }
 
@@ -2634,26 +2909,74 @@ unsafe fn paint(
                 (None, _) => page,
             };
 
-            SetTextColor(surface.dc, colorref(run.style.foreground));
-            SetBkColor(surface.dc, colorref(run_background));
-            SetBkMode(surface.dc, OPAQUE);
-
             let rect = RECT {
                 left: run.x,
                 top: line.top,
                 right: run.x + run.width,
                 bottom: line.top + line.height,
             };
-            let _ = ExtTextOutW(
-                surface.dc,
-                run.x,
-                line.top,
-                ETO_OPAQUE | ETO_CLIPPED,
-                Some(&rect),
-                PCWSTR(wide.as_ptr()),
-                wide.len() as u32,
-                None,
-            );
+
+            match selected_part {
+                Some((from, to)) => {
+                    // The selected part is painted over its own highlight, so the
+                    // run is drawn in up to three pieces: the text before it as
+                    // usual, the selection without touching its background, and the
+                    // text after it as usual.
+                    let characters: Vec<char> = run.text.chars().collect();
+                    let advance = run.width as f32 / characters.len() as f32;
+                    let piece = |start: usize, end: usize| {
+                        characters[start..end].iter().collect::<String>()
+                    };
+
+                    paint_run(
+                        surface,
+                        &piece(0, from),
+                        run.x,
+                        line.top,
+                        rect,
+                        run.style.foreground,
+                        run_background,
+                    );
+
+                    let highlight_rect = RECT {
+                        left: run.x + (from as f32 * advance).round() as i32,
+                        right: run.x + (to as f32 * advance).round() as i32,
+                        ..rect
+                    };
+                    paint_run(
+                        surface,
+                        &piece(from, to),
+                        highlight_rect.left,
+                        line.top,
+                        highlight_rect,
+                        highlight_foreground.unwrap_or(run.style.foreground),
+                        highlight,
+                    );
+
+                    let tail_x = run.x + (to as f32 * advance).round() as i32;
+                    paint_run(
+                        surface,
+                        &piece(to, characters.len()),
+                        tail_x,
+                        line.top,
+                        RECT {
+                            left: tail_x,
+                            ..rect
+                        },
+                        run.style.foreground,
+                        run_background,
+                    );
+                }
+                None => paint_run(
+                    surface,
+                    &run.text,
+                    run.x,
+                    line.top,
+                    rect,
+                    run.style.foreground,
+                    run_background,
+                ),
+            }
         }
     }
 
@@ -2721,9 +3044,10 @@ fn fill_rect(surface: &DibSurface, rect: RECT, color: [u8; 3]) {
 #[cfg(test)]
 mod tests {
     use super::{
-        cp437_char, decode_text, expand_tabs, legacy_encoding, measure, render_scrolled,
-        scroll_line_at_track_y, strip_rtf, styled_window, wants_ansi, window_markdown,
-        LegacyEncoding, LineBlock, TextPreviewOptions, MAX_LINE_CHARS,
+        cp437_char, decode_text, expand_tabs, frame_text, legacy_encoding, measure, position_in,
+        render_scrolled, scroll_line_at_track_y, strip_rtf, styled_window, text_in, wants_ansi,
+        window_markdown, FrameLine, FrameRun, LegacyEncoding, LineBlock, Selection,
+        TextPreviewOptions, MAX_LINE_CHARS,
     };
     use crate::config::{MarkdownMode, TextTheme};
     use crate::text_theme;
@@ -2746,6 +3070,7 @@ mod tests {
             theme,
             markdown_mode: mode,
             font_scale_percent: 100,
+            full_mode: true,
         }
     }
 
@@ -2758,6 +3083,7 @@ mod tests {
             theme,
             markdown_mode: mode,
             font_scale_percent,
+            full_mode: true,
         }
     }
 
@@ -3000,7 +3326,7 @@ mod tests {
         assert!(width < 1400, "{width}");
         assert!(height < 200, "{height}");
 
-        let frame = render_scrolled(&path, 0, width, height, 96, options).expect("rendered");
+        let frame = render_scrolled(&path, 0, width, height, 96, options, None).expect("rendered");
 
         assert_eq!((frame.width, frame.height), (width, height));
         assert_eq!(frame.pixels.len(), (width * height * 4) as usize);
@@ -3046,6 +3372,7 @@ mod tests {
             height,
             96,
             options(TextTheme::Light, MarkdownMode::Rendered),
+            None,
         )
         .unwrap()
         .pixels;
@@ -3056,6 +3383,7 @@ mod tests {
             height,
             96,
             options(TextTheme::Dark, MarkdownMode::Rendered),
+            None,
         )
         .unwrap()
         .pixels;
@@ -3078,7 +3406,7 @@ mod tests {
         assert!(width <= 500, "{width}");
         assert!(height < 100, "one clipped line, not {height}");
 
-        let frame = render_scrolled(&path, 0, width, 400, 96, options).unwrap();
+        let frame = render_scrolled(&path, 0, width, 400, 96, options, None).unwrap();
         assert_eq!(
             frame.pixels.len(),
             (frame.width * frame.height * 4) as usize
@@ -3153,7 +3481,7 @@ mod tests {
             (small, small_width, small_height),
             (large, large_width, large_height),
         ] {
-            let frame = render_scrolled(&path, 0, width, height, 96, options).unwrap();
+            let frame = render_scrolled(&path, 0, width, height, 96, options, None).unwrap();
             assert_eq!((frame.width, frame.height), (width, height));
             assert_eq!(frame.pixels.len(), (width * height * 4) as usize);
         }
@@ -3195,6 +3523,261 @@ mod tests {
         assert_eq!(scroll_line_at_track_y(track, thumb, 100, 200, 200), 0);
     }
 
+    /// A file longer than the frame reaches its end through a scrollbar in full
+    /// mode, and says so in a line without it.
+    #[test]
+    fn a_long_file_scrolls_only_in_full_mode() {
+        let mut source = String::new();
+        for line in 0..200 {
+            source.push_str(&format!("line {line}\n"));
+        }
+        let path = fixture("full-mode.txt", source.as_bytes());
+        let (width, height) = measure(
+            &path,
+            600,
+            120,
+            96,
+            options(TextTheme::Light, MarkdownMode::Rendered),
+        )
+        .unwrap();
+
+        let full = render_scrolled(
+            &path,
+            0,
+            width,
+            height,
+            96,
+            options(TextTheme::Light, MarkdownMode::Rendered),
+            None,
+        )
+        .unwrap();
+        assert!(full.scrollable(), "full mode should scroll a long file");
+        assert!(!full.lines.is_empty());
+
+        let plain_options = TextPreviewOptions {
+            full_mode: false,
+            ..options(TextTheme::Light, MarkdownMode::Rendered)
+        };
+        let plain = render_scrolled(&path, 0, width, height, 96, plain_options, None).unwrap();
+        assert!(
+            !plain.scrollable(),
+            "without full mode a frame is a frame, however long the file"
+        );
+        assert!(
+            plain
+                .lines
+                .iter()
+                .any(|line| line.runs.iter().any(|run| run.text.contains("more lines"))),
+            "what the box cannot hold should be said in a line: {:?}",
+            plain
+                .lines
+                .iter()
+                .map(|line| line
+                    .runs
+                    .iter()
+                    .map(|run| run.text.clone())
+                    .collect::<String>())
+                .collect::<Vec<_>>()
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// A selection is painted where it was selected: the lines it covers, and on the
+    /// first and last of those only the part of the line that was selected.
+    ///
+    /// The ends are the point. A line is painted run by run — one per token, which
+    /// is where the colors change — so a selection measured in a line's characters
+    /// has to be mapped back onto the run it lands in, and getting that mapping
+    /// wrong highlights the same few characters of every token instead of the run
+    /// of text between the ends.
+    #[test]
+    fn a_selection_is_painted_where_it_was_selected() {
+        let mut source = String::new();
+        for line in 0..40 {
+            source.push_str(&format!(
+                "line {line:02}  fn example_{line}(value: u32) -> Result<u32, Error>\n"
+            ));
+        }
+        let path = fixture("selection-painted.rs", source.as_bytes());
+        let options = options_at(TextTheme::Light, MarkdownMode::Rendered, 125);
+        let (width, height) = measure(&path, 900, 700, 96, options).unwrap();
+
+        let plain = render_scrolled(&path, 0, width, height, 96, options, None).unwrap();
+        let selection = Selection {
+            anchor: (2, 5),
+            caret: (9, 40),
+        };
+        let selected =
+            render_scrolled(&path, 0, width, height, 96, options, Some(selection)).unwrap();
+
+        // Where along a line the painting differs from the same frame without a
+        // selection.
+        let painted = |line: &FrameLine| -> Option<(usize, usize)> {
+            let mut first: Option<usize> = None;
+            let mut last = 0usize;
+            for row in line.top.max(0) as usize..(line.top + line.height).max(0) as usize {
+                let start = row * width as usize * 4;
+                for column in 0..width as usize {
+                    let at = start + column * 4;
+                    if plain.pixels[at..at + 4] != selected.pixels[at..at + 4] {
+                        first = Some(first.map_or(column, |value: usize| value.min(column)));
+                        last = last.max(column);
+                    }
+                }
+            }
+            first.map(|from| (from, last))
+        };
+
+        for (index, line) in selected.lines.iter().enumerate() {
+            let changed = painted(line);
+            if (2..=9).contains(&index) {
+                assert!(
+                    changed.is_some(),
+                    "line {index} was selected and should show it"
+                );
+            } else {
+                assert!(changed.is_none(), "line {index} is outside the selection");
+            }
+        }
+
+        let first_run = &selected.lines[2].runs[0];
+        let advance = first_run.width as f32 / first_run.text.chars().count() as f32;
+        let (starts_at, _) = painted(&selected.lines[2]).unwrap();
+        let (_, ends_at) = painted(&selected.lines[9]).unwrap();
+
+        let wanted_start = first_run.x + (5.0 * advance).round() as i32;
+        assert!(
+            (starts_at as i32 - wanted_start).abs() <= 1,
+            "the selection should start at character 5 of its first line: {starts_at} vs {wanted_start}"
+        );
+        let wanted_end = first_run.x + (40.0 * advance).round() as i32;
+        assert!(
+            (ends_at as i32 - wanted_end).abs() <= 1,
+            "the selection should end at character 40 of its last line: {ends_at} vs {wanted_end}"
+        );
+        assert!(
+            ends_at < plain.width as usize - 60,
+            "the last selected line stops short of the line's end"
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// A point on the frame turns back into a place in the text, and a selection
+    /// copies the lines it touches as they will be pasted.
+    #[test]
+    fn a_selection_covers_the_text_between_two_points() {
+        let mut source = String::new();
+        for line in 0..40 {
+            source.push_str(&format!("line {line:02}\n"));
+        }
+        let path = fixture("selection.txt", source.as_bytes());
+        let (width, height) = measure(
+            &path,
+            600,
+            200,
+            96,
+            options(TextTheme::Light, MarkdownMode::Rendered),
+        )
+        .unwrap();
+        let frame = render_scrolled(
+            &path,
+            0,
+            width,
+            height,
+            96,
+            options(TextTheme::Light, MarkdownMode::Rendered),
+            None,
+        )
+        .unwrap();
+
+        assert!(frame.lines.len() > 3);
+
+        // A point at the very left of a line is its first character, and the
+        // character under the pointer is the one it lands on.
+        let line = &frame.lines[1];
+        let start = position_in(&frame.lines, line.runs[0].x, line.top + line.height / 2);
+        assert_eq!(start.0, 1);
+        assert_eq!(start.1, 0);
+
+        let advance =
+            frame.lines[1].runs[0].width / frame.lines[1].runs[0].text.chars().count() as i32;
+        let end = position_in(
+            &frame.lines,
+            frame.lines[3].runs[0].x + advance * 5,
+            frame.lines[3].top + 1,
+        );
+        assert_eq!(end, (3, 5));
+
+        // Reading order, whatever way the drag ran.
+        let forwards = Selection {
+            anchor: start,
+            caret: end,
+        };
+        let backwards = Selection {
+            anchor: end,
+            caret: start,
+        };
+        assert_eq!(forwards.ordered(), backwards.ordered());
+
+        // The selection takes the rest of the first line, all of the middle lines,
+        // and the start of the last.
+        let text = text_in(&frame.lines, forwards);
+        let lines: Vec<&str> = text.split("\r\n").collect();
+        assert_eq!(lines.len(), 3);
+        assert!(lines[0].starts_with("line 01"));
+        assert_eq!(lines[1], "line 02");
+        assert_eq!(lines[2], "line 03".chars().take(5).collect::<String>());
+
+        // With nothing selected there is nothing to copy, and the whole frame is
+        // what a Copy without a selection takes.
+        let empty = Selection {
+            anchor: end,
+            caret: end,
+        };
+        assert!(empty.is_empty());
+        assert!(text_in(&frame.lines, empty).is_empty());
+        assert!(frame_text(&frame.lines).contains("line 00"));
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// A point past either end of a line takes that end of it, so a drag that runs
+    /// off the text still selects the line it started on.
+    #[test]
+    fn a_point_past_the_text_takes_the_nearest_end() {
+        let lines = vec![
+            FrameLine {
+                top: 0,
+                height: 10,
+                runs: vec![FrameRun {
+                    x: 0,
+                    width: 50,
+                    text: "abcdefghij".to_string(),
+                }],
+            },
+            FrameLine {
+                top: 10,
+                height: 10,
+                runs: vec![FrameRun {
+                    x: 10,
+                    width: 50,
+                    text: "klmnopqrst".to_string(),
+                }],
+            },
+        ];
+
+        assert_eq!(position_in(&lines, -100, 0), (0, 0));
+        assert_eq!(position_in(&lines, 1000, 5), (0, 10));
+        assert_eq!(position_in(&lines, -100, 14), (1, 0));
+        assert_eq!(position_in(&lines, 1000, 15), (1, 10));
+
+        // A point between the two lines takes the nearer one.
+        assert_eq!(position_in(&lines, 0, 9), (0, 0));
+        assert_eq!(position_in(&lines, 10, 11), (1, 0));
+    }
+
     #[test]
     fn a_long_file_scrolls_instead_of_stopping() {
         let mut source = String::new();
@@ -3206,7 +3789,7 @@ mod tests {
 
         // Room for a few lines, nowhere near five hundred.
         let (width, height) = measure(&path, 600, 120, 96, options).unwrap();
-        let first = render_scrolled(&path, 0, width, height, 96, options).unwrap();
+        let first = render_scrolled(&path, 0, width, height, 96, options, None).unwrap();
 
         assert!(first.scrollable(), "a long file should scroll");
         assert_eq!(first.first_line, 0);
@@ -3220,7 +3803,7 @@ mod tests {
 
         // The last screenful is pulled back so the frame is full, which is what
         // keeps the bottom of the document from ending in empty page.
-        let last = render_scrolled(&path, 499, width, height, 96, options).unwrap();
+        let last = render_scrolled(&path, 499, width, height, 96, options, None).unwrap();
         assert_eq!(
             last.first_line + last.visible_lines,
             last.scrollable_lines,
@@ -3258,7 +3841,16 @@ mod tests {
         let dc = unsafe { windows::Win32::Graphics::Gdi::CreateCompatibleDC(None) };
         assert!(!dc.0.is_null());
         let metrics = super::TextMetrics::new(dc, 96, 100).unwrap();
-        let laid_out = super::layout(&document, light_theme(), &metrics, 0, width, height, 0);
+        let laid_out = super::layout(
+            &document,
+            light_theme(),
+            &metrics,
+            0,
+            width,
+            height,
+            0,
+            true,
+        );
         unsafe {
             let _ = windows::Win32::Graphics::Gdi::DeleteDC(dc);
         }

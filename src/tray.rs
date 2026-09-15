@@ -18,9 +18,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GetCursorPos, LoadImageW, PeekMessageW, PostQuitMessage, RegisterClassExW,
     RegisterWindowMessageW, SetForegroundWindow, TrackPopupMenu, TranslateMessage, CS_HREDRAW,
     CS_VREDRAW, HICON, IMAGE_ICON, LR_DEFAULTSIZE, LR_SHARED, MF_CHECKED, MF_POPUP, MF_STRING,
-    MF_UNCHECKED, MSG, PM_REMOVE, SW_SHOWNORMAL, TPM_BOTTOMALIGN, TPM_LEFTALIGN, WM_COMMAND,
-    WM_DESTROY, WM_LBUTTONUP, WM_POWERBROADCAST, WM_RBUTTONUP, WM_USER, WNDCLASSEXW,
-    WS_EX_TOOLWINDOW, WS_POPUP, PBT_APMRESUMEAUTOMATIC, PBT_APMRESUMESUSPEND,
+    MF_UNCHECKED, MSG, PBT_APMRESUMEAUTOMATIC, PBT_APMRESUMESUSPEND, PM_REMOVE, SW_SHOWNORMAL,
+    TPM_BOTTOMALIGN, TPM_LEFTALIGN, WM_COMMAND, WM_DESTROY, WM_LBUTTONUP, WM_POWERBROADCAST,
+    WM_RBUTTONUP, WM_USER, WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_POPUP,
 };
 
 const WM_TRAYICON: u32 = WM_USER + 1;
@@ -65,6 +65,7 @@ const ID_TRAY_THEME_DARK: u16 = 1051; // One Dark Pro
 const ID_TRAY_MARKDOWN_RENDERED: u16 = 1052; // Rendered document
 const ID_TRAY_MARKDOWN_SOURCE: u16 = 1053; // Highlighted Markdown source
 const ID_TRAY_TEXT_ENABLE: u16 = 1060; // Text previews on/off
+const ID_TRAY_TEXT_FULL_MODE: u16 = 1061; // Text previews scroll/select on/off
 const ID_TRAY_FONT_100: u16 = 1072;
 const ID_TRAY_FONT_125: u16 = 1073;
 const ID_TRAY_FONT_150: u16 = 1074;
@@ -158,6 +159,7 @@ unsafe extern "system" fn tray_window_proc(
                 ID_TRAY_MARKDOWN_RENDERED => set_markdown_mode(MarkdownMode::Rendered),
                 ID_TRAY_MARKDOWN_SOURCE => set_markdown_mode(MarkdownMode::Source),
                 ID_TRAY_TEXT_ENABLE => toggle_text_preview_enabled(),
+                ID_TRAY_TEXT_FULL_MODE => toggle_text_preview_full_mode(),
                 ID_TRAY_FONT_100 => set_text_font_scale(100),
                 ID_TRAY_FONT_125 => set_text_font_scale(125),
                 ID_TRAY_FONT_150 => set_text_font_scale(150),
@@ -177,9 +179,7 @@ unsafe extern "system" fn tray_window_proc(
         }
         WM_POWERBROADCAST => {
             let power_event = wparam.0 as u32;
-            if power_event == PBT_APMRESUMEAUTOMATIC
-                || power_event == PBT_APMRESUMESUSPEND
-            {
+            if power_event == PBT_APMRESUMEAUTOMATIC || power_event == PBT_APMRESUMESUSPEND {
                 // System resumed from sleep — re-add tray icon in case
                 // DWM/Explorer restart affected its visibility.
                 remove_tray_icon(hwnd);
@@ -317,6 +317,24 @@ unsafe fn show_context_menu(hwnd: HWND) {
         text_enable_flags,
         ID_TRAY_TEXT_ENABLE as usize,
         w!("Enable Text Preview"),
+    );
+
+    // Add "Enable Text Preview Full Mode" with checkmark
+    let text_full_mode = CONFIG
+        .lock()
+        .map(|c| c.text_preview_full_mode)
+        .unwrap_or(true);
+    let text_full_flags = MF_STRING
+        | if text_full_mode {
+            MF_CHECKED
+        } else {
+            MF_UNCHECKED
+        };
+    let _ = AppendMenuW(
+        menu,
+        text_full_flags,
+        ID_TRAY_TEXT_FULL_MODE as usize,
+        w!("Enable Text Preview Full Mode"),
     );
 
     // Add Text Preview Theme submenu
@@ -812,6 +830,17 @@ fn set_theme(theme: TextTheme) {
 fn toggle_text_preview_enabled() {
     if let Ok(mut config) = CONFIG.lock() {
         config.text_preview_enabled = !config.text_preview_enabled;
+        config.save();
+    }
+    refresh_preview();
+}
+
+/// Full mode changes what a text preview *is* rather than what it shows — it
+/// scrolls, it can be selected from, and the pointer can rest on it — so the
+/// preview on screen is rebuilt the same way a new font size rebuilds it.
+fn toggle_text_preview_full_mode() {
+    if let Ok(mut config) = CONFIG.lock() {
+        config.text_preview_full_mode = !config.text_preview_full_mode;
         config.save();
     }
     refresh_preview();

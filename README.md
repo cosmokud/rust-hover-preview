@@ -66,7 +66,11 @@ Text previews are sized to their content rather than to the image scaling settin
 
 ### Scrolling a text preview
 
-When a file is longer than the preview, the preview grows a scrollbar instead of stopping at the bottom of the page. Moving the pointer onto the preview keeps it there — the usual rule is that touching a preview dismisses it — and from there the wheel scrolls the text, or the thumb can be dragged. The pointer can stray a comfortable margin around the preview, off the thin scrollbar and even off the window itself, without the preview closing; it closes when the pointer leaves that margin, or when another file is hovered.
+When a file is longer than the preview, the preview grows a scrollbar instead of stopping at the bottom of the page. Moving the pointer onto the preview keeps it there — the usual rule is that touching a preview dismisses it — and from there the wheel scrolls the text, or the thumb can be dragged. The pointer can stray a little way around the preview, off the thin scrollbar and even off the window itself, without the preview closing; it closes when the pointer leaves that margin, or when another file is hovered.
+
+Selecting works the way it does anywhere else: drag across the text to select it, `Ctrl+C` to copy it, or right-click the preview for **Copy**. What is copied is what is on screen, so a line clipped at the right edge copies the part that was visible, and a Copy with nothing selected takes the whole frame. Dragging the scrollbar clears the selection, since the lines it was measured against have moved.
+
+All of this belongs to **full mode** (`Enable Text Preview Full Mode` in the tray, on by default). With it off, a text preview is only something to look at: a frame shows what fits and says how many lines it left out on the last one, and the pointer over it closes it the way it closes any other preview.
 
 Scrolling does not re-read the file. For source files only the lines coming into view are highlighted — the parser's state is carried along as you go, with a checkpoint every few dozen lines so a jump in either direction is bounded — and the text itself is read once, up to the read cap. A rendered Markdown document is walked in one pass (its line breaks are only known once the block before it has been read) but only the visible lines are kept. Scrolling is fastest where it matters most: a hundred-thousand-line source file opens as quickly as a short one.
 
@@ -143,6 +147,7 @@ ffprobe -version
 - **Video Volume**: `Max (100%)`, `High (80%)`, `Medium (50%)`, `Low (25%)`, `Very Low (10%)`, `Mute (0%)`
 - **Preview Position**: `Follow Cursor` or `Best Position` — `Best Position` places the preview beside the cursor (or the focused item) and centers it on the same line, moving it only as far as a display edge requires, so a small preview appears where you are looking rather than in the middle of the screen. `Follow Cursor` places it in the roomiest quadrant around the cursor.
 - **Enable Text Preview**: Turn text and code previews on or off, ahead of the extension list — turning them off leaves the list alone and turning them back on restores it.
+- **Enable Text Preview Full Mode**: Whether a text preview can be worked with — scrolled, selected from and copied, and rested on by the pointer — or is only something to look at. On by default.
 - **Text Preview Theme**: `Atom One Light (Default)` or `One Dark Pro` — the colors text and code previews are drawn with. Changing it re-renders the preview that is on screen.
 - **Text Preview Font Size**: `100%`, `125% (Default)`, `150%`, `175%`, `200%`, `250%`, `300%`, `400%` — the size the text is drawn at, for rendered Markdown as much as for source files. The whole page scales with it (glyphs, line spacing and margin together), so a bigger preview holds fewer lines rather than the same lines stretched. Any hand-edited value in `config.ini` is honored, including one between these steps.
 - **Markdown Preview**: `Rendered (Default)` shows a `.md` file as the document it describes, `Highlighted Source` shows the markup itself with Markdown syntax highlighting.
@@ -181,6 +186,7 @@ preview_scale=100
 theme=light
 markdown_mode=rendered
 text_preview_enabled=true
+text_preview_full_mode=true
 text_font_scale=125
 
 [text]
@@ -190,6 +196,7 @@ extensions=txt,text,log,nfo,md,markdown,json,toml,yaml,py,js,ts,rs,...
 - `theme` is the color theme for text and code previews: `light` (Atom One Light, the default) or `dark` (One Dark Pro). `atom one light` and `one dark pro` are accepted as well.
 - `markdown_mode` is how `.md` files are drawn: `rendered` (the default document view) or `source` (the markup with syntax highlighting).
 - `text_preview_enabled` is the `Enable Text Preview` toggle: `false` stops text previews without touching the extension list.
+- `text_preview_full_mode` is the `Enable Text Preview Full Mode` toggle: `false` leaves a text preview as a frame that only shows what fits.
 - `text_font_scale` is the size text is drawn at, as a percentage between 1 and 1000 (`150` or `150%`; `0` resets to the default of 125). The tray offers steps from 100% to 400%, and a value between those steps is used as written.
 - `extensions` is every extension previewed as text. It is written in full when the file is created and is shortened in this example. Append an extension to preview one the app does not know, or delete entries to stop previewing them — the change is picked up without a restart. An extension is written without its dot (`py`, not `.py`), and an empty list turns text previews off, so the built-in list comes back only when the key itself is missing.
 - When `enable_off_trigger_key` is enabled, hold the configured `off_trigger_key` to keep previews hidden while browsing Explorer.

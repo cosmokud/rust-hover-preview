@@ -195,6 +195,10 @@ pub struct AppConfig {
     pub markdown_mode: MarkdownMode,
     /// Whether text files are previewed at all, ahead of the extension list.
     pub text_preview_enabled: bool,
+    /// Whether a text preview is more than something to look at: a preview that
+    /// scrolls, that can be selected and copied from, and that a pointer can rest
+    /// on without closing it.
+    pub text_preview_full_mode: bool,
     /// Font scale for text previews, as a percentage of the default size.
     pub text_font_scale_percent: u32,
     /// Extensions previewed as text, already normalized for lookup.
@@ -220,6 +224,7 @@ impl Default for AppConfig {
             theme: TextTheme::Light,
             markdown_mode: MarkdownMode::Rendered,
             text_preview_enabled: true,
+            text_preview_full_mode: true,
             text_font_scale_percent: DEFAULT_TEXT_FONT_SCALE_PERCENT,
             text_extensions: sanitize_extensions(DEFAULT_TEXT_EXTENSIONS),
         }
@@ -343,6 +348,11 @@ impl AppConfig {
             );
             ini.set(
                 CONFIG_SECTION,
+                "text_preview_full_mode",
+                Some(self.text_preview_full_mode.to_string()),
+            );
+            ini.set(
+                CONFIG_SECTION,
                 "text_font_scale",
                 Some(sanitize_text_font_scale_percent(self.text_font_scale_percent).to_string()),
             );
@@ -416,6 +426,9 @@ impl AppConfig {
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "text_preview_enabled") {
             self.text_preview_enabled = value;
         }
+        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "text_preview_full_mode") {
+            self.text_preview_full_mode = value;
+        }
         if let Some(value) = ini.get(CONFIG_SECTION, "text_font_scale") {
             if let Some(scale) = parse_text_font_scale(&value) {
                 self.text_font_scale_percent = scale;
@@ -442,6 +455,7 @@ mod tests {
     fn the_text_keys_are_read_from_the_ini() {
         let mut ini = Ini::new();
         ini.set("settings", "text_preview_enabled", Some("false".into()));
+        ini.set("settings", "text_preview_full_mode", Some("false".into()));
         ini.set("settings", "text_font_scale", Some("175%".into()));
         ini.set("text", "extensions", Some("md, py, .RS, md".into()));
 
@@ -449,8 +463,23 @@ mod tests {
         config.apply_ini(&ini);
 
         assert!(!config.text_preview_enabled);
+        assert!(!config.text_preview_full_mode);
         assert_eq!(config.text_font_scale_percent, 175);
         assert_eq!(config.text_extensions, vec!["md", "py", "rs"]);
+    }
+
+    /// Full mode is on unless it is turned off, and a pre-existing `config.ini`
+    /// without the key is how it stays that way.
+    #[test]
+    fn full_mode_is_on_unless_it_is_turned_off() {
+        assert!(AppConfig::default().text_preview_full_mode);
+
+        let mut ini = Ini::new();
+        ini.set("settings", "text_preview_enabled", Some("true".into()));
+
+        let mut config = AppConfig::default();
+        config.apply_ini(&ini);
+        assert!(config.text_preview_full_mode);
     }
 
     #[test]
