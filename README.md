@@ -13,7 +13,7 @@ Inspired by QTTabBar (QuizoApps) hover preview.
 ## Highlights
 
 - Mouse-hover and keyboard-navigation previews in Explorer
-- Static image previews plus animated GIF playback and libwebp-backed animated WebP playback
+- Static image previews plus animated GIF, APNG, and libwebp-backed animated WebP playback
 - Video previews through FFmpeg (`ffplay` + `ffprobe`)
 - Tray controls for enable/disable, delay, positioning, scaling, startup, off-trigger key, and volume
 - Explorer Shell view detection, folder caching, and path normalization for reliable hover matching
@@ -30,7 +30,9 @@ Inspired by QTTabBar (QuizoApps) hover preview.
 
 ### Images
 
-`jpg`, `jpeg`, `png`, `gif`, `bmp`, `ico`, `tiff`, `tif`, `webp`
+`jpg`, `jpeg`, `jpe`, `jfif`, `png`, `apng`, `gif`, `bmp`, `ico`, `tiff`, `tif`, `webp`, `tga`, `pbm`, `pgm`, `ppm`, `pam`, `pnm`, `hdr`, `exr`, `qoi`, `ff`
+
+`apng` files with multiple frames play as animations; single-frame ones show as static images.
 
 ### Videos (FFmpeg required)
 

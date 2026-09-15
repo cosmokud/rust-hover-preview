@@ -5,7 +5,7 @@ use crate::config::{
 use crate::video_formats::is_video_file;
 use crate::{CONFIG, RUNNING};
 use gif::DecodeOptions;
-use image::GenericImageView;
+use image::{AnimationDecoder, GenericImageView};
 use once_cell::sync::Lazy;
 use std::collections::{HashMap, VecDeque};
 use std::env;
@@ -50,7 +50,7 @@ const PREVIEW_CLASS: PCWSTR = w!("RustHoverPreviewWindow");
 
 const MAX_STREAMED_ANIMATION_FRAMES: usize = 300;
 const MAX_STREAMED_ANIMATION_BYTES: usize = 256 * 1024 * 1024;
-const MIN_GIF_ANIMATION_FRAME_DELAY_MS: u32 = 33;
+const MIN_ANIMATION_FRAME_DELAY_MS: u32 = 33;
 const ANIMATION_STARTUP_PREBUFFER_FRAMES: usize = 12;
 const ANIMATION_STARTUP_PREBUFFER_MS: u32 = 500;
 const STREAMING_SPINNER_MAX_MS: u64 = 1500;
@@ -90,6 +90,7 @@ pub enum PreviewMessage {
 enum MediaType {
     StaticImage,
     AnimatedGif,
+    AnimatedApng,
     AnimatedWebP,
     Video,
     Loading,
@@ -224,7 +225,7 @@ impl MediaData {
     fn is_streaming(&self) -> bool {
         matches!(
             self.media_type,
-            MediaType::AnimatedGif | MediaType::AnimatedWebP
+            MediaType::AnimatedGif | MediaType::AnimatedApng | MediaType::AnimatedWebP
         ) && !self.is_fully_loaded()
     }
 
@@ -438,6 +439,13 @@ fn is_webp_file(path: &PathBuf) -> bool {
     path.extension()
         .and_then(|ext| ext.to_str())
         .map(|ext| ext.to_lowercase() == "webp")
+        .unwrap_or(false)
+}
+
+fn is_apng_file(path: &PathBuf) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.to_lowercase() == "apng")
         .unwrap_or(false)
 }
 
@@ -735,7 +743,7 @@ fn load_animated_gif(
         };
 
         composite_gif_frame(&mut canvas, frame, gif_width, gif_height);
-        let delay_ms = (frame.delay as u32 * 10).max(MIN_GIF_ANIMATION_FRAME_DELAY_MS);
+        let delay_ms = (frame.delay as u32 * 10).max(MIN_ANIMATION_FRAME_DELAY_MS);
         let img = decode_gif_frame_to_image(
             &canvas,
             gif_width,
@@ -814,7 +822,7 @@ fn load_animated_gif(
                 continue;
             }
 
-            let delay_ms = (frame.delay as u32 * 10).max(MIN_GIF_ANIMATION_FRAME_DELAY_MS);
+            let delay_ms = (frame.delay as u32 * 10).max(MIN_ANIMATION_FRAME_DELAY_MS);
             if let Some(img) = decode_gif_frame_to_image(
                 &canvas,
                 gif_width,
@@ -845,6 +853,194 @@ fn load_animated_gif(
         current_frame: 0,
         last_frame_time: Instant::now(),
         media_type: MediaType::AnimatedGif,
+        stream_cancel: Some(cancel),
+        video_process: None,
+        loading_start: Some(Instant::now()),
+    })
+}
+
+/// Open an animated PNG frame iterator for the given path.
+fn apng_frames(path: &PathBuf) -> Option<image::Frames<'static>> {
+    let file = File::open(path).ok()?;
+    let decoder = image::codecs::png::PngDecoder::new(BufReader::new(file)).ok()?;
+    Some(decoder.apng().ok()?.into_frames())
+}
+
+/// APNG delays are exact ratios; clamp to the shared floor so a zero-delay
+/// animation cannot spin the render loop.
+fn apng_frame_delay_ms(frame: &image::Frame) -> u32 {
+    let (numerator, denominator) = frame.delay().numer_denom_ms();
+    if denominator == 0 {
+        return MIN_ANIMATION_FRAME_DELAY_MS;
+    }
+    (numerator / denominator).max(MIN_ANIMATION_FRAME_DELAY_MS)
+}
+
+/// Convert an APNG frame into an ImageFrame. The decoder already composites
+/// blend and dispose operations, so every frame arrives as the full canvas.
+fn decode_apng_frame_to_image(
+    source: &image::RgbaImage,
+    target_width: u32,
+    target_height: u32,
+    delay_ms: u32,
+) -> ImageFrame {
+    let (source_width, source_height) = source.dimensions();
+    let rgba = if target_width != source_width || target_height != source_height {
+        image::imageops::resize(
+            source,
+            target_width,
+            target_height,
+            frame_resize_filter(source_width, source_height, target_width, target_height),
+        )
+        .into_raw()
+    } else {
+        source.as_raw().clone()
+    };
+
+    ImageFrame {
+        pixels: rgba_to_bgra(&rgba),
+        width: target_width,
+        height: target_height,
+        delay_ms,
+    }
+}
+
+fn load_animated_apng(
+    path: &PathBuf,
+    max_width: u32,
+    max_height: u32,
+    preview_scale: PreviewScale,
+    cancel: Arc<AtomicBool>,
+) -> Option<MediaData> {
+    if cancel.load(Ordering::Acquire) {
+        return None;
+    }
+
+    let mut frames_iter = apng_frames(path)?;
+
+    let mut initial_frames = Vec::new();
+    let mut initial_bytes: usize = 0;
+    let mut buffered_ms: u32 = 0;
+    let mut reached_end = false;
+    let mut target_size: Option<(u32, u32)> = None;
+
+    while initial_frames.len() < MAX_STREAMED_ANIMATION_FRAMES
+        && initial_frames.len() < ANIMATION_STARTUP_PREBUFFER_FRAMES
+        && (initial_frames.len() < 2 || buffered_ms < ANIMATION_STARTUP_PREBUFFER_MS)
+    {
+        if cancel.load(Ordering::Acquire) {
+            return None;
+        }
+
+        let frame = match frames_iter.next() {
+            Some(Ok(frame)) => frame,
+            Some(Err(_)) => return None,
+            None => {
+                reached_end = true;
+                break;
+            }
+        };
+
+        let (target_width, target_height) = match target_size {
+            Some(size) => size,
+            None => {
+                let size = scale_dimensions(
+                    frame.buffer().width(),
+                    frame.buffer().height(),
+                    max_width,
+                    max_height,
+                    preview_scale,
+                );
+                target_size = Some(size);
+                size
+            }
+        };
+
+        let delay_ms = apng_frame_delay_ms(&frame);
+        let img = decode_apng_frame_to_image(frame.buffer(), target_width, target_height, delay_ms);
+        initial_bytes = initial_bytes.saturating_add(img.pixels.len());
+        if initial_bytes > MAX_STREAMED_ANIMATION_BYTES {
+            return None;
+        }
+        buffered_ms = buffered_ms.saturating_add(delay_ms);
+        initial_frames.push(img);
+    }
+
+    if initial_frames.is_empty() || (reached_end && initial_frames.len() <= 1) {
+        return None;
+    }
+
+    if reached_end {
+        return Some(MediaData {
+            frames: initial_frames,
+            shared_frames: None,
+            all_frames_loaded: None,
+            current_frame: 0,
+            last_frame_time: Instant::now(),
+            media_type: MediaType::AnimatedApng,
+            stream_cancel: Some(cancel),
+            video_process: None,
+            loading_start: None,
+        });
+    }
+
+    let shared = Arc::new(Mutex::new(VecDeque::new()));
+    let shared_clone = Arc::clone(&shared);
+    let loaded_flag = Arc::new(AtomicBool::new(false));
+    let loaded_flag_clone = Arc::clone(&loaded_flag);
+    let skip_frames = initial_frames.len();
+    let (target_width, target_height) = target_size?;
+
+    let path_clone = path.clone();
+    let cancel_clone = Arc::clone(&cancel);
+    std::thread::spawn(move || {
+        let frames = match apng_frames(&path_clone) {
+            Some(frames) => frames,
+            None => {
+                loaded_flag_clone.store(true, Ordering::Release);
+                return;
+            }
+        };
+
+        let mut streamed_count = skip_frames;
+        let mut streamed_bytes = initial_bytes;
+
+        for frame in frames.skip(skip_frames) {
+            let frame = match frame {
+                Ok(frame) => frame,
+                Err(_) => break,
+            };
+
+            if cancel_clone.load(Ordering::Acquire)
+                || streamed_count >= MAX_STREAMED_ANIMATION_FRAMES
+            {
+                break;
+            }
+
+            let delay_ms = apng_frame_delay_ms(&frame);
+            let img =
+                decode_apng_frame_to_image(frame.buffer(), target_width, target_height, delay_ms);
+            let frame_bytes = img.pixels.len();
+            if streamed_bytes.saturating_add(frame_bytes) > MAX_STREAMED_ANIMATION_BYTES {
+                break;
+            }
+            if let Ok(mut queue) = shared_clone.lock() {
+                queue.push_back(img);
+            }
+            streamed_count += 1;
+            streamed_bytes = streamed_bytes.saturating_add(frame_bytes);
+        }
+
+        loaded_flag_clone.store(true, Ordering::Release);
+    });
+
+    Some(MediaData {
+        frames: initial_frames,
+        shared_frames: Some(shared),
+        all_frames_loaded: Some(loaded_flag),
+        current_frame: 0,
+        last_frame_time: Instant::now(),
+        media_type: MediaType::AnimatedApng,
         stream_cancel: Some(cancel),
         video_process: None,
         loading_start: Some(Instant::now()),
@@ -1857,6 +2053,24 @@ fn load_media(
             return None;
         }
         // Fall back to static for non-animated WebP
+        return load_static_image(path, max_width, max_height, preview_scale);
+    }
+
+    if is_apng_file(path) {
+        // Try animated APNG first
+        if let Some(media) = load_animated_apng(
+            path,
+            max_width,
+            max_height,
+            preview_scale,
+            Arc::clone(&cancel),
+        ) {
+            return Some(media);
+        }
+        if cancel.load(Ordering::Acquire) {
+            return None;
+        }
+        // Fall back to static for single-frame APNGs
         return load_static_image(path, max_width, max_height, preview_scale);
     }
 
