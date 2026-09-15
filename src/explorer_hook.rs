@@ -3535,9 +3535,9 @@ pub fn run_explorer_hook() {
             ExplorerState::VisibleNotFocused => {
                 // Explorer is visible but not focused - do a quick cursor check
                 // Only activate full polling if cursor is actually over Explorer.
-                // A pointer that is using a scrollable preview is not evidence
-                // that the user has left: the preview is on top of Explorer, so
-                // the check below cannot see Explorer under it.
+                // A pointer that is using a text preview is not evidence that the
+                // user has left: the preview is on top of Explorer, so the check
+                // below cannot see Explorer under it.
                 if !is_cursor_over_explorer_full() && !text_scroll_pointer_hold_now() {
                     if last_file.is_some() || keyboard_file.is_some() {
                         hide_preview();
@@ -3723,9 +3723,10 @@ pub fn run_explorer_hook() {
             let over_video_preview = preview_hover.video;
             let over_any_preview = preview_hover.any();
 
-            // A text preview that scrolls is the exception to that rule: while the
-            // pointer is using it, the preview is kept — see `text_scroll_hold`
-            // above for what "using it" covers.
+            // A text preview is the exception to that rule: while the pointer is
+            // using one, the preview is kept — see `text_scroll_hold` above for
+            // what "using it" covers. A preview the pointer cannot work with keeps
+            // the old behaviour, which is to close as soon as it is touched.
             let guard_active = video_hover_guard_until
                 .map(|until| Instant::now() < until)
                 .unwrap_or(false);
