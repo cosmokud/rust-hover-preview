@@ -17,14 +17,16 @@ use crate::config::{sanitize_text_font_scale_percent, MarkdownMode, TextTheme};
 use crate::text_theme::{self, LoadedTheme};
 use once_cell::sync::Lazy;
 use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 use syntect::easy::HighlightLines;
-use syntect::highlighting::{Color, FontStyle, Style};
-use syntect::parsing::SyntaxSet;
+use syntect::highlighting::{Color, FontStyle, HighlightState, Style};
+use syntect::parsing::{ParseState, SyntaxReference, SyntaxSet};
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{COLORREF, RECT, SIZE};
 use windows::Win32::Graphics::Gdi::{
@@ -39,10 +41,25 @@ use windows::Win32::Graphics::Gdi::{
 /// work a hover can trigger on a file that happens to be enormous.
 const READ_LIMIT_BYTES: u64 = 2 * 1024 * 1024;
 
-/// Lines carried through highlighting and layout. No display fits this many, so
-/// whatever is cut here is reported as remaining lines instead of being dropped
-/// silently.
-const MAX_DOC_LINES: usize = 400;
+/// Lines a preview can scroll through. A source file is styled a window at a
+/// time, so this is not a memory bound but a bound on how far one hover can walk
+/// into a file — a few dozen screens of text.
+const MAX_DOC_LINES: usize = 2000;
+
+/// Lines styled between parse checkpoints. Highlighting is sequential, so the
+/// only way to show a window near the end of a file is to have parsed from
+/// somewhere before it; this is how far back that somewhere can be, and so what
+/// a jump that cannot continue from where it stopped costs.
+const CHECKPOINT_INTERVAL_LINES: usize = 32;
+const CHECKPOINT_MAX_ENTRIES: usize = 192;
+
+/// Styled windows kept per document. Scrolling a line at a time lands inside the
+/// window that is already built, and a repaint is free.
+const WINDOW_CACHE_MAX_ENTRIES: usize = 6;
+
+/// Documents one thread keeps parse progress for. Small: it is there so a scroll
+/// can continue rather than to remember every file ever hovered.
+const SYNTAX_PROGRESS_MAX_ENTRIES: usize = 8;
 
 /// Longest line kept, in characters. Minified sources and one-line data files
 /// would otherwise turn a single hover into a megabyte-wide layout.
@@ -61,6 +78,14 @@ const BODY_LEVEL: u8 = 0;
 
 const PADDING_PIXELS: f32 = 12.0;
 const QUOTE_BAR_PIXELS: i32 = 4;
+
+/// The scrollbar drawn when a document is longer than the frame: a thin groove
+/// near the right edge, and the room kept clear for it.
+const SCROLLBAR_WIDTH_PIXELS: i32 = 6;
+const SCROLLBAR_MARGIN_PIXELS: i32 = 4;
+/// Shortest the thumb gets, so a document of a thousand screens still has
+/// something to grab.
+const SCROLLBAR_MIN_THUMB_PIXELS: i32 = 24;
 
 /// Narrow files still get a window wide enough to look like one.
 const MIN_CONTENT_CHARS: i32 = 16;
@@ -92,6 +117,38 @@ pub struct TextPreviewOptions {
     pub font_scale_percent: u32,
 }
 
+/// A vertical scrollbar inside a frame, in frame coordinates: the groove it runs
+/// in and the thumb that shows where the preview is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScrollBar {
+    pub track: (i32, i32, i32, i32),
+    pub thumb: (i32, i32, i32, i32),
+}
+
+/// One painted text preview: its pixels and what it took to lay it out.
+pub struct TextFrame {
+    pub pixels: Vec<u8>,
+    pub width: u32,
+    pub height: u32,
+    /// Document line the frame starts at.
+    pub first_line: usize,
+    /// Lines the frame shows.
+    pub visible_lines: usize,
+    /// Lines the preview can reach, which is why it scrolls at all.
+    pub scrollable_lines: usize,
+    pub total_lines: usize,
+    /// Present when the document is longer than the frame, which is also the only
+    /// case in which the preview scrolls.
+    pub scrollbar: Option<ScrollBar>,
+}
+
+impl TextFrame {
+    /// Whether more of the document can be reached by scrolling.
+    pub fn scrollable(&self) -> bool {
+        self.scrollbar.is_some()
+    }
+}
+
 /// The size the preview of `path` wants inside `max_width` x `max_height`.
 ///
 /// The box hugs the content — a two-line file gets a two-line window — and is
@@ -114,7 +171,7 @@ pub fn measure(
     }
 
     let result = TextMetrics::new(dc, dpi, options.font_scale_percent).map(|metrics| {
-        let laid_out = layout(&document, max_width, max_height, &metrics, theme);
+        let laid_out = layout(&document, theme, &metrics, 0, max_width, max_height, 0);
         (laid_out.width, laid_out.height)
     });
 
@@ -125,18 +182,21 @@ pub fn measure(
     result
 }
 
-/// Paint the preview into a `width` x `height` BGRA frame.
+/// Paint the preview at a scroll position, together with the scrollbar the frame
+/// needs and the numbers that describe where the preview is.
 ///
-/// The frame is always exactly the requested size, with the theme's background
-/// showing wherever the text does not reach, which is what keeps the painted
-/// frame and the window the layout planned in step.
-pub fn render(
+/// `first_line` is a request rather than a command: a preview of a document that
+/// is nearly over is pulled back so the frame is still full, and a preview that
+/// fits is always at line 0. What comes back is what was actually painted, so the
+/// caller can scroll from there without guessing.
+pub fn render_scrolled(
     path: &Path,
+    first_line: usize,
     width: u32,
     height: u32,
     dpi: u32,
     options: TextPreviewOptions,
-) -> Option<(Vec<u8>, u32, u32)> {
+) -> Option<TextFrame> {
     if width == 0 || height == 0 {
         return None;
     }
@@ -146,30 +206,226 @@ pub fn render(
 
     let surface = DibSurface::create(width, height)?;
     let metrics = TextMetrics::new(surface.dc, dpi, options.font_scale_percent)?;
-    let laid_out = layout(&document, width, height, &metrics, theme);
+    let scrollable_lines = document.doc.scrollable_lines();
 
-    unsafe {
-        paint(&surface, &laid_out, theme, &metrics);
+    // Whether there is a scrollbar depends on how many lines fit, and the bar
+    // takes room the text would otherwise use — so the layout is asked once to
+    // find that out and again with the room kept aside.
+    let mut laid_out = layout(&document, theme, &metrics, first_line, width, height, 0);
+    let scrollable = scrollable_lines > laid_out.visible_lines;
+    if scrollable {
+        laid_out = layout(
+            &document,
+            theme,
+            &metrics,
+            first_line,
+            width,
+            height,
+            metrics.scrollbar_space(),
+        );
     }
 
-    Some((surface.pixels(), width, height))
+    let scrollbar = if scrollable {
+        scrollbar_geometry(
+            width as i32,
+            height as i32,
+            &metrics,
+            laid_out.first_line,
+            laid_out.visible_lines,
+            scrollable_lines,
+        )
+    } else {
+        None
+    };
+
+    unsafe {
+        paint(
+            &surface,
+            &laid_out,
+            theme,
+            &metrics,
+            scrollbar.as_ref(),
+            first_line,
+        );
+    }
+
+    Some(TextFrame {
+        pixels: surface.pixels(),
+        width,
+        height,
+        first_line: laid_out.first_line,
+        visible_lines: laid_out.visible_lines,
+        scrollable_lines,
+        total_lines: document.doc.total_lines(),
+        scrollbar,
+    })
 }
 
 // ---------------------------------------------------------------- documents
 
-/// A parsed document, ready to lay out: styled lines plus what was left out.
+/// A text file as it is read: the decoded text and where its lines start.
+///
+/// Styling is deliberately not part of this. A line table costs eight bytes per
+/// line and no parsing, which is what lets a preview know how tall a document is
+/// — and how far it can scroll — before anything has been colored. The styled
+/// lines for the part of it that is on screen are built on demand, in
+/// [`styled_window`].
 struct TextDoc {
-    lines: Vec<DocLine>,
-    /// Lines the file holds beyond the ones above.
-    remaining_lines: usize,
+    text: String,
+    /// Byte offset of the start of every line, so `line_starts.len()` is the
+    /// document's line count.
+    line_starts: Vec<usize>,
+    producer: Producer,
     /// Whether the read stopped at the byte cap rather than at the end of the
-    /// file, in which case the remaining count is a lower bound.
+    /// file, in which case a file continues past what a preview can show.
     read_truncated: bool,
     /// Whether a line wider than the page continues on the next one. Prose wraps —
     /// a paragraph is one long line and clipping it would hide most of what the
     /// file says — while code, markup and art keep their columns.
     wrap: bool,
 }
+
+impl TextDoc {
+    fn total_lines(&self) -> usize {
+        self.line_starts.len()
+    }
+
+    /// Lines this preview can reach. A source file is styled a window at a time,
+    /// but the range a preview can scroll through is capped so a hover can never
+    /// walk an unbounded file.
+    fn scrollable_lines(&self) -> usize {
+        self.total_lines().min(MAX_DOC_LINES)
+    }
+
+    fn line(&self, index: usize) -> &str {
+        let start = self.line_starts[index];
+        let end = self
+            .line_starts
+            .get(index + 1)
+            .copied()
+            .unwrap_or(self.text.len());
+
+        self.text[start..end].trim_end_matches('\n')
+    }
+}
+
+/// Which renderer turns a document's lines into styled spans.
+#[derive(Clone)]
+enum Producer {
+    /// Source and markup: a syntax definition colors the lines, and the parser's
+    /// state carries from one line to the next, which is what makes it possible
+    /// to start part-way into a file.
+    Highlighted { syntax: &'static SyntaxReference },
+    /// A Markdown document, laid out as the document it describes.
+    Markdown,
+    /// Text that needs no coloring of its own, such as an RTF's stripped text.
+    Plain,
+    /// Text carrying ANSI color escapes.
+    Ansi,
+}
+
+/// Styled lines for a range of one document. `first` is the document line the
+/// first entry belongs to, so callers index by absolute line number.
+struct TextWindow {
+    first: usize,
+    lines: Vec<DocLine>,
+}
+
+impl TextWindow {
+    fn line(&self, index: usize) -> Option<&DocLine> {
+        self.lines.get(index.checked_sub(self.first)?)
+    }
+
+    fn covers(&self, first: usize, count: usize) -> bool {
+        self.first <= first && self.first + self.lines.len() >= first + count
+    }
+}
+
+/// How far the highlighter has walked through one document, and the states it
+/// would need to start again from a few points inside it.
+///
+/// Highlighting is sequential — a grammar's state at line N depends on every line
+/// before it — so the only way to show a window near the end of a file without
+/// parsing the whole file is to have parsed it once, in order, and to remember
+/// where it was. The checkpoint spacing bounds what a jump costs, and the states
+/// are small: a scope stack and a style stack, not the lines themselves.
+struct SyntaxProgress {
+    /// Line the parse has reached, and the state that resumes exactly there.
+    frontier: usize,
+    frontier_state: (HighlightState, ParseState),
+    checkpoints: Vec<(usize, HighlightState, ParseState)>,
+}
+
+impl SyntaxProgress {
+    fn continuation(&self, first: usize) -> (usize, HighlightState, ParseState) {
+        if self.frontier <= first {
+            let (highlight, parse) = self.frontier_state.clone();
+            return (self.frontier, highlight, parse);
+        }
+
+        self.checkpoints
+            .iter()
+            .rev()
+            .find(|(line, _, _)| *line <= first)
+            .map(|(line, highlight, parse)| (*line, highlight.clone(), parse.clone()))
+            .unwrap_or_else(|| {
+                let (highlight, parse) = self.frontier_state.clone();
+                (0, highlight, parse)
+            })
+    }
+}
+
+/// Styled windows built for one document. Plain data, so it is shared between the
+/// threads that measure and paint a preview.
+#[derive(Default)]
+struct WindowCache {
+    windows: Vec<Arc<TextWindow>>,
+}
+
+/// A parsed document with its window cache. Shared through the global cache, so
+/// the windows outlive a single preview and a second hover in the same area costs
+/// nothing at all.
+struct CachedDocument {
+    /// What this document was built from, which is also how the per-thread parse
+    /// progress finds it again.
+    key: DocKey,
+    doc: TextDoc,
+    windows: Mutex<WindowCache>,
+}
+
+thread_local! {
+    /// Where the highlighter has reached in each document, on this thread.
+    ///
+    /// syntect's parse state is not `Send` — it holds pointers into Oniguruma's
+    /// match regions — so it cannot live in the shared document cache no matter
+    /// how useful it would be there. Styled windows are shared, because they are
+    /// plain data; the state that continues a parse from part-way into a file is
+    /// rebuilt per thread, which costs a bounded re-parse at worst.
+    static SYNTAX_PROGRESS: RefCell<HashMap<DocKey, SyntaxProgress>> =
+        RefCell::new(HashMap::new());
+}
+
+/// What a parsed document is cached by. The font scale is not part of it: a
+/// document is the same text at any size, and only the layout changes.
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct DocKey {
+    path: PathBuf,
+    modified: Option<SystemTime>,
+    len: u64,
+    theme: TextTheme,
+    markdown_mode: MarkdownMode,
+}
+
+/// Parsed documents, the most recently built last, keyed by the file and the
+/// options they were built from. Bounded: the whole cache is dropped when it
+/// fills, the way the PDF page and video geometry caches are.
+type DocumentCache = Vec<(DocKey, Arc<CachedDocument>)>;
+
+static DOCUMENTS: Lazy<Mutex<DocumentCache>> = Lazy::new(|| Mutex::new(Vec::new()));
+
+/// Syntax definitions from syntect plus the ones it does not bundle, built once
+/// on the first text hover. Individual syntaxes are still parsed lazily.
+static SYNTAXES: Lazy<SyntaxSet> = Lazy::new(two_face::syntax::extra_no_newlines);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum LineBlock {
@@ -181,7 +437,7 @@ enum LineBlock {
     Quote,
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct DocLine {
     spans: Vec<Span>,
     block: LineBlock,
@@ -189,6 +445,7 @@ struct DocLine {
     indent: u8,
 }
 
+#[derive(Clone)]
 struct Span {
     text: String,
     style: TextStyle,
@@ -205,31 +462,9 @@ struct TextStyle {
     level: u8,
 }
 
-/// What a parsed document is cached by. The font scale is not part of it: a
-/// document is the same styled lines at any size, and only the layout changes.
-#[derive(Clone, PartialEq, Eq)]
-struct DocKey {
-    path: PathBuf,
-    modified: Option<SystemTime>,
-    len: u64,
-    theme: TextTheme,
-    markdown_mode: MarkdownMode,
-}
-
-/// Parsed documents, the most recently built last, keyed by the file and the
-/// options they were built from. Bounded: the whole cache is dropped when it
-/// fills, the way the PDF page and video geometry caches are.
-type DocumentCache = Vec<(DocKey, Arc<TextDoc>)>;
-
-static DOCUMENTS: Lazy<Mutex<DocumentCache>> = Lazy::new(|| Mutex::new(Vec::new()));
-
-/// Syntax definitions from syntect plus the ones it does not bundle, built once
-/// on the first text hover. Individual syntaxes are still parsed lazily.
-static SYNTAXES: Lazy<SyntaxSet> = Lazy::new(two_face::syntax::extra_no_newlines);
-
 /// The parsed document for `path`, from the cache when the file, its mode and
 /// its theme are unchanged.
-fn document(path: &Path, options: TextPreviewOptions) -> Option<Arc<TextDoc>> {
+fn document(path: &Path, options: TextPreviewOptions) -> Option<Arc<CachedDocument>> {
     let metadata = std::fs::metadata(path).ok()?;
     let key = DocKey {
         path: path.to_path_buf(),
@@ -245,8 +480,11 @@ fn document(path: &Path, options: TextPreviewOptions) -> Option<Arc<TextDoc>> {
         }
     }
 
-    let theme = text_theme::loaded(options.theme)?;
-    let document = Arc::new(build_document(path, options, theme)?);
+    let document = Arc::new(CachedDocument {
+        key: key.clone(),
+        doc: build_document(path, options)?,
+        windows: Mutex::new(WindowCache::default()),
+    });
 
     if let Ok(mut cache) = DOCUMENTS.lock() {
         if cache.len() >= DOC_CACHE_MAX_ENTRIES {
@@ -258,11 +496,58 @@ fn document(path: &Path, options: TextPreviewOptions) -> Option<Arc<TextDoc>> {
     Some(document)
 }
 
-fn build_document(
-    path: &Path,
-    options: TextPreviewOptions,
+/// Styled lines covering `[first, first + count)` of the document, built on
+/// demand and kept for the next preview in the same place.
+///
+/// The returned window may be wider than what was asked for; callers index it by
+/// absolute line number through [`TextWindow::line`].
+fn styled_window(
+    key: &DocKey,
+    document: &CachedDocument,
     theme: &LoadedTheme,
-) -> Option<TextDoc> {
+    first: usize,
+    count: usize,
+) -> Option<Arc<TextWindow>> {
+    if count == 0 {
+        return Some(Arc::new(TextWindow {
+            first,
+            lines: Vec::new(),
+        }));
+    }
+
+    let mut cache = document.windows.lock().ok()?;
+    let last = first + count;
+
+    if let Some(window) = cache
+        .windows
+        .iter()
+        .rev()
+        .find(|window| window.covers(first, count))
+    {
+        return Some(Arc::clone(window));
+    }
+
+    let window = match &document.doc.producer {
+        Producer::Highlighted { syntax } => {
+            window_highlighted(&document.doc, key, syntax, theme, first, last)
+        }
+        Producer::Markdown => window_markdown(&document.doc, theme, first, last),
+        // A line of plain text or ANSI art is styled on its own, so only the
+        // window's own lines are touched.
+        Producer::Plain => window_plain(&document.doc, theme, first, last),
+        Producer::Ansi => window_ansi(&document.doc, theme, first, last),
+    };
+
+    let window = Arc::new(window);
+    if cache.windows.len() >= WINDOW_CACHE_MAX_ENTRIES {
+        cache.windows.remove(0);
+    }
+    cache.windows.push(Arc::clone(&window));
+
+    Some(window)
+}
+
+fn build_document(path: &Path, options: TextPreviewOptions) -> Option<TextDoc> {
     let source = read_source(path)?;
     if source.text.trim().is_empty() {
         return None;
@@ -270,47 +555,173 @@ fn build_document(
 
     let extension = extension_of(path);
 
+    // An RTF is markup, not text: it is reduced to the text it carries once, and
+    // from there it is an ordinary plain document.
     if extension == "rtf" {
-        return Some(plain_document(
-            &strip_rtf(&source.text),
-            theme,
-            source.truncated,
-        ));
+        let stripped = strip_rtf(&source.text).join("\n");
+        return Some(TextDoc {
+            line_starts: line_starts(&stripped),
+            text: stripped,
+            producer: Producer::Plain,
+            read_truncated: source.truncated,
+            wrap: true,
+        });
     }
 
     if is_markdown_extension(extension) && options.markdown_mode == MarkdownMode::Rendered {
-        return Some(markdown_document(
-            &source.text,
-            theme,
-            source.lines.len(),
-            source.truncated,
-        ));
+        return Some(TextDoc {
+            line_starts: line_starts(&source.text),
+            producer: Producer::Markdown,
+            text: source.text,
+            read_truncated: source.truncated,
+            // A rendered document is prose: its paragraphs wrap.
+            wrap: true,
+        });
     }
 
     // NFO files carry ANSI color codes around plain text, so they are built from
     // their own escapes rather than from a syntax definition.
     if wants_ansi(extension) {
-        return Some(ansi_document(&source.lines, theme, source.truncated));
+        return Some(TextDoc {
+            line_starts: line_starts(&source.text),
+            producer: Producer::Ansi,
+            text: source.text,
+            read_truncated: source.truncated,
+            // NFO art is drawn in columns; wrapping it would destroy the picture.
+            wrap: false,
+        });
     }
 
-    Some(highlighted_document(path, &source, theme))
+    let syntax_set = &*SYNTAXES;
+    let syntax = syntax_set
+        .find_syntax_for_file(path)
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| syntax_set.find_syntax_plain_text());
+
+    Some(TextDoc {
+        line_starts: line_starts(&source.text),
+        producer: Producer::Highlighted { syntax },
+        // A file no grammar claims is prose rather than code — a readme, a log, a
+        // note — and prose that is cut off at the page edge is unreadable, so
+        // those wrap. Anything with a syntax definition keeps its columns.
+        wrap: syntax.name == "Plain Text",
+        text: source.text,
+        read_truncated: source.truncated,
+    })
 }
 
-/// A document whose lines share one style, for text that carries no markup. It is
-/// prose, so it wraps.
-fn plain_document(lines: &[String], theme: &LoadedTheme, truncated: bool) -> TextDoc {
-    let style = text_style(&theme.style_for_scopes(&["source"]), BODY_LEVEL);
-    let mut document = TextDoc {
-        lines: Vec::new(),
-        remaining_lines: 0,
-        read_truncated: truncated,
-        wrap: true,
-    };
+/// The byte offset every line starts at. One pass over the text, no parsing: this
+/// is what a preview uses to know how much there is without coloring any of it.
+fn line_starts(text: &str) -> Vec<usize> {
+    let mut starts = vec![0usize];
+    for (offset, byte) in text.bytes().enumerate() {
+        if byte == b'\n' && offset + 1 < text.len() {
+            starts.push(offset + 1);
+        }
+    }
+    starts
+}
 
-    for line in lines.iter().take(MAX_DOC_LINES) {
-        document.lines.push(DocLine {
+/// A window of a source file: the parser runs from wherever it left off — or from
+/// the nearest checkpoint — and only the requested lines are kept.
+///
+/// This is what makes a preview of a large file cheap: nothing past the window is
+/// ever styled, and the state that continues the parse is kept instead of the
+/// lines it produced.
+fn window_highlighted(
+    doc: &TextDoc,
+    key: &DocKey,
+    syntax: &'static SyntaxReference,
+    theme: &LoadedTheme,
+    first: usize,
+    last: usize,
+) -> TextWindow {
+    let syntax_set = &*SYNTAXES;
+    let (start, highlight_state, parse_state) = SYNTAX_PROGRESS.with(|cell| {
+        let mut map = cell.borrow_mut();
+        if map.len() > SYNTAX_PROGRESS_MAX_ENTRIES {
+            map.clear();
+        }
+
+        let progress = map.entry(key.clone()).or_insert_with(|| {
+            let (highlight_state, parse_state) = HighlightLines::new(syntax, theme.theme()).state();
+            SyntaxProgress {
+                frontier: 0,
+                frontier_state: (highlight_state, parse_state),
+                checkpoints: Vec::new(),
+            }
+        });
+
+        progress.continuation(first)
+    });
+
+    let mut highlighter = HighlightLines::from_state(theme.theme(), highlight_state, parse_state);
+
+    let mut lines = Vec::with_capacity(last.saturating_sub(first));
+    let mut checkpoints: Vec<(usize, HighlightState, ParseState)> = Vec::new();
+    let mut line_index = start;
+    while line_index < last && line_index < doc.total_lines() {
+        let spans = highlight_line(&mut highlighter, doc.line(line_index), syntax_set);
+        if line_index >= first {
+            lines.push(DocLine {
+                spans,
+                block: LineBlock::Plain,
+                indent: 0,
+            });
+        }
+
+        line_index += 1;
+        if line_index % CHECKPOINT_INTERVAL_LINES == 0 {
+            let (highlight_state, parse_state) = highlighter.state();
+            checkpoints.push((line_index, highlight_state.clone(), parse_state.clone()));
+            // Reading the state out consumes the highlighter, so it is rebuilt
+            // from the same state to carry on.
+            highlighter = HighlightLines::from_state(theme.theme(), highlight_state, parse_state);
+        }
+    }
+
+    let (highlight_state, parse_state) = highlighter.state();
+    SYNTAX_PROGRESS.with(|cell| {
+        if let Ok(mut map) = cell.try_borrow_mut() {
+            if let Some(progress) = map.get_mut(key) {
+                for (line, highlight_state, parse_state) in checkpoints {
+                    remember_checkpoint(progress, line, highlight_state, parse_state);
+                }
+                if line_index > progress.frontier {
+                    progress.frontier = line_index;
+                    progress.frontier_state = (highlight_state, parse_state);
+                }
+            }
+        }
+    });
+
+    TextWindow { first, lines }
+}
+
+fn remember_checkpoint(
+    progress: &mut SyntaxProgress,
+    line: usize,
+    highlight_state: HighlightState,
+    parse_state: ParseState,
+) {
+    if progress.checkpoints.len() >= CHECKPOINT_MAX_ENTRIES {
+        progress.checkpoints.remove(0);
+    }
+    progress
+        .checkpoints
+        .push((line, highlight_state, parse_state));
+}
+
+/// Plain lines: one style, and only the window's own lines are built.
+fn window_plain(doc: &TextDoc, theme: &LoadedTheme, first: usize, last: usize) -> TextWindow {
+    let style = text_style(&theme.style_for_scopes(&["source"]), BODY_LEVEL);
+    let mut lines = Vec::with_capacity(last.saturating_sub(first));
+
+    for index in first..last.min(doc.total_lines()) {
+        lines.push(DocLine {
             spans: vec![Span {
-                text: line.clone(),
+                text: doc.line(index).to_string(),
                 style,
             }],
             block: LineBlock::Plain,
@@ -318,40 +729,26 @@ fn plain_document(lines: &[String], theme: &LoadedTheme, truncated: bool) -> Tex
         });
     }
 
-    document.remaining_lines = lines.len().saturating_sub(document.lines.len());
-    document
+    TextWindow { first, lines }
 }
 
-fn highlighted_document(path: &Path, source: &SourceText, theme: &LoadedTheme) -> TextDoc {
-    let syntax_set = &*SYNTAXES;
-    let syntax = syntax_set
-        .find_syntax_for_file(path)
-        .ok()
-        .flatten()
-        .unwrap_or_else(|| syntax_set.find_syntax_plain_text());
-    let mut highlighter = HighlightLines::new(syntax, theme.theme());
+/// ANSI art: the escapes are consumed per line, so the window is self-contained.
+fn window_ansi(doc: &TextDoc, theme: &LoadedTheme, first: usize, last: usize) -> TextWindow {
+    let palette = AnsiPalette::new(theme);
+    let base = text_style(&theme.style_for_scopes(&["source"]), BODY_LEVEL);
+    let mut lines = Vec::with_capacity(last.saturating_sub(first));
 
-    let mut document = TextDoc {
-        lines: Vec::new(),
-        remaining_lines: 0,
-        read_truncated: source.truncated,
-        // A file no grammar claims is prose rather than code — a readme, a log, a
-        // note — and prose that is cut off at the page edge is unreadable, so
-        // those wrap. Anything with a syntax definition keeps its columns.
-        wrap: syntax.name == "Plain Text",
-    };
-
-    for line in source.lines.iter().take(MAX_DOC_LINES) {
-        let spans = highlight_line(&mut highlighter, line, syntax_set);
-        document.lines.push(DocLine {
+    for index in first..last.min(doc.total_lines()) {
+        let mut spans = Vec::new();
+        push_ansi_spans(&mut spans, doc.line(index), base, &palette);
+        lines.push(DocLine {
             spans,
             block: LineBlock::Plain,
             indent: 0,
         });
     }
 
-    document.remaining_lines = source.lines.len().saturating_sub(document.lines.len());
-    document
+    TextWindow { first, lines }
 }
 
 /// One line through syntect. A grammar that cannot handle the line still shows
@@ -410,9 +807,22 @@ fn rgb(color: Color) -> [u8; 3] {
 /// Block structure becomes lines and indent, inline structure becomes runs, and
 /// fenced code is handed to the same highlighter the rest of the preview uses,
 /// so a fenced block is colored like the language it names.
+///
+/// A rendered document is the one producer that has to read all of its input: a
+/// line's place in the document is only known once the block before it has been
+/// walked, so there is no state to resume from part-way through. It is a single
+/// linear pass with no grammar work, and only the lines inside the requested
+/// window are kept — the rest are counted and dropped as they go past.
 struct MarkdownBuilder<'a> {
     theme: &'a LoadedTheme,
     lines: Vec<DocLine>,
+    /// Document line the builder has reached, and the window it keeps.
+    emitted: usize,
+    keep_from: usize,
+    keep_to: usize,
+    /// Whether the line before the current one was blank, which is what keeps
+    /// block spacing down to one line without needing the lines themselves.
+    last_blank: bool,
     current: DocLine,
     inline: Vec<Inline>,
     list_stack: Vec<Option<u64>>,
@@ -433,10 +843,14 @@ enum Inline {
 }
 
 impl<'a> MarkdownBuilder<'a> {
-    fn new(theme: &'a LoadedTheme) -> Self {
+    fn new(theme: &'a LoadedTheme, keep_from: usize, keep_to: usize) -> Self {
         Self {
             theme,
             lines: Vec::new(),
+            emitted: 0,
+            keep_from,
+            keep_to,
+            last_blank: false,
             current: DocLine::default(),
             inline: Vec::new(),
             list_stack: Vec::new(),
@@ -536,39 +950,40 @@ impl<'a> MarkdownBuilder<'a> {
             self.current = DocLine::default();
             return;
         }
-        if self.lines.len() >= MAX_DOC_LINES {
+
+        let line = std::mem::take(&mut self.current);
+        self.push_line(line);
+        self.last_blank = false;
+    }
+
+    /// Count one document line, keeping it only when it falls inside the window.
+    fn push_line(&mut self, line: DocLine) {
+        if self.emitted >= MAX_DOC_LINES {
             self.hit_line_cap = true;
-            self.current = DocLine::default();
             return;
         }
 
-        let line = std::mem::take(&mut self.current);
-        self.lines.push(line);
+        if self.emitted >= self.keep_from && self.emitted < self.keep_to {
+            self.lines.push(line);
+        }
+        self.emitted += 1;
     }
 
     /// One empty line between blocks, never two.
     fn blank_line(&mut self) {
         self.flush();
-        if self.lines.is_empty()
-            || self.lines.len() >= MAX_DOC_LINES
-            || self
-                .lines
-                .last()
-                .map(|line| line.spans.is_empty())
-                .unwrap_or(true)
-        {
+        if self.emitted == 0 || self.last_blank {
             return;
         }
 
-        self.lines.push(DocLine::default());
+        self.push_line(DocLine::default());
+        self.last_blank = true;
     }
 
     fn rule_line(&mut self) {
         self.blank_line();
-        if self.lines.len() >= MAX_DOC_LINES {
-            return;
-        }
-        self.lines.push(DocLine::default());
+        self.push_line(DocLine::default());
+        self.last_blank = true;
     }
 
     fn item_marker(&mut self) {
@@ -609,43 +1024,41 @@ impl<'a> MarkdownBuilder<'a> {
         let indent = self.line_indent().saturating_add(1);
 
         for line in &lines {
-            if self.lines.len() >= MAX_DOC_LINES {
-                self.hit_line_cap = true;
-                break;
-            }
-            self.lines.push(DocLine {
+            let styled = DocLine {
                 spans: highlight_line(&mut highlighter, line, syntax_set),
                 block: LineBlock::Code,
                 indent,
-            });
+            };
+            self.push_line(styled);
+            if self.hit_line_cap {
+                return;
+            }
         }
 
+        self.last_blank = lines.is_empty();
         self.current = DocLine::default();
     }
 
-    fn finish(mut self, source_lines: usize) -> TextDoc {
+    /// The window the walk produced, with the line number it starts at.
+    fn finish(mut self) -> TextWindow {
         self.flush();
-        while self
-            .lines
-            .last()
-            .map(|line| line.spans.is_empty())
-            .unwrap_or(false)
-        {
-            self.lines.pop();
+
+        // A blank line at the very end of the document is padding rather than
+        // content, but one in the middle of a window is a paragraph break.
+        if !self.hit_line_cap {
+            while self
+                .lines
+                .last()
+                .map(|line| line.spans.is_empty())
+                .unwrap_or(false)
+            {
+                self.lines.pop();
+            }
         }
 
-        let remaining_lines = if self.hit_line_cap {
-            source_lines.saturating_sub(self.lines.len())
-        } else {
-            0
-        };
-
-        TextDoc {
+        TextWindow {
+            first: self.keep_from,
             lines: self.lines,
-            remaining_lines,
-            read_truncated: false,
-            // A rendered document is prose: its paragraphs wrap.
-            wrap: true,
         }
     }
 }
@@ -659,17 +1072,14 @@ fn heading_size_level(level: u8) -> u8 {
     }
 }
 
-fn markdown_document(
-    text: &str,
-    theme: &LoadedTheme,
-    source_lines: usize,
-    truncated: bool,
-) -> TextDoc {
+/// A window of a rendered Markdown document. The walk is linear and cannot be
+/// resumed, so it runs over the whole text and keeps only the requested lines.
+fn window_markdown(doc: &TextDoc, theme: &LoadedTheme, first: usize, last: usize) -> TextWindow {
     let options =
         Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS;
-    let mut builder = MarkdownBuilder::new(theme);
+    let mut builder = MarkdownBuilder::new(theme, first, last);
 
-    for event in Parser::new_ext(text, options) {
+    for event in Parser::new_ext(&doc.text, options) {
         match event {
             Event::Start(tag) => match tag {
                 Tag::Paragraph => {}
@@ -781,17 +1191,15 @@ fn markdown_document(
         }
     }
 
-    let mut document = builder.finish(source_lines);
-    document.read_truncated = truncated;
-    document
+    builder.finish()
 }
 
 // -------------------------------------------------------------------- source
 
-/// A decoded file, split into lines with tabs already expanded.
+/// A decoded file with its tabs already expanded. Lines are located by offset in
+/// `text` rather than copied out of it.
 struct SourceText {
     text: String,
-    lines: Vec<String>,
     truncated: bool,
 }
 
@@ -807,11 +1215,7 @@ fn read_source(path: &Path) -> Option<SourceText> {
     let text = decode_text(&bytes, legacy_encoding(extension_of(path)), truncated)?;
     let text = expand_tabs(&text);
 
-    Some(SourceText {
-        lines: text.lines().map(|line| line.to_string()).collect(),
-        text,
-        truncated,
-    })
+    Some(SourceText { text, truncated })
 }
 
 /// The single-byte encoding a file without a byte order mark is assumed to use.
@@ -1241,33 +1645,6 @@ fn skip_rtf_character(characters: &[char], index: &mut usize) {
 
 // ---------------------------------------------------------------------- ANSI
 
-/// An SGR-colored document: the escapes are consumed, and the text they wrapped
-/// is emitted with the color they selected.
-fn ansi_document(lines: &[String], theme: &LoadedTheme, truncated: bool) -> TextDoc {
-    let palette = AnsiPalette::new(theme);
-    let base = text_style(&theme.style_for_scopes(&["source"]), BODY_LEVEL);
-    let mut document = TextDoc {
-        lines: Vec::new(),
-        remaining_lines: 0,
-        read_truncated: truncated,
-        // NFO art is drawn in columns; wrapping it would destroy the picture.
-        wrap: false,
-    };
-
-    for line in lines.iter().take(MAX_DOC_LINES) {
-        let mut spans = Vec::new();
-        push_ansi_spans(&mut spans, line, base, &palette);
-        document.lines.push(DocLine {
-            spans,
-            block: LineBlock::Plain,
-            indent: 0,
-        });
-    }
-
-    document.remaining_lines = lines.len().saturating_sub(document.lines.len());
-    document
-}
-
 struct AnsiPalette {
     foreground: [[u8; 3]; 16],
     background: [[u8; 3]; 16],
@@ -1522,6 +1899,15 @@ impl TextMetrics {
     fn indent(&self, characters: u8) -> i32 {
         characters as i32 * self.advance[BODY_LEVEL as usize]
     }
+
+    /// Room the scrollbar and its margin take from the right edge of the text.
+    fn scrollbar_space(&self) -> i32 {
+        scaled(SCROLLBAR_WIDTH_PIXELS + SCROLLBAR_MARGIN_PIXELS, self.scale)
+    }
+
+    fn scrollbar_width(&self) -> i32 {
+        scaled(SCROLLBAR_WIDTH_PIXELS, self.scale).max(1)
+    }
 }
 
 fn plain_style(level: u8) -> TextStyle {
@@ -1558,6 +1944,11 @@ struct LaidOut {
     lines: Vec<LaidLine>,
     width: u32,
     height: u32,
+    /// Document line the frame starts at, after the position was pulled back so
+    /// the frame is full.
+    first_line: usize,
+    /// Document lines the frame shows.
+    visible_lines: usize,
 }
 
 /// The lines that fit above the box's bottom edge, before anything is said about
@@ -1569,37 +1960,67 @@ struct BodyLayout {
     emitted: usize,
 }
 
-/// Lay the document out inside `box_width` x `box_height` and report the box the
-/// content needs.
+/// Lay the document out inside `box_width` x `box_height`, starting at
+/// `first_line`, and report the box the content needs.
 ///
 /// Lines are clipped at the right edge rather than wrapped — column-aligned code
-/// reads better unwrapped — and the document is cut at the bottom edge with the
-/// count of what was left out, so a long file says so instead of just stopping.
+/// reads better unwrapped — and only the lines the frame shows are ever styled,
+/// which is what keeps a preview of a large file cheap. `scrollbar_space` is room
+/// kept clear at the right edge for a scrollbar the caller is about to draw.
 fn layout(
-    document: &TextDoc,
+    document: &CachedDocument,
+    theme: &LoadedTheme,
+    metrics: &TextMetrics,
+    first_line: usize,
     box_width: u32,
     box_height: u32,
-    metrics: &TextMetrics,
-    theme: &LoadedTheme,
+    scrollbar_space: i32,
 ) -> LaidOut {
+    let doc = &document.doc;
     let padding = metrics.padding;
-    let tail_height = metrics.line_height[BODY_LEVEL as usize];
-    let total = document.lines.len() + document.remaining_lines;
+    let scrollable_lines = doc.scrollable_lines();
+    let min_line_height = metrics
+        .line_height
+        .iter()
+        .copied()
+        .min()
+        .unwrap_or(1)
+        .max(1);
 
-    let mut body = lay_out_body(document, box_width, box_height, metrics, 0);
+    // How many lines a frame of this height holds, and so how deep it can start:
+    // a frame is pulled back until it can be filled from where it starts, which is
+    // what keeps the last screenful of a document full instead of showing two
+    // lines at the top of an otherwise empty box.
+    let capacity = (((box_height.max(1) as i32 - padding * 2).max(0) / min_line_height) as usize)
+        .max(1)
+        .min(scrollable_lines.max(1));
+    let first_line = first_line.min(scrollable_lines.saturating_sub(capacity));
 
-    if body.emitted < total {
-        // The file continues past the page, so the last line is kept for the
-        // count: a full page of text that simply stops reads as the whole file.
-        body = lay_out_body(document, box_width, box_height, metrics, tail_height);
+    // A file that was cut at the read cap keeps a line for the note that says so:
+    // what is below it cannot be reached by scrolling either.
+    let note_height = if doc.read_truncated {
+        metrics.line_height[BODY_LEVEL as usize]
+    } else {
+        0
+    };
+    let mut body = lay_out_body(
+        document,
+        theme,
+        metrics,
+        first_line,
+        (box_width, box_height),
+        scrollbar_space,
+        note_height,
+    );
 
+    if doc.read_truncated {
         let bottom = box_height.max(1) as i32 - padding;
-        if body.y + tail_height <= bottom {
-            let remaining = total - body.emitted;
-            let text = if document.read_truncated {
+        if body.y + note_height <= bottom {
+            let remaining = doc.total_lines().saturating_sub(first_line + body.emitted);
+            let text = if remaining > 0 {
                 format!("… {remaining} more lines (file truncated)")
             } else {
-                format!("… {remaining} more lines")
+                "… the rest of the file is not shown".to_string()
             };
 
             let mut style = plain_style(BODY_LEVEL);
@@ -1615,10 +2036,10 @@ fn layout(
                     width,
                 }],
                 top: body.y,
-                height: tail_height,
+                height: note_height,
                 block: LineBlock::Plain,
             });
-            body.y += tail_height;
+            body.y += note_height;
             body.content_right = body.content_right.max(padding + width);
         }
     }
@@ -1627,74 +2048,110 @@ fn layout(
         lines: body.lines,
         width: (body.content_right + padding).clamp(1, box_width.max(1) as i32) as u32,
         height: (body.y + padding).clamp(1, box_height.max(1) as i32) as u32,
+        first_line,
+        visible_lines: body.emitted,
     }
 }
 
-/// The lines of the document that fit inside the box, with `reserve` pixels of the
-/// bottom edge held back for whatever the caller wants to add below them.
+/// The lines of the document that fit inside the box, starting at `first_line`.
+///
+/// Only the window that will be drawn is styled: the request to [`styled_window`]
+/// is sized from the box, so a file that is a hundred pages long has a screenful
+/// highlighted and nothing else.
 fn lay_out_body(
-    document: &TextDoc,
-    box_width: u32,
-    box_height: u32,
+    document: &CachedDocument,
+    theme: &LoadedTheme,
     metrics: &TextMetrics,
+    first_line: usize,
+    box_size: (u32, u32),
+    scrollbar_space: i32,
     reserve: i32,
 ) -> BodyLayout {
+    let doc = &document.doc;
+    let (box_width, box_height) = box_size;
     let padding = metrics.padding;
     let box_width = box_width.max(1) as i32;
     let left = padding;
-    let right = (box_width - padding).max(left + 1);
+    let right = (box_width - padding - scrollbar_space).max(left + 1);
     let bottom = (box_height.max(1) as i32 - padding).max(padding + 1) - reserve;
     let body_advance = metrics.advance[BODY_LEVEL as usize].max(1);
+    let min_line_height = metrics
+        .line_height
+        .iter()
+        .copied()
+        .min()
+        .unwrap_or(1)
+        .max(1);
+
+    // One more line than can fit, so the layout can tell "the frame is full" from
+    // "the document ends here".
+    let wanted = (((bottom - padding).max(0) / min_line_height) as usize).saturating_add(2);
+    let window = styled_window(&document.key, document, theme, first_line, wanted);
 
     let mut lines: Vec<LaidLine> = Vec::new();
     let mut y = padding;
     let mut content_right = left + body_advance * MIN_CONTENT_CHARS;
     let mut emitted = 0usize;
 
-    for line in &document.lines {
-        let height = line_height(line, metrics);
-        if y + height > bottom {
-            break;
-        }
+    if let Some(window) = window {
+        let mut index = first_line;
+        while index < doc.scrollable_lines() {
+            let Some(line) = window.line(index) else {
+                break;
+            };
 
-        let indent = left + metrics.indent(line.indent);
-        let text_right = match line.block {
-            LineBlock::Quote => right - metrics.quote_bar - 4,
-            _ => right,
-        };
-
-        let visual_lines = if document.wrap {
-            wrap_line(line, indent, text_right, metrics)
-        } else {
-            vec![clip_line(line, indent, text_right, metrics)]
-        };
-
-        let mut placed = false;
-        for runs in visual_lines {
+            let height = line_height(line, metrics);
             if y + height > bottom {
                 break;
             }
 
-            let right_edge = runs
-                .iter()
-                .map(|run| run.x + run.width)
-                .max()
-                .unwrap_or(indent);
-            content_right = content_right.max(right_edge);
-            lines.push(LaidLine {
-                runs,
-                top: y,
-                height,
-                block: line.block,
-            });
-            y += height;
-            placed = true;
-        }
+            let indent = left + metrics.indent(line.indent);
+            let text_right = match line.block {
+                LineBlock::Quote => right - metrics.quote_bar - 4,
+                _ => right,
+            };
 
-        if !placed {
-            break;
+            let visual_lines = if doc.wrap {
+                wrap_line(line, indent, text_right, metrics)
+            } else {
+                vec![clip_line(line, indent, text_right, metrics)]
+            };
+
+            let mut placed = false;
+            for runs in visual_lines {
+                if y + height > bottom {
+                    break;
+                }
+
+                let right_edge = runs
+                    .iter()
+                    .map(|run| run.x + run.width)
+                    .max()
+                    .unwrap_or(indent);
+                content_right = content_right.max(right_edge);
+                lines.push(LaidLine {
+                    runs,
+                    top: y,
+                    height,
+                    block: line.block,
+                });
+                y += height;
+                placed = true;
+            }
+
+            if !placed {
+                break;
+            }
+            emitted += 1;
+            index += 1;
+
+            // A document that continues past the window has to be styled further
+            // before the next line can be laid out; rebuilding the window is how
+            // that happens, and it is bounded by the same margin.
+            if index >= window.first + window.lines.len() {
+                break;
+            }
         }
-        emitted += 1;
     }
 
     BodyLayout {
@@ -1855,6 +2312,74 @@ fn line_height(line: &DocLine, metrics: &TextMetrics) -> i32 {
         .map(|span| metrics.line_height[(span.style.level as usize).min(SIZE_LEVELS - 1)])
         .max()
         .unwrap_or(metrics.line_height[BODY_LEVEL as usize])
+}
+
+/// Where the scrollbar sits in a frame showing `visible_lines` of `total_lines`
+/// from `first_line`.
+///
+/// The thumb's length is the share of the document the frame shows, and its
+/// position is the share that has been scrolled past it — the two things a
+/// reader uses to tell how much more there is.
+fn scrollbar_geometry(
+    width: i32,
+    height: i32,
+    metrics: &TextMetrics,
+    first_line: usize,
+    visible_lines: usize,
+    total_lines: usize,
+) -> Option<ScrollBar> {
+    if total_lines <= visible_lines || visible_lines == 0 || width <= 0 || height <= 0 {
+        return None;
+    }
+
+    let padding = metrics.padding;
+    let bar_width = metrics.scrollbar_width();
+    let right = width - padding;
+    let left = (right - bar_width).max(0);
+    let top = padding;
+    let bottom = (height - padding).max(top + 1);
+    let track_height = bottom - top;
+
+    let thumb_height = ((track_height as f32) * (visible_lines as f32 / total_lines as f32))
+        .round()
+        .clamp(
+            scaled(SCROLLBAR_MIN_THUMB_PIXELS, metrics.scale).min(track_height) as f32,
+            track_height as f32,
+        ) as i32;
+
+    let max_first = (total_lines - visible_lines) as f32;
+    let travelled = if max_first > 0.0 {
+        (first_line as f32 / max_first).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let thumb_top = top + ((track_height - thumb_height) as f32 * travelled).round() as i32;
+
+    Some(ScrollBar {
+        track: (left, top, right, bottom),
+        thumb: (left, thumb_top, right, thumb_top + thumb_height),
+    })
+}
+
+/// The document line a drag to `y` inside the track asks for.
+///
+/// The inverse of the thumb's placement, shared by both places that need it: the
+/// thumb is dragged by its middle, and the ends of the track are the ends of the
+/// document however long it is.
+pub fn scroll_line_at_track_y(
+    track: (i32, i32, i32, i32),
+    thumb: (i32, i32, i32, i32),
+    y: i32,
+    visible_lines: usize,
+    total_lines: usize,
+) -> usize {
+    let track_height = (track.3 - track.1).max(1);
+    let thumb_height = (thumb.3 - thumb.1).max(1);
+    let travel = (track_height - thumb_height).max(1);
+    let ratio = ((y - track.1 - thumb_height / 2) as f32 / travel as f32).clamp(0.0, 1.0);
+
+    let max_first = total_lines.saturating_sub(visible_lines);
+    (ratio * max_first as f32).round() as usize
 }
 
 // ------------------------------------------------------------------ painting
@@ -2024,7 +2549,8 @@ fn colorref(color: [u8; 3]) -> COLORREF {
     COLORREF(color[0] as u32 | ((color[1] as u32) << 8) | ((color[2] as u32) << 16))
 }
 
-/// Paint the background, the block decorations and then the text.
+/// Paint the background, the block decorations, the text, and the scrollbar when
+/// the document is longer than the frame.
 ///
 /// Every run is drawn with an opaque background rectangle, so the page color
 /// fills the box and the pieces GDI leaves alone (the space a clipped line did
@@ -2034,6 +2560,8 @@ unsafe fn paint(
     laid_out: &LaidOut,
     theme: &LoadedTheme,
     metrics: &TextMetrics,
+    scrollbar: Option<&ScrollBar>,
+    _first_line: usize,
 ) {
     let width = surface.width as i32;
     let page = rgb(theme.background());
@@ -2133,6 +2661,34 @@ unsafe fn paint(
         let _ = SelectObject(surface.dc, previous);
     }
     drop(fonts);
+
+    // The scrollbar goes last so it sits above everything, including a line that
+    // ran to the right edge.
+    if let Some(scrollbar) = scrollbar {
+        let (left, top, right, bottom) = scrollbar.track;
+        fill_rect(
+            surface,
+            RECT {
+                left,
+                top,
+                right,
+                bottom,
+            },
+            blend(page, rgb(theme.foreground()), 0.10),
+        );
+
+        let (left, top, right, bottom) = scrollbar.thumb;
+        fill_rect(
+            surface,
+            RECT {
+                left,
+                top,
+                right,
+                bottom,
+            },
+            blend(page, rgb(theme.foreground()), 0.45),
+        );
+    }
 }
 
 fn fill_rect(surface: &DibSurface, rect: RECT, color: [u8; 3]) {
@@ -2165,12 +2721,25 @@ fn fill_rect(surface: &DibSurface, rect: RECT, color: [u8; 3]) {
 #[cfg(test)]
 mod tests {
     use super::{
-        cp437_char, decode_text, expand_tabs, legacy_encoding, markdown_document, measure, render,
-        strip_rtf, wants_ansi, LegacyEncoding, LineBlock, TextPreviewOptions, MAX_LINE_CHARS,
+        cp437_char, decode_text, expand_tabs, legacy_encoding, measure, render_scrolled,
+        scroll_line_at_track_y, strip_rtf, styled_window, wants_ansi, window_markdown,
+        LegacyEncoding, LineBlock, TextPreviewOptions, MAX_LINE_CHARS,
     };
     use crate::config::{MarkdownMode, TextTheme};
     use crate::text_theme;
     use std::path::{Path, PathBuf};
+
+    /// A document built from a string rather than a file, for the producers that
+    /// can be exercised on their own.
+    fn document_of(text: &str, producer: super::Producer, wrap: bool) -> super::TextDoc {
+        super::TextDoc {
+            line_starts: super::line_starts(text),
+            text: text.to_string(),
+            producer,
+            read_truncated: false,
+            wrap,
+        }
+    }
 
     fn options(theme: TextTheme, mode: MarkdownMode) -> TextPreviewOptions {
         TextPreviewOptions {
@@ -2308,13 +2877,10 @@ mod tests {
 
     #[test]
     fn ansi_escapes_become_colors() {
-        let document = super::ansi_document(
-            &["\u{1B}[31mred\u{1B}[0m plain".to_string()],
-            light_theme(),
-            false,
-        );
+        let document = document_of("\u{1B}[31mred\u{1B}[0m plain", super::Producer::Ansi, false);
+        let window = super::window_ansi(&document, light_theme(), 0, 1);
 
-        let spans = &document.lines[0].spans;
+        let spans = &window.lines[0].spans;
         assert_eq!(spans.len(), 2);
         assert_eq!(spans[0].text, "red");
         assert_eq!(spans[1].text, " plain");
@@ -2332,17 +2898,18 @@ mod tests {
     #[test]
     fn markdown_becomes_blocks_and_inline_runs() {
         let source = "# Title\n\nSome *emphasis* and `code`.\n\n- one\n- two\n\n```rust\nfn main() {}\n```\n";
-        let document = markdown_document(source, light_theme(), 12, false);
+        let document = document_of(source, super::Producer::Markdown, true);
+        let window = window_markdown(&document, light_theme(), 0, 64);
+        let lines = &window.lines;
 
-        let heading = &document.lines[0];
+        let heading = &lines[0];
         assert!(heading.spans.iter().any(|span| span.text == "Title"));
         assert!(heading
             .spans
             .iter()
             .any(|span| span.style.bold && span.style.level > 0));
 
-        let body = document
-            .lines
+        let body = lines
             .iter()
             .find(|line| line.spans.iter().any(|span| span.text.contains("emphasis")))
             .expect("the paragraph should be laid out");
@@ -2355,15 +2922,28 @@ mod tests {
             .iter()
             .any(|span| span.text == "code" && span.style.background.is_some()));
 
-        assert!(document.lines.iter().any(|line| line
-            .spans
-            .first()
-            .map(|span| span.text.as_str())
-            == Some("• ")));
-        assert!(document
-            .lines
+        assert!(lines
+            .iter()
+            .any(|line| line.spans.first().map(|span| span.text.as_str()) == Some("• ")));
+        assert!(lines
             .iter()
             .any(|line| line.block == LineBlock::Code && !line.spans.is_empty()));
+    }
+
+    /// A window that starts part-way into a document is what scrolling asks for,
+    /// and it has to say which line it starts at.
+    #[test]
+    fn a_window_can_start_part_way_into_a_document() {
+        let source: String = (0..200).map(|line| format!("line {line}\n")).collect();
+        let document = document_of(&source, super::Producer::Plain, true);
+        let window = super::window_plain(&document, light_theme(), 120, 140);
+
+        assert_eq!(window.first, 120);
+        assert_eq!(window.lines.len(), 20);
+        assert!(window.covers(120, 10));
+        assert_eq!(window.line(120).unwrap().spans[0].text, "line 120");
+        assert!(window.line(119).is_none());
+        assert!(window.line(140).is_none());
     }
 
     #[test]
@@ -2376,8 +2956,16 @@ mod tests {
         let rendered = super::document(&path, rendered_mode).unwrap();
         let highlighted = super::document(&path, source_mode).unwrap();
 
-        let text_of = |document: &super::TextDoc| {
-            document
+        let text_of = |document: &super::CachedDocument| {
+            let window = styled_window(
+                &document.key,
+                document,
+                light_theme(),
+                0,
+                document.doc.total_lines(),
+            )
+            .unwrap();
+            window
                 .lines
                 .iter()
                 .flat_map(|line| line.spans.iter())
@@ -2412,27 +3000,28 @@ mod tests {
         assert!(width < 1400, "{width}");
         assert!(height < 200, "{height}");
 
-        let (pixels, rendered_width, rendered_height) =
-            render(&path, width, height, 96, options).expect("rendered");
+        let frame = render_scrolled(&path, 0, width, height, 96, options).expect("rendered");
 
-        assert_eq!((rendered_width, rendered_height), (width, height));
-        assert_eq!(pixels.len(), (width * height * 4) as usize);
+        assert_eq!((frame.width, frame.height), (width, height));
+        assert_eq!(frame.pixels.len(), (width * height * 4) as usize);
 
         // Every pixel is opaque, and the theme's background is what the page is
         // painted with.
-        assert!(pixels.chunks_exact(4).all(|pixel| pixel[3] == 255));
+        assert!(frame.pixels.chunks_exact(4).all(|pixel| pixel[3] == 255));
         let background = text_theme::loaded(TextTheme::Dark).unwrap().background();
         assert_eq!(
-            &pixels[0..3],
+            &frame.pixels[0..3],
             &[background.b, background.g, background.r],
             "the top-left corner should be the page background"
         );
 
         // Something was drawn: a completely uniform frame would mean the text
         // never reached the surface.
-        let uniform = pixels
-            .chunks_exact(4)
-            .all(|pixel| pixel[0] == pixels[0] && pixel[1] == pixels[1] && pixel[2] == pixels[2]);
+        let uniform = frame.pixels.chunks_exact(4).all(|pixel| {
+            pixel[0] == frame.pixels[0]
+                && pixel[1] == frame.pixels[1]
+                && pixel[2] == frame.pixels[2]
+        });
         assert!(!uniform, "the preview painted no text");
 
         let _ = std::fs::remove_file(&path);
@@ -2450,22 +3039,26 @@ mod tests {
         )
         .unwrap();
 
-        let (light, _, _) = render(
+        let light = render_scrolled(
             &path,
+            0,
             width,
             height,
             96,
             options(TextTheme::Light, MarkdownMode::Rendered),
         )
-        .unwrap();
-        let (dark, _, _) = render(
+        .unwrap()
+        .pixels;
+        let dark = render_scrolled(
             &path,
+            0,
             width,
             height,
             96,
             options(TextTheme::Dark, MarkdownMode::Rendered),
         )
-        .unwrap();
+        .unwrap()
+        .pixels;
 
         assert!(light[0] > 200, "the light theme should paint a light page");
         assert!(dark[0] < 100, "the dark theme should paint a dark page");
@@ -2485,11 +3078,10 @@ mod tests {
         assert!(width <= 500, "{width}");
         assert!(height < 100, "one clipped line, not {height}");
 
-        let (pixels, rendered_width, rendered_height) =
-            render(&path, width, 400, 96, options).unwrap();
+        let frame = render_scrolled(&path, 0, width, 400, 96, options).unwrap();
         assert_eq!(
-            pixels.len(),
-            (rendered_width * rendered_height * 4) as usize
+            frame.pixels.len(),
+            (frame.width * frame.height * 4) as usize
         );
 
         let _ = std::fs::remove_file(&path);
@@ -2561,10 +3153,9 @@ mod tests {
             (small, small_width, small_height),
             (large, large_width, large_height),
         ] {
-            let (pixels, rendered_width, rendered_height) =
-                render(&path, width, height, 96, options).unwrap();
-            assert_eq!((rendered_width, rendered_height), (width, height));
-            assert_eq!(pixels.len(), (width * height * 4) as usize);
+            let frame = render_scrolled(&path, 0, width, height, 96, options).unwrap();
+            assert_eq!((frame.width, frame.height), (width, height));
+            assert_eq!(frame.pixels.len(), (width * height * 4) as usize);
         }
 
         let _ = std::fs::remove_file(&path);
@@ -2585,8 +3176,27 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
+    /// The thumb is dragged by its middle, and the ends of the track are the ends
+    /// of the document.
     #[test]
-    fn a_long_file_says_how_much_is_left() {
+    fn the_thumb_position_maps_back_to_a_line() {
+        let track = (100, 0, 110, 200);
+        let thumb = (100, 0, 110, 40);
+
+        assert_eq!(scroll_line_at_track_y(track, thumb, 0, 20, 200), 0);
+        assert_eq!(scroll_line_at_track_y(track, thumb, 100, 20, 200), 90);
+        assert_eq!(scroll_line_at_track_y(track, thumb, 200, 20, 200), 180);
+
+        // A drag past either end stops at it rather than wrapping around.
+        assert_eq!(scroll_line_at_track_y(track, thumb, -50, 20, 200), 0);
+        assert_eq!(scroll_line_at_track_y(track, thumb, 9999, 20, 200), 180);
+
+        // A document that fits has nowhere to scroll to.
+        assert_eq!(scroll_line_at_track_y(track, thumb, 100, 200, 200), 0);
+    }
+
+    #[test]
+    fn a_long_file_scrolls_instead_of_stopping() {
         let mut source = String::new();
         for line in 0..500 {
             source.push_str(&format!("line {line}\n"));
@@ -2596,12 +3206,59 @@ mod tests {
 
         // Room for a few lines, nowhere near five hundred.
         let (width, height) = measure(&path, 600, 120, 96, options).unwrap();
-        let document = super::document(&path, options).unwrap();
+        let first = render_scrolled(&path, 0, width, height, 96, options).unwrap();
 
+        assert!(first.scrollable(), "a long file should scroll");
+        assert_eq!(first.first_line, 0);
+        assert!(first.visible_lines < first.total_lines);
+        assert_eq!(first.pixels.len(), (width * height * 4) as usize);
+
+        let scrollbar = first.scrollbar.expect("a scrollbar");
+        assert!(scrollbar.thumb.1 >= scrollbar.track.1);
+        assert!(scrollbar.thumb.3 <= scrollbar.track.3);
+        assert!(scrollbar.thumb.3 > scrollbar.thumb.1);
+
+        // The last screenful is pulled back so the frame is full, which is what
+        // keeps the bottom of the document from ending in empty page.
+        let last = render_scrolled(&path, 499, width, height, 96, options).unwrap();
+        assert_eq!(
+            last.first_line + last.visible_lines,
+            last.scrollable_lines,
+            "the last frame should end at the document's last line"
+        );
+        assert!(last.first_line > 0);
+
+        // And the thumb sits at the bottom of its track there, at the top of it
+        // back at the start.
+        let scrollbar = last.scrollbar.expect("a scrollbar");
+        assert_eq!(scrollbar.thumb.3, scrollbar.track.3);
+        let first_bar = first.scrollbar.expect("a scrollbar");
+        assert_eq!(first_bar.thumb.1, first_bar.track.1);
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// A file the read cap cut short cannot be scrolled to its end, so the frame
+    /// says so instead of pretending the last line is the last line.
+    #[test]
+    fn a_file_cut_by_the_read_cap_says_so() {
+        let line = "y".repeat(1024);
+        let mut source = String::new();
+        for _ in 0..(super::READ_LIMIT_BYTES as usize / 1024 + 256) {
+            source.push_str(&line);
+            source.push('\n');
+        }
+
+        let path = fixture("truncated.txt", source.as_bytes());
+        let options = options(TextTheme::Light, MarkdownMode::Rendered);
+        let document = super::document(&path, options).unwrap();
+        assert!(document.doc.read_truncated);
+
+        let (width, height) = measure(&path, 600, 400, 96, options).unwrap();
         let dc = unsafe { windows::Win32::Graphics::Gdi::CreateCompatibleDC(None) };
         assert!(!dc.0.is_null());
         let metrics = super::TextMetrics::new(dc, 96, 100).unwrap();
-        let laid_out = super::layout(&document, width, height, &metrics, light_theme());
+        let laid_out = super::layout(&document, light_theme(), &metrics, 0, width, height, 0);
         unsafe {
             let _ = windows::Win32::Graphics::Gdi::DeleteDC(dc);
         }
@@ -2609,7 +3266,7 @@ mod tests {
         let last = laid_out.lines.last().expect("a full page");
         let note = &last.runs[0].text;
         assert!(note.starts_with('…'), "{note}");
-        assert!(note.contains("more lines"), "{note}");
+        assert!(note.contains("file truncated"), "{note}");
 
         // The note is inside the box it was laid out for.
         assert!(last.top + last.height <= height as i32, "{note}");

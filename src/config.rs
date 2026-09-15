@@ -14,7 +14,7 @@ pub const MAX_WEBP_PLAYBACK_FPS: u32 = 90;
 pub const DEFAULT_PREVIEW_SCALE_PERCENT: u32 = 100;
 pub const MIN_PREVIEW_SCALE_PERCENT: u32 = 1;
 pub const MAX_PREVIEW_SCALE_PERCENT: u32 = 1000;
-pub const DEFAULT_TEXT_FONT_SCALE_PERCENT: u32 = 100;
+pub const DEFAULT_TEXT_FONT_SCALE_PERCENT: u32 = 125;
 pub const MIN_TEXT_FONT_SCALE_PERCENT: u32 = 1;
 pub const MAX_TEXT_FONT_SCALE_PERCENT: u32 = 1000;
 
@@ -126,7 +126,7 @@ impl TransparentBackground {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TextTheme {
     /// Atom One Light.
     Light,
@@ -153,7 +153,7 @@ impl TextTheme {
 
 /// How a Markdown file is laid out: the document it describes, or the markup
 /// itself with the Markdown syntax highlighted like any other source file.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MarkdownMode {
     Rendered,
     Source,
@@ -455,14 +455,14 @@ mod tests {
 
     #[test]
     fn the_text_font_scale_accepts_percentages_and_resets_on_zero() {
-        assert_eq!(sanitize_text_font_scale_percent(0), 100);
-        assert_eq!(sanitize_text_font_scale_percent(25), 25);
+        assert_eq!(sanitize_text_font_scale_percent(0), 125);
+        assert_eq!(sanitize_text_font_scale_percent(125), 125);
         assert_eq!(sanitize_text_font_scale_percent(400), 400);
         assert_eq!(sanitize_text_font_scale_percent(5000), 1000);
 
         assert_eq!(parse_text_font_scale("150"), Some(150));
         assert_eq!(parse_text_font_scale(" 175% "), Some(175));
-        assert_eq!(parse_text_font_scale("0"), Some(100));
+        assert_eq!(parse_text_font_scale("0"), Some(125));
         assert_eq!(parse_text_font_scale("large"), None);
     }
 

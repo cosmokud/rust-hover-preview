@@ -1,7 +1,7 @@
 use crate::pdf_preview::is_pdf_file;
 use crate::preview_window::{
     cursor_preview_hover, hide_preview, kill_stray_video_process, preview_screen_rect,
-    show_preview, show_preview_keyboard, PreviewCursorHover,
+    show_preview, show_preview_keyboard, text_scroll_pointer_hold, PreviewCursorHover,
 };
 use crate::text_formats::is_text_file;
 use crate::video_formats::is_video_file;
@@ -3676,6 +3676,14 @@ pub fn run_explorer_hook() {
             // or background load result cannot resurrect a stuck preview under
             // the pointer. Keyboard previews own the screen: they may cover the
             // parked cursor and are never dismissed by it.
+            //
+            // A text preview that scrolls is the exception: while the pointer is
+            // inside the region around it, the preview is something the user is
+            // reading rather than something in the way, so it is kept — and the
+            // file under the pointer is not resolved, so the preview cannot be
+            // replaced by whatever it happens to cover.
+            let text_scroll_hold = text_scroll_pointer_hold(cursor_pos.x, cursor_pos.y);
+
             let preview_hover = if should_probe_preview_hover(
                 is_keyboard_hover || pointer_pause.freezes_pointer(),
                 last_file.is_some(),
@@ -3691,8 +3699,8 @@ pub fn run_explorer_hook() {
             let guard_active = video_hover_guard_until
                 .map(|until| Instant::now() < until)
                 .unwrap_or(false);
-            let should_dismiss_for_preview_hover =
-                over_image_preview || (over_video_preview && !guard_active);
+            let should_dismiss_for_preview_hover = (over_image_preview && !text_scroll_hold)
+                || (over_video_preview && !guard_active);
 
             if should_dismiss_for_preview_hover
                 || (suppress_preview_until_cursor_leaves_preview && over_any_preview)
@@ -3742,6 +3750,7 @@ pub fn run_explorer_hook() {
                 })
                 && !is_keyboard_hover
                 && !pointer_pause.freezes_pointer()
+                && !text_scroll_hold
                 && should_probe_hover_resolver(
                     preview_active,
                     moved,
@@ -4091,8 +4100,10 @@ pub fn run_explorer_hook() {
             }
 
             // If keyboard hover is active, or the pointer is frozen under a
-            // keyboard preview, skip mouse hover delay logic entirely.
-            if is_keyboard_hover || pointer_pause.freezes_pointer() {
+            // keyboard preview, skip mouse hover delay logic entirely. The same
+            // goes for a pointer inside a scrollable text preview: the file under
+            // it is not what the user is looking at, so nothing is hovered over.
+            if is_keyboard_hover || pointer_pause.freezes_pointer() || text_scroll_hold {
                 continue;
             }
 

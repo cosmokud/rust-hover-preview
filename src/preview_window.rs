@@ -6,6 +6,7 @@ use crate::pdf_preview;
 use crate::text_formats;
 use crate::text_preview::{self, TextPreviewOptions};
 use crate::video_formats::is_video_file;
+use crate::wheel_input;
 use crate::{CONFIG, RUNNING};
 use gif::DecodeOptions;
 use image::{AnimationDecoder, GenericImageView};
@@ -39,6 +40,7 @@ use windows::Win32::System::Threading::{
     PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE,
 };
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
+use windows::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture};
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DispatchMessageW, EnumWindows, GetSystemMetrics, GetWindow,
     GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, IsWindow, IsWindowVisible,
@@ -47,7 +49,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GW_OWNER,
     HWND_TOPMOST, IDC_ARROW, MSG, PM_REMOVE, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN,
     SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW,
-    SW_HIDE, SW_SHOWNOACTIVATE, ULW_ALPHA, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_POWERBROADCAST,
+    SW_HIDE, SW_SHOWNOACTIVATE, ULW_ALPHA, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_LBUTTONDOWN,
+    WM_LBUTTONUP, WM_MOUSEMOVE, WM_POWERBROADCAST,
     PBT_APMRESUMEAUTOMATIC, PBT_APMRESUMESUSPEND, PBT_APMSUSPEND, PBT_APMSTANDBY, WNDCLASSEXW,
     WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
@@ -79,6 +82,22 @@ pub static PREVIEW_SENDER: Lazy<Mutex<Option<Sender<PreviewMessage>>>> =
 
 // Use AtomicIsize for the HWND pointer (thread-safe)
 static PREVIEW_HWND: AtomicIsize = AtomicIsize::new(0);
+
+/// Lines one wheel notch moves a text preview. Three is the step a text editor
+/// takes, and it keeps a screenful to a few notches.
+const TEXT_SCROLL_LINES_PER_NOTCH: i64 = 3;
+const WHEEL_DELTA: i32 = 120;
+
+/// How far around a scrollable text preview the pointer can stray without the
+/// preview giving up on it, in logical pixels. The scrollbar is a few pixels
+/// wide, so a drag that drifts off it — or off the window — has to stay inside
+/// the region that keeps the preview alive.
+const TEXT_SCROLL_KEEP_ALIVE_PADDING_PIXELS: f32 = 26.0;
+
+/// The region that keeps a scrollable text preview on screen, in screen
+/// coordinates, or `None` when the preview on screen does not scroll.
+static TEXT_SCROLL_KEEP_ALIVE: Lazy<Mutex<Option<(i32, i32, i32, i32)>>> =
+    Lazy::new(|| Mutex::new(None));
 
 // Track the ffplay video window HWND for cursor-over-preview detection
 static VIDEO_HWND: AtomicIsize = AtomicIsize::new(0);
@@ -145,6 +164,45 @@ struct MediaData {
     // For video playback using ffplay
     video_process: Option<Child>,
     loading_start: Option<Instant>,
+    /// Where a text preview is scrolled to, when it scrolls at all.
+    text_scroll: Option<TextScroll>,
+}
+
+/// A text preview that is longer than its frame, and what it takes to move it.
+///
+/// A preview of a file that fits keeps none of this: there is nothing to scroll,
+/// so the pointer over it still dismisses it the way any other preview does.
+struct TextScroll {
+    path: PathBuf,
+    options: TextPreviewOptions,
+    dpi: u32,
+    width: u32,
+    height: u32,
+    /// Document line the frame starts at, and how many it shows.
+    first_line: usize,
+    visible_lines: usize,
+    /// Lines the preview can reach, and lines the file holds.
+    scrollable_lines: usize,
+    total_lines: usize,
+    /// The bar drawn in the frame, kept so a drag can be tested against it.
+    scrollbar: Option<text_preview::ScrollBar>,
+    /// Whether the pointer is currently dragging the thumb.
+    dragging: bool,
+}
+
+impl TextScroll {
+    fn max_first_line(&self) -> usize {
+        self.scrollable_lines.saturating_sub(self.visible_lines)
+    }
+
+    /// The line a scroll of `lines` from here lands on, kept inside the document.
+    fn scrolled_by(&self, lines: i64) -> usize {
+        (self.first_line as i64 + lines).clamp(0, self.max_first_line() as i64) as usize
+    }
+
+    fn can_scroll(&self) -> bool {
+        self.max_first_line() > 0
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -1028,6 +1086,7 @@ fn load_animated_gif(
             stream_cancel: Some(cancel),
             video_process: None,
             loading_start: None,
+            text_scroll: None,
         });
     }
 
@@ -1112,6 +1171,7 @@ fn load_animated_gif(
         stream_cancel: Some(cancel),
         video_process: None,
         loading_start: Some(Instant::now()),
+        text_scroll: None,
     })
 }
 
@@ -1236,6 +1296,7 @@ fn load_animated_apng(
             stream_cancel: Some(cancel),
             video_process: None,
             loading_start: None,
+            text_scroll: None,
         });
     }
 
@@ -1307,6 +1368,7 @@ fn load_animated_apng(
         stream_cancel: Some(cancel),
         video_process: None,
         loading_start: Some(Instant::now()),
+        text_scroll: None,
     })
 }
 
@@ -1437,6 +1499,7 @@ fn load_animated_webp(
             stream_cancel: Some(cancel),
             video_process: None,
             loading_start: None,
+            text_scroll: None,
         });
     }
 
@@ -1521,6 +1584,7 @@ fn load_animated_webp(
         stream_cancel: Some(cancel),
         video_process: None,
         loading_start: Some(Instant::now()),
+        text_scroll: None,
     })
 }
 
@@ -1570,6 +1634,7 @@ fn load_static_image(
         stream_cancel: None,
         video_process: None,
         loading_start: None,
+        text_scroll: None,
     })
 }
 
@@ -1612,6 +1677,7 @@ fn load_pdf_first_page(
         stream_cancel: None,
         video_process: None,
         loading_start: None,
+        text_scroll: None,
     })
 }
 
@@ -1629,12 +1695,26 @@ fn load_text_preview(
     dpi: u32,
     options: TextPreviewOptions,
 ) -> Option<MediaData> {
-    let (pixels, width, height) = text_preview::render(path, width, height, dpi, options)?;
+    let frame = text_preview::render_scrolled(path, 0, width, height, dpi, options)?;
+
+    let scroll = frame.scrollable().then(|| TextScroll {
+        path: path.clone(),
+        options,
+        dpi,
+        width: frame.width,
+        height: frame.height,
+        first_line: frame.first_line,
+        visible_lines: frame.visible_lines,
+        scrollable_lines: frame.scrollable_lines,
+        total_lines: frame.total_lines,
+        scrollbar: frame.scrollbar,
+        dragging: false,
+    });
 
     let frame = ImageFrame {
-        pixels,
-        width,
-        height,
+        pixels: frame.pixels,
+        width: frame.width,
+        height: frame.height,
         delay_ms: 0,
     };
 
@@ -1648,6 +1728,7 @@ fn load_text_preview(
         stream_cancel: None,
         video_process: None,
         loading_start: None,
+        text_scroll: scroll,
     })
 }
 
@@ -1691,6 +1772,7 @@ fn load_video_thumbnail(
         stream_cancel: None,
         video_process: None,
         loading_start: None,
+        text_scroll: None,
     })
 }
 
@@ -2610,6 +2692,7 @@ fn create_loading_media(width: u32, height: u32) -> MediaData {
         stream_cancel: None,
         video_process: None,
         loading_start: Some(Instant::now()),
+        text_scroll: None,
     }
 }
 
@@ -2983,10 +3066,227 @@ unsafe fn render_layered_preview(hwnd: HWND) {
         Some(&blend),
         ULW_ALPHA,
     );
+
+    publish_text_scroll_keep_alive(hwnd);
+}
+
+/// Publish — or withdraw — the region in which the pointer keeps a scrollable
+/// text preview alive.
+///
+/// The Explorer hook polls this to decide whether the pointer over the preview
+/// means "the user is reading this" or "dismiss it and show what is underneath",
+/// and the wheel hook asks the same question before it decides whether the wheel
+/// belongs to Explorer or to the preview.
+unsafe fn publish_text_scroll_keep_alive(hwnd: HWND) {
+    let keep_alive = CURRENT_MEDIA
+        .lock()
+        .ok()
+        .and_then(|media| {
+            let media = media.as_ref()?;
+            let scroll = media.text_scroll.as_ref()?;
+            if !matches!(media.media_type, MediaType::Text) || !scroll.can_scroll() {
+                return None;
+            }
+            Some(scroll.dpi)
+        })
+        .and_then(|dpi| {
+            let mut rect = RECT::default();
+            if GetWindowRect(hwnd, &mut rect).is_err() {
+                return None;
+            }
+
+            let padding =
+                (TEXT_SCROLL_KEEP_ALIVE_PADDING_PIXELS * dpi as f32 / 96.0).round() as i32;
+            Some((
+                rect.left - padding,
+                rect.top - padding,
+                rect.right + padding,
+                rect.bottom + padding,
+            ))
+        });
+
+    if let Ok(mut published) = TEXT_SCROLL_KEEP_ALIVE.lock() {
+        *published = keep_alive;
+    }
+}
+
+fn clear_text_scroll_keep_alive() {
+    if let Ok(mut published) = TEXT_SCROLL_KEEP_ALIVE.lock() {
+        *published = None;
+    }
+}
+
+/// Whether the pointer is inside the region that keeps a scrollable text preview
+/// alive. Answered from a published rectangle, so the Explorer hook can ask on
+/// every poll tick.
+pub fn text_scroll_pointer_hold(x: i32, y: i32) -> bool {
+    text_scroll_keep_alive_try()
+        .map(|(left, top, right, bottom)| x >= left && x < right && y >= top && y < bottom)
+        .unwrap_or(false)
+}
+
+/// The published region, without blocking. The wheel hook runs inside a
+/// system-wide hook procedure, where waiting on a lock held by the preview thread
+/// would stall every wheel message on the desktop — so a lock it cannot take
+/// immediately means the wheel is not ours to take either.
+pub fn text_scroll_keep_alive_try() -> Option<(i32, i32, i32, i32)> {
+    TEXT_SCROLL_KEEP_ALIVE.try_lock().ok().and_then(|held| *held)
+}
+
+/// Where a scroll of `lines` from the preview's current position lands.
+fn text_scroll_target(lines: i64) -> Option<usize> {
+    CURRENT_MEDIA
+        .lock()
+        .ok()
+        .and_then(|media| {
+            media
+                .as_ref()
+                .and_then(|media| media.text_scroll.as_ref())
+                .map(|scroll| scroll.scrolled_by(lines))
+        })
+}
+
+/// Move the text preview on screen to `first_line` and repaint it.
+///
+/// The frame is re-rendered rather than slid: only the lines coming into view are
+/// styled, the window it is drawn in does not move, and a document that is
+/// scrolled through costs a window of highlighting per step rather than a
+/// re-read.
+unsafe fn scroll_text_preview(hwnd: HWND, first_line: usize) {
+    // Taken out of the media so the lock is not held while the lines are styled
+    // and painted.
+    let Some((path, options, dpi, width, height, current)) =
+        CURRENT_MEDIA.lock().ok().and_then(|media| {
+            media.as_ref().and_then(|media| {
+                media.text_scroll.as_ref().map(|scroll| {
+                    (
+                        scroll.path.clone(),
+                        scroll.options,
+                        scroll.dpi,
+                        scroll.width,
+                        scroll.height,
+                        scroll.first_line,
+                    )
+                })
+            })
+        })
+    else {
+        return;
+    };
+
+    if first_line == current {
+        return;
+    }
+
+    let Some(frame) = text_preview::render_scrolled(&path, first_line, width, height, dpi, options)
+    else {
+        return;
+    };
+
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        let Some(media) = media.as_mut() else {
+            return;
+        };
+
+        // The hover may have moved on while this frame was rendered.
+        if media.text_scroll.as_ref().map(|scroll| &scroll.path) != Some(&path) {
+            return;
+        }
+
+        media.frames[0] = ImageFrame {
+            pixels: frame.pixels,
+            width: frame.width,
+            height: frame.height,
+            delay_ms: 0,
+        };
+
+        if let Some(scroll) = media.text_scroll.as_mut() {
+            scroll.first_line = frame.first_line;
+            scroll.visible_lines = frame.visible_lines;
+            scroll.scrollbar = frame.scrollbar;
+        }
+    }
+
+    render_layered_preview(hwnd);
+}
+
+/// Whether a press at `(x, y)` in window coordinates lands on the scrollbar, and
+/// if so, where the drag starts.
+fn text_scroll_drag_target(x: i32, y: i32) -> Option<usize> {
+    CURRENT_MEDIA.lock().ok().and_then(|media| {
+        let media = media.as_ref()?;
+        let scroll = media.text_scroll.as_ref()?;
+        let scrollbar = scroll.scrollbar?;
+
+        // The whole column counts, not just the groove: the bar is thin, and a
+        // press a few pixels to its left is a press on the bar as far as the user
+        // is concerned.
+        let (left, top, right, bottom) = scrollbar.track;
+        if x < left - TEXT_SCROLL_KEEP_ALIVE_PADDING_PIXELS as i32
+            || x >= right + TEXT_SCROLL_KEEP_ALIVE_PADDING_PIXELS as i32
+            || y < top
+            || y >= bottom
+        {
+            return None;
+        }
+
+        Some(text_preview::scroll_line_at_track_y(
+            scrollbar.track,
+            scrollbar.thumb,
+            y,
+            scroll.visible_lines,
+            scroll.total_lines,
+        ))
+    })
+}
+
+/// The document line a drag to `y` in window coordinates asks for.
+fn drag_target_for_y(y: i32) -> Option<usize> {
+    CURRENT_MEDIA.lock().ok().and_then(|media| {
+        let scroll = media.as_ref()?.text_scroll.as_ref()?;
+        let scrollbar = scroll.scrollbar?;
+        Some(text_preview::scroll_line_at_track_y(
+            scrollbar.track,
+            scrollbar.thumb,
+            y,
+            scroll.visible_lines,
+            scroll.total_lines,
+        ))
+    })
+}
+
+fn set_text_scroll_dragging(dragging: bool) -> bool {
+    let Ok(mut media) = CURRENT_MEDIA.lock() else {
+        return false;
+    };
+
+    media
+        .as_mut()
+        .and_then(|media| media.text_scroll.as_mut())
+        .map(|scroll| {
+            let was = scroll.dragging;
+            scroll.dragging = dragging;
+            was
+        })
+        .unwrap_or(false)
+}
+
+fn is_text_scroll_dragging() -> bool {
+    CURRENT_MEDIA
+        .lock()
+        .map(|media| {
+            media
+                .as_ref()
+                .and_then(|media| media.text_scroll.as_ref())
+                .map(|scroll| scroll.dragging)
+                .unwrap_or(false)
+        })
+        .unwrap_or(false)
 }
 
 unsafe fn reset_preview_after_display_change(hwnd: HWND) {
     let _ = ShowWindow(hwnd, SW_HIDE);
+    clear_text_scroll_keep_alive();
 
     if let Ok(mut current) = CURRENT_MEDIA.lock() {
         if let Some(ref mut media) = *current {
@@ -2995,6 +3295,13 @@ unsafe fn reset_preview_after_display_change(hwnd: HWND) {
         }
         *current = None;
     }
+}
+
+/// The point a mouse message was delivered at, in window coordinates.
+fn message_point(lparam: LPARAM) -> (i32, i32) {
+    let x = (lparam.0 & 0xFFFF) as u16 as i16 as i32;
+    let y = ((lparam.0 >> 16) & 0xFFFF) as u16 as i16 as i32;
+    (x, y)
 }
 
 unsafe extern "system" fn window_proc(
@@ -3006,6 +3313,32 @@ unsafe extern "system" fn window_proc(
     match msg {
         WM_DISPLAYCHANGE | WM_DPICHANGED => {
             reset_preview_after_display_change(hwnd);
+            LRESULT(0)
+        }
+        WM_LBUTTONDOWN => {
+            // A press on the scrollbar starts a drag from where it landed, so the
+            // thumb follows the pointer from the first click.
+            let (x, y) = message_point(lparam);
+            if let Some(first_line) = text_scroll_drag_target(x, y) {
+                set_text_scroll_dragging(true);
+                let _ = SetCapture(hwnd);
+                scroll_text_preview(hwnd, first_line);
+            }
+            LRESULT(0)
+        }
+        WM_MOUSEMOVE => {
+            if is_text_scroll_dragging() {
+                let (_, y) = message_point(lparam);
+                if let Some(first_line) = drag_target_for_y(y) {
+                    scroll_text_preview(hwnd, first_line);
+                }
+            }
+            LRESULT(0)
+        }
+        WM_LBUTTONUP => {
+            if set_text_scroll_dragging(false) {
+                let _ = ReleaseCapture();
+            }
             LRESULT(0)
         }
         WM_POWERBROADCAST => {
@@ -3653,6 +3986,19 @@ pub fn run_preview_window() {
                 }
             }
 
+            // A wheel notch over a scrollable text preview belongs to the preview:
+            // the wheel hook swallowed it so Explorer does not scroll, and left
+            // the ticks here.
+            let scroll_delta = wheel_input::take_text_scroll_delta();
+            if scroll_delta != 0 {
+                let lines = (scroll_delta / WHEEL_DELTA) as i64 * TEXT_SCROLL_LINES_PER_NOTCH;
+                if lines != 0 {
+                    if let Some(first_line) = text_scroll_target(lines) {
+                        scroll_text_preview(hwnd, first_line);
+                    }
+                }
+            }
+
             // Check for our custom messages. Only the newest hover target matters;
             // collapse stale Show/Hide traffic so we do not spend time computing
             // layouts for files the cursor has already left.
@@ -3754,6 +4100,7 @@ pub fn run_preview_window() {
                         }
 
                         let _ = ShowWindow(hwnd, SW_HIDE);
+                        clear_text_scroll_keep_alive();
 
                         // Stop video playback if any
                         if let Ok(mut current) = CURRENT_MEDIA.lock() {
@@ -3966,6 +4313,7 @@ pub fn run_preview_window() {
 mod tests {
     use super::{centered_top, compute_keyboard_layout, compute_mouse_layout, ScreenBounds};
     use crate::config::PreviewScale;
+    use std::path::PathBuf;
 
     /// A 1920x1040 work area at the origin, which is all the placement math needs.
     fn screen() -> ScreenBounds {
@@ -4065,5 +4413,45 @@ mod tests {
 
         assert_eq!(layout.pos_x, 310);
         assert_eq!(layout.pos_y, 160);
+    }
+
+    /// The wheel and a drag both move a preview through this: a step is counted
+    /// from where it is now and stops at either end of the document.
+    #[test]
+    fn scrolling_a_text_preview_stops_at_both_ends() {
+        let scroll = super::TextScroll {
+            path: PathBuf::from("preview.txt"),
+            options: crate::text_preview::TextPreviewOptions {
+                theme: crate::config::TextTheme::Light,
+                markdown_mode: crate::config::MarkdownMode::Rendered,
+                font_scale_percent: 100,
+            },
+            dpi: 96,
+            width: 800,
+            height: 600,
+            first_line: 100,
+            visible_lines: 40,
+            scrollable_lines: 200,
+            total_lines: 200,
+            scrollbar: None,
+            dragging: false,
+        };
+
+        assert!(scroll.can_scroll());
+        assert_eq!(scroll.max_first_line(), 160);
+        assert_eq!(scroll.scrolled_by(3), 103);
+        assert_eq!(scroll.scrolled_by(-3), 97);
+        assert_eq!(scroll.scrolled_by(1000), 160);
+        assert_eq!(scroll.scrolled_by(-1000), 0);
+
+        // A document that fits has nowhere to go.
+        let fits = super::TextScroll {
+            visible_lines: 200,
+            scrollable_lines: 200,
+            total_lines: 200,
+            ..scroll
+        };
+        assert!(!fits.can_scroll());
+        assert_eq!(fits.scrolled_by(3), 0);
     }
 }
