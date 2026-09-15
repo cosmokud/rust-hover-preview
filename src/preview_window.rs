@@ -87,17 +87,14 @@ static PREVIEW_HWND: AtomicIsize = AtomicIsize::new(0);
 const TEXT_SCROLL_LINES_PER_NOTCH: i64 = 3;
 const WHEEL_DELTA: i32 = 120;
 
-/// How far around the preview, and around the path from the file to it, the
-/// pointer can stray and still be treated as using the preview, in logical
-/// pixels. This is the vertical slack: the scrollbar is a few pixels wide, so the
-/// region has to forgive a hand that drifts above or below it. Along the path the
-/// region is tight instead — see [`TEXT_SCROLL_ANCHOR_SLACK_PIXELS`].
-const TEXT_SCROLL_HOLD_PADDING_PIXELS: f32 = 40.0;
-
 /// How far behind the point a preview was opened from the region reaches, in
-/// logical pixels. The pointer travels forwards from there, so this only has to
-/// cover the jitter of a hand at rest.
-const TEXT_SCROLL_ANCHOR_SLACK_PIXELS: i32 = 2;
+/// logical pixels. The pointer travels forwards from there, so this is only there
+/// to keep the pixel under a hand at rest inside the region.
+const TEXT_SCROLL_ANCHOR_SLACK_PIXELS: i32 = 1;
+
+/// How much slack the region keeps above and below the preview, in logical
+/// pixels, for a hand aiming at a scrollbar a few pixels wide.
+const TEXT_SCROLL_HOLD_PADDING_PIXELS: f32 = 40.0;
 
 /// A region on screen: left, top, right, bottom.
 type ScreenRegion = (i32, i32, i32, i32);
@@ -115,16 +112,20 @@ static TEXT_SCROLL_ANCHOR: Lazy<Mutex<Option<(i32, i32)>>> = Lazy::new(|| Mutex:
 /// show, which is the condition for everything above.
 static TEXT_PREVIEW_SCROLLABLE: AtomicBool = AtomicBool::new(false);
 
-/// The region that keeps a preview alive: the box from the point it was opened
-/// from to the preview itself, with the vertical slack the scrollbar needs.
+/// The region that keeps a preview alive: the line from the point it was opened
+/// from to the preview, joined to the preview itself.
 ///
 /// A preview is placed beside what it belongs to rather than over it, so the
 /// pointer has to travel to reach it — across a gap, sometimes against the side
 /// the placement chose. Joining the two means that journey never leaves the
-/// region, however the preview ended up placed relative to the cursor. Along the
-/// direction of travel the region is deliberately tight: two pixels behind the
-/// point the preview was opened from, so the pointer only has to cross the gap
-/// and not wander a margin it does not need.
+/// region, however the preview ended up placed relative to the cursor, and it
+/// keeps the region off everything else: one pixel behind the point the preview
+/// was opened from, so the strip beside the file list is as narrow as it can be
+/// and hovering another file is a hover like any other.
+///
+/// Vertically the region is the preview plus the slack a hand aiming for the
+/// scrollbar needs, joined to the pointer's own row so the line between the two
+/// is inside it as well.
 fn text_scroll_hold_region(
     preview: ScreenRegion,
     anchor: (i32, i32),
@@ -146,9 +147,9 @@ fn text_scroll_hold_region(
 
     (
         region_left,
-        top.min(anchor.1) - padding,
+        (top - padding).min(anchor.1),
         region_right,
-        bottom.max(anchor.1) + padding,
+        (bottom + padding).max(anchor.1),
     )
 }
 
@@ -4548,23 +4549,30 @@ mod tests {
     }
 
     /// The region that keeps a preview alive joins the point it was opened from
-    /// to the preview, tightly along the path and with slack above and below it.
+    /// to the preview: one pixel behind that point along the way, and the preview
+    /// plus its slack across it.
     #[test]
     fn the_hold_region_stretches_from_the_file_to_the_preview() {
-        // A preview placed to the right of the cursor: the region starts two
-        // pixels behind the pointer and runs to the preview's right edge, while
-        // vertically it spans both with that slack.
+        // A preview placed to the right of the cursor: the region starts one
+        // pixel behind the pointer — a step further takes the pointer out of it —
+        // and runs to the preview's right edge.
         let region = text_scroll_hold_region((620, 300, 1020, 700), (600, 500), 40);
-        assert_eq!(region, (598, 260, 1020, 740));
+        assert_eq!(region, (599, 260, 1020, 740));
 
         // Placed to the left instead: the mirror image.
         let region = text_scroll_hold_region((200, 100, 600, 500), (620, 300), 40);
-        assert_eq!(region, (200, 60, 622, 540));
+        assert_eq!(region, (200, 60, 621, 540));
 
-        // A preview in the pointer's own column is just the preview, grown
-        // vertically around the pointer.
+        // A preview in the pointer's own column is just the preview, joined to the
+        // pointer's row.
         let region = text_scroll_hold_region((300, 100, 500, 400), (400, 600), 40);
-        assert_eq!(region, (300, 60, 500, 640));
+        assert_eq!(region, (300, 60, 500, 600));
+
+        // The point the preview was opened from is inside its own region.
+        let anchor = (900, 400);
+        let region = text_scroll_hold_region((920, 300, 1300, 700), anchor, 40);
+        assert!(region.0 <= anchor.0 && region.2 >= anchor.0);
+        assert!(region.1 <= anchor.1 && region.3 >= anchor.1);
     }
 
     /// The wheel and a drag both move a preview through this: a step is counted
