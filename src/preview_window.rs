@@ -19,8 +19,10 @@ use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
-use windows::core::{w, PCWSTR};
-use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM};
+use windows::core::{w, PCWSTR, PWSTR};
+use windows::Win32::Foundation::{
+    CloseHandle, COLORREF, HANDLE, HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM,
+};
 use windows::Win32::Graphics::Gdi::{
     BeginPaint, CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, EndPaint,
     GetMonitorInfoW, MonitorFromPoint, SelectObject, AC_SRC_ALPHA, AC_SRC_OVER, BITMAPINFO,
@@ -28,7 +30,10 @@ use windows::Win32::Graphics::Gdi::{
     PAINTSTRUCT,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::System::Threading::{OpenProcess, TerminateProcess, PROCESS_TERMINATE};
+use windows::Win32::System::Threading::{
+    OpenProcess, QueryFullProcessImageNameW, TerminateProcess, PROCESS_NAME_WIN32,
+    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DispatchMessageW, EnumWindows, GetSystemMetrics, GetWindow,
     GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, IsWindowVisible, LoadCursorW,
@@ -50,6 +55,9 @@ const ANIMATION_STARTUP_PREBUFFER_FRAMES: usize = 12;
 const ANIMATION_STARTUP_PREBUFFER_MS: u32 = 500;
 const STREAMING_SPINNER_MAX_MS: u64 = 1500;
 const VIDEO_GEOMETRY_CACHE_MAX_ENTRIES: usize = 512;
+// Expected executable name of the playback process spawned below, used to
+// verify a recorded PID still belongs to that process before killing it.
+const VIDEO_PROCESS_IMAGE_NAME: &str = "ffplay.exe";
 
 // Message passing for thread communication
 pub static PREVIEW_SENDER: Lazy<Mutex<Option<Sender<PreviewMessage>>>> =
@@ -300,17 +308,9 @@ pub fn hide_preview() {
         }
         *current = None;
     } else {
-        let pid = VIDEO_PID.load(Ordering::SeqCst);
-        if pid != 0 {
-            unsafe {
-                if let Ok(process) = OpenProcess(PROCESS_TERMINATE, false, pid) {
-                    let _ = TerminateProcess(process, 1);
-                    let _ = windows::Win32::Foundation::CloseHandle(process);
-                }
-            }
-            VIDEO_HWND.store(0, Ordering::SeqCst);
-            VIDEO_PID.store(0, Ordering::SeqCst);
-        }
+        // The media state is locked elsewhere; kill the recorded ffplay by PID
+        // instead (verified to still be ffplay before terminating it).
+        kill_stray_video_process();
     }
 
     if let Ok(sender) = PREVIEW_SENDER.lock() {
@@ -1628,13 +1628,15 @@ fn start_video_playback(path: &PathBuf, x: i32, y: i32, width: i32, height: i32)
 /// Stop video playback process
 fn stop_video_playback(media: &mut MediaData) {
     if let Some(ref mut process) = media.video_process {
+        // Kill only, never wait: a process stuck in kernel I/O would block the
+        // caller (possibly the Explorer hook thread) indefinitely. The leftover
+        // process checks confirm death and clear VIDEO_PID.
         let _ = process.kill();
-        let _ = process.wait();
     }
     media.video_process = None;
-    // Clear the video window HWND
+    // Clear the video window HWND. VIDEO_PID stays recorded until the process
+    // is confirmed gone, so a surviving ffplay can still be found and killed.
     VIDEO_HWND.store(0, Ordering::SeqCst);
-    VIDEO_PID.store(0, Ordering::SeqCst);
 }
 
 /// Check if the current ffplay process is still running
@@ -1654,7 +1656,8 @@ fn is_video_process_running() -> bool {
                     Err(_) => {
                         media.video_process = None;
                         VIDEO_HWND.store(0, Ordering::SeqCst);
-                        VIDEO_PID.store(0, Ordering::SeqCst);
+                        // Keep VIDEO_PID: the process is not confirmed dead, so
+                        // the leftover-process checks can still find and kill it.
                         return false;
                     }
                 }
@@ -1662,6 +1665,93 @@ fn is_video_process_running() -> bool {
         }
     }
     false
+}
+
+/// True when the handle refers to a process whose executable file name matches
+/// `expected_name` (compared case-insensitively).
+unsafe fn process_image_matches(handle: HANDLE, expected_name: &str) -> bool {
+    let mut buffer = [0u16; 1024];
+    let mut len = buffer.len() as u32;
+    if QueryFullProcessImageNameW(
+        handle,
+        PROCESS_NAME_WIN32,
+        PWSTR(buffer.as_mut_ptr()),
+        &mut len,
+    )
+    .is_err()
+    {
+        return false;
+    }
+
+    let path = String::from_utf16_lossy(&buffer[..len as usize]);
+    std::path::Path::new(&path)
+        .file_name()
+        .is_some_and(|name| name.eq_ignore_ascii_case(std::ffi::OsStr::new(expected_name)))
+}
+
+/// True when `pid` still refers to a live ffplay process.
+fn is_ffplay_pid_alive(pid: u32) -> bool {
+    unsafe {
+        let Ok(handle) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) else {
+            return false;
+        };
+        let matches = process_image_matches(handle, VIDEO_PROCESS_IMAGE_NAME);
+        let _ = CloseHandle(handle);
+        matches
+    }
+}
+
+/// Terminate `pid` when it is still the ffplay process we spawned. Non-blocking:
+/// it only requests the termination, it never waits for the process to exit.
+fn terminate_ffplay_pid(pid: u32) {
+    unsafe {
+        let Ok(handle) = OpenProcess(
+            PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION,
+            false,
+            pid,
+        ) else {
+            return;
+        };
+        if process_image_matches(handle, VIDEO_PROCESS_IMAGE_NAME) {
+            let _ = TerminateProcess(handle, 1);
+        }
+        let _ = CloseHandle(handle);
+    }
+}
+
+/// Clear the recorded video process state once `pid` is confirmed gone.
+fn clear_video_process_state(pid: u32) {
+    if VIDEO_PID
+        .compare_exchange(pid, 0, Ordering::SeqCst, Ordering::SeqCst)
+        .is_ok()
+    {
+        VIDEO_HWND.store(0, Ordering::SeqCst);
+    }
+}
+
+/// Kill the last spawned ffplay process when it is still alive.
+///
+/// A process can outlive its `Child` handle: a kill may not take effect, or the
+/// handle may be dropped before the process is confirmed gone. Without this a
+/// surviving ffplay keeps its window on screen and the next hover would spawn a
+/// second one next to it. The PID is only cleared once the process is confirmed
+/// gone, so a later call retries instead of losing track of it.
+pub fn kill_stray_video_process() {
+    let pid = VIDEO_PID.load(Ordering::SeqCst);
+    if pid == 0 {
+        return;
+    }
+
+    if !is_ffplay_pid_alive(pid) {
+        clear_video_process_state(pid);
+        return;
+    }
+
+    terminate_ffplay_pid(pid);
+
+    if !is_ffplay_pid_alive(pid) {
+        clear_video_process_state(pid);
+    }
 }
 
 /// Ensure the ffplay window is topmost and positioned correctly
@@ -2959,6 +3049,11 @@ pub fn run_preview_window() {
                                         stop_video_playback(media);
                                     }
                                 }
+
+                                // The previous ffplay may have survived its stop
+                                // (dropped handle or an unconfirmed kill): kill it
+                                // before a new one takes the screen.
+                                kill_stray_video_process();
 
                                 let video_process = start_video_playback(
                                     &path,

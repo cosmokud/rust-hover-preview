@@ -1,6 +1,6 @@
 use crate::preview_window::{
-    cursor_preview_hover, hide_preview, preview_screen_rect, show_preview, show_preview_keyboard,
-    PreviewCursorHover,
+    cursor_preview_hover, hide_preview, kill_stray_video_process, preview_screen_rect,
+    show_preview, show_preview_keyboard, PreviewCursorHover,
 };
 use crate::video_formats::is_video_file;
 use crate::wheel_input;
@@ -3266,6 +3266,10 @@ pub fn run_explorer_hook() {
     let mut last_navigation_trigger_at: Option<Instant> = None;
     let mut stationary_hover_probe_done = false;
 
+    // Safety net for a ffplay process that survived a stop (failed or
+    // unconfirmed kill): while nothing is hovered it is re-checked and killed.
+    let mut last_video_process_sweep = Instant::now();
+
     // Wheel scrolling moves the list under a stationary pointer, so the wheel
     // tick counter is the only signal that the hovered item changed (see
     // `wheel_input`).
@@ -3288,6 +3292,7 @@ pub fn run_explorer_hook() {
     const STATIONARY_SEARCH_MISS_HIDE_MS: u64 = 180;
     const EXPLORER_SLOW_PROBE_LIMIT: u32 = 3;
     const EXPLORER_PROBE_BACKOFF_MS: u64 = 1500;
+    const VIDEO_PROCESS_SWEEP_MS: u64 = 1000;
 
     // How often to re-evaluate the state when in sleep modes
     const STATE_RECHECK_DEEP_MS: u64 = 2000; // When no Explorer windows
@@ -3312,6 +3317,17 @@ pub fn run_explorer_hook() {
     let mut last_display_signature = current_display_signature();
 
     while RUNNING.load(Ordering::SeqCst) {
+        // Nothing is hovered, so any ffplay still alive is a leftover from a
+        // stop that did not take effect: kill it before it lingers on screen.
+        if last_file.is_none()
+            && keyboard_file.is_none()
+            && !is_keyboard_hover
+            && last_video_process_sweep.elapsed() >= Duration::from_millis(VIDEO_PROCESS_SWEEP_MS)
+        {
+            last_video_process_sweep = Instant::now();
+            kill_stray_video_process();
+        }
+
         if let Some(display_signature) = current_display_signature() {
             if display_signature_changed(last_display_signature, display_signature) {
                 last_display_signature = Some(display_signature);

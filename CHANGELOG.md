@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.1.14-rc.9] - 2026-09-15
 
 ### Added
 
@@ -13,6 +13,7 @@
 
 ### Fixed
 
+- Video previews no longer risk leaving a stray `ffplay` process, and its frozen window, behind when a stop does not take effect. Stopping playback is now kill-only — the app requests termination and never blocks in `wait`, which could freeze the Explorer hook thread indefinitely on a process stuck in kernel I/O — and the recorded PID is kept until the process is confirmed gone instead of being cleared on the spot. Two checks make that recoverable: the Explorer hook re-checks the recorded PID once a second while nothing is hovered, and the preview thread re-checks it before spawning a new `ffplay`, so a new preview can no longer stack a second player next to one that survived its stop. Both terminate only when the PID still belongs to `ffplay.exe`, read from the same process handle that is terminated so a recycled PID can never hit an unrelated process, and the record is cleared through a compare-exchange only once the process is gone, so a fresh spawn cannot have its PID wiped by a stale check. A player that still refuses to die is retried on the next sweep instead of being forgotten.
 - Entering a folder no longer waits for a mouse move before previewing the item under the cursor. Clicks (left/right/middle), Enter and the history keys are now tracked as deliberate input, so the folder change they cause is recognized as user navigation instead of a change the gate has to wait out: the folder probe runs at the active cadence for a moment after such a press so the change is seen before the user's next key press, and the post-change suspension lifts on its own once the new view has settled. A folder change that no input precedes (a programmatic renavigation, a network refresh) still waits for the user, and the auto-focused first item still never previews without a key press.
 - A single navigation key press now opens the keyboard preview right after a folder change. The post-folder-change gate compared the focused item against a baseline recorded only once a key was already pressed, so that first press was swallowed as the baseline and the preview only appeared on the second one. The gate now also lifts on a navigation key press seen after the change — the press transition, not the key-down state, so key state left over from the navigation that opened the folder cannot lift it — and the item that press selects previews immediately.
 
