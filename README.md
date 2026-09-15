@@ -14,6 +14,7 @@ Inspired by QTTabBar (QuizoApps) hover preview.
 
 - Mouse-hover and keyboard-navigation previews in Explorer
 - Static image previews plus animated GIF, APNG, and libwebp-backed animated WebP playback
+- Animation memory is bounded by a sliding window rather than the length of the file: the decoder stays a few frames ahead of the playhead and frames already shown are released, so long or large GIF, APNG, and WebP files play to the end and loop instead of stopping early
 - Video previews through FFmpeg (`ffplay` + `ffprobe`)
 - Tray controls for enable/disable, delay, positioning, scaling, startup, off-trigger key, and volume
 - Explorer Shell view detection, folder caching, and path normalization for reliable hover matching
@@ -21,6 +22,7 @@ Inspired by QTTabBar (QuizoApps) hover preview.
 - Per-monitor DPI awareness to reduce scaling artifacts on high-DPI displays
 - Display-aware placement that keeps the preview inside the monitor under the cursor or focused item, with frames painted before the window is revealed so a new hover never flashes the previous image
 - Scale-aware sizing from 25% to 400% or fit-to-screen, always clamped to the space available on the display so a scaled-up preview is never clipped
+- Sleep/resume resilience: waking the system resets the layered composition surface and re-asserts the preview's topmost/layered styles, the tray icon is restored after an Explorer restart, and video playback and background decoding are torn down cleanly on suspend
 - EnumWindows-based Explorer detection with CabinetWClass/ExplorerWClass class matching to keep idle polling light and avoid Explorer-side COM allocations, plus input-grace helpers that throttle hover and keyboard focus probes to recent user activity
 - Wheel scrolling refreshes the preview without moving the mouse: a system-wide low-level mouse hook reports wheel input, the hover stability window restarts while the wheel turns, and the item that settles under the parked cursor is previewed — or the preview is dropped when that item is not media. Scrolling while a keyboard preview is on screen closes it and hands the screen back to the mouse, so the preview follows the item under the cursor instead of staying frozen while the list scrolls
 - Keyboard previews take priority over the pointer: a preview opened with the arrow keys stays on top when a parked cursor sits under it, mouse-driven triggers stay frozen until the mouse is moved on purpose or the wheel is turned, and the cursor-over-preview check is skipped instead of running on every poll
@@ -32,7 +34,7 @@ Inspired by QTTabBar (QuizoApps) hover preview.
 
 `jpg`, `jpeg`, `jpe`, `jfif`, `png`, `apng`, `gif`, `bmp`, `ico`, `tiff`, `tif`, `webp`, `tga`, `pbm`, `pgm`, `ppm`, `pam`, `pnm`, `hdr`, `exr`, `qoi`, `ff`
 
-`apng` files with multiple frames play as animations; single-frame ones show as static images.
+`apng` files with multiple frames play as animations; single-frame ones show as static images. Animation is detected from the file's content rather than the extension, so a `.png` file carrying an `acTL` chunk ahead of its image data animates as well, and every other `.png` stays a static image.
 
 ### Videos (FFmpeg required)
 
@@ -139,7 +141,7 @@ preview_scale=100
 - When `enable_off_trigger_key` is enabled, hold the configured `off_trigger_key` to keep previews hidden while browsing Explorer.
 - When `confirm_file_type` is enabled, the app validates file content signatures (magic bytes) against the extension — useful for files with incorrect extensions.
 - `webp_playback_fps` controls the maximum playback speed for animated WebP files (1–90 FPS; 0 resets to the default of 90).
-- `preview_scale` controls the preview size relative to the media's native resolution. Use `fit` to scale the preview as large as the display area allows, or a percentage between 1 and 1000 written as `200`, `200%`, or `75`. A scale larger than the available space is reduced to fit so the preview cannot be clipped; `0` resets to the default of 100.
+- `preview_scale` controls the preview size relative to the media's native resolution. Use `fit` (or `fit to screen`) to scale the preview as large as the display area allows, or a percentage between 1 and 1000 written as `200`, `200%`, or `75`. A scale larger than the available space is reduced to fit so the preview cannot be clipped; `0` resets to the default of 100.
 
 ## Build from Source
 
