@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.2.0] - 2026-09-16
+
+### Added
+
+- PDF previews show the first page of a `.pdf` file, rendered by the PDF engine that ships with Windows (`Windows.Data.Pdf`) rather than by a bundled renderer: this adds no crate, ships no native library in the installer, and asks the user to install nothing, which is what made it the cheaper pick over `pdfium` (a new crate plus roughly 10 MB of native library) and over a pure-Rust PDF rasterizer (a new crate and its rendering stack). The page is rendered at exactly the pixel size the layout asks for, so `100%` is a 96 DPI page while 200% or `Fit to Screen` is rendered larger instead of enlarging a smaller raster, and the size the engine reports for the page (DIPs, 96 per inch) is what the preview is placed and sized from, so a page that is not A4 or Letter lands correctly instead of at a guessed shape. The engine is asked to encode BMP so the decode on this side is a header parse instead of a PNG inflate, the page is painted on an opaque white background so its text stays readable under every `transparent_background` mode, and the finished frame then takes the existing static-image path, spinner included.
+- A page is measured once. The preview is positioned and sized before anything is decoded, so page 1's size is resolved when the hover arrives and cached per path afterwards — failures included, so a file that cannot be read is not re-parsed on every hover — and that cache is bounded the way the video geometry cache is. Both the sizing probe and the render initialize a multithreaded apartment on their thread first, which is what WinRT requires, so the apartment is claimed before either is used rather than left to fail the first call.
+- A `.pdf` file is confirmed to carry a `%PDF-` header within its first kilobyte before the path reaches the OS renderer, so a mislabeled file never gets parsed by it, and a PDF that cannot be rendered — password-protected, damaged, or mislabeled — is simply not previewed instead of showing an error or a placeholder.
+- Measured against a 66-page, 1.4 MB manual: the first call of a session spends about 35 ms loading the document and 65 ms rendering page 1 at 1000 px wide, including the engine's one-time initialization, and later hovers of the same file about 5 ms and 10 ms, with the page-size lookup already cached.
+
+### Changed
+
+- Documentation is up to date with the release: README.md lists PDF under supported formats and states what is and is not previewed, and ARCHITECTURE.md documents the PDF path, the apartment both rendering threads initialize, the page-size cache, and the header check.
+- Bumped version to 0.2.0 in Cargo.toml and Cargo.lock
+
 ## [0.1.14] - 2026-09-15
 
 ### Added

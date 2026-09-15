@@ -23,6 +23,7 @@ The app runs as a single instance per user session. `main` claims a session-loca
 - `explorer_hook.rs`: resolves hovered/focused Explorer items, handles path normalization, and sends preview messages.
 - `wheel_input.rs`: system-wide mouse-wheel hook thread that publishes a tick counter, so a scroll that moves the list under a parked pointer is visible to the polling loop.
 - `preview_window.rs`: layered window rendering, scale-aware sizing, animation streaming for GIF/WebP, FFmpeg-backed video playback with verified-PID process supervision (see Video Process Lifecycle), monitor-bounded placement with paint-before-show presentation, and WM_POWERBROADCAST handling to reset state on system resume and clean up on suspend.
+- `pdf_preview.rs`: first-page PDF rendering through the PDF engine that ships with Windows (`Windows.Data.Pdf`), with the page size cached per file and the file's own header confirmed before a path reaches the OS renderer.
 - `tray.rs`: tray icon and menu, configuration toggles, exit flow, and WM_POWERBROADCAST handling to re-add the icon after DWM/Explorer restart on resume.
 - `config.rs`: INI-backed configuration with defaults and input sanitization.
 - `startup.rs`: registry integration for the Run-at-startup setting.
@@ -32,6 +33,15 @@ The app runs as a single instance per user session. `main` claims a session-loca
 - Images (static, GIF, WebP) are decoded in the preview thread, with animated formats streaming frames into a shared queue.
 - The preview window uses GDI and `UpdateLayeredWindow` to draw to a topmost, no-activate surface.
 - Video previews launch `ffplay` for playback and query `ffprobe` for video geometry; the player's lifetime is supervised as described in Video Process Lifecycle.
+- PDF previews render page 1 through `Windows.Data.Pdf`; see PDF Previews for the split between measuring a page and rendering it.
+
+## PDF Previews
+
+A PDF preview shows page 1, rendered by `Windows.Data.Pdf` — the PDF engine that ships with Windows — so the app bundles no renderer and the user installs nothing. Two threads do this work, and both initialize a multithreaded apartment (`CoInitializeEx(COINIT_MULTITHREADED)`) before their first call, which is what WinRT requires of the calling thread.
+
+The preview thread measures the page before anything is decoded, because the preview is positioned and sized first: the page size the engine reports (DIPs, 96 per inch) is what the layout is computed from, the same way video geometry is resolved up front. That probe is cached per path, failures included, so a file is parsed once and an unreadable file is not re-parsed on every hover. Before a path is handed to the renderer it has to carry a `%PDF-` header in its first kilobyte, which is what keeps a mislabeled file out of the OS parser.
+
+The decode worker then renders page 1 into exactly the pixel size the layout asked for, after fitting the page's own aspect ratio into that box, so a page that is not the shape the layout assumed is letterboxed instead of stretched. Rendering at the target size is also what keeps a scaled-up preview sharp: `100%` is a 96 DPI page, while 200% or fit-to-screen is rendered larger rather than enlarged afterwards. The renderer is asked for its BMP encoder, which turns the decode on this side into a header parse instead of a PNG inflate, and the page is painted on an opaque white background so its text stays readable over any `transparent_background` mode. From there the result is an ordinary static frame: the existing spinner covers the wait, and a render that finishes after the cursor has moved on is dropped by the same generation check as every other load.
 
 ## Video Process Lifecycle
 
