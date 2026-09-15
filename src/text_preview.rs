@@ -13,7 +13,7 @@
 //! and theme, so a second hover, a theme switch or a repaint costs a layout
 //! instead of a parse.
 
-use crate::config::{MarkdownMode, TextTheme};
+use crate::config::{sanitize_text_font_scale_percent, MarkdownMode, TextTheme};
 use crate::text_theme::{self, LoadedTheme};
 use once_cell::sync::Lazy;
 use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
@@ -73,6 +73,11 @@ const FONT_FACE: &str = "Consolas";
 const MIN_DPI: u32 = 48;
 const MAX_DPI: u32 = 480;
 
+/// Bounds on the combined display and font scale, so a hand-edited font size
+/// cannot ask for glyphs larger than a screen or smaller than a pixel.
+const MIN_SCALE: f32 = 0.25;
+const MAX_SCALE: f32 = 16.0;
+
 /// The options a preview is built with. They are passed in rather than read from
 /// the configuration inside this module so the cache key and the caller's intent
 /// cannot drift apart.
@@ -80,6 +85,11 @@ const MAX_DPI: u32 = 480;
 pub struct TextPreviewOptions {
     pub theme: TextTheme,
     pub markdown_mode: MarkdownMode,
+    /// Font scale as a percentage of the default text size. It sizes the glyphs,
+    /// the line spacing and the page margin together, and it is deliberately not
+    /// part of what a parsed document is cached by: the same styled lines are
+    /// drawn at any size.
+    pub font_scale_percent: u32,
 }
 
 /// The size the preview of `path` wants inside `max_width` x `max_height`.
@@ -103,7 +113,7 @@ pub fn measure(
         return None;
     }
 
-    let result = TextMetrics::new(dc, dpi).map(|metrics| {
+    let result = TextMetrics::new(dc, dpi, options.font_scale_percent).map(|metrics| {
         let laid_out = layout(&document, max_width, max_height, &metrics, theme);
         (laid_out.width, laid_out.height)
     });
@@ -135,7 +145,7 @@ pub fn render(
     let theme = text_theme::loaded(options.theme)?;
 
     let surface = DibSurface::create(width, height)?;
-    let metrics = TextMetrics::new(surface.dc, dpi)?;
+    let metrics = TextMetrics::new(surface.dc, dpi, options.font_scale_percent)?;
     let laid_out = layout(&document, width, height, &metrics, theme);
 
     unsafe {
@@ -195,12 +205,15 @@ struct TextStyle {
     level: u8,
 }
 
+/// What a parsed document is cached by. The font scale is not part of it: a
+/// document is the same styled lines at any size, and only the layout changes.
 #[derive(Clone, PartialEq, Eq)]
 struct DocKey {
     path: PathBuf,
     modified: Option<SystemTime>,
     len: u64,
-    options: TextPreviewOptions,
+    theme: TextTheme,
+    markdown_mode: MarkdownMode,
 }
 
 /// Parsed documents, the most recently built last, keyed by the file and the
@@ -222,7 +235,8 @@ fn document(path: &Path, options: TextPreviewOptions) -> Option<Arc<TextDoc>> {
         path: path.to_path_buf(),
         modified: metadata.modified().ok(),
         len: metadata.len(),
-        options,
+        theme: options.theme,
+        markdown_mode: options.markdown_mode,
     };
 
     if let Ok(cache) = DOCUMENTS.lock() {
@@ -1433,7 +1447,8 @@ fn readable(color: [u8; 3], background: [u8; 3]) -> [u8; 3] {
 
 // -------------------------------------------------------------------- layout
 
-/// Font metrics for one display scale, taken from GDI once per preview.
+/// Font metrics for one display scale and font scale, taken from GDI once per
+/// preview.
 struct TextMetrics {
     scale: f32,
     padding: i32,
@@ -1443,9 +1458,17 @@ struct TextMetrics {
 }
 
 impl TextMetrics {
-    fn new(dc: HDC, dpi: u32) -> Option<Self> {
+    /// `dpi` is the display's own scale and `font_scale_percent` the configured
+    /// text size on top of it. They multiply into one scale, so the glyphs, the
+    /// line spacing and the page margin all grow together and a preview at 200%
+    /// is the same page twice the size rather than the same page in a bigger box.
+    fn new(dc: HDC, dpi: u32, font_scale_percent: u32) -> Option<Self> {
         let dpi = dpi.clamp(MIN_DPI, MAX_DPI);
-        let scale = dpi as f32 / 96.0;
+        let font_scale = sanitize_text_font_scale_percent(font_scale_percent) as f32 / 100.0;
+        // A preview is still a preview: past this the config is asking for a
+        // handful of characters per screen, which GDI font sizes stop being
+        // useful for.
+        let scale = (dpi as f32 / 96.0 * font_scale).clamp(MIN_SCALE, MAX_SCALE);
 
         let mut advance = [0i32; SIZE_LEVELS];
         let mut line_height = [0i32; SIZE_LEVELS];
@@ -2153,6 +2176,19 @@ mod tests {
         TextPreviewOptions {
             theme,
             markdown_mode: mode,
+            font_scale_percent: 100,
+        }
+    }
+
+    fn options_at(
+        theme: TextTheme,
+        mode: MarkdownMode,
+        font_scale_percent: u32,
+    ) -> TextPreviewOptions {
+        TextPreviewOptions {
+            theme,
+            markdown_mode: mode,
+            font_scale_percent,
         }
     }
 
@@ -2506,6 +2542,50 @@ mod tests {
     }
 
     #[test]
+    fn the_font_scale_grows_the_text_and_its_spacing() {
+        let path = fixture("font-scale.txt", b"hello world\nsecond line\n");
+        let small = options_at(TextTheme::Light, MarkdownMode::Rendered, 50);
+        let normal = options_at(TextTheme::Light, MarkdownMode::Rendered, 100);
+        let large = options_at(TextTheme::Light, MarkdownMode::Rendered, 200);
+
+        let (small_width, small_height) = measure(&path, 2000, 2000, 96, small).unwrap();
+        let (normal_width, normal_height) = measure(&path, 2000, 2000, 96, normal).unwrap();
+        let (large_width, large_height) = measure(&path, 2000, 2000, 96, large).unwrap();
+
+        assert!(small_width < normal_width && normal_width < large_width);
+        assert!(small_height < normal_height && normal_height < large_height);
+
+        // A preview is still painted at the size it was measured at, whatever the
+        // scale asked for.
+        for (options, width, height) in [
+            (small, small_width, small_height),
+            (large, large_width, large_height),
+        ] {
+            let (pixels, rendered_width, rendered_height) =
+                render(&path, width, height, 96, options).unwrap();
+            assert_eq!((rendered_width, rendered_height), (width, height));
+            assert_eq!(pixels.len(), (width * height * 4) as usize);
+        }
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_hand_edited_font_scale_is_bounded_rather_than_trusted() {
+        let path = fixture("font-scale-limits.txt", b"hello\n");
+        let mode = MarkdownMode::Rendered;
+
+        for percent in [0u32, 1, 400, 1000, 100000] {
+            let options = options_at(TextTheme::Light, mode, percent);
+            let (width, height) = measure(&path, 4000, 4000, 96, options)
+                .expect("every sanitized scale should still measure");
+            assert!(width > 0 && height > 0 && width <= 4000 && height <= 4000);
+        }
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
     fn a_long_file_says_how_much_is_left() {
         let mut source = String::new();
         for line in 0..500 {
@@ -2520,7 +2600,7 @@ mod tests {
 
         let dc = unsafe { windows::Win32::Graphics::Gdi::CreateCompatibleDC(None) };
         assert!(!dc.0.is_null());
-        let metrics = super::TextMetrics::new(dc, 96).unwrap();
+        let metrics = super::TextMetrics::new(dc, 96, 100).unwrap();
         let laid_out = super::layout(&document, width, height, &metrics, light_theme());
         unsafe {
             let _ = windows::Win32::Graphics::Gdi::DeleteDC(dc);

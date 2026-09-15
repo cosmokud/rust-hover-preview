@@ -1,5 +1,6 @@
 use crate::config::{
-    MarkdownMode, PreviewScale, TextTheme, TransparentBackground, DEFAULT_PREVIEW_SCALE_PERCENT,
+    sanitize_text_font_scale_percent, MarkdownMode, PreviewScale, TextTheme, TransparentBackground,
+    DEFAULT_PREVIEW_SCALE_PERCENT, DEFAULT_TEXT_FONT_SCALE_PERCENT,
 };
 use crate::preview_window::refresh_preview;
 use crate::{startup, CONFIG, RUNNING};
@@ -63,6 +64,17 @@ const ID_TRAY_THEME_LIGHT: u16 = 1050; // Atom One Light
 const ID_TRAY_THEME_DARK: u16 = 1051; // One Dark Pro
 const ID_TRAY_MARKDOWN_RENDERED: u16 = 1052; // Rendered document
 const ID_TRAY_MARKDOWN_SOURCE: u16 = 1053; // Highlighted Markdown source
+const ID_TRAY_TEXT_ENABLE: u16 = 1060; // Text previews on/off
+const ID_TRAY_FONT_25: u16 = 1070;
+const ID_TRAY_FONT_50: u16 = 1071;
+const ID_TRAY_FONT_100: u16 = 1072;
+const ID_TRAY_FONT_125: u16 = 1073;
+const ID_TRAY_FONT_150: u16 = 1074;
+const ID_TRAY_FONT_175: u16 = 1075;
+const ID_TRAY_FONT_200: u16 = 1076;
+const ID_TRAY_FONT_250: u16 = 1077;
+const ID_TRAY_FONT_300: u16 = 1078;
+const ID_TRAY_FONT_400: u16 = 1079;
 
 const TRAY_CLASS: PCWSTR = w!("RustHoverPreviewTrayClass");
 
@@ -147,6 +159,17 @@ unsafe extern "system" fn tray_window_proc(
                 ID_TRAY_THEME_DARK => set_theme(TextTheme::Dark),
                 ID_TRAY_MARKDOWN_RENDERED => set_markdown_mode(MarkdownMode::Rendered),
                 ID_TRAY_MARKDOWN_SOURCE => set_markdown_mode(MarkdownMode::Source),
+                ID_TRAY_TEXT_ENABLE => toggle_text_preview_enabled(),
+                ID_TRAY_FONT_25 => set_text_font_scale(25),
+                ID_TRAY_FONT_50 => set_text_font_scale(50),
+                ID_TRAY_FONT_100 => set_text_font_scale(100),
+                ID_TRAY_FONT_125 => set_text_font_scale(125),
+                ID_TRAY_FONT_150 => set_text_font_scale(150),
+                ID_TRAY_FONT_175 => set_text_font_scale(175),
+                ID_TRAY_FONT_200 => set_text_font_scale(200),
+                ID_TRAY_FONT_250 => set_text_font_scale(250),
+                ID_TRAY_FONT_300 => set_text_font_scale(300),
+                ID_TRAY_FONT_400 => set_text_font_scale(400),
                 _ => {}
             }
             LRESULT(0)
@@ -282,6 +305,24 @@ unsafe fn show_context_menu(hwnd: HWND) {
         w!("Transparent Background"),
     );
 
+    // Add "Enable TXT Preview" with checkmark
+    let text_preview_enabled = CONFIG
+        .lock()
+        .map(|c| c.text_preview_enabled)
+        .unwrap_or(true);
+    let text_enable_flags = MF_STRING
+        | if text_preview_enabled {
+            MF_CHECKED
+        } else {
+            MF_UNCHECKED
+        };
+    let _ = AppendMenuW(
+        menu,
+        text_enable_flags,
+        ID_TRAY_TEXT_ENABLE as usize,
+        w!("Enable TXT Preview"),
+    );
+
     // Add Text Preview Theme submenu
     let theme = CONFIG.lock().map(|c| c.theme).unwrap_or(TextTheme::Light);
     let theme_menu = CreatePopupMenu().unwrap();
@@ -311,6 +352,89 @@ unsafe fn show_context_menu(hwnd: HWND) {
         MF_STRING | MF_POPUP,
         theme_menu.0 as usize,
         w!("Text Preview Theme"),
+    );
+
+    // Add Text Preview Font Size submenu. A hand-edited size between these steps
+    // simply matches none of them, which is why the values are read as written.
+    let font_scale = CONFIG
+        .lock()
+        .map(|c| sanitize_text_font_scale_percent(c.text_font_scale_percent))
+        .unwrap_or(DEFAULT_TEXT_FONT_SCALE_PERCENT);
+    let font_menu = CreatePopupMenu().unwrap();
+
+    let font_flag = |percent: u32| {
+        MF_STRING
+            | if font_scale == percent {
+                MF_CHECKED
+            } else {
+                MF_UNCHECKED
+            }
+    };
+    let _ = AppendMenuW(
+        font_menu,
+        font_flag(25),
+        ID_TRAY_FONT_25 as usize,
+        w!("25%"),
+    );
+    let _ = AppendMenuW(
+        font_menu,
+        font_flag(50),
+        ID_TRAY_FONT_50 as usize,
+        w!("50%"),
+    );
+    let _ = AppendMenuW(
+        font_menu,
+        font_flag(100),
+        ID_TRAY_FONT_100 as usize,
+        w!("100% (Default)"),
+    );
+    let _ = AppendMenuW(
+        font_menu,
+        font_flag(125),
+        ID_TRAY_FONT_125 as usize,
+        w!("125%"),
+    );
+    let _ = AppendMenuW(
+        font_menu,
+        font_flag(150),
+        ID_TRAY_FONT_150 as usize,
+        w!("150%"),
+    );
+    let _ = AppendMenuW(
+        font_menu,
+        font_flag(175),
+        ID_TRAY_FONT_175 as usize,
+        w!("175%"),
+    );
+    let _ = AppendMenuW(
+        font_menu,
+        font_flag(200),
+        ID_TRAY_FONT_200 as usize,
+        w!("200%"),
+    );
+    let _ = AppendMenuW(
+        font_menu,
+        font_flag(250),
+        ID_TRAY_FONT_250 as usize,
+        w!("250%"),
+    );
+    let _ = AppendMenuW(
+        font_menu,
+        font_flag(300),
+        ID_TRAY_FONT_300 as usize,
+        w!("300%"),
+    );
+    let _ = AppendMenuW(
+        font_menu,
+        font_flag(400),
+        ID_TRAY_FONT_400 as usize,
+        w!("400%"),
+    );
+    let _ = AppendMenuW(
+        menu,
+        MF_STRING | MF_POPUP,
+        font_menu.0 as usize,
+        w!("Text Preview Font Size"),
     );
 
     // Add Markdown submenu
@@ -693,6 +817,25 @@ fn set_transparent_background(background: TransparentBackground) {
 fn set_theme(theme: TextTheme) {
     if let Ok(mut config) = CONFIG.lock() {
         config.theme = theme;
+        config.save();
+    }
+    refresh_preview();
+}
+
+/// Both of these rebuild the visible preview the same way: turning text previews
+/// off drops the one on screen (the hover that produced it no longer measures),
+/// and a new font size repaints it at that size.
+fn toggle_text_preview_enabled() {
+    if let Ok(mut config) = CONFIG.lock() {
+        config.text_preview_enabled = !config.text_preview_enabled;
+        config.save();
+    }
+    refresh_preview();
+}
+
+fn set_text_font_scale(percent: u32) {
+    if let Ok(mut config) = CONFIG.lock() {
+        config.text_font_scale_percent = sanitize_text_font_scale_percent(percent);
         config.save();
     }
     refresh_preview();
