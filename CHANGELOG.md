@@ -11,6 +11,11 @@
 
 - The video extension list moved into a single `src/video_formats.rs` module exposing `is_video_file`, replacing the identical eight-extension constant and extension check that were duplicated in `explorer_hook.rs` and `preview_window.rs`.
 
+### Fixed
+
+- Entering a folder no longer waits for a mouse move before previewing the item under the cursor. Clicks (left/right/middle), Enter and the history keys are now tracked as deliberate input, so the folder change they cause is recognized as user navigation instead of a change the gate has to wait out: the folder probe runs at the active cadence for a moment after such a press so the change is seen before the user's next key press, and the post-change suspension lifts on its own once the new view has settled. A folder change that no input precedes (a programmatic renavigation, a network refresh) still waits for the user, and the auto-focused first item still never previews without a key press.
+- A single navigation key press now opens the keyboard preview right after a folder change. The post-folder-change gate compared the focused item against a baseline recorded only once a key was already pressed, so that first press was swallowed as the baseline and the preview only appeared on the second one. The gate now also lifts on a navigation key press seen after the change — the press transition, not the key-down state, so key state left over from the navigation that opened the folder cannot lift it — and the item that press selects previews immediately.
+
 ## [0.1.14-rc.8] - 2026-09-15
 
 ### Added

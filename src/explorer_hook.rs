@@ -25,8 +25,8 @@ use windows::Win32::UI::Accessibility::{
     UIA_DataItemControlTypeId, UIA_LegacyIAccessiblePatternId, UIA_ListItemControlTypeId,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetAsyncKeyState, VK_DOWN, VK_END, VK_HOME, VK_LEFT, VK_NEXT, VK_PRIOR, VK_RIGHT, VK_UP,
-    VK_XBUTTON1, VK_XBUTTON2,
+    GetAsyncKeyState, VK_DOWN, VK_END, VK_HOME, VK_LBUTTON, VK_LEFT, VK_MBUTTON, VK_NEXT, VK_PRIOR,
+    VK_RBUTTON, VK_RETURN, VK_RIGHT, VK_UP, VK_XBUTTON1, VK_XBUTTON2,
 };
 use windows::Win32::UI::Shell::{
     IFolderView, INameSpaceTreeControl, IPersistFolder2, IShellBrowser, IShellFolder,
@@ -291,6 +291,7 @@ const EXPLORER_REAL_FOLDER_CACHE_MAX_ENTRIES: usize = 256;
 const SEARCH_ROOT_CACHE_MAX_ENTRIES: usize = 8;
 const FOLDER_PROBE_MS: u64 = 200;
 const IDLE_FOLDER_PROBE_MS: u64 = 750;
+const FOLDER_PROBE_TRIGGER_MS: u64 = 400;
 const DISPLAY_CHANGE_BACKOFF_MS: u64 = 1500;
 const KEYBOARD_FOCUS_INPUT_GRACE_MS: u64 = 500;
 const HOVER_RESOLVER_INPUT_GRACE_MS: u64 = 1500;
@@ -2803,18 +2804,47 @@ fn get_explorer_state() -> ExplorerState {
     ExplorerState::VisibleNotFocused
 }
 
-/// Detect whether the user is actively navigating Explorer with keyboard.
-/// We treat both current-down and "pressed since last check" states as input.
-fn is_keyboard_navigation_input_detected() -> bool {
-    unsafe {
-        let navigation_keys = [
-            VK_UP, VK_DOWN, VK_LEFT, VK_RIGHT, VK_HOME, VK_END, VK_PRIOR, VK_NEXT,
-        ];
+/// Keyboard navigation state: `active` is true while a navigation key is held
+/// or was pressed since the previous poll, and `pressed` is the fresh press
+/// transition alone. A held key keeps reporting `active` forever, so a folder
+/// change uses `pressed` to tell a new key press apart from state left over
+/// from the navigation that opened the folder.
+fn keyboard_navigation_input_state() -> (bool, bool) {
+    key_input_state(&[
+        VK_UP, VK_DOWN, VK_LEFT, VK_RIGHT, VK_HOME, VK_END, VK_PRIOR, VK_NEXT,
+    ])
+}
 
-        navigation_keys.iter().any(|&key| {
+/// Left, right and middle buttons are deliberate input even when the cursor
+/// never moves: the folder a double-click opens is user navigation, not a
+/// background change the preview has to wait out.
+fn mouse_button_input_state() -> (bool, bool) {
+    key_input_state(&mouse_press_buttons())
+}
+
+/// Enter opens the focused item, so it drives folder changes without any
+/// pointer input at all.
+fn activation_key_input_state() -> (bool, bool) {
+    key_input_state(&[VK_RETURN])
+}
+
+fn key_input_state(
+    keys: &[windows::Win32::UI::Input::KeyboardAndMouse::VIRTUAL_KEY],
+) -> (bool, bool) {
+    unsafe {
+        let mut active = false;
+        let mut pressed = false;
+        for &key in keys {
             let state = GetAsyncKeyState(key.0 as i32) as u16;
-            is_pressed_or_down_state(state)
-        })
+            if is_pressed_or_down_state(state) {
+                active = true;
+            }
+            if (state & 0x0001) != 0 {
+                pressed = true;
+            }
+        }
+
+        (active, pressed)
     }
 }
 
@@ -2869,6 +2899,10 @@ fn is_mouse_navigation_button_detected() -> bool {
     mouse_navigation_buttons()
         .iter()
         .any(|&key| unsafe { is_pressed_or_down_state(GetAsyncKeyState(key.0 as i32) as u16) })
+}
+
+fn mouse_press_buttons() -> [windows::Win32::UI::Input::KeyboardAndMouse::VIRTUAL_KEY; 3] {
+    [VK_LBUTTON, VK_RBUTTON, VK_MBUTTON]
 }
 
 fn hover_location_key(hints: &HoverResolverHints) -> Option<String> {
@@ -3210,11 +3244,26 @@ pub fn run_explorer_hook() {
     let mut allow_keyboard_preview_on_first_observation = false;
     let mut folder_change_time: Option<Instant> = None;
     let mut suspended_initial_focus: Option<String> = None;
+    // A folder change that follows recent input is user navigation: its gate
+    // lifts on its own once the view has settled, so the item under a parked
+    // cursor previews without a mouse move.
+    let mut folder_change_user_initiated = false;
+    // Navigation-key press transitions seen so far, and the value when the
+    // current suspension started. Only a later press may lift that
+    // suspension, which keeps key state left over from the navigation that
+    // opened the folder from counting as new input.
+    let mut keyboard_navigation_press_seq: u64 = 0;
+    let mut keyboard_press_seq_at_suspend: u64 = 0;
     let mut last_folder_probe = Instant::now();
     let mut last_hover_probe = Instant::now();
     let mut last_keyboard_focus_probe = Instant::now();
     let mut last_user_input_at: Option<Instant> = None;
     let mut last_keyboard_navigation_input_at: Option<Instant> = None;
+    // Set on a click, Enter or a navigation key press: the folder probe runs at
+    // the faster cadence for a moment afterwards, so a folder that press opens
+    // is noticed before the user's next key press instead of up to a full idle
+    // interval later.
+    let mut last_navigation_trigger_at: Option<Instant> = None;
     let mut stationary_hover_probe_done = false;
 
     // Wheel scrolling moves the list under a stationary pointer, so the wheel
@@ -3279,8 +3328,10 @@ pub fn run_explorer_hook() {
                 stationary_hover_probe_done = false;
                 suspend_preview_until_user_input = true;
                 allow_keyboard_preview_on_first_observation = false;
+                folder_change_user_initiated = false;
                 folder_change_time = Some(Instant::now());
                 suspended_initial_focus = None;
+                keyboard_press_seq_at_suspend = keyboard_navigation_press_seq;
                 hover_resolver_hints = HoverResolverHints::default();
                 last_cursor_location = None;
                 slow_explorer_probe_count = 0;
@@ -3383,6 +3434,7 @@ pub fn run_explorer_hook() {
             video_hover_guard_until = None;
             suspend_preview_until_user_input = false;
             allow_keyboard_preview_on_first_observation = false;
+            folder_change_user_initiated = false;
             last_cursor_location = None;
             hover_resolver_hints = HoverResolverHints::default();
             folder_change_time = None;
@@ -3468,10 +3520,18 @@ pub fn run_explorer_hook() {
             let move_threshold = pointer_pause.move_threshold_px();
             let moved = (cursor_pos.x - last_cursor_pos.x).abs() > move_threshold
                 || (cursor_pos.y - last_cursor_pos.y).abs() > move_threshold;
+            // Read the navigation keys first: GetAsyncKeyState's "pressed since
+            // the previous call" bit goes away with the first read of a key in
+            // an iteration, and that fresh press is what a folder change has to
+            // tell apart from a held key.
+            let (keyboard_navigation_active, keyboard_navigation_press) =
+                keyboard_navigation_input_state();
             let explorer_navigation_shortcut_input = is_explorer_navigation_shortcut_detected();
             let keyboard_navigation_input =
-                explorer_navigation_shortcut_input || is_keyboard_navigation_input_detected();
+                explorer_navigation_shortcut_input || keyboard_navigation_active;
             let mouse_navigation_input = is_mouse_navigation_button_detected();
+            let (mouse_button_input, mouse_button_press) = mouse_button_input_state();
+            let (activation_key_input, activation_key_press) = activation_key_input_state();
 
             // A wheel tick only counts while the wheel is driving Explorer: the
             // pointer is over it, or over a keyboard preview that covers the
@@ -3513,11 +3573,27 @@ pub fn run_explorer_hook() {
                 WHEEL_SCROLL_SETTLE_MS,
             );
 
-            if moved || keyboard_navigation_input || mouse_navigation_input || wheel_scroll {
+            if moved
+                || keyboard_navigation_input
+                || mouse_navigation_input
+                || mouse_button_input
+                || activation_key_input
+                || wheel_scroll
+            {
                 last_user_input_at = Some(loop_now);
             }
             if keyboard_navigation_input {
                 last_keyboard_navigation_input_at = Some(loop_now);
+            }
+            if keyboard_navigation_press {
+                keyboard_navigation_press_seq = keyboard_navigation_press_seq.wrapping_add(1);
+                // The item a fresh press selects is the user's own choice, so it
+                // must not be swallowed as a fresh baseline, even while no
+                // baseline is stored (folder change, mouse move, startup).
+                allow_keyboard_preview_on_first_observation = true;
+            }
+            if mouse_button_press || activation_key_press || keyboard_navigation_press {
+                last_navigation_trigger_at = Some(loop_now);
             }
 
             if explorer_navigation_shortcut_input || mouse_navigation_input {
@@ -3535,8 +3611,15 @@ pub fn run_explorer_hook() {
                 video_hover_guard_until = None;
                 suspend_preview_until_user_input = true;
                 allow_keyboard_preview_on_first_observation = false;
+                folder_change_user_initiated = false;
+                // History navigation (Backspace, Alt+arrows, the mouse
+                // back/forward buttons) changes the folder too: keep the faster
+                // probe cadence through the hold and past the release so the new
+                // location is recognized before the user's next key press.
+                last_navigation_trigger_at = Some(loop_now);
                 folder_change_time = Some(Instant::now());
                 suspended_initial_focus = None;
+                keyboard_press_seq_at_suspend = keyboard_navigation_press_seq;
                 last_cursor_pos = cursor_pos;
                 stationary_hover_probe_done = false;
                 continue;
@@ -3601,13 +3684,24 @@ pub fn run_explorer_hook() {
 
             // Detect folder/navigation changes and suspend preview until user input.
             // Probe at active-poll cadence only while a preview is visible; idle
-            // polling keeps the slower cadence to avoid extra COM work. While the
-            // keyboard drives, this cursor-based probe stays off: it resolves the
-            // window under the pointer, which is the keyboard preview itself.
+            // polling keeps the slower cadence to avoid extra COM work. A click,
+            // Enter or navigation key press takes that place for a moment: the
+            // folder it opens has to be recognized before the user's next key
+            // press, which otherwise lands in the folder-change gate below. While
+            // the keyboard drives, this cursor-based probe stays off: it resolves
+            // the window under the pointer, which is the keyboard preview itself.
             let preview_active =
                 last_file.is_some() || keyboard_file.is_some() || is_keyboard_hover;
+            let navigation_trigger_active = recent_elapsed_within(
+                last_navigation_trigger_at.map(|at| at.elapsed()),
+                FOLDER_PROBE_TRIGGER_MS,
+            );
             if last_folder_probe.elapsed()
-                >= Duration::from_millis(folder_probe_interval_ms(preview_active))
+                >= Duration::from_millis(if navigation_trigger_active {
+                    FOLDER_PROBE_MS
+                } else {
+                    folder_probe_interval_ms(preview_active)
+                })
                 && !is_keyboard_hover
                 && !pointer_pause.freezes_pointer()
                 && should_probe_hover_resolver(
@@ -3623,9 +3717,17 @@ pub fn run_explorer_hook() {
                         if let Some(folder) = hover_resolver_hints.current_folder.clone() {
                             queue_folder_index_build(PathBuf::from(&folder), folder);
                         }
+                        // A change that follows recent input is user navigation:
+                        // the file under the parked cursor may preview as soon as
+                        // the new view has settled, without a mouse move.
+                        let user_navigation = recent_elapsed_within(
+                            last_user_input_at.map(|at| at.elapsed()),
+                            HOVER_RESOLVER_INPUT_GRACE_MS,
+                        );
                         last_cursor_location = Some(location_key);
                         suspend_preview_until_user_input = true;
                         allow_keyboard_preview_on_first_observation = false;
+                        folder_change_user_initiated = user_navigation;
                         folder_change_time = Some(Instant::now());
                         suspended_initial_focus = None;
                         hover_start = None;
@@ -3633,8 +3735,12 @@ pub fn run_explorer_hook() {
                         // Reset cursor baseline so we don't mistake stale delta for movement.
                         last_cursor_pos = cursor_pos;
                         stationary_hover_probe_done = false;
-                        // Drain stale GetAsyncKeyState flags from prior navigation
-                        let _ = is_keyboard_navigation_input_detected();
+                        // Drain stale GetAsyncKeyState flags from prior navigation,
+                        // then remember the press count: only a later navigation key
+                        // press may lift this suspension, so key state left over
+                        // from the navigation that opened the folder cannot.
+                        let _ = keyboard_navigation_input_state();
+                        keyboard_press_seq_at_suspend = keyboard_navigation_press_seq;
 
                         if last_file.is_some() || keyboard_file.is_some() || is_keyboard_hover {
                             hide_preview();
@@ -3660,22 +3766,36 @@ pub fn run_explorer_hook() {
                     }
                 }
 
+                let navigation_press =
+                    keyboard_navigation_press_seq != keyboard_press_seq_at_suspend;
+
                 // A scroll is deliberate pointer input, so it releases the
                 // suspension exactly like a mouse move. The armed probe is used
                 // instead of the raw tick because the cooldown above bails out
                 // before this check, which would swallow a one-notch scroll.
-                if moved || scroll_probe.is_pending() {
+                // A folder opened by a click, Enter or a navigation key is user
+                // navigation too, so its suspension lifts once the new view has
+                // settled and the item under the parked cursor can preview
+                // without a mouse move. A navigation key press after the change
+                // releases it as well: that press is the user asking for the
+                // keyboard preview and must not be swallowed as a baseline.
+                if moved
+                    || scroll_probe.is_pending()
+                    || folder_change_user_initiated
+                    || navigation_press
+                {
                     suspend_preview_until_user_input = false;
-                    allow_keyboard_preview_on_first_observation = false;
+                    allow_keyboard_preview_on_first_observation = navigation_press;
+                    folder_change_user_initiated = false;
                     hover_start = Some(Instant::now());
                     stationary_hover_probe_done = false;
                     suspended_initial_focus = None;
                     folder_change_time = None;
                 } else {
-                    // Detect real keyboard navigation by observing UI Automation
-                    // focus changes, which is far more reliable than GetAsyncKeyState
-                    // (whose "pressed since last check" bit can carry stale state
-                    // from the navigation that opened this folder).
+                    // Nothing released the gate yet. Keep watching UI Automation
+                    // focus changes as a fallback for focus moves that no counted
+                    // press explains, such as Explorer restoring focus while the
+                    // new view is being built.
                     let mut keyboard_unlocked = false;
                     if should_probe_keyboard_focus(
                         last_keyboard_navigation_input_at.map(|at| at.elapsed()),
@@ -3708,6 +3828,7 @@ pub fn run_explorer_hook() {
                     if keyboard_unlocked {
                         suspend_preview_until_user_input = false;
                         allow_keyboard_preview_on_first_observation = true;
+                        folder_change_user_initiated = false;
                         suspended_initial_focus = None;
                         folder_change_time = None;
                     } else {
