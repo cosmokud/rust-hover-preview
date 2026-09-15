@@ -1,4 +1,6 @@
-use crate::config::{PreviewScale, TransparentBackground, DEFAULT_PREVIEW_SCALE_PERCENT};
+use crate::config::{
+    MarkdownMode, PreviewScale, TextTheme, TransparentBackground, DEFAULT_PREVIEW_SCALE_PERCENT,
+};
 use crate::preview_window::refresh_preview;
 use crate::{startup, CONFIG, RUNNING};
 use std::os::windows::ffi::OsStrExt;
@@ -57,6 +59,10 @@ const ID_TRAY_SCALE_150: u16 = 1045; // 150%
 const ID_TRAY_SCALE_100: u16 = 1046; // 100%
 const ID_TRAY_SCALE_50: u16 = 1047; // 50%
 const ID_TRAY_SCALE_25: u16 = 1048; // 25%
+const ID_TRAY_THEME_LIGHT: u16 = 1050; // Atom One Light
+const ID_TRAY_THEME_DARK: u16 = 1051; // One Dark Pro
+const ID_TRAY_MARKDOWN_RENDERED: u16 = 1052; // Rendered document
+const ID_TRAY_MARKDOWN_SOURCE: u16 = 1053; // Highlighted Markdown source
 
 const TRAY_CLASS: PCWSTR = w!("RustHoverPreviewTrayClass");
 
@@ -137,6 +143,10 @@ unsafe extern "system" fn tray_window_proc(
                 ID_TRAY_SCALE_100 => set_preview_scale(PreviewScale::Percent(100)),
                 ID_TRAY_SCALE_50 => set_preview_scale(PreviewScale::Percent(50)),
                 ID_TRAY_SCALE_25 => set_preview_scale(PreviewScale::Percent(25)),
+                ID_TRAY_THEME_LIGHT => set_theme(TextTheme::Light),
+                ID_TRAY_THEME_DARK => set_theme(TextTheme::Dark),
+                ID_TRAY_MARKDOWN_RENDERED => set_markdown_mode(MarkdownMode::Rendered),
+                ID_TRAY_MARKDOWN_SOURCE => set_markdown_mode(MarkdownMode::Source),
                 _ => {}
             }
             LRESULT(0)
@@ -270,6 +280,71 @@ unsafe fn show_context_menu(hwnd: HWND) {
         MF_STRING | MF_POPUP,
         background_menu.0 as usize,
         w!("Transparent Background"),
+    );
+
+    // Add Text Preview Theme submenu
+    let theme = CONFIG.lock().map(|c| c.theme).unwrap_or(TextTheme::Light);
+    let theme_menu = CreatePopupMenu().unwrap();
+
+    let theme_flag = |candidate: TextTheme| {
+        MF_STRING
+            | if theme == candidate {
+                MF_CHECKED
+            } else {
+                MF_UNCHECKED
+            }
+    };
+    let _ = AppendMenuW(
+        theme_menu,
+        theme_flag(TextTheme::Light),
+        ID_TRAY_THEME_LIGHT as usize,
+        w!("Atom One Light (Default)"),
+    );
+    let _ = AppendMenuW(
+        theme_menu,
+        theme_flag(TextTheme::Dark),
+        ID_TRAY_THEME_DARK as usize,
+        w!("One Dark Pro"),
+    );
+    let _ = AppendMenuW(
+        menu,
+        MF_STRING | MF_POPUP,
+        theme_menu.0 as usize,
+        w!("Text Preview Theme"),
+    );
+
+    // Add Markdown submenu
+    let markdown_mode = CONFIG
+        .lock()
+        .map(|c| c.markdown_mode)
+        .unwrap_or(MarkdownMode::Rendered);
+    let markdown_menu = CreatePopupMenu().unwrap();
+
+    let markdown_flag = |candidate: MarkdownMode| {
+        MF_STRING
+            | if markdown_mode == candidate {
+                MF_CHECKED
+            } else {
+                MF_UNCHECKED
+            }
+    };
+    let _ = AppendMenuW(
+        markdown_menu,
+        markdown_flag(MarkdownMode::Rendered),
+        ID_TRAY_MARKDOWN_RENDERED as usize,
+        w!("Rendered (Default)"),
+    );
+    let _ = AppendMenuW(
+        markdown_menu,
+        markdown_flag(MarkdownMode::Source),
+        ID_TRAY_MARKDOWN_SOURCE as usize,
+        w!("Highlighted Source"),
+    );
+    let _ = AppendMenuW(
+        menu,
+        MF_STRING | MF_POPUP,
+        markdown_menu.0 as usize,
+        w!("Markdown Preview"),
     );
 
     // Add Preview Delay submenu
@@ -608,6 +683,24 @@ fn toggle_confirm_file_type() {
 fn set_transparent_background(background: TransparentBackground) {
     if let Ok(mut config) = CONFIG.lock() {
         config.transparent_background = background;
+        config.save();
+    }
+    refresh_preview();
+}
+
+/// A text preview's colors and glyphs are painted into its frame, so the preview
+/// on screen is rebuilt rather than only composited again.
+fn set_theme(theme: TextTheme) {
+    if let Ok(mut config) = CONFIG.lock() {
+        config.theme = theme;
+        config.save();
+    }
+    refresh_preview();
+}
+
+fn set_markdown_mode(mode: MarkdownMode) {
+    if let Ok(mut config) = CONFIG.lock() {
+        config.markdown_mode = mode;
         config.save();
     }
     refresh_preview();
