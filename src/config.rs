@@ -14,6 +14,9 @@ pub const MAX_WEBP_PLAYBACK_FPS: u32 = 90;
 pub const DEFAULT_PREVIEW_SCALE_PERCENT: u32 = 100;
 pub const MIN_PREVIEW_SCALE_PERCENT: u32 = 1;
 pub const MAX_PREVIEW_SCALE_PERCENT: u32 = 1000;
+pub const DEFAULT_TEXT_FONT_SCALE_PERCENT: u32 = 100;
+pub const MIN_TEXT_FONT_SCALE_PERCENT: u32 = 1;
+pub const MAX_TEXT_FONT_SCALE_PERCENT: u32 = 1000;
 
 pub fn sanitize_webp_playback_fps(value: u32) -> u32 {
     match value {
@@ -21,6 +24,27 @@ pub fn sanitize_webp_playback_fps(value: u32) -> u32 {
         1..=MAX_WEBP_PLAYBACK_FPS => value,
         _ => MAX_WEBP_PLAYBACK_FPS,
     }
+}
+
+/// The text preview font scale, where `0` and nonsense land back on the default.
+/// Anything from 1% to 1000% is honored: the tray offers a handful of steps, but
+/// the value is a percentage either way, so a hand-edited one is not rounded to
+/// the nearest menu entry.
+pub fn sanitize_text_font_scale_percent(value: u32) -> u32 {
+    if value == 0 {
+        DEFAULT_TEXT_FONT_SCALE_PERCENT
+    } else {
+        value.clamp(MIN_TEXT_FONT_SCALE_PERCENT, MAX_TEXT_FONT_SCALE_PERCENT)
+    }
+}
+
+fn parse_text_font_scale(value: &str) -> Option<u32> {
+    let normalized = value.trim().to_ascii_lowercase();
+    let normalized = normalized.trim_end_matches('%').trim();
+    normalized
+        .parse::<u32>()
+        .ok()
+        .map(sanitize_text_font_scale_percent)
 }
 
 fn sanitize_preview_scale_percent(value: u32) -> u32 {
@@ -169,6 +193,10 @@ pub struct AppConfig {
     pub preview_scale: PreviewScale,
     pub theme: TextTheme,
     pub markdown_mode: MarkdownMode,
+    /// Whether text files are previewed at all, ahead of the extension list.
+    pub text_preview_enabled: bool,
+    /// Font scale for text previews, as a percentage of the default size.
+    pub text_font_scale_percent: u32,
     /// Extensions previewed as text, already normalized for lookup.
     pub text_extensions: Vec<String>,
 }
@@ -191,6 +219,8 @@ impl Default for AppConfig {
             preview_scale: PreviewScale::Percent(DEFAULT_PREVIEW_SCALE_PERCENT),
             theme: TextTheme::Light,
             markdown_mode: MarkdownMode::Rendered,
+            text_preview_enabled: true,
+            text_font_scale_percent: DEFAULT_TEXT_FONT_SCALE_PERCENT,
             text_extensions: sanitize_extensions(DEFAULT_TEXT_EXTENSIONS),
         }
     }
@@ -307,6 +337,16 @@ impl AppConfig {
                 Some(self.markdown_mode.as_str().to_string()),
             );
             ini.set(
+                CONFIG_SECTION,
+                "text_preview_enabled",
+                Some(self.text_preview_enabled.to_string()),
+            );
+            ini.set(
+                CONFIG_SECTION,
+                "text_font_scale",
+                Some(sanitize_text_font_scale_percent(self.text_font_scale_percent).to_string()),
+            );
+            ini.set(
                 TEXT_SECTION,
                 "extensions",
                 Some(sanitize_extensions(&self.text_extensions.join(",")).join(",")),
@@ -373,6 +413,14 @@ impl AppConfig {
                 self.markdown_mode = mode;
             }
         }
+        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "text_preview_enabled") {
+            self.text_preview_enabled = value;
+        }
+        if let Some(value) = ini.get(CONFIG_SECTION, "text_font_scale") {
+            if let Some(scale) = parse_text_font_scale(&value) {
+                self.text_font_scale_percent = scale;
+            }
+        }
         // An empty list means the user removed every extension, and the built-in
         // list comes back only when the key itself is gone.
         if let Some(value) = ini.get(TEXT_SECTION, "extensions") {
@@ -383,7 +431,40 @@ impl AppConfig {
 
 #[cfg(test)]
 mod tests {
-    use super::{MarkdownMode, TextTheme};
+    use super::{
+        parse_text_font_scale, sanitize_text_font_scale_percent, AppConfig, MarkdownMode, TextTheme,
+    };
+    use configparser::ini::Ini;
+
+    /// Reading the file is the half of the round trip a test can do without
+    /// touching the real `config.ini` in the user's profile.
+    #[test]
+    fn the_text_keys_are_read_from_the_ini() {
+        let mut ini = Ini::new();
+        ini.set("settings", "text_preview_enabled", Some("false".into()));
+        ini.set("settings", "text_font_scale", Some("175%".into()));
+        ini.set("text", "extensions", Some("md, py, .RS, md".into()));
+
+        let mut config = AppConfig::default();
+        config.apply_ini(&ini);
+
+        assert!(!config.text_preview_enabled);
+        assert_eq!(config.text_font_scale_percent, 175);
+        assert_eq!(config.text_extensions, vec!["md", "py", "rs"]);
+    }
+
+    #[test]
+    fn the_text_font_scale_accepts_percentages_and_resets_on_zero() {
+        assert_eq!(sanitize_text_font_scale_percent(0), 100);
+        assert_eq!(sanitize_text_font_scale_percent(25), 25);
+        assert_eq!(sanitize_text_font_scale_percent(400), 400);
+        assert_eq!(sanitize_text_font_scale_percent(5000), 1000);
+
+        assert_eq!(parse_text_font_scale("150"), Some(150));
+        assert_eq!(parse_text_font_scale(" 175% "), Some(175));
+        assert_eq!(parse_text_font_scale("0"), Some(100));
+        assert_eq!(parse_text_font_scale("large"), None);
+    }
 
     #[test]
     fn theme_names_round_trip_and_accept_aliases() {

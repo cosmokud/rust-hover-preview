@@ -62,11 +62,16 @@ pub fn matches_configured_extension(path: &Path, extensions: &[String]) -> bool 
     extensions.contains(&extension)
 }
 
-/// Whether the file is previewed as text under the current configuration.
+/// Whether the file is previewed as text under the current configuration. The
+/// `Enable TXT Preview` toggle is checked first, so turning text previews off
+/// leaves the extension list alone and turning them back on restores it.
 pub fn is_text_file(path: &Path) -> bool {
     CONFIG
         .lock()
-        .map(|config| matches_configured_extension(path, &config.text_extensions))
+        .map(|config| {
+            config.text_preview_enabled
+                && matches_configured_extension(path, &config.text_extensions)
+        })
         .unwrap_or(false)
 }
 

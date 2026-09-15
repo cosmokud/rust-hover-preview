@@ -1,6 +1,6 @@
 use crate::config::{
     sanitize_webp_playback_fps, MarkdownMode, PreviewScale, TextTheme, TransparentBackground,
-    DEFAULT_PREVIEW_SCALE_PERCENT, DEFAULT_WEBP_PLAYBACK_FPS,
+    DEFAULT_PREVIEW_SCALE_PERCENT, DEFAULT_TEXT_FONT_SCALE_PERCENT, DEFAULT_WEBP_PLAYBACK_FPS,
 };
 use crate::pdf_preview;
 use crate::text_formats;
@@ -648,18 +648,20 @@ fn current_preview_scale() -> PreviewScale {
         .unwrap_or(PreviewScale::Percent(DEFAULT_PREVIEW_SCALE_PERCENT))
 }
 
-/// The theme and Markdown rendering the configuration currently selects, read
-/// once per hover so a measure and the render that follows agree.
+/// The theme, Markdown rendering and font size the configuration currently
+/// selects, read once per hover so a measure and the render that follows agree.
 fn current_text_options() -> TextPreviewOptions {
     CONFIG
         .lock()
         .map(|cfg| TextPreviewOptions {
             theme: cfg.theme,
             markdown_mode: cfg.markdown_mode,
+            font_scale_percent: cfg.text_font_scale_percent,
         })
         .unwrap_or(TextPreviewOptions {
             theme: TextTheme::Light,
             markdown_mode: MarkdownMode::Rendered,
+            font_scale_percent: DEFAULT_TEXT_FONT_SCALE_PERCENT,
         })
 }
 
@@ -2504,7 +2506,8 @@ fn monitor_dpi_from_point(x: i32, y: i32) -> u32 {
         if !monitor.is_invalid() {
             let mut dpi_x = 0u32;
             let mut dpi_y = 0u32;
-            if GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y).is_ok() && dpi_x > 0
+            if GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y).is_ok()
+                && dpi_x > 0
             {
                 return dpi_x;
             }
@@ -3103,6 +3106,18 @@ fn monitor_bounds_from_point(x: i32, y: i32) -> ScreenBounds {
     virtual_screen_bounds()
 }
 
+/// The top edge that centers a `height`-tall preview on `center`, kept inside the
+/// display.
+///
+/// Centering is the intent and the screen edge is the limit: a preview that fits
+/// under a cursor near the top is placed where the cursor is rather than pushed
+/// down the display, and one tall enough to reach an edge is moved only as far as
+/// that edge allows.
+fn centered_top(center: i32, height: i32, bounds: ScreenBounds) -> i32 {
+    let lowest = (bounds.bottom - height).max(bounds.top);
+    (center - height / 2).clamp(bounds.top, lowest)
+}
+
 /// Compute preview layout for mouse hover (relative to cursor position)
 fn compute_mouse_layout(
     cursor_x: i32,
@@ -3231,7 +3246,12 @@ fn compute_mouse_layout(
         } else {
             cursor_x + offset
         };
-        let pos_y = bounds.top + (full_height - media_height) / 2;
+        // Best position means beside the cursor, not in the middle of the
+        // display. Centering on the cursor's own line keeps a small preview where
+        // the pointer is instead of floating at the screen's center — which for a
+        // cursor near the top put most of the preview below it — and the clamp is
+        // what still keeps a tall preview inside the display.
+        let pos_y = centered_top(cursor_y, media_height, bounds);
 
         Some(PreviewLayout {
             pos_x,
@@ -3376,7 +3396,9 @@ fn compute_keyboard_layout(
         } else {
             item_right + gap
         };
-        let pos_y = bounds.top + (full_height - media_height) / 2;
+        // The same rule as the mouse path, centered on the row the preview
+        // belongs to: beside the item it describes, not adrift in the display.
+        let pos_y = centered_top((item_top + item_bottom) / 2, media_height, bounds);
 
         Some(PreviewLayout {
             pos_x,
@@ -3937,5 +3959,111 @@ pub fn run_preview_window() {
         let (_, cvar) = &*load_request_slot;
         cvar.notify_all();
         let _ = load_worker.join();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{centered_top, compute_keyboard_layout, compute_mouse_layout, ScreenBounds};
+    use crate::config::PreviewScale;
+
+    /// A 1920x1040 work area at the origin, which is all the placement math needs.
+    fn screen() -> ScreenBounds {
+        ScreenBounds {
+            left: 0,
+            top: 0,
+            right: 1920,
+            bottom: 1040,
+        }
+    }
+
+    #[test]
+    fn a_centered_preview_follows_the_cursor_and_stops_at_the_edge() {
+        let cursor_y = 520;
+        assert_eq!(centered_top(cursor_y, 300, screen()), cursor_y - 150);
+        assert_eq!(centered_top(30, 800, screen()), 0);
+        assert_eq!(centered_top(1000, 800, screen()), 240);
+        // A preview taller than the display is pinned to its top edge rather than
+        // clamped into a range that does not exist.
+        assert_eq!(centered_top(520, 2000, screen()), 0);
+    }
+
+    #[test]
+    fn best_position_puts_the_preview_on_the_cursors_own_line() {
+        let layout = compute_mouse_layout(
+            600,
+            520,
+            (400, 300),
+            false,
+            PreviewScale::Percent(100),
+            screen(),
+        )
+        .expect("a layout");
+
+        // Beside the cursor horizontally, centered on it vertically.
+        assert_eq!((layout.pos_x, layout.pos_y), (620, 370));
+        assert_eq!((layout.preview_w, layout.preview_h), (400, 300));
+    }
+
+    #[test]
+    fn best_position_moves_a_small_preview_up_to_the_top_edge() {
+        // A cursor near the top: the preview is centered on it as far as the edge
+        // allows, instead of being centered on the display below the cursor.
+        let layout = compute_mouse_layout(
+            600,
+            30,
+            (400, 800),
+            false,
+            PreviewScale::Percent(100),
+            screen(),
+        )
+        .expect("a layout");
+
+        assert_eq!(layout.pos_y, 0);
+        assert!(layout.pos_y + layout.preview_h as i32 <= screen().bottom);
+
+        // And near the bottom it stops against that edge instead.
+        let layout = compute_mouse_layout(
+            600,
+            1000,
+            (400, 800),
+            false,
+            PreviewScale::Percent(100),
+            screen(),
+        )
+        .expect("a layout");
+
+        assert_eq!(layout.pos_y, 240);
+    }
+
+    #[test]
+    fn follow_cursor_mode_keeps_its_quadrant_placement() {
+        let layout = compute_mouse_layout(
+            600,
+            520,
+            (400, 300),
+            true,
+            PreviewScale::Percent(100),
+            screen(),
+        )
+        .expect("a layout");
+
+        // Still offset below the cursor rather than centered on it.
+        assert_eq!((layout.pos_x, layout.pos_y), (620, 540));
+    }
+
+    #[test]
+    fn a_keyboard_preview_centers_on_the_row_it_describes() {
+        let layout = compute_keyboard_layout(
+            (200, 300, 300, 320),
+            (400, 300),
+            false,
+            PreviewScale::Percent(100),
+            screen(),
+        )
+        .expect("a layout");
+
+        assert_eq!(layout.pos_x, 310);
+        assert_eq!(layout.pos_y, 160);
     }
 }
