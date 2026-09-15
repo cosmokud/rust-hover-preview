@@ -22,7 +22,7 @@ The app runs as a single instance per user session. `main` claims a session-loca
 - `single_instance.rs`: named-mutex guard that limits the app to one running instance per user session.
 - `explorer_hook.rs`: resolves hovered/focused Explorer items, handles path normalization, and sends preview messages.
 - `wheel_input.rs`: system-wide mouse-wheel hook thread that publishes a tick counter, so a scroll that moves the list under a parked pointer is visible to the polling loop.
-- `preview_window.rs`: layered window rendering, scale-aware sizing, animation streaming for GIF/WebP, FFmpeg-backed video playback, monitor-bounded placement with paint-before-show presentation, and WM_POWERBROADCAST handling to reset state on system resume and clean up on suspend.
+- `preview_window.rs`: layered window rendering, scale-aware sizing, animation streaming for GIF/WebP, FFmpeg-backed video playback with verified-PID process supervision (see Video Process Lifecycle), monitor-bounded placement with paint-before-show presentation, and WM_POWERBROADCAST handling to reset state on system resume and clean up on suspend.
 - `tray.rs`: tray icon and menu, configuration toggles, exit flow, and WM_POWERBROADCAST handling to re-add the icon after DWM/Explorer restart on resume.
 - `config.rs`: INI-backed configuration with defaults and input sanitization.
 - `startup.rs`: registry integration for the Run-at-startup setting.
@@ -31,7 +31,13 @@ The app runs as a single instance per user session. `main` claims a session-loca
 
 - Images (static, GIF, WebP) are decoded in the preview thread, with animated formats streaming frames into a shared queue.
 - The preview window uses GDI and `UpdateLayeredWindow` to draw to a topmost, no-activate surface.
-- Video previews launch `ffplay` for playback and query `ffprobe` for video geometry.
+- Video previews launch `ffplay` for playback and query `ffprobe` for video geometry; the player's lifetime is supervised as described in Video Process Lifecycle.
+
+## Video Process Lifecycle
+
+`ffplay` is the only long-lived external process the app spawns. It is started per hover, its own window is used as the preview surface while the layered window stays hidden, and it is stopped when the hover ends — switching to another video, switching to an image, leaving the file, disabling previews, a display change, or system suspend.
+
+Stopping is kill-only: the app requests termination and never waits for exit, because a process stuck in kernel I/O cannot be terminated by anyone in user mode, and an unbounded `wait` on the Explorer hook thread would freeze hover tracking for good. The PID of the last spawned player is therefore kept until the process is confirmed gone rather than cleared on the spot, and two checks recover a player that survived its stop: the Explorer hook re-checks the recorded PID once a second while no file is hovered and no keyboard preview is up, and the preview thread re-checks it before spawning a new `ffplay`, so a new preview cannot stack a second player next to a stalled one. Both checks terminate only when the recorded PID still belongs to `ffplay.exe`, read from the same process handle that is terminated, so a recycled PID can never hit an unrelated process; the record is cleared only after the process is gone, through a compare-exchange so a freshly spawned player's PID cannot be wiped by a stale check.
 
 ## Explorer Hook Flow
 
