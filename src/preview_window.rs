@@ -99,6 +99,10 @@ const TEXT_SCROLL_KEEP_ALIVE_PADDING_PIXELS: f32 = 26.0;
 static TEXT_SCROLL_KEEP_ALIVE: Lazy<Mutex<Option<(i32, i32, i32, i32)>>> =
     Lazy::new(|| Mutex::new(None));
 
+/// Whether the preview on screen is a text preview with more lines than it can
+/// show, which is the condition for everything above.
+static TEXT_PREVIEW_SCROLLABLE: AtomicBool = AtomicBool::new(false);
+
 // Track the ffplay video window HWND for cursor-over-preview detection
 static VIDEO_HWND: AtomicIsize = AtomicIsize::new(0);
 // Track the ffplay process ID to re-find the window if needed
@@ -3078,7 +3082,7 @@ unsafe fn render_layered_preview(hwnd: HWND) {
 /// and the wheel hook asks the same question before it decides whether the wheel
 /// belongs to Explorer or to the preview.
 unsafe fn publish_text_scroll_keep_alive(hwnd: HWND) {
-    let keep_alive = CURRENT_MEDIA
+    let dpi = CURRENT_MEDIA
         .lock()
         .ok()
         .and_then(|media| {
@@ -3088,22 +3092,24 @@ unsafe fn publish_text_scroll_keep_alive(hwnd: HWND) {
                 return None;
             }
             Some(scroll.dpi)
-        })
-        .and_then(|dpi| {
-            let mut rect = RECT::default();
-            if GetWindowRect(hwnd, &mut rect).is_err() {
-                return None;
-            }
-
-            let padding =
-                (TEXT_SCROLL_KEEP_ALIVE_PADDING_PIXELS * dpi as f32 / 96.0).round() as i32;
-            Some((
-                rect.left - padding,
-                rect.top - padding,
-                rect.right + padding,
-                rect.bottom + padding,
-            ))
         });
+
+    TEXT_PREVIEW_SCROLLABLE.store(dpi.is_some(), Ordering::Release);
+
+    let keep_alive = dpi.and_then(|dpi| {
+        let mut rect = RECT::default();
+        if GetWindowRect(hwnd, &mut rect).is_err() {
+            return None;
+        }
+
+        let padding = (TEXT_SCROLL_KEEP_ALIVE_PADDING_PIXELS * dpi as f32 / 96.0).round() as i32;
+        Some((
+            rect.left - padding,
+            rect.top - padding,
+            rect.right + padding,
+            rect.bottom + padding,
+        ))
+    });
 
     if let Ok(mut published) = TEXT_SCROLL_KEEP_ALIVE.lock() {
         *published = keep_alive;
@@ -3111,16 +3117,31 @@ unsafe fn publish_text_scroll_keep_alive(hwnd: HWND) {
 }
 
 fn clear_text_scroll_keep_alive() {
+    TEXT_PREVIEW_SCROLLABLE.store(false, Ordering::Release);
     if let Ok(mut published) = TEXT_SCROLL_KEEP_ALIVE.lock() {
         *published = None;
     }
+}
+
+/// Whether the preview on screen is a text preview that scrolls. Cheap enough for
+/// the Explorer hook to ask on every poll tick.
+pub fn text_preview_scrollable() -> bool {
+    TEXT_PREVIEW_SCROLLABLE.load(Ordering::Acquire)
 }
 
 /// Whether the pointer is inside the region that keeps a scrollable text preview
 /// alive. Answered from a published rectangle, so the Explorer hook can ask on
 /// every poll tick.
 pub fn text_scroll_pointer_hold(x: i32, y: i32) -> bool {
-    text_scroll_keep_alive_try()
+    if !text_preview_scrollable() {
+        return false;
+    }
+
+    let Ok(published) = TEXT_SCROLL_KEEP_ALIVE.lock() else {
+        return false;
+    };
+
+    published
         .map(|(left, top, right, bottom)| x >= left && x < right && y >= top && y < bottom)
         .unwrap_or(false)
 }
@@ -3130,6 +3151,10 @@ pub fn text_scroll_pointer_hold(x: i32, y: i32) -> bool {
 /// would stall every wheel message on the desktop — so a lock it cannot take
 /// immediately means the wheel is not ours to take either.
 pub fn text_scroll_keep_alive_try() -> Option<(i32, i32, i32, i32)> {
+    if !text_preview_scrollable() {
+        return None;
+    }
+
     TEXT_SCROLL_KEEP_ALIVE.try_lock().ok().and_then(|held| *held)
 }
 
@@ -4294,6 +4319,11 @@ pub fn run_preview_window() {
             } else if refresh_requested {
                 render_layered_preview(hwnd);
             }
+
+            // Keep the pointer region in step with the window rather than only
+            // with the paints: the window is moved when a frame is installed, and
+            // the Explorer hook reads this on every one of its own ticks.
+            publish_text_scroll_keep_alive(hwnd);
 
             std::thread::sleep(std::time::Duration::from_millis(16)); // ~60fps loop is enough and lowers idle CPU
         }
