@@ -14,7 +14,7 @@ use std::env;
 use std::fs::{File, OpenOptions};
 use std::io::{BufReader, Write};
 use std::os::windows::process::CommandExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, Ordering};
@@ -641,6 +641,20 @@ fn current_preview_scale() -> PreviewScale {
         .lock()
         .map(|cfg| cfg.preview_scale)
         .unwrap_or(PreviewScale::Percent(DEFAULT_PREVIEW_SCALE_PERCENT))
+}
+
+/// The scale a preview is laid out and rendered with.
+///
+/// A PDF page is a vector, so the engine draws it at whatever size it is asked
+/// for and a larger preview is sharper text rather than an enlarged raster. The
+/// configured scale could only hold that back, so a PDF always takes the space
+/// the display allows; every other format keeps the configured scale.
+fn effective_preview_scale(path: &Path, preview_scale: PreviewScale) -> PreviewScale {
+    if pdf_preview::is_pdf_file(path) {
+        PreviewScale::FitToScreen
+    } else {
+        preview_scale
+    }
 }
 
 fn effective_frame_delay_ms(media_type: &MediaType, source_delay_ms: u32) -> u32 {
@@ -3516,13 +3530,14 @@ pub fn run_preview_window() {
                 let mut show_layout: Option<PreviewLayout> = None;
                 let mut show_is_video: bool = false;
                 let mut show_requested = false;
-                let preview_scale = current_preview_scale();
+                let mut preview_scale = current_preview_scale();
 
                 match preview_msg {
                     PreviewMessage::Show(path, x, y) => {
                         show_requested = true;
                         let bounds = monitor_bounds_from_point(x, y);
                         let follow_cursor = CONFIG.lock().map(|c| c.follow_cursor).unwrap_or(true);
+                        preview_scale = effective_preview_scale(&path, preview_scale);
 
                         if let Some(orig_dims) = get_media_dimensions(&path) {
                             let is_video = is_video_file(&path);
@@ -3546,6 +3561,7 @@ pub fn run_preview_window() {
                         // its center resolves to that window's monitor.
                         let bounds = monitor_bounds_from_point((il + ir) / 2, (it + ib) / 2);
                         let follow_cursor = CONFIG.lock().map(|c| c.follow_cursor).unwrap_or(true);
+                        preview_scale = effective_preview_scale(&path, preview_scale);
 
                         if let Some(orig_dims) = get_media_dimensions(&path) {
                             let is_video = is_video_file(&path);
