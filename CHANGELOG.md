@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.1.14-rc.10] - 2026-09-15
+
+### Added
+
+- Animated PNGs are now recognized inside `.png` files instead of only in `.apng` files. An APNG is an ordinary PNG with an `acTL` chunk ahead of its first image data, so a `.png` file's chunk list is walked — a few dozen header bytes, no decoding — and only a file carrying that chunk takes the animation path; every other `.png` keeps the static path it had before. A `.png` animation with a single frame still falls back to a static preview, a malformed or truncated chunk list is treated as static, and `.apng` files behave exactly as they did.
+
+### Changed
+
+- The Explorer hook no longer allocates on every poll tick. The per-tick configuration snapshot no longer clones the off-trigger key string, the off-trigger virtual key is resolved once when the configuration changes instead of being trimmed, lowercased and parsed into a fresh string every tick, and the Explorer window class check compares `CabinetWClass`/`ExplorerWClass` in place instead of lowercasing every top-level window's class name into a new string on every enumeration.
+- The Explorer window and folder snapshot is shared rather than copied. Cache hits on the 250 ms snapshot now hand back a reference-counted list instead of cloning the vector and every folder path, which removes the remaining per-call allocations from the hover-resolution and folder-probe paths. When the snapshot is rebuilt did not change: the same 250 ms boundary and the same cache-clearing events.
+
 ## [0.1.14-rc.9] - 2026-09-15
 
 ### Added
