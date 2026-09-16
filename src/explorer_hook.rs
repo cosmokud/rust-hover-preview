@@ -3214,52 +3214,45 @@ fn root_window_at(point: POINT) -> Option<HWND> {
     }
 }
 
-/// The view the pointer is in: the Shell window whose own window is the root the
-/// pointer sits over, and the view that window is showing.
+/// Every Shell view registered for a window, deduplicated by the view's own
+/// identity.
 ///
-/// The Shell window is matched against the pointer's root window rather than
-/// against focus or a rectangle, which is what makes the answer "the view under
-/// this pointer" whatever else is on the screen: a background Explorer window, a
-/// tab that is not the one showing, and another application's window are all
-/// excluded by that one comparison. The view is kept while it is still the same
-/// view, so a hover that never leaves a window asks for it once.
-fn active_folder_view(resolver: &mut MouseResolver, point: POINT) -> Option<IFolderView2> {
-    let root_key = root_window_at(point)?.0 as isize;
-
-    if let Some(cached) = resolver.view.as_ref() {
-        if cached.browser_hwnd == root_key && cached.is_current() {
-            return Some(cached.folder_view.clone());
-        }
-    }
-
-    let shell_windows = resolver.shell_windows.as_ref()?;
+/// A window that holds several tabs registers one Shell window per tab, and every
+/// one of them answers with the frame's own window — so the frame names a set of
+/// views rather than one, and something else has to say which of them the pointer
+/// is in. The tabs that are not showing are not skipped here: they are what the
+/// item settles, and a view skipped here could be the one holding it.
+fn folder_views_for_window(resolver: &MouseResolver, root_key: isize) -> Vec<CachedFolderView> {
+    let mut candidates: Vec<CachedFolderView> = Vec::new();
+    let Some(shell_windows) = resolver.shell_windows.as_ref() else {
+        return candidates;
+    };
 
     unsafe {
-        let count = shell_windows.Count().ok()?;
+        let Ok(count) = shell_windows.Count() else {
+            return candidates;
+        };
 
         for index in 0..count.min(SHELL_WINDOW_LIMIT) {
-            let dispatch = match shell_windows.Item(&VARIANT::from(index)) {
-                Ok(dispatch) => dispatch,
-                Err(_) => continue,
+            let Ok(dispatch) = shell_windows.Item(&VARIANT::from(index)) else {
+                continue;
             };
-            let browser = match dispatch.cast::<windows::Win32::UI::Shell::IWebBrowser2>() {
-                Ok(browser) => browser,
-                Err(_) => continue,
+            let Ok(browser) = dispatch.cast::<windows::Win32::UI::Shell::IWebBrowser2>() else {
+                continue;
             };
-            let browser_hwnd = match browser.HWND() {
-                Ok(handle) => HWND(handle.0 as *mut core::ffi::c_void),
-                Err(_) => continue,
+            let Ok(handle) = browser.HWND() else {
+                continue;
             };
-            if browser_hwnd.0 as isize != root_key {
+            let browser_window = HWND(handle.0 as *mut core::ffi::c_void);
+            if browser_window.0 as isize != root_key {
                 continue;
             }
-            if !IsWindowVisible(browser_hwnd).as_bool() || IsIconic(browser_hwnd).as_bool() {
+            if !IsWindowVisible(browser_window).as_bool() || IsIconic(browser_window).as_bool() {
                 continue;
             }
 
-            let service_provider = match browser.cast::<IServiceProvider>() {
-                Ok(service_provider) => service_provider,
-                Err(_) => continue,
+            let Ok(service_provider) = browser.cast::<IServiceProvider>() else {
+                continue;
             };
             let shell_browser: IShellBrowser =
                 match service_provider.QueryService(&SID_STopLevelBrowser) {
@@ -3270,39 +3263,90 @@ fn active_folder_view(resolver: &mut MouseResolver, point: POINT) -> Option<IFol
                 Ok(shell_view) => shell_view,
                 Err(_) => continue,
             };
-            // A window holding several tabs registers one Shell window per tab,
-            // and the entries of the tabs that are not showing answer with a view
-            // that is not on the screen. The pointer is over a visible window, so
-            // the view it is in is the visible one.
-            let view_window = match shell_view.GetWindow() {
-                Ok(window) if !window.is_invalid() => window,
-                _ => continue,
+            let Ok(identity) = shell_view.cast::<IUnknown>() else {
+                continue;
             };
-            if !IsWindowVisible(view_window).as_bool() || is_window_minimized(view_window) {
+            let view_identity = Interface::as_raw(&identity);
+            if candidates
+                .iter()
+                .any(|candidate| candidate.view_identity == view_identity)
+            {
                 continue;
             }
-
-            let view_identity = match shell_view.cast::<IUnknown>() {
-                Ok(identity) => Interface::as_raw(&identity),
-                Err(_) => continue,
-            };
-            let folder_view = match shell_view.cast::<IFolderView2>() {
-                Ok(folder_view) => folder_view,
-                Err(_) => continue,
+            let Ok(folder_view) = shell_view.cast::<IFolderView2>() else {
+                continue;
             };
 
-            resolver.view = Some(CachedFolderView {
+            candidates.push(CachedFolderView {
                 browser_hwnd: root_key,
                 shell_browser,
                 view_identity,
-                folder_view: folder_view.clone(),
+                folder_view,
             });
-
-            return Some(folder_view);
         }
     }
 
-    None
+    candidates
+}
+
+/// How many Shell windows are registered, which is what says whether a window the
+/// pointer is in could be holding tabs.
+fn shell_window_count(resolver: &MouseResolver) -> Option<i32> {
+    unsafe { resolver.shell_windows.as_ref()?.Count().ok() }
+}
+
+/// The file the pointer's item stands for, asked of the view the pointer is in.
+///
+/// The view is the one the window under the pointer is showing, and a window that
+/// holds tabs registers one Shell window per tab — all of them answering with the
+/// frame's own window — so the frame names a set of views and not one. Which of
+/// them it is, is settled by the item: each candidate is asked for the file at the
+/// item's position under the item's name, and a view holding some other folder's
+/// items has nothing there to answer with. What two of them do answer has to
+/// agree: two tabs showing the same folder are one answer and either of them is
+/// the right one, while two tabs whose items differ are a question the item cannot
+/// settle — and no answer is better than the wrong tab's file.
+fn pointer_item_file_path(
+    resolver: &mut MouseResolver,
+    point: POINT,
+    item: &HoveredItem,
+) -> Option<PathBuf> {
+    let index = item.index? - 1;
+    let root_key = root_window_at(point)?.0 as isize;
+
+    // The view that answered last is asked first, but only while it is the *only*
+    // registration for the window: with one view there is no second one for it to
+    // disagree with, and a window holding tabs is never answered from the cache —
+    // a cached tab is one of several, and the cache cannot say which of them is
+    // showing.
+    if shell_window_count(resolver) == Some(1) {
+        if let Some(cached) = resolver.view.as_ref() {
+            if cached.browser_hwnd == root_key && cached.is_current() {
+                if let Some(path) = view_item_file_path(&cached.folder_view, index, &item.name) {
+                    return Some(path);
+                }
+            }
+        }
+    }
+
+    let mut answer: Option<(CachedFolderView, PathBuf)> = None;
+
+    for candidate in folder_views_for_window(resolver, root_key) {
+        let Some(path) = view_item_file_path(&candidate.folder_view, index, &item.name) else {
+            continue;
+        };
+
+        match &answer {
+            None => answer = Some((candidate, path)),
+            Some((_, existing)) if !same_path(existing, &path) => return None,
+            // Another tab showing the same folder is the same answer.
+            Some(_) => {}
+        }
+    }
+
+    let (view, path) = answer?;
+    resolver.view = Some(view);
+    Some(path)
 }
 
 /// The file system path the Shell holds for an item — the path the item *is*,
@@ -3413,19 +3457,15 @@ fn resolve_file_under_cursor(
     point: POINT,
 ) -> Option<PathBuf> {
     if let Some(item) = uia_item_under_cursor(resolver, point) {
-        if let Some(index) = item.index {
-            if let Some(view) = active_folder_view(resolver, point) {
-                if let Some(path) = view_item_file_path(&view, index - 1, &item.name) {
-                    // The view is asked twice: a wheel turns the list under a
-                    // parked pointer, and an item that is no longer at the point
-                    // the first answer described is not what that answer is about.
-                    if uia_item_under_cursor(resolver, point)
-                        .map(|again| again.same_item(&item))
-                        .unwrap_or(false)
-                    {
-                        return Some(path);
-                    }
-                }
+        if let Some(path) = pointer_item_file_path(resolver, point, &item) {
+            // The view is asked twice: a wheel turns the list under a parked
+            // pointer, and an item that is no longer at the point the first answer
+            // described is not what that answer is about.
+            if uia_item_under_cursor(resolver, point)
+                .map(|again| again.same_item(&item))
+                .unwrap_or(false)
+            {
+                return Some(path);
             }
         }
 
