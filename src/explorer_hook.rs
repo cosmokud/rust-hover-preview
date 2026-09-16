@@ -191,9 +191,11 @@ impl KeyboardPointerPause {
     }
 
     /// Cursor movement that hands control back to the mouse. Small movements are
-    /// ignored on purpose so a parked mouse cannot cancel a keyboard preview.
-    fn move_threshold_px(&self) -> i32 {
-        if self.freezes_pointer() {
+    /// ignored on purpose so a parked mouse cannot cancel a keyboard preview — and
+    /// the wider tolerance holds for the whole of the keyboard's turn, not only
+    /// while the preview's box happens to cover the cursor.
+    fn move_threshold_px(&self, keyboard_owns_screen: bool) -> i32 {
+        if keyboard_owns_screen || self.freezes_pointer() {
             KEYBOARD_POINTER_MOVE_TOLERANCE_PX
         } else {
             MOUSE_MOVE_PX
@@ -3309,6 +3311,17 @@ pub fn run_explorer_hook() {
     // opened the folder from counting as new input.
     let mut keyboard_navigation_press_seq: u64 = 0;
     let mut keyboard_press_seq_at_suspend: u64 = 0;
+    // Whether the keyboard is the one driving Explorer: set on a navigation key
+    // press and kept across the keyboard previews that follow, cleared only by
+    // deliberate pointer input — a move past the pointer tolerance or a wheel
+    // tick — or by a reset that ends the keyboard's turn outright (previews
+    // switched off, a display change, Explorer leaving the foreground). While
+    // it holds, the parked pointer may neither raise a preview nor take one
+    // over, which is what keeps the two previews from fighting over a list the
+    // keyboard is walking: a focused item with no preview to give must not hand
+    // the pointer the screen. It shows worst on a large search-result view,
+    // where the items the keyboard walks are the ones still being resolved.
+    let mut keyboard_screen_owner = false;
     let mut last_folder_probe = Instant::now();
     let mut last_hover_probe = Instant::now();
     let mut last_keyboard_focus_probe = Instant::now();
@@ -3405,6 +3418,7 @@ pub fn run_explorer_hook() {
                 folder_change_time = Some(Instant::now());
                 suspended_initial_focus = None;
                 keyboard_press_seq_at_suspend = keyboard_navigation_press_seq;
+                keyboard_screen_owner = false;
                 hover_resolver_hints = HoverResolverHints::default();
                 last_cursor_location = None;
                 slow_explorer_probe_count = 0;
@@ -3425,6 +3439,7 @@ pub fn run_explorer_hook() {
             last_file = None;
             keyboard_file = None;
             is_keyboard_hover = false;
+            keyboard_screen_owner = false;
             suppressed.clear();
             pointer_pause.clear();
             stationary_search_miss_started_at = None;
@@ -3487,6 +3502,7 @@ pub fn run_explorer_hook() {
             last_file = None;
             last_focused_name = None;
             is_keyboard_hover = false;
+            keyboard_screen_owner = false;
             video_hover_guard_until = None;
             suspend_preview_until_user_input = false;
             allow_keyboard_preview_on_first_observation = false;
@@ -3538,6 +3554,7 @@ pub fn run_explorer_hook() {
                     is_keyboard_hover = false;
                     video_hover_guard_until = None;
                     pointer_pause.clear();
+                    keyboard_screen_owner = false;
                 }
                 std::thread::sleep(Duration::from_millis(sleep_ms));
                 continue;
@@ -3559,6 +3576,7 @@ pub fn run_explorer_hook() {
                         is_keyboard_hover = false;
                         video_hover_guard_until = None;
                         pointer_pause.clear();
+                        keyboard_screen_owner = false;
                     }
                     std::thread::sleep(Duration::from_millis(sleep_ms));
                     continue;
@@ -3599,7 +3617,8 @@ pub fn run_explorer_hook() {
             // treated the way it was before the pointer ever touched it.
             let text_scroll_hold = text_scroll_pointer_hold(cursor_pos.x, cursor_pos.y);
 
-            let move_threshold = pointer_pause.move_threshold_px();
+            let move_threshold =
+                pointer_pause.move_threshold_px(is_keyboard_hover || keyboard_screen_owner);
             let moved = (cursor_pos.x - last_cursor_pos.x).abs() > move_threshold
                 || (cursor_pos.y - last_cursor_pos.y).abs() > move_threshold;
             // Read the navigation keys first: GetAsyncKeyState's "pressed since
@@ -3645,6 +3664,7 @@ pub fn run_explorer_hook() {
                     is_keyboard_hover = false;
                     video_hover_guard_until = None;
                     pointer_pause.clear();
+                    keyboard_screen_owner = false;
                     last_focused_name = None;
                     allow_keyboard_preview_on_first_observation = true;
                     last_keyboard_navigation_input_at = None;
@@ -3673,6 +3693,10 @@ pub fn run_explorer_hook() {
                 // must not be swallowed as a fresh baseline, even while no
                 // baseline is stored (folder change, mouse move, startup).
                 allow_keyboard_preview_on_first_observation = true;
+                // The press is also the keyboard taking the screen: the pointer
+                // stays parked, and nothing it sits on previews, until it takes
+                // its turn back with a move or the wheel.
+                keyboard_screen_owner = true;
             }
             if mouse_button_press || activation_key_press || keyboard_navigation_press {
                 last_navigation_trigger_at = Some(loop_now);
@@ -3702,6 +3726,7 @@ pub fn run_explorer_hook() {
                 folder_change_time = Some(Instant::now());
                 suspended_initial_focus = None;
                 keyboard_press_seq_at_suspend = keyboard_navigation_press_seq;
+                keyboard_screen_owner = false;
                 last_cursor_pos = cursor_pos;
                 stationary_hover_probe_done = false;
                 continue;
@@ -3916,6 +3941,7 @@ pub fn run_explorer_hook() {
                     if keyboard_unlocked {
                         suspend_preview_until_user_input = false;
                         allow_keyboard_preview_on_first_observation = true;
+                        keyboard_screen_owner = true;
                         folder_change_user_initiated = false;
                         suspended_initial_focus = None;
                         folder_change_time = None;
@@ -3940,6 +3966,7 @@ pub fn run_explorer_hook() {
                 // scroll gesture that was still settling.
                 pointer_pause.clear();
                 scroll_probe.disarm();
+                keyboard_screen_owner = false;
 
                 // Mouse movement always takes priority - dismiss keyboard hover.
                 // The keyboard preview may have been covering the cursor, so the
@@ -4070,6 +4097,7 @@ pub fn run_explorer_hook() {
                                     }
                                     keyboard_file = Some(path.clone());
                                     is_keyboard_hover = true;
+                                    keyboard_screen_owner = true;
                                     suppress_preview_until_cursor_leaves_preview = false;
                                     pointer_pause.watch_for_box();
                                     video_hover_guard_until = if is_video_file(&path) {
@@ -4127,6 +4155,7 @@ pub fn run_explorer_hook() {
                                 }
                                 keyboard_file = Some(path.clone());
                                 is_keyboard_hover = true;
+                                keyboard_screen_owner = true;
                                 suppress_preview_until_cursor_leaves_preview = false;
                                 pointer_pause.watch_for_box();
                                 video_hover_guard_until = if is_video_file(&path) {
@@ -4163,7 +4192,19 @@ pub fn run_explorer_hook() {
             // keyboard preview, skip mouse hover delay logic entirely. The same
             // goes for a pointer inside a scrollable text preview: the file under
             // it is not what the user is looking at, so nothing is hovered over.
-            if is_keyboard_hover || pointer_pause.freezes_pointer() || text_scroll_hold {
+            //
+            // A pointer parked since the keyboard last drove is in the same
+            // position for the same reason: the keyboard owns the screen, so a
+            // file it left behind — or one it landed on that has no preview to
+            // give — is not a reason for the pointer to raise a preview of
+            // whatever it happens to sit on. That is the whole of the fight, and
+            // it is worst in a large search-result view, where the file the
+            // keyboard walks away from is still whatever is under the cursor.
+            if is_keyboard_hover
+                || pointer_pause.freezes_pointer()
+                || text_scroll_hold
+                || keyboard_screen_owner
+            {
                 continue;
             }
 
