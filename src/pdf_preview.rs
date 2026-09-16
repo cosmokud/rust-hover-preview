@@ -3,13 +3,19 @@ use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::Read;
+use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use windows::core::PCWSTR;
 use windows::Data::Pdf::{PdfDocument, PdfPage, PdfPageRenderOptions};
 use windows::Graphics::Imaging::BitmapEncoder;
-use windows::Storage::Streams::{DataReader, DataWriter, InMemoryRandomAccessStream};
+use windows::Storage::Streams::{DataReader, IRandomAccessStream, InMemoryRandomAccessStream};
 use windows::UI::Color;
-use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
+use windows::Win32::System::Com::{
+    CoInitializeEx, IStream, COINIT_MULTITHREADED, STGM_READ, STGM_SHARE_DENY_NONE,
+};
+use windows::Win32::System::WinRT::{CreateRandomAccessStreamOverStream, BSOS_DEFAULT};
+use windows::Win32::UI::Shell::SHCreateStreamOnFileEx;
 
 /// A PDF header may sit behind leading bytes, so the whole first kilobyte is
 /// searched for the signature rather than only its start.
@@ -147,24 +153,36 @@ fn fit_page(width: f32, height: f32, max_width: u32, max_height: u32) -> Option<
     Some((target_width, target_height))
 }
 
-/// Open the document from bytes read here rather than through `StorageFile`.
+/// Open the document from a stream over the file itself.
 ///
-/// `StorageFile.GetFileFromPathAsync` rejects the verbatim paths the Explorer
-/// hook produces when it canonicalizes a shell path (`\\?\C:\...`): it fails
-/// with `ERROR_BAD_PATHNAME` while the same file opens through a plain path,
-/// which is why a PDF previewed from a search result but not from a folder
-/// view. Reading the file here keeps the WinRT boundary on the path forms the
-/// rest of the app uses, long and UNC paths included, at the cost of holding
-/// the file in memory while it is parsed.
+/// A PDF is read by seeking: the object graph is found from a table at the end of
+/// the file, and a page's content and the resources it names can be anywhere in
+/// it. A stream over the file lets the engine touch only what page 1 actually
+/// needs, instead of the whole file being read into memory and then copied again
+/// into a stream — so what a hover onto a large PDF costs is proportional to the
+/// page rather than to the file.
+///
+/// The file is opened with the path forms the rest of the app produces, the
+/// verbatim `\\?\` form included, because `SHCreateStreamOnFileEx` is handed the
+/// path rather than the WinRT broker being asked to resolve it — that refusal by
+/// `StorageFile.GetFileFromPathAsync` is why this used to be read into memory by
+/// hand.
 fn open_document(path: &Path) -> Option<PdfDocument> {
-    let bytes = std::fs::read(path).ok()?;
+    let mut wide: Vec<u16> = path.as_os_str().encode_wide().collect();
+    wide.push(0);
 
-    let stream = InMemoryRandomAccessStream::new().ok()?;
-    let writer = DataWriter::CreateDataWriter(&stream).ok()?;
-    writer.WriteBytes(&bytes).ok()?;
-    writer.StoreAsync().ok()?.get().ok()?;
-    writer.FlushAsync().ok()?.get().ok()?;
-    stream.Seek(0).ok()?;
+    let stream: IRandomAccessStream = unsafe {
+        let file = SHCreateStreamOnFileEx(
+            PCWSTR(wide.as_ptr()),
+            STGM_READ.0 | STGM_SHARE_DENY_NONE.0,
+            0,
+            false,
+            None::<&IStream>,
+        )
+        .ok()?;
+
+        CreateRandomAccessStreamOverStream(&file, BSOS_DEFAULT).ok()?
+    };
 
     PdfDocument::LoadFromStreamAsync(&stream).ok()?.get().ok()
 }

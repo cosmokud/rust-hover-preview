@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, Ordering};
-use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 use windows::core::{w, PCWSTR, PWSTR};
@@ -89,6 +89,12 @@ const MIN_ANIMATION_FRAME_DELAY_MS: u32 = 33;
 /// when the preview opens, not how much of the animation is played.
 const ANIMATION_STARTUP_FRAMES: usize = 2;
 const STREAMING_SPINNER_MAX_MS: u64 = 1500;
+/// How long the preview thread waits when there is nothing on screen: no preview
+/// to animate, nothing to repaint, and no pointer region left to keep in step.
+/// The wait is the preview channel rather than a sleep, so a hover is answered
+/// the moment it arrives and this interval is only a ceiling on how long a window
+/// message — a resume, a display change — waits to be noticed.
+const IDLE_WAIT_MS: u64 = 500;
 const VIDEO_GEOMETRY_CACHE_MAX_ENTRIES: usize = 512;
 // Expected executable name of the playback process spawned below, used to
 // verify a recorded PID still belongs to that process before killing it.
@@ -4799,6 +4805,9 @@ pub fn run_preview_window() {
 
         // Message loop
         let mut msg = MSG::default();
+        // A message the idle wait took off the channel, held for the drain below
+        // rather than acted on where it was received.
+        let mut carried_preview_msg: Option<PreviewMessage> = None;
         while RUNNING.load(Ordering::SeqCst) {
             // Check for Windows messages
             while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
@@ -4993,7 +5002,13 @@ pub fn run_preview_window() {
             // layouts for files the cursor has already left.
             let mut latest_preview_msg: Option<PreviewMessage> = None;
             let mut refresh_requested = false;
-            while let Ok(preview_msg) = rx.try_recv() {
+            let mut next_preview_msg = carried_preview_msg.take();
+            loop {
+                let Some(preview_msg) = next_preview_msg.or_else(|| rx.try_recv().ok()) else {
+                    break;
+                };
+                next_preview_msg = None;
+
                 match preview_msg {
                     PreviewMessage::Refresh => {
                         if latest_preview_msg.is_none() {
@@ -5346,7 +5361,28 @@ pub fn run_preview_window() {
             // the Explorer hook reads this on every one of its own ticks.
             publish_text_scroll_keep_alive(hwnd);
 
-            std::thread::sleep(std::time::Duration::from_millis(16)); // ~60fps loop is enough and lowers idle CPU
+            if current_show.is_none() && pending_load.is_none() {
+                // Nothing is on screen, which is where this thread used to spend
+                // its whole life waking sixty times a second to drain a queue that
+                // was empty and publish a region that did not exist. There is
+                // nothing to animate, nothing to repaint and nothing left to keep
+                // in step, so the wait becomes the preview channel itself: a hover
+                // is answered as it arrives rather than on the next tick, and the
+                // interval is only a ceiling on how long a window message — a
+                // resume, a display change — waits to be noticed.
+                carried_preview_msg = match rx.recv_timeout(Duration::from_millis(IDLE_WAIT_MS)) {
+                    Ok(message) => Some(message),
+                    Err(RecvTimeoutError::Timeout) => None,
+                    // Nothing left that could send, so this waits a tick rather
+                    // than spinning on a channel no message can arrive on.
+                    Err(RecvTimeoutError::Disconnected) => {
+                        std::thread::sleep(Duration::from_millis(IDLE_WAIT_MS));
+                        None
+                    }
+                };
+            } else {
+                std::thread::sleep(Duration::from_millis(16)); // ~60fps loop while something is on screen
+            }
         }
 
         // Signal the dedicated loader worker to stop and wait for shutdown.

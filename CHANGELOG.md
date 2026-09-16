@@ -8,12 +8,14 @@
 
 ### Changed
 
+- The preview thread no longer wakes on a timer while nothing is on screen: it waits on the hover channel instead, so an idle app stops waking sixty times a second, and a hover is answered as it arrives rather than on the next tick.
 - Animated GIF, APNG and WebP previews open on their first frames instead of waiting for a startup buffer.
 - Video previews read a file's dimensions and detect its letterboxing at the same time instead of one after the other.
 - A PDF's page size is remembered from the render that read it, so a file is not opened twice for one preview.
 
 ### Fixed
 
+- A PDF is no longer read into memory in full before its first page is rendered, so a large one costs memory in proportion to the page rather than to the file.
 - A OneDrive or SharePoint file that has not been downloaded no longer starts downloading when the pointer rests on it.
 - A very large image can no longer take the app down with it.
 - Hovering no longer stalls indefinitely when Explorer stops answering.
