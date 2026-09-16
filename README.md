@@ -34,7 +34,7 @@ A Windows 11 tray app inspired by QTTabBar that shows instant File Explorer prev
 
 `txt`, `md`, `rtf`, `nfo`, `json`, `toml`, `yaml`, `xml`, `ini`, `csv`, `log`, `sql`, `py`, `js`, `ts`, `rs`, `go`, `c`, `h`, `cpp`, `cs`, `java`, `kt`, `swift`, `php`, `rb`, `lua`, `sh`, `ps1`, `bat`, `html`, `css`, and more.
 
-Extensionless repository files such as `LICENSE`, `Makefile`, `Dockerfile`, and `.gitignore` are also supported. Text previews show the first screenful. Markdown can be rendered or shown as source. Full mode adds scrolling, selection, copy; it is off by default.
+Extensionless repository files such as `LICENSE`, `Makefile`, `Dockerfile`, and `.gitignore` are also supported. Text previews show the first screenful, with long lines wrapped instead of cut off. Markdown can be rendered or shown as source. Full mode adds scrolling, selection, copy; it is off by default.
 
 You can add custom extensions via `config.ini`.
 
