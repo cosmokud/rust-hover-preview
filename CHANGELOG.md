@@ -13,6 +13,7 @@
 
 ### Fixed
 
+- A text preview of a file with long lines is now tall enough to show the rows the line wraps into, instead of cutting them off below the first one.
 - Search results that share a file name each preview their own file.
 - A search result that lives in another folder previews from the keyboard too, not only under the pointer.
 - A Details or Content row previews from anywhere on it, not only from its text.
