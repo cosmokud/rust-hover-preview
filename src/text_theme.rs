@@ -1,15 +1,27 @@
-//! The two bundled color themes, and the scope lookups the renderer uses to ask
-//! them for a color.
+//! The color themes a text preview can be painted with, and the scope lookups the
+//! renderer uses to ask one for a color.
 //!
-//! Both files are TextMate themes generated from the VS Code themes of the same
-//! name (see `assets/themes/NOTICE.md`) and embedded in the binary, so the
-//! preview depends on no file on disk and no installation step. Each is parsed
+//! The two bundled themes are TextMate themes generated from the VS Code themes of
+//! the same name (see `assets/themes/NOTICE.md`) and embedded in the binary, so
+//! the preview depends on no file on disk and no installation step. Each is parsed
 //! once, on first use, and the parse result — including a failure — is kept for
 //! the lifetime of the process.
+//!
+//! A `.tmTheme` file in the user's `theme` folder is read from disk on the same
+//! terms and one step later: the file is read when a theme is asked for, not when
+//! the folder is listed, so a folder of files costs nothing until one of them is
+//! chosen. A file that is missing, unreadable, or not a theme at all is painted
+//! with the default instead (see [`loaded`]), and the files are dropped and read
+//! again whenever the tray menu is built, which is how a theme that was edited or
+//! repaired since it was chosen is the one the next preview shows.
 
 use crate::config::TextTheme;
+use crate::theme_files;
 use once_cell::sync::Lazy;
+use std::collections::HashMap;
 use std::io::Cursor;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
 use syntect::highlighting::{Color, Highlighter, Style, Theme, ThemeSet};
 use syntect::parsing::Scope;
 
@@ -63,8 +75,16 @@ impl LoadedTheme {
     }
 }
 
-fn load(source: &'static str) -> Option<LoadedTheme> {
-    let theme = ThemeSet::load_from_reader(&mut Cursor::new(source.as_bytes())).ok()?;
+fn parse(source: &[u8]) -> Option<LoadedTheme> {
+    let theme = ThemeSet::load_from_reader(&mut Cursor::new(source)).ok()?;
+
+    // A theme says what its page and its text are; a file that parses and names
+    // neither is a plist of some other kind wearing the extension, and guessing
+    // colors for it would be worse than the default.
+    if theme.settings.background.is_none() && theme.settings.foreground.is_none() {
+        return None;
+    }
+
     let theme: &'static Theme = Box::leak(Box::new(theme));
 
     Some(LoadedTheme {
@@ -73,22 +93,76 @@ fn load(source: &'static str) -> Option<LoadedTheme> {
     })
 }
 
-static LIGHT: Lazy<Option<LoadedTheme>> = Lazy::new(|| load(ATOM_ONE_LIGHT));
-static DARK: Lazy<Option<LoadedTheme>> = Lazy::new(|| load(ONE_DARK_PRO));
+static LIGHT: Lazy<Option<LoadedTheme>> = Lazy::new(|| parse(ATOM_ONE_LIGHT.as_bytes()));
+static DARK: Lazy<Option<LoadedTheme>> = Lazy::new(|| parse(ONE_DARK_PRO.as_bytes()));
 
-/// The bundled theme for `kind`. `None` — which the bundled files make
-/// impossible in practice — drops the preview rather than painting it with
-/// guessed colors.
+/// The user's themes by the name they were asked for, parsed once each — the ones
+/// that did not parse included, which are an answer too: a folder of files that
+/// are not themes would otherwise be read again on every repaint.
+static CUSTOM: Lazy<Mutex<HashMap<String, Option<&'static LoadedTheme>>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+
+/// How many times the user's themes have been read, so that a parsed document can
+/// say which reading it was styled against. A theme file edited under a running
+/// app is a different theme, and the lines colored with the old one cannot be
+/// handed out for it.
+static CUSTOM_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+/// The theme for `kind`: its own file for a theme that came from the `theme`
+/// folder, the bundled file for the two that ship, and, when a file cannot be
+/// read or is not a theme, the default — a broken file is not allowed to take the
+/// preview with it.
+///
+/// `None`, which the bundled files make impossible in practice, drops the preview
+/// rather than painting it with guessed colors.
 pub fn loaded(kind: TextTheme) -> Option<&'static LoadedTheme> {
     match kind {
         TextTheme::Light => LIGHT.as_ref(),
         TextTheme::Dark => DARK.as_ref(),
+        TextTheme::Custom(name) => custom(name).or_else(|| LIGHT.as_ref()),
     }
+}
+
+/// The theme a file in the `theme` folder holds, or `None` when the folder has no
+/// theme by that name, when the file cannot be read, or when what it holds is not
+/// a theme.
+pub fn custom(name: &str) -> Option<&'static LoadedTheme> {
+    let mut themes = match CUSTOM.lock() {
+        Ok(themes) => themes,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    if let Some(loaded) = themes.get(name) {
+        return *loaded;
+    }
+
+    let loaded = theme_files::path_of(name)
+        .and_then(|path| std::fs::read(path).ok())
+        .and_then(|source| parse(&source))
+        .map(|theme| &*Box::leak(Box::new(theme)));
+
+    themes.insert(name.to_string(), loaded);
+    loaded
+}
+
+/// Forgets the user's themes and counts a new reading, so that the folder as it
+/// is now is what the next menu lists and the next preview paints. Built with the
+/// tray menu, which is the one moment a user is looking at the files that back
+/// these names.
+pub fn refresh_custom() {
+    if let Ok(mut themes) = CUSTOM.lock() {
+        themes.clear();
+    }
+    CUSTOM_GENERATION.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Which reading of the user's themes is current; see `CUSTOM_GENERATION`.
+pub fn generation() -> u64 {
+    CUSTOM_GENERATION.load(Ordering::Relaxed)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{loaded, DARK, LIGHT};
+    use super::{loaded, parse, DARK, LIGHT};
     use crate::config::TextTheme;
 
     #[test]
@@ -121,5 +195,30 @@ mod tests {
                 "comments should not be painted in the default foreground"
             );
         }
+    }
+
+    /// A file that is there but is not a theme is not painted with: a truncated
+    /// document does not parse, and a plist that parses but says nothing about a
+    /// page or its text is some other kind of file carrying the extension.
+    #[test]
+    fn a_file_that_is_not_a_theme_does_not_load() {
+        assert!(parse(b"this is not a theme").is_none());
+        assert!(parse(b"<plist><dict><key>settings</key><string>soon").is_none());
+        assert!(parse(
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict><key>hello</key><string>there</string></dict></plist>"#
+        )
+        .is_none());
+    }
+
+    /// A name the folder cannot hold — a file that was deleted since it was
+    /// chosen, a name written by hand, a colon no Windows file name can carry —
+    /// is painted with the default rather than dropping the preview.
+    #[test]
+    fn a_theme_that_cannot_be_loaded_falls_back_to_the_default() {
+        let fallback = loaded(TextTheme::Custom("gone:theme")).unwrap();
+        let light = loaded(TextTheme::Light).unwrap();
+
+        assert!(std::ptr::eq(fallback, light));
     }
 }
