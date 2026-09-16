@@ -1,3 +1,4 @@
+use crate::config::PreviewType;
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
@@ -38,6 +39,17 @@ pub fn is_video_file(path: &Path) -> bool {
     }
 
     true
+}
+
+/// Whether a video preview may be shown for `path`: a file FFmpeg can demux, and
+/// the `Videos` gate in the tray's `Toggle Preview Types` submenu.
+///
+/// [`is_video_file`] is the classification on its own, which is what asks whether
+/// a file is a video rather than whether one may be shown — a `.ts` a video gate
+/// turned down must still be recognized as the transport stream it is, or the
+/// text lists would claim it.
+pub fn is_video_preview(path: &Path) -> bool {
+    is_video_file(path) && PreviewType::Videos.enabled()
 }
 
 fn looks_like_mpegts(path: &Path) -> bool {

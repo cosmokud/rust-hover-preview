@@ -34,7 +34,7 @@ A Windows 11 tray app inspired by QTTabBar that shows instant File Explorer prev
 
 `txt`, `md`, `rtf`, `nfo`, `json`, `toml`, `yaml`, `xml`, `ini`, `csv`, `log`, `sql`, `py`, `js`, `ts`, `rs`, `go`, `c`, `h`, `cpp`, `cs`, `java`, `kt`, `swift`, `php`, `rb`, `lua`, `sh`, `ps1`, `bat`, `html`, `css`, and more.
 
-Extensionless repository files such as `LICENSE`, `Makefile`, `Dockerfile`, and `.gitignore` are also supported. Text previews show the first screenful. Markdown can be rendered or shown as source. Full mode adds scrolling, selection, and copy; it is off by default.
+Extensionless repository files such as `LICENSE`, `Makefile`, `Dockerfile`, and `.gitignore` are also supported. Text previews show the first screenful. Markdown can be rendered or shown as source. Full mode adds scrolling, selection, copy; it is off by default.
 
 You can add custom extensions via `config.ini`.
 
@@ -93,11 +93,11 @@ ffprobe -version
 ## System Tray Menu
 
 - **Enable Preview** — turn previews on or off
+- **Toggle Preview Types** — Images, Videos, Text, PDF: switch a kind of preview off without touching its file list
 - **Preview Delay** — Instant, Fast, Medium, Relaxed, Slow
 - **Same File Rehover Delay** — delay before the same file can preview again
 - **Video Volume** — Max, High, Medium, Low, Very Low, Mute
 - **Preview Position** — Follow Cursor or Best Position
-- **Enable Text Preview** — turn text and code previews on or off
 - **Enable Text Preview Full Mode** — adds scrolling, selection, and copy; off by default
 - **Text Preview Theme** — Atom One Light, One Dark Pro, or custom `.tmTheme`
 - **Text Preview Font Size** — 100%–400%
@@ -128,6 +128,10 @@ run_at_startup=true
 hover_delay_ms=0
 same_file_rehover_delay_ms=750
 preview_enabled=true
+image_preview_enabled=true
+video_preview_enabled=true
+text_preview_enabled=true
+pdf_preview_enabled=true
 trigger_key=alt
 trigger_key_mode=disable
 confirm_file_type=false
@@ -150,8 +154,8 @@ Key settings:
 
 - `theme` — `light` (default), `dark`, or a custom theme as `custom:<name>`.
 - `markdown_mode` — `rendered` or `source`.
-- `text_preview_enabled` — `false` disables text previews without changing the extension list.
-- `text_preview_full_mode` — `true` adds scrolling, selection, and copy.
+- `image_preview_enabled` / `video_preview_enabled` / `text_preview_enabled` / `pdf_preview_enabled` — whether previews of that kind may be shown at all, without changing the lists of files it covers.
+- `text_preview_full_mode` — `true` adds scrolling, selection, copy, and `Ctrl+A`.
 - `text_font_scale` — percentage from 1 to 1000; default is `125`.
 - `extensions` / `names` — text-preview gates. Extensions are written without dots; names match extensionless files.
 - `trigger_key` / `trigger_key_mode` — key (`alt`, `ctrl`, `shift`, `win`) and mode (`disable` or `enable`).

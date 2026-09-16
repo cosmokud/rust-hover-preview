@@ -1,8 +1,9 @@
 use crate::config::{
-    sanitize_text_font_scale_percent, MarkdownMode, PreviewScale, TextTheme, TransparentBackground,
-    TriggerKeyMode, DEFAULT_PREVIEW_SCALE_PERCENT, DEFAULT_TEXT_FONT_SCALE_PERCENT,
+    sanitize_text_font_scale_percent, MarkdownMode, PreviewScale, PreviewType, TextTheme,
+    TransparentBackground, TriggerKeyMode, DEFAULT_PREVIEW_SCALE_PERCENT,
+    DEFAULT_TEXT_FONT_SCALE_PERCENT,
 };
-use crate::preview_window::refresh_preview;
+use crate::preview_window::{refresh_preview, refresh_preview_types};
 use crate::text_theme;
 use crate::theme_files;
 use crate::{startup, CONFIG, RUNNING};
@@ -70,8 +71,12 @@ const ID_TRAY_THEME_LIGHT: u16 = 1050; // Atom One Light
 const ID_TRAY_THEME_DARK: u16 = 1051; // One Dark Pro
 const ID_TRAY_MARKDOWN_RENDERED: u16 = 1052; // Rendered document
 const ID_TRAY_MARKDOWN_SOURCE: u16 = 1053; // Highlighted Markdown source
-const ID_TRAY_TEXT_ENABLE: u16 = 1060; // Text previews on/off
 const ID_TRAY_TEXT_FULL_MODE: u16 = 1061; // Text previews scroll/select on/off
+/// The `Toggle Preview Types` submenu, one command per kind of preview.
+const ID_TRAY_TYPE_IMAGES: u16 = 1062;
+const ID_TRAY_TYPE_VIDEOS: u16 = 1063;
+const ID_TRAY_TYPE_TEXT: u16 = 1064;
+const ID_TRAY_TYPE_PDF: u16 = 1065;
 const ID_TRAY_FONT_100: u16 = 1072;
 const ID_TRAY_FONT_125: u16 = 1073;
 const ID_TRAY_FONT_150: u16 = 1074;
@@ -183,8 +188,11 @@ unsafe extern "system" fn tray_window_proc(
                 }
                 ID_TRAY_MARKDOWN_RENDERED => set_markdown_mode(MarkdownMode::Rendered),
                 ID_TRAY_MARKDOWN_SOURCE => set_markdown_mode(MarkdownMode::Source),
-                ID_TRAY_TEXT_ENABLE => toggle_text_preview_enabled(),
                 ID_TRAY_TEXT_FULL_MODE => toggle_text_preview_full_mode(),
+                ID_TRAY_TYPE_IMAGES => toggle_preview_type(PreviewType::Images),
+                ID_TRAY_TYPE_VIDEOS => toggle_preview_type(PreviewType::Videos),
+                ID_TRAY_TYPE_TEXT => toggle_preview_type(PreviewType::Text),
+                ID_TRAY_TYPE_PDF => toggle_preview_type(PreviewType::Pdf),
                 ID_TRAY_FONT_100 => set_text_font_scale(100),
                 ID_TRAY_FONT_125 => set_text_font_scale(125),
                 ID_TRAY_FONT_150 => set_text_font_scale(150),
@@ -235,6 +243,35 @@ unsafe fn show_context_menu(hwnd: HWND) {
         enable_flags,
         ID_TRAY_ENABLE as usize,
         w!("Enable Preview"),
+    );
+
+    // Add the "Toggle Preview Types" submenu: one gate per kind of preview, on by
+    // default. A gate is only whether previews of that kind may be shown at all —
+    // the lists and settings that decide which files of that kind preview are left
+    // alone, so switching one off and back on restores what was configured.
+    let kinds = [
+        (PreviewType::Images, ID_TRAY_TYPE_IMAGES, w!("Images")),
+        (PreviewType::Videos, ID_TRAY_TYPE_VIDEOS, w!("Videos")),
+        (PreviewType::Text, ID_TRAY_TYPE_TEXT, w!("Text")),
+        (PreviewType::Pdf, ID_TRAY_TYPE_PDF, w!("PDF")),
+    ];
+    let types_menu = CreatePopupMenu().unwrap();
+
+    for (kind, id, label) in kinds {
+        let flags = MF_STRING
+            | if kind.enabled() {
+                MF_CHECKED
+            } else {
+                MF_UNCHECKED
+            };
+        let _ = AppendMenuW(types_menu, flags, id as usize, label);
+    }
+
+    let _ = AppendMenuW(
+        menu,
+        MF_STRING | MF_POPUP,
+        types_menu.0 as usize,
+        w!("Toggle Preview Types"),
     );
 
     // Add the "Trigger Key (Alt)" submenu: the key it watches, and what holding it
@@ -346,24 +383,6 @@ unsafe fn show_context_menu(hwnd: HWND) {
         MF_STRING | MF_POPUP,
         background_menu.0 as usize,
         w!("Transparent Background"),
-    );
-
-    // Add "Enable TXT Preview" with checkmark
-    let text_preview_enabled = CONFIG
-        .lock()
-        .map(|c| c.text_preview_enabled)
-        .unwrap_or(true);
-    let text_enable_flags = MF_STRING
-        | if text_preview_enabled {
-            MF_CHECKED
-        } else {
-            MF_UNCHECKED
-        };
-    let _ = AppendMenuW(
-        menu,
-        text_enable_flags,
-        ID_TRAY_TEXT_ENABLE as usize,
-        w!("Enable Text Preview"),
     );
 
     // Add "Enable Text Preview Full Mode" with checkmark
@@ -931,15 +950,18 @@ fn set_theme_from_menu(index: usize) {
     }
 }
 
-/// Both of these rebuild the visible preview the same way: turning text previews
-/// off drops the one on screen (the hover that produced it no longer measures),
-/// and a new font size repaints it at that size.
-fn toggle_text_preview_enabled() {
+/// Switching a kind of preview off drops the one on screen when it is of that
+/// kind — the hover that produced it no longer measures — and switching one back
+/// on leaves the preview that is up alone, since a preview of another kind has
+/// nothing to do with the gate that changed. The Explorer hook reads the gates
+/// fresh on every tick, so a change needs no restart and no cache to clear.
+fn toggle_preview_type(kind: PreviewType) {
     if let Ok(mut config) = CONFIG.lock() {
-        config.text_preview_enabled = !config.text_preview_enabled;
+        let enabled = kind.enabled_in(&config);
+        kind.set_enabled_in(&mut config, !enabled);
         config.save();
     }
-    refresh_preview();
+    refresh_preview_types();
 }
 
 /// Full mode changes what a text preview *is* rather than what it shows — it

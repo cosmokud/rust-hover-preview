@@ -1,3 +1,4 @@
+use crate::config::PreviewType;
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::fs::File;
@@ -40,6 +41,12 @@ pub fn is_pdf_file(path: &Path) -> bool {
         .and_then(|ext| ext.to_str())
         .map(|ext| ext.to_lowercase() == "pdf")
         .unwrap_or(false)
+}
+
+/// Whether a PDF preview may be shown for `path`: the file a page would be read
+/// from, and the `PDF` gate in the tray's `Toggle Preview Types` submenu.
+pub fn is_pdf_preview(path: &Path) -> bool {
+    is_pdf_file(path) && PreviewType::Pdf.enabled()
 }
 
 /// Page 1's size in DIPs, from the cache when the file has been seen before.

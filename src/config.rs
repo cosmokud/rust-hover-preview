@@ -266,6 +266,50 @@ impl MarkdownMode {
     }
 }
 
+/// A kind of preview, as the tray's `Toggle Preview Types` submenu lists them.
+///
+/// A gate is not a file list: it says whether previews of that kind may be shown
+/// at all, and the lists that decide *which* files of that kind are previewed are
+/// left untouched by it, so switching a kind off and back on restores exactly
+/// what was configured.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PreviewType {
+    Images,
+    Videos,
+    Text,
+    Pdf,
+}
+
+impl PreviewType {
+    /// Whether this kind of preview may be shown under the current configuration.
+    pub fn enabled(self) -> bool {
+        crate::CONFIG
+            .lock()
+            .map(|config| self.enabled_in(&config))
+            .unwrap_or(true)
+    }
+
+    /// Whether this kind of preview is switched on in `config`.
+    pub fn enabled_in(self, config: &AppConfig) -> bool {
+        match self {
+            Self::Images => config.image_preview_enabled,
+            Self::Videos => config.video_preview_enabled,
+            Self::Text => config.text_preview_enabled,
+            Self::Pdf => config.pdf_preview_enabled,
+        }
+    }
+
+    /// Switch this kind of preview on or off.
+    pub fn set_enabled_in(self, config: &mut AppConfig, enabled: bool) {
+        match self {
+            Self::Images => config.image_preview_enabled = enabled,
+            Self::Videos => config.video_preview_enabled = enabled,
+            Self::Text => config.text_preview_enabled = enabled,
+            Self::Pdf => config.pdf_preview_enabled = enabled,
+        }
+    }
+}
+
 /// What the trigger key does while it is held.
 ///
 /// A preview appears when a file is hovered, so the trigger key is normally what
@@ -327,8 +371,14 @@ pub struct AppConfig {
     pub preview_scale: PreviewScale,
     pub theme: TextTheme,
     pub markdown_mode: MarkdownMode,
+    /// Whether image previews may be shown at all.
+    pub image_preview_enabled: bool,
+    /// Whether video previews may be shown at all.
+    pub video_preview_enabled: bool,
     /// Whether text files are previewed at all, ahead of the extension list.
     pub text_preview_enabled: bool,
+    /// Whether PDF previews may be shown at all.
+    pub pdf_preview_enabled: bool,
     /// Whether a text preview is more than something to look at: a preview that
     /// scrolls, that can be selected and copied from, and that a pointer can rest
     /// on without closing it. Off by default, because it changes what a preview
@@ -365,7 +415,10 @@ impl Default for AppConfig {
             preview_scale: PreviewScale::Percent(DEFAULT_PREVIEW_SCALE_PERCENT),
             theme: TextTheme::Light,
             markdown_mode: MarkdownMode::Rendered,
+            image_preview_enabled: true,
+            video_preview_enabled: true,
             text_preview_enabled: true,
+            pdf_preview_enabled: true,
             text_preview_full_mode: false,
             text_font_scale_percent: DEFAULT_TEXT_FONT_SCALE_PERCENT,
             text_scroll_far_edge_grace_pixels: DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS,
@@ -494,8 +547,23 @@ impl AppConfig {
             );
             ini.set(
                 CONFIG_SECTION,
+                "image_preview_enabled",
+                Some(self.image_preview_enabled.to_string()),
+            );
+            ini.set(
+                CONFIG_SECTION,
+                "video_preview_enabled",
+                Some(self.video_preview_enabled.to_string()),
+            );
+            ini.set(
+                CONFIG_SECTION,
                 "text_preview_enabled",
                 Some(self.text_preview_enabled.to_string()),
+            );
+            ini.set(
+                CONFIG_SECTION,
+                "pdf_preview_enabled",
+                Some(self.pdf_preview_enabled.to_string()),
             );
             ini.set(
                 CONFIG_SECTION,
@@ -596,8 +664,17 @@ impl AppConfig {
                 self.markdown_mode = mode;
             }
         }
+        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "image_preview_enabled") {
+            self.image_preview_enabled = value;
+        }
+        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "video_preview_enabled") {
+            self.video_preview_enabled = value;
+        }
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "text_preview_enabled") {
             self.text_preview_enabled = value;
+        }
+        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "pdf_preview_enabled") {
+            self.pdf_preview_enabled = value;
         }
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "text_preview_full_mode") {
             self.text_preview_full_mode = value;

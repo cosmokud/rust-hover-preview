@@ -1,12 +1,12 @@
 use crate::config::{
-    sanitize_webp_playback_fps, MarkdownMode, PreviewScale, TextTheme, TransparentBackground,
-    DEFAULT_PREVIEW_SCALE_PERCENT, DEFAULT_TEXT_FONT_SCALE_PERCENT,
+    sanitize_webp_playback_fps, MarkdownMode, PreviewScale, PreviewType, TextTheme,
+    TransparentBackground, DEFAULT_PREVIEW_SCALE_PERCENT, DEFAULT_TEXT_FONT_SCALE_PERCENT,
     DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS, DEFAULT_WEBP_PLAYBACK_FPS,
 };
 use crate::pdf_preview;
 use crate::text_formats;
 use crate::text_preview::{self, TextPreviewOptions};
-use crate::video_formats::is_video_file;
+use crate::video_formats::{self, is_video_file};
 use crate::wheel_input;
 use crate::{CONFIG, RUNNING};
 use gif::DecodeOptions;
@@ -47,7 +47,7 @@ use windows::Win32::System::Threading::{
 };
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetAsyncKeyState, ReleaseCapture, SetCapture, VK_C, VK_CONTROL,
+    GetAsyncKeyState, ReleaseCapture, SetCapture, VK_A, VK_C, VK_CONTROL,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DispatchMessageW,
@@ -220,6 +220,10 @@ pub enum PreviewMessage {
     ShowKeyboard(PathBuf, i32, i32, i32, i32),
     Hide,
     Refresh,
+    /// A preview type was switched on or off. Only a preview whose own kind is
+    /// now off is rebuilt, and it is rebuilt from the hover it came from, so it
+    /// goes away on the spot rather than at the next pointer move.
+    RefreshTypes,
 }
 
 /// Represents different types of media we can display
@@ -232,6 +236,21 @@ enum MediaType {
     Pdf,
     Text,
     Loading,
+}
+
+impl MediaType {
+    /// The kind of preview this media is, as the tray's gates name them.
+    fn kind(&self) -> Option<PreviewType> {
+        match self {
+            Self::StaticImage | Self::AnimatedGif | Self::AnimatedApng | Self::AnimatedWebP => {
+                Some(PreviewType::Images)
+            }
+            Self::Video => Some(PreviewType::Videos),
+            Self::Text => Some(PreviewType::Text),
+            Self::Pdf => Some(PreviewType::Pdf),
+            Self::Loading => None,
+        }
+    }
 }
 
 /// A single frame of image data
@@ -577,6 +596,16 @@ pub fn refresh_preview() {
     }
 }
 
+/// A preview type was switched on or off in the tray, which is a question only
+/// the preview thread can answer: whether what is on screen is of that kind.
+pub fn refresh_preview_types() {
+    if let Ok(sender) = PREVIEW_SENDER.lock() {
+        if let Some(ref tx) = *sender {
+            let _ = tx.send(PreviewMessage::RefreshTypes);
+        }
+    }
+}
+
 /// Which preview surface the pointer is currently on.
 #[derive(Clone, Copy)]
 pub struct PreviewCursorHover {
@@ -849,6 +878,19 @@ fn current_media_is_text() -> bool {
             )
         })
         .unwrap_or(false)
+}
+
+/// Which kind of preview is on screen, if one is.
+///
+/// The media the renderer built already knows what it is, so this is the kind of
+/// preview that is up rather than a classification of the file it came from. A
+/// spinner is no kind: what it is standing in for has not been decided yet.
+fn current_media_kind() -> Option<PreviewType> {
+    CURRENT_MEDIA
+        .lock()
+        .ok()
+        .and_then(|media| media.as_ref().map(|media| media.media_type.kind()))
+        .flatten()
 }
 
 /// The scale a preview is laid out and rendered with.
@@ -2678,7 +2720,7 @@ fn load_media(
 
 /// Get original dimensions of media for positioning calculations
 fn get_media_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
-    if is_video_file(path) {
+    if video_formats::is_video_preview(path) {
         return get_video_geometry(path)
             .map(|g| (g.width, g.height))
             .or(Some((1920, 1080)));
@@ -2686,8 +2728,15 @@ fn get_media_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
 
     // A PDF is measured from its own first page; one that cannot be read as a
     // PDF reports no dimensions, which drops the preview instead of guessing.
-    if pdf_preview::is_pdf_file(path) {
+    if pdf_preview::is_pdf_preview(path) {
         return pdf_preview::page_dimensions(path);
+    }
+
+    // Whatever is left is an image, so the `Images` gate is what decides it. A
+    // file of a kind that is switched off reports no size, which is how the
+    // layout drops its preview.
+    if !PreviewType::Images.enabled() {
+        return None;
     }
 
     if is_confirm_file_type_enabled() {
@@ -3606,6 +3655,21 @@ fn has_text_selection() -> bool {
         .unwrap_or(false)
 }
 
+/// Whether the text preview on screen has a frame to select from, which is what
+/// makes a Ctrl+A the preview's to answer.
+fn has_text_frame() -> bool {
+    CURRENT_MEDIA
+        .lock()
+        .map(|media| {
+            media
+                .as_ref()
+                .and_then(|media| media.text_state.as_ref())
+                .map(|state| !state.lines.is_empty())
+                .unwrap_or(false)
+        })
+        .unwrap_or(false)
+}
+
 /// Select everything the frame shows: the whole of a document that fits on one
 /// page, and the screenful a longer one is showing.
 ///
@@ -3707,6 +3771,25 @@ fn text_preview_copy_requested() -> bool {
     unsafe {
         let control = GetAsyncKeyState(VK_CONTROL.0 as i32) as u16 & 0x8000 != 0;
         let just_pressed = GetAsyncKeyState(VK_C.0 as i32) & 1 != 0;
+        control && just_pressed
+    }
+}
+
+/// Ask for Ctrl+A to select everything the preview shows, which is the same
+/// command the menu's `Select All` offers.
+///
+/// Read exactly the way Ctrl+C is — the preview never takes focus — and only
+/// while a text preview with lines in it is on screen, so a Ctrl+A meant for
+/// something else is left alone. Nothing is read at all while no text preview is
+/// up, and a preview without full mode keeps no lines to select from.
+fn text_preview_select_all_requested() -> bool {
+    if !has_text_frame() {
+        return false;
+    }
+
+    unsafe {
+        let control = GetAsyncKeyState(VK_CONTROL.0 as i32) as u16 & 0x8000 != 0;
+        let just_pressed = GetAsyncKeyState(VK_A.0 as i32) & 1 != 0;
         control && just_pressed
     }
 }
@@ -4540,6 +4623,22 @@ pub fn run_preview_window() {
                             }
                         }
                     }
+                    PreviewMessage::RefreshTypes => {
+                        // A preview of a kind that was switched off is rebuilt
+                        // from the hover it came from, which is what drops it:
+                        // the layout finds no size for a file whose kind is off.
+                        // Every other preview is left exactly as it is — a
+                        // running video is not restarted by a toggle it has
+                        // nothing to do with.
+                        if latest_preview_msg.is_none() {
+                            match (current_media_kind(), current_show.clone()) {
+                                (Some(kind), Some(show)) if !kind.enabled() => {
+                                    latest_preview_msg = Some(show)
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
                     other => {
                         latest_preview_msg = Some(other);
                         refresh_requested = false;
@@ -4647,6 +4746,10 @@ pub fn run_preview_window() {
                     PreviewMessage::Refresh => {
                         render_layered_preview(hwnd);
                     }
+                    // A type toggle is answered by the receive loop above, which
+                    // is where the kind of the preview on screen is known; it
+                    // replays the hover instead of arriving here as itself.
+                    PreviewMessage::RefreshTypes => {}
                 }
 
                 // Shared load/display logic for Show and ShowKeyboard
@@ -4825,9 +4928,13 @@ pub fn run_preview_window() {
                 render_layered_preview(hwnd);
             }
 
-            // Ctrl+C over a text preview copies what is selected in it. The key is
-            // polled rather than waited for: the preview never takes focus, so it
-            // would never receive the keystroke as a message.
+            // Ctrl+C over a text preview copies what is selected in it, and
+            // Ctrl+A selects everything it shows. The keys are polled rather than
+            // waited for: the preview never takes focus, so it would never
+            // receive the keystroke as a message.
+            if text_preview_select_all_requested() {
+                select_all_text_preview(hwnd);
+            }
             if text_preview_copy_requested() {
                 copy_text_preview(hwnd);
             }
