@@ -107,6 +107,25 @@ const TEXT_SCROLL_ANCHOR_SLACK_PIXELS: i32 = 1;
 /// press in the text is the start of a selection rather than a scroll.
 const TEXT_SCROLL_BAR_PRESS_SLACK_PIXELS: f32 = 8.0;
 
+/// How far past the far edge of a text preview the hold region reaches, in logical
+/// pixels.
+///
+/// That edge is the one the pointer arrives at last, and the one it can overshoot:
+/// crossing the gap to reach the preview is a movement towards it, so the hand is
+/// still moving when it gets there, and what usually waits at the end of the
+/// journey is the scrollbar — a thin target sitting at the very edge of the frame.
+/// A few pixels past it would otherwise take the preview down with it, which is
+/// what this is for. It goes on the far side whichever side that is: the preview to
+/// the right of the cursor is the common case, and then it is the right edge.
+const TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS: f32 = 30.0;
+
+/// `TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS` at the display the preview is on. A margin
+/// that is comfortable at 100% is a sliver at 200%, and the scrollbar it is there
+/// for scales with the text.
+fn far_edge_grace(dpi: u32) -> i32 {
+    (TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS * dpi as f32 / 96.0).round() as i32
+}
+
 /// A region on screen: left, top, right, bottom.
 type ScreenRegion = (i32, i32, i32, i32);
 
@@ -136,20 +155,32 @@ static TEXT_PREVIEW_HOLDING: AtomicBool = AtomicBool::new(false);
 /// the placement chose. Joining the two means that journey never leaves the
 /// region, however the preview ended up placed relative to the cursor, and it
 /// keeps the region off everything else: one pixel behind the point the preview
-/// was opened from and no slack beyond the preview, so what it covers away from
+/// was opened from and no slack beyond the preview, apart from `far_edge_grace`
+/// past the edge the pointer was travelling towards — so what it covers away from
 /// the preview is a single row of the file list.
-fn text_scroll_hold_region(preview: ScreenRegion, anchor: (i32, i32)) -> ScreenRegion {
+fn text_scroll_hold_region(
+    preview: ScreenRegion,
+    anchor: (i32, i32),
+    far_edge_grace: i32,
+) -> ScreenRegion {
     let (left, top, right, bottom) = preview;
 
     let (region_left, region_right) = if anchor.0 < left {
-        // The preview is to the right of where the pointer was.
-        (anchor.0 - TEXT_SCROLL_ANCHOR_SLACK_PIXELS, right)
+        // The preview is to the right of where the pointer was, so the journey is
+        // rightwards and the edge it ends at is the right one.
+        (
+            anchor.0 - TEXT_SCROLL_ANCHOR_SLACK_PIXELS,
+            right + far_edge_grace,
+        )
     } else if anchor.0 >= right {
-        // …or to its left.
-        (left, anchor.0 + TEXT_SCROLL_ANCHOR_SLACK_PIXELS)
+        // …or to its left, where the journey ends at the left edge.
+        (
+            left - far_edge_grace,
+            anchor.0 + TEXT_SCROLL_ANCHOR_SLACK_PIXELS,
+        )
     } else {
-        // The pointer is already in the preview's own column, so the preview is
-        // all the region needs to be.
+        // The pointer is already in the preview's own column, so there is no edge
+        // it travelled towards and the preview is all the region needs to be.
         (left, right)
     };
 
@@ -3181,7 +3212,7 @@ unsafe fn publish_text_scroll_keep_alive(hwnd: HWND) {
     );
     TEXT_PREVIEW_HOLDING.store(state.is_some(), Ordering::Release);
 
-    let keep_alive = state.and_then(|_| {
+    let keep_alive = state.and_then(|(dpi, _)| {
         let mut rect = RECT::default();
         if GetWindowRect(hwnd, &mut rect).is_err() {
             return None;
@@ -3197,7 +3228,11 @@ unsafe fn publish_text_scroll_keep_alive(hwnd: HWND) {
             // leaves the region as the preview alone.
             .unwrap_or((preview.0, preview.1));
 
-        Some(text_scroll_hold_region(preview, anchor))
+        Some(text_scroll_hold_region(
+            preview,
+            anchor,
+            far_edge_grace(dpi),
+        ))
     });
 
     if let Ok(mut published) = TEXT_SCROLL_KEEP_ALIVE.lock() {
@@ -4867,32 +4902,47 @@ mod tests {
     }
 
     /// The region that keeps a preview alive joins the point it was opened from
-    /// to the preview: one pixel behind that point along the way, and no slack
-    /// beyond the preview.
+    /// to the preview: one pixel behind that point along the way, and the far edge
+    /// — the one the pointer arrives at — extended by the grace a hand that
+    /// overshoots it needs.
     #[test]
     fn the_hold_region_stretches_from_the_file_to_the_preview() {
         // A preview placed to the right of the cursor: the region starts one
         // pixel behind the pointer — a step further takes the pointer out of it —
-        // and its edge is the preview's own.
-        let region = text_scroll_hold_region((620, 300, 1020, 700), (600, 500));
-        assert_eq!(region, (599, 300, 1020, 700));
+        // and reaches past the preview on the right, the side it was reached from.
+        let region = text_scroll_hold_region((620, 300, 1020, 700), (600, 500), 30);
+        assert_eq!(region, (599, 300, 1050, 700));
 
-        // Placed to the left instead: the mirror image.
-        let region = text_scroll_hold_region((200, 100, 600, 500), (620, 300));
-        assert_eq!(region, (200, 100, 621, 500));
+        // Placed to the left instead: the mirror image, with the grace on the left.
+        let region = text_scroll_hold_region((200, 100, 600, 500), (620, 300), 30);
+        assert_eq!(region, (170, 100, 621, 500));
 
         // A preview in the pointer's own column is just the preview, joined to the
-        // pointer's row.
-        let region = text_scroll_hold_region((300, 100, 500, 400), (400, 600));
+        // pointer's row: it was not travelled to from either side.
+        let region = text_scroll_hold_region((300, 100, 500, 400), (400, 600), 30);
         assert_eq!(region, (300, 100, 500, 600));
+
+        // With no grace asked for, the region ends at the preview.
+        let region = text_scroll_hold_region((620, 300, 1020, 700), (600, 500), 0);
+        assert_eq!(region, (599, 300, 1020, 700));
 
         // The point the preview was opened from is inside its own region, and one
         // pixel further back is not.
         let anchor = (900, 400);
-        let region = text_scroll_hold_region((920, 300, 1300, 700), anchor);
+        let region = text_scroll_hold_region((920, 300, 1300, 700), anchor, 30);
         assert!(region.0 <= anchor.0 && region.2 >= anchor.0);
         assert!(region.1 <= anchor.1 && region.3 >= anchor.1);
         assert!(region.0 > anchor.0 - 2);
+    }
+
+    /// The grace is measured in logical pixels, so it is the same distance under a
+    /// hand on any display; the scrollbar it is there for scales with the text.
+    #[test]
+    fn the_far_edge_grace_follows_the_display_dpi() {
+        assert_eq!(super::far_edge_grace(96), 30);
+        assert_eq!(super::far_edge_grace(120), 38);
+        assert_eq!(super::far_edge_grace(144), 45);
+        assert_eq!(super::far_edge_grace(192), 60);
     }
 
     /// Full mode is what a preview keeps its state for: with it off there is
