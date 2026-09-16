@@ -12,6 +12,7 @@
 - Animated GIF, APNG and WebP previews open on their first frames instead of waiting for a startup buffer.
 - Video previews read a file's dimensions and detect its letterboxing at the same time instead of one after the other.
 - A PDF's page size is remembered from the render that read it, so a file is not opened twice for one preview.
+- Bumped version to 0.2.4 in Cargo.toml and Cargo.lock
 
 ### Fixed
 
