@@ -25,6 +25,11 @@ pub const MIN_TEXT_FONT_SCALE_PERCENT: u32 = 1;
 pub const MAX_TEXT_FONT_SCALE_PERCENT: u32 = 1000;
 pub const DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS: f32 = 40.0;
 pub const MAX_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS: f32 = 1000.0;
+/// Memory the decoded-image cache may hold. A preview is decoded at the size the
+/// layout asked for, so this is a ceiling on retained pixels rather than on
+/// files: how many images fit depends entirely on how large they are shown.
+pub const DEFAULT_IMAGE_CACHE_MB: u32 = 64;
+pub const MAX_IMAGE_CACHE_MB: u32 = 2048;
 
 pub fn sanitize_webp_playback_fps(value: u32) -> u32 {
     match value {
@@ -32,6 +37,14 @@ pub fn sanitize_webp_playback_fps(value: u32) -> u32 {
         1..=MAX_WEBP_PLAYBACK_FPS => value,
         _ => MAX_WEBP_PLAYBACK_FPS,
     }
+}
+
+/// The decoded-image cache size in megabytes. `0` is a cache that is switched
+/// off rather than a size that has to be corrected — it is the way to ask for
+/// every preview to be decoded again — and anything past the ceiling is clamped
+/// to it.
+pub fn sanitize_image_cache_mb(value: u32) -> u32 {
+    value.min(MAX_IMAGE_CACHE_MB)
 }
 
 /// The text preview font scale, where `0` and nonsense land back on the default.
@@ -366,6 +379,9 @@ pub struct AppConfig {
     pub follow_cursor: bool,
     pub same_file_rehover_delay_ms: u64,
     pub webp_playback_fps: u32,
+    /// Memory the decoded-image cache may hold, in megabytes. `0` switches the
+    /// cache off, so every preview is decoded again.
+    pub image_cache_mb: u32,
     pub transparent_background: TransparentBackground,
     pub video_volume: u32,
     pub preview_scale: PreviewScale,
@@ -410,6 +426,7 @@ impl Default for AppConfig {
             follow_cursor: false,
             same_file_rehover_delay_ms: 750,
             webp_playback_fps: DEFAULT_WEBP_PLAYBACK_FPS,
+            image_cache_mb: DEFAULT_IMAGE_CACHE_MB,
             transparent_background: TransparentBackground::Black,
             video_volume: 0, // Mute by default
             preview_scale: PreviewScale::Percent(DEFAULT_PREVIEW_SCALE_PERCENT),
@@ -526,6 +543,11 @@ impl AppConfig {
             );
             ini.set(
                 CONFIG_SECTION,
+                "image_cache_mb",
+                Some(sanitize_image_cache_mb(self.image_cache_mb).to_string()),
+            );
+            ini.set(
+                CONFIG_SECTION,
                 "transparent_background",
                 Some(self.transparent_background.as_str().to_string()),
             );
@@ -637,6 +659,11 @@ impl AppConfig {
         if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "webp_playback_fps") {
             if let Ok(value) = u32::try_from(value) {
                 self.webp_playback_fps = sanitize_webp_playback_fps(value);
+            }
+        }
+        if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "image_cache_mb") {
+            if let Ok(value) = u32::try_from(value) {
+                self.image_cache_mb = sanitize_image_cache_mb(value);
             }
         }
         if let Some(value) = ini.get(CONFIG_SECTION, "transparent_background") {
