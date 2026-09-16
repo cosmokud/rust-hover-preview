@@ -9,39 +9,36 @@ use crate::video_formats::is_video_file;
 use crate::wheel_input;
 use crate::{CONFIG, RUNNING};
 use once_cell::sync::Lazy;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::ffi::OsString;
 use std::os::windows::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
-use std::sync::{atomic::Ordering, Arc, Mutex};
+use std::sync::{atomic::Ordering, Mutex};
 use std::time::{Duration, Instant};
 use windows::core::{w, Interface, IUnknown, VARIANT};
 use windows::Win32::Foundation::{BOOL, HWND, LPARAM, POINT, RECT};
-use windows::Win32::Graphics::Gdi::{ClientToScreen, ScreenToClient};
 use windows::Win32::System::Com::{
-    CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, IDataObject, IServiceProvider,
-    CLSCTX_ALL, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, COINIT_MULTITHREADED,
+    CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, IServiceProvider, CLSCTX_ALL,
+    CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED,
 };
-use windows::Win32::System::Variant::{VariantClear, VT_I4};
+use windows::Win32::System::Variant::VT_I4;
 use windows::Win32::UI::Accessibility::{
     CUIAutomation, CUIAutomationRegistrar, IUIAutomation, IUIAutomationCacheRequest,
     IUIAutomationElement, IUIAutomationLegacyIAccessiblePattern, IUIAutomationRegistrar,
-    IUIAutomationSelectionPattern, IUIAutomationTreeWalker, IUIAutomationValuePattern,
-    TreeScope_Descendants, TreeScope_Element, UIAutomationPropertyInfo, UIAutomationType_Int,
-    UIA_BoundingRectanglePropertyId, UIA_ControlTypePropertyId, UIA_DataItemControlTypeId,
+    IUIAutomationSelectionPattern, IUIAutomationTreeWalker, TreeScope_Element,
+    UIAutomationPropertyInfo, UIAutomationType_Int, UIA_BoundingRectanglePropertyId,
+    UIA_CONTROLTYPE_ID, UIA_ControlTypePropertyId, UIA_DataItemControlTypeId,
     UIA_LegacyIAccessiblePatternId, UIA_ListItemControlTypeId, UIA_NamePropertyId,
-    UIA_NativeWindowHandlePropertyId, UIA_PROPERTY_ID, UIA_SelectionPatternId, UIA_ValuePatternId,
+    UIA_NativeWindowHandlePropertyId, UIA_PROPERTY_ID, UIA_SelectionPatternId,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, VK_DOWN, VK_END, VK_HOME, VK_LBUTTON, VK_LEFT, VK_MBUTTON, VK_NEXT, VK_PRIOR,
     VK_RBUTTON, VK_RETURN, VK_RIGHT, VK_UP, VK_XBUTTON1, VK_XBUTTON2,
 };
 use windows::Win32::UI::Shell::{
-    IFolderView, IFolderView2, INameSpaceTreeControl, IPersistFolder2, IShellBrowser, IShellFolder,
-    IShellFolderViewDual, IShellItem, IShellItemArray, IShellView, IShellWindows,
-    ItemIndex_Property_GUID, SHCreateItemFromIDList, SHCreateItemWithParent,
-    SHCreateShellItemArrayFromDataObject, SID_STopLevelBrowser, SIGDN_DESKTOPABSOLUTEPARSING,
-    SIGDN_FILESYSPATH, SIGDN_NORMALDISPLAY, ShellWindows, SVGIO_ALLVIEW, SVGIO_SELECTION,
+    IFolderView, IFolderView2, IPersistFolder2, IShellBrowser, IShellItem, IShellView,
+    IShellWindows, ItemIndex_Property_GUID, SHCreateItemFromIDList, SID_STopLevelBrowser,
+    SIGDN_DESKTOPABSOLUTEPARSING, SIGDN_FILESYSPATH, SIGDN_NORMALDISPLAY, ShellWindows,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetAncestor, GetClassNameW, GetCursorPos, GetForegroundWindow, GetSystemMetrics,
@@ -56,35 +53,6 @@ const IMAGE_EXTENSIONS: &[&str] = &[
     "pbm", "pgm", "ppm", "pam", "pnm", "hdr", "exr", "qoi", "ff",
 ];
 
-struct FolderMediaIndex {
-    built_at: Instant,
-    by_file_name: HashMap<String, PathBuf>,
-    by_stem: HashMap<String, PathBuf>,
-}
-
-struct ExplorerFoldersCache {
-    built_at: Instant,
-    folders: Arc<Vec<(isize, String)>>,
-}
-
-struct ShellViewMediaIndex {
-    built_at: Instant,
-    /// Whether the walk read every item of the view. One that did not is replaced
-    /// by a walk that runs off the hook thread, so a file the short walk did not
-    /// reach is only missing for as long as that takes.
-    complete: bool,
-    by_display_name: HashMap<String, PathBuf>,
-    by_file_name: HashMap<String, PathBuf>,
-    by_stem: HashMap<String, PathBuf>,
-    root_folder: Option<String>,
-}
-
-struct SearchRootMediaIndex {
-    built_at: Instant,
-    by_file_name: HashMap<String, Vec<PathBuf>>,
-    by_stem: HashMap<String, Vec<PathBuf>>,
-}
-
 struct ExplorerWindowCounts {
     total: usize,
     visible: usize,
@@ -98,12 +66,12 @@ struct DisplaySignature {
     height: i32,
 }
 
+/// The view under a point, as the shell describes it: the window it is drawn in,
+/// the URL it was opened with, and the folder it has open.
 struct ActiveShellViewContext {
     shell_view_hwnd: isize,
     location_url: Option<String>,
     folder_path: Option<String>,
-    shell_view: IShellView,
-    client_point: POINT,
 }
 
 #[derive(Clone, Default)]
@@ -115,35 +83,37 @@ struct HoverResolverHints {
     shell_view_hwnd: Option<isize>,
 }
 
-/// Everything the mouse path needs to resolve the item under the pointer the way
-/// the Shell itself knows it: one UI Automation client whose property reads are
-/// batched into a single round trip per element, Explorer's own item-position
-/// property, the view the pointer is in, and the answer the last probe produced.
+/// What both paths need to resolve an item to the file it stands for: one UI
+/// Automation client whose property reads are batched into a single round trip per
+/// element, Explorer's own item-position property, and the view that last answered
+/// for a window.
 ///
 /// What it holds is as telling as what it does not: there is no folder index, no
-/// view index and no search root here. A search across folders is answered by the
-/// item the pointer is on rather than by a name, so nothing has to be walked,
-/// remembered or kept warm for the pointer to have an answer.
-struct MouseResolver {
+/// view index and no search root here. A file is found from the item that stands
+/// for it rather than from its name, so nothing has to be walked, remembered or
+/// kept warm for either path to have an answer.
+struct ItemResolver {
     automation: Option<IUIAutomation>,
-    /// The batched property request every element under the pointer is read
-    /// with, so an element costs one crossing into the view's provider rather
-    /// than one per property.
+    /// The batched property request every element is read with, so an element
+    /// costs one crossing into the view's provider rather than one per property.
     cache: Option<IUIAutomationCacheRequest>,
     walker: Option<IUIAutomationTreeWalker>,
     /// Explorer's own `ItemIndex` property, registered once per process. `None`
-    /// when the registrar refuses it, which leaves the raw route skipped and the
-    /// routes after it to answer exactly as they did before.
+    /// when the registrar refuses it, which leaves the identity route skipped and
+    /// the item's own value to answer.
     item_index_property: Option<UIA_PROPERTY_ID>,
     /// The Shell window collection, created once and kept: building it is the one
     /// call every lookup would otherwise repeat.
     shell_windows: Option<IShellWindows>,
-    view: Option<CachedFolderView>,
+    /// The view that answered for a window, kept while the window holds only that
+    /// one view: a window with tabs has several and none of them is the cache's to
+    /// choose between.
+    view: Option<AnsweredView>,
     probe: Option<ProbeMemo>,
 }
 
-/// The view the pointer is in, kept while it is still the same view.
-struct CachedFolderView {
+/// The view that answered for a window.
+struct AnsweredView {
     browser_hwnd: isize,
     shell_browser: IShellBrowser,
     /// The shell view's own identity, so a window that navigated is a different
@@ -158,7 +128,9 @@ struct ProbeMemo {
     answer: Option<PathBuf>,
 }
 
-/// The item the pointer is over, as the view's accessibility provider reports it.
+/// The item a file is resolved from, as the view's accessibility provider reports
+/// it — read at the cursor for the pointer and at the focused item for the
+/// keyboard, so both paths get their answer from the same facts.
 struct HoveredItem {
     /// The item's position in the view, one-based as Explorer's own `ItemIndex`
     /// reports it — the one fact about a search result that a shared name cannot
@@ -168,21 +140,27 @@ struct HoveredItem {
     /// The name the item goes by in the view, which may hide the extension.
     name: String,
     /// The item's legacy accessible value: for a file a search has surfaced this
-    /// is normally the file's own path, which is what lets a view that reports no
-    /// position still be answered without looking anything up.
+    /// is normally the file's own path, which is the second way an item is
+    /// answered when it reports no position.
     value: Option<String>,
+    /// The box the item occupies on screen, which is what says the pointer is
+    /// inside it and where a keyboard preview is placed.
+    bounds: RECT,
+    /// The window the item is drawn in, whose frame is the window the item's view
+    /// belongs to.
+    native_window: isize,
 }
 
 impl HoveredItem {
-    /// Whether a second look at the same point found the same item. What the view
-    /// says about an item is only true of the item — a list can move under a
-    /// parked pointer — so an answer is only taken when both looks agree.
+    /// Whether a second look found the same item. What the view says about an item
+    /// is only true of the item — a list can move under a parked pointer — so an
+    /// answer is only taken when both looks agree.
     fn same_item(&self, other: &HoveredItem) -> bool {
         self.index == other.index && self.name == other.name
     }
 }
 
-impl MouseResolver {
+impl ItemResolver {
     fn new(automation: Option<IUIAutomation>) -> Self {
         let item_index_property = register_item_index_property();
 
@@ -246,7 +224,7 @@ impl MouseResolver {
     }
 }
 
-impl CachedFolderView {
+impl AnsweredView {
     /// Whether the cached view is still the one the window is showing. A window
     /// that navigated is showing a different view, and what the old one knew about
     /// its items describes the place the window has left.
@@ -463,36 +441,9 @@ impl ScrollSettleProbe {
     }
 }
 
-const FOLDER_INDEX_TTL_MS: u64 = 60000;
-const EXPLORER_FOLDERS_CACHE_TTL_MS: u64 = 250;
-const SHELL_VIEW_INDEX_TTL_MS: u64 = 5000;
-/// A Shell view index that saw every item cost a walk of the whole view, so it is
-/// kept longer than a short one — long enough that the walk is paid for by the
-/// hovers that read it rather than by the ones that follow it.
-const SHELL_VIEW_INDEX_COMPLETE_TTL_MS: u64 = 30000;
-const SHELL_VIEW_INDEX_MAX_ITEMS: i32 = 50000;
-const SHELL_VIEW_INDEX_SYNC_ITEM_LIMIT: i32 = 1000;
-/// How long a shell view may be walked for an index before the walk is left where
-/// it is. The walk happens on the hook thread — a COM call, a file check and a
-/// media-gate test per item — so a view of hundreds of items would otherwise stop
-/// the loop for as long as it takes, and every route that does not need an index
-/// is asked after this one anyway. What has been collected by the deadline is
-/// still an index.
-const SHELL_VIEW_INDEX_BUILD_BUDGET_MS: u64 = 150;
-const SEARCH_ROOT_INDEX_TTL_MS: u64 = 60000;
-/// How long a lookup may walk the folders below one while the hook loop waits for
-/// it. The walk answers the question a search asks — where below this folder does
-/// that name live — and it is given only as long as a probe can afford: a small
-/// tree is walked to the end inside it, a large one is answered by the index that
-/// walks it in the background.
-const SEARCH_DESCEND_BUDGET_MS: u64 = 40;
-const SEARCH_ROOT_INDEX_MAX_DIRS: usize = 20000;
-const SEARCH_ROOT_INDEX_MAX_FILES: usize = 50000;
 const EXPLORER_PROBE_SLOW_MS: u64 = 700;
 const EXPLORER_WINDOW_CACHE_TTL_MS: u64 = 1000;
-const FOLDER_INDEX_CACHE_MAX_ENTRIES: usize = 16;
 const EXPLORER_REAL_FOLDER_CACHE_MAX_ENTRIES: usize = 256;
-const SEARCH_ROOT_CACHE_MAX_ENTRIES: usize = 8;
 const FOLDER_PROBE_MS: u64 = 200;
 const IDLE_FOLDER_PROBE_MS: u64 = 750;
 const FOLDER_PROBE_TRIGGER_MS: u64 = 400;
@@ -516,32 +467,15 @@ const POINTER_ITEM_ANCESTOR_LIMIT: usize = 8;
 /// collection that reports more than this is not one to walk for every probe.
 const SHELL_WINDOW_LIMIT: i32 = 64;
 
-static FOLDER_MEDIA_INDEX: Lazy<Mutex<HashMap<String, FolderMediaIndex>>> =
-    Lazy::new(|| Mutex::new(HashMap::new()));
-static FOLDER_INDEX_BUILDING: Lazy<Mutex<HashSet<String>>> =
-    Lazy::new(|| Mutex::new(HashSet::new()));
-static EXPLORER_FOLDERS_CACHE: Lazy<Mutex<Option<ExplorerFoldersCache>>> =
-    Lazy::new(|| Mutex::new(None));
-static SHELL_VIEW_MEDIA_INDEX: Lazy<Mutex<HashMap<isize, ShellViewMediaIndex>>> =
-    Lazy::new(|| Mutex::new(HashMap::new()));
-static SHELL_VIEW_INDEX_BUILDING: Lazy<Mutex<HashSet<isize>>> =
-    Lazy::new(|| Mutex::new(HashSet::new()));
-static SEARCH_ROOT_MEDIA_INDEX: Lazy<Mutex<HashMap<String, SearchRootMediaIndex>>> =
-    Lazy::new(|| Mutex::new(HashMap::new()));
-static SEARCH_ROOT_INDEX_BUILDING: Lazy<Mutex<HashSet<String>>> =
-    Lazy::new(|| Mutex::new(HashSet::new()));
 static EXPLORER_LAST_REAL_FOLDERS: Lazy<Mutex<HashMap<isize, String>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 static EXPLORER_WINDOW_CACHE: Lazy<Mutex<HashMap<isize, (bool, Instant)>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
+/// Drop what describes a view: the folder the last probe remembered for a window,
+/// and whether a window is one of Explorer's. The window the pointer is in is
+/// resolved again the next time it is asked about.
 fn clear_shell_view_probe_caches() {
-    if let Ok(mut cache) = SHELL_VIEW_MEDIA_INDEX.lock() {
-        cache.clear();
-    }
-    if let Ok(mut cache) = EXPLORER_FOLDERS_CACHE.lock() {
-        *cache = None;
-    }
     if let Ok(mut cache) = EXPLORER_WINDOW_CACHE.lock() {
         cache.clear();
     }
@@ -612,170 +546,6 @@ fn should_probe_preview_hover(
 
 fn is_jpeg_extension(ext: &str) -> bool {
     matches!(ext, "jpg" | "jpeg" | "jpe" | "jfif")
-}
-
-fn clear_variant(variant: &mut VARIANT) {
-    unsafe {
-        let _ = VariantClear(variant as *mut VARIANT);
-    }
-}
-
-fn build_folder_media_index(folder_path: &PathBuf, _folder_key: &str) -> Option<FolderMediaIndex> {
-    let mut by_file_name = HashMap::new();
-    let mut by_stem = HashMap::new();
-
-    let entries = std::fs::read_dir(folder_path).ok()?;
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if !path.is_file() || !is_media_file(&path) {
-            continue;
-        }
-
-        if let Some(file_name) = path.file_name().and_then(|s| s.to_str()) {
-            by_file_name
-                .entry(file_name.to_ascii_lowercase())
-                .or_insert_with(|| path.clone());
-        }
-
-        if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-            by_stem
-                .entry(stem.to_ascii_lowercase())
-                .or_insert(path.clone());
-        }
-    }
-
-    Some(FolderMediaIndex {
-        built_at: Instant::now(),
-        by_file_name,
-        by_stem,
-    })
-}
-
-fn trim_folder_index_cache(cache: &mut HashMap<String, FolderMediaIndex>) {
-    if cache.len() <= FOLDER_INDEX_CACHE_MAX_ENTRIES {
-        return;
-    }
-
-    let mut oldest_key: Option<String> = None;
-    let mut oldest_age = Duration::ZERO;
-    for (folder, index) in cache.iter() {
-        let age = index.built_at.elapsed();
-        if oldest_key.is_none() || age > oldest_age {
-            oldest_key = Some(folder.clone());
-            oldest_age = age;
-        }
-    }
-
-    if let Some(oldest_key) = oldest_key {
-        cache.remove(&oldest_key);
-    }
-}
-
-fn queue_folder_index_build(folder_path: PathBuf, folder_key: String) {
-    let should_build = {
-        let cache_is_fresh = FOLDER_MEDIA_INDEX
-            .lock()
-            .ok()
-            .and_then(|cache| cache.get(&folder_key).map(|index| index.built_at.elapsed()))
-            .map(|age| age <= Duration::from_millis(FOLDER_INDEX_TTL_MS))
-            .unwrap_or(false);
-        if cache_is_fresh {
-            false
-        } else if let Ok(mut building) = FOLDER_INDEX_BUILDING.lock() {
-            if building.contains(&folder_key) {
-                false
-            } else {
-                building.insert(folder_key.clone());
-                true
-            }
-        } else {
-            false
-        }
-    };
-
-    if !should_build {
-        return;
-    }
-
-    std::thread::spawn(move || {
-        let built_index = build_folder_media_index(&folder_path, &folder_key);
-        if let Some(index) = built_index {
-            if let Ok(mut cache) = FOLDER_MEDIA_INDEX.lock() {
-                cache.insert(folder_key.clone(), index);
-                trim_folder_index_cache(&mut cache);
-            }
-        }
-        if let Ok(mut building) = FOLDER_INDEX_BUILDING.lock() {
-            building.remove(&folder_key);
-        }
-    });
-}
-
-fn lookup_media_in_folder_index(
-    folder_path: &PathBuf,
-    folder_key: &str,
-    item_name: &str,
-) -> Option<PathBuf> {
-    let item_name = item_name.trim();
-    if item_name.is_empty() {
-        return None;
-    }
-
-    let item_name_lower = item_name.to_ascii_lowercase();
-    let item_stem_lower = Path::new(item_name)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .map(|s| s.to_ascii_lowercase());
-    let item_ext_lower = Path::new(item_name)
-        .extension()
-        .and_then(|s| s.to_str())
-        .map(|s| s.to_ascii_lowercase());
-
-    let mut stale = false;
-
-    if let Ok(cache) = FOLDER_MEDIA_INDEX.lock() {
-        if let Some(index) = cache.get(folder_key) {
-            if let Some(path) = index.by_file_name.get(&item_name_lower) {
-                return Some(path.clone());
-            }
-
-            if let Some(stem_key) = item_stem_lower.as_ref() {
-                if let Some(path) = index.by_stem.get(stem_key) {
-                    if let Some(item_ext) = item_ext_lower.as_deref() {
-                        if let Some(candidate_ext) = path.extension().and_then(|s| s.to_str()) {
-                            let candidate_ext_lower = candidate_ext.to_ascii_lowercase();
-                            if candidate_ext_lower == item_ext
-                                || (is_jpeg_extension(&candidate_ext_lower)
-                                    && is_jpeg_extension(item_ext))
-                            {
-                                return Some(path.clone());
-                            }
-                        }
-                    } else {
-                        return Some(path.clone());
-                    }
-                }
-            }
-
-            if item_ext_lower.is_none() {
-                if let Some(path) = index.by_stem.get(&item_name_lower) {
-                    return Some(path.clone());
-                }
-            }
-
-            stale = index.built_at.elapsed() > Duration::from_millis(FOLDER_INDEX_TTL_MS);
-        } else {
-            stale = true;
-        }
-    }
-
-    // Never block hover polling on a huge folder scan: the names the folder is
-    // already known by are read while a walk of it that is due runs behind, so the
-    // names do not disappear for as long as that walk takes.
-    if stale {
-        queue_folder_index_build(folder_path.clone(), folder_key.to_string());
-    }
-    None
 }
 
 fn is_image_file(path: &PathBuf) -> bool {
@@ -1033,49 +803,6 @@ fn resolve_explorer_location_folder(hwnd: isize, url_str: &str) -> Option<String
     None
 }
 
-fn merge_common_folder_root(current: Option<PathBuf>, path: &Path) -> Option<PathBuf> {
-    let candidate_dir = path.parent()?.to_path_buf();
-
-    match current {
-        Some(existing) => existing
-            .ancestors()
-            .find(|ancestor| candidate_dir.starts_with(ancestor))
-            .map(|ancestor| ancestor.to_path_buf()),
-        None => Some(candidate_dir),
-    }
-}
-
-fn get_shell_view_search_root(view_hwnd_key: isize) -> Option<String> {
-    let root = {
-        let mut cache = SHELL_VIEW_MEDIA_INDEX.lock().ok()?;
-        cache.retain(|_, index| shell_view_index_is_fresh(index));
-
-        if !cache.contains_key(&view_hwnd_key) {
-            let index = build_shell_view_media_index(
-                view_hwnd_key,
-                Some(Duration::from_millis(SHELL_VIEW_INDEX_BUILD_BUDGET_MS)),
-            )?;
-            cache.insert(view_hwnd_key, index);
-        }
-
-        let index = cache.get(&view_hwnd_key)?;
-        let root = index.root_folder.clone();
-
-        if !index.complete {
-            // The folders of some of the items are only the folders those have in
-            // common, which is a narrower root than the one the results really
-            // share: the walk is finished off the hook thread, and the root read
-            // after it is the one of them all.
-            drop(cache);
-            queue_shell_view_index_completion(view_hwnd_key);
-        }
-
-        root
-    };
-
-    root
-}
-
 fn resolve_search_root_from_context(context: &ActiveShellViewContext) -> Option<String> {
     if let Some(url) = context.location_url.as_deref() {
         if let Some(root) = resolve_explorer_location_folder(context.shell_view_hwnd, url) {
@@ -1092,11 +819,6 @@ fn resolve_search_root_from_context(context: &ActiveShellViewContext) -> Option<
         return Some(folder.to_string());
     }
 
-    if let Some(root) = get_shell_view_search_root(context.shell_view_hwnd) {
-        cache_explorer_real_folder(context.shell_view_hwnd, &root);
-        return Some(root);
-    }
-
     get_cached_explorer_real_folder(context.shell_view_hwnd)
 }
 
@@ -1106,218 +828,6 @@ fn is_probable_search_view_context(context: &ActiveShellViewContext) -> bool {
         .as_deref()
         .map(is_search_ms_url)
         .unwrap_or(false)
-        || (context.folder_path.is_none()
-            && get_shell_view_search_root(context.shell_view_hwnd).is_some())
-}
-
-/// Explorer windows and their folders. The cached snapshot is shared through an
-/// `Arc` so a poll tick does not clone the list and every folder string.
-fn get_all_explorer_folders() -> Arc<Vec<(isize, String)>> {
-    if let Ok(cache) = EXPLORER_FOLDERS_CACHE.lock() {
-        if let Some(cache_entry) = cache.as_ref() {
-            if cache_entry.built_at.elapsed()
-                <= Duration::from_millis(EXPLORER_FOLDERS_CACHE_TTL_MS)
-            {
-                return Arc::clone(&cache_entry.folders);
-            }
-        }
-    }
-
-    let mut result: Vec<(isize, String)> = Vec::new();
-
-    unsafe {
-        if let Ok(shell_windows) =
-            CoCreateInstance::<_, IShellWindows>(&ShellWindows, None, CLSCTX_ALL)
-        {
-            if let Ok(count) = shell_windows.Count() {
-                for i in 0..count {
-                    let variant = VARIANT::from(i);
-                    if let Ok(disp) = shell_windows.Item(&variant) {
-                        if let Ok(browser) = disp.cast::<windows::Win32::UI::Shell::IWebBrowser2>()
-                        {
-                            if let Ok(browser_hwnd) = browser.HWND() {
-                                let hwnd = browser_hwnd.0 as isize;
-                                let folder = browser
-                                    .LocationURL()
-                                    .ok()
-                                    .and_then(|url| {
-                                        let url_str = url.to_string();
-                                        resolve_explorer_location_folder(hwnd, &url_str)
-                                    })
-                                    .or_else(|| get_cached_explorer_real_folder(hwnd));
-
-                                if let Some(folder) = folder {
-                                    result.push((hwnd, folder));
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    let result = Arc::new(result);
-
-    if let Ok(mut cache) = EXPLORER_FOLDERS_CACHE.lock() {
-        *cache = Some(ExplorerFoldersCache {
-            built_at: Instant::now(),
-            folders: Arc::clone(&result),
-        });
-    }
-
-    result
-}
-
-fn get_explorer_hwnd_under_cursor_or_foreground() -> Option<HWND> {
-    unsafe {
-        let folders = get_all_explorer_folders();
-
-        let mut cursor_pos = POINT::default();
-        if GetCursorPos(&mut cursor_pos).is_ok() {
-            let hwnd = WindowFromPoint(cursor_pos);
-            if !hwnd.0.is_null() {
-                let mut current_hwnd = hwnd;
-                let mut top_hwnd = hwnd;
-
-                for _ in 0..20 {
-                    for (explorer_hwnd, _) in folders.iter() {
-                        let explorer_hwnd = HWND(*explorer_hwnd as *mut _);
-                        if current_hwnd == explorer_hwnd {
-                            return Some(explorer_hwnd);
-                        }
-                    }
-
-                    match windows::Win32::UI::WindowsAndMessaging::GetParent(current_hwnd) {
-                        Ok(parent) if !parent.0.is_null() && parent != current_hwnd => {
-                            top_hwnd = parent;
-                            current_hwnd = parent;
-                        }
-                        _ => break,
-                    }
-                }
-
-                // Only fall back to the top-level parent. Child controls also run
-                // in explorer.exe, so process-name checks on the original child
-                // can return a handle ShellWindows cannot resolve.
-                if is_explorer_window(top_hwnd) {
-                    return Some(top_hwnd);
-                }
-            }
-        }
-
-        let foreground = GetForegroundWindow();
-        if !foreground.is_invalid() {
-            for (explorer_hwnd, _) in folders.iter() {
-                let explorer_hwnd = HWND(*explorer_hwnd as *mut _);
-                if foreground == explorer_hwnd {
-                    return Some(explorer_hwnd);
-                }
-            }
-
-            if is_explorer_window(foreground) {
-                return Some(foreground);
-            }
-        }
-    }
-
-    None
-}
-
-fn get_explorer_hwnd_under_cursor_or_foreground_legacy() -> Option<HWND> {
-    unsafe {
-        let folders = get_all_explorer_folders();
-
-        let mut cursor_pos = POINT::default();
-        if GetCursorPos(&mut cursor_pos).is_ok() {
-            let hwnd = WindowFromPoint(cursor_pos);
-            if !hwnd.0.is_null() {
-                let mut current_hwnd = hwnd;
-                let mut top_hwnd = hwnd;
-
-                for _ in 0..20 {
-                    for (explorer_hwnd, _) in folders.iter() {
-                        let explorer_hwnd = HWND(*explorer_hwnd as *mut _);
-                        if current_hwnd == explorer_hwnd {
-                            return Some(explorer_hwnd);
-                        }
-                    }
-
-                    match windows::Win32::UI::WindowsAndMessaging::GetParent(current_hwnd) {
-                        Ok(parent) if !parent.0.is_null() && parent != current_hwnd => {
-                            top_hwnd = parent;
-                            current_hwnd = parent;
-                        }
-                        _ => break,
-                    }
-                }
-
-                if is_explorer_window(top_hwnd) {
-                    return Some(top_hwnd);
-                }
-            }
-        }
-
-        let foreground = GetForegroundWindow();
-        if !foreground.is_invalid() {
-            for (explorer_hwnd, _) in folders.iter() {
-                let explorer_hwnd = HWND(*explorer_hwnd as *mut _);
-                if foreground == explorer_hwnd {
-                    return Some(explorer_hwnd);
-                }
-            }
-
-            if is_explorer_window(foreground) {
-                return Some(foreground);
-            }
-        }
-    }
-
-    None
-}
-
-fn get_explorer_location_url(hwnd: HWND) -> Option<String> {
-    let hwnd_key = hwnd.0 as isize;
-
-    unsafe {
-        let shell_windows =
-            CoCreateInstance::<_, IShellWindows>(&ShellWindows, None, CLSCTX_ALL).ok()?;
-        let count = shell_windows.Count().ok()?;
-
-        for i in 0..count {
-            let variant = VARIANT::from(i);
-            let disp = match shell_windows.Item(&variant) {
-                Ok(disp) => disp,
-                Err(_) => continue,
-            };
-            let browser = match disp.cast::<windows::Win32::UI::Shell::IWebBrowser2>() {
-                Ok(browser) => browser,
-                Err(_) => continue,
-            };
-            let browser_hwnd = match browser.HWND() {
-                Ok(browser_hwnd) => browser_hwnd,
-                Err(_) => continue,
-            };
-            if browser_hwnd.0 != hwnd_key {
-                continue;
-            }
-
-            return browser.LocationURL().ok().map(|url| url.to_string());
-        }
-    }
-
-    None
-}
-
-fn get_current_explorer_location_url_legacy() -> Option<String> {
-    if let Some(context) = get_active_shell_view_context_at_cursor() {
-        if let Some(url) = context.location_url {
-            return Some(url);
-        }
-    }
-
-    let hwnd = get_explorer_hwnd_under_cursor_or_foreground_legacy()?;
-    get_explorer_location_url(hwnd)
 }
 
 fn get_active_shell_view_context(screen_point: &POINT) -> Option<ActiveShellViewContext> {
@@ -1373,17 +883,11 @@ fn get_active_shell_view_context(screen_point: &POINT) -> Option<ActiveShellView
 
             let location_url = browser.LocationURL().ok().map(|url| url.to_string());
             let folder_path = get_shell_view_folder_path(&shell_view);
-            let mut client_point = *screen_point;
-            if !ScreenToClient(shell_view_hwnd, &mut client_point).as_bool() {
-                continue;
-            }
 
             let context = ActiveShellViewContext {
                 shell_view_hwnd: shell_view_hwnd_key,
                 location_url,
                 folder_path,
-                shell_view,
-                client_point,
             };
 
             if !cursor_hwnd.is_invalid() && hwnd_is_same_or_ancestor(cursor_hwnd, shell_view_hwnd) {
@@ -1414,17 +918,6 @@ fn get_active_shell_view_context_at_cursor() -> Option<ActiveShellViewContext> {
     }
 }
 
-fn get_current_explorer_location_url() -> Option<String> {
-    if let Some(context) = get_active_shell_view_context_at_cursor() {
-        if let Some(url) = context.location_url {
-            return Some(url);
-        }
-    }
-
-    let hwnd = get_explorer_hwnd_under_cursor_or_foreground()?;
-    get_explorer_location_url(hwnd)
-}
-
 fn hwnd_is_same_or_ancestor(child: HWND, ancestor: HWND) -> bool {
     if child.is_invalid() || ancestor.is_invalid() {
         return false;
@@ -1447,13 +940,27 @@ fn hwnd_is_same_or_ancestor(child: HWND, ancestor: HWND) -> bool {
     false
 }
 
+/// Whether the view under the pointer is a search's results. The hints carry the
+/// same answer, but they are read at the folder probe's cadence: a search opened a
+/// moment ago is seen here before it is seen there.
 fn is_current_search_view_legacy() -> bool {
-    get_current_explorer_location_url_legacy()
-        .as_deref()
-        .map(is_search_ms_url)
-        .unwrap_or(false)
+    match get_active_shell_view_context_at_cursor() {
+        Some(context) => context
+            .location_url
+            .as_deref()
+            .map(is_search_ms_url)
+            .unwrap_or(false),
+        None => false,
+    }
 }
 
+/// What the view under the pointer is showing, for the probes that need to know a
+/// location has changed.
+///
+/// It is answered by the view itself — the folder it has open and the URL it was
+/// opened with — and by nothing else: the resolution of a file does not depend on
+/// it, so a view the shell does not describe leaves the hints empty rather than
+/// sending the hook looking for another witness.
 fn get_current_hover_resolver_hints() -> HoverResolverHints {
     let mut hints = HoverResolverHints::default();
 
@@ -1469,13 +976,6 @@ fn get_current_hover_resolver_hints() -> HoverResolverHints {
                 hints.current_folder = hints.search_root.clone();
             }
         }
-    }
-
-    if hints.current_folder.is_none() {
-        hints.current_folder = get_current_explorer_folder();
-    }
-    if hints.is_search_view && hints.search_root.is_none() {
-        hints.search_root = get_current_explorer_search_root();
     }
 
     hints
@@ -1501,6 +1001,7 @@ fn normalize_media_path(path: PathBuf) -> Option<PathBuf> {
     normalize_existing_path(path)
 }
 
+/// The path a Shell item stands for, in the form the rest of the app works in.
 fn shell_item_to_path(shell_item: &IShellItem) -> Option<PathBuf> {
     unsafe {
         let display_name = shell_item
@@ -1512,10 +1013,6 @@ fn shell_item_to_path(shell_item: &IShellItem) -> Option<PathBuf> {
 
         normalize_existing_path(PathBuf::from(path_string))
     }
-}
-
-fn shell_item_to_media_path(shell_item: &IShellItem) -> Option<PathBuf> {
-    shell_item_to_path(shell_item).and_then(normalize_media_path)
 }
 
 fn get_shell_view_folder_path(shell_view: &IShellView) -> Option<String> {
@@ -1531,996 +1028,6 @@ fn get_shell_view_folder_path(shell_view: &IShellView) -> Option<String> {
             .filter(|path| path.is_dir())
             .map(|path| path.to_string_lossy().into_owned())
     }
-}
-
-fn shell_item_from_view_pidl(
-    folder_view: &IFolderView,
-    pidl: *mut windows::Win32::UI::Shell::Common::ITEMIDLIST,
-) -> Option<IShellItem> {
-    unsafe {
-        let direct = SHCreateItemFromIDList::<IShellItem>(pidl).ok();
-        if direct.is_some() {
-            return direct;
-        }
-
-        let shell_folder = folder_view.GetFolder::<IShellFolder>().ok()?;
-        SHCreateItemWithParent::<_, IShellItem>(None, &shell_folder, pidl).ok()
-    }
-}
-
-fn get_shell_data_model_file_from_context(context: &ActiveShellViewContext) -> Option<PathBuf> {
-    if let Ok(hit_test) = context.shell_view.cast::<INameSpaceTreeControl>() {
-        unsafe {
-            if let Ok(shell_item) = hit_test.HitTest(&context.client_point) {
-                if let Some(path) = shell_item_to_media_path(&shell_item) {
-                    return Some(path);
-                }
-            }
-        }
-    }
-
-    None
-}
-
-fn get_current_explorer_search_root() -> Option<String> {
-    if let Some(context) = get_active_shell_view_context_at_cursor() {
-        if is_probable_search_view_context(&context) {
-            return resolve_search_root_from_context(&context);
-        }
-    }
-
-    let hwnd = get_explorer_hwnd_under_cursor_or_foreground()?;
-    let hwnd_key = hwnd.0 as isize;
-    let url = get_explorer_location_url(hwnd)?;
-    if is_search_ms_url(&url) {
-        resolve_explorer_location_folder(hwnd_key, &url)
-    } else {
-        None
-    }
-}
-
-/// The media files the view has selected, asked of the view itself.
-///
-/// The accessibility tree hands a search result over as a name, and a name is
-/// ambiguous the moment two results share one — which is what a search across
-/// folders produces, the same file name sitting in any number of them. The view's
-/// own selection is not ambiguous: it names the item the keyboard is on, by
-/// identity, wherever that item's file lives. A keyboard preview asks this first
-/// for that reason, and takes an answer from it only when exactly one of the
-/// selected files goes by the name of the item the focus is on.
-fn shell_view_selected_media_paths(context: &ActiveShellViewContext) -> Vec<PathBuf> {
-    let mut paths = Vec::new();
-
-    unsafe {
-        let Ok(data_object) = context
-            .shell_view
-            .GetItemObject::<IDataObject>(SVGIO_SELECTION)
-        else {
-            return paths;
-        };
-        let Ok(items) = SHCreateShellItemArrayFromDataObject::<_, IShellItemArray>(&data_object)
-        else {
-            return paths;
-        };
-        let Ok(count) = items.GetCount() else {
-            return paths;
-        };
-
-        for index in 0..count.min(16) {
-            if let Ok(item) = items.GetItemAt(index) {
-                if let Some(path) = shell_item_to_media_path(&item) {
-                    paths.push(path);
-                }
-            }
-        }
-    }
-
-    paths
-}
-
-/// The path of the item whose cell holds a point, asked of the view's own grid.
-///
-/// This is the one answer a name cannot give: every item a view shows has a cell
-/// of its own, and the cell the point falls in belongs to exactly one item,
-/// whatever that item is called. It is what resolves a search result whose file
-/// name another result shares, for the pointer and for the keyboard alike.
-///
-/// The cells are laid out top to bottom, so the row a point is in is found by
-/// bisecting their positions — an item's y never decreases as its index grows —
-/// and the item within that row by walking the few positions that share it. A
-/// cell runs from its own position to the next one's, and the last one in a row
-/// to the view's edge.
-fn view_item_media_path_at_point(
-    context: &ActiveShellViewContext,
-    screen_point: POINT,
-) -> Option<PathBuf> {
-    let folder_view = context.shell_view.cast::<IFolderView>().ok()?;
-
-    unsafe {
-        let count = folder_view.ItemCount(SVGIO_ALLVIEW).ok()?;
-        if count <= 0 {
-            return None;
-        }
-
-        let mut origin = POINT::default();
-        let view_window = HWND(context.shell_view_hwnd as *mut core::ffi::c_void);
-        if !ClientToScreen(view_window, &mut origin).as_bool() {
-            return None;
-        }
-        let local = POINT {
-            x: screen_point.x - origin.x,
-            y: screen_point.y - origin.y,
-        };
-
-        // An item's position is asked for by its own pidl, so each probe is the item
-        // and the position it sits at; the pidl is given back right away, since only
-        // the position matters here.
-        let position_of = |index: i32| -> Option<POINT> {
-            let pidl = folder_view.Item(index).ok()?;
-            if pidl.is_null() {
-                return None;
-            }
-            let position = folder_view.GetItemPosition(pidl).ok();
-            CoTaskMemFree(Some(pidl as *const core::ffi::c_void));
-            position
-        };
-
-        // The last item whose top is at or above the point: the row it is in, or the
-        // row before it.
-        let mut low = 0i32;
-        let mut high = count - 1;
-        let mut row_start = 0i32;
-        while low <= high {
-            let middle = low + (high - low) / 2;
-            match position_of(middle) {
-                Some(position) if position.y <= local.y => {
-                    row_start = middle;
-                    low = middle + 1;
-                }
-                Some(_) => high = middle - 1,
-                None => return None,
-            }
-        }
-
-        // Back to the first item of that row, then across it.
-        let row_y = position_of(row_start)?.y;
-        let mut first = row_start;
-        for _ in 0..64 {
-            match position_of(first - 1) {
-                Some(position) if position.y == row_y => first -= 1,
-                _ => break,
-            }
-        }
-
-        for index in first..count.min(first + 64) {
-            let position = match position_of(index) {
-                Some(position) => position,
-                None => break,
-            };
-            if position.y != row_y {
-                break;
-            }
-
-            let cell_right = position_of(index + 1)
-                .filter(|next| next.y == row_y)
-                .map(|next| next.x)
-                .unwrap_or(i32::MAX);
-
-            if local.x >= position.x && local.x < cell_right {
-                let pidl = match folder_view.Item(index) {
-                    Ok(pidl) if !pidl.is_null() => pidl,
-                    _ => return None,
-                };
-                let shell_item = shell_item_from_view_pidl(&folder_view, pidl);
-                CoTaskMemFree(Some(pidl as *const core::ffi::c_void));
-                return shell_item.and_then(|item| shell_item_to_media_path(&item));
-            }
-        }
-    }
-
-    None
-}
-
-/// The Shell view's own focused item, as the path it resolves to.
-///
-/// This is the route a keyboard preview asks first, and it is the view itself
-/// that is asked — what it says is focused, or marked as the selection — rather
-/// than anything the accessibility tree reports.
-fn shell_view_focused_media_path(context: &ActiveShellViewContext) -> Option<PathBuf> {
-    let folder_view = context.shell_view.cast::<IFolderView>().ok()?;
-
-    unsafe {
-        for item_index in [
-            folder_view.GetFocusedItem().ok(),
-            folder_view.GetSelectionMarkedItem().ok(),
-        ]
-        .into_iter()
-        .flatten()
-        {
-            let pidl = match folder_view.Item(item_index) {
-                Ok(pidl) if !pidl.is_null() => pidl,
-                _ => continue,
-            };
-            let shell_item = shell_item_from_view_pidl(&folder_view, pidl);
-            CoTaskMemFree(Some(pidl as *const core::ffi::c_void));
-
-            if let Some(path) =
-                shell_item.and_then(|shell_item| shell_item_to_media_path(&shell_item))
-            {
-                return Some(path);
-            }
-        }
-    }
-
-    None
-}
-
-/// The point in the middle of a focused item's box.
-fn focused_item_center(item: &FocusedItemInfo) -> POINT {
-    POINT {
-        x: item.rect.left + (item.rect.right - item.rect.left) / 2,
-        y: item.rect.top + (item.rect.bottom - item.rect.top) / 2,
-    }
-}
-
-/// Whether a path found for a keyboard preview is the file the focused item
-/// stands for — the check that makes a path found from the item's box safe to
-/// take, because a box is a place and the list can move under it.
-fn focused_path_is_item(item: &FocusedItemInfo, path: &PathBuf) -> bool {
-    match &item.result {
-        AccessibilityResult::FullPath(focused_path) => same_path(focused_path, path),
-        AccessibilityResult::FileName(name) => path_matches_item_name(path, name),
-    }
-}
-
-/// The file a focused item stands for, asked at the item's own box the way the
-/// pointer asks it about the item under the cursor.
-///
-/// A result from a search that spans folders is why the box is asked at all: the
-/// file is in none of the folders the results are gathered under, so no lookup by
-/// name can reach it, and the item itself is the only thing that knows where it
-/// is. The pointer reads that answer from the shell data model for the item under
-/// the cursor; the keyboard reads the same answer for the item the focus is on,
-/// which is what makes a result that spans folders preview exactly as a hovered
-/// one does.
-///
-/// The accessibility provider is asked at the item before this, in
-/// `get_focused_explorer_item` — see `focused_item_probe_points`, which is where a
-/// search result states the file it stands for. What is left for the box is the
-/// view and the data model. Every answer is taken only when it names the item: a
-/// list that scrolled under a rect read a moment earlier can put another file in
-/// that box.
-fn focused_item_path_at_box(item: &FocusedItemInfo) -> Option<PathBuf> {
-    let point = focused_item_center(item);
-
-    if let Some(context) = get_active_shell_view_context(&point) {
-        // What the view has selected, asked before anything else: the keyboard's
-        // focus is the selection, and the selection names the item by identity —
-        // the answer a name cannot give when two results share one. Only a
-        // selection that matches the focused item's name exactly once is taken from
-        // it, so several selected files that share the name are left to the cells
-        // below, which are not ambiguous at all.
-        let mut matching = shell_view_selected_media_paths(&context)
-            .into_iter()
-            .filter(|path| focused_path_is_item(item, path));
-        if let (Some(path), None) = (matching.next(), matching.next()) {
-            return Some(path);
-        }
-
-        // The item whose cell holds the focused item's middle: the view's grid says
-        // which file that is, by identity, however many results share its name.
-        if let Some(path) = view_item_media_path_at_point(&context, point) {
-            if focused_path_is_item(item, &path) {
-                return Some(path);
-            }
-        }
-
-        // The view's own focused item, then the item that sits in the box — the same
-        // order the pointer tries them in.
-        if let Some(path) = shell_view_focused_media_path(&context) {
-            if focused_path_is_item(item, &path) {
-                return Some(path);
-            }
-        }
-
-        if let Some(path) = get_shell_data_model_file_from_context(&context) {
-            if focused_path_is_item(item, &path) {
-                return Some(path);
-            }
-        }
-    }
-
-    None
-}
-
-/// The points inside a focused item's box that are worth asking the accessibility
-/// provider about, in the order they are worth asking.
-///
-/// A search result states the file it stands for in the value of the text it shows,
-/// and that value lives on the text rather than on the item containing it — so the
-/// text is what has to be asked. A list item exposes it as a child, an icon view
-/// hangs it below the icon, and a content row writes it a line down from the top.
-/// The item's own subtree is therefore walked and each element found is asked at
-/// its middle: descendants rather than children, because the text can sit a level
-/// or two down, and only for an element that *is* an item, so a list cannot hand
-/// over its whole contents to be probed.
-///
-/// What the subtree does not expose is covered by points in the item's own box,
-/// taken in bands across it — a fifth of the way down, three fifths, and four
-/// fifths — because a view keeps its text in one of them: a details row centres it
-/// on the row, a content row writes its name on the first line and its details on
-/// the second, and an icon view hangs the label below the icon. Each band is asked
-/// just inside the name column — a hand's width in, then a name's width in — and at
-/// the item's middle, which is where a centred label is. Every point is only asked
-/// when the ones before it answered nothing, so breadth costs a call only where a
-/// single point would have spent one and found nothing.
-fn focused_item_probe_points(
-    automation: &IUIAutomation,
-    element: &IUIAutomationElement,
-    rect: &RECT,
-) -> Vec<POINT> {
-    let mut points = Vec::new();
-
-    unsafe {
-        let is_item = element
-            .CurrentControlType()
-            .map(|control_type| {
-                control_type == UIA_ListItemControlTypeId
-                    || control_type == UIA_DataItemControlTypeId
-            })
-            .unwrap_or(false);
-
-        if is_item {
-            if let Ok(condition) = automation.CreateTrueCondition() {
-                if let Ok(descendants) = element.FindAll(TreeScope_Descendants, &condition) {
-                    if let Ok(count) = descendants.Length() {
-                        for index in 0..count.min(6) {
-                            if let Ok(child) = descendants.GetElement(index) {
-                                if let Ok(child_rect) = child.CurrentBoundingRectangle() {
-                                    if child_rect.right > child_rect.left
-                                        && child_rect.bottom > child_rect.top
-                                    {
-                                        points.push(POINT {
-                                            x: child_rect.left
-                                                + (child_rect.right - child_rect.left) / 2,
-                                            y: child_rect.top
-                                                + (child_rect.bottom - child_rect.top) / 2,
-                                        });
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    let width = (rect.right - rect.left).max(1);
-    let height = (rect.bottom - rect.top).max(1);
-    let clamp = |x: i32| x.min(rect.right - 2).max(rect.left + 1);
-    let center_x = clamp(rect.left + width / 2);
-
-    let band_x = [
-        clamp(rect.left + (height / 2).max(2)),
-        clamp(rect.left + height * 2),
-        center_x,
-    ];
-
-    for fraction in [1, 3, 4] {
-        let y = rect.top + height * fraction / 5;
-        for x in band_x {
-            points.push(POINT { x, y });
-        }
-    }
-
-    points
-}
-
-/// The path the accessibility provider gives up for a focused item, asked at each
-/// of its points until one of them answers with a file the item names.
-fn focused_item_provider_path(item_name: &str, points: &[POINT]) -> Option<PathBuf> {
-    for point in points {
-        if let Some(AccessibilityResult::FullPath(path)) = get_item_at_point(*point) {
-            if path_matches_item_name(&path, item_name) {
-                return Some(path);
-            }
-        }
-    }
-
-    None
-}
-
-/// Read a Shell view into an index, optionally under a time budget.
-///
-/// The walk costs a COM call, a file check and a media-gate test per item, all of
-/// it on the thread that asks for it, so the caller that runs on the hook loop
-/// gives it a budget and gets a short index back — one the file it wanted may not
-/// be in. `complete` says which it is, and a short one is replaced by a walk with
-/// no budget on a thread of its own, which is what keeps a missing file a matter
-/// of waiting a moment rather than of never being found.
-fn build_shell_view_media_index(
-    view_hwnd_key: isize,
-    budget: Option<Duration>,
-) -> Option<ShellViewMediaIndex> {
-    let mut by_display_name = HashMap::new();
-    let mut by_file_name = HashMap::new();
-    let mut by_stem = HashMap::new();
-    let mut root_folder: Option<PathBuf> = None;
-
-    unsafe {
-        let shell_windows =
-            CoCreateInstance::<_, IShellWindows>(&ShellWindows, None, CLSCTX_ALL).ok()?;
-        let count = shell_windows.Count().ok()?;
-
-        for i in 0..count {
-            let variant = VARIANT::from(i);
-            let disp = match shell_windows.Item(&variant) {
-                Ok(disp) => disp,
-                Err(_) => continue,
-            };
-            let browser = match disp.cast::<windows::Win32::UI::Shell::IWebBrowser2>() {
-                Ok(browser) => browser,
-                Err(_) => continue,
-            };
-            let service_provider = match browser.cast::<IServiceProvider>() {
-                Ok(service_provider) => service_provider,
-                Err(_) => continue,
-            };
-            let shell_browser: IShellBrowser =
-                match service_provider.QueryService(&SID_STopLevelBrowser) {
-                    Ok(shell_browser) => shell_browser,
-                    Err(_) => continue,
-                };
-            let shell_view = match shell_browser.QueryActiveShellView() {
-                Ok(shell_view) => shell_view,
-                Err(_) => continue,
-            };
-            let shell_view_hwnd = match shell_view.GetWindow() {
-                Ok(hwnd) if !hwnd.is_invalid() => hwnd,
-                _ => continue,
-            };
-            if shell_view_hwnd.0 as isize != view_hwnd_key {
-                continue;
-            }
-
-            let document = browser.Document().ok()?;
-            let shell_view = document.cast::<IShellFolderViewDual>().ok()?;
-            let folder = shell_view.Folder().ok()?;
-            let items = folder.Items().ok()?;
-            let item_count = items.Count().ok()?;
-            if item_count > SHELL_VIEW_INDEX_SYNC_ITEM_LIMIT {
-                return None;
-            }
-            let item_count = item_count.min(SHELL_VIEW_INDEX_MAX_ITEMS);
-            let build_deadline = budget.map(|budget| Instant::now() + budget);
-            let mut complete = true;
-
-            for item_index in 0..item_count {
-                // The walk is left where it is once its budget is out, and says so:
-                // a view of hundreds of items costs a COM call, a file check and a
-                // media-gate test per item, all of it with the caller's thread
-                // stopped, and the caller that cannot wait asks for a complete index
-                // behind it instead.
-                if let Some(deadline) = build_deadline {
-                    if Instant::now() >= deadline {
-                        complete = false;
-                        break;
-                    }
-                }
-
-                let item_variant = VARIANT::from(item_index);
-                let item = match items.Item(&item_variant) {
-                    Ok(item) => item,
-                    Err(_) => continue,
-                };
-
-                let path_str = match item.Path() {
-                    Ok(path) => path.to_string(),
-                    Err(_) => continue,
-                };
-                let path = PathBuf::from(path_str);
-                if !path.exists() || !is_media_file(&path) {
-                    continue;
-                }
-
-                if let Ok(name) = item.Name() {
-                    by_display_name
-                        .entry(name.to_string().to_ascii_lowercase())
-                        .or_insert_with(|| path.clone());
-                }
-
-                if let Some(file_name) = path.file_name().and_then(|s| s.to_str()) {
-                    by_file_name
-                        .entry(file_name.to_ascii_lowercase())
-                        .or_insert_with(|| path.clone());
-                }
-
-                if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                    by_stem
-                        .entry(stem.to_ascii_lowercase())
-                        .or_insert_with(|| path.clone());
-                }
-
-                root_folder = merge_common_folder_root(root_folder, &path);
-            }
-
-            return Some(ShellViewMediaIndex {
-                built_at: Instant::now(),
-                complete,
-                by_display_name,
-                by_file_name,
-                by_stem,
-                root_folder: root_folder.map(|path| path.to_string_lossy().into_owned()),
-            });
-        }
-    }
-
-    None
-}
-
-fn lookup_path_in_shell_view_index(
-    index: &ShellViewMediaIndex,
-    item_name: &str,
-) -> Option<PathBuf> {
-    let item_name_lower = item_name.to_ascii_lowercase();
-    let item_stem_lower = Path::new(item_name)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .map(|s| s.to_ascii_lowercase());
-    let item_ext_lower = Path::new(item_name)
-        .extension()
-        .and_then(|s| s.to_str())
-        .map(|s| s.to_ascii_lowercase());
-
-    if let Some(path) = index
-        .by_file_name
-        .get(&item_name_lower)
-        .or_else(|| index.by_display_name.get(&item_name_lower))
-    {
-        return Some(path.clone());
-    }
-
-    if let Some(stem_key) = item_stem_lower.as_ref() {
-        if let Some(path) = index.by_stem.get(stem_key) {
-            if let Some(item_ext) = item_ext_lower.as_deref() {
-                if let Some(candidate_ext) = path.extension().and_then(|s| s.to_str()) {
-                    let candidate_ext_lower = candidate_ext.to_ascii_lowercase();
-                    if candidate_ext_lower == item_ext
-                        || (is_jpeg_extension(&candidate_ext_lower) && is_jpeg_extension(item_ext))
-                    {
-                        return Some(path.clone());
-                    }
-                }
-            } else {
-                return Some(path.clone());
-            }
-        }
-    }
-
-    if item_ext_lower.is_none() {
-        if let Some(path) = index.by_stem.get(&item_name_lower) {
-            return Some(path.clone());
-        }
-    }
-
-    None
-}
-
-fn find_media_in_shell_view(view_hwnd_key: isize, item_name: &str) -> Option<PathBuf> {
-    let item_name = item_name.trim();
-    if item_name.is_empty() {
-        return None;
-    }
-
-    let mut cache = SHELL_VIEW_MEDIA_INDEX.lock().ok()?;
-    cache.retain(|_, index| shell_view_index_is_fresh(index));
-
-    if !cache.contains_key(&view_hwnd_key) {
-        let index = build_shell_view_media_index(
-            view_hwnd_key,
-            Some(Duration::from_millis(SHELL_VIEW_INDEX_BUILD_BUDGET_MS)),
-        )?;
-        cache.insert(view_hwnd_key, index);
-    }
-
-    let index = cache.get(&view_hwnd_key)?;
-    let found = lookup_path_in_shell_view_index(index, item_name);
-    let needs_completion = !index.complete;
-
-    if needs_completion {
-        // A short index is only ever a stop-gap: the walk is finished off the hook
-        // thread whether or not this lookup found what it asked for, so a file that
-        // is not in it yet is a moment away rather than a mystery.
-        queue_shell_view_index_completion(view_hwnd_key);
-    }
-
-    found
-}
-
-/// Whether a Shell view index is still worth reading. One that saw every item
-/// cost a walk of the whole view and is kept longer than a short one, which the
-/// next lookup will replace anyway.
-fn shell_view_index_is_fresh(index: &ShellViewMediaIndex) -> bool {
-    let ttl = if index.complete {
-        SHELL_VIEW_INDEX_COMPLETE_TTL_MS
-    } else {
-        SHELL_VIEW_INDEX_TTL_MS
-    };
-
-    index.built_at.elapsed() <= Duration::from_millis(ttl)
-}
-
-/// Finish off a Shell view index the hook loop could not wait for, on a thread of
-/// its own, and put it where the next lookup will read it.
-///
-/// The walk is the same one, without a budget: nothing waits for it, and the
-/// hook loop is free while it runs. A view is built once at a time — a second
-/// request for one already being built is dropped rather than raced.
-fn queue_shell_view_index_completion(view_hwnd_key: isize) {
-    let should_build = match SHELL_VIEW_INDEX_BUILDING.lock() {
-        Ok(mut keys) => keys.insert(view_hwnd_key),
-        Err(_) => false,
-    };
-    if !should_build {
-        return;
-    }
-
-    std::thread::spawn(move || {
-        // The walk is Shell COM, and this thread is not one of the app's own: the
-        // apartment is claimed here, the way every other thread that talks to the
-        // shell claims it, or every call the walk makes is refused with "not
-        // initialized" and the completion quietly does nothing — which is the one
-        // thing it must not do. It is the multi-threaded apartment, which needs no
-        // message pump and so is the right one for a thread that has none.
-        unsafe {
-            let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
-        }
-
-        if let Some(index) = build_shell_view_media_index(view_hwnd_key, None) {
-            if let Ok(mut cache) = SHELL_VIEW_MEDIA_INDEX.lock() {
-                cache.insert(view_hwnd_key, index);
-            }
-        }
-
-        unsafe {
-            CoUninitialize();
-        }
-
-        if let Ok(mut keys) = SHELL_VIEW_INDEX_BUILDING.lock() {
-            keys.remove(&view_hwnd_key);
-        }
-    });
-}
-
-fn find_media_in_current_shell_view(item_name: &str) -> Option<PathBuf> {
-    let context = get_active_shell_view_context_at_cursor()?;
-    find_media_in_shell_view(context.shell_view_hwnd, item_name)
-}
-
-fn lookup_media_in_hover_folder(
-    item_name: &str,
-    current_folder_hint: Option<&str>,
-) -> Option<PathBuf> {
-    if let Some(folder) = current_folder_hint {
-        if let Some(path) = find_media_in_folder(folder, item_name) {
-            return Some(path);
-        }
-        if let Some(path) = lookup_media_below_folder(folder, item_name) {
-            return Some(path);
-        }
-    }
-
-    get_current_explorer_folder().and_then(|folder| {
-        find_media_in_folder(&folder, item_name)
-            .or_else(|| lookup_media_below_folder(&folder, item_name))
-    })
-}
-
-fn add_search_index_path(index: &mut SearchRootMediaIndex, path: &PathBuf) {
-    if let Some(file_name) = path.file_name().and_then(|s| s.to_str()) {
-        index
-            .by_file_name
-            .entry(file_name.to_ascii_lowercase())
-            .or_default()
-            .push(path.clone());
-    }
-
-    if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-        index
-            .by_stem
-            .entry(stem.to_ascii_lowercase())
-            .or_default()
-            .push(path.clone());
-    }
-}
-
-/// Read the files under a folder into an index, optionally under a time budget.
-///
-/// The walk is the one a search's results are found by: every folder below the
-/// one it starts at, and every media file in them, by name. It is offered a
-/// budget by the callers that run on the hook loop, which get a short index back
-/// and leave the rest to the walk that runs in the background.
-fn build_search_root_media_index(
-    root: &str,
-    budget: Option<Duration>,
-) -> Option<SearchRootMediaIndex> {
-    let root_path = PathBuf::from(root);
-    if !root_path.is_dir() {
-        return None;
-    }
-
-    let mut index = SearchRootMediaIndex {
-        built_at: Instant::now(),
-        by_file_name: HashMap::new(),
-        by_stem: HashMap::new(),
-    };
-    let mut dirs = vec![root_path];
-    let mut scanned_dirs = 0usize;
-    let mut indexed_files = 0usize;
-    let deadline = budget.map(|budget| Instant::now() + budget);
-
-    while let Some(dir) = dirs.pop() {
-        if scanned_dirs >= SEARCH_ROOT_INDEX_MAX_DIRS
-            || indexed_files >= SEARCH_ROOT_INDEX_MAX_FILES
-        {
-            break;
-        }
-        if let Some(deadline) = deadline {
-            if Instant::now() >= deadline {
-                break;
-            }
-        }
-        scanned_dirs += 1;
-
-        let entries = match std::fs::read_dir(&dir) {
-            Ok(entries) => entries,
-            Err(_) => continue,
-        };
-
-        for entry in entries.flatten() {
-            let file_type = match entry.file_type() {
-                Ok(file_type) => file_type,
-                Err(_) => continue,
-            };
-            let path = entry.path();
-
-            if file_type.is_dir() {
-                dirs.push(path);
-                continue;
-            }
-
-            if file_type.is_file() && is_media_file(&path) {
-                add_search_index_path(&mut index, &path);
-                indexed_files += 1;
-                if indexed_files >= SEARCH_ROOT_INDEX_MAX_FILES {
-                    break;
-                }
-            }
-        }
-    }
-
-    Some(index)
-}
-
-fn lookup_path_in_search_root_index(
-    index: &SearchRootMediaIndex,
-    item_name: &str,
-) -> Option<PathBuf> {
-    let item_name_lower = item_name.to_ascii_lowercase();
-    let item_stem_lower = Path::new(item_name)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .map(|s| s.to_ascii_lowercase());
-    let item_ext_lower = Path::new(item_name)
-        .extension()
-        .and_then(|s| s.to_str())
-        .map(|s| s.to_ascii_lowercase());
-
-    if let Some(paths) = index.by_file_name.get(&item_name_lower) {
-        if let Some(path) = paths.first() {
-            return Some(path.clone());
-        }
-    }
-
-    if let Some(stem_key) = item_stem_lower.as_ref() {
-        if let Some(paths) = index.by_stem.get(stem_key) {
-            for path in paths {
-                if let Some(item_ext) = item_ext_lower.as_deref() {
-                    if let Some(candidate_ext) = path.extension().and_then(|s| s.to_str()) {
-                        let candidate_ext_lower = candidate_ext.to_ascii_lowercase();
-                        if candidate_ext_lower == item_ext
-                            || (is_jpeg_extension(&candidate_ext_lower)
-                                && is_jpeg_extension(item_ext))
-                        {
-                            return Some(path.clone());
-                        }
-                    }
-                } else {
-                    return Some(path.clone());
-                }
-            }
-        }
-    }
-
-    None
-}
-
-/// Find a file by name below a folder, walking the folders under it now.
-///
-/// This is the question a search answers: a search started in a folder returns
-/// results from any folder below it, and the shell hands a result over as its
-/// name — so when the name is not *in* the folder the search began at, the only
-/// folders that can hold it are the ones underneath. The walk is the same one the
-/// search-root index does, given a budget small enough for the hook loop to spend
-/// between probes; what it does not reach in time is left to the index, which
-/// walks the same tree in the background.
-fn lookup_media_below_folder(folder: &str, item_name: &str) -> Option<PathBuf> {
-    let index = build_search_root_media_index(
-        folder,
-        Some(Duration::from_millis(SEARCH_DESCEND_BUDGET_MS)),
-    )?;
-
-    lookup_path_in_search_root_index(&index, item_name)
-}
-
-fn queue_search_root_index_build(root: String) {
-    let root_path = PathBuf::from(&root);
-    if !root_path.is_dir() {
-        return;
-    }
-
-    let should_build = {
-        let cache_is_fresh = SEARCH_ROOT_MEDIA_INDEX
-            .lock()
-            .ok()
-            .and_then(|cache| cache.get(&root).map(|index| index.built_at.elapsed()))
-            .map(|age| age <= Duration::from_millis(SEARCH_ROOT_INDEX_TTL_MS))
-            .unwrap_or(false);
-
-        if cache_is_fresh {
-            false
-        } else if let Ok(mut building) = SEARCH_ROOT_INDEX_BUILDING.lock() {
-            if building.contains(&root) {
-                false
-            } else {
-                building.insert(root.clone());
-                true
-            }
-        } else {
-            false
-        }
-    };
-
-    if !should_build {
-        return;
-    }
-
-    std::thread::spawn(move || {
-        let built_index = build_search_root_media_index(&root, None);
-        if let Some(index) = built_index {
-            if let Ok(mut cache) = SEARCH_ROOT_MEDIA_INDEX.lock() {
-                cache.insert(root.clone(), index);
-                if cache.len() > SEARCH_ROOT_CACHE_MAX_ENTRIES {
-                    let mut oldest_key: Option<String> = None;
-                    let mut oldest_age = Duration::ZERO;
-                    for (cache_root, cache_index) in cache.iter() {
-                        let age = cache_index.built_at.elapsed();
-                        if oldest_key.is_none() || age > oldest_age {
-                            oldest_key = Some(cache_root.clone());
-                            oldest_age = age;
-                        }
-                    }
-                    if let Some(oldest_key) = oldest_key {
-                        cache.remove(&oldest_key);
-                    }
-                }
-            }
-        }
-        if let Ok(mut building) = SEARCH_ROOT_INDEX_BUILDING.lock() {
-            building.remove(&root);
-        }
-    });
-}
-
-fn lookup_media_in_search_root_index(root: &str, item_name: &str) -> Option<PathBuf> {
-    let item_name = item_name.trim();
-    if item_name.is_empty() {
-        return None;
-    }
-
-    let mut has_index = false;
-    let mut stale = false;
-
-    if let Ok(cache) = SEARCH_ROOT_MEDIA_INDEX.lock() {
-        if let Some(index) = cache.get(root) {
-            has_index = true;
-            stale = index.built_at.elapsed() > Duration::from_millis(SEARCH_ROOT_INDEX_TTL_MS);
-            if let Some(path) = lookup_path_in_search_root_index(index, item_name) {
-                return Some(path);
-            }
-        }
-    }
-
-    if !has_index || stale {
-        // An index being old is a reason to walk the tree again, not a reason to
-        // stop reading the names it holds: it is read while the walk that refreshes
-        // it runs, so a name that was found a minute ago is not unfindable for as
-        // long as that walk takes. Nothing else retires it — the cache bounds its
-        // entries, and a fresh walk replaces the one it was built from.
-        queue_search_root_index_build(root.to_string());
-    }
-
-    None
-}
-
-/// Find which Explorer folder the cursor is currently over
-fn get_current_explorer_folder() -> Option<String> {
-    if let Some(context) = get_active_shell_view_context_at_cursor() {
-        if let Some(folder) = context.folder_path {
-            return Some(folder);
-        }
-        if is_probable_search_view_context(&context) {
-            if let Some(folder) = resolve_search_root_from_context(&context) {
-                return Some(folder);
-            }
-        }
-        if let Some(url) = context.location_url.as_deref() {
-            if let Some(folder) = resolve_explorer_location_folder(context.shell_view_hwnd, url) {
-                return Some(folder);
-            }
-        }
-        if let Some(folder) = get_cached_explorer_real_folder(context.shell_view_hwnd) {
-            return Some(folder);
-        }
-    }
-
-    unsafe {
-        let mut cursor_pos = POINT::default();
-        if GetCursorPos(&mut cursor_pos).is_err() {
-            return None;
-        }
-
-        // Get window under cursor
-        let hwnd = WindowFromPoint(cursor_pos);
-        if hwnd.0.is_null() {
-            return None;
-        }
-
-        // Walk up parent windows to find Explorer window
-        let mut current_hwnd = hwnd;
-        let folders = get_all_explorer_folders();
-
-        // Check if any parent window is an Explorer window
-        for _ in 0..20 {
-            // Limit iterations
-            for (explorer_hwnd, folder) in folders.iter() {
-                if current_hwnd == HWND(*explorer_hwnd as *mut _) {
-                    return Some(folder.clone());
-                }
-            }
-
-            // Get parent
-            if let Ok(parent) = windows::Win32::UI::WindowsAndMessaging::GetParent(current_hwnd) {
-                if parent.0.is_null() || parent == current_hwnd {
-                    break;
-                }
-                current_hwnd = parent;
-            } else {
-                break;
-            }
-        }
-
-        // Also check if the foreground window is an Explorer
-        let foreground = GetForegroundWindow();
-        for (explorer_hwnd, folder) in folders.iter() {
-            if foreground == HWND(*explorer_hwnd as *mut _) {
-                return Some(folder.clone());
-            }
-        }
-    }
-
-    None
 }
 
 /// Names that indicate container elements, not actual files
@@ -2581,393 +1088,6 @@ fn is_valid_file_path(s: &str) -> bool {
     path.is_absolute()
 }
 
-/// Result from accessibility query - can be a filename or a full path
-#[derive(Debug, Clone)]
-enum AccessibilityResult {
-    /// Just a filename (need to find in folder)
-    FileName(String),
-    /// Full path to file (from search results)
-    FullPath(PathBuf),
-}
-
-/// Check whether an accessibility element/child variant contains the current cursor point.
-/// This prevents fallbacks from returning focused/default items that are not truly hovered.
-fn is_variant_under_cursor(
-    acc: &windows::Win32::UI::Accessibility::IAccessible,
-    variant: &VARIANT,
-    cursor_pos: &POINT,
-) -> bool {
-    unsafe {
-        let mut left = 0;
-        let mut top = 0;
-        let mut width = 0;
-        let mut height = 0;
-
-        if acc
-            .accLocation(&mut left, &mut top, &mut width, &mut height, variant)
-            .is_err()
-        {
-            return false;
-        }
-
-        if width <= 0 || height <= 0 {
-            return false;
-        }
-
-        let right = left.saturating_add(width);
-        let bottom = top.saturating_add(height);
-
-        cursor_pos.x >= left && cursor_pos.x < right && cursor_pos.y >= top && cursor_pos.y < bottom
-    }
-}
-
-/// Get the filename or full path under cursor using accessibility - try multiple approaches
-fn get_item_under_cursor() -> Option<AccessibilityResult> {
-    unsafe {
-        let mut cursor_pos = POINT::default();
-        if GetCursorPos(&mut cursor_pos).is_err() {
-            return None;
-        }
-
-        get_item_at_point(cursor_pos)
-    }
-}
-
-/// Get the filename or full path of the item at a point, the way a pointer reads
-/// it.
-///
-/// The point is what makes this shared: an item under the cursor and the item a
-/// keyboard preview is about are the same question asked at two places, and every
-/// answer below is Explorer's — a search result gives up the file it stands for in
-/// its accessible value, whatever folder that file is in.
-fn get_item_at_point(point: POINT) -> Option<AccessibilityResult> {
-    unsafe {
-        // Use accessibility to get the item info
-        let mut accessible: Option<windows::Win32::UI::Accessibility::IAccessible> = None;
-        let mut child_variant = VARIANT::default();
-
-        let result = (|| -> Option<AccessibilityResult> {
-            if windows::Win32::UI::Accessibility::AccessibleObjectFromPoint(
-                point,
-                &mut accessible,
-                &mut child_variant,
-            )
-            .is_err()
-            {
-                return None;
-            }
-
-            if let Some(ref acc) = accessible {
-                // First, try to get the value - this often contains the full path in search results
-                if is_variant_under_cursor(acc, &child_variant, &point) {
-                    if let Ok(value) = acc.get_accValue(&child_variant) {
-                        let value_str = value.to_string();
-                        if let Some(path) = resolve_media_path_from_text(&value_str) {
-                            return Some(AccessibilityResult::FullPath(path));
-                        }
-                    }
-                }
-
-                // Try with the child variant first for name. A view can report text
-                // that is not a file's name here — see `name_could_be_previewed` —
-                // and the walk goes on to the parent item when it does.
-                if is_variant_under_cursor(acc, &child_variant, &point) {
-                    if let Ok(name) = acc.get_accName(&child_variant) {
-                        let name_str = name.to_string();
-                        if !is_container_name(&name_str) {
-                            if let Some(path) = resolve_media_path_from_text(&name_str) {
-                                return Some(AccessibilityResult::FullPath(path));
-                            }
-                            if name_could_be_previewed(&name_str) {
-                                return Some(AccessibilityResult::FileName(name_str));
-                            }
-                        }
-                    }
-                }
-
-                // Try with default variant
-                let default_variant = VARIANT::default();
-                if is_variant_under_cursor(acc, &default_variant, &point) {
-                    if let Ok(name) = acc.get_accName(&default_variant) {
-                        let name_str = name.to_string();
-                        if !is_container_name(&name_str) {
-                            if let Some(path) = resolve_media_path_from_text(&name_str) {
-                                return Some(AccessibilityResult::FullPath(path));
-                            }
-                            if name_could_be_previewed(&name_str) {
-                                return Some(AccessibilityResult::FileName(name_str));
-                            }
-                        }
-                    }
-                }
-
-                // Try navigating parent chain to find item name (for list/details views)
-                if let Some(result) = try_get_item_from_parent(acc, &child_variant, &point) {
-                    return Some(result);
-                }
-
-                // Try getting help text which sometimes has info
-                if is_variant_under_cursor(acc, &child_variant, &point) {
-                    if let Ok(help) = acc.get_accHelp(&child_variant) {
-                        let help_str = help.to_string();
-                        if !help_str.is_empty()
-                            && !is_container_name(&help_str)
-                            && name_could_be_previewed(&help_str)
-                        {
-                            return Some(AccessibilityResult::FileName(help_str));
-                        }
-                    }
-                }
-
-                // Try description which may have path info
-                if is_variant_under_cursor(acc, &child_variant, &point) {
-                    if let Ok(desc) = acc.get_accDescription(&child_variant) {
-                        let desc_str = desc.to_string();
-                        if let Some(path) = resolve_media_path_from_text(&desc_str) {
-                            return Some(AccessibilityResult::FullPath(path));
-                        }
-                    }
-                }
-
-                // Try to walk up parent hierarchy more aggressively (for details view text cells)
-                if let Some(result) = try_deep_parent_search(acc, &point) {
-                    return Some(result);
-                }
-            }
-
-            None
-        })();
-
-        clear_variant(&mut child_variant);
-        return result;
-    }
-}
-
-/// Try to get item info by navigating the accessibility parent chain
-/// This helps with List/Details views where hovering over filename text doesn't directly give the name
-fn try_get_item_from_parent(
-    acc: &windows::Win32::UI::Accessibility::IAccessible,
-    _child_variant: &VARIANT,
-    cursor_pos: &POINT,
-) -> Option<AccessibilityResult> {
-    unsafe {
-        // Try to get parent accessible object
-        if let Ok(parent_disp) = acc.accParent() {
-            if let Ok(parent_acc) =
-                parent_disp.cast::<windows::Win32::UI::Accessibility::IAccessible>()
-            {
-                let default_variant = VARIANT::default();
-
-                // Try to get name from parent
-                if is_variant_under_cursor(&parent_acc, &default_variant, cursor_pos) {
-                    if let Ok(name) = parent_acc.get_accName(&default_variant) {
-                        let name_str = name.to_string();
-                        if !is_container_name(&name_str) {
-                            if let Some(path) = resolve_media_path_from_text(&name_str) {
-                                return Some(AccessibilityResult::FullPath(path));
-                            }
-                            if name_could_be_previewed(&name_str) {
-                                return Some(AccessibilityResult::FileName(name_str));
-                            }
-                        }
-                    }
-                }
-
-                // Try to get value (path) from parent
-                if is_variant_under_cursor(&parent_acc, &default_variant, cursor_pos) {
-                    if let Ok(value) = parent_acc.get_accValue(&default_variant) {
-                        let value_str = value.to_string();
-                        if let Some(path) = resolve_media_path_from_text(&value_str) {
-                            return Some(AccessibilityResult::FullPath(path));
-                        }
-                    }
-                }
-
-                // Try child enumeration to find focused/selected item
-                if let Some(result) = try_get_focused_child(&parent_acc, cursor_pos) {
-                    return Some(result);
-                }
-            }
-        }
-
-        // Try getting focused element within the accessible object
-        if let Ok(mut focus) = acc.accFocus() {
-            let focus_result = (|| -> Option<AccessibilityResult> {
-                // If focus returns a variant with child ID
-                let vt = focus.as_raw().Anonymous.Anonymous.vt;
-                if vt == windows::Win32::System::Variant::VT_I4.0 {
-                    if is_variant_under_cursor(acc, &focus, cursor_pos) {
-                        if let Ok(name) = acc.get_accName(&focus) {
-                            let name_str = name.to_string();
-                            if !is_container_name(&name_str) {
-                                return Some(AccessibilityResult::FileName(name_str));
-                            }
-                        }
-                    }
-                }
-
-                None
-            })();
-
-            clear_variant(&mut focus);
-            if focus_result.is_some() {
-                return focus_result;
-            }
-        }
-    }
-    None
-}
-
-/// Try to find focused/hot-tracked child in accessibility tree
-fn try_get_focused_child(
-    acc: &windows::Win32::UI::Accessibility::IAccessible,
-    cursor_pos: &POINT,
-) -> Option<AccessibilityResult> {
-    unsafe {
-        // Get child count
-        if let Ok(count) = acc.accChildCount() {
-            // Limit iteration to prevent hanging
-            let max_check = (count as i32).min(100);
-
-            for i in 1..=max_check {
-                let child_var = VARIANT::from(i);
-
-                if !is_variant_under_cursor(acc, &child_var, cursor_pos) {
-                    continue;
-                }
-
-                // Check state for focus/hot tracking
-                if let Ok(state) = acc.get_accState(&child_var) {
-                    let state_val = state.as_raw().Anonymous.Anonymous.Anonymous.uintVal;
-                    // STATE_SYSTEM_HOTTRACKED = 0x80, STATE_SYSTEM_FOCUSED = 0x4
-                    if (state_val & 0x80) != 0 || (state_val & 0x4) != 0 {
-                        if let Ok(name) = acc.get_accName(&child_var) {
-                            let name_str = name.to_string();
-                            if !is_container_name(&name_str) {
-                                if let Some(path) = resolve_media_path_from_text(&name_str) {
-                                    return Some(AccessibilityResult::FullPath(path));
-                                }
-                                return Some(AccessibilityResult::FileName(name_str));
-                            }
-                        }
-
-                        // Also try value for full path
-                        if let Ok(value) = acc.get_accValue(&child_var) {
-                            let value_str = value.to_string();
-                            if let Some(path) = resolve_media_path_from_text(&value_str) {
-                                return Some(AccessibilityResult::FullPath(path));
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-    None
-}
-
-/// Deep parent search - walk up the accessibility tree to find file information
-/// This is especially useful for Details/List views where clicking on a text cell
-/// gives us the cell, not the row/item
-fn try_deep_parent_search(
-    acc: &windows::Win32::UI::Accessibility::IAccessible,
-    cursor_pos: &POINT,
-) -> Option<AccessibilityResult> {
-    unsafe {
-        let mut current_acc = acc.clone();
-
-        // Walk up to 5 levels of parent hierarchy
-        for _ in 0..5 {
-            // Try to get parent
-            if let Ok(parent_disp) = current_acc.accParent() {
-                if let Ok(parent_acc) =
-                    parent_disp.cast::<windows::Win32::UI::Accessibility::IAccessible>()
-                {
-                    let default_variant = VARIANT::default();
-
-                    // Try getting name from parent
-                    if is_variant_under_cursor(&parent_acc, &default_variant, cursor_pos) {
-                        if let Ok(name) = parent_acc.get_accName(&default_variant) {
-                            let name_str = name.to_string();
-                            if !is_container_name(&name_str) {
-                                if let Some(path) = resolve_media_path_from_text(&name_str) {
-                                    return Some(AccessibilityResult::FullPath(path));
-                                }
-                                return Some(AccessibilityResult::FileName(name_str));
-                            }
-                        }
-                    }
-
-                    // Try getting value from parent (may contain path)
-                    if is_variant_under_cursor(&parent_acc, &default_variant, cursor_pos) {
-                        if let Ok(value) = parent_acc.get_accValue(&default_variant) {
-                            let value_str = value.to_string();
-                            if let Some(path) = resolve_media_path_from_text(&value_str) {
-                                return Some(AccessibilityResult::FullPath(path));
-                            }
-                        }
-                    }
-
-                    // Try to find selected/focused child of this parent
-                    if let Some(result) = try_get_focused_child(&parent_acc, cursor_pos) {
-                        return Some(result);
-                    }
-
-                    current_acc = parent_acc;
-                } else {
-                    break;
-                }
-            } else {
-                break;
-            }
-        }
-    }
-    None
-}
-
-/// Try to find an image or video file in a specific folder by item name
-fn find_media_in_folder(folder: &str, item_name: &str) -> Option<PathBuf> {
-    let item_name = item_name.trim();
-    if item_name.is_empty() {
-        return None;
-    }
-
-    let folder_path = PathBuf::from(folder);
-    let folder_key = folder_path.to_string_lossy().into_owned();
-
-    // First try: item_name as-is
-    let full_path = folder_path.join(item_name);
-    if full_path.exists() && is_media_file(&full_path) {
-        return Some(full_path);
-    }
-
-    // JPEG extension aliases can differ between Explorer labels and on-disk names.
-    // Try sibling JPEG aliases before consulting the folder index.
-    if let Some(item_ext) = Path::new(item_name)
-        .extension()
-        .and_then(|s| s.to_str())
-        .map(|s| s.to_ascii_lowercase())
-    {
-        if is_jpeg_extension(&item_ext) {
-            if let Some(stem) = Path::new(item_name).file_stem().and_then(|s| s.to_str()) {
-                for alt in ["jpg", "jpeg", "jpe", "jfif"] {
-                    if alt == item_ext {
-                        continue;
-                    }
-                    let candidate = folder_path.join(format!("{}.{}", stem, alt));
-                    if candidate.exists() && is_media_file(&candidate) {
-                        return Some(candidate);
-                    }
-                }
-            }
-        }
-    }
-
-    // Fallback: use a short-lived folder index so large folders are scanned once
-    // instead of once per hover poll.
-    lookup_media_in_folder_index(&folder_path, &folder_key, item_name)
-}
-
 /// Whether a name could be a file this app previews: one whose extension is in a
 /// list the app knows, or a name the text lists carry.
 ///
@@ -2998,181 +1118,169 @@ fn name_could_be_previewed(name: &str) -> bool {
     }
 }
 
-fn accessibility_result_from_name(name: String) -> Option<AccessibilityResult> {
-    let name = name.trim().to_string();
-    if name.is_empty() || is_container_name(&name) {
-        return None;
-    }
-
-    if let Some(path) = resolve_media_path_from_text(&name) {
-        return Some(AccessibilityResult::FullPath(path));
-    }
-
-    if !name_could_be_previewed(&name) {
-        return None;
-    }
-
-    Some(AccessibilityResult::FileName(name))
-}
-
-fn accessibility_result_from_legacy_pattern(
-    pattern: &IUIAutomationLegacyIAccessiblePattern,
-) -> Option<AccessibilityResult> {
-    unsafe {
-        for candidate in [
-            pattern.CurrentValue().ok().map(|s| s.to_string()),
-            pattern.CurrentDescription().ok().map(|s| s.to_string()),
-            pattern.CurrentName().ok().map(|s| s.to_string()),
-        ]
-        .into_iter()
-        .flatten()
-        {
-            if let Some(result) = accessibility_result_from_name(candidate) {
-                return Some(result);
-            }
-        }
-    }
-
-    None
-}
-
-fn accessibility_result_from_uia_element(
-    element: &IUIAutomationElement,
-) -> Option<AccessibilityResult> {
-    unsafe {
-        if let Ok(name) = element.CurrentName() {
-            if let Some(result) = accessibility_result_from_name(name.to_string()) {
-                return Some(result);
-            }
-        }
-
-        let control_type = element.CurrentControlType().ok();
-        if control_type == Some(UIA_ListItemControlTypeId)
-            || control_type == Some(UIA_DataItemControlTypeId)
-        {
-            if let Ok(pattern) = element
-                .GetCurrentPatternAs::<IUIAutomationLegacyIAccessiblePattern>(
-                    UIA_LegacyIAccessiblePatternId,
-                )
-            {
-                if let Some(result) = accessibility_result_from_legacy_pattern(&pattern) {
-                    return Some(result);
-                }
-            }
-        }
-    }
-
-    None
-}
-
-fn get_item_under_cursor_uia(automation: &IUIAutomation) -> Option<AccessibilityResult> {
-    unsafe {
-        let mut cursor_pos = POINT::default();
-        if GetCursorPos(&mut cursor_pos).is_err() {
-            return None;
-        }
-
-        let mut element = automation.ElementFromPoint(cursor_pos).ok()?;
-        let walker = automation.ControlViewWalker().ok()?;
-
-        for _ in 0..8 {
-            if let Ok(rect) = element.CurrentBoundingRectangle() {
-                if rect.left <= cursor_pos.x
-                    && cursor_pos.x <= rect.right
-                    && rect.top <= cursor_pos.y
-                    && cursor_pos.y <= rect.bottom
-                {
-                    if let Some(result) = accessibility_result_from_uia_element(&element) {
-                        return Some(result);
-                    }
-                }
-            }
-
-            element = walker.GetParentElement(&element).ok()?;
-        }
-    }
-
-    None
-}
-
-fn get_accessibility_item_under_cursor(
-    automation: Option<&IUIAutomation>,
-) -> Option<AccessibilityResult> {
-    get_item_under_cursor().or_else(|| automation.and_then(get_item_under_cursor_uia))
-}
-
 /// The item the pointer is over, as the view's accessibility provider reports it,
 /// or nothing when the pointer is over no item at all.
-fn uia_item_under_cursor(resolver: &MouseResolver, point: POINT) -> Option<HoveredItem> {
+fn uia_item_from_point(resolver: &ItemResolver, point: POINT) -> Option<HoveredItem> {
     let automation = resolver.automation.as_ref()?;
     let cache = resolver.cache.as_ref()?;
+    let element = unsafe { automation.ElementFromPointBuildCache(point, cache) }.ok()?;
+
+    walk_to_item(resolver, &element, Some(point))
+}
+
+/// The item the keyboard is on: the element Explorer says holds the focus, or the
+/// item of that element's list when the view reports the list itself as focused.
+fn uia_item_from_focus(resolver: &ItemResolver) -> Option<HoveredItem> {
+    let automation = resolver.automation.as_ref()?;
+    let cache = resolver.cache.as_ref()?;
+    let focused = unsafe { automation.GetFocusedElementBuildCache(cache) }.ok()?;
+
+    // A view can report the list itself as focused while the focus it draws is on
+    // one of its items — the search results view does — and a list's name is not a
+    // file's, so the selection is where the item has to be taken from. For a
+    // focused element that already is an item this is the element itself.
+    let start = if element_names_an_item(&focused) {
+        focused
+    } else {
+        selected_item_of_focused_list(&focused)?
+    };
+
+    walk_to_item(resolver, &start, None)
+}
+
+/// The nearest item at or above an element, as the view reports it.
+///
+/// The walk starts where the caller's evidence does — the element under the
+/// pointer, or the focused element — and goes up to the first list row or data
+/// item, because what the view says about an item is kept on the item and not on
+/// the text it draws inside it.
+fn walk_to_item(
+    resolver: &ItemResolver,
+    start: &IUIAutomationElement,
+    point: Option<POINT>,
+) -> Option<HoveredItem> {
+    let cache = resolver.cache.as_ref()?;
     let walker = resolver.walker.as_ref()?;
+    let mut element = start.clone();
 
-    unsafe {
-        let mut element = automation.ElementFromPointBuildCache(point, cache).ok()?;
-
-        for _ in 0..=POINTER_ITEM_ANCESTOR_LIMIT {
-            if let Some(item) =
-                hovered_item_from_element(&element, resolver.item_index_property, point)
-            {
-                return Some(item);
-            }
-
-            element = walker.GetParentElementBuildCache(&element, cache).ok()?;
+    for _ in 0..=POINTER_ITEM_ANCESTOR_LIMIT {
+        if let Some(item) = item_from_element(&element, resolver.item_index_property, point) {
+            return Some(item);
         }
+
+        element = unsafe { walker.GetParentElementBuildCache(&element, cache) }.ok()?;
     }
 
     None
 }
 
-/// The item an element is, when the pointer is inside it.
+/// The item an element is, when the pointer's box test says it is the one asked
+/// about — or, for the keyboard, whenever it is an item at all.
 ///
-/// The box is the whole test. A row is an item from its left edge to its right
-/// one, and what a pointer anywhere on that row belongs to is the file the row
-/// stands for — the same thing Explorer highlights when it is selected. An item
-/// whose box does not hold the point is not an answer even though the walk passed
-/// through it, and since the walk starts at the element under the pointer, the
-/// first item that holds the point is the one the pointer is on.
-fn hovered_item_from_element(
+/// The box is what says the pointer is on an item: a row is an item from its left
+/// edge to its right one, and a pointer anywhere on that row belongs to the file
+/// the row stands for, which is the same thing Explorer highlights when it is
+/// selected. An item whose box does not hold the point is not an answer even
+/// though the walk passed through it, and since the walk starts at the element
+/// under the pointer, the first item that holds the point is the one it is on. A
+/// keyboard preview has no point to test — the focused element is the evidence —
+/// so there it is the item itself that answers.
+fn item_from_element(
     element: &IUIAutomationElement,
     item_index_property: Option<UIA_PROPERTY_ID>,
-    point: POINT,
+    point: Option<POINT>,
 ) -> Option<HoveredItem> {
-    unsafe {
-        let control_type = element.CachedControlType().ok()?;
-        if control_type != UIA_ListItemControlTypeId && control_type != UIA_DataItemControlTypeId {
-            return None;
-        }
+    let control_type = element_control_type(element)?;
+    if control_type != UIA_ListItemControlTypeId && control_type != UIA_DataItemControlTypeId {
+        return None;
+    }
 
-        let bounds = element.CachedBoundingRectangle().ok()?;
-        let holds_point = bounds.left < bounds.right
-            && bounds.top < bounds.bottom
-            && point.x >= bounds.left
+    let bounds = element_bounds(element)?;
+    if bounds.left >= bounds.right || bounds.top >= bounds.bottom {
+        return None;
+    }
+    if let Some(point) = point {
+        let holds_point = point.x >= bounds.left
             && point.x < bounds.right
             && point.y >= bounds.top
             && point.y < bounds.bottom;
         if !holds_point {
             return None;
         }
+    }
 
-        let name = element
+    Some(HoveredItem {
+        index: element_item_index(element, item_index_property),
+        name: element_name(element).unwrap_or_default().trim().to_string(),
+        value: element_value(element),
+        bounds,
+        native_window: element_native_window(element),
+    })
+}
+
+/// The control type of an element, from the batched cache when the element came
+/// from one and from the provider itself when it did not: the item a keyboard
+/// preview is resolved from can be handed over by a selection pattern, which is
+/// not a cached read of the element under a pointer.
+fn element_control_type(element: &IUIAutomationElement) -> Option<UIA_CONTROLTYPE_ID> {
+    unsafe {
+        element
+            .CachedControlType()
+            .or_else(|_| element.CurrentControlType())
+            .ok()
+    }
+}
+
+fn element_name(element: &IUIAutomationElement) -> Option<String> {
+    unsafe {
+        element
             .CachedName()
-            .map(|value| value.to_string())
-            .unwrap_or_default();
-        let value = element
+            .or_else(|_| element.CurrentName())
+            .ok()
+            .map(|name| name.to_string())
+    }
+}
+
+fn element_bounds(element: &IUIAutomationElement) -> Option<RECT> {
+    unsafe {
+        element
+            .CachedBoundingRectangle()
+            .or_else(|_| element.CurrentBoundingRectangle())
+            .ok()
+    }
+}
+
+fn element_native_window(element: &IUIAutomationElement) -> isize {
+    unsafe {
+        element
+            .CachedNativeWindowHandle()
+            .or_else(|_| element.CurrentNativeWindowHandle())
+            .map(|window| window.0 as isize)
+            .unwrap_or_default()
+    }
+}
+
+/// The value the item's legacy accessible pattern carries — for a file a search
+/// has surfaced, the file's own path.
+fn element_value(element: &IUIAutomationElement) -> Option<String> {
+    unsafe {
+        let pattern = element
             .GetCachedPatternAs::<IUIAutomationLegacyIAccessiblePattern>(
                 UIA_LegacyIAccessiblePatternId,
             )
-            .ok()
-            .and_then(|pattern| pattern.CachedValue().ok())
-            .map(|value| value.to_string())
-            .filter(|value| !value.trim().is_empty());
+            .or_else(|_| {
+                element.GetCurrentPatternAs::<IUIAutomationLegacyIAccessiblePattern>(
+                    UIA_LegacyIAccessiblePatternId,
+                )
+            })
+            .ok()?;
 
-        Some(HoveredItem {
-            index: cached_item_index(element, item_index_property),
-            name: name.trim().to_string(),
-            value,
-        })
+        pattern
+            .CachedValue()
+            .or_else(|_| pattern.CurrentValue())
+            .ok()
+            .map(|value| value.to_string())
+            .filter(|value| !value.trim().is_empty())
     }
 }
 
@@ -3180,16 +1288,19 @@ fn hovered_item_from_element(
 ///
 /// The property is one-based, and zero is what the provider answers when it has
 /// nothing to say about the element's position at all — so only a positive value
-/// is a position. A missing one is not a failure: the item's name and its
-/// accessible value still stand on their own.
-fn cached_item_index(
+/// is a position. A missing one is not a failure: the item's own value still
+/// stands on its own.
+fn element_item_index(
     element: &IUIAutomationElement,
     item_index_property: Option<UIA_PROPERTY_ID>,
 ) -> Option<i32> {
     let property = item_index_property?;
 
     unsafe {
-        let value = element.GetCachedPropertyValue(property).ok()?;
+        let value = element
+            .GetCachedPropertyValue(property)
+            .or_else(|_| element.GetCurrentPropertyValue(property))
+            .ok()?;
         let raw = value.as_raw().Anonymous.Anonymous;
         if raw.vt != VT_I4.0 {
             return None;
@@ -3222,8 +1333,8 @@ fn root_window_at(point: POINT) -> Option<HWND> {
 /// views rather than one, and something else has to say which of them the pointer
 /// is in. The tabs that are not showing are not skipped here: they are what the
 /// item settles, and a view skipped here could be the one holding it.
-fn folder_views_for_window(resolver: &MouseResolver, root_key: isize) -> Vec<CachedFolderView> {
-    let mut candidates: Vec<CachedFolderView> = Vec::new();
+fn folder_views_for_window(resolver: &ItemResolver, root_key: isize) -> Vec<AnsweredView> {
+    let mut candidates: Vec<AnsweredView> = Vec::new();
     let Some(shell_windows) = resolver.shell_windows.as_ref() else {
         return candidates;
     };
@@ -3277,7 +1388,7 @@ fn folder_views_for_window(resolver: &MouseResolver, root_key: isize) -> Vec<Cac
                 continue;
             };
 
-            candidates.push(CachedFolderView {
+            candidates.push(AnsweredView {
                 browser_hwnd: root_key,
                 shell_browser,
                 view_identity,
@@ -3289,30 +1400,26 @@ fn folder_views_for_window(resolver: &MouseResolver, root_key: isize) -> Vec<Cac
     candidates
 }
 
-/// How many Shell windows are registered, which is what says whether a window the
-/// pointer is in could be holding tabs.
-fn shell_window_count(resolver: &MouseResolver) -> Option<i32> {
+/// How many Shell windows are registered, which is what says whether a window
+/// could be holding tabs.
+fn shell_window_count(resolver: &ItemResolver) -> Option<i32> {
     unsafe { resolver.shell_windows.as_ref()?.Count().ok() }
 }
 
-/// The file the pointer's item stands for, asked of the view the pointer is in.
+/// The file an item stands for, asked of the view that is showing it.
 ///
-/// The view is the one the window under the pointer is showing, and a window that
-/// holds tabs registers one Shell window per tab — all of them answering with the
-/// frame's own window — so the frame names a set of views and not one. Which of
-/// them it is, is settled by the item: each candidate is asked for the file at the
-/// item's position under the item's name, and a view holding some other folder's
-/// items has nothing there to answer with. What two of them do answer has to
-/// agree: two tabs showing the same folder are one answer and either of them is
-/// the right one, while two tabs whose items differ are a question the item cannot
-/// settle — and no answer is better than the wrong tab's file.
-fn pointer_item_file_path(
-    resolver: &mut MouseResolver,
-    point: POINT,
-    item: &HoveredItem,
-) -> Option<PathBuf> {
+/// The view belongs to a window — the frame the pointer is over, or the one the
+/// focused item is drawn in — and a window that holds tabs registers one Shell
+/// window per tab, all of them answering with the frame's own window, so the frame
+/// names a set of views and not one. Which of them it is, is settled by the item:
+/// each candidate is asked for the file at the item's position under the item's
+/// name, and a view holding some other folder's items has nothing there to answer
+/// with. What two of them do answer has to agree: two tabs showing the same folder
+/// are one answer and either of them is the right one, while two tabs whose items
+/// differ are a question the item cannot settle — and no answer is better than the
+/// wrong tab's file.
+fn item_file_path(resolver: &mut ItemResolver, root_key: isize, item: &HoveredItem) -> Option<PathBuf> {
     let index = item.index? - 1;
-    let root_key = root_window_at(point)?.0 as isize;
 
     // The view that answered last is asked first, but only while it is the *only*
     // registration for the window: with one view there is no second one for it to
@@ -3320,16 +1427,16 @@ fn pointer_item_file_path(
     // a cached tab is one of several, and the cache cannot say which of them is
     // showing.
     if shell_window_count(resolver) == Some(1) {
-        if let Some(cached) = resolver.view.as_ref() {
-            if cached.browser_hwnd == root_key && cached.is_current() {
-                if let Some(path) = view_item_file_path(&cached.folder_view, index, &item.name) {
+        if let Some(answered) = resolver.view.as_ref() {
+            if answered.browser_hwnd == root_key && answered.is_current() {
+                if let Some(path) = view_item_file_path(&answered.folder_view, index, &item.name) {
                     return Some(path);
                 }
             }
         }
     }
 
-    let mut answer: Option<(CachedFolderView, PathBuf)> = None;
+    let mut answer: Option<(AnsweredView, PathBuf)> = None;
 
     for candidate in folder_views_for_window(resolver, root_key) {
         let Some(path) = view_item_file_path(&candidate.folder_view, index, &item.name) else {
@@ -3417,22 +1524,17 @@ fn view_item_file_path(
     }
 }
 
-/// The file the pointer is over.
+/// The file the pointer is over, resolved once per point.
 ///
 /// The pointer asks one question — what is under me — and the view under it
 /// answers by identity: the item the accessibility provider says the point is
 /// inside, the position that item holds in the view, and the file that position
 /// stands for. Nothing is looked up by name for the pointer, because a search
 /// across folders is full of names that belong to more than one file and a name
-/// is the one thing the view does not need. What follows the raw route is the
-/// same answer asked of another witness, in the order that costs least: the
-/// item's own accessible value when it carries the file's path, the view's own
-/// cell under the point, and — for folder views, where a name really is
-/// unambiguous — the item's name in the folder the pointer is in.
-fn get_file_under_cursor(
-    resolver: &mut MouseResolver,
-    hints: &HoverResolverHints,
-) -> Option<PathBuf> {
+/// is the one thing the view does not need. What follows the identity route is the
+/// same answer asked of the item itself: the accessible value it carries, when
+/// that value is a whole path.
+fn get_file_under_cursor(resolver: &mut ItemResolver) -> Option<PathBuf> {
     let mut point = POINT::default();
     if unsafe { GetCursorPos(&mut point) }.is_err() {
         return None;
@@ -3446,98 +1548,52 @@ fn get_file_under_cursor(
         return answer;
     }
 
-    let answer = resolve_file_under_cursor(resolver, hints, point);
+    let answer = resolve_file_under_cursor(resolver, point);
     resolver.remember_probe(point, answer.clone());
     answer
 }
 
-fn resolve_file_under_cursor(
-    resolver: &mut MouseResolver,
-    hints: &HoverResolverHints,
-    point: POINT,
-) -> Option<PathBuf> {
-    if let Some(item) = uia_item_under_cursor(resolver, point) {
-        if let Some(path) = pointer_item_file_path(resolver, point, &item) {
+/// The file the pointer is over.
+///
+/// Two witnesses and no third: the item the pointer is on, turned into a file by
+/// the view that is showing it, and the item's own accessible value when that
+/// value is a whole path. Nothing is looked up by name, nothing is walked, and a
+/// name that nothing can vouch for is left unanswered rather than guessed at — a
+/// search across folders is full of names that belong to more than one file.
+fn resolve_file_under_cursor(resolver: &mut ItemResolver, point: POINT) -> Option<PathBuf> {
+    let item = uia_item_from_point(resolver, point)?;
+
+    if let Some(root_key) = root_window_at(point).map(|window| window.0 as isize) {
+        if let Some(path) = item_file_path(resolver, root_key, &item) {
             // The view is asked twice: a wheel turns the list under a parked
             // pointer, and an item that is no longer at the point the first answer
             // described is not what that answer is about.
-            if uia_item_under_cursor(resolver, point)
+            if uia_item_from_point(resolver, point)
                 .map(|again| again.same_item(&item))
                 .unwrap_or(false)
             {
                 return Some(path);
             }
         }
+    }
 
-        // What the item says about itself: a search result carries the file's own
-        // path in its accessible value.
-        if let Some(value) = item.value.as_deref() {
-            if let Some(path) = resolve_media_path_from_text(value) {
-                return Some(path);
-            }
+    // What the item says about itself: a search result carries the file's own path
+    // in its accessible value.
+    if let Some(value) = item.value.as_deref() {
+        if let Some(path) = resolve_media_path_from_text(value) {
+            return Some(path);
         }
     }
 
-    let item_info = get_accessibility_item_under_cursor(resolver.automation.as_ref())?;
-
-    match item_info {
-        AccessibilityResult::FullPath(path) => is_media_file(&path).then_some(path),
-        AccessibilityResult::FileName(item_name) => {
-            if let Some(path) = resolve_media_path_from_text(&item_name) {
-                return Some(path);
-            }
-
-            // The cell the point falls in, asked of the view's own grid: the one
-            // answer a name cannot give, for a view that reports no position.
-            if let Some(context) = get_active_shell_view_context(&point) {
-                if let Some(path) = view_item_media_path_at_point(&context, point) {
-                    if path_matches_item_name(&path, &item_name) {
-                        return Some(path);
-                    }
-                }
-            }
-
-            // A name is a witness only where it is unambiguous, and that is a
-            // folder view: the search's results span folders, so a name that is in
-            // any one of them is not evidence about the item under the pointer —
-            // two results sharing a name is what the identity routes above exist
-            // for, and a name lookup here would undo them.
-            if !hints.is_search_view {
-                if let Some(folder) = hints
-                    .current_folder
-                    .as_deref()
-                    .map(str::to_string)
-                    .or_else(get_current_explorer_folder)
-                {
-                    if let Some(path) = find_media_in_folder(&folder, &item_name) {
-                        return Some(path);
-                    }
-                }
-
-                // Last resort, and only when no view said which folder it is: the
-                // folders the open Explorer windows are showing.
-                if hints.current_folder.is_none() {
-                    let all_folders = get_all_explorer_folders();
-                    for (_, folder) in all_folders.iter() {
-                        if let Some(path) = find_media_in_folder(folder, &item_name) {
-                            return Some(path);
-                        }
-                    }
-                }
-            }
-
-            None
-        }
-    }
+    None
 }
 
 fn get_file_under_cursor_checked(
-    resolver: &mut MouseResolver,
-    hints: &HoverResolverHints,
+    resolver: &mut ItemResolver,
     slow_probe_count: &mut u32,
 ) -> Option<PathBuf> {
     let started = Instant::now();
-    let result = get_file_under_cursor(resolver, hints);
+    let result = get_file_under_cursor(resolver);
 
     if started.elapsed() >= Duration::from_millis(EXPLORER_PROBE_SLOW_MS) {
         *slow_probe_count = slow_probe_count.saturating_add(1);
@@ -4027,10 +2083,13 @@ fn is_explorer_window(hwnd: HWND) -> bool {
     is_explorer
 }
 
-/// Information about a focused item from Explorer's accessibility tree
+/// What a keyboard preview is resolved from: the item Explorer says holds the
+/// focus, and the window its view belongs to.
 struct FocusedItemInfo {
-    result: AccessibilityResult,
-    rect: RECT,
+    item: HoveredItem,
+    /// The frame of the window the item is drawn in — the window whose views can
+    /// be the one holding it.
+    root_window: Option<isize>,
 }
 
 /// What tells one keyboard focus observation from the next.
@@ -4104,53 +2163,6 @@ fn path_matches_item_name(path: &Path, item_name: &str) -> bool {
     }
 }
 
-/// The path a focused Explorer element carries, when what it carries is the item
-/// it names.
-///
-/// A result from a search that spans folders is why this exists: its name is only
-/// what the file is called, and every lookup that could turn a name into a path
-/// searches the folders the results have in common, which is not the folder the
-/// file is in. The element does carry the path — in the same accessible value the
-/// pointer path reads a result's path from — so the keyboard path asks for it
-/// there too, and takes it only when it names the item: a value belongs to the
-/// element, and an element that is not the item cannot claim it. Both the value a
-/// provider exposes as a pattern of its own and the one the legacy bridge carries
-/// are asked: Explorer answers with either, depending on the view.
-fn focused_item_media_path(element: &IUIAutomationElement, item_name: &str) -> Option<PathBuf> {
-    let mut candidates: Vec<String> = Vec::new();
-
-    unsafe {
-        if let Ok(pattern) =
-            element.GetCurrentPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId)
-        {
-            if let Ok(value) = pattern.CurrentValue() {
-                candidates.push(value.to_string());
-            }
-        }
-
-        if let Ok(pattern) = element.GetCurrentPatternAs::<IUIAutomationLegacyIAccessiblePattern>(
-            UIA_LegacyIAccessiblePatternId,
-        ) {
-            if let Ok(value) = pattern.CurrentValue() {
-                candidates.push(value.to_string());
-            }
-            if let Ok(value) = pattern.CurrentDescription() {
-                candidates.push(value.to_string());
-            }
-        }
-    }
-
-    for candidate in candidates {
-        if let Some(path) = resolve_media_path_from_text(&candidate) {
-            if path_matches_item_name(&path, item_name) {
-                return Some(path);
-            }
-        }
-    }
-
-    None
-}
-
 /// Whether a UIA element names a file: an Explorer item does, and a list, a header
 /// or a toolbar does not.
 fn element_names_an_item(element: &IUIAutomationElement) -> bool {
@@ -4206,161 +2218,72 @@ fn selected_item_of_focused_list(element: &IUIAutomationElement) -> Option<IUIAu
     }
 }
 
-/// Get the currently focused/selected file in Explorer using UI Automation.
-/// UI Automation is far more reliable than MSAA IAccessible for modern Explorer.
-fn get_focused_explorer_item(automation: &IUIAutomation) -> Option<FocusedItemInfo> {
-    unsafe {
-        // Only works when Explorer is the foreground window
-        let foreground = GetForegroundWindow();
-        if foreground.is_invalid() || !is_explorer_window(foreground) {
-            return None;
-        }
-
-        // Get the currently focused UI element via UI Automation
-        let focused = automation.GetFocusedElement().ok()?;
-
-        // A view can report the list itself as focused while the focus it draws is
-        // on one of its items — the search results view does — and a list's name is
-        // not a file's, so the selection is where the item has to be taken from. For
-        // a focused element that already is an item this is the element itself, so
-        // nothing changes for a folder view.
-        let focused = if element_names_an_item(&focused) {
-            focused
-        } else {
-            selected_item_of_focused_list(&focused)?
-        };
-
-        // Get the element name (this is the filename in Explorer)
-        let name = focused.CurrentName().ok()?.to_string();
-        if name.is_empty() || is_container_name(&name) {
-            return None;
-        }
-
-        // Get bounding rectangle (screen coordinates)
-        let rect = focused.CurrentBoundingRectangle().ok()?;
-        if rect.right <= rect.left || rect.bottom <= rect.top {
-            return None;
-        }
-
-        // Check if name is a full path (can happen in search results)
-        if is_valid_file_path(&name) {
-            let path = PathBuf::from(&name);
-            if path.exists() && is_media_file(&path) {
-                return Some(FocusedItemInfo {
-                    result: AccessibilityResult::FullPath(path),
-                    rect,
-                });
-            }
-        }
-
-        // A result whose file is not in the folder it was found under: its name
-        // cannot name it, so the item itself is asked. The element's own accessible
-        // value is the first place to look — see `focused_item_media_path` — and
-        // the provider is asked at the item's box next.
-        if let Some(path) = focused_item_media_path(&focused, &name) {
-            return Some(FocusedItemInfo {
-                result: AccessibilityResult::FullPath(path),
-                rect,
-            });
-        }
-
-        // The item's box, asked the way the pointer asks the item under the cursor:
-        // the accessibility provider at the item — at the text it shows before
-        // anywhere else — is where a search result states the file it stands for,
-        // whatever folder that file is in. A name is only findable in a folder that
-        // holds it, which is the one thing a search across folders never offers, so
-        // this is the question that has to be asked, and the one hovering the same
-        // result already gets an answer from.
-        let probe_points = focused_item_probe_points(automation, &focused, &rect);
-        if let Some(path) = focused_item_provider_path(&name, &probe_points) {
-            return Some(FocusedItemInfo {
-                result: AccessibilityResult::FullPath(path),
-                rect,
-            });
-        }
-
-        Some(FocusedItemInfo {
-            result: AccessibilityResult::FileName(name),
-            rect,
-        })
+/// The item Explorer says holds the keyboard focus, as the view reports it.
+fn get_focused_explorer_item(resolver: &ItemResolver) -> Option<FocusedItemInfo> {
+    // Only works when Explorer is the foreground window
+    let foreground = unsafe { GetForegroundWindow() };
+    if foreground.is_invalid() || !is_explorer_window(foreground) {
+        return None;
     }
+
+    let item = uia_item_from_focus(resolver)?;
+    if item.name.is_empty() || is_container_name(&item.name) {
+        return None;
+    }
+    if item.bounds.right <= item.bounds.left || item.bounds.bottom <= item.bounds.top {
+        return None;
+    }
+
+    Some(FocusedItemInfo {
+        root_window: root_window_of_item(&item),
+        item,
+    })
 }
 
-fn resolve_focused_item_to_path(item: &FocusedItemInfo) -> Option<PathBuf> {
-    match &item.result {
-        AccessibilityResult::FullPath(path) => {
-            if is_media_file(path) {
-                Some(path.clone())
-            } else {
-                None
-            }
-        }
-        AccessibilityResult::FileName(item_name) => {
-            // The item's own box, asked what the pointer asks the window under the
-            // cursor: which item of the view sits there, and which item the view
-            // itself says is focused. The provider was asked for the item already —
-            // see `focused_item_probe_points` — and these are the two answers that
-            // can still name a result no folder holds.
-            if let Some(path) = focused_item_path_at_box(item) {
-                return Some(path);
-            }
-
-            // Try as a potential full path
-            let potential_path = PathBuf::from(item_name);
-            if potential_path.is_absolute()
-                && potential_path.exists()
-                && is_media_file(&potential_path)
-            {
-                return Some(potential_path);
-            }
-
-            if let Some(path) = lookup_media_in_hover_folder(item_name, None) {
-                return Some(path);
-            }
-
-            let current_url = get_current_explorer_location_url();
-            let current_is_search_view = current_url
-                .as_deref()
-                .map(is_search_ms_url)
-                .unwrap_or(false);
-
-            if !current_is_search_view {
-                let all_folders = get_all_explorer_folders();
-                for (_, folder) in all_folders.iter() {
-                    if let Some(path) = find_media_in_folder(folder, item_name) {
-                        return Some(path);
-                    }
-                }
-                return None;
-            }
-
-            let current_search_root = get_current_explorer_search_root();
-
-            // Search mode: keep the special resolver intact.
-            if let Some(root) = current_search_root.as_deref() {
-                if let Some(path) = find_media_in_folder(root, item_name) {
-                    return Some(path);
-                }
-
-                // A search that began at this root returns results from the folders
-                // below it as well, and those are handed over as names: the name is
-                // walked for under the root rather than only looked for in it.
-                if let Some(path) = lookup_media_below_folder(root, item_name) {
-                    return Some(path);
-                }
-            }
-            if let Some(path) = find_media_in_current_shell_view(item_name) {
-                return Some(path);
-            }
-            if let Some(root) = current_search_root.as_deref() {
-                if let Some(path) = lookup_media_in_search_root_index(root, item_name) {
-                    return Some(path);
-                }
-            }
-
-            None
+/// The frame of the window an item is drawn in, which is the window whose views
+/// can be the one holding it. A provider that reports no window of its own leaves
+/// the foreground window, which is Explorer's while the keyboard is driving.
+fn root_window_of_item(item: &HoveredItem) -> Option<isize> {
+    let window = HWND(item.native_window as *mut core::ffi::c_void);
+    if !window.is_invalid() {
+        let root = unsafe { GetAncestor(window, GA_ROOT) };
+        if !root.is_invalid() {
+            return Some(root.0 as isize);
         }
     }
+
+    let foreground = unsafe { GetForegroundWindow() };
+    (!foreground.is_invalid()).then_some(foreground.0 as isize)
+}
+
+/// The file a keyboard preview is about.
+///
+/// The item the focus is on is turned into a file the same way the pointer's item
+/// is: by the view that is showing it, which is what resolves a search result whose
+/// file lives in another folder — a name has no folder to be found in when the
+/// results span folders, and two results may share one. The item's own accessible
+/// value answers when its position is not reported, and when the name itself is a
+/// path. Nothing else is tried: a name that nothing can vouch for is left
+/// unanswered rather than guessed at.
+fn resolve_focused_item_to_path(
+    resolver: &mut ItemResolver,
+    focused: &FocusedItemInfo,
+) -> Option<PathBuf> {
+    if let Some(root_key) = focused.root_window {
+        if let Some(path) = item_file_path(resolver, root_key, &focused.item) {
+            return Some(path);
+        }
+    }
+
+    if let Some(path) = resolve_media_path_from_text(&focused.item.name) {
+        return Some(path);
+    }
+
+    focused
+        .item
+        .value
+        .as_deref()
+        .and_then(resolve_media_path_from_text)
 }
 
 /// Main loop for explorer hook
@@ -4369,14 +2292,12 @@ pub fn run_explorer_hook() {
         let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
     }
 
-    // Create UI Automation instance for keyboard focus detection (cached for the lifetime of the loop)
-    let uia: Option<IUIAutomation> =
-        unsafe { CoCreateInstance(&CUIAutomation, None, CLSCTX_ALL).ok() };
-
-    // What the mouse path resolves the item under the pointer with: the same UI
-    // Automation client, asked through a batched request, plus the view it last
-    // found the pointer in.
-    let mut mouse = MouseResolver::new(uia.clone());
+    // What both paths resolve an item to a file with: one UI Automation client
+    // whose property reads are batched into a round trip per element, plus the
+    // view that answered last for a window.
+    let mut resolver = ItemResolver::new(unsafe {
+        CoCreateInstance(&CUIAutomation, None, CLSCTX_ALL).ok()
+    });
 
     let mut last_file: Option<PathBuf> = None;
     let mut suppressed = SuppressedHover::default();
@@ -4488,7 +2409,7 @@ pub fn run_explorer_hook() {
     while RUNNING.load(Ordering::SeqCst) {
         // The pointer's answer belongs to the tick that produced it: the list under
         // a parked pointer can have moved on by the next one.
-        mouse.forget_probe();
+        resolver.forget_probe();
 
         // Nothing is hovered, so any ffplay still alive is a leftover from a
         // stop that did not take effect: kill it before it lingers on screen.
@@ -4505,7 +2426,7 @@ pub fn run_explorer_hook() {
             if display_signature_changed(last_display_signature, display_signature) {
                 last_display_signature = Some(display_signature);
                 clear_shell_view_probe_caches();
-                mouse.forget_view();
+                resolver.forget_view();
                 hide_preview();
                 last_file = None;
                 keyboard_file = None;
@@ -4947,9 +2868,6 @@ pub fn run_explorer_hook() {
                 hover_resolver_hints = get_current_hover_resolver_hints();
                 if let Some(location_key) = hover_location_key(&hover_resolver_hints) {
                     if last_cursor_location.as_ref() != Some(&location_key) {
-                        if let Some(folder) = hover_resolver_hints.current_folder.clone() {
-                            queue_folder_index_build(PathBuf::from(&folder), folder);
-                        }
                         // A change that follows recent input is user navigation:
                         // the file under the parked cursor may preview as soon as
                         // the new view has settled, without a mouse move.
@@ -4961,12 +2879,11 @@ pub fn run_explorer_hook() {
                         // The view this location describes is a different one now —
                         // another folder, or the same window searched again — so what
                         // was cached about the last one describes the wrong place: a
-                        // folder remembered for the window, an index of the items it
-                        // was showing, and the view the pointer was last resolved in.
-                        // A name looked up against those resolves to something that is
-                        // not there, or to nothing at all.
+                        // folder remembered for the window and the view that answered
+                        // for it. A name looked up against those resolves to something
+                        // that is not there, or to nothing at all.
                         clear_shell_view_probe_caches();
-                        mouse.forget_view();
+                        resolver.forget_view();
                         suspend_preview_until_user_input = true;
                         allow_keyboard_preview_on_first_observation = false;
                         folder_change_user_initiated = user_navigation;
@@ -5047,15 +2964,12 @@ pub fn run_explorer_hook() {
                     {
                         last_keyboard_focus_probe = Instant::now();
                         if let Some(focused_info) =
-                            uia.as_ref().and_then(|a| get_focused_explorer_item(a))
+                            get_focused_explorer_item(&resolver)
                         {
-                            let focused_name = match &focused_info.result {
-                                AccessibilityResult::FileName(name) => name.clone(),
-                                AccessibilityResult::FullPath(path) => {
-                                    path.to_string_lossy().to_string()
-                                }
-                            };
-                            let focused_key = FocusedItemKey::new(focused_name, &focused_info.rect);
+                            let focused_key = FocusedItemKey::new(
+                                focused_info.item.name.clone(),
+                                &focused_info.item.bounds,
+                            );
 
                             if suspended_initial_focus.is_none() {
                                 // Record the auto-focused first item
@@ -5122,11 +3036,9 @@ pub fn run_explorer_hook() {
                 allow_keyboard_preview_on_first_observation = true;
 
                 if let Some(suppressed_file) = suppressed.file.clone() {
-                    if let Some(current_file) = get_file_under_cursor_checked(
-                        &mut mouse,
-                        &hover_resolver_hints,
-                        &mut slow_explorer_probe_count,
-                    ) {
+                    if let Some(current_file) =
+                        get_file_under_cursor_checked(&mut resolver, &mut slow_explorer_probe_count)
+                    {
                         if same_path(&suppressed_file, &current_file) {
                             hover_start = Some(Instant::now());
                             continue;
@@ -5140,11 +3052,9 @@ pub fn run_explorer_hook() {
                 // resolution and wait until hover is stable before probing media.
                 if last_file.is_some() {
                     let mut keep_while_scrolling_preview = false;
-                    if let Some(current_file) = get_file_under_cursor_checked(
-                        &mut mouse,
-                        &hover_resolver_hints,
-                        &mut slow_explorer_probe_count,
-                    ) {
+                    if let Some(current_file) =
+                        get_file_under_cursor_checked(&mut resolver, &mut slow_explorer_probe_count)
+                    {
                         if last_file
                             .as_ref()
                             .map(|last| same_path(last, &current_file))
@@ -5197,16 +3107,14 @@ pub fn run_explorer_hook() {
                     >= Duration::from_millis(KEYBOARD_FOCUS_PROBE_MS)
             {
                 last_keyboard_focus_probe = Instant::now();
-                if let Some(focused_info) = uia.as_ref().and_then(|a| get_focused_explorer_item(a))
-                {
-                    let focused_name = match &focused_info.result {
-                        AccessibilityResult::FileName(name) => name.clone(),
-                        AccessibilityResult::FullPath(path) => path.to_string_lossy().to_string(),
-                    };
+                if let Some(focused_info) = get_focused_explorer_item(&resolver) {
                     // The name alone cannot tell two observations apart: a search
                     // can hold the same name in more than one folder, and the box is
                     // what says which of them the keyboard is on.
-                    let focused_key = FocusedItemKey::new(focused_name, &focused_info.rect);
+                    let focused_key = FocusedItemKey::new(
+                        focused_info.item.name.clone(),
+                        &focused_info.item.bounds,
+                    );
 
                     if last_focused_key.is_none() {
                         if allow_keyboard_preview_on_first_observation {
@@ -5226,7 +3134,9 @@ pub fn run_explorer_hook() {
                             }
 
                             // Resolve to a media file and show keyboard preview
-                            if let Some(path) = resolve_focused_item_to_path(&focused_info) {
+                            if let Some(path) =
+                                resolve_focused_item_to_path(&mut resolver, &focused_info)
+                            {
                                 if keyboard_file.as_ref() != Some(&path) {
                                     // Hide previous preview before showing new one
                                     if is_keyboard_hover {
@@ -5249,10 +3159,10 @@ pub fn run_explorer_hook() {
                                     };
                                     show_preview_keyboard(
                                         &path,
-                                        focused_info.rect.left,
-                                        focused_info.rect.top,
-                                        focused_info.rect.right,
-                                        focused_info.rect.bottom,
+                                        focused_info.item.bounds.left,
+                                        focused_info.item.bounds.top,
+                                        focused_info.item.bounds.right,
+                                        focused_info.item.bounds.bottom,
                                     );
                                 }
                             } else {
@@ -5284,7 +3194,9 @@ pub fn run_explorer_hook() {
                         }
 
                         // Resolve to a media file and show keyboard preview
-                        if let Some(path) = resolve_focused_item_to_path(&focused_info) {
+                        if let Some(path) =
+                            resolve_focused_item_to_path(&mut resolver, &focused_info)
+                        {
                             if keyboard_file.as_ref() != Some(&path) {
                                 // Hide previous preview before showing new one
                                 if is_keyboard_hover {
@@ -5305,10 +3217,10 @@ pub fn run_explorer_hook() {
                                 };
                                 show_preview_keyboard(
                                     &path,
-                                    focused_info.rect.left,
-                                    focused_info.rect.top,
-                                    focused_info.rect.right,
-                                    focused_info.rect.bottom,
+                                    focused_info.item.bounds.left,
+                                    focused_info.item.bounds.top,
+                                    focused_info.item.bounds.right,
+                                    focused_info.item.bounds.bottom,
                                 );
                             }
                         } else {
@@ -5375,8 +3287,7 @@ pub fn run_explorer_hook() {
 
                     // Try to get file under cursor
                     let resolved = get_file_under_cursor_checked(
-                        &mut mouse,
-                        &hover_resolver_hints,
+                        &mut resolver,
                         &mut slow_explorer_probe_count,
                     );
                     // One probe per parked cursor, except while a scroll gesture is
@@ -5469,11 +3380,10 @@ pub fn run_explorer_hook() {
 
     // Everything COM handed the loop is released while the apartment that owns it
     // is still initialized. An interface released after `CoUninitialize` belongs to
-    // an apartment that has already been torn down, which faults — and the mouse
-    // resolver holds the Shell window collection, the batched property request and
-    // the view it last resolved in, not just the automation client.
-    drop(mouse);
-    drop(uia);
+    // an apartment that has already been torn down, which faults — and the resolver
+    // holds the Shell window collection, the batched property request and the view
+    // that answered last, not just the automation client.
+    drop(resolver);
 
     unsafe {
         CoUninitialize();
