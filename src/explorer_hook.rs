@@ -17,10 +17,10 @@ use std::sync::{atomic::Ordering, Arc, Mutex};
 use std::time::{Duration, Instant};
 use windows::core::{Interface, VARIANT};
 use windows::Win32::Foundation::{BOOL, HWND, LPARAM, POINT, RECT};
-use windows::Win32::Graphics::Gdi::ScreenToClient;
+use windows::Win32::Graphics::Gdi::{ClientToScreen, ScreenToClient};
 use windows::Win32::System::Com::{
-    CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, IServiceProvider, CLSCTX_ALL,
-    COINIT_APARTMENTTHREADED, COINIT_MULTITHREADED,
+    CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, IDataObject, IServiceProvider,
+    CLSCTX_ALL, COINIT_APARTMENTTHREADED, COINIT_MULTITHREADED,
 };
 use windows::Win32::System::Variant::VariantClear;
 use windows::Win32::UI::Accessibility::{
@@ -35,8 +35,10 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows::Win32::UI::Shell::{
     IFolderView, INameSpaceTreeControl, IPersistFolder2, IShellBrowser, IShellFolder,
-    IShellFolderViewDual, IShellItem, IShellView, IShellWindows, SHCreateItemFromIDList,
-    SHCreateItemWithParent, SID_STopLevelBrowser, ShellWindows, SIGDN_DESKTOPABSOLUTEPARSING,
+    IShellFolderViewDual, IShellItem, IShellItemArray, IShellView, IShellWindows,
+    SHCreateItemFromIDList, SHCreateItemWithParent, SHCreateShellItemArrayFromDataObject,
+    SID_STopLevelBrowser, ShellWindows, SIGDN_DESKTOPABSOLUTEPARSING, SVGIO_ALLVIEW,
+    SVGIO_SELECTION,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetClassNameW, GetCursorPos, GetForegroundWindow, GetSystemMetrics,
@@ -1423,6 +1425,148 @@ fn get_current_explorer_search_root_legacy() -> Option<String> {
     }
 }
 
+/// The media files the view has selected, asked of the view itself.
+///
+/// The accessibility tree hands a search result over as a name, and a name is
+/// ambiguous the moment two results share one — which is what a search across
+/// folders produces, the same file name sitting in any number of them. The view's
+/// own selection is not ambiguous: it names the item the keyboard is on, by
+/// identity, wherever that item's file lives. A keyboard preview asks this first
+/// for that reason, and takes an answer from it only when exactly one of the
+/// selected files goes by the name of the item the focus is on.
+fn shell_view_selected_media_paths(context: &ActiveShellViewContext) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+
+    unsafe {
+        let Ok(data_object) = context
+            .shell_view
+            .GetItemObject::<IDataObject>(SVGIO_SELECTION)
+        else {
+            return paths;
+        };
+        let Ok(items) = SHCreateShellItemArrayFromDataObject::<_, IShellItemArray>(&data_object)
+        else {
+            return paths;
+        };
+        let Ok(count) = items.GetCount() else {
+            return paths;
+        };
+
+        for index in 0..count.min(16) {
+            if let Ok(item) = items.GetItemAt(index) {
+                if let Some(path) = shell_item_to_media_path(&item) {
+                    paths.push(path);
+                }
+            }
+        }
+    }
+
+    paths
+}
+
+/// The path of the item whose cell holds a point, asked of the view's own grid.
+///
+/// This is the one answer a name cannot give: every item a view shows has a cell
+/// of its own, and the cell the point falls in belongs to exactly one item,
+/// whatever that item is called. It is what resolves a search result whose file
+/// name another result shares, for the pointer and for the keyboard alike.
+///
+/// The cells are laid out top to bottom, so the row a point is in is found by
+/// bisecting their positions — an item's y never decreases as its index grows —
+/// and the item within that row by walking the few positions that share it. A
+/// cell runs from its own position to the next one's, and the last one in a row
+/// to the view's edge.
+fn view_item_media_path_at_point(
+    context: &ActiveShellViewContext,
+    screen_point: POINT,
+) -> Option<PathBuf> {
+    let folder_view = context.shell_view.cast::<IFolderView>().ok()?;
+
+    unsafe {
+        let count = folder_view.ItemCount(SVGIO_ALLVIEW).ok()?;
+        if count <= 0 {
+            return None;
+        }
+
+        let mut origin = POINT::default();
+        let view_window = HWND(context.shell_view_hwnd as *mut core::ffi::c_void);
+        if !ClientToScreen(view_window, &mut origin).as_bool() {
+            return None;
+        }
+        let local = POINT {
+            x: screen_point.x - origin.x,
+            y: screen_point.y - origin.y,
+        };
+
+        // An item's position is asked for by its own pidl, so each probe is the item
+        // and the position it sits at; the pidl is given back right away, since only
+        // the position matters here.
+        let position_of = |index: i32| -> Option<POINT> {
+            let pidl = folder_view.Item(index).ok()?;
+            if pidl.is_null() {
+                return None;
+            }
+            let position = folder_view.GetItemPosition(pidl).ok();
+            CoTaskMemFree(Some(pidl as *const core::ffi::c_void));
+            position
+        };
+
+        // The last item whose top is at or above the point: the row it is in, or the
+        // row before it.
+        let mut low = 0i32;
+        let mut high = count - 1;
+        let mut row_start = 0i32;
+        while low <= high {
+            let middle = low + (high - low) / 2;
+            match position_of(middle) {
+                Some(position) if position.y <= local.y => {
+                    row_start = middle;
+                    low = middle + 1;
+                }
+                Some(_) => high = middle - 1,
+                None => return None,
+            }
+        }
+
+        // Back to the first item of that row, then across it.
+        let row_y = position_of(row_start)?.y;
+        let mut first = row_start;
+        for _ in 0..64 {
+            match position_of(first - 1) {
+                Some(position) if position.y == row_y => first -= 1,
+                _ => break,
+            }
+        }
+
+        for index in first..count.min(first + 64) {
+            let position = match position_of(index) {
+                Some(position) => position,
+                None => break,
+            };
+            if position.y != row_y {
+                break;
+            }
+
+            let cell_right = position_of(index + 1)
+                .filter(|next| next.y == row_y)
+                .map(|next| next.x)
+                .unwrap_or(i32::MAX);
+
+            if local.x >= position.x && local.x < cell_right {
+                let pidl = match folder_view.Item(index) {
+                    Ok(pidl) if !pidl.is_null() => pidl,
+                    _ => return None,
+                };
+                let shell_item = shell_item_from_view_pidl(&folder_view, pidl);
+                CoTaskMemFree(Some(pidl as *const core::ffi::c_void));
+                return shell_item.and_then(|item| shell_item_to_media_path(&item));
+            }
+        }
+    }
+
+    None
+}
+
 /// The Shell view's own focused item, as the path it resolves to.
 ///
 /// This is the route a keyboard preview asks first, and it is the view itself
@@ -1496,8 +1640,29 @@ fn focused_item_path_at_box(item: &FocusedItemInfo) -> Option<PathBuf> {
     let point = focused_item_center(item);
 
     if let Some(context) = get_active_shell_view_context(&point) {
-        // The view's own focused item first, then the item that sits in the box —
-        // the same order the pointer tries them in.
+        // What the view has selected, asked before anything else: the keyboard's
+        // focus is the selection, and the selection names the item by identity —
+        // the answer a name cannot give when two results share one. Only a
+        // selection that matches the focused item's name exactly once is taken from
+        // it, so several selected files that share the name are left to the cells
+        // below, which are not ambiguous at all.
+        let mut matching = shell_view_selected_media_paths(&context)
+            .into_iter()
+            .filter(|path| focused_path_is_item(item, path));
+        if let (Some(path), None) = (matching.next(), matching.next()) {
+            return Some(path);
+        }
+
+        // The item whose cell holds the focused item's middle: the view's grid says
+        // which file that is, by identity, however many results share its name.
+        if let Some(path) = view_item_media_path_at_point(&context, point) {
+            if focused_path_is_item(item, &path) {
+                return Some(path);
+            }
+        }
+
+        // The view's own focused item, then the item that sits in the box — the same
+        // order the pointer tries them in.
         if let Some(path) = shell_view_focused_media_path(&context) {
             if focused_path_is_item(item, &path) {
                 return Some(path);
@@ -3029,6 +3194,21 @@ fn get_file_under_cursor_search_legacy(
         AccessibilityResult::FileName(item_name) => {
             if let Some(path) = resolve_media_path_from_text(&item_name) {
                 return Some(path);
+            }
+
+            // What the view itself says the item under the cursor is: its cell is
+            // the one fact a shared name cannot take away, and it is asked before any
+            // lookup by name — which is what a search across folders cannot always
+            // serve, and what cannot tell two results with the same name apart.
+            if let Some(context) = get_active_shell_view_context_at_cursor() {
+                let mut cursor_pos = POINT::default();
+                if unsafe { GetCursorPos(&mut cursor_pos).is_ok() } {
+                    if let Some(path) = view_item_media_path_at_point(&context, cursor_pos) {
+                        if path_matches_item_name(&path, &item_name) {
+                            return Some(path);
+                        }
+                    }
+                }
             }
 
             let current_is_search_view = hints.is_search_view || is_current_search_view_legacy();
