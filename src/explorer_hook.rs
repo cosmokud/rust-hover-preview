@@ -549,11 +549,9 @@ fn lookup_media_in_folder_index(
         .and_then(|s| s.to_str())
         .map(|s| s.to_ascii_lowercase());
 
-    if let Ok(mut cache) = FOLDER_MEDIA_INDEX.lock() {
-        cache.retain(|_, index| {
-            index.built_at.elapsed() <= Duration::from_millis(FOLDER_INDEX_TTL_MS)
-        });
+    let mut stale = false;
 
+    if let Ok(cache) = FOLDER_MEDIA_INDEX.lock() {
         if let Some(index) = cache.get(folder_key) {
             if let Some(path) = index.by_file_name.get(&item_name_lower) {
                 return Some(path.clone());
@@ -582,11 +580,19 @@ fn lookup_media_in_folder_index(
                     return Some(path.clone());
                 }
             }
+
+            stale = index.built_at.elapsed() > Duration::from_millis(FOLDER_INDEX_TTL_MS);
+        } else {
+            stale = true;
         }
     }
 
-    // Never block hover polling on a huge folder scan. Queue async build instead.
-    queue_folder_index_build(folder_path.clone(), folder_key.to_string());
+    // Never block hover polling on a huge folder scan: the names the folder is
+    // already known by are read while a walk of it that is due runs behind, so the
+    // names do not disappear for as long as that walk takes.
+    if stale {
+        queue_folder_index_build(folder_path.clone(), folder_key.to_string());
+    }
     None
 }
 
@@ -2250,22 +2256,25 @@ fn lookup_media_in_search_root_index(root: &str, item_name: &str) -> Option<Path
         return None;
     }
 
-    let mut has_fresh_index = false;
+    let mut has_index = false;
+    let mut stale = false;
 
-    if let Ok(mut cache) = SEARCH_ROOT_MEDIA_INDEX.lock() {
-        cache.retain(|_, index| {
-            index.built_at.elapsed() <= Duration::from_millis(SEARCH_ROOT_INDEX_TTL_MS)
-        });
-
+    if let Ok(cache) = SEARCH_ROOT_MEDIA_INDEX.lock() {
         if let Some(index) = cache.get(root) {
-            has_fresh_index = true;
+            has_index = true;
+            stale = index.built_at.elapsed() > Duration::from_millis(SEARCH_ROOT_INDEX_TTL_MS);
             if let Some(path) = lookup_path_in_search_root_index(index, item_name) {
                 return Some(path);
             }
         }
     }
 
-    if !has_fresh_index {
+    if !has_index || stale {
+        // An index being old is a reason to walk the tree again, not a reason to
+        // stop reading the names it holds: it is read while the walk that refreshes
+        // it runs, so a name that was found a minute ago is not unfindable for as
+        // long as that walk takes. Nothing else retires it — the cache bounds its
+        // entries, and a fresh walk replaces the one it was built from.
         queue_search_root_index_build(root.to_string());
     }
 
@@ -3525,6 +3534,30 @@ struct FocusedItemInfo {
     rect: RECT,
 }
 
+/// What tells one keyboard focus observation from the next.
+///
+/// The name alone does not. A search whose results come from several folders can
+/// hold the same file name in more than one of them — a `README.md` here and a
+/// `README.md` there — and moving between the two would read as no change at all,
+/// which leaves the preview on the file the keyboard came from and never asks the
+/// new one up. The item's box is taken with the name for that reason: two files
+/// that share a name do not share a row, and an item that did not move keeps its
+/// box.
+#[derive(Clone, PartialEq)]
+struct FocusedItemKey {
+    name: String,
+    rect: (i32, i32, i32, i32),
+}
+
+impl FocusedItemKey {
+    fn new(name: String, rect: &RECT) -> Self {
+        Self {
+            name,
+            rect: (rect.left, rect.top, rect.right, rect.bottom),
+        }
+    }
+}
+
 /// Whether a path is the file an Explorer item's name stands for. The name a view
 /// shows is compared whole first, and — when the name carries no extension of its
 /// own, because the view hides it — to the path's stem. Two files that share a
@@ -3849,7 +3882,7 @@ pub fn run_explorer_hook() {
 
     // Keyboard hover state
     let mut keyboard_file: Option<PathBuf> = None;
-    let mut last_focused_name: Option<String> = None;
+    let mut last_focused_key: Option<FocusedItemKey> = None;
     let mut is_keyboard_hover = false;
     let mut suppress_preview_until_cursor_leaves_preview = false;
     let mut stationary_search_miss_started_at: Option<Instant> = None;
@@ -3862,7 +3895,7 @@ pub fn run_explorer_hook() {
     let mut suspend_preview_until_user_input = false;
     let mut allow_keyboard_preview_on_first_observation = false;
     let mut folder_change_time: Option<Instant> = None;
-    let mut suspended_initial_focus: Option<String> = None;
+    let mut suspended_initial_focus: Option<FocusedItemKey> = None;
     // A folder change that follows recent input is user navigation: its gate
     // lifts on its own once the view has settled, so the item under a parked
     // cursor previews without a mouse move.
@@ -4078,7 +4111,7 @@ pub fn run_explorer_hook() {
             }
             keyboard_file = None;
             last_file = None;
-            last_focused_name = None;
+            last_focused_key = None;
             is_keyboard_hover = false;
             keyboard_screen_owner = false;
             video_hover_guard_until = None;
@@ -4128,7 +4161,7 @@ pub fn run_explorer_hook() {
                     stationary_search_miss_started_at = None;
                     hover_start = None;
                     keyboard_file = None;
-                    last_focused_name = None;
+                    last_focused_key = None;
                     is_keyboard_hover = false;
                     video_hover_guard_until = None;
                     pointer_pause.clear();
@@ -4150,7 +4183,7 @@ pub fn run_explorer_hook() {
                         stationary_search_miss_started_at = None;
                         hover_start = None;
                         keyboard_file = None;
-                        last_focused_name = None;
+                        last_focused_key = None;
                         is_keyboard_hover = false;
                         video_hover_guard_until = None;
                         pointer_pause.clear();
@@ -4243,7 +4276,7 @@ pub fn run_explorer_hook() {
                     video_hover_guard_until = None;
                     pointer_pause.clear();
                     keyboard_screen_owner = false;
-                    last_focused_name = None;
+                    last_focused_key = None;
                     allow_keyboard_preview_on_first_observation = true;
                     last_keyboard_navigation_input_at = None;
                 }
@@ -4291,7 +4324,7 @@ pub fn run_explorer_hook() {
                 pointer_pause.clear();
                 stationary_search_miss_started_at = None;
                 hover_start = None;
-                last_focused_name = None;
+                last_focused_key = None;
                 video_hover_guard_until = None;
                 suspend_preview_until_user_input = true;
                 allow_keyboard_preview_on_first_observation = false;
@@ -4416,13 +4449,20 @@ pub fn run_explorer_hook() {
                             HOVER_RESOLVER_INPUT_GRACE_MS,
                         );
                         last_cursor_location = Some(location_key);
+                        // The view this location describes is a different one now —
+                        // another folder, or the same window searched again — so what
+                        // was cached about the last one describes the wrong place: a
+                        // folder remembered for the window, and an index of the items
+                        // it was showing. A name looked up against those resolves to
+                        // something that is not there, or to nothing at all.
+                        clear_shell_view_probe_caches();
                         suspend_preview_until_user_input = true;
                         allow_keyboard_preview_on_first_observation = false;
                         folder_change_user_initiated = user_navigation;
                         folder_change_time = Some(Instant::now());
                         suspended_initial_focus = None;
                         hover_start = None;
-                        last_focused_name = None;
+                        last_focused_key = None;
                         // Reset cursor baseline so we don't mistake stale delta for movement.
                         last_cursor_pos = cursor_pos;
                         stationary_hover_probe_done = false;
@@ -4504,12 +4544,13 @@ pub fn run_explorer_hook() {
                                     path.to_string_lossy().to_string()
                                 }
                             };
+                            let focused_key = FocusedItemKey::new(focused_name, &focused_info.rect);
 
                             if suspended_initial_focus.is_none() {
                                 // Record the auto-focused first item
                                 // (set by Windows when folder opens)
-                                suspended_initial_focus = Some(focused_name);
-                            } else if suspended_initial_focus.as_ref() != Some(&focused_name) {
+                                suspended_initial_focus = Some(focused_key);
+                            } else if suspended_initial_focus.as_ref() != Some(&focused_key) {
                                 // Focus actually changed — user pressed a navigation key
                                 keyboard_unlocked = true;
                             }
@@ -4566,7 +4607,7 @@ pub fn run_explorer_hook() {
                 // next focus observed while the user is driving with the keyboard
                 // acts immediately. Recording it as a fresh baseline instead would
                 // swallow the first key press and keep the mouse preview on screen.
-                last_focused_name = None;
+                last_focused_key = None;
                 allow_keyboard_preview_on_first_observation = true;
 
                 if let Some(suppressed_file) = suppressed.file.clone() {
@@ -4651,14 +4692,18 @@ pub fn run_explorer_hook() {
                         AccessibilityResult::FileName(name) => name.clone(),
                         AccessibilityResult::FullPath(path) => path.to_string_lossy().to_string(),
                     };
+                    // The name alone cannot tell two observations apart: a search
+                    // can hold the same name in more than one folder, and the box is
+                    // what says which of them the keyboard is on.
+                    let focused_key = FocusedItemKey::new(focused_name, &focused_info.rect);
 
-                    if last_focused_name.is_none() {
+                    if last_focused_key.is_none() {
                         if allow_keyboard_preview_on_first_observation {
                             // The focus baseline is unknown — the mouse just moved, or
                             // the user unlocked a folder change with the keyboard — so
                             // this first observed item acts immediately instead of
                             // being recorded and waiting for a second key press.
-                            last_focused_name = Some(focused_name.clone());
+                            last_focused_key = Some(focused_key);
                             allow_keyboard_preview_on_first_observation = false;
 
                             // Dismiss any active mouse hover
@@ -4713,10 +4758,10 @@ pub fn run_explorer_hook() {
 
                         // Nothing to compare against yet and no keyboard input has
                         // claimed this focus, so record it as the baseline only.
-                        last_focused_name = Some(focused_name);
-                    } else if last_focused_name.as_ref() != Some(&focused_name) {
+                        last_focused_key = Some(focused_key);
+                    } else if last_focused_key.as_ref() != Some(&focused_key) {
                         // Focused item changed - keyboard navigation detected
-                        last_focused_name = Some(focused_name);
+                        last_focused_key = Some(focused_key);
                         allow_keyboard_preview_on_first_observation = false;
 
                         // Dismiss any active mouse hover
