@@ -25,8 +25,9 @@ use windows::Win32::System::Com::{
 use windows::Win32::System::Variant::VariantClear;
 use windows::Win32::UI::Accessibility::{
     CUIAutomation, IUIAutomation, IUIAutomationElement, IUIAutomationLegacyIAccessiblePattern,
-    TreeScope_Children, UIA_DataItemControlTypeId, UIA_LegacyIAccessiblePatternId,
-    UIA_ListItemControlTypeId,
+    IUIAutomationSelectionPattern, IUIAutomationValuePattern, TreeScope_Children,
+    UIA_DataItemControlTypeId, UIA_LegacyIAccessiblePatternId, UIA_ListItemControlTypeId,
+    UIA_SelectionPatternId, UIA_ValuePatternId,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, VK_DOWN, VK_END, VK_HOME, VK_LBUTTON, VK_LEFT, VK_MBUTTON, VK_NEXT, VK_PRIOR,
@@ -288,6 +289,13 @@ const EXPLORER_FOLDERS_CACHE_TTL_MS: u64 = 250;
 const SHELL_VIEW_INDEX_TTL_MS: u64 = 5000;
 const SHELL_VIEW_INDEX_MAX_ITEMS: i32 = 50000;
 const SHELL_VIEW_INDEX_SYNC_ITEM_LIMIT: i32 = 1000;
+/// How long a shell view may be walked for an index before the walk is left where
+/// it is. The walk happens on the hook thread — a COM call, a file check and a
+/// media-gate test per item — so a view of hundreds of items would otherwise stop
+/// the loop for as long as it takes, and every route that does not need an index
+/// is asked after this one anyway. What has been collected by the deadline is
+/// still an index.
+const SHELL_VIEW_INDEX_BUILD_BUDGET_MS: u64 = 150;
 const SEARCH_ROOT_INDEX_TTL_MS: u64 = 60000;
 const SEARCH_ROOT_INDEX_MAX_DIRS: usize = 20000;
 const SEARCH_ROOT_INDEX_MAX_FILES: usize = 50000;
@@ -1599,8 +1607,17 @@ fn build_shell_view_media_index(view_hwnd_key: isize) -> Option<ShellViewMediaIn
                 return None;
             }
             let item_count = item_count.min(SHELL_VIEW_INDEX_MAX_ITEMS);
+            let build_deadline =
+                Instant::now() + Duration::from_millis(SHELL_VIEW_INDEX_BUILD_BUDGET_MS);
 
             for item_index in 0..item_count {
+                // The walk is left where it is once its budget is out: a view of
+                // hundreds of items costs a COM call, a file check and a media-gate
+                // test per item, all of it with the hook loop stopped.
+                if Instant::now() >= build_deadline {
+                    break;
+                }
+
                 let item_variant = VARIANT::from(item_index);
                 let item = match items.Item(&item_variant) {
                     Ok(item) => item,
@@ -1690,8 +1707,17 @@ fn build_legacy_search_shell_view_media_index(
                 return None;
             }
             let item_count = item_count.min(SHELL_VIEW_INDEX_MAX_ITEMS);
+            let build_deadline =
+                Instant::now() + Duration::from_millis(SHELL_VIEW_INDEX_BUILD_BUDGET_MS);
 
             for item_index in 0..item_count {
+                // The walk is left where it is once its budget is out: a view of
+                // hundreds of items costs a COM call, a file check and a media-gate
+                // test per item, all of it with the hook loop stopped.
+                if Instant::now() >= build_deadline {
+                    break;
+                }
+
                 let item_variant = VARIANT::from(item_index);
                 let item = match items.Item(&item_variant) {
                     Ok(item) => item,
@@ -3356,30 +3382,97 @@ fn path_matches_item_name(path: &Path, item_name: &str) -> bool {
 /// file is in. The element does carry the path — in the same accessible value the
 /// pointer path reads a result's path from — so the keyboard path asks for it
 /// there too, and takes it only when it names the item: a value belongs to the
-/// element, and an element that is not the item cannot claim it.
+/// element, and an element that is not the item cannot claim it. Both the value a
+/// provider exposes as a pattern of its own and the one the legacy bridge carries
+/// are asked: Explorer answers with either, depending on the view.
 fn focused_item_media_path(element: &IUIAutomationElement, item_name: &str) -> Option<PathBuf> {
+    let mut candidates: Vec<String> = Vec::new();
+
     unsafe {
-        let pattern = element
-            .GetCurrentPatternAs::<IUIAutomationLegacyIAccessiblePattern>(
-                UIA_LegacyIAccessiblePatternId,
-            )
-            .ok()?;
+        if let Ok(pattern) =
+            element.GetCurrentPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId)
+        {
+            if let Ok(value) = pattern.CurrentValue() {
+                candidates.push(value.to_string());
+            }
+        }
 
-        let candidates = [
-            pattern.CurrentValue().ok(),
-            pattern.CurrentDescription().ok(),
-        ];
+        if let Ok(pattern) = element.GetCurrentPatternAs::<IUIAutomationLegacyIAccessiblePattern>(
+            UIA_LegacyIAccessiblePatternId,
+        ) {
+            if let Ok(value) = pattern.CurrentValue() {
+                candidates.push(value.to_string());
+            }
+            if let Ok(value) = pattern.CurrentDescription() {
+                candidates.push(value.to_string());
+            }
+        }
+    }
 
-        for candidate in candidates.into_iter().flatten() {
-            if let Some(path) = resolve_media_path_from_text(&candidate.to_string()) {
-                if path_matches_item_name(&path, item_name) {
-                    return Some(path);
-                }
+    for candidate in candidates {
+        if let Some(path) = resolve_media_path_from_text(&candidate) {
+            if path_matches_item_name(&path, item_name) {
+                return Some(path);
             }
         }
     }
 
     None
+}
+
+/// Whether a UIA element names a file: an Explorer item does, and a list, a header
+/// or a toolbar does not.
+fn element_names_an_item(element: &IUIAutomationElement) -> bool {
+    match unsafe { element.CurrentName() } {
+        Ok(name) => {
+            let name = name.to_string();
+            !name.is_empty() && !is_container_name(&name)
+        }
+        Err(_) => false,
+    }
+}
+
+/// The item a view has selected, for a focused element that is the view itself.
+///
+/// The search results view is why this exists: it can report the list as the
+/// focused element while the focus it draws is on one of the results, and a list's
+/// name stands for no file, so nothing downstream can be resolved from it — which
+/// is why a keyboard preview in such a view found nothing at all. The list answers
+/// for its own selection, and the item of that selection with the keyboard focus,
+/// or the first one it holds, is the item a keyboard preview is about.
+fn selected_item_of_focused_list(element: &IUIAutomationElement) -> Option<IUIAutomationElement> {
+    unsafe {
+        let pattern = element
+            .GetCurrentPatternAs::<IUIAutomationSelectionPattern>(UIA_SelectionPatternId)
+            .ok()?;
+        let selection = pattern.GetCurrentSelection().ok()?;
+        let count = selection.Length().ok()?;
+
+        let mut first_named: Option<IUIAutomationElement> = None;
+
+        for index in 0..count.min(16) {
+            let Ok(candidate) = selection.GetElement(index) else {
+                continue;
+            };
+            if !element_names_an_item(&candidate) {
+                continue;
+            }
+
+            let has_keyboard_focus = candidate
+                .CurrentHasKeyboardFocus()
+                .map(|focused| focused.as_bool())
+                .unwrap_or(false);
+            if has_keyboard_focus {
+                return Some(candidate);
+            }
+
+            if first_named.is_none() {
+                first_named = Some(candidate);
+            }
+        }
+
+        first_named
+    }
 }
 
 /// Get the currently focused/selected file in Explorer using UI Automation.
@@ -3394,6 +3487,17 @@ fn get_focused_explorer_item(automation: &IUIAutomation) -> Option<FocusedItemIn
 
         // Get the currently focused UI element via UI Automation
         let focused = automation.GetFocusedElement().ok()?;
+
+        // A view can report the list itself as focused while the focus it draws is
+        // on one of its items — the search results view does — and a list's name is
+        // not a file's, so the selection is where the item has to be taken from. For
+        // a focused element that already is an item this is the element itself, so
+        // nothing changes for a folder view.
+        let focused = if element_names_an_item(&focused) {
+            focused
+        } else {
+            selected_item_of_focused_list(&focused)?
+        };
 
         // Get the element name (this is the filename in Explorer)
         let name = focused.CurrentName().ok()?.to_string();
