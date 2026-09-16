@@ -2779,6 +2779,40 @@ fn media_dimensions(path: &PathBuf, bounds: ScreenBounds, dpi: u32) -> Option<(u
     get_media_dimensions(path)
 }
 
+/// A text preview's box, placed for the width it came out with.
+///
+/// The box a text preview is placed from is measured at the width the *display* can
+/// give, and the layout fits that box beside the cursor or the focused item by
+/// shrinking it whole. Text does not shrink with it: the lines wrap at the width the
+/// box ends up with, and a narrower box needs *more* rows than the proportional
+/// height leaves — a long line that took two rows at the display's width takes three
+/// in the box that came back — so the frame could show the first of them and the
+/// rest of the line was cut off below it. Measuring the document again at the width
+/// the box actually has is what gives it the height the text really takes there, and
+/// placing the result again is the same rule that put it there the first time.
+fn text_preview_layout(
+    path: &Path,
+    layout: PreviewLayout,
+    dpi: u32,
+    place: impl FnOnce((u32, u32)) -> Option<PreviewLayout>,
+) -> PreviewLayout {
+    if !is_text_preview(path) {
+        return layout;
+    }
+
+    let Some(size) = text_preview::measure(
+        path,
+        layout.preview_w,
+        layout.max_height,
+        dpi,
+        current_text_options(),
+    ) else {
+        return layout;
+    };
+
+    place(size).unwrap_or(layout)
+}
+
 /// Effective DPI of the display nearest `(x, y)`, which is what a text preview's
 /// font size is scaled by. Falls back to the 96 DPI baseline when the monitor
 /// query fails, the same way the placement falls back to the virtual screen.
@@ -4794,6 +4828,16 @@ pub fn run_preview_window() {
                                 preview_scale,
                                 bounds,
                             ) {
+                                let layout = text_preview_layout(&path, layout, dpi, |size| {
+                                    compute_mouse_layout(
+                                        x,
+                                        y,
+                                        size,
+                                        follow_cursor,
+                                        preview_scale,
+                                        bounds,
+                                    )
+                                });
                                 show_is_video = is_video;
                                 show_layout = Some(layout);
                                 show_path = Some(path);
@@ -4823,6 +4867,16 @@ pub fn run_preview_window() {
                                 preview_scale,
                                 bounds,
                             ) {
+                                let layout = text_preview_layout(&path, layout, dpi, |size| {
+                                    compute_keyboard_layout(
+                                        (il, it, ir, ib),
+                                        content_right,
+                                        size,
+                                        follow_cursor,
+                                        preview_scale,
+                                        bounds,
+                                    )
+                                });
                                 show_is_video = is_video;
                                 show_layout = Some(layout);
                                 show_path = Some(path);
