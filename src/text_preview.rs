@@ -2030,8 +2030,22 @@ fn readable(color: [u8; 3], background: [u8; 3]) -> [u8; 3] {
 
 // -------------------------------------------------------------------- layout
 
+/// Advance and line height for each size level at one scale. Answering costs a
+/// font created and deleted per level, and the answer depends on nothing but the
+/// scale, so a display scale and font size are measured once and kept.
+const LEVEL_METRICS_MAX_ENTRIES: usize = 16;
+
+#[derive(Clone, Copy)]
+struct LevelMetrics {
+    advance: [i32; SIZE_LEVELS],
+    line_height: [i32; SIZE_LEVELS],
+}
+
+static LEVEL_METRICS: Lazy<Mutex<HashMap<(u32, u32), LevelMetrics>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+
 /// Font metrics for one display scale and font scale, taken from GDI once per
-/// preview.
+/// scale and font size.
 struct TextMetrics {
     scale: f32,
     padding: i32,
@@ -2047,58 +2061,21 @@ impl TextMetrics {
     /// is the same page twice the size rather than the same page in a bigger box.
     fn new(dc: HDC, dpi: u32, font_scale_percent: u32) -> Option<Self> {
         let dpi = dpi.clamp(MIN_DPI, MAX_DPI);
-        let font_scale = sanitize_text_font_scale_percent(font_scale_percent) as f32 / 100.0;
+        let font_scale_percent = sanitize_text_font_scale_percent(font_scale_percent);
+        let font_scale = font_scale_percent as f32 / 100.0;
         // A preview is still a preview: past this the config is asking for a
         // handful of characters per screen, which GDI font sizes stop being
         // useful for.
         let scale = (dpi as f32 / 96.0 * font_scale).clamp(MIN_SCALE, MAX_SCALE);
 
-        let mut advance = [0i32; SIZE_LEVELS];
-        let mut line_height = [0i32; SIZE_LEVELS];
-
-        for level in 0..SIZE_LEVELS {
-            let pixels = scaled(LEVEL_FONT_PIXELS[level], scale);
-            let font = create_font(pixels, &plain_style(level as u8));
-            if font.0.is_null() {
-                return None;
-            }
-
-            let mut keep = false;
-            unsafe {
-                let previous = SelectObject(dc, font);
-
-                let mut metrics = TEXTMETRICW::default();
-                let measured = GetTextMetricsW(dc, &mut metrics).as_bool();
-
-                // The advance of one character is the whole measurement a fixed
-                // pitch face needs.
-                let sample = [b'0' as u16];
-                let mut extent = SIZE::default();
-                let sampled = GetTextExtentPoint32W(dc, &sample, &mut extent).as_bool();
-
-                let _ = SelectObject(dc, previous);
-                let _ = DeleteObject(font);
-
-                if measured && sampled && extent.cx > 0 {
-                    advance[level] = extent.cx;
-                    line_height[level] = metrics.tmHeight
-                        + metrics.tmExternalLeading
-                        + scaled(LEVEL_EXTRA_LEADING[level], scale);
-                    keep = true;
-                }
-            }
-
-            if !keep {
-                return None;
-            }
-        }
+        let levels = level_metrics(dc, (dpi, font_scale_percent), scale)?;
 
         Some(Self {
             scale,
             padding: scaled(PADDING_PIXELS as i32, scale),
             quote_bar: scaled(QUOTE_BAR_PIXELS, scale),
-            advance,
-            line_height,
+            advance: levels.advance,
+            line_height: levels.line_height,
         })
     }
 
@@ -2114,6 +2091,76 @@ impl TextMetrics {
     fn scrollbar_width(&self) -> i32 {
         scaled(SCROLLBAR_WIDTH_PIXELS, self.scale).max(1)
     }
+}
+
+/// The five levels at `scale`, from the cache when this display scale and font
+/// size have been measured before.
+fn level_metrics(dc: HDC, key: (u32, u32), scale: f32) -> Option<LevelMetrics> {
+    if let Ok(cache) = LEVEL_METRICS.lock() {
+        if let Some(cached) = cache.get(&key) {
+            return Some(*cached);
+        }
+    }
+
+    let measured = measure_levels(dc, scale)?;
+
+    if let Ok(mut cache) = LEVEL_METRICS.lock() {
+        if !cache.contains_key(&key) && cache.len() >= LEVEL_METRICS_MAX_ENTRIES {
+            cache.clear();
+        }
+        cache.insert(key, measured);
+    }
+
+    Some(measured)
+}
+
+/// Measure the five size levels against `dc`, leaving no font behind: each level
+/// is created, asked for its advance and line height, and deleted again.
+fn measure_levels(dc: HDC, scale: f32) -> Option<LevelMetrics> {
+    let mut advance = [0i32; SIZE_LEVELS];
+    let mut line_height = [0i32; SIZE_LEVELS];
+
+    for level in 0..SIZE_LEVELS {
+        let pixels = scaled(LEVEL_FONT_PIXELS[level], scale);
+        let font = create_font(pixels, &plain_style(level as u8));
+        if font.0.is_null() {
+            return None;
+        }
+
+        let mut keep = false;
+        unsafe {
+            let previous = SelectObject(dc, font);
+
+            let mut metrics = TEXTMETRICW::default();
+            let measured = GetTextMetricsW(dc, &mut metrics).as_bool();
+
+            // The advance of one character is the whole measurement a fixed
+            // pitch face needs.
+            let sample = [b'0' as u16];
+            let mut extent = SIZE::default();
+            let sampled = GetTextExtentPoint32W(dc, &sample, &mut extent).as_bool();
+
+            let _ = SelectObject(dc, previous);
+            let _ = DeleteObject(font);
+
+            if measured && sampled && extent.cx > 0 {
+                advance[level] = extent.cx;
+                line_height[level] = metrics.tmHeight
+                    + metrics.tmExternalLeading
+                    + scaled(LEVEL_EXTRA_LEADING[level], scale);
+                keep = true;
+            }
+        }
+
+        if !keep {
+            return None;
+        }
+    }
+
+    Some(LevelMetrics {
+        advance,
+        line_height,
+    })
 }
 
 fn plain_style(level: u8) -> TextStyle {

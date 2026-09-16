@@ -1,5 +1,6 @@
 #![windows_subsystem = "windows"]
 
+mod cloud_files;
 mod config;
 mod explorer_hook;
 mod pdf_preview;

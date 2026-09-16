@@ -1,3 +1,4 @@
+use crate::cloud_files;
 use crate::config::{PreviewType, TriggerKeyMode};
 use crate::pdf_preview::is_pdf_file;
 use crate::preview_window::{
@@ -11,7 +12,7 @@ use crate::{CONFIG, RUNNING};
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::ffi::OsString;
-use std::os::windows::ffi::OsStringExt;
+use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::path::PathBuf;
 use std::sync::{atomic::Ordering, Mutex};
 use std::time::{Duration, Instant};
@@ -23,7 +24,7 @@ use windows::Win32::System::Com::{
 };
 use windows::Win32::System::Variant::VT_I4;
 use windows::Win32::UI::Accessibility::{
-    CUIAutomation, CUIAutomationRegistrar, IUIAutomation, IUIAutomationCacheRequest,
+    CUIAutomation, CUIAutomationRegistrar, IUIAutomation, IUIAutomation2, IUIAutomationCacheRequest,
     IUIAutomationElement, IUIAutomationLegacyIAccessiblePattern, IUIAutomationRegistrar,
     IUIAutomationSelectionPattern, IUIAutomationTreeWalker, TreeScope_Children, TreeScope_Element,
     UIAutomationPropertyInfo, UIAutomationType_Int, UIA_BoundingRectanglePropertyId,
@@ -252,6 +253,42 @@ impl AnsweredView {
             }
         }
     }
+}
+
+/// How long a UI Automation call may take before it is abandoned. Every probe
+/// crosses into the shell's own thread, so a shell that has stopped answering
+/// would otherwise hold this thread inside a probe for as long as it likes — and
+/// the slow-probe backoff cannot see a probe that has not returned yet, which
+/// leaves an unbounded wait with nothing watching it.
+const UIA_TIMEOUT_MS: u32 = 500;
+
+/// The UI Automation client both paths resolve items with, with every call
+/// bounded.
+///
+/// The timeouts are set and then read back, because a client that silently
+/// ignores them would be worse than none: it would look bounded while leaving
+/// the hover path able to block forever. A client that cannot be bounded at all
+/// is refused outright, and the hooks answer with no preview rather than with a
+/// wait that has no end.
+fn automation_client() -> Option<IUIAutomation> {
+    let automation: IUIAutomation =
+        unsafe { CoCreateInstance(&CUIAutomation, None, CLSCTX_ALL).ok()? };
+    let bounded: IUIAutomation2 = automation.cast().ok()?;
+
+    unsafe {
+        bounded.SetConnectionTimeout(UIA_TIMEOUT_MS).ok()?;
+        bounded.SetTransactionTimeout(UIA_TIMEOUT_MS).ok()?;
+    }
+
+    let applied = unsafe {
+        bounded.ConnectionTimeout().ok()? == UIA_TIMEOUT_MS
+            && bounded.TransactionTimeout().ok()? == UIA_TIMEOUT_MS
+    };
+    if !applied {
+        return None;
+    }
+
+    Some(automation)
 }
 
 /// Explorer's own `ItemIndex` property, asked of the UI Automation registrar.
@@ -589,8 +626,20 @@ fn is_media_file(path: &PathBuf) -> bool {
 
 fn same_path(a: &PathBuf, b: &PathBuf) -> bool {
     a == b
-        || a.to_string_lossy()
-            .eq_ignore_ascii_case(&b.to_string_lossy())
+        || a.as_os_str()
+            .encode_wide()
+            .map(ascii_lower)
+            .eq(b.as_os_str().encode_wide().map(ascii_lower))
+}
+
+/// Fold one UTF-16 unit the way `eq_ignore_ascii_case` folds a character, so a
+/// path can be compared without being turned into a string first.
+fn ascii_lower(unit: u16) -> u16 {
+    if (b'A' as u16..=b'Z' as u16).contains(&unit) {
+        unit + 32
+    } else {
+        unit
+    }
 }
 
 fn urlencoding_decode(s: &str) -> String {
@@ -998,7 +1047,7 @@ fn normalize_existing_path(path: PathBuf) -> Option<PathBuf> {
 }
 
 fn normalize_media_path(path: PathBuf) -> Option<PathBuf> {
-    if !path.exists() || !is_media_file(&path) {
+    if !path.exists() || !is_media_file(&path) || cloud_files::needs_download(&path) {
         return None;
     }
 
@@ -2364,9 +2413,7 @@ pub fn run_explorer_hook() {
     // What both paths resolve an item to a file with: one UI Automation client
     // whose property reads are batched into a round trip per element, plus the
     // view that answered last for a window.
-    let mut resolver = ItemResolver::new(unsafe {
-        CoCreateInstance(&CUIAutomation, None, CLSCTX_ALL).ok()
-    });
+    let mut resolver = ItemResolver::new(automation_client());
 
     let mut last_file: Option<PathBuf> = None;
     let mut suppressed = SuppressedHover::default();

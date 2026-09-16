@@ -61,15 +61,24 @@ pub fn page_dimensions(path: &Path) -> Option<(u32, u32)> {
     }
 
     let dimensions = probe_page_dimensions(path);
+    remember_page_dimensions(path, dimensions);
 
+    dimensions
+}
+
+/// Record a page size that has been read, so it never has to be read again.
+///
+/// Both the measure and the render open the document — which, because
+/// `Windows.Data.Pdf` is handed a stream, means reading the whole file — so what
+/// one of them read is handed to the other's cache rather than left for it to
+/// find a second time.
+fn remember_page_dimensions(path: &Path, dimensions: Option<(u32, u32)>) {
     if let Ok(mut cache) = PAGE_DIMENSIONS.lock() {
         if !cache.contains_key(path) && cache.len() >= PAGE_DIMENSION_CACHE_MAX_ENTRIES {
             cache.clear();
         }
         cache.insert(path.to_path_buf(), dimensions);
     }
-
-    dimensions
 }
 
 /// Render page 1 into the largest box that fits `max_width` x `max_height`
@@ -87,7 +96,9 @@ pub fn render_first_page(
     let document = open_document(path)?;
     let page = document.GetPage(0).ok()?;
     let size = page.Size().ok()?;
+    let dimensions = page_size_in_dips(size.Width, size.Height);
     let (render_width, render_height) = fit_page(size.Width, size.Height, max_width, max_height)?;
+    remember_page_dimensions(path, dimensions);
 
     let bytes = render_page(&page, render_width, render_height)?;
     let image = image::load_from_memory(&bytes).ok()?.to_rgba8();

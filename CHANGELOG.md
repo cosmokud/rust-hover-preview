@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.2.4] - 2026-09-17
+
+### Added
+
+- `image_cache_mb` in `config.ini` (default `64`) sets how much memory decoded image previews may be kept in, so hovering back over a folder no longer decodes the same pictures again. `0` turns the cache off, and the value is capped at `2048`.
+
+### Changed
+
+- Animated GIF, APNG and WebP previews open on their first frames instead of waiting for a startup buffer.
+- Video previews read a file's dimensions and detect its letterboxing at the same time instead of one after the other.
+- A PDF's page size is remembered from the render that read it, so a file is not opened twice for one preview.
+
+### Fixed
+
+- A OneDrive or SharePoint file that has not been downloaded no longer starts downloading when the pointer rests on it.
+- A very large image can no longer take the app down with it.
+- Hovering no longer stalls indefinitely when Explorer stops answering.
+
 ## [0.2.3] - 2026-09-17
 
 ### Changed
