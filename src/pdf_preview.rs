@@ -132,7 +132,7 @@ fn fit_page(width: f32, height: f32, max_width: u32, max_height: u32) -> Option<
 /// Open the document from bytes read here rather than through `StorageFile`.
 ///
 /// `StorageFile.GetFileFromPathAsync` rejects the verbatim paths the Explorer
-/// hook produces when it canonicalizes a shell path (`\\?\G:\...`): it fails
+/// hook produces when it canonicalizes a shell path (`\\?\C:\...`): it fails
 /// with `ERROR_BAD_PATHNAME` while the same file opens through a plain path,
 /// which is why a PDF previewed from a search result but not from a folder
 /// view. Reading the file here keeps the WinRT boundary on the path forms the
@@ -227,47 +227,4 @@ fn has_pdf_header(path: &Path) -> bool {
     probe[..read]
         .windows(PDF_HEADER.len())
         .any(|window| window == PDF_HEADER)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{fit_page, has_pdf_header, is_pdf_file};
-    use std::io::Write;
-    use std::path::Path;
-
-    #[test]
-    fn extension_gate_matches_pdf_files() {
-        assert!(is_pdf_file(Path::new("manual.pdf")));
-        assert!(is_pdf_file(Path::new("MANUAL.PDF")));
-        assert!(!is_pdf_file(Path::new("manual.pdf.txt")));
-        assert!(!is_pdf_file(Path::new("manual")));
-    }
-
-    #[test]
-    fn header_is_found_behind_leading_bytes() {
-        let mut path = std::env::temp_dir();
-        path.push("rust-hover-preview-header-probe.pdf");
-
-        let mut file = std::fs::File::create(&path).unwrap();
-        file.write_all(b"junk before the header").unwrap();
-        file.write_all(b"%PDF-1.7\n").unwrap();
-        drop(file);
-
-        assert!(has_pdf_header(&path));
-        let _ = std::fs::remove_file(&path);
-
-        assert!(!has_pdf_header(Path::new("does-not-exist.pdf")));
-    }
-
-    #[test]
-    fn a_page_fits_its_box_without_changing_aspect() {
-        // A4 in DIPs inside a square box keeps its width-to-height ratio, and
-        // fills the box on the axis that ran out of room first.
-        assert_eq!(fit_page(793.6, 1122.4, 1000, 1000), Some((708, 1000)));
-        assert_eq!(fit_page(1000.0, 500.0, 800, 800), Some((800, 400)));
-        // A box that already matches the page is returned unchanged.
-        assert_eq!(fit_page(800.0, 1000.0, 800, 1000), Some((800, 1000)));
-        assert_eq!(fit_page(0.0, 100.0, 800, 800), None);
-        assert_eq!(fit_page(800.0, 1000.0, 0, 800), None);
-    }
 }

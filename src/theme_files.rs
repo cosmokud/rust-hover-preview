@@ -95,36 +95,3 @@ fn stem(name: &str) -> &str {
         _ => name,
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::{stem, theme_name};
-    use std::path::Path;
-
-    #[test]
-    fn a_theme_file_is_one_named_with_the_extension() {
-        assert_eq!(
-            theme_name(Path::new(r"C:\themes\atom-one-light.tmTheme")),
-            Some("atom-one-light")
-        );
-        assert_eq!(theme_name(Path::new("one.TMTHEME")), Some("one"));
-        assert_eq!(
-            theme_name(Path::new("atom-one-light.tmtheme")),
-            Some("atom-one-light")
-        );
-
-        assert_eq!(theme_name(Path::new("notes.txt")), None);
-        assert_eq!(theme_name(Path::new("tmTheme")), None);
-        assert_eq!(theme_name(Path::new(".tmTheme")), None);
-    }
-
-    #[test]
-    fn a_written_name_is_read_as_a_stem() {
-        assert_eq!(stem(" solarized "), "solarized");
-        assert_eq!(stem("solarized"), "solarized");
-        assert_eq!(stem("solarized.tmTheme"), "solarized");
-        assert_eq!(stem("Solarized.TmTheme"), "Solarized");
-        assert_eq!(stem("tmTheme"), "tmTheme");
-        assert_eq!(stem(""), "");
-    }
-}

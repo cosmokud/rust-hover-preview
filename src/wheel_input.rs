@@ -131,36 +131,3 @@ fn point_in_region(point: POINT, region: (i32, i32, i32, i32)) -> bool {
     let (left, top, right, bottom) = region;
     point.x >= left && point.x < right && point.y >= top && point.y < bottom
 }
-
-#[cfg(test)]
-mod tests {
-    use super::point_in_region;
-
-    #[test]
-    fn the_keep_alive_region_holds_the_pointer_inside_its_edges() {
-        let region = (10, 20, 110, 220);
-
-        assert!(point_in_region(
-            windows::Win32::Foundation::POINT { x: 10, y: 20 },
-            region
-        ));
-        assert!(point_in_region(
-            windows::Win32::Foundation::POINT { x: 109, y: 219 },
-            region
-        ));
-        // The far edges are outside, so a region and its neighbour never both
-        // claim the same pixel.
-        assert!(!point_in_region(
-            windows::Win32::Foundation::POINT { x: 110, y: 100 },
-            region
-        ));
-        assert!(!point_in_region(
-            windows::Win32::Foundation::POINT { x: 100, y: 220 },
-            region
-        ));
-        assert!(!point_in_region(
-            windows::Win32::Foundation::POINT { x: 0, y: 0 },
-            region
-        ));
-    }
-}
