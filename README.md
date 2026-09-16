@@ -68,7 +68,7 @@ Text previews are sized to their content rather than to the image scaling settin
 
 ### Scrolling a text preview
 
-When a file is longer than the preview, the preview grows a scrollbar instead of stopping at the bottom of the page. Moving the pointer onto the preview keeps it there — the usual rule is that touching a preview dismisses it — and from there the wheel scrolls the text, or the thumb can be dragged. The pointer can stray around the preview without the preview closing, and the amount it can stray is not the same on every side: reaching a preview is a movement towards it, so the hand is still moving when it arrives, and the edge it arrives at — the one the scrollbar sits at — keeps thirty logical pixels of room past it, at the display's DPI, so a hand that overshoots the thin scrollbar does not take the preview down with it. The edge it came from gets no such room, since the pointer has already stopped there. The preview closes when the pointer leaves that region, or when another file is hovered.
+When a file is longer than the preview, the preview grows a scrollbar instead of stopping at the bottom of the page. Moving the pointer onto the preview keeps it there — the usual rule is that touching a preview dismisses it — and from there the wheel scrolls the text, or the thumb can be dragged. The pointer can stray around the preview without the preview closing, and the amount it can stray is not the same on every side: reaching a preview is a movement towards it, so the hand is still moving when it arrives, and the edge it arrives at — the one the scrollbar sits at — keeps room past it, forty logical pixels at the display's DPI by default, so a hand that overshoots the thin scrollbar does not take the preview down with it. The edge it came from gets no such room, since the pointer has already stopped there. How much room the far edge gets is the `text_scroll_far_edge_grace_pixels` setting. The preview closes when the pointer leaves that region, or when another file is hovered.
 
 Selecting works the way it does anywhere else: drag across the text to select it, `Ctrl+C` to copy it, or right-click the preview for **Copy**. What is copied is what is on screen, so a line clipped at the right edge copies the part that was visible, and a Copy with nothing selected takes the whole frame. Dragging the scrollbar clears the selection, since the lines it was measured against have moved.
 
@@ -190,6 +190,7 @@ markdown_mode=rendered
 text_preview_enabled=true
 text_preview_full_mode=false
 text_font_scale=125
+text_scroll_far_edge_grace_pixels=40
 
 [text]
 extensions=txt,text,log,nfo,md,markdown,json,toml,yaml,py,js,ts,rs,...
@@ -201,6 +202,7 @@ names=license,notice,makefile,dockerfile,gitignore,.gitattributes,...
 - `text_preview_enabled` is the `Enable Text Preview` toggle: `false` stops text previews without touching the extension list.
 - `text_preview_full_mode` is the `Enable Text Preview Full Mode` toggle. It is off unless it is turned on, because it changes what a preview does rather than what it shows: `true` lets a text preview be scrolled, selected from and copied.
 - `text_font_scale` is the size text is drawn at, as a percentage between 1 and 1000 (`150` or `150%`; `0` resets to the default of 125). The tray offers steps from 100% to 400%, and a value between those steps is used as written.
+- `text_scroll_far_edge_grace_pixels` is how far past the far edge of a text preview in full mode the pointer still counts as using it: a distance in logical pixels between 0 and 1000, 40 by default, scaled by the display's DPI so it is the same distance under a hand at any text size (decimals are honored, and a plain `0` ends the region at the preview itself). It is the room a hand that overshoots the scrollbar as it arrives needs; only the edge the pointer travelled towards gets it.
 - `extensions` is every extension previewed as text. It is written in full when the file is created and is shortened in this example. Append an extension to preview one the app does not know, or delete entries to stop previewing them — the change is picked up without a restart. An extension is written without its dot (`py`, not `.py`), and an empty list turns text previews off, so the built-in list comes back only when the key itself is missing. A dot file is named here without its dot too, so `gitignore` covers `.gitignore`.
 - `names` is the other half of the text gate: the files that have no extension to match, like `LICENSE`, `Makefile` and `Dockerfile`. Entries are file names, matched whole and without regard to case; the list covers the root of a typical repository, and `gitignore` and `.gitignore` are the same entry here as they are there.
 - When the trigger key is held, previews either stop or start, according to `trigger_key_mode`: `disable` keeps previews hidden while it is down, and `enable` shows them only while it is down. The key itself is `trigger_key`.
