@@ -101,6 +101,10 @@ const WHEEL_DELTA: i32 = 120;
 /// logical pixels. The pointer travels forwards from there, so this is only there
 /// to keep the pixel under a hand at rest inside the region.
 const TEXT_SCROLL_ANCHOR_SLACK_PIXELS: i32 = 1;
+/// How far above and below the row the pointer is on the journey to a preview may
+/// wander before it is out of it. The journey is made across a row of the list, so
+/// the band is the hand's, not the preview's.
+const TEXT_SCROLL_CORRIDOR_SLACK_PIXELS: i32 = 12;
 
 /// How far either side of the scrollbar's column a press still counts as a press
 /// on the bar, in logical pixels. It is deliberately small: the bar is thin, so a
@@ -138,9 +142,11 @@ fn configured_far_edge_grace_pixels() -> f32 {
 /// A region on screen: left, top, right, bottom.
 type ScreenRegion = (i32, i32, i32, i32);
 
-/// The region that keeps a scrollable text preview on screen, in screen
-/// coordinates, or `None` when the preview on screen does not scroll.
-static TEXT_SCROLL_KEEP_ALIVE: Lazy<Mutex<Option<ScreenRegion>>> = Lazy::new(|| Mutex::new(None));
+/// The regions that keep a text preview on screen, in screen coordinates, or
+/// `None` when the preview on screen is not one: the journey to the preview and
+/// the preview itself.
+static TEXT_SCROLL_KEEP_ALIVE: Lazy<Mutex<Option<[ScreenRegion; 2]>>> =
+    Lazy::new(|| Mutex::new(None));
 
 /// Where the preview that is on screen was opened from: the cursor that hovered
 /// the file, or the middle of the focused item. The hold region is built from
@@ -156,49 +162,54 @@ static TEXT_PREVIEW_SCROLLABLE: AtomicBool = AtomicBool::new(false);
 /// so the check for it stays an atomic read.
 static TEXT_PREVIEW_HOLDING: AtomicBool = AtomicBool::new(false);
 
-/// The region that keeps a preview alive: the line from the point it was opened
-/// from to the preview, joined to the preview itself.
+/// The regions that keep a preview alive: the journey to it, and the preview.
 ///
 /// A preview is placed beside what it belongs to rather than over it, so the
 /// pointer has to travel to reach it — across a gap, sometimes against the side
 /// the placement chose. Joining the two means that journey never leaves the
-/// region, however the preview ended up placed relative to the cursor, and it
-/// keeps the region off everything else: one pixel behind the point the preview
-/// was opened from and no slack beyond the preview, apart from `far_edge_grace`
-/// past the edge the pointer was travelling towards — so what it covers away from
-/// the preview is a single row of the file list.
-fn text_scroll_hold_region(
+/// regions, however the preview ended up placed relative to the cursor. The
+/// journey is the first of the two regions and the preview is the second.
+///
+/// The journey reaches the preview's *nearest* point and stops there. Reaching
+/// across to its far corner instead — which is what a region built from the two
+/// corners of both rectangles does — covers every file in the list beside the
+/// preview, from the row the pointer is on down to the preview's bottom: a text
+/// preview is as tall as the display allows, and inside the region the item under
+/// the pointer is not resolved at all, so those files stop previewing for as long
+/// as the preview is up.
+fn text_scroll_hold_regions(
     preview: ScreenRegion,
     anchor: (i32, i32),
     far_edge_grace: i32,
-) -> ScreenRegion {
+) -> [ScreenRegion; 2] {
     let (left, top, right, bottom) = preview;
 
-    let (region_left, region_right) = if anchor.0 < left {
-        // The preview is to the right of where the pointer was, so the journey is
-        // rightwards and the edge it ends at is the right one.
-        (
-            anchor.0 - TEXT_SCROLL_ANCHOR_SLACK_PIXELS,
-            right + far_edge_grace,
-        )
+    // The preview, with the margin a hand that overshot the edge it was travelling
+    // towards needs — that edge is the far one, and what usually waits just past it
+    // is the scrollbar.
+    let preview_region = if anchor.0 < left {
+        (left, top, right + far_edge_grace, bottom)
     } else if anchor.0 >= right {
-        // …or to its left, where the journey ends at the left edge.
-        (
-            left - far_edge_grace,
-            anchor.0 + TEXT_SCROLL_ANCHOR_SLACK_PIXELS,
-        )
+        (left - far_edge_grace, top, right, bottom)
     } else {
-        // The pointer is already in the preview's own column, so there is no edge
-        // it travelled towards and the preview is all the region needs to be.
-        (left, right)
+        (left, top, right, bottom)
     };
 
-    (
-        region_left,
-        top.min(anchor.1),
-        region_right,
-        bottom.max(anchor.1),
-    )
+    // The journey: from the point the preview was opened from to the nearest point
+    // of the preview, and no further. It is as tall as the journey is and not as
+    // tall as the preview is, so a pointer beside a preview crosses a row of the
+    // list and nothing else.
+    let near_x = anchor.0.clamp(left, right);
+    let near_y = anchor.1.clamp(top, bottom);
+
+    let corridor = (
+        anchor.0.min(near_x) - TEXT_SCROLL_ANCHOR_SLACK_PIXELS,
+        anchor.1.min(near_y) - TEXT_SCROLL_CORRIDOR_SLACK_PIXELS,
+        anchor.0.max(near_x) + TEXT_SCROLL_ANCHOR_SLACK_PIXELS,
+        anchor.1.max(near_y) + TEXT_SCROLL_CORRIDOR_SLACK_PIXELS,
+    );
+
+    [corridor, preview_region]
 }
 
 // Track the ffplay video window HWND for cursor-over-preview detection
@@ -3296,7 +3307,7 @@ unsafe fn publish_text_scroll_keep_alive(hwnd: HWND) {
             // leaves the region as the preview alone.
             .unwrap_or((preview.0, preview.1));
 
-        Some(text_scroll_hold_region(
+        Some(text_scroll_hold_regions(
             preview,
             anchor,
             far_edge_grace(dpi, configured_far_edge_grace_pixels()),
@@ -3345,15 +3356,23 @@ pub fn text_scroll_pointer_hold(x: i32, y: i32) -> bool {
         return false;
     };
 
-    published
-        .map(|(left, top, right, bottom)| x >= left && x < right && y >= top && y < bottom)
+    (*published)
+        .map(|regions| {
+            regions.iter().any(|(left, top, right, bottom)| {
+                x >= *left && x < *right && y >= *top && y < *bottom
+            })
+        })
         .unwrap_or(false)
 }
 
-/// The published region, without blocking. The wheel hook runs inside a
+/// The published preview region, without blocking. The wheel hook runs inside a
 /// system-wide hook procedure, where waiting on a lock held by the preview thread
 /// would stall every wheel message on the desktop — so a lock it cannot take
 /// immediately means the wheel is not ours to take either.
+///
+/// This is the preview itself and not the journey to it: the wheel belongs to the
+/// preview while the pointer is on (or just past) its edge, not while the pointer
+/// is still crossing the row in front of it, where the wheel is Explorer's.
 pub fn text_scroll_keep_alive_try() -> Option<(i32, i32, i32, i32)> {
     if !text_preview_scrollable() {
         return None;
@@ -3362,7 +3381,7 @@ pub fn text_scroll_keep_alive_try() -> Option<(i32, i32, i32, i32)> {
     TEXT_SCROLL_KEEP_ALIVE
         .try_lock()
         .ok()
-        .and_then(|held| *held)
+        .and_then(|held| (*held).map(|regions| regions[1]))
 }
 
 /// Where a scroll of `lines` from the preview's current position lands.
