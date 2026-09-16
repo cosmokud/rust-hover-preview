@@ -25,7 +25,7 @@ use windows::Win32::System::Com::{
 use windows::Win32::System::Variant::VariantClear;
 use windows::Win32::UI::Accessibility::{
     CUIAutomation, IUIAutomation, IUIAutomationElement, IUIAutomationLegacyIAccessiblePattern,
-    IUIAutomationSelectionPattern, IUIAutomationValuePattern, TreeScope_Children,
+    IUIAutomationSelectionPattern, IUIAutomationValuePattern, TreeScope_Descendants,
     UIA_DataItemControlTypeId, UIA_LegacyIAccessiblePatternId, UIA_ListItemControlTypeId,
     UIA_SelectionPatternId, UIA_ValuePatternId,
 };
@@ -1517,15 +1517,24 @@ fn focused_item_path_at_box(item: &FocusedItemInfo) -> Option<PathBuf> {
 /// The points inside a focused item's box that are worth asking the accessibility
 /// provider about, in the order they are worth asking.
 ///
-/// A search result states the file it stands for in the value of the text it
-/// shows, so the children a list item exposes are asked about first — that text is
-/// one of them, and its middle is where the provider answers with a path. The
-/// item's own middle comes next, and then the name column just inside its left
-/// edge, which is where the name sits in a view that exposes no child for it at
-/// all — the details list among them. That column is swept rather than pointed at:
-/// how far a name reaches depends on the name, and every point is only asked when
-/// the ones before it answered nothing, so a sweep costs a call only where a
-/// single point would have cost one and found nothing.
+/// A search result states the file it stands for in the value of the text it shows,
+/// and that value lives on the text rather than on the item containing it — so the
+/// text is what has to be asked. A list item exposes it as a child, an icon view
+/// hangs it below the icon, and a content row writes it a line down from the top.
+/// The item's own subtree is therefore walked and each element found is asked at
+/// its middle: descendants rather than children, because the text can sit a level
+/// or two down, and only for an element that *is* an item, so a list cannot hand
+/// over its whole contents to be probed.
+///
+/// What the subtree does not expose is covered by points in the item's own box,
+/// taken in bands across it — a fifth of the way down, three fifths, and four
+/// fifths — because a view keeps its text in one of them: a details row centres it
+/// on the row, a content row writes its name on the first line and its details on
+/// the second, and an icon view hangs the label below the icon. Each band is asked
+/// just inside the name column — a hand's width in, then a name's width in — and at
+/// the item's middle, which is where a centred label is. Every point is only asked
+/// when the ones before it answered nothing, so breadth costs a call only where a
+/// single point would have spent one and found nothing.
 fn focused_item_probe_points(
     automation: &IUIAutomation,
     element: &IUIAutomationElement,
@@ -1534,21 +1543,31 @@ fn focused_item_probe_points(
     let mut points = Vec::new();
 
     unsafe {
-        if let Ok(condition) = automation.CreateTrueCondition() {
-            if let Ok(children) = element.FindAll(TreeScope_Children, &condition) {
-                if let Ok(count) = children.Length() {
-                    for index in 0..count.min(4) {
-                        if let Ok(child) = children.GetElement(index) {
-                            if let Ok(child_rect) = child.CurrentBoundingRectangle() {
-                                if child_rect.right > child_rect.left
-                                    && child_rect.bottom > child_rect.top
-                                {
-                                    points.push(POINT {
-                                        x: child_rect.left
-                                            + (child_rect.right - child_rect.left) / 2,
-                                        y: child_rect.top
-                                            + (child_rect.bottom - child_rect.top) / 2,
-                                    });
+        let is_item = element
+            .CurrentControlType()
+            .map(|control_type| {
+                control_type == UIA_ListItemControlTypeId
+                    || control_type == UIA_DataItemControlTypeId
+            })
+            .unwrap_or(false);
+
+        if is_item {
+            if let Ok(condition) = automation.CreateTrueCondition() {
+                if let Ok(descendants) = element.FindAll(TreeScope_Descendants, &condition) {
+                    if let Ok(count) = descendants.Length() {
+                        for index in 0..count.min(6) {
+                            if let Ok(child) = descendants.GetElement(index) {
+                                if let Ok(child_rect) = child.CurrentBoundingRectangle() {
+                                    if child_rect.right > child_rect.left
+                                        && child_rect.bottom > child_rect.top
+                                    {
+                                        points.push(POINT {
+                                            x: child_rect.left
+                                                + (child_rect.right - child_rect.left) / 2,
+                                            y: child_rect.top
+                                                + (child_rect.bottom - child_rect.top) / 2,
+                                        });
+                                    }
                                 }
                             }
                         }
@@ -1558,24 +1577,22 @@ fn focused_item_probe_points(
         }
     }
 
+    let width = (rect.right - rect.left).max(1);
     let height = (rect.bottom - rect.top).max(1);
-    let middle_y = rect.top + height / 2;
     let clamp = |x: i32| x.min(rect.right - 2).max(rect.left + 1);
+    let center_x = clamp(rect.left + width / 2);
 
-    points.push(POINT {
-        x: clamp(rect.left + (rect.right - rect.left) / 2),
-        y: middle_y,
-    });
+    let band_x = [
+        clamp(rect.left + (height / 2).max(2)),
+        clamp(rect.left + height * 2),
+        center_x,
+    ];
 
-    let step = height.max(8);
-    let sweep_end = (rect.left + height * 10).min(rect.right - 2);
-    let mut x = rect.left + (height / 2).max(2);
-    while x < sweep_end {
-        points.push(POINT {
-            x: clamp(x),
-            y: middle_y,
-        });
-        x += step;
+    for fraction in [1, 3, 4] {
+        let y = rect.top + height * fraction / 5;
+        for x in band_x {
+            points.push(POINT { x, y });
+        }
     }
 
     points
