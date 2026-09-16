@@ -19,6 +19,8 @@ pub const MAX_PREVIEW_SCALE_PERCENT: u32 = 1000;
 pub const DEFAULT_TEXT_FONT_SCALE_PERCENT: u32 = 125;
 pub const MIN_TEXT_FONT_SCALE_PERCENT: u32 = 1;
 pub const MAX_TEXT_FONT_SCALE_PERCENT: u32 = 1000;
+pub const DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS: f32 = 40.0;
+pub const MAX_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS: f32 = 1000.0;
 
 pub fn sanitize_webp_playback_fps(value: u32) -> u32 {
     match value {
@@ -37,6 +39,20 @@ pub fn sanitize_text_font_scale_percent(value: u32) -> u32 {
         DEFAULT_TEXT_FONT_SCALE_PERCENT
     } else {
         value.clamp(MIN_TEXT_FONT_SCALE_PERCENT, MAX_TEXT_FONT_SCALE_PERCENT)
+    }
+}
+
+/// How far past the far edge of a text preview the pointer region reaches, in
+/// logical pixels at the display's DPI.
+///
+/// Zero is a distance like any other — the region then ends at the preview, which
+/// is what it did before the grace existed — so only a value that is not a number
+/// at all falls back to the default.
+pub fn sanitize_text_scroll_far_edge_grace_pixels(value: f32) -> f32 {
+    if value.is_finite() {
+        value.clamp(0.0, MAX_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS)
+    } else {
+        DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS
     }
 }
 
@@ -248,6 +264,10 @@ pub struct AppConfig {
     pub text_preview_full_mode: bool,
     /// Font scale for text previews, as a percentage of the default size.
     pub text_font_scale_percent: u32,
+    /// How far past the far edge of a text preview the pointer region reaches, in
+    /// logical pixels at the display's DPI, so a hand that overshoots the edge on
+    /// its way to the scrollbar does not take the preview down with it.
+    pub text_scroll_far_edge_grace_pixels: f32,
     /// Extensions previewed as text, already normalized for lookup.
     pub text_extensions: Vec<String>,
     /// File names previewed as text — the ones with no extension to match, like
@@ -276,6 +296,7 @@ impl Default for AppConfig {
             text_preview_enabled: true,
             text_preview_full_mode: false,
             text_font_scale_percent: DEFAULT_TEXT_FONT_SCALE_PERCENT,
+            text_scroll_far_edge_grace_pixels: DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS,
             text_extensions: sanitize_extensions(DEFAULT_TEXT_EXTENSIONS),
             text_names: sanitize_names(DEFAULT_TEXT_NAMES),
         }
@@ -408,6 +429,16 @@ impl AppConfig {
                 Some(sanitize_text_font_scale_percent(self.text_font_scale_percent).to_string()),
             );
             ini.set(
+                CONFIG_SECTION,
+                "text_scroll_far_edge_grace_pixels",
+                Some(
+                    sanitize_text_scroll_far_edge_grace_pixels(
+                        self.text_scroll_far_edge_grace_pixels,
+                    )
+                    .to_string(),
+                ),
+            );
+            ini.set(
                 TEXT_SECTION,
                 "extensions",
                 Some(sanitize_extensions(&self.text_extensions.join(",")).join(",")),
@@ -497,6 +528,10 @@ impl AppConfig {
                 self.text_font_scale_percent = scale;
             }
         }
+        if let Ok(Some(value)) = ini.getfloat(CONFIG_SECTION, "text_scroll_far_edge_grace_pixels") {
+            self.text_scroll_far_edge_grace_pixels =
+                sanitize_text_scroll_far_edge_grace_pixels(value as f32);
+        }
         // An empty list means the user removed every extension, and the built-in
         // list comes back only when the key itself is gone.
         if let Some(value) = ini.get(TEXT_SECTION, "extensions") {
@@ -511,8 +546,9 @@ impl AppConfig {
 #[cfg(test)]
 mod tests {
     use super::{
-        parse_text_font_scale, sanitize_text_font_scale_percent, AppConfig, MarkdownMode,
-        TextTheme, TriggerKeyMode,
+        parse_text_font_scale, sanitize_text_font_scale_percent,
+        sanitize_text_scroll_far_edge_grace_pixels, AppConfig, MarkdownMode, TextTheme,
+        TriggerKeyMode,
     };
     use configparser::ini::Ini;
 
@@ -524,6 +560,11 @@ mod tests {
         ini.set("settings", "text_preview_enabled", Some("false".into()));
         ini.set("settings", "text_preview_full_mode", Some("true".into()));
         ini.set("settings", "text_font_scale", Some("175%".into()));
+        ini.set(
+            "settings",
+            "text_scroll_far_edge_grace_pixels",
+            Some("12.5".into()),
+        );
         ini.set("text", "extensions", Some("md, py, .RS, md".into()));
         ini.set(
             "text",
@@ -537,6 +578,7 @@ mod tests {
         assert!(!config.text_preview_enabled);
         assert!(config.text_preview_full_mode);
         assert_eq!(config.text_font_scale_percent, 175);
+        assert_eq!(config.text_scroll_far_edge_grace_pixels, 12.5);
         assert_eq!(config.text_extensions, vec!["md", "py", "rs"]);
         assert_eq!(config.text_names, vec!["gitignore", "license", "makefile"]);
     }
@@ -613,6 +655,25 @@ mod tests {
         assert_eq!(parse_text_font_scale(" 175% "), Some(175));
         assert_eq!(parse_text_font_scale("0"), Some(125));
         assert_eq!(parse_text_font_scale("large"), None);
+    }
+
+    /// The grace is a distance, and zero is one of them: it ends the region at the
+    /// preview, which is what a user asking for no grace is asking for. Only a
+    /// value that is not a distance at all resets to the default.
+    #[test]
+    fn the_far_edge_grace_is_read_as_a_distance() {
+        assert_eq!(AppConfig::default().text_scroll_far_edge_grace_pixels, 40.0);
+
+        assert_eq!(sanitize_text_scroll_far_edge_grace_pixels(40.0), 40.0);
+        assert_eq!(sanitize_text_scroll_far_edge_grace_pixels(12.5), 12.5);
+        assert_eq!(sanitize_text_scroll_far_edge_grace_pixels(0.0), 0.0);
+        assert_eq!(sanitize_text_scroll_far_edge_grace_pixels(-5.0), 0.0);
+        assert_eq!(sanitize_text_scroll_far_edge_grace_pixels(5000.0), 1000.0);
+        assert_eq!(sanitize_text_scroll_far_edge_grace_pixels(f32::NAN), 40.0);
+        assert_eq!(
+            sanitize_text_scroll_far_edge_grace_pixels(f32::INFINITY),
+            40.0
+        );
     }
 
     #[test]
