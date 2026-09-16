@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.2.2] - 2026-09-16
+
+### Added
+
+- Added a `Toggle Preview Types` submenu to the tray menu, right under `Enable Preview`: one gate per kind of preview — `Images`, `Videos`, `Text` and `PDF` — all switched on and written to `config.ini` as `image_preview_enabled`, `video_preview_enabled`, `text_preview_enabled` and `pdf_preview_enabled`. A gate is not a file list: it says whether previews of that kind may be shown at all, so the lists and the settings that decide *which* files of that kind are previewed — the text extensions and names, the image, video and PDF extensions, `Markdown Preview`, a preview's scale, the text theme — are left exactly as they were, and switching a kind off and back on restores what was configured rather than a default. Both halves of the app read the gates: the Explorer hook asks them on the tick that resolved a file, so a toggle needs no restart and leaves no cache to clear, and the renderer asks them when it measures the preview it was handed, so a preview cannot be laid out for a kind that is off. The hook asks the kinds the way the renderer asks them — a video first, because only its content settles the `.ts`/`.mts` extensions the text list shares, then a PDF, then the text lists, then the image extensions — so the two cannot disagree about what a file is.
+- A preview of a kind that is switched off goes away on the spot rather than at the next pointer move. The toggle is handed to the preview thread, which is the only place that knows what is on screen: a preview of the kind that changed is rebuilt from the hover it came from, and because the layout finds no size for a file whose kind is off, that rebuild drops it exactly as a moved pointer would — while a preview of any other kind is left untouched, so switching images off does not restart the video that is playing.
+- Added `Ctrl+A` to a text preview in full mode: everything the frame shows is selected — the whole of a document that fits on one page, and the screenful a longer one is showing — which is the range the preview's own menu takes and the one a `Copy` with nothing selected would take, so the highlight left on screen is what `Ctrl+C` puts on the clipboard. The key is polled the way `Ctrl+C` is — the preview never takes focus, so a keystroke never arrives as a message — and it is read only while a text preview with lines in it is on screen, so a `Ctrl+A` meant for something else is left alone.
+- Added `Select All` to the text preview's own context menu, above `Copy`, so a preview can be selected from without a keyboard; both items act through the same functions the polled `Ctrl+A` and `Ctrl+C` do.
+- A text preview is now recognized by one function, `is_text_preview`, which asks the video gate before the text gate. Only a file's content can tell a TypeScript source from the MPEG transport stream that goes by the same `.ts` and `.mts` extensions, so a file the video gate accepts is never handed to the text renderer; the places that used to ask the question separately — the scale a preview is laid out with, the size it is measured at, and the box its renderer is handed — ask that one function now, so they cannot disagree about a `.ts` file.
+
+### Changed
+
+- Removed `Enable Text Preview` from the tray menu, which `Toggle Preview Types` → `Text` replaces. The setting is the same one — `text_preview_enabled` is still the key, still checked ahead of the extension and name lists — so a `config.ini` written before the change keeps its answer.
+- Documentation is up to date with the release: README.md lists the `Toggle Preview Types` submenu, the four keys and `Ctrl+A`, and ARCHITECTURE.md's text-preview and Explorer-hook sections describe the gates, the order they are asked in and where a type change is answered.
+- Bumped version to 0.2.2 in Cargo.toml and Cargo.lock
+
+### Fixed
+
+- Text previews no longer depend on how an extension's case was typed. The extension a document is previewed by is lowercased once, where it is read, so a `README.MD` is rendered as the document it describes instead of being highlighted as source, an `.NFO` in capitals keeps its ANSI colors and CP437 decoding, and an `.RTF` is reduced to the text it carries like any other.
+
 ## [0.2.1] - 2026-09-16
 
 ### Added
