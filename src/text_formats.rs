@@ -136,16 +136,24 @@ pub fn matches_configured_name(path: &Path, names: &[String]) -> bool {
     names.contains(&name)
 }
 
+/// Whether either configured list claims `path`.
+///
+/// This is the classification without the gate: the lists as they stand, so a
+/// caller that already holds the configuration can ask what kind of preview a
+/// file is without asking whether that kind is switched on.
+pub fn matches_text_lists(path: &Path, extensions: &[String], names: &[String]) -> bool {
+    matches_configured_extension(path, extensions) || matches_configured_name(path, names)
+}
+
 /// Whether the file is previewed as text under the current configuration. The
-/// `Enable Text Preview` toggle is checked first, so turning text previews off
-/// leaves the lists alone and turning them back on restores them.
+/// `Text` gate is checked first, so turning text previews off leaves the lists
+/// alone and turning them back on restores them.
 pub fn is_text_file(path: &Path) -> bool {
     CONFIG
         .lock()
         .map(|config| {
             config.text_preview_enabled
-                && (matches_configured_extension(path, &config.text_extensions)
-                    || matches_configured_name(path, &config.text_names))
+                && matches_text_lists(path, &config.text_extensions, &config.text_names)
         })
         .unwrap_or(false)
 }

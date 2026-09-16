@@ -1,10 +1,10 @@
-use crate::config::TriggerKeyMode;
+use crate::config::{PreviewType, TriggerKeyMode};
 use crate::pdf_preview::is_pdf_file;
 use crate::preview_window::{
     cursor_preview_hover, hide_preview, kill_stray_video_process, preview_screen_rect,
     show_preview, show_preview_keyboard, text_scroll_pointer_hold, PreviewCursorHover,
 };
-use crate::text_formats::is_text_file;
+use crate::text_formats::matches_text_lists;
 use crate::video_formats::is_video_file;
 use crate::wheel_input;
 use crate::{CONFIG, RUNNING};
@@ -574,8 +574,32 @@ fn is_image_file(path: &PathBuf) -> bool {
         .unwrap_or(false)
 }
 
+/// Whether a preview may be shown for `path`: the kind of preview it would get,
+/// and whether that kind is switched on in the tray's `Toggle Preview Types`
+/// submenu.
+///
+/// The kinds are asked the way the renderer asks them — a video first, then a
+/// PDF, then the text lists, then the image extensions — so the two cannot
+/// disagree about what a file is. A video goes first because only its content
+/// settles the extensions it shares with text: a `.ts` carrying MPEG-TS packets
+/// is a video however the gates stand, and one that does not is the TypeScript
+/// source the text lists claim.
 fn is_media_file(path: &PathBuf) -> bool {
-    is_image_file(path) || is_video_file(path) || is_pdf_file(path) || is_text_file(path)
+    let Ok(config) = CONFIG.lock() else {
+        return false;
+    };
+
+    if is_video_file(path) {
+        return PreviewType::Videos.enabled_in(&config);
+    }
+    if is_pdf_file(path) {
+        return PreviewType::Pdf.enabled_in(&config);
+    }
+    if matches_text_lists(path, &config.text_extensions, &config.text_names) {
+        return PreviewType::Text.enabled_in(&config);
+    }
+
+    is_image_file(path) && PreviewType::Images.enabled_in(&config)
 }
 
 fn same_path(a: &PathBuf, b: &PathBuf) -> bool {
