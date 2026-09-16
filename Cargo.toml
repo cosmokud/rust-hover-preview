@@ -30,11 +30,10 @@ windows = { version = "0.58", features = [
     "Win32_UI_Accessibility",
     "Win32_System_Ole",
     "Win32_System_Variant",
+    "Win32_System_WinRT",
     "Win32_Media_MediaFoundation",
     "Win32_Graphics_Direct3D11",
     "Win32_Graphics_Dxgi_Common",
-    # WinRT namespaces: PDF first-page rendering through the PDF engine that
-    # ships with Windows (Windows.Data.Pdf) instead of a bundled renderer.
     "Foundation",
     "Data_Pdf",
     "Storage_Streams",
