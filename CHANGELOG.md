@@ -15,6 +15,7 @@
 - Search results that share a file name each preview their own file.
 - A search result that lives in another folder previews from the keyboard too, not only under the pointer.
 - A Details or Content row previews from anywhere on it, not only from its text.
+- A keyboard preview of a Content view row is placed in the empty tail past the row's last column — the edge the row's own text stops at, read from the view — instead of in the middle of the display, and the space to the right of the columns is what sizes it.
 - A search result previews in any tab of an Explorer window, and follows the tab when it changes.
 - Bumped version to 0.2.3 in Cargo.toml and Cargo.lock
 
