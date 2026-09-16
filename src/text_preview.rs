@@ -599,6 +599,10 @@ struct DocKey {
     modified: Option<SystemTime>,
     len: u64,
     theme: TextTheme,
+    /// Which reading of a user's theme file the document was styled against. The
+    /// bundled themes cannot change while the process runs, so only a file theme
+    /// carries one, and the same file read again is a different document.
+    theme_generation: u64,
     markdown_mode: MarkdownMode,
 }
 
@@ -657,6 +661,10 @@ fn document(path: &Path, options: TextPreviewOptions) -> Option<Arc<CachedDocume
         modified: metadata.modified().ok(),
         len: metadata.len(),
         theme: options.theme,
+        theme_generation: match options.theme {
+            TextTheme::Custom(_) => text_theme::generation(),
+            _ => 0,
+        },
         markdown_mode: options.markdown_mode,
     };
 

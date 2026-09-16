@@ -9,6 +9,7 @@ mod startup;
 mod text_formats;
 mod text_preview;
 mod text_theme;
+mod theme_files;
 mod tray;
 mod video_formats;
 mod wheel_input;
