@@ -3159,6 +3159,88 @@ struct FocusedItemInfo {
     rect: RECT,
 }
 
+/// Whether a path is the file an Explorer item's name stands for. The name a view
+/// shows is compared whole first, and — when the name carries no extension of its
+/// own, because the view hides it — to the path's stem. Two files that share a
+/// stem but differ in extension are two files, so a name that does carry one only
+/// matches the same extension, or a sibling in the JPEG family, which is the one
+/// Explorer can label a file with instead of the extension it is stored under.
+fn path_matches_item_name(path: &Path, item_name: &str) -> bool {
+    let item_name = item_name.trim();
+    if item_name.is_empty() {
+        return false;
+    }
+
+    let full_name_matches = path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .map(|file_name| file_name.eq_ignore_ascii_case(item_name))
+        .unwrap_or(false);
+    if full_name_matches {
+        return true;
+    }
+
+    let (Some(item_stem), Some(path_stem)) = (
+        Path::new(item_name).file_stem().and_then(|s| s.to_str()),
+        path.file_stem().and_then(|s| s.to_str()),
+    ) else {
+        return false;
+    };
+    if !item_stem.eq_ignore_ascii_case(path_stem) {
+        return false;
+    }
+
+    match Path::new(item_name).extension().and_then(|s| s.to_str()) {
+        None => true,
+        Some(item_ext) => {
+            let item_ext = item_ext.to_ascii_lowercase();
+            path.extension()
+                .and_then(|s| s.to_str())
+                .map(|path_ext| {
+                    let path_ext = path_ext.to_ascii_lowercase();
+                    item_ext == path_ext
+                        || (is_jpeg_extension(&item_ext) && is_jpeg_extension(&path_ext))
+                })
+                .unwrap_or(false)
+        }
+    }
+}
+
+/// The path a focused Explorer element carries, when what it carries is the item
+/// it names.
+///
+/// A result from a search that spans folders is why this exists: its name is only
+/// what the file is called, and every lookup that could turn a name into a path
+/// searches the folders the results have in common, which is not the folder the
+/// file is in. The element does carry the path — in the same accessible value the
+/// pointer path reads a result's path from — so the keyboard path asks for it
+/// there too, and takes it only when it names the item: a value belongs to the
+/// element, and an element that is not the item cannot claim it.
+fn focused_item_media_path(element: &IUIAutomationElement, item_name: &str) -> Option<PathBuf> {
+    unsafe {
+        let pattern = element
+            .GetCurrentPatternAs::<IUIAutomationLegacyIAccessiblePattern>(
+                UIA_LegacyIAccessiblePatternId,
+            )
+            .ok()?;
+
+        let candidates = [
+            pattern.CurrentValue().ok(),
+            pattern.CurrentDescription().ok(),
+        ];
+
+        for candidate in candidates.into_iter().flatten() {
+            if let Some(path) = resolve_media_path_from_text(&candidate.to_string()) {
+                if path_matches_item_name(&path, item_name) {
+                    return Some(path);
+                }
+            }
+        }
+    }
+
+    None
+}
+
 /// Get the currently focused/selected file in Explorer using UI Automation.
 /// UI Automation is far more reliable than MSAA IAccessible for modern Explorer.
 fn get_focused_explorer_item(automation: &IUIAutomation) -> Option<FocusedItemInfo> {
@@ -3193,6 +3275,19 @@ fn get_focused_explorer_item(automation: &IUIAutomation) -> Option<FocusedItemIn
                     rect,
                 });
             }
+        }
+
+        // A result whose file is not in the folder it was found under: the name
+        // cannot name it, and the element's own value can — see
+        // `focused_item_media_path`. The pointer path reads the same value for the
+        // same result, which is why hovering one works while the keyboard needed
+        // this: a search that spans folders has no single folder to look a name up
+        // in, so the path has to come from the item itself.
+        if let Some(path) = focused_item_media_path(&focused, &name) {
+            return Some(FocusedItemInfo {
+                result: AccessibilityResult::FullPath(path),
+                rect,
+            });
         }
 
         Some(FocusedItemInfo {
