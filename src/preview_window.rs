@@ -228,7 +228,10 @@ static VIDEO_GEOMETRY_CACHE: Lazy<Mutex<HashMap<PathBuf, VideoGeometry>>> =
 #[derive(Clone)]
 pub enum PreviewMessage {
     Show(PathBuf, i32, i32),
-    ShowKeyboard(PathBuf, i32, i32, i32, i32),
+    /// A preview of the focused item, whose box comes with it and — for an item
+    /// that draws less than that box holds — where the item's own text stops, which
+    /// is the edge its preview is placed from. See `compute_keyboard_layout`.
+    ShowKeyboard(PathBuf, i32, i32, i32, i32, Option<i32>),
     Hide,
     Refresh,
     /// A preview type was switched on or off. Only a preview whose own kind is
@@ -558,6 +561,7 @@ pub fn show_preview_keyboard(
     item_top: i32,
     item_right: i32,
     item_bottom: i32,
+    content_right: Option<i32>,
 ) {
     if let Ok(sender) = PREVIEW_SENDER.lock() {
         if let Some(ref tx) = *sender {
@@ -567,6 +571,7 @@ pub fn show_preview_keyboard(
                 item_top,
                 item_right,
                 item_bottom,
+                content_right,
             ));
         }
     }
@@ -4172,14 +4177,20 @@ fn compute_mouse_layout(
 
 /// The least room beside an item a keyboard preview will squeeze into before it
 /// stops treating the item as something to sit beside. Below this the free space
-/// past the item's edge is a sliver, and the preview is placed from the item's
-/// middle instead — see `compute_keyboard_layout`.
+/// past the item's edge — or past a row's own content — is a sliver, and the
+/// preview is placed from the item's middle instead — see `compute_keyboard_layout`.
 const MIN_BESIDE_ROOM_PX: i32 = 64;
 
 /// Compute preview layout for keyboard hover (relative to item bounding rect)
 /// Positions the preview so it doesn't block the selected file item
+///
+/// `content_right` is where the item's own text stops, for an item that draws less
+/// than the box it is given — Content view draws every row that way, and the hook
+/// reads the edge off the row's text (see `explorer_hook::item_content_right`).
+/// Every other item draws what its box says and passes `None`.
 fn compute_keyboard_layout(
     item_rect: (i32, i32, i32, i32),
+    content_right: Option<i32>,
     orig_dims: (u32, u32),
     follow_cursor: bool,
     preview_scale: PreviewScale,
@@ -4190,21 +4201,80 @@ fn compute_keyboard_layout(
     let (orig_w, orig_h) = (orig_dims.0 as i32, orig_dims.1 as i32);
     let desired_scale = preview_scale.target_scale().unwrap_or(f32::INFINITY);
 
-    // What the placement is anchored at: the item's own edges for a box, and its
-    // *middle* for a row. An item far wider than it is tall and at least half the
-    // display across is a row — Content view draws every item that way, with the
-    // name and details at the row's left end and the rest of the row empty — and
-    // there is nothing *beside* a row to place a preview in or grow one from: what
-    // its edges leave is the space the view itself is not using (the navigation pane
-    // on one side, the window's edge on the other), which is where a preview ends up
-    // as a sliver standing next to the list. Anchoring at the middle is what the
-    // mouse path does with the cursor, so a row is read the way a hover over it is,
-    // and the preview is allowed to cover the rest of the row.
+    // An item far wider than it is tall and at least half the display across is a
+    // row of the list — Content view draws every item that way, as a box as wide as
+    // the view with the name and the columns written into its left end.
     let item_width = (item_right - item_left).max(0);
     let item_height = (item_bottom - item_top).max(1);
     let display_width = (bounds.right - bounds.left).max(1);
     let row_shaped = item_width >= item_height * 4 && item_width * 2 >= display_width;
 
+    // What is *beside* a row is not what its edges leave: the room past the row's
+    // right edge is the space the view itself is not using — a sliver at the
+    // window's edge, which is where a preview squeezed beside a row used to land.
+    // The room a row really offers is the empty tail past its own content, and a
+    // keyboard preview is placed in it: just past where the row's text stops, at
+    // the row's own line, sized by the tail and the display's height. That is the
+    // placement a box item gets past its right edge, with the row's content edge
+    // standing in for the box's — which is also what makes it the same placement
+    // Details rows get, since a Details row's box is the width of its columns.
+    //
+    // A row with no tail — a narrow view, a name long enough to fill it — is left
+    // to the placement below, which anchors it at its middle: there is nowhere
+    // beside it to put a preview, and the display's own room is all there is.
+    if row_shaped {
+        if let Some(content_right) = content_right.filter(|right| {
+            *right > item_left && bounds.right - *right - gap >= MIN_BESIDE_ROOM_PX
+        }) {
+            let max_width = (bounds.right - content_right - gap).max(1) as u32;
+            let room_below = bounds.bottom - item_bottom - gap;
+            let room_above = item_top - bounds.top - gap;
+            // Follow Cursor grows the preview away from the row — from below it
+            // when the larger room is there, from above it when it is not — while
+            // Best Position centres it on the row, the way the mouse path centres
+            // one on the cursor's line.
+            let max_height = if follow_cursor {
+                room_below.max(room_above).max(1) as u32
+            } else {
+                bounds.height().max(1) as u32
+            };
+
+            let (preview_w, preview_h) = scale_dimensions(
+                orig_dims.0,
+                orig_dims.1,
+                max_width,
+                max_height,
+                preview_scale,
+            );
+            if preview_w == 0 || preview_h == 0 {
+                return None;
+            }
+
+            let pos_x = content_right + gap;
+            let pos_y = if !follow_cursor {
+                centered_top((item_top + item_bottom) / 2, preview_h as i32, bounds)
+            } else if room_below >= room_above {
+                item_bottom + gap
+            } else {
+                item_top - gap - preview_h as i32
+            };
+
+            return Some(PreviewLayout {
+                pos_x,
+                pos_y,
+                max_width,
+                max_height,
+                preview_w,
+                preview_h,
+            });
+        }
+    }
+
+    // What the placement is anchored at: the item's own edges for a box, and its
+    // *middle* for a row that leaves no tail to be placed in (see above). Anchoring
+    // at the middle is what the mouse path does with the cursor, so such a row is
+    // read the way a hover over it is, and the preview is allowed to cover the rest
+    // of it.
     let (anchor_left, anchor_top, anchor_right, anchor_bottom) = if row_shaped {
         let center_x = (item_left + item_right) / 2;
         let center_y = (item_top + item_bottom) / 2;
@@ -4305,14 +4375,15 @@ fn compute_keyboard_layout(
         })
     } else {
         // Best spot mode: choose the left or right side of what the item is anchored
-        // at — its own edges for a box, its middle for a row (see above).
+        // at — its own edges for a box, its middle for a row that leaves no tail to
+        // be placed in (see above).
         //
         // The room a side offers is the room past that anchor, which for a box is
         // what keeps the preview off the file it describes. A box that leaves no room
         // on either side is placed from its middle with the display's own room, since
         // a preview squeezed into what is left past its edge is a sliver while one
-        // placed from its middle takes the size the display allows; a row is already
-        // anchored there.
+        // placed from its middle takes the size the display allows; a row without a
+        // tail is already anchored there.
         let edge_left_width = anchor_left - bounds.left - gap;
         let edge_right_width = bounds.right - anchor_right - gap;
 
@@ -4730,7 +4801,7 @@ pub fn run_preview_window() {
                             }
                         }
                     }
-                    PreviewMessage::ShowKeyboard(path, il, it, ir, ib) => {
+                    PreviewMessage::ShowKeyboard(path, il, it, ir, ib, content_right) => {
                         show_requested = true;
                         // The focused item lives inside the Explorer window, so
                         // its center resolves to that window's monitor.
@@ -4746,6 +4817,7 @@ pub fn run_preview_window() {
                             let is_video = is_video_file(&path);
                             if let Some(layout) = compute_keyboard_layout(
                                 (il, it, ir, ib),
+                                content_right,
                                 orig_dims,
                                 follow_cursor,
                                 preview_scale,
