@@ -1,11 +1,15 @@
 use configparser::ini::Ini;
 use directories::BaseDirs;
+use once_cell::sync::Lazy;
+use std::collections::HashSet;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Mutex;
 
 use crate::text_formats::{
     sanitize_extensions, sanitize_names, DEFAULT_TEXT_EXTENSIONS, DEFAULT_TEXT_NAMES,
 };
+use crate::theme_files;
 
 const CONFIG_SECTION: &str = "settings";
 /// The text-preview extension list lives in its own section so the one long
@@ -144,20 +148,56 @@ impl TransparentBackground {
     }
 }
 
+/// The marker a theme from the `theme` folder is written after in `config.ini`.
+///
+/// It is what keeps a file named after a bundled theme apart from the bundled
+/// theme of that name: `light.tmTheme` in the folder is `custom:light`, while
+/// `light` on its own is Atom One Light however many files the folder holds.
+const CUSTOM_THEME_PREFIX: &str = "custom:";
+
+/// Names already interned for [`TextTheme::custom`], so one file name is one
+/// `&'static str` however many times a menu or a configuration read hands it over.
+static CUSTOM_THEME_NAMES: Lazy<Mutex<HashSet<&'static str>>> =
+    Lazy::new(|| Mutex::new(HashSet::new()));
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TextTheme {
     /// Atom One Light.
     Light,
     /// One Dark Pro.
     Dark,
+    /// A `.tmTheme` file in the `theme` folder, by the name it is listed under.
+    Custom(&'static str),
 }
 
 impl TextTheme {
-    pub fn as_str(self) -> &'static str {
+    /// How the theme is written in `config.ini`.
+    pub fn as_str(self) -> String {
         match self {
-            Self::Light => "light",
-            Self::Dark => "dark",
+            Self::Light => "light".to_string(),
+            Self::Dark => "dark".to_string(),
+            Self::Custom(name) => format!("{CUSTOM_THEME_PREFIX}{name}"),
         }
+    }
+
+    /// The theme a file of that name in the `theme` folder is, interned so that it
+    /// can live in a value the rest of the app copies around.
+    ///
+    /// The folder is listed and `config.ini` is read back whenever either changes,
+    /// and both hand a name over again each time; interning is what keeps the same
+    /// theme one value rather than a fresh string per reading.
+    pub fn custom(name: &str) -> Self {
+        let mut names = match CUSTOM_THEME_NAMES.lock() {
+            Ok(names) => names,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if let Some(name) = names.get(name).copied() {
+            return Self::Custom(name);
+        }
+
+        let name: &'static str = Box::leak(name.to_string().into_boxed_str());
+        names.insert(name);
+        Self::Custom(name)
     }
 
     fn from_str(value: &str) -> Option<Self> {
@@ -166,6 +206,38 @@ impl TextTheme {
             "dark" | "one dark pro" | "one-dark-pro" => Some(Self::Dark),
             _ => None,
         }
+    }
+
+    /// The theme a `config.ini` value names, if this machine has one.
+    ///
+    /// Three spellings, in the order they are read: a name the tray wrote for a
+    /// file (`custom:atom-one-light`), the name of a bundled theme — `light`,
+    /// `dark`, and the long spellings accepted as ever — and a file in the `theme`
+    /// folder written by hand without the marker, its extension optional. A value
+    /// that is none of those leaves the theme as it was, which is what puts the
+    /// default back when a selection stops making sense.
+    fn resolve(value: &str) -> Option<Self> {
+        let value = value.trim();
+
+        if let Some(name) = value.strip_prefix(CUSTOM_THEME_PREFIX) {
+            let name = name.trim();
+            if name.is_empty() {
+                return None;
+            }
+
+            // A file the folder holds under another spelling is still that file,
+            // and the menu lists the spelling the folder uses; a name it does not
+            // hold is kept as written, so the choice survives a file that is
+            // missing for the moment.
+            let name = theme_files::find(name).unwrap_or_else(|| name.to_string());
+            return Some(Self::custom(&name));
+        }
+
+        if let Some(built_in) = Self::from_str(value) {
+            return Some(built_in);
+        }
+
+        theme_files::find(value).map(|name| Self::custom(&name))
     }
 }
 
@@ -304,16 +376,27 @@ impl Default for AppConfig {
 }
 
 impl AppConfig {
+    /// The app's own folder under the roaming profile, holding `config.ini` and
+    /// the `theme` folder beside it.
+    fn folder() -> Option<PathBuf> {
+        BaseDirs::new().map(|dirs| dirs.config_dir().join("rust-hover-preview"))
+    }
+
     pub fn config_path() -> Option<PathBuf> {
-        BaseDirs::new().map(|dirs| {
-            dirs.config_dir()
-                .join("rust-hover-preview")
-                .join("config.ini")
-        })
+        Self::folder().map(|folder| folder.join("config.ini"))
+    }
+
+    /// The folder the user's `.tmTheme` files live in, beside `config.ini`.
+    pub fn theme_dir() -> Option<PathBuf> {
+        Self::folder().map(|folder| folder.join("theme"))
     }
 
     pub fn load() -> Self {
         let mut config = Self::default();
+
+        // The folder exists before anything can list it, so that adding a theme is
+        // dropping a file into a path the app can name rather than creating one.
+        theme_files::ensure();
 
         if let Some(path) = Self::config_path() {
             config.is_first_run = !path.exists();
@@ -403,11 +486,7 @@ impl AppConfig {
                 "preview_scale",
                 Some(self.preview_scale.as_str()),
             );
-            ini.set(
-                CONFIG_SECTION,
-                "theme",
-                Some(self.theme.as_str().to_string()),
-            );
+            ini.set(CONFIG_SECTION, "theme", Some(self.theme.as_str()));
             ini.set(
                 CONFIG_SECTION,
                 "markdown_mode",
@@ -508,7 +587,7 @@ impl AppConfig {
             }
         }
         if let Some(value) = ini.get(CONFIG_SECTION, "theme") {
-            if let Some(theme) = TextTheme::from_str(&value) {
+            if let Some(theme) = TextTheme::resolve(&value) {
                 self.theme = theme;
             }
         }
@@ -688,6 +767,26 @@ mod tests {
         assert_eq!(TextTheme::from_str("solarized"), None);
         assert_eq!(TextTheme::Light.as_str(), "light");
         assert_eq!(TextTheme::Dark.as_str(), "dark");
+    }
+
+    /// A theme from the `theme` folder is written behind a marker, which is what
+    /// keeps it apart from a bundled theme of the same name: a file
+    /// `light.tmTheme` is `custom:light`, and `light` on its own still means Atom
+    /// One Light.
+    #[test]
+    fn a_user_theme_is_written_and_read_back_behind_its_marker() {
+        let custom = TextTheme::custom("atom-one-light");
+
+        assert_eq!(custom.as_str(), "custom:atom-one-light");
+        assert_eq!(TextTheme::resolve("custom:atom-one-light"), Some(custom));
+        assert_eq!(TextTheme::resolve(" custom: atom-one-light "), Some(custom));
+        assert_eq!(TextTheme::resolve("custom:"), None);
+        assert_eq!(TextTheme::resolve("custom:   "), None);
+
+        assert_eq!(TextTheme::resolve("light"), Some(TextTheme::Light));
+        assert_eq!(TextTheme::resolve("atom-one-light"), Some(TextTheme::Light));
+        assert_eq!(TextTheme::resolve("one-dark-pro"), Some(TextTheme::Dark));
+        assert_eq!(TextTheme::resolve(""), None);
     }
 
     #[test]

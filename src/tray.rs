@@ -3,9 +3,13 @@ use crate::config::{
     TriggerKeyMode, DEFAULT_PREVIEW_SCALE_PERCENT, DEFAULT_TEXT_FONT_SCALE_PERCENT,
 };
 use crate::preview_window::refresh_preview;
+use crate::text_theme;
+use crate::theme_files;
 use crate::{startup, CONFIG, RUNNING};
+use once_cell::sync::Lazy;
 use std::os::windows::ffi::OsStrExt;
 use std::sync::atomic::Ordering;
+use std::sync::Mutex;
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -18,9 +22,10 @@ use windows::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, GetCursorPos, LoadImageW, PeekMessageW, PostQuitMessage, RegisterClassExW,
     RegisterWindowMessageW, SetForegroundWindow, TrackPopupMenu, TranslateMessage, CS_HREDRAW,
     CS_VREDRAW, HICON, IMAGE_ICON, LR_DEFAULTSIZE, LR_SHARED, MF_BYCOMMAND, MF_CHECKED, MF_POPUP,
-    MF_STRING, MF_UNCHECKED, MSG, PBT_APMRESUMEAUTOMATIC, PBT_APMRESUMESUSPEND, PM_REMOVE,
-    SW_SHOWNORMAL, TPM_BOTTOMALIGN, TPM_LEFTALIGN, WM_COMMAND, WM_DESTROY, WM_LBUTTONUP,
-    WM_POWERBROADCAST, WM_RBUTTONUP, WM_USER, WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_POPUP,
+    MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MSG, PBT_APMRESUMEAUTOMATIC, PBT_APMRESUMESUSPEND,
+    PM_REMOVE, SW_SHOWNORMAL, TPM_BOTTOMALIGN, TPM_LEFTALIGN, WM_COMMAND, WM_DESTROY,
+    WM_LBUTTONUP, WM_POWERBROADCAST, WM_RBUTTONUP, WM_USER, WNDCLASSEXW, WS_EX_TOOLWINDOW,
+    WS_POPUP,
 };
 
 const WM_TRAYICON: u32 = WM_USER + 1;
@@ -75,11 +80,26 @@ const ID_TRAY_FONT_200: u16 = 1076;
 const ID_TRAY_FONT_250: u16 = 1077;
 const ID_TRAY_FONT_300: u16 = 1078;
 const ID_TRAY_FONT_400: u16 = 1079;
+/// Where the `theme` folder's own items start: one command ID each, in the order
+/// the submenu listed them. The IDs the app uses end at 1079, so these collide
+/// with nothing.
+const ID_TRAY_THEME_CUSTOM_BASE: u16 = 1100;
+/// How many files the theme submenu will list. A menu that long is unusable well
+/// before this, and the cap is what keeps a folder of thousands of files from
+/// running off the end of the command IDs.
+const MAX_TRAY_CUSTOM_THEMES: usize = 200;
 
 const TRAY_CLASS: PCWSTR = w!("RustHoverPreviewTrayClass");
 
 static mut TRAY_HWND: HWND = HWND(std::ptr::null_mut());
 static mut TASKBAR_CREATED: u32 = 0;
+
+/// The custom themes the `Text Preview Theme` submenu last listed, in the order it
+/// listed them: a command ID carries a position, and this is what it was a
+/// position in. The menu can outlive a change to the folder, so a click has to
+/// select the file the item it landed on named rather than whatever is in that
+/// place now.
+static TRAY_CUSTOM_THEMES: Lazy<Mutex<Vec<TextTheme>>> = Lazy::new(|| Mutex::new(Vec::new()));
 
 unsafe extern "system" fn tray_window_proc(
     hwnd: HWND,
@@ -156,6 +176,11 @@ unsafe extern "system" fn tray_window_proc(
                 ID_TRAY_SCALE_25 => set_preview_scale(PreviewScale::Percent(25)),
                 ID_TRAY_THEME_LIGHT => set_theme(TextTheme::Light),
                 ID_TRAY_THEME_DARK => set_theme(TextTheme::Dark),
+                // The `theme` folder's items, by the position the submenu gave
+                // them rather than any position in the folder.
+                cmd if cmd >= ID_TRAY_THEME_CUSTOM_BASE => {
+                    set_theme_from_menu((cmd - ID_TRAY_THEME_CUSTOM_BASE) as usize)
+                }
                 ID_TRAY_MARKDOWN_RENDERED => set_markdown_mode(MarkdownMode::Rendered),
                 ID_TRAY_MARKDOWN_SOURCE => set_markdown_mode(MarkdownMode::Source),
                 ID_TRAY_TEXT_ENABLE => toggle_text_preview_enabled(),
@@ -361,11 +386,26 @@ unsafe fn show_context_menu(hwnd: HWND) {
 
     // Add Text Preview Theme submenu
     let theme = CONFIG.lock().map(|c| c.theme).unwrap_or(TextTheme::Light);
+
+    // The folder is read here rather than once at startup: the files these names
+    // stand for are the user's to add to and to edit, and this is the moment they
+    // are looking at them.
+    text_theme::refresh_custom();
+    let mut custom_themes = theme_files::names();
+    custom_themes.truncate(MAX_TRAY_CUSTOM_THEMES);
+
     let theme_menu = CreatePopupMenu().unwrap();
 
+    // A file theme that no longer loads is painted with the default — see
+    // `text_theme::loaded` — so the default is what is marked while the name it
+    // was chosen under stays in `config.ini`.
+    let marked = match theme {
+        TextTheme::Custom(name) if text_theme::custom(name).is_none() => TextTheme::Light,
+        theme => theme,
+    };
     let theme_flag = |candidate: TextTheme| {
         MF_STRING
-            | if theme == candidate {
+            | if marked == candidate {
                 MF_CHECKED
             } else {
                 MF_UNCHECKED
@@ -383,6 +423,33 @@ unsafe fn show_context_menu(hwnd: HWND) {
         ID_TRAY_THEME_DARK as usize,
         w!("One Dark Pro"),
     );
+
+    if !custom_themes.is_empty() {
+        let _ = AppendMenuW(theme_menu, MF_SEPARATOR, 0, PCWSTR::null());
+    }
+
+    let mut listed = Vec::with_capacity(custom_themes.len());
+    for (index, name) in custom_themes.iter().enumerate() {
+        let theme = TextTheme::custom(name);
+        // `&&` is how an item asks for a literal ampersand; one on its own
+        // underlines the character after it instead of standing for itself.
+        let label: Vec<u16> = name
+            .replace('&', "&&")
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+        let _ = AppendMenuW(
+            theme_menu,
+            theme_flag(theme),
+            ID_TRAY_THEME_CUSTOM_BASE as usize + index,
+            PCWSTR(label.as_ptr()),
+        );
+        listed.push(theme);
+    }
+    if let Ok(mut items) = TRAY_CUSTOM_THEMES.lock() {
+        *items = listed;
+    }
+
     let _ = AppendMenuW(
         menu,
         MF_STRING | MF_POPUP,
@@ -848,6 +915,20 @@ fn set_theme(theme: TextTheme) {
         config.save();
     }
     refresh_preview();
+}
+
+/// The theme a custom item named, by the position the submenu listed it at. A
+/// position there is no item for — a click that outlived its menu — selects
+/// nothing rather than the wrong theme.
+fn set_theme_from_menu(index: usize) {
+    let theme = TRAY_CUSTOM_THEMES
+        .lock()
+        .ok()
+        .and_then(|themes| themes.get(index).copied());
+
+    if let Some(theme) = theme {
+        set_theme(theme);
+    }
 }
 
 /// Both of these rebuild the visible preview the same way: turning text previews

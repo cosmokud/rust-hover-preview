@@ -17,7 +17,7 @@ Inspired by QTTabBar (QuizoApps) hover preview.
 - Animation memory is bounded by a sliding window rather than the length of the file: the decoder stays a few frames ahead of the playhead and frames already shown are released, so long or large GIF, APNG, and WebP files play to the end and loop instead of stopping early
 - Video previews through FFmpeg (`ffplay` + `ffprobe`)
 - PDF previews of the first page, rendered by the PDF engine already built into Windows — no bundled renderer, no extra install, and no new dependency
-- Text and code previews colored by syntax definition, with Atom One Light and One Dark Pro bundled as the light and dark themes, and Markdown shown as the document it describes (or as highlighted source, from the tray)
+- Text and code previews colored by syntax definition, with Atom One Light and One Dark Pro bundled as the light and dark themes — or any `.tmTheme` file dropped into the app's own `theme` folder — and Markdown shown as the document it describes (or as highlighted source, from the tray)
 - Tray controls for enable/disable, delay, positioning, scaling, startup, off-trigger key, volume, text previews, text theme, text size, and Markdown rendering
 - Explorer Shell view detection, folder caching, and path normalization for reliable hover matching
 - Topmost, non-activating preview windows designed to avoid focus stealing
@@ -65,6 +65,10 @@ The files a repository is recognized by usually have no extension to match: `LIC
 `.nfo` files are read as CP437 art with their ANSI colors preserved, toned to the page they are drawn on so light and dark themes are both readable.
 
 Text previews are sized to their content rather than to the image scaling setting: a two-line file gets a two-line preview, a long file takes as much of the display as the space beside the cursor allows, and the font is a fixed size scaled by the display's DPI rather than a stretched image. `Text Preview Font Size` sets that size — the glyphs, the line spacing and the margin scale together, so 200% is the same page twice the size and shows fewer lines, not the same lines stretched. Code, markup, and NFO art keep their columns and are clipped at the right edge; prose — a readme, a log, an `.rtf` — wraps.
+
+### Themes
+
+Text and code are colored by one of two bundled TextMate themes — Atom One Light (the default) and One Dark Pro — or by any TextMate theme you drop into `%APPDATA%\rust-hover-preview\theme`, a folder the app creates on first run. A `.tmTheme` file is listed in the `Text Preview Theme` submenu under its own name without the extension, below the two bundled ones, so `atom-one-light.tmTheme` appears as `atom-one-light` — and a file named after a bundled theme is a theme of its own rather than a replacement for it. The folder is read each time the menu is opened, which is when a file added or edited since the last look takes effect. Nothing in the folder is read until a theme is used, so a shelf of files costs nothing while it sits there, and a file that is missing, unreadable, or not a TextMate theme at all is painted with the default rather than leaving the preview uncolored: its entry keeps its place and its name stays in `config.ini`, so repairing the file brings the theme back the next time the menu is opened.
 
 ### Scrolling a text preview
 
@@ -150,7 +154,7 @@ ffprobe -version
 - **Preview Position**: `Follow Cursor` or `Best Position` — `Best Position` places the preview beside the cursor (or the focused item) and centers it on the same line, moving it only as far as a display edge requires, so a small preview appears where you are looking rather than in the middle of the screen. `Follow Cursor` places it in the roomiest quadrant around the cursor.
 - **Enable Text Preview**: Turn text and code previews on or off, ahead of the extension list — turning them off leaves the list alone and turning them back on restores it.
 - **Enable Text Preview Full Mode**: Whether a text preview can be worked with — scrolled, selected from and copied, and rested on by the pointer — or is only something to look at. Off by default.
-- **Text Preview Theme**: `Atom One Light (Default)` or `One Dark Pro` — the colors text and code previews are drawn with. Changing it re-renders the preview that is on screen.
+- **Text Preview Theme**: `Atom One Light (Default)`, `One Dark Pro`, and every `.tmTheme` file in `%APPDATA%\rust-hover-preview\theme`, listed under its own file name (`atom-one-light`, `one-dark-pro`) below the two bundled themes. The folder is read every time the menu opens, so a file added or edited while the app runs is listed and used without a restart. A file that cannot be read or is not a TextMate theme is painted with the default theme instead; its item stays in the list, so repairing the file brings it back. Changing the theme re-renders the preview that is on screen.
 - **Text Preview Font Size**: `100%`, `125% (Default)`, `150%`, `175%`, `200%`, `250%`, `300%`, `400%` — the size the text is drawn at, for rendered Markdown as much as for source files. The whole page scales with it (glyphs, line spacing and margin together), so a bigger preview holds fewer lines rather than the same lines stretched. Any hand-edited value in `config.ini` is honored, including one between these steps.
 - **Markdown Preview**: `Rendered (Default)` shows a `.md` file as the document it describes, `Highlighted Source` shows the markup itself with Markdown syntax highlighting.
 - **Preview Scaling**: `Fit to Screen`, `400%`, `300%`, `200%`, `150%`, `100% (Default)`, `50%`, `25%` — sizes the preview relative to the image or video's native resolution instead of always showing it verbatim. `Fit to Screen` enlarges the preview as much as the display allows. Any scale that would extend past the screen edge is reduced to fit, so the preview is never clipped, in both `Follow Cursor` and `Best Position` modes. PDF and text previews size themselves (a PDF page is always fit to screen, and text is always drawn at its own font size), so this setting does not apply to them.
@@ -197,7 +201,7 @@ extensions=txt,text,log,nfo,md,markdown,json,toml,yaml,py,js,ts,rs,...
 names=license,notice,makefile,dockerfile,gitignore,.gitattributes,...
 ```
 
-- `theme` is the color theme for text and code previews: `light` (Atom One Light, the default) or `dark` (One Dark Pro). `atom one light` and `one dark pro` are accepted as well.
+- `theme` is the color theme for text and code previews: `light` (Atom One Light, the default) or `dark` (One Dark Pro). `atom one light` and `one dark pro` are accepted as well. A theme from the `theme` folder is written by the tray as `custom:<name>`, the marker being what keeps a file named `light.tmTheme` apart from the bundled `light` and the other way round; a value you write yourself is read on the same terms — a bundled name means the bundled theme, and any other name means the file of that name in the `theme` folder (extension optional, case not significant), with a name that is neither leaving the theme as it was.
 - `markdown_mode` is how `.md` files are drawn: `rendered` (the default document view) or `source` (the markup with syntax highlighting).
 - `text_preview_enabled` is the `Enable Text Preview` toggle: `false` stops text previews without touching the extension list.
 - `text_preview_full_mode` is the `Enable Text Preview Full Mode` toggle. It is off unless it is turned on, because it changes what a preview does rather than what it shows: `true` lets a text preview be scrolled, selected from and copied.
@@ -244,7 +248,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full system overview.
 - Uses GDI for image rendering in a layered topmost preview window
 - Colors text and code with the TextMate grammars `bat` uses (through `syntect` and `two-face`) and lays the styled lines out into a GDI surface with Consolas, the same layered window, and the same frame shape images arrive in
 - Renders Markdown with `pulldown-cmark`, with the theme's own colors asked for by scope, so a rendered document and a highlighted source file share one palette
-- Bundles Atom One Light and One Dark Pro as TextMate themes converted from their VS Code sources (see `assets/themes/NOTICE.md`)
+- Bundles Atom One Light and One Dark Pro as TextMate themes converted from their VS Code sources (see `assets/themes/NOTICE.md`), and reads any `.tmTheme` dropped into `%APPDATA%\rust-hover-preview\theme` with the same reader
 - Uses Google's libwebp through `webp-animation` for animated WebP decoding
 - Uses `directories` for Windows roaming configuration paths
 - Uses `ffprobe` for video dimensions and `ffplay` for video playback
