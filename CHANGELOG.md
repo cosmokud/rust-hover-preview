@@ -9,6 +9,7 @@
 - Removed the name-based fallbacks and the search-result indexing behind them: no directory walks, no background scans, no index caches, no MSAA.
 - A file nothing can vouch for is left without a preview rather than guessed at by name.
 - Documentation updated: ARCHITECTURE.md describes the resolution, and the search-results known issue is gone from TODO.md.
+- Text previews wrap long lines instead of cutting them off at the right edge.
 
 ### Fixed
 
