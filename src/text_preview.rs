@@ -755,7 +755,7 @@ fn build_document(path: &Path, options: TextPreviewOptions) -> Option<TextDoc> {
         });
     }
 
-    if is_markdown_extension(extension) && options.markdown_mode == MarkdownMode::Rendered {
+    if is_markdown_extension(&extension) && options.markdown_mode == MarkdownMode::Rendered {
         let mut document = TextDoc {
             line_starts: line_starts(&source.text),
             rendered_lines: None,
@@ -777,7 +777,7 @@ fn build_document(path: &Path, options: TextPreviewOptions) -> Option<TextDoc> {
 
     // NFO files carry ANSI color codes around plain text, so they are built from
     // their own escapes rather than from a syntax definition.
-    if wants_ansi(extension) {
+    if wants_ansi(&extension) {
         return Some(TextDoc {
             line_starts: line_starts(&source.text),
             rendered_lines: None,
@@ -978,8 +978,13 @@ fn wants_ansi(extension: &str) -> bool {
     matches!(extension, "nfo" | "ans" | "asc" | "diz")
 }
 
-fn extension_of(path: &Path) -> &str {
-    path.extension().and_then(|ext| ext.to_str()).unwrap_or("")
+/// The extension `path` is previewed by, lowercased so `.MD` and `.md` are one
+/// extension to every rule that reads it.
+fn extension_of(path: &Path) -> String {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or("")
+        .to_lowercase()
 }
 
 fn text_style(style: &Style, level: u8) -> TextStyle {
@@ -1430,7 +1435,7 @@ fn read_source(path: &Path) -> Option<SourceText> {
     let truncated = bytes.len() as u64 > READ_LIMIT_BYTES;
     bytes.truncate(READ_LIMIT_BYTES as usize);
 
-    let text = decode_text(&bytes, legacy_encoding(extension_of(path)), truncated)?;
+    let text = decode_text(&bytes, legacy_encoding(&extension_of(path)), truncated)?;
     let text = expand_tabs(&text);
 
     Some(SourceText { text, truncated })

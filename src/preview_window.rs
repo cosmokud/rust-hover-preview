@@ -868,11 +868,22 @@ fn current_media_is_text() -> bool {
 fn effective_preview_scale(path: &Path, preview_scale: PreviewScale) -> PreviewScale {
     if pdf_preview::is_pdf_file(path) {
         PreviewScale::FitToScreen
-    } else if text_formats::is_text_file(path) {
+    } else if is_text_preview(path) {
         PreviewScale::Percent(100)
     } else {
         preview_scale
     }
+}
+
+/// Whether the preview of `path` is a text preview.
+///
+/// The video gate is asked first, because it is the one that settles the
+/// extensions the text list shares with it — `.ts` and `.mts` — by content, and
+/// only it can tell a TypeScript source from the transport stream that goes by the
+/// same name. A file it turns down falls through to the text gate; one it accepts
+/// is a video, which the text renderer would find nothing readable in.
+fn is_text_preview(path: &Path) -> bool {
+    !is_video_file(path) && text_formats::is_text_file(path)
 }
 
 fn effective_frame_delay_ms(media_type: &MediaType, source_delay_ms: u32) -> u32 {
@@ -2694,7 +2705,7 @@ fn get_media_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
 /// can fit it into the space beside the cursor, and the text renderer is handed
 /// the box that comes out of that.
 fn media_dimensions(path: &PathBuf, bounds: ScreenBounds, dpi: u32) -> Option<(u32, u32)> {
-    if text_formats::is_text_file(path) {
+    if is_text_preview(path) {
         let cap_width = (bounds.right - bounds.left).max(1) as u32;
         let cap_height = bounds.height().max(1) as u32;
         return text_preview::measure(path, cap_width, cap_height, dpi, current_text_options());
@@ -3595,6 +3606,35 @@ fn has_text_selection() -> bool {
         .unwrap_or(false)
 }
 
+/// Select everything the frame shows: the whole of a document that fits on one
+/// page, and the screenful a longer one is showing.
+///
+/// The range is the one a Copy with nothing selected already takes, so what the
+/// highlight covers is what that Copy puts on the clipboard.
+unsafe fn select_all_text_preview(hwnd: HWND) {
+    let Ok(mut media) = CURRENT_MEDIA.lock() else {
+        return;
+    };
+
+    let Some(state) = media.as_mut().and_then(|media| media.text_state.as_mut()) else {
+        return;
+    };
+    if state.lines.is_empty() {
+        return;
+    }
+
+    state.selection = Some(text_preview::Selection {
+        anchor: (0, 0),
+        caret: (usize::MAX, usize::MAX),
+    });
+
+    // The repaint reads the same state through its own lock, so the guard goes
+    // back before it is asked to draw.
+    drop(media);
+
+    repaint_text_preview(hwnd);
+}
+
 /// What a Copy takes from the preview on screen: what is selected, or — with
 /// nothing selected — everything the frame shows.
 fn text_preview_clipboard_text() -> Option<String> {
@@ -3671,9 +3711,10 @@ fn text_preview_copy_requested() -> bool {
     }
 }
 
-/// The one thing the preview's own menu does: put what is selected on the
-/// clipboard.
-const ID_TEXT_PREVIEW_COPY: usize = 1;
+/// What the preview's own menu offers: the whole frame selected, and what is
+/// selected put on the clipboard.
+const ID_TEXT_PREVIEW_SELECT_ALL: usize = 1;
+const ID_TEXT_PREVIEW_COPY: usize = 2;
 
 /// Show the preview's context menu at a point in window coordinates and act on
 /// what it returns.
@@ -3686,6 +3727,12 @@ unsafe fn show_text_preview_menu(hwnd: HWND, x: i32, y: i32) {
         return;
     };
 
+    let _ = AppendMenuW(
+        menu,
+        MF_STRING,
+        ID_TEXT_PREVIEW_SELECT_ALL,
+        w!("Select All"),
+    );
     let _ = AppendMenuW(menu, MF_STRING, ID_TEXT_PREVIEW_COPY, w!("Copy"));
 
     let mut point = POINT { x, y };
@@ -3708,8 +3755,12 @@ unsafe fn show_text_preview_menu(hwnd: HWND, x: i32, y: i32) {
 
     let _ = DestroyMenu(menu);
 
-    if command.0 as usize == ID_TEXT_PREVIEW_COPY {
-        copy_text_preview(hwnd);
+    match command.0 as usize {
+        ID_TEXT_PREVIEW_SELECT_ALL => select_all_text_preview(hwnd),
+        ID_TEXT_PREVIEW_COPY => {
+            copy_text_preview(hwnd);
+        }
+        _ => {}
     }
 }
 
@@ -4613,7 +4664,7 @@ pub fn run_preview_window() {
                     // for it: text is never scaled to fill a box, so the planned
                     // box is the box it draws into. Every other format is loaded
                     // against the free space it may be scaled within.
-                    let (load_width, load_height) = if text_formats::is_text_file(&path) {
+                    let (load_width, load_height) = if is_text_preview(&path) {
                         (preview_w, preview_h)
                     } else {
                         (max_width, max_height)

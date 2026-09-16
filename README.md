@@ -36,6 +36,8 @@ A Windows 11 tray app inspired by QTTabBar that shows instant File Explorer prev
 
 Extensionless repository files such as `LICENSE`, `Makefile`, `Dockerfile`, and `.gitignore` are also supported. Text previews show the first screenful. Markdown can be rendered or shown as source. Full mode adds scrolling, selection, and copy; it is off by default.
 
+You can add custom extensions via `config.ini`.
+
 ### Videos (FFmpeg required)
 
 `mp4`, `webm`, `mkv`, `avi`, `mov`, `wmv`, `flv`, `m4v`, `ts`, `m2ts`, `mts`, `mpg`, `mpeg`, `vob`, `3gp`, `ogv`, `rmvb`, `asf`, `divx`, `f4v`, `mxf`, `dv`. FFmpeg-supported containers and codecs generally work. `.ts` and `.mts` are previewed as video only when they contain MPEG-TS packets.
