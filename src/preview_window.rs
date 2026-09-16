@@ -1,6 +1,7 @@
 use crate::config::{
     sanitize_webp_playback_fps, MarkdownMode, PreviewScale, TextTheme, TransparentBackground,
-    DEFAULT_PREVIEW_SCALE_PERCENT, DEFAULT_TEXT_FONT_SCALE_PERCENT, DEFAULT_WEBP_PLAYBACK_FPS,
+    DEFAULT_PREVIEW_SCALE_PERCENT, DEFAULT_TEXT_FONT_SCALE_PERCENT,
+    DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS, DEFAULT_WEBP_PLAYBACK_FPS,
 };
 use crate::pdf_preview;
 use crate::text_formats;
@@ -107,8 +108,8 @@ const TEXT_SCROLL_ANCHOR_SLACK_PIXELS: i32 = 1;
 /// press in the text is the start of a selection rather than a scroll.
 const TEXT_SCROLL_BAR_PRESS_SLACK_PIXELS: f32 = 8.0;
 
-/// How far past the far edge of a text preview the hold region reaches, in logical
-/// pixels.
+/// The grace `text_scroll_far_edge_grace_pixels` asks for past the far edge of a
+/// text preview, at the display the preview is on.
 ///
 /// That edge is the one the pointer arrives at last, and the one it can overshoot:
 /// crossing the gap to reach the preview is a movement towards it, so the hand is
@@ -117,13 +118,21 @@ const TEXT_SCROLL_BAR_PRESS_SLACK_PIXELS: f32 = 8.0;
 /// A few pixels past it would otherwise take the preview down with it, which is
 /// what this is for. It goes on the far side whichever side that is: the preview to
 /// the right of the cursor is the common case, and then it is the right edge.
-const TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS: f32 = 30.0;
+///
+/// The configured distance is in logical pixels, so it is the same distance under a
+/// hand on any display: a margin that is comfortable at 100% is a sliver at 200%,
+/// and the scrollbar it is there for scales with the text.
+fn far_edge_grace(dpi: u32, configured_pixels: f32) -> i32 {
+    (configured_pixels * dpi as f32 / 96.0).round() as i32
+}
 
-/// `TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS` at the display the preview is on. A margin
-/// that is comfortable at 100% is a sliver at 200%, and the scrollbar it is there
-/// for scales with the text.
-fn far_edge_grace(dpi: u32) -> i32 {
-    (TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS * dpi as f32 / 96.0).round() as i32
+/// The grace as `config.ini` has it, so a hand-edited distance is used as written
+/// and a config that names none keeps the default.
+fn configured_far_edge_grace_pixels() -> f32 {
+    CONFIG
+        .lock()
+        .map(|config| config.text_scroll_far_edge_grace_pixels)
+        .unwrap_or(DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS)
 }
 
 /// A region on screen: left, top, right, bottom.
@@ -3231,7 +3240,7 @@ unsafe fn publish_text_scroll_keep_alive(hwnd: HWND) {
         Some(text_scroll_hold_region(
             preview,
             anchor,
-            far_edge_grace(dpi),
+            far_edge_grace(dpi, configured_far_edge_grace_pixels()),
         ))
     });
 
@@ -4935,14 +4944,21 @@ mod tests {
         assert!(region.0 > anchor.0 - 2);
     }
 
-    /// The grace is measured in logical pixels, so it is the same distance under a
-    /// hand on any display; the scrollbar it is there for scales with the text.
+    /// The configured grace is measured in logical pixels, so it is the same
+    /// distance under a hand on any display; the scrollbar it is there for scales
+    /// with the text.
     #[test]
     fn the_far_edge_grace_follows_the_display_dpi() {
-        assert_eq!(super::far_edge_grace(96), 30);
-        assert_eq!(super::far_edge_grace(120), 38);
-        assert_eq!(super::far_edge_grace(144), 45);
-        assert_eq!(super::far_edge_grace(192), 60);
+        assert_eq!(super::far_edge_grace(96, 40.0), 40);
+        assert_eq!(super::far_edge_grace(120, 40.0), 50);
+        assert_eq!(super::far_edge_grace(144, 40.0), 60);
+        assert_eq!(super::far_edge_grace(192, 40.0), 80);
+
+        // Any distance the configuration names takes the same road, and the one
+        // that ends the grace where the preview does stays zero.
+        assert_eq!(super::far_edge_grace(96, 12.5), 13);
+        assert_eq!(super::far_edge_grace(192, 12.5), 25);
+        assert_eq!(super::far_edge_grace(192, 0.0), 0);
     }
 
     /// Full mode is what a preview keeps its state for: with it off there is
