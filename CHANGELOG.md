@@ -17,6 +17,7 @@
 - A Details or Content row previews from anywhere on it, not only from its text.
 - A keyboard preview of a Content view row is placed in the empty tail past the row's last column — the edge the row's own text stops at, read from the view — instead of in the middle of the display, and the space to the right of the columns is what sizes it.
 - A search result previews in any tab of an Explorer window, and follows the tab when it changes.
+- Hovering a folder, an executable or any other item this app does not preview no longer shows another tab's file.
 - Bumped version to 0.2.3 in Cargo.toml and Cargo.lock
 
 ## [0.2.2] - 2026-09-16

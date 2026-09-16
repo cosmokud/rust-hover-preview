@@ -12,7 +12,7 @@ use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::os::windows::ffi::OsStringExt;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{atomic::Ordering, Mutex};
 use std::time::{Duration, Instant};
 use windows::core::{w, Interface, IUnknown, VARIANT};
@@ -550,10 +550,6 @@ fn should_probe_preview_hover(
     suppress_until_cursor_leaves: bool,
 ) -> bool {
     !pointer_frozen && (mouse_preview_active || suppress_until_cursor_leaves)
-}
-
-fn is_jpeg_extension(ext: &str) -> bool {
-    matches!(ext, "jpg" | "jpeg" | "jpe" | "jfif")
 }
 
 fn is_image_file(path: &PathBuf) -> bool {
@@ -1096,36 +1092,6 @@ fn is_valid_file_path(s: &str) -> bool {
     path.is_absolute()
 }
 
-/// Whether a name could be a file this app previews: one whose extension is in a
-/// list the app knows, or a name the text lists carry.
-///
-/// A view can put text under the pointer that is not a file's name — the metadata
-/// line of a Content view row, the value of a column — and the accessibility tree
-/// reports it the same way it reports a file name. Taking it for the file under the
-/// pointer sends every lookup below after a file called `12 KB` and finds nothing,
-/// which is a preview that never appears even though a file *is* under the pointer;
-/// skipping it lets the walk go on to the item that carries the real name. A name
-/// that fails this is not a file the app could preview even if a folder held it, so
-/// nothing is lost by passing it over.
-fn name_could_be_previewed(name: &str) -> bool {
-    let name = name.trim();
-    if name.is_empty() {
-        return false;
-    }
-
-    let path = PathBuf::from(name);
-    if is_image_file(&path) || is_video_file(&path) || is_pdf_file(&path) {
-        return true;
-    }
-
-    match CONFIG.lock() {
-        Ok(config) => matches_text_lists(&path, &config.text_extensions, &config.text_names),
-        // Without the text lists the answer is unknown, and a name that is not a
-        // file is harmless: the lookups that follow simply find nothing.
-        Err(_) => true,
-    }
-}
-
 /// The item the pointer is over, as the view's accessibility provider reports it,
 /// or nothing when the pointer is over no item at all.
 fn uia_item_from_point(resolver: &ItemResolver, point: POINT) -> Option<HoveredItem> {
@@ -1503,44 +1469,87 @@ fn shell_window_count(resolver: &ItemResolver) -> Option<i32> {
 /// The view belongs to a window — the frame the pointer is over, or the one the
 /// focused item is drawn in — and a window that holds tabs registers one Shell
 /// window per tab, all of them answering with the frame's own window, so the frame
-/// names a set of views and not one. Which of them it is, is settled by the item:
-/// each candidate is asked for the file at the item's position under the item's
-/// name, and a view holding some other folder's items has nothing there to answer
-/// with. What two of them do answer has to agree: two tabs showing the same folder
-/// are one answer and either of them is the right one, while two tabs whose items
-/// differ are a question the item cannot settle — and no answer is better than the
-/// wrong tab's file.
-fn item_file_path(resolver: &mut ItemResolver, root_key: isize, item: &HoveredItem) -> Option<PathBuf> {
+/// names a set of views and not one. Which of them it is, is settled in two steps
+/// that must not be confused with each other.
+///
+/// First the item: a candidate view is asked whether the item at that position is
+/// the item we are on, by name and nothing else. That is an identity question, and
+/// a folder answers it exactly as a file does — what the item *is* says nothing
+/// about which view holds it. Then, and only for the views that claimed the item,
+/// the file: the path the Shell hands over, gated to a file this app previews. A
+/// view that holds the item but has no file to show it (a folder, an archive, a
+/// document) is a *match* with nothing to preview, not a view that failed to match
+/// — treating it as the latter is how another tab's file gets shown while a folder
+/// is hovered. What several matches do has to agree: two tabs showing the same
+/// folder are one answer, while tabs that disagree — about the file, or about
+/// whether there is one at all — are a question the item cannot settle, and no
+/// answer is better than the wrong tab's file.
+fn item_file_path(
+    resolver: &mut ItemResolver,
+    root_key: isize,
+    item: &HoveredItem,
+) -> Option<PathBuf> {
     let index = item.index? - 1;
+    let registrations = shell_window_count(resolver);
+
+    // An item with no name cannot be told from another tab's item, so only a window
+    // showing a single view can be answered without one.
+    if item.name.is_empty() && registrations != Some(1) {
+        return None;
+    }
 
     // The view that answered last is asked first, but only while it is the *only*
     // registration for the window: with one view there is no second one for it to
     // disagree with, and a window holding tabs is never answered from the cache —
     // a cached tab is one of several, and the cache cannot say which of them is
     // showing.
-    if shell_window_count(resolver) == Some(1) {
+    if registrations == Some(1) {
         if let Some(answered) = resolver.view.as_ref() {
             if answered.browser_hwnd == root_key && answered.is_current() {
-                if let Some(path) = view_item_file_path(&answered.folder_view, index, &item.name) {
+                if let Some(path) = view_item_media_path(&answered.folder_view, index) {
                     return Some(path);
                 }
             }
         }
     }
 
+    let mut matches = 0usize;
+    let mut matched_without_file = 0usize;
     let mut answer: Option<(AnsweredView, PathBuf)> = None;
+    let mut disagreed = false;
 
     for candidate in folder_views_for_window(resolver, root_key) {
-        let Some(path) = view_item_file_path(&candidate.folder_view, index, &item.name) else {
+        if !view_item_holds(&candidate.folder_view, index, &item.name) {
+            continue;
+        }
+        matches += 1;
+
+        let Some(path) = view_item_media_path(&candidate.folder_view, index) else {
+            // This view holds the item, and the item is not a file to preview.
+            matched_without_file += 1;
             continue;
         };
 
         match &answer {
             None => answer = Some((candidate, path)),
-            Some((_, existing)) if !same_path(existing, &path) => return None,
+            Some((_, existing)) if !same_path(existing, &path) => disagreed = true,
             // Another tab showing the same folder is the same answer.
             Some(_) => {}
         }
+    }
+
+    if matches == 0 {
+        return None;
+    }
+
+    // Tabs that do not agree about what the item is — one holding a file, another
+    // holding a folder, a name that is in both at that position — cannot be told
+    // apart, and either answer could be the wrong tab's.
+    if matched_without_file > 0 && (matches > 1 || disagreed) {
+        return None;
+    }
+    if disagreed {
+        return None;
     }
 
     let (view, path) = answer?;
@@ -1581,21 +1590,39 @@ fn item_display_name_matches(item: &IShellItem, expected_name: &str) -> bool {
     }
 }
 
-/// The file the view's item at `index` stands for, taken from the Shell item the
-/// view itself hands over.
+/// Whether the item at a position in a view is the item that was asked about.
+///
+/// This is the identity question and nothing else: the name the view shows the item
+/// under against the name the accessibility tree reports for it. What the item *is*
+/// is not part of it — a folder goes by its name exactly as a file does, and a view
+/// that holds a folder has to be seen as holding the item, or the tab that owns it
+/// abstains and another tab's file answers in its place. An item with no name to ask
+/// about is taken as held, which the caller has already established can only be
+/// asked of a window showing one view.
+fn view_item_holds(folder_view: &IFolderView2, index: i32, expected_name: &str) -> bool {
+    if index < 0 || expected_name.is_empty() {
+        return true;
+    }
+
+    unsafe {
+        let Ok(item) = folder_view.GetItem::<IShellItem>(index) else {
+            return false;
+        };
+
+        item_display_name_matches(&item, expected_name)
+    }
+}
+
+/// The path a view's item at a position stands for, when it is a file this app
+/// previews.
 ///
 /// The path is the Shell's own answer for the item at that position
-/// (`SIGDN_FILESYSPATH`), not something put together from what the item is
-/// called: a search whose results come from many folders holds any number of
-/// files that share a name, and the position an item holds is the one thing a
-/// shared name cannot take away. The name is still checked against the item's own,
-/// because a list that moved between the two calls would otherwise hand over its
-/// neighbour's path — and an answer that does not agree is no answer at all.
-fn view_item_file_path(
-    folder_view: &IFolderView2,
-    index: i32,
-    expected_name: &str,
-) -> Option<PathBuf> {
+/// (`SIGDN_FILESYSPATH`) — for a search result, the real file wherever it lives,
+/// and for a folder or an item that stands for no file at all, no answer. It is the
+/// *second* question, asked only of the views that first claimed the item: a folder
+/// reaches this point and stops here, which is what keeps the preview of a folder
+/// from being another tab's file.
+fn view_item_media_path(folder_view: &IFolderView2, index: i32) -> Option<PathBuf> {
     if index < 0 {
         return None;
     }
@@ -1603,14 +1630,6 @@ fn view_item_file_path(
     unsafe {
         let item = folder_view.GetItem::<IShellItem>(index).ok()?;
         let path = shell_item_filesystem_path(&item)?;
-
-        if !expected_name.is_empty()
-            && name_could_be_previewed(expected_name)
-            && !item_display_name_matches(&item, expected_name)
-            && !path_matches_item_name(&path, expected_name)
-        {
-            return None;
-        }
 
         normalize_media_path(path).filter(|path| path.is_file())
     }
@@ -1670,11 +1689,16 @@ fn resolve_file_under_cursor(resolver: &mut ItemResolver, point: POINT) -> Optio
     }
 
     // What the item says about itself: a search result carries the file's own path
-    // in its accessible value.
+    // in its accessible value, and a name that is a whole path was come by the same
+    // way.
     if let Some(value) = item.value.as_deref() {
         if let Some(path) = resolve_media_path_from_text(value) {
             return Some(path);
         }
+    }
+
+    if let Some(path) = resolve_media_path_from_text(&item.name) {
+        return Some(path);
     }
 
     None
@@ -2204,53 +2228,6 @@ impl FocusedItemKey {
         Self {
             name,
             rect: (rect.left, rect.top, rect.right, rect.bottom),
-        }
-    }
-}
-
-/// Whether a path is the file an Explorer item's name stands for. The name a view
-/// shows is compared whole first, and — when the name carries no extension of its
-/// own, because the view hides it — to the path's stem. Two files that share a
-/// stem but differ in extension are two files, so a name that does carry one only
-/// matches the same extension, or a sibling in the JPEG family, which is the one
-/// Explorer can label a file with instead of the extension it is stored under.
-fn path_matches_item_name(path: &Path, item_name: &str) -> bool {
-    let item_name = item_name.trim();
-    if item_name.is_empty() {
-        return false;
-    }
-
-    let full_name_matches = path
-        .file_name()
-        .and_then(|s| s.to_str())
-        .map(|file_name| file_name.eq_ignore_ascii_case(item_name))
-        .unwrap_or(false);
-    if full_name_matches {
-        return true;
-    }
-
-    let (Some(item_stem), Some(path_stem)) = (
-        Path::new(item_name).file_stem().and_then(|s| s.to_str()),
-        path.file_stem().and_then(|s| s.to_str()),
-    ) else {
-        return false;
-    };
-    if !item_stem.eq_ignore_ascii_case(path_stem) {
-        return false;
-    }
-
-    match Path::new(item_name).extension().and_then(|s| s.to_str()) {
-        None => true,
-        Some(item_ext) => {
-            let item_ext = item_ext.to_ascii_lowercase();
-            path.extension()
-                .and_then(|s| s.to_str())
-                .map(|path_ext| {
-                    let path_ext = path_ext.to_ascii_lowercase();
-                    item_ext == path_ext
-                        || (is_jpeg_extension(&item_ext) && is_jpeg_extension(&path_ext))
-                })
-                .unwrap_or(false)
         }
     }
 }
