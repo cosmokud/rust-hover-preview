@@ -20,7 +20,7 @@ use windows::Win32::Foundation::{BOOL, HWND, LPARAM, POINT, RECT};
 use windows::Win32::Graphics::Gdi::ScreenToClient;
 use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, IServiceProvider, CLSCTX_ALL,
-    COINIT_APARTMENTTHREADED,
+    COINIT_APARTMENTTHREADED, COINIT_MULTITHREADED,
 };
 use windows::Win32::System::Variant::VariantClear;
 use windows::Win32::UI::Accessibility::{
@@ -1508,9 +1508,12 @@ fn focused_item_path_at_box(item: &FocusedItemInfo) -> Option<PathBuf> {
 /// A search result states the file it stands for in the value of the text it
 /// shows, so the children a list item exposes are asked about first — that text is
 /// one of them, and its middle is where the provider answers with a path. The
-/// item's own middle comes next, and then two points just inside its left edge,
-/// which is where the name sits in a view that exposes no child for it at all, the
-/// details list among them.
+/// item's own middle comes next, and then the name column just inside its left
+/// edge, which is where the name sits in a view that exposes no child for it at
+/// all — the details list among them. That column is swept rather than pointed at:
+/// how far a name reaches depends on the name, and every point is only asked when
+/// the ones before it answered nothing, so a sweep costs a call only where a
+/// single point would have cost one and found nothing.
 fn focused_item_probe_points(
     automation: &IUIAutomation,
     element: &IUIAutomationElement,
@@ -1551,14 +1554,17 @@ fn focused_item_probe_points(
         x: clamp(rect.left + (rect.right - rect.left) / 2),
         y: middle_y,
     });
-    points.push(POINT {
-        x: clamp(rect.left + height * 2),
-        y: middle_y,
-    });
-    points.push(POINT {
-        x: clamp(rect.left + height / 2),
-        y: middle_y,
-    });
+
+    let step = height.max(8);
+    let sweep_end = (rect.left + height * 10).min(rect.right - 2);
+    let mut x = rect.left + (height / 2).max(2);
+    while x < sweep_end {
+        points.push(POINT {
+            x: clamp(x),
+            y: middle_y,
+        });
+        x += step;
+    }
 
     points
 }
@@ -1954,6 +1960,16 @@ fn queue_shell_view_index_completion(view_hwnd_key: isize, legacy: bool) {
     }
 
     std::thread::spawn(move || {
+        // The walk is Shell COM, and this thread is not one of the app's own: the
+        // apartment is claimed here, the way every other thread that talks to the
+        // shell claims it, or every call the walk makes is refused with "not
+        // initialized" and the completion quietly does nothing — which is the one
+        // thing it must not do. It is the multi-threaded apartment, which needs no
+        // message pump and so is the right one for a thread that has none.
+        unsafe {
+            let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+        }
+
         let built = if legacy {
             build_legacy_search_shell_view_media_index(view_hwnd_key, None)
         } else {
@@ -1969,6 +1985,10 @@ fn queue_shell_view_index_completion(view_hwnd_key: isize, legacy: bool) {
             if let Ok(mut cache) = cache.lock() {
                 cache.insert(view_hwnd_key, index);
             }
+        }
+
+        unsafe {
+            CoUninitialize();
         }
 
         if let Ok(mut keys) = building.lock() {
@@ -3907,42 +3927,58 @@ pub fn run_explorer_hook() {
             }
         }
 
+        // The shell answered too slowly, too often: stop asking it about the file
+        // under the cursor for a moment. What the pause must not do is what it used
+        // to — take the preview away and clear everything with it. At the size
+        // where this fires, in a search view of several hundred results, the probes
+        // are slow *every* time, so the pause re-armed itself before the next
+        // preview could appear and the view looked like it had no previews at all.
+        // What is on screen belongs to the file the cursor was on, and the pause
+        // only stops the asking.
         if slow_explorer_probe_count >= EXPLORER_SLOW_PROBE_LIMIT
             && explorer_probe_backoff_until.is_none()
         {
             explorer_probe_backoff_until =
                 Some(Instant::now() + Duration::from_millis(EXPLORER_PROBE_BACKOFF_MS));
-            clear_shell_view_probe_caches();
-            hide_preview();
-            last_file = None;
-            keyboard_file = None;
-            is_keyboard_hover = false;
-            keyboard_screen_owner = false;
-            suppressed.clear();
-            pointer_pause.clear();
+            // The slow probe left a hover window half-open; the next probe after
+            // the pause starts one again rather than inheriting it.
             stationary_search_miss_started_at = None;
-            hover_start = None;
-            video_hover_guard_until = None;
             stationary_hover_probe_done = false;
         }
 
         if let Some(until) = explorer_probe_backoff_until {
             if Instant::now() < until {
-                if last_file.is_some() || keyboard_file.is_some() || is_keyboard_hover {
-                    hide_preview();
+                // The one thing still watched for is the cursor leaving the file
+                // the preview is of: that would leave a preview describing a file
+                // the pointer is no longer on, which is worse than no preview. A
+                // pointer that stays is answered with what it already has.
+                unsafe {
+                    let mut cursor_pos = POINT::default();
+                    if GetCursorPos(&mut cursor_pos).is_ok()
+                        && ((cursor_pos.x - last_cursor_pos.x).abs() > MOUSE_MOVE_PX
+                            || (cursor_pos.y - last_cursor_pos.y).abs() > MOUSE_MOVE_PX)
+                    {
+                        last_cursor_pos = cursor_pos;
+
+                        if last_file.is_some() {
+                            hide_preview();
+                            last_file = None;
+                            hover_start = None;
+                            video_hover_guard_until = None;
+                        }
+                    }
                 }
-                last_file = None;
-                keyboard_file = None;
-                is_keyboard_hover = false;
-                hover_start = None;
-                video_hover_guard_until = None;
-                stationary_hover_probe_done = false;
+
                 std::thread::sleep(Duration::from_millis(MEDIUM_SLEEP_MS));
                 continue;
             }
 
             explorer_probe_backoff_until = None;
             slow_explorer_probe_count = 0;
+            // The pause is not a place a hover resumes from: whatever the cursor is
+            // over when it ends has to be probed as something new.
+            hover_start = Some(Instant::now());
+            stationary_hover_probe_done = false;
             current_state = get_explorer_state();
             last_state_check = Instant::now();
         }
