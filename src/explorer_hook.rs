@@ -25,11 +25,11 @@ use windows::Win32::System::Variant::VT_I4;
 use windows::Win32::UI::Accessibility::{
     CUIAutomation, CUIAutomationRegistrar, IUIAutomation, IUIAutomationCacheRequest,
     IUIAutomationElement, IUIAutomationLegacyIAccessiblePattern, IUIAutomationRegistrar,
-    IUIAutomationSelectionPattern, IUIAutomationTreeWalker, TreeScope_Element,
+    IUIAutomationSelectionPattern, IUIAutomationTreeWalker, TreeScope_Children, TreeScope_Element,
     UIAutomationPropertyInfo, UIAutomationType_Int, UIA_BoundingRectanglePropertyId,
-    UIA_CONTROLTYPE_ID, UIA_ControlTypePropertyId, UIA_DataItemControlTypeId,
+    UIA_CONTROLTYPE_ID, UIA_ControlTypePropertyId, UIA_DataItemControlTypeId, UIA_EditControlTypeId,
     UIA_LegacyIAccessiblePatternId, UIA_ListItemControlTypeId, UIA_NamePropertyId,
-    UIA_NativeWindowHandlePropertyId, UIA_PROPERTY_ID, UIA_SelectionPatternId,
+    UIA_NativeWindowHandlePropertyId, UIA_PROPERTY_ID, UIA_SelectionPatternId, UIA_TextControlTypeId,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, VK_DOWN, VK_END, VK_HOME, VK_LBUTTON, VK_LEFT, VK_MBUTTON, VK_NEXT, VK_PRIOR,
@@ -146,6 +146,14 @@ struct HoveredItem {
     /// The box the item occupies on screen, which is what says the pointer is
     /// inside it and where a keyboard preview is placed.
     bounds: RECT,
+    /// Where the text the item draws stops, for an item that draws less than the
+    /// box it is given: Content view draws every row as a box as wide as the view
+    /// with its name and columns written into the left end of it, so the box says
+    /// where the row is while the text says how much of it is used — and the empty
+    /// tail past the text is the only room a keyboard preview of that row can take.
+    /// `None` for an item that draws what its box says, which is every other view,
+    /// and for one whose text reaches the end of its box anyway.
+    content_right: Option<i32>,
     /// The window the item is drawn in, whose frame is the window the item's view
     /// belongs to.
     native_window: isize,
@@ -1125,7 +1133,9 @@ fn uia_item_from_point(resolver: &ItemResolver, point: POINT) -> Option<HoveredI
     let cache = resolver.cache.as_ref()?;
     let element = unsafe { automation.ElementFromPointBuildCache(point, cache) }.ok()?;
 
-    walk_to_item(resolver, &element, Some(point))
+    // A pointer has a position of its own to place a preview beside, so the item's
+    // own text is not measured for it.
+    walk_to_item(resolver, &element, Some(point), false)
 }
 
 /// The item the keyboard is on: the element Explorer says holds the focus, or the
@@ -1145,7 +1155,9 @@ fn uia_item_from_focus(resolver: &ItemResolver) -> Option<HoveredItem> {
         selected_item_of_focused_list(&focused)?
     };
 
-    walk_to_item(resolver, &start, None)
+    // A keyboard preview is placed from the item alone, so where the item's own
+    // text stops is read with it — see `item_content_right`.
+    walk_to_item(resolver, &start, None, true)
 }
 
 /// The nearest item at or above an element, as the view reports it.
@@ -1158,13 +1170,14 @@ fn walk_to_item(
     resolver: &ItemResolver,
     start: &IUIAutomationElement,
     point: Option<POINT>,
+    measure_content: bool,
 ) -> Option<HoveredItem> {
     let cache = resolver.cache.as_ref()?;
     let walker = resolver.walker.as_ref()?;
     let mut element = start.clone();
 
     for _ in 0..=POINTER_ITEM_ANCESTOR_LIMIT {
-        if let Some(item) = item_from_element(&element, resolver.item_index_property, point) {
+        if let Some(item) = item_from_element(resolver, &element, point, measure_content) {
             return Some(item);
         }
 
@@ -1186,9 +1199,10 @@ fn walk_to_item(
 /// keyboard preview has no point to test — the focused element is the evidence —
 /// so there it is the item itself that answers.
 fn item_from_element(
+    resolver: &ItemResolver,
     element: &IUIAutomationElement,
-    item_index_property: Option<UIA_PROPERTY_ID>,
     point: Option<POINT>,
+    measure_content: bool,
 ) -> Option<HoveredItem> {
     let control_type = element_control_type(element)?;
     if control_type != UIA_ListItemControlTypeId && control_type != UIA_DataItemControlTypeId {
@@ -1209,13 +1223,91 @@ fn item_from_element(
         }
     }
 
+    // Only an item wide enough to be a row of the view can be drawing less than its
+    // box holds, which is the one case where measuring its text answers anything —
+    // see `item_content_right`.
+    let wide = bounds.right - bounds.left >= (bounds.bottom - bounds.top).max(1) * 4;
+    let content_right = (measure_content && wide)
+        .then(|| item_content_right(resolver, element, &bounds))
+        .flatten();
+
     Some(HoveredItem {
-        index: element_item_index(element, item_index_property),
+        index: element_item_index(element, resolver.item_index_property),
         name: element_name(element).unwrap_or_default().trim().to_string(),
         value: element_value(element),
         bounds,
+        content_right,
         native_window: element_native_window(element),
     })
+}
+
+/// Where the text an item draws stops, or `None` when the item draws text to the
+/// end of its box.
+///
+/// A view gives every item the box it occupies, and for most views that box is
+/// what the item draws: an icon, a thumbnail, a tile. Content view is the one that
+/// differs — it draws every item as a row as wide as the view and writes the name
+/// and the columns into the left end of it, so the box says where the row is while
+/// the text says how much of the row is used. The empty tail past the text is the
+/// only room beside such a row, and a keyboard preview takes its place and its size
+/// from there, so the edge has to be measured rather than assumed.
+///
+/// It is measured from the row's own children, because that is how the view reports
+/// what it draws: each piece of the row's text — the name and path, the type, the
+/// modified date, the size — is an element of its own carrying the box it is drawn
+/// in, and the rightmost of them is the edge the row's content stops at. The read is
+/// batched into one round trip with the properties the rest of the walk already
+/// asks for. A row that reports no text at all — a view that draws its columns some
+/// other way — is answered with `None`, which leaves the item measured by its box.
+fn item_content_right(
+    resolver: &ItemResolver,
+    element: &IUIAutomationElement,
+    bounds: &RECT,
+) -> Option<i32> {
+    let automation = resolver.automation.as_ref()?;
+    let cache = resolver.cache.as_ref()?;
+
+    unsafe {
+        let condition = automation.CreateTrueCondition().ok()?;
+        let children = element
+            .FindAllBuildCache(TreeScope_Children, &condition, cache)
+            .ok()?;
+        let count = children.Length().ok()?;
+
+        let mut rightmost: Option<i32> = None;
+        for index in 0..count {
+            let Ok(child) = children.GetElement(index) else {
+                continue;
+            };
+            if !element_is_drawn_text(&child) {
+                continue;
+            }
+            let Ok(rect) = child.CachedBoundingRectangle() else {
+                continue;
+            };
+            if rect.right <= rect.left {
+                continue;
+            }
+            rightmost = Some(rightmost.map_or(rect.right, |value| value.max(rect.right)));
+        }
+
+        // An item whose text runs to the end of its box has no tail, and one whose
+        // text is reported past it is reported wrong: either way the box answers.
+        rightmost.filter(|right| *right < bounds.right)
+    }
+}
+
+/// Whether an element is text the view draws, which is what an item's own content
+/// is made of. A row of a file list reports its name and its columns that way, and
+/// anything else it may report — the file's icon, the row's own container — is not
+/// part of the text whose end is being measured.
+fn element_is_drawn_text(element: &IUIAutomationElement) -> bool {
+    match element_control_type(element) {
+        Some(control_type) => {
+            control_type == UIA_EditControlTypeId || control_type == UIA_TextControlTypeId
+        }
+        None => false,
+    }
 }
 
 /// The control type of an element, from the batched cache when the element came
@@ -3163,6 +3255,7 @@ pub fn run_explorer_hook() {
                                         focused_info.item.bounds.top,
                                         focused_info.item.bounds.right,
                                         focused_info.item.bounds.bottom,
+                                        focused_info.item.content_right,
                                     );
                                 }
                             } else {
@@ -3221,6 +3314,7 @@ pub fn run_explorer_hook() {
                                     focused_info.item.bounds.top,
                                     focused_info.item.bounds.right,
                                     focused_info.item.bounds.bottom,
+                                    focused_info.item.content_right,
                                 );
                             }
                         } else {
