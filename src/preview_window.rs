@@ -4281,29 +4281,42 @@ fn compute_keyboard_layout(
         // Best spot mode: choose left or right side of item.
         //
         // The room a side offers is the room past the item's own edge, which is what
-        // keeps the preview off the file it belongs to. A row as wide as the view
-        // leaves none on either side — Content view draws every item that way — and
-        // a preview squeezed into what is left of the display past its edge is a
-        // sliver: a text preview the height of the display and seven pixels wide is
-        // worse than one that overlaps the list. When neither side has room to
-        // speak of, the display's room is measured from the item's middle instead,
-        // the way the mouse path measures it from the cursor, so the preview lands
-        // beside that and takes the space it needs.
+        // keeps the preview off the file it belongs to. That reading only holds for
+        // an item that is a *box*, though: Content view draws every item as a row as
+        // wide as the view, with its name and details written at the row's left end
+        // and the rest of the row empty. There is nothing beside a row to place a
+        // preview in — what its edges leave is the space the view itself is not using
+        // (the navigation pane on one side, the window's edge on the other) — and a
+        // preview squeezed in there is a sliver standing beside a list instead of a
+        // preview of it.
+        //
+        // An item that is both much wider than it is tall and at least half the
+        // display across is read as such a row: its room is then measured from its
+        // *middle*, the way the mouse path measures it from the cursor, so the
+        // preview lands in the empty space beside the row's own content and is
+        // allowed to cover the rest of the row. An item that leaves no room on
+        // either side — a box already touching both edges — is treated the same way.
+        let item_width = (item_right - item_left).max(0);
+        let item_height = (item_bottom - item_top).max(1);
+        let display_width = (bounds.right - bounds.left).max(1);
+        let row_shaped = item_width >= item_height * 4 && item_width * 2 >= display_width;
+
         let edge_left_width = item_left - bounds.left - gap;
         let edge_right_width = bounds.right - item_right - gap;
 
-        let (left_anchor_x, right_anchor_x, left_width, right_width) =
-            if edge_left_width < MIN_BESIDE_ROOM_PX && edge_right_width < MIN_BESIDE_ROOM_PX {
-                let center = ((item_left + item_right) / 2).clamp(bounds.left, bounds.right);
-                (
-                    center,
-                    center,
-                    center - bounds.left - gap,
-                    bounds.right - center - gap,
-                )
-            } else {
-                (item_left, item_right, edge_left_width, edge_right_width)
-            };
+        let (left_anchor_x, right_anchor_x, left_width, right_width) = if row_shaped
+            || (edge_left_width < MIN_BESIDE_ROOM_PX && edge_right_width < MIN_BESIDE_ROOM_PX)
+        {
+            let center = ((item_left + item_right) / 2).clamp(bounds.left, bounds.right);
+            (
+                center,
+                center,
+                center - bounds.left - gap,
+                bounds.right - center - gap,
+            )
+        } else {
+            (item_left, item_right, edge_left_width, edge_right_width)
+        };
 
         let full_height = bounds.height();
 
