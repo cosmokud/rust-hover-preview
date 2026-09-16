@@ -1,3 +1,4 @@
+use crate::config::TriggerKeyMode;
 use crate::pdf_preview::is_pdf_file;
 use crate::preview_window::{
     cursor_preview_hover, hide_preview, kill_stray_video_process, preview_screen_rect,
@@ -3330,24 +3331,20 @@ pub fn run_explorer_hook() {
     const STATE_RECHECK_MEDIUM_MS: u64 = 300; // When visible but not focused
     const STATE_RECHECK_ACTIVE_MS: u64 = 100; // When active
 
-    let (mut config_snapshot, mut off_trigger_vk) = CONFIG
+    let (mut config_snapshot, mut trigger_key_vk) = CONFIG
         .lock()
         .map(|c| {
             let snapshot = (
                 c.preview_enabled,
                 c.hover_delay_ms,
-                c.enable_off_trigger_key,
+                c.trigger_key_mode,
                 c.same_file_rehover_delay_ms,
             );
             // Resolved once per config change instead of once per tick.
-            let vk = if c.enable_off_trigger_key {
-                off_trigger_key_to_vk(&c.off_trigger_key)
-            } else {
-                None
-            };
+            let vk = off_trigger_key_to_vk(&c.trigger_key);
             (snapshot, vk)
         })
-        .unwrap_or(((true, 0, true, 750), Some(0x12)));
+        .unwrap_or(((true, 0, TriggerKeyMode::Disable, 750), Some(0x12)));
     let mut slow_explorer_probe_count = 0u32;
     let mut explorer_probe_backoff_until: Option<Instant> = None;
     let mut last_display_signature = current_display_signature();
@@ -3437,50 +3434,33 @@ pub fn run_explorer_hook() {
             config_snapshot = (
                 config.preview_enabled,
                 config.hover_delay_ms,
-                config.enable_off_trigger_key,
+                config.trigger_key_mode,
                 config.same_file_rehover_delay_ms,
             );
-            off_trigger_vk = if config.enable_off_trigger_key {
-                off_trigger_key_to_vk(&config.off_trigger_key)
-            } else {
-                None
-            };
+            trigger_key_vk = off_trigger_key_to_vk(&config.trigger_key);
         }
 
         let preview_enabled = config_snapshot.0;
         let hover_delay_ms = config_snapshot.1;
-        let enable_off_trigger_key = config_snapshot.2;
+        let trigger_key_mode = config_snapshot.2;
         let same_file_rehover_delay_ms = config_snapshot.3;
 
-        let off_trigger_active = enable_off_trigger_key && off_trigger_vk.is_some_and(key_is_down);
+        // One question, two settings: the key either stops previews while it is
+        // held, or is the only thing that lets them happen. Either way, what is left
+        // to do when they are not allowed is the same as when they are turned off.
+        let trigger_key_down = trigger_key_vk.is_some_and(key_is_down);
+        let previews_allowed = trigger_key_mode.allows_previews(trigger_key_down);
 
-        if off_trigger_active {
+        if !previews_allowed || !preview_enabled {
             if last_file.is_some() || keyboard_file.is_some() {
                 hide_preview();
-            }
-            keyboard_file = None;
-            last_file = None;
-            suppressed.clear();
-            pointer_pause.clear();
-            stationary_search_miss_started_at = None;
-            hover_start = None;
-            last_focused_name = None;
-            is_keyboard_hover = false;
-            video_hover_guard_until = None;
-            std::thread::sleep(Duration::from_millis(ACTIVE_POLL_MS));
-            continue;
-        }
-
-        if !preview_enabled {
-            if last_file.is_some() || keyboard_file.is_some() {
-                hide_preview();
-                last_file = None;
                 suppressed.clear();
                 pointer_pause.clear();
                 stationary_search_miss_started_at = None;
                 hover_start = None;
             }
             keyboard_file = None;
+            last_file = None;
             last_focused_name = None;
             is_keyboard_hover = false;
             video_hover_guard_until = None;
@@ -3491,8 +3471,14 @@ pub fn run_explorer_hook() {
             hover_resolver_hints = HoverResolverHints::default();
             folder_change_time = None;
             suspended_initial_focus = None;
-            // Sleep longer when disabled
-            std::thread::sleep(Duration::from_millis(LONG_SLEEP_MS));
+            // A held key has to be noticed the moment it is released, so the poll
+            // stays quick while the trigger is what is holding previews back, and
+            // slows down only when previews are turned off outright.
+            std::thread::sleep(Duration::from_millis(if previews_allowed {
+                LONG_SLEEP_MS
+            } else {
+                ACTIVE_POLL_MS
+            }));
             continue;
         }
 

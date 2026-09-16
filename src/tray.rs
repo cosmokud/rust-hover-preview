@@ -1,6 +1,6 @@
 use crate::config::{
     sanitize_text_font_scale_percent, MarkdownMode, PreviewScale, TextTheme, TransparentBackground,
-    DEFAULT_PREVIEW_SCALE_PERCENT, DEFAULT_TEXT_FONT_SCALE_PERCENT,
+    TriggerKeyMode, DEFAULT_PREVIEW_SCALE_PERCENT, DEFAULT_TEXT_FONT_SCALE_PERCENT,
 };
 use crate::preview_window::refresh_preview;
 use crate::{startup, CONFIG, RUNNING};
@@ -14,13 +14,13 @@ use windows::Win32::UI::Shell::{
     NOTIFYICONDATAW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DispatchMessageW,
-    GetCursorPos, LoadImageW, PeekMessageW, PostQuitMessage, RegisterClassExW,
+    AppendMenuW, CheckMenuRadioItem, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu,
+    DispatchMessageW, GetCursorPos, LoadImageW, PeekMessageW, PostQuitMessage, RegisterClassExW,
     RegisterWindowMessageW, SetForegroundWindow, TrackPopupMenu, TranslateMessage, CS_HREDRAW,
-    CS_VREDRAW, HICON, IMAGE_ICON, LR_DEFAULTSIZE, LR_SHARED, MF_CHECKED, MF_POPUP, MF_STRING,
-    MF_UNCHECKED, MSG, PBT_APMRESUMEAUTOMATIC, PBT_APMRESUMESUSPEND, PM_REMOVE, SW_SHOWNORMAL,
-    TPM_BOTTOMALIGN, TPM_LEFTALIGN, WM_COMMAND, WM_DESTROY, WM_LBUTTONUP, WM_POWERBROADCAST,
-    WM_RBUTTONUP, WM_USER, WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_POPUP,
+    CS_VREDRAW, HICON, IMAGE_ICON, LR_DEFAULTSIZE, LR_SHARED, MF_BYCOMMAND, MF_CHECKED, MF_POPUP,
+    MF_STRING, MF_UNCHECKED, MSG, PBT_APMRESUMEAUTOMATIC, PBT_APMRESUMESUSPEND, PM_REMOVE,
+    SW_SHOWNORMAL, TPM_BOTTOMALIGN, TPM_LEFTALIGN, WM_COMMAND, WM_DESTROY, WM_LBUTTONUP,
+    WM_POWERBROADCAST, WM_RBUTTONUP, WM_USER, WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_POPUP,
 };
 
 const WM_TRAYICON: u32 = WM_USER + 1;
@@ -28,7 +28,8 @@ const ID_TRAY_EXIT: u16 = 1001;
 const ID_TRAY_STARTUP: u16 = 1002;
 const ID_TRAY_ENABLE: u16 = 1003;
 const ID_TRAY_CONFIRM_FILE_TYPE: u16 = 1004;
-const ID_TRAY_ENABLE_OFF_TRIGGER_KEY: u16 = 1005;
+const ID_TRAY_TRIGGER_DISABLE: u16 = 1005; // Hold the trigger key to stop previews
+const ID_TRAY_TRIGGER_ENABLE: u16 = 1006; // Hold the trigger key to allow previews
 const ID_TRAY_BG_TRANSPARENT: u16 = 1007;
 const ID_TRAY_BG_BLACK: u16 = 1008;
 const ID_TRAY_BG_WHITE: u16 = 1009;
@@ -116,9 +117,8 @@ unsafe extern "system" fn tray_window_proc(
                 ID_TRAY_CONFIRM_FILE_TYPE => {
                     toggle_confirm_file_type();
                 }
-                ID_TRAY_ENABLE_OFF_TRIGGER_KEY => {
-                    toggle_enable_off_trigger_key();
-                }
+                ID_TRAY_TRIGGER_DISABLE => set_trigger_key_mode(TriggerKeyMode::Disable),
+                ID_TRAY_TRIGGER_ENABLE => set_trigger_key_mode(TriggerKeyMode::Enable),
                 ID_TRAY_BG_TRANSPARENT => {
                     set_transparent_background(TransparentBackground::Transparent)
                 }
@@ -212,32 +212,54 @@ unsafe fn show_context_menu(hwnd: HWND) {
         w!("Enable Preview"),
     );
 
-    // Add "Enable Off Trigger Key" with checkmark
-    let (enable_off_trigger_key, off_trigger_key) = CONFIG
+    // Add the "Trigger Key (Alt)" submenu: the key it watches, and what holding it
+    // does. Which of the two is active is shown with radio marks, because only one
+    // of them can be.
+    let (trigger_key, trigger_key_mode) = CONFIG
         .lock()
-        .map(|c| (c.enable_off_trigger_key, c.off_trigger_key.clone()))
-        .unwrap_or((true, "alt".to_string()));
-    let off_trigger_flags = MF_STRING
-        | if enable_off_trigger_key {
-            MF_CHECKED
-        } else {
-            MF_UNCHECKED
-        };
-    let mut off_trigger_key_chars = off_trigger_key.chars();
-    let off_trigger_key_display = match off_trigger_key_chars.next() {
-        Some(first) => first.to_uppercase().collect::<String>() + off_trigger_key_chars.as_str(),
-        None => off_trigger_key,
+        .map(|c| (c.trigger_key.clone(), c.trigger_key_mode))
+        .unwrap_or(("alt".to_string(), TriggerKeyMode::Disable));
+    let trigger_menu = CreatePopupMenu().unwrap();
+
+    let mut trigger_key_chars = trigger_key.chars();
+    let trigger_key_display = match trigger_key_chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + trigger_key_chars.as_str(),
+        None => trigger_key,
     };
-    let off_trigger_label = format!("Enable Off Trigger Key ({})", off_trigger_key_display);
-    let off_trigger_label_wide: Vec<u16> = off_trigger_label
+    let trigger_label = format!("Trigger Key ({trigger_key_display})");
+    let trigger_label_wide: Vec<u16> = trigger_label
         .encode_utf16()
         .chain(std::iter::once(0))
         .collect();
+
+    let _ = AppendMenuW(
+        trigger_menu,
+        MF_STRING,
+        ID_TRAY_TRIGGER_DISABLE as usize,
+        w!("Trigger Key to Disable Preview"),
+    );
+    let _ = AppendMenuW(
+        trigger_menu,
+        MF_STRING,
+        ID_TRAY_TRIGGER_ENABLE as usize,
+        w!("Trigger Key to Enable Preview"),
+    );
+    let _ = CheckMenuRadioItem(
+        trigger_menu,
+        ID_TRAY_TRIGGER_DISABLE as u32,
+        ID_TRAY_TRIGGER_ENABLE as u32,
+        match trigger_key_mode {
+            TriggerKeyMode::Disable => ID_TRAY_TRIGGER_DISABLE as u32,
+            TriggerKeyMode::Enable => ID_TRAY_TRIGGER_ENABLE as u32,
+        },
+        MF_BYCOMMAND.0,
+    );
+
     let _ = AppendMenuW(
         menu,
-        off_trigger_flags,
-        ID_TRAY_ENABLE_OFF_TRIGGER_KEY as usize,
-        PCWSTR(off_trigger_label_wide.as_ptr()),
+        MF_STRING | MF_POPUP,
+        trigger_menu.0 as usize,
+        PCWSTR(trigger_label_wide.as_ptr()),
     );
 
     // Add "Confirm File Type" with checkmark (content/header sniffing)
@@ -792,11 +814,15 @@ fn toggle_preview_enabled() {
     }
 }
 
-fn toggle_enable_off_trigger_key() {
+/// What the trigger key does is a setting rather than a view of one, so the preview
+/// on screen is rebuilt: in disable mode a held key is what keeps previews away, and
+/// switching to enable mode while it is held should show one.
+fn set_trigger_key_mode(mode: TriggerKeyMode) {
     if let Ok(mut config) = CONFIG.lock() {
-        config.enable_off_trigger_key = !config.enable_off_trigger_key;
+        config.trigger_key_mode = mode;
         config.save();
     }
+    refresh_preview();
 }
 
 fn toggle_confirm_file_type() {

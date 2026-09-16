@@ -56,6 +56,8 @@ The first screenful is shown, colored by the syntax definition its extension nam
 
 The full list lives in `config.ini` and is meant to be edited there: add an extension the app does not know, or delete the ones you never want to see, and the change applies without a restart. A file whose extension is not in the list is not previewed at all.
 
+The files a repository is recognized by usually have no extension to match: `LICENSE`, `Makefile` and `Dockerfile` have no dot in them anywhere, and `.gitignore` has no extension at all — its dot begins its *name*. So there is a second list beside the extensions, of names, and a file is previewed when either list claims it. Dot files are matched by the name they are written with, with the dot dropped on both sides: `gitignore` in the extension list means `.gitignore` exactly as `.gitignore` in the name list does, and `.eslintrc.json` is read by its extension because that is the part of it the filesystem calls one. The default list covers what a GitHub repository puts at its root — licences and notices, `README` and `CHANGELOG`, the make and container files, and the dot files (`.gitignore`, `.gitattributes`, `.editorconfig`, `.env` and their kind).
+
 `.md` files are rendered as the document they describe — headings, lists, quotes, tables, links, and fenced code blocks colored with the same highlighter — and can be switched to highlighted source from the tray or with `markdown_mode`.
 
 `.rtf` files are shown as the text they carry: Word's tables are skipped and the paragraphs, tabs, and escaped characters are resolved, so a document reads without its formatting.
@@ -70,7 +72,7 @@ When a file is longer than the preview, the preview grows a scrollbar instead of
 
 Selecting works the way it does anywhere else: drag across the text to select it, `Ctrl+C` to copy it, or right-click the preview for **Copy**. What is copied is what is on screen, so a line clipped at the right edge copies the part that was visible, and a Copy with nothing selected takes the whole frame. Dragging the scrollbar clears the selection, since the lines it was measured against have moved.
 
-All of this belongs to **full mode** (`Enable Text Preview Full Mode` in the tray, on by default). With it off, a text preview is only something to look at: a frame shows what fits and says how many lines it left out on the last one, and the pointer over it closes it the way it closes any other preview.
+All of this belongs to **full mode** (`Enable Text Preview Full Mode` in the tray, **off by default**). With it off, a text preview is only something to look at: a frame shows what fits and says how many lines it left out on the last one, and the pointer over it closes it the way it closes any other preview.
 
 Scrolling does not re-read the file. For source files only the lines coming into view are highlighted — the parser's state is carried along as you go, with a checkpoint every few dozen lines so a jump in either direction is bounded — and the text itself is read once, up to the read cap. A rendered Markdown document is walked in one pass (its line breaks are only known once the block before it has been read) but only the visible lines are kept. Scrolling is fastest where it matters most: a hundred-thousand-line source file opens as quickly as a short one.
 
@@ -147,13 +149,13 @@ ffprobe -version
 - **Video Volume**: `Max (100%)`, `High (80%)`, `Medium (50%)`, `Low (25%)`, `Very Low (10%)`, `Mute (0%)`
 - **Preview Position**: `Follow Cursor` or `Best Position` — `Best Position` places the preview beside the cursor (or the focused item) and centers it on the same line, moving it only as far as a display edge requires, so a small preview appears where you are looking rather than in the middle of the screen. `Follow Cursor` places it in the roomiest quadrant around the cursor.
 - **Enable Text Preview**: Turn text and code previews on or off, ahead of the extension list — turning them off leaves the list alone and turning them back on restores it.
-- **Enable Text Preview Full Mode**: Whether a text preview can be worked with — scrolled, selected from and copied, and rested on by the pointer — or is only something to look at. On by default.
+- **Enable Text Preview Full Mode**: Whether a text preview can be worked with — scrolled, selected from and copied, and rested on by the pointer — or is only something to look at. Off by default.
 - **Text Preview Theme**: `Atom One Light (Default)` or `One Dark Pro` — the colors text and code previews are drawn with. Changing it re-renders the preview that is on screen.
 - **Text Preview Font Size**: `100%`, `125% (Default)`, `150%`, `175%`, `200%`, `250%`, `300%`, `400%` — the size the text is drawn at, for rendered Markdown as much as for source files. The whole page scales with it (glyphs, line spacing and margin together), so a bigger preview holds fewer lines rather than the same lines stretched. Any hand-edited value in `config.ini` is honored, including one between these steps.
 - **Markdown Preview**: `Rendered (Default)` shows a `.md` file as the document it describes, `Highlighted Source` shows the markup itself with Markdown syntax highlighting.
 - **Preview Scaling**: `Fit to Screen`, `400%`, `300%`, `200%`, `150%`, `100% (Default)`, `50%`, `25%` — sizes the preview relative to the image or video's native resolution instead of always showing it verbatim. `Fit to Screen` enlarges the preview as much as the display allows. Any scale that would extend past the screen edge is reduced to fit, so the preview is never clipped, in both `Follow Cursor` and `Best Position` modes. PDF and text previews size themselves (a PDF page is always fit to screen, and text is always drawn at its own font size), so this setting does not apply to them.
 - **Transparent Background**: `Transparent`, `Black`, `White`, or `Checkerboard`
-- **Enable Off Trigger Key**: Temporarily suppress previews while the displayed configured key is held
+- **Trigger Key (Alt)**: The key the trigger watches, by name, and what holding it does — one of **Trigger Key to Disable Preview** (the default: hold the key and nothing previews while it is held) or **Trigger Key to Enable Preview** (the reverse: previews wait for the key, so hold it and they appear as you hover, let go and they stop). Only one of the two is active at a time. The key itself is the `trigger_key` setting, so `alt`, `ctrl`, `shift` and `win` are the usual choices.
 - **Confirm File Type**: When enabled, validates file content signatures (magic bytes) against the extension to avoid loading mislabeled files. If previews don't appear for certain files that should be supported, try enabling this option — the app will attempt to decode them by their true content type rather than relying solely on the file extension.
 - **Run at Startup**: Add/remove startup entry in Windows
 - **Edit Config.ini**: Open configuration file in your default editor
@@ -175,8 +177,8 @@ run_at_startup=true
 hover_delay_ms=0
 same_file_rehover_delay_ms=750
 preview_enabled=true
-enable_off_trigger_key=true
-off_trigger_key=alt
+trigger_key=alt
+trigger_key_mode=disable
 confirm_file_type=false
 follow_cursor=false
 transparent_background=black
@@ -186,20 +188,22 @@ preview_scale=100
 theme=light
 markdown_mode=rendered
 text_preview_enabled=true
-text_preview_full_mode=true
+text_preview_full_mode=false
 text_font_scale=125
 
 [text]
 extensions=txt,text,log,nfo,md,markdown,json,toml,yaml,py,js,ts,rs,...
+names=license,notice,makefile,dockerfile,gitignore,.gitattributes,...
 ```
 
 - `theme` is the color theme for text and code previews: `light` (Atom One Light, the default) or `dark` (One Dark Pro). `atom one light` and `one dark pro` are accepted as well.
 - `markdown_mode` is how `.md` files are drawn: `rendered` (the default document view) or `source` (the markup with syntax highlighting).
 - `text_preview_enabled` is the `Enable Text Preview` toggle: `false` stops text previews without touching the extension list.
-- `text_preview_full_mode` is the `Enable Text Preview Full Mode` toggle: `false` leaves a text preview as a frame that only shows what fits.
+- `text_preview_full_mode` is the `Enable Text Preview Full Mode` toggle. It is off unless it is turned on, because it changes what a preview does rather than what it shows: `true` lets a text preview be scrolled, selected from and copied.
 - `text_font_scale` is the size text is drawn at, as a percentage between 1 and 1000 (`150` or `150%`; `0` resets to the default of 125). The tray offers steps from 100% to 400%, and a value between those steps is used as written.
-- `extensions` is every extension previewed as text. It is written in full when the file is created and is shortened in this example. Append an extension to preview one the app does not know, or delete entries to stop previewing them — the change is picked up without a restart. An extension is written without its dot (`py`, not `.py`), and an empty list turns text previews off, so the built-in list comes back only when the key itself is missing.
-- When `enable_off_trigger_key` is enabled, hold the configured `off_trigger_key` to keep previews hidden while browsing Explorer.
+- `extensions` is every extension previewed as text. It is written in full when the file is created and is shortened in this example. Append an extension to preview one the app does not know, or delete entries to stop previewing them — the change is picked up without a restart. An extension is written without its dot (`py`, not `.py`), and an empty list turns text previews off, so the built-in list comes back only when the key itself is missing. A dot file is named here without its dot too, so `gitignore` covers `.gitignore`.
+- `names` is the other half of the text gate: the files that have no extension to match, like `LICENSE`, `Makefile` and `Dockerfile`. Entries are file names, matched whole and without regard to case; the list covers the root of a typical repository, and `gitignore` and `.gitignore` are the same entry here as they are there.
+- When the trigger key is held, previews either stop or start, according to `trigger_key_mode`: `disable` keeps previews hidden while it is down, and `enable` shows them only while it is down. The key itself is `trigger_key`.
 - When `confirm_file_type` is enabled, the app validates file content signatures (magic bytes) against the extension — useful for files with incorrect extensions.
 - `webp_playback_fps` controls the maximum playback speed for animated WebP files (1–90 FPS; 0 resets to the default of 90).
 - `preview_scale` controls the preview size relative to the media's native resolution. Use `fit` (or `fit to screen`) to scale the preview as large as the display area allows, or a percentage between 1 and 1000 written as `200`, `200%`, or `75`. A scale larger than the available space is reduced to fit so the preview cannot be clipped; `0` resets to the default of 100.
