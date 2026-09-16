@@ -3,7 +3,9 @@ use directories::BaseDirs;
 use std::fs;
 use std::path::PathBuf;
 
-use crate::text_formats::{sanitize_extensions, DEFAULT_TEXT_EXTENSIONS};
+use crate::text_formats::{
+    sanitize_extensions, sanitize_names, DEFAULT_TEXT_EXTENSIONS, DEFAULT_TEXT_NAMES,
+};
 
 const CONFIG_SECTION: &str = "settings";
 /// The text-preview extension list lives in its own section so the one long
@@ -176,14 +178,58 @@ impl MarkdownMode {
     }
 }
 
+/// What the trigger key does while it is held.
+///
+/// A preview appears when a file is hovered, so the trigger key is normally what
+/// stops that: hold it and nothing previews while it is down. The reverse suits
+/// a machine where previews are the exception rather than the rule — hold the key
+/// and they appear, let go and they stop — and it is the same gesture either way,
+/// which is why one key covers both.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TriggerKeyMode {
+    Disable,
+    Enable,
+}
+
+impl TriggerKeyMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Disable => "disable",
+            Self::Enable => "enable",
+        }
+    }
+
+    /// Whether a preview may appear while the trigger key is in this state.
+    ///
+    /// One question, whichever way round the setting is: in `Disable` the key is
+    /// what stops previews, so it has to be up; in `Enable` it is the only thing
+    /// that starts them, so it has to be down.
+    pub fn allows_previews(self, trigger_key_down: bool) -> bool {
+        match self {
+            Self::Disable => !trigger_key_down,
+            Self::Enable => trigger_key_down,
+        }
+    }
+
+    fn from_str(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "disable" | "disables" | "off" | "hold to disable" => Some(Self::Disable),
+            "enable" | "enables" | "on" | "hold to enable" => Some(Self::Enable),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct AppConfig {
     pub is_first_run: bool,
     pub run_at_startup: bool,
     pub hover_delay_ms: u64,
     pub preview_enabled: bool,
-    pub enable_off_trigger_key: bool,
-    pub off_trigger_key: String,
+    /// The modifier the trigger key watches, by name.
+    pub trigger_key: String,
+    /// What holding it does: stop previews, or allow them.
+    pub trigger_key_mode: TriggerKeyMode,
     pub confirm_file_type: bool,
     pub follow_cursor: bool,
     pub same_file_rehover_delay_ms: u64,
@@ -197,12 +243,16 @@ pub struct AppConfig {
     pub text_preview_enabled: bool,
     /// Whether a text preview is more than something to look at: a preview that
     /// scrolls, that can be selected and copied from, and that a pointer can rest
-    /// on without closing it.
+    /// on without closing it. Off by default, because it changes what a preview
+    /// does rather than what it shows.
     pub text_preview_full_mode: bool,
     /// Font scale for text previews, as a percentage of the default size.
     pub text_font_scale_percent: u32,
     /// Extensions previewed as text, already normalized for lookup.
     pub text_extensions: Vec<String>,
+    /// File names previewed as text — the ones with no extension to match, like
+    /// `LICENSE` and `Makefile` — already normalized for lookup.
+    pub text_names: Vec<String>,
 }
 
 impl Default for AppConfig {
@@ -212,8 +262,8 @@ impl Default for AppConfig {
             run_at_startup: true,
             hover_delay_ms: 0,
             preview_enabled: true,
-            enable_off_trigger_key: true,
-            off_trigger_key: "alt".to_string(),
+            trigger_key: "alt".to_string(),
+            trigger_key_mode: TriggerKeyMode::Disable,
             confirm_file_type: false,
             follow_cursor: false,
             same_file_rehover_delay_ms: 750,
@@ -224,9 +274,10 @@ impl Default for AppConfig {
             theme: TextTheme::Light,
             markdown_mode: MarkdownMode::Rendered,
             text_preview_enabled: true,
-            text_preview_full_mode: true,
+            text_preview_full_mode: false,
             text_font_scale_percent: DEFAULT_TEXT_FONT_SCALE_PERCENT,
             text_extensions: sanitize_extensions(DEFAULT_TEXT_EXTENSIONS),
+            text_names: sanitize_names(DEFAULT_TEXT_NAMES),
         }
     }
 }
@@ -288,13 +339,13 @@ impl AppConfig {
             );
             ini.set(
                 CONFIG_SECTION,
-                "enable_off_trigger_key",
-                Some(self.enable_off_trigger_key.to_string()),
+                "trigger_key",
+                Some(self.trigger_key.clone()),
             );
             ini.set(
                 CONFIG_SECTION,
-                "off_trigger_key",
-                Some(self.off_trigger_key.clone()),
+                "trigger_key_mode",
+                Some(self.trigger_key_mode.as_str().to_string()),
             );
             ini.set(
                 CONFIG_SECTION,
@@ -361,6 +412,11 @@ impl AppConfig {
                 "extensions",
                 Some(sanitize_extensions(&self.text_extensions.join(",")).join(",")),
             );
+            ini.set(
+                TEXT_SECTION,
+                "names",
+                Some(sanitize_names(&self.text_names.join(",")).join(",")),
+            );
             let _ = ini.write(path.to_string_lossy().as_ref());
         }
     }
@@ -375,13 +431,20 @@ impl AppConfig {
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "preview_enabled") {
             self.preview_enabled = value;
         }
-        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "enable_off_trigger_key") {
-            self.enable_off_trigger_key = value;
-        }
-        if let Some(value) = ini.get(CONFIG_SECTION, "off_trigger_key") {
+        // `off_trigger_key` is what the key was called when the trigger could only
+        // stop previews; a file written then still names the key the same way.
+        if let Some(value) = ini
+            .get(CONFIG_SECTION, "trigger_key")
+            .or_else(|| ini.get(CONFIG_SECTION, "off_trigger_key"))
+        {
             let value = value.trim();
             if !value.is_empty() {
-                self.off_trigger_key = value.to_string();
+                self.trigger_key = value.to_string();
+            }
+        }
+        if let Some(value) = ini.get(CONFIG_SECTION, "trigger_key_mode") {
+            if let Some(mode) = TriggerKeyMode::from_str(&value) {
+                self.trigger_key_mode = mode;
             }
         }
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "confirm_file_type") {
@@ -439,13 +502,17 @@ impl AppConfig {
         if let Some(value) = ini.get(TEXT_SECTION, "extensions") {
             self.text_extensions = sanitize_extensions(&value);
         }
+        if let Some(value) = ini.get(TEXT_SECTION, "names") {
+            self.text_names = sanitize_names(&value);
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        parse_text_font_scale, sanitize_text_font_scale_percent, AppConfig, MarkdownMode, TextTheme,
+        parse_text_font_scale, sanitize_text_font_scale_percent, AppConfig, MarkdownMode,
+        TextTheme, TriggerKeyMode,
     };
     use configparser::ini::Ini;
 
@@ -455,31 +522,84 @@ mod tests {
     fn the_text_keys_are_read_from_the_ini() {
         let mut ini = Ini::new();
         ini.set("settings", "text_preview_enabled", Some("false".into()));
-        ini.set("settings", "text_preview_full_mode", Some("false".into()));
+        ini.set("settings", "text_preview_full_mode", Some("true".into()));
         ini.set("settings", "text_font_scale", Some("175%".into()));
         ini.set("text", "extensions", Some("md, py, .RS, md".into()));
+        ini.set(
+            "text",
+            "names",
+            Some(".gitignore, LICENSE , makefile, LICENSE".into()),
+        );
 
         let mut config = AppConfig::default();
         config.apply_ini(&ini);
 
         assert!(!config.text_preview_enabled);
-        assert!(!config.text_preview_full_mode);
+        assert!(config.text_preview_full_mode);
         assert_eq!(config.text_font_scale_percent, 175);
         assert_eq!(config.text_extensions, vec!["md", "py", "rs"]);
+        assert_eq!(config.text_names, vec!["gitignore", "license", "makefile"]);
     }
 
-    /// Full mode is on unless it is turned off, and a pre-existing `config.ini`
-    /// without the key is how it stays that way.
+    /// Full mode changes what a preview does rather than what it shows, so it waits
+    /// to be asked for: a configuration that does not mention it leaves it off.
     #[test]
-    fn full_mode_is_on_unless_it_is_turned_off() {
-        assert!(AppConfig::default().text_preview_full_mode);
+    fn full_mode_is_off_unless_it_is_turned_on() {
+        assert!(!AppConfig::default().text_preview_full_mode);
 
         let mut ini = Ini::new();
         ini.set("settings", "text_preview_enabled", Some("true".into()));
 
         let mut config = AppConfig::default();
         config.apply_ini(&ini);
-        assert!(config.text_preview_full_mode);
+        assert!(!config.text_preview_full_mode);
+    }
+
+    /// The trigger key is Alt until another is named, and what it does is to stop
+    /// previews until the configuration says otherwise.
+    #[test]
+    fn the_trigger_key_stops_previews_unless_it_is_told_to_allow_them() {
+        let default = AppConfig::default();
+        assert_eq!(default.trigger_key, "alt");
+        assert_eq!(default.trigger_key_mode, TriggerKeyMode::Disable);
+
+        let mut ini = Ini::new();
+        ini.set("settings", "trigger_key", Some("ctrl".into()));
+        ini.set("settings", "trigger_key_mode", Some("Enable".into()));
+
+        let mut config = AppConfig::default();
+        config.apply_ini(&ini);
+        assert_eq!(config.trigger_key, "ctrl");
+        assert_eq!(config.trigger_key_mode, TriggerKeyMode::Enable);
+
+        // The name the key had when the trigger could only stop previews still
+        // names it, so a file written before the setting changed keeps its key.
+        let mut older = Ini::new();
+        older.set("settings", "off_trigger_key", Some("shift".into()));
+
+        let mut config = AppConfig::default();
+        config.apply_ini(&older);
+        assert_eq!(config.trigger_key, "shift");
+        assert_eq!(config.trigger_key_mode, TriggerKeyMode::Disable);
+    }
+
+    /// The two trigger modes are the same gesture read opposite ways, so each is
+    /// the exact inverse of the other.
+    #[test]
+    fn the_trigger_modes_are_inverses_of_each_other() {
+        assert!(TriggerKeyMode::Disable.allows_previews(false));
+        assert!(!TriggerKeyMode::Disable.allows_previews(true));
+
+        assert!(!TriggerKeyMode::Enable.allows_previews(false));
+        assert!(TriggerKeyMode::Enable.allows_previews(true));
+
+        for key_down in [false, true] {
+            assert_ne!(
+                TriggerKeyMode::Disable.allows_previews(key_down),
+                TriggerKeyMode::Enable.allows_previews(key_down),
+                "one mode stops what the other starts"
+            );
+        }
     }
 
     #[test]
