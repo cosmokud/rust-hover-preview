@@ -61,10 +61,6 @@ const WINDOW_CACHE_MAX_ENTRIES: usize = 6;
 /// can continue rather than to remember every file ever hovered.
 const SYNTAX_PROGRESS_MAX_ENTRIES: usize = 8;
 
-/// Longest line kept, in characters. Minified sources and one-line data files
-/// would otherwise turn a single hover into a megabyte-wide layout.
-const MAX_LINE_CHARS: usize = 2000;
-
 const TAB_WIDTH: usize = 4;
 
 /// Parsed documents kept in memory, keyed by file and rendering options.
@@ -235,8 +231,8 @@ pub fn position_in(lines: &[FrameLine], x: i32, y: i32) -> (usize, usize) {
 /// covers, as it will be pasted: the lines it touches, each cut to the part that
 /// was selected, joined with Windows line endings.
 ///
-/// What painted lines hold is what the frame shows, so a line clipped at the right
-/// edge copies the part that was read off the screen.
+/// What painted lines hold is what the frame shows, so a copy is the part of the
+/// file that was on screen — a line that wrapped is copied as the lines it took.
 pub fn text_in(lines: &[FrameLine], selection: Selection) -> String {
     let ((start_line, start_char), (end_line, end_char)) = selection.ordered();
     let mut selected: Vec<String> = Vec::new();
@@ -456,10 +452,6 @@ struct TextDoc {
     /// Whether the read stopped at the byte cap rather than at the end of the
     /// file, in which case a file continues past what a preview can show.
     read_truncated: bool,
-    /// Whether a line wider than the page continues on the next one. Prose wraps —
-    /// a paragraph is one long line and clipping it would hide most of what the
-    /// file says — while code, markup and art keep their columns.
-    wrap: bool,
 }
 
 impl TextDoc {
@@ -751,7 +743,6 @@ fn build_document(path: &Path, options: TextPreviewOptions) -> Option<TextDoc> {
             text: stripped,
             producer: Producer::Plain,
             read_truncated: source.truncated,
-            wrap: true,
         });
     }
 
@@ -762,8 +753,6 @@ fn build_document(path: &Path, options: TextPreviewOptions) -> Option<TextDoc> {
             producer: Producer::Markdown,
             text: source.text,
             read_truncated: source.truncated,
-            // A rendered document is prose: its paragraphs wrap.
-            wrap: true,
         };
 
         // The walk that renders a document is also the only thing that can say
@@ -784,8 +773,6 @@ fn build_document(path: &Path, options: TextPreviewOptions) -> Option<TextDoc> {
             producer: Producer::Ansi,
             text: source.text,
             read_truncated: source.truncated,
-            // NFO art is drawn in columns; wrapping it would destroy the picture.
-            wrap: false,
         });
     }
 
@@ -800,10 +787,6 @@ fn build_document(path: &Path, options: TextPreviewOptions) -> Option<TextDoc> {
         line_starts: line_starts(&source.text),
         rendered_lines: None,
         producer: Producer::Highlighted { syntax },
-        // A file no grammar claims is prose rather than code — a readme, a log, a
-        // note — and prose that is cut off at the page edge is unreadable, so
-        // those wrap. Anything with a syntax definition keeps its columns.
-        wrap: syntax.name == "Plain Text",
         text: source.text,
         read_truncated: source.truncated,
     })
@@ -2197,12 +2180,13 @@ struct BodyLayout {
 /// of the box is pulled back until the lines left in the document fill it, so the
 /// last screenful of a document is a full one and its last line is on screen.
 ///
-/// Lines are clipped at the right edge rather than wrapped — column-aligned code
-/// reads better unwrapped — and only the lines the frame shows are ever styled,
-/// which is what keeps a preview of a large file cheap. `scrollbar_space` is room
-/// kept clear at the right edge for a scrollbar the caller is about to draw, and
-/// `full_mode` says whether there is a scrollbar to reach the rest of the document
-/// at all: without one, what the box cannot hold is said in a line.
+/// A line wider than the box wraps onto the next one — nothing in a preview scrolls
+/// sideways, so whatever went past the edge would be out of reach for good — and
+/// only the lines the frame shows are ever styled, which is what keeps a preview of
+/// a large file cheap. `scrollbar_space` is room kept clear at the right edge for a
+/// scrollbar the caller is about to draw, and `full_mode` says whether there is a
+/// scrollbar to reach the rest of the document at all: without one, what the box
+/// cannot hold is said in a line.
 #[allow(clippy::too_many_arguments)] // Each one is a distinct number about the request.
 fn layout(
     document: &CachedDocument,
@@ -2363,7 +2347,6 @@ fn pulled_back_first_line(
         return first_line;
     }
 
-    let doc = &document.doc;
     let padding = metrics.padding;
     let min_line_height = metrics
         .line_height
@@ -2391,8 +2374,11 @@ fn pulled_back_first_line(
 
         // The height the line takes in the frame, which is the height the
         // placement gives it.
-        let needed = visual_lines_of(doc, line, metrics, left, right).len() as i32
-            * line_height(line, metrics);
+        let height = line_height(line, metrics);
+        // One line more than the room holds, which is enough of a line that does
+        // not fit for the answer to be over the room either way.
+        let max_lines = (room / height) as usize + 1;
+        let needed = visual_lines_of(line, metrics, left, right, max_lines).len() as i32 * height;
         if needed > room {
             break;
         }
@@ -2458,7 +2444,10 @@ fn lay_out_body(
                 break;
             }
 
-            let visual_lines = visual_lines_of(doc, line, metrics, left, right);
+            // The visual lines the box still has room for are all of this line a
+            // frame can ever show, so that is as far as it is wrapped.
+            let max_lines = ((bottom - y) / height) as usize;
+            let visual_lines = visual_lines_of(line, metrics, left, right, max_lines);
 
             let mut placed = false;
             for runs in visual_lines {
@@ -2510,17 +2499,27 @@ fn lay_out_body(
 }
 
 /// One document line as the frame draws it inside its text column: the visual
-/// lines it takes, left to right. Code, markup and art are clipped at the right
-/// edge, so their columns line up; prose wraps between words.
+/// lines it takes, left to right, wrapped at the page edge.
+///
+/// A line wider than the column continues on the next one. Nothing in a text
+/// preview scrolls sideways, so a line that ran past the edge would put whatever it
+/// held beyond it out of reach for good, whatever the file is — code and NFO art as
+/// much as prose.
+///
+/// Only `max_lines` of them are wrapped, which is as many as the frame could ever
+/// draw: what lies past that is a tail no scroll position can reach, because a
+/// position is a document line and every frame starts at the first of a line's own
+/// visual lines. A minified file is one line of megabytes, and that is what keeps a
+/// hover bounded by the box rather than by the file.
 ///
 /// Both the placement and the pull-back measure a line with this, so the height a
 /// line is given and the height it is walked back by cannot drift apart.
 fn visual_lines_of(
-    doc: &TextDoc,
     line: &DocLine,
     metrics: &TextMetrics,
     left: i32,
     right: i32,
+    max_lines: usize,
 ) -> Vec<Vec<LaidRun>> {
     let indent = left + metrics.indent(line.indent);
     let text_right = match line.block {
@@ -2528,48 +2527,7 @@ fn visual_lines_of(
         _ => right,
     };
 
-    if doc.wrap {
-        wrap_line(line, indent, text_right, metrics)
-    } else {
-        vec![clip_line(line, indent, text_right, metrics)]
-    }
-}
-
-/// The runs of one line as it fits between `left` and `limit`, clipped at the
-/// edge. This is what code, markup and art get: their columns line up, and a
-/// wrapped line would break that.
-fn clip_line(line: &DocLine, left: i32, limit: i32, metrics: &TextMetrics) -> Vec<LaidRun> {
-    let mut x = left;
-    let mut runs = Vec::new();
-
-    for span in &line.spans {
-        if x >= limit {
-            break;
-        }
-
-        let advance = metrics.advance[(span.style.level as usize).min(SIZE_LEVELS - 1)].max(1);
-        let available = ((limit - x) / advance) as usize;
-        let characters = span
-            .text
-            .chars()
-            .take(MAX_LINE_CHARS.min(available))
-            .count();
-        if characters == 0 {
-            break;
-        }
-
-        let text: String = span.text.chars().take(characters).collect();
-        let width = characters as i32 * advance;
-        runs.push(LaidRun {
-            text,
-            style: span.style,
-            x,
-            width,
-        });
-        x += width;
-    }
-
-    runs
+    wrap_line(line, indent, text_right, max_lines, metrics)
 }
 
 /// A word or the spaces between words, carrying the style it was colored with.
@@ -2579,11 +2537,15 @@ struct Token {
     space: bool,
 }
 
-/// Split a line into words and spaces, so a wrapped line breaks between words
-/// instead of in the middle of one and keeps its colors across the break.
-fn tokens_of(line: &DocLine) -> Vec<Token> {
-    let mut tokens = Vec::new();
-
+/// Walk a line's words and the spaces between them, so a wrapped line breaks
+/// between words instead of in the middle of one and keeps its colors across the
+/// break.
+///
+/// The walk stops the moment `visit` answers false. That is what keeps a line of a
+/// minified file — megabytes on one line — from being split any further than a
+/// frame can draw, without deciding up front how much of it that is: only as much
+/// of the line as is drawn is ever copied.
+fn for_each_token(line: &DocLine, mut visit: impl FnMut(Token) -> bool) {
     for span in &line.spans {
         let mut text = String::new();
         let mut space = false;
@@ -2591,44 +2553,54 @@ fn tokens_of(line: &DocLine) -> Vec<Token> {
         for character in span.text.chars() {
             let is_space = character == ' ';
             if !text.is_empty() && is_space != space {
-                tokens.push(Token {
+                let token = Token {
                     text: std::mem::take(&mut text),
                     style: span.style,
                     space,
-                });
+                };
+                if !visit(token) {
+                    return;
+                }
             }
             space = is_space;
             text.push(character);
         }
 
         if !text.is_empty() {
-            tokens.push(Token {
+            let token = Token {
                 text,
                 style: span.style,
                 space,
-            });
+            };
+            if !visit(token) {
+                return;
+            }
         }
     }
-
-    tokens
 }
 
-/// One document line's visual lines, wrapped at the page edge. A word wider than
-/// the page — a URL, a hash — is cut rather than allowed to run off it, and a
-/// space that lands at a wrap point is dropped instead of starting a line.
-fn wrap_line(line: &DocLine, left: i32, limit: i32, metrics: &TextMetrics) -> Vec<Vec<LaidRun>> {
+/// One document line's visual lines, wrapped at the page edge and at most
+/// `max_lines` of them. A word wider than the page — a URL, a hash — is cut rather
+/// than allowed to run off it, and a space that lands at a wrap point is dropped
+/// instead of starting a line.
+fn wrap_line(
+    line: &DocLine,
+    left: i32,
+    limit: i32,
+    max_lines: usize,
+    metrics: &TextMetrics,
+) -> Vec<Vec<LaidRun>> {
     let mut lines: Vec<Vec<LaidRun>> = Vec::new();
     let mut runs: Vec<LaidRun> = Vec::new();
     let mut x = left;
 
-    for token in tokens_of(line) {
+    for_each_token(line, |token| {
         let advance = metrics.advance[(token.style.level as usize).min(SIZE_LEVELS - 1)].max(1);
-        let characters: Vec<char> = token.text.chars().collect();
-        let width = characters.len() as i32 * advance;
+        let width = token.text.chars().count() as i32 * advance;
 
         if token.space {
             if runs.is_empty() || x + width > limit {
-                continue;
+                return true;
             }
             runs.push(LaidRun {
                 text: token.text,
@@ -2637,14 +2609,35 @@ fn wrap_line(line: &DocLine, left: i32, limit: i32, metrics: &TextMetrics) -> Ve
                 width,
             });
             x += width;
-            continue;
+            return true;
         }
 
         if x > left && x + width > limit {
+            // This word belongs to another visual line, and there is no room left
+            // in the frame for one.
+            if lines.len() + 1 == max_lines {
+                return false;
+            }
             lines.push(std::mem::take(&mut runs));
             x = left;
         }
 
+        // A word that fits where the line stands is taken whole, so only one too
+        // wide for the room left of it is ever split.
+        if width <= limit - x {
+            runs.push(LaidRun {
+                text: token.text,
+                style: token.style,
+                x,
+                width,
+            });
+            x += width;
+            return true;
+        }
+
+        // A word too wide for the room left of it is split across the lines it
+        // takes, and nothing else reaches here.
+        let characters: Vec<char> = token.text.chars().collect();
         let mut offset = 0usize;
         while offset < characters.len() {
             let available = (((limit - x).max(advance)) / advance) as usize;
@@ -2662,11 +2655,16 @@ fn wrap_line(line: &DocLine, left: i32, limit: i32, metrics: &TextMetrics) -> Ve
             offset += take;
 
             if offset < characters.len() {
+                if lines.len() + 1 == max_lines {
+                    return false;
+                }
                 lines.push(std::mem::take(&mut runs));
                 x = left;
             }
         }
-    }
+
+        true
+    });
 
     if !runs.is_empty() {
         lines.push(runs);
@@ -2993,8 +2991,9 @@ unsafe fn paint_run(
 /// scrollbar when the document is longer than the frame.
 ///
 /// Every run is drawn with an opaque background rectangle, so the page color
-/// fills the box and the pieces GDI leaves alone (the space a clipped line did
-/// not use, the gaps between blocks) are already the right color.
+/// fills the box and the pieces GDI leaves alone (the space a line that stops
+/// before the edge did not use, the gaps between blocks) are already the right
+/// color.
 unsafe fn paint(
     surface: &DibSurface,
     laid_out: &LaidOut,
