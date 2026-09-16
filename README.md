@@ -155,7 +155,7 @@ Key settings:
 - `theme` — `light` (default), `dark`, or a custom theme as `custom:<name>`.
 - `markdown_mode` — `rendered` or `source`.
 - `image_preview_enabled` / `video_preview_enabled` / `text_preview_enabled` / `pdf_preview_enabled` — whether previews of that kind may be shown at all, without changing the lists of files it covers.
-- `text_preview_full_mode` — `true` adds scrolling, selection, copy, and `Ctrl+A`.
+- `text_preview_full_mode` — `true` adds scrolling, selection, and copy.
 - `text_font_scale` — percentage from 1 to 1000; default is `125`.
 - `extensions` / `names` — text-preview gates. Extensions are written without dots; names match extensionless files.
 - `trigger_key` / `trigger_key_mode` — key (`alt`, `ctrl`, `shift`, `win`) and mode (`disable` or `enable`).

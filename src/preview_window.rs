@@ -47,7 +47,7 @@ use windows::Win32::System::Threading::{
 };
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetAsyncKeyState, ReleaseCapture, SetCapture, VK_A, VK_C, VK_CONTROL,
+    GetAsyncKeyState, ReleaseCapture, SetCapture, VK_C, VK_CONTROL,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DispatchMessageW,
@@ -3655,21 +3655,6 @@ fn has_text_selection() -> bool {
         .unwrap_or(false)
 }
 
-/// Whether the text preview on screen has a frame to select from, which is what
-/// makes a Ctrl+A the preview's to answer.
-fn has_text_frame() -> bool {
-    CURRENT_MEDIA
-        .lock()
-        .map(|media| {
-            media
-                .as_ref()
-                .and_then(|media| media.text_state.as_ref())
-                .map(|state| !state.lines.is_empty())
-                .unwrap_or(false)
-        })
-        .unwrap_or(false)
-}
-
 /// Select everything the frame shows: the whole of a document that fits on one
 /// page, and the screenful a longer one is showing.
 ///
@@ -3771,25 +3756,6 @@ fn text_preview_copy_requested() -> bool {
     unsafe {
         let control = GetAsyncKeyState(VK_CONTROL.0 as i32) as u16 & 0x8000 != 0;
         let just_pressed = GetAsyncKeyState(VK_C.0 as i32) & 1 != 0;
-        control && just_pressed
-    }
-}
-
-/// Ask for Ctrl+A to select everything the preview shows, which is the same
-/// command the menu's `Select All` offers.
-///
-/// Read exactly the way Ctrl+C is — the preview never takes focus — and only
-/// while a text preview with lines in it is on screen, so a Ctrl+A meant for
-/// something else is left alone. Nothing is read at all while no text preview is
-/// up, and a preview without full mode keeps no lines to select from.
-fn text_preview_select_all_requested() -> bool {
-    if !has_text_frame() {
-        return false;
-    }
-
-    unsafe {
-        let control = GetAsyncKeyState(VK_CONTROL.0 as i32) as u16 & 0x8000 != 0;
-        let just_pressed = GetAsyncKeyState(VK_A.0 as i32) & 1 != 0;
         control && just_pressed
     }
 }
@@ -4928,13 +4894,10 @@ pub fn run_preview_window() {
                 render_layered_preview(hwnd);
             }
 
-            // Ctrl+C over a text preview copies what is selected in it, and
-            // Ctrl+A selects everything it shows. The keys are polled rather than
-            // waited for: the preview never takes focus, so it would never
-            // receive the keystroke as a message.
-            if text_preview_select_all_requested() {
-                select_all_text_preview(hwnd);
-            }
+            // Ctrl+C over a text preview copies what is selected in it. The key
+            // is polled rather than waited for: the preview never takes focus, so
+            // it would never receive the keystroke as a message. Selecting
+            // everything is the menu's `Select All`, not a key of its own.
             if text_preview_copy_requested() {
                 copy_text_preview(hwnd);
             }
