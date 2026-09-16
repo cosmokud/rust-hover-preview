@@ -299,6 +299,12 @@ const SHELL_VIEW_INDEX_SYNC_ITEM_LIMIT: i32 = 1000;
 /// still an index.
 const SHELL_VIEW_INDEX_BUILD_BUDGET_MS: u64 = 150;
 const SEARCH_ROOT_INDEX_TTL_MS: u64 = 60000;
+/// How long a lookup may walk the folders below one while the hook loop waits for
+/// it. The walk answers the question a search asks — where below this folder does
+/// that name live — and it is given only as long as a probe can afford: a small
+/// tree is walked to the end inside it, a large one is answered by the index that
+/// walks it in the background.
+const SEARCH_DESCEND_BUDGET_MS: u64 = 40;
 const SEARCH_ROOT_INDEX_MAX_DIRS: usize = 20000;
 const SEARCH_ROOT_INDEX_MAX_FILES: usize = 50000;
 const EXPLORER_PROBE_SLOW_MS: u64 = 700;
@@ -2021,9 +2027,15 @@ fn lookup_media_in_hover_folder(
         if let Some(path) = find_media_in_folder(folder, item_name) {
             return Some(path);
         }
+        if let Some(path) = lookup_media_below_folder(folder, item_name) {
+            return Some(path);
+        }
     }
 
-    get_current_explorer_folder().and_then(|folder| find_media_in_folder(&folder, item_name))
+    get_current_explorer_folder().and_then(|folder| {
+        find_media_in_folder(&folder, item_name)
+            .or_else(|| lookup_media_below_folder(&folder, item_name))
+    })
 }
 
 fn add_search_index_path(index: &mut SearchRootMediaIndex, path: &PathBuf) {
@@ -2044,7 +2056,16 @@ fn add_search_index_path(index: &mut SearchRootMediaIndex, path: &PathBuf) {
     }
 }
 
-fn build_search_root_media_index(root: &str) -> Option<SearchRootMediaIndex> {
+/// Read the files under a folder into an index, optionally under a time budget.
+///
+/// The walk is the one a search's results are found by: every folder below the
+/// one it starts at, and every media file in them, by name. It is offered a
+/// budget by the callers that run on the hook loop, which get a short index back
+/// and leave the rest to the walk that runs in the background.
+fn build_search_root_media_index(
+    root: &str,
+    budget: Option<Duration>,
+) -> Option<SearchRootMediaIndex> {
     let root_path = PathBuf::from(root);
     if !root_path.is_dir() {
         return None;
@@ -2058,12 +2079,18 @@ fn build_search_root_media_index(root: &str) -> Option<SearchRootMediaIndex> {
     let mut dirs = vec![root_path];
     let mut scanned_dirs = 0usize;
     let mut indexed_files = 0usize;
+    let deadline = budget.map(|budget| Instant::now() + budget);
 
     while let Some(dir) = dirs.pop() {
         if scanned_dirs >= SEARCH_ROOT_INDEX_MAX_DIRS
             || indexed_files >= SEARCH_ROOT_INDEX_MAX_FILES
         {
             break;
+        }
+        if let Some(deadline) = deadline {
+            if Instant::now() >= deadline {
+                break;
+            }
         }
         scanned_dirs += 1;
 
@@ -2140,6 +2167,24 @@ fn lookup_path_in_search_root_index(
     None
 }
 
+/// Find a file by name below a folder, walking the folders under it now.
+///
+/// This is the question a search answers: a search started in a folder returns
+/// results from any folder below it, and the shell hands a result over as its
+/// name — so when the name is not *in* the folder the search began at, the only
+/// folders that can hold it are the ones underneath. The walk is the same one the
+/// search-root index does, given a budget small enough for the hook loop to spend
+/// between probes; what it does not reach in time is left to the index, which
+/// walks the same tree in the background.
+fn lookup_media_below_folder(folder: &str, item_name: &str) -> Option<PathBuf> {
+    let index = build_search_root_media_index(
+        folder,
+        Some(Duration::from_millis(SEARCH_DESCEND_BUDGET_MS)),
+    )?;
+
+    lookup_path_in_search_root_index(&index, item_name)
+}
+
 fn queue_search_root_index_build(root: String) {
     let root_path = PathBuf::from(&root);
     if !root_path.is_dir() {
@@ -2173,7 +2218,7 @@ fn queue_search_root_index_build(root: String) {
     }
 
     std::thread::spawn(move || {
-        let built_index = build_search_root_media_index(&root);
+        let built_index = build_search_root_media_index(&root, None);
         if let Some(index) = built_index {
             if let Ok(mut cache) = SEARCH_ROOT_MEDIA_INDEX.lock() {
                 cache.insert(root.clone(), index);
@@ -2861,6 +2906,12 @@ fn get_file_under_cursor_normal(
                 if let Some(path) = find_media_in_folder(&folder, &item_name) {
                     return Some(path);
                 }
+
+                // A result of a search that was started in this folder can be in
+                // any folder below it, and only its name is known.
+                if let Some(path) = lookup_media_below_folder(&folder, &item_name) {
+                    return Some(path);
+                }
             }
 
             let potential_path = PathBuf::from(&item_name);
@@ -2920,6 +2971,12 @@ fn get_file_under_cursor_search_legacy(
 
             if let Some(root) = current_search_root.as_deref() {
                 if let Some(path) = find_media_in_folder(root, &item_name) {
+                    return Some(path);
+                }
+
+                // The result came from a search that began at this root, so a name
+                // that is not directly in it is in one of the folders below it.
+                if let Some(path) = lookup_media_below_folder(root, &item_name) {
                     return Some(path);
                 }
             }
@@ -3750,6 +3807,13 @@ fn resolve_focused_item_to_path(item: &FocusedItemInfo) -> Option<PathBuf> {
             // Search mode: keep the special resolver intact.
             if let Some(root) = current_search_root.as_deref() {
                 if let Some(path) = find_media_in_folder(root, item_name) {
+                    return Some(path);
+                }
+
+                // A search that began at this root returns results from the folders
+                // below it as well, and those are handed over as names: the name is
+                // walked for under the root rather than only looked for in it.
+                if let Some(path) = lookup_media_below_folder(root, item_name) {
                     return Some(path);
                 }
             }
