@@ -1,7 +1,9 @@
+use crate::cloud_files;
 use crate::config::{
-    sanitize_webp_playback_fps, MarkdownMode, PreviewScale, PreviewType, TextTheme,
-    TransparentBackground, DEFAULT_PREVIEW_SCALE_PERCENT, DEFAULT_TEXT_FONT_SCALE_PERCENT,
-    DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS, DEFAULT_WEBP_PLAYBACK_FPS,
+    sanitize_image_cache_mb, sanitize_webp_playback_fps, MarkdownMode, PreviewScale, PreviewType,
+    TextTheme, TransparentBackground, DEFAULT_IMAGE_CACHE_MB, DEFAULT_PREVIEW_SCALE_PERCENT,
+    DEFAULT_TEXT_FONT_SCALE_PERCENT, DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS,
+    DEFAULT_WEBP_PLAYBACK_FPS,
 };
 use crate::pdf_preview;
 use crate::text_formats;
@@ -24,7 +26,7 @@ use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Condvar, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 use windows::core::{w, PCWSTR, PWSTR};
 use windows::Win32::Foundation::{
     CloseHandle, GlobalFree, COLORREF, HANDLE, HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM,
@@ -77,8 +79,15 @@ const ANIMATION_QUEUE_FRAMES: usize = 6;
 /// released. Releasing in blocks keeps the sliding window from moving per frame.
 const ANIMATION_RELEASE_BYTES: usize = 16 * 1024 * 1024;
 const MIN_ANIMATION_FRAME_DELAY_MS: u32 = 33;
-const ANIMATION_STARTUP_PREBUFFER_FRAMES: usize = 12;
-const ANIMATION_STARTUP_PREBUFFER_MS: u32 = 500;
+/// Frames an animation is given before it is handed over.
+///
+/// Two, rather than a startup buffer: the frame the preview opens on is the first
+/// one, and holding a buffer before showing anything is a delay the user reads as
+/// the preview not appearing. The decoder runs on ahead of playback once it has
+/// been handed over, so it is the queue depth that keeps playback fed, not this —
+/// and every frame still reaches the screen, because the handover only decides
+/// when the preview opens, not how much of the animation is played.
+const ANIMATION_STARTUP_FRAMES: usize = 2;
 const STREAMING_SPINNER_MAX_MS: u64 = 1500;
 const VIDEO_GEOMETRY_CACHE_MAX_ENTRIES: usize = 512;
 // Expected executable name of the playback process spawned below, used to
@@ -268,6 +277,7 @@ impl MediaType {
 }
 
 /// A single frame of image data
+#[derive(Clone)]
 struct ImageFrame {
     pixels: Vec<u8>,
     width: u32,
@@ -1018,37 +1028,42 @@ fn compose_preview_row(
                 dst[3] = a as u8;
             }
         }
-        TransparentBackground::Black
-        | TransparentBackground::White
-        | TransparentBackground::Checkerboard => {
+        // The background is settled once per row rather than once per pixel: it
+        // cannot change inside the loop, and as a per-pixel match it cost a
+        // branch on every pixel of every animation frame.
+        TransparentBackground::Black => {
+            for (px, dst) in src_row.chunks_exact(4).zip(dst_row.chunks_exact_mut(4)) {
+                blend_pixel_over(px, dst, 0, 0, 0);
+            }
+        }
+        TransparentBackground::White => {
+            for (px, dst) in src_row.chunks_exact(4).zip(dst_row.chunks_exact_mut(4)) {
+                blend_pixel_over(px, dst, 255, 255, 255);
+            }
+        }
+        TransparentBackground::Checkerboard => {
             for (x, (px, dst)) in src_row
                 .chunks_exact(4)
                 .zip(dst_row.chunks_exact_mut(4))
                 .enumerate()
             {
-                let b = px[0] as u32;
-                let g = px[1] as u32;
-                let r = px[2] as u32;
-                let a = px[3] as u32;
-
-                let (bg_b, bg_g, bg_r) = match background {
-                    TransparentBackground::Black => (0u32, 0u32, 0u32),
-                    TransparentBackground::White => (255u32, 255u32, 255u32),
-                    TransparentBackground::Checkerboard => {
-                        let (cr, cg, cb) = checkerboard_color(x as u32, y);
-                        (cb as u32, cg as u32, cr as u32)
-                    }
-                    TransparentBackground::Transparent => unreachable!(),
-                };
-                let inv_a = 255 - a;
-
-                dst[0] = ((b * a + bg_b * inv_a + 127) / 255) as u8;
-                dst[1] = ((g * a + bg_g * inv_a + 127) / 255) as u8;
-                dst[2] = ((r * a + bg_r * inv_a + 127) / 255) as u8;
-                dst[3] = 255;
+                let (r, g, b) = checkerboard_color(x as u32, y);
+                blend_pixel_over(px, dst, b as u32, g as u32, r as u32);
             }
         }
     }
+}
+
+/// One pixel blended over an opaque background, written opaquely.
+#[inline]
+fn blend_pixel_over(px: &[u8], dst: &mut [u8], bg_b: u32, bg_g: u32, bg_r: u32) {
+    let a = px[3] as u32;
+    let inv_a = 255 - a;
+
+    dst[0] = ((px[0] as u32 * a + bg_b * inv_a + 127) / 255) as u8;
+    dst[1] = ((px[1] as u32 * a + bg_g * inv_a + 127) / 255) as u8;
+    dst[2] = ((px[2] as u32 * a + bg_r * inv_a + 127) / 255) as u8;
+    dst[3] = 255;
 }
 
 /// Scale media dimensions to the requested preview scale while never exceeding
@@ -1214,12 +1229,9 @@ fn load_animated_gif(
     let mut canvas = vec![0u8; (gif_width * gif_height * 4) as usize];
     let mut initial_frames = Vec::new();
     let mut initial_bytes: usize = 0;
-    let mut buffered_ms: u32 = 0;
     let mut reached_end = false;
 
-    while initial_frames.len() < ANIMATION_STARTUP_PREBUFFER_FRAMES
-        && (initial_frames.len() < 2 || buffered_ms < ANIMATION_STARTUP_PREBUFFER_MS)
-    {
+    while initial_frames.len() < ANIMATION_STARTUP_FRAMES {
         if cancel.load(Ordering::Acquire) {
             return None;
         }
@@ -1247,7 +1259,6 @@ fn load_animated_gif(
         if initial_bytes > ANIMATION_RETAINED_BYTES {
             return None;
         }
-        buffered_ms = buffered_ms.saturating_add(delay_ms);
         initial_frames.push(img);
     }
 
@@ -1416,13 +1427,10 @@ fn load_animated_apng(
 
     let mut initial_frames = Vec::new();
     let mut initial_bytes: usize = 0;
-    let mut buffered_ms: u32 = 0;
     let mut reached_end = false;
     let mut target_size: Option<(u32, u32)> = None;
 
-    while initial_frames.len() < ANIMATION_STARTUP_PREBUFFER_FRAMES
-        && (initial_frames.len() < 2 || buffered_ms < ANIMATION_STARTUP_PREBUFFER_MS)
-    {
+    while initial_frames.len() < ANIMATION_STARTUP_FRAMES {
         if cancel.load(Ordering::Acquire) {
             return None;
         }
@@ -1457,7 +1465,6 @@ fn load_animated_apng(
         if initial_bytes > ANIMATION_RETAINED_BYTES {
             return None;
         }
-        buffered_ms = buffered_ms.saturating_add(delay_ms);
         initial_frames.push(img);
     }
 
@@ -1629,14 +1636,11 @@ fn load_animated_webp(
 
     let mut initial_frames = Vec::new();
     let mut initial_bytes: usize = 0;
-    let mut buffered_ms: u32 = 0;
     let mut previous_timestamp = 0i32;
     let mut reached_end = false;
     let mut iterator = decoder.into_iter();
 
-    while initial_frames.len() < ANIMATION_STARTUP_PREBUFFER_FRAMES
-        && (initial_frames.len() < 2 || buffered_ms < ANIMATION_STARTUP_PREBUFFER_MS)
-    {
+    while initial_frames.len() < ANIMATION_STARTUP_FRAMES {
         if cancel.load(Ordering::Acquire) {
             return None;
         }
@@ -1665,7 +1669,6 @@ fn load_animated_webp(
         if initial_bytes > ANIMATION_RETAINED_BYTES {
             return None;
         }
-        buffered_ms = buffered_ms.saturating_add(delay_ms);
         initial_frames.push(img);
     }
 
@@ -1771,26 +1774,234 @@ fn load_animated_webp(
     })
 }
 
+/// The largest image a preview will decode: a side length, and the pixel count
+/// that bounds the memory it asks for (four bytes each, so the pixel cap is a
+/// 160 MB decode). A preview is at most a screen, so an image past this is one
+/// nobody was going to see at its own size anyway.
+const MAX_IMAGE_SIDE: u32 = 20_000;
+const MAX_IMAGE_PIXELS: u64 = 40_000_000;
+
+/// Whether an image of this size can be decoded for the price of a preview.
+///
+/// The size comes from the header, so nothing is decoded to ask the question —
+/// which is the point: an allocation as large as a huge image asks for is the one
+/// failure `catch_unwind` cannot turn into a missing preview, because the
+/// allocator aborts rather than unwinds.
+fn image_within_decode_limits(width: u32, height: u32) -> bool {
+    width <= MAX_IMAGE_SIDE
+        && height <= MAX_IMAGE_SIDE
+        && width as u64 * height as u64 <= MAX_IMAGE_PIXELS
+}
+
+/// A frame's place in the cache, and when it was last asked for. The stamp is a
+/// counter rather than a clock, so the order frames are dropped in cannot be
+/// changed by the system clock moving.
+struct ImageCacheEntry {
+    frame: ImageFrame,
+    bytes: usize,
+    last_used: u64,
+}
+
+/// The file's modification time and length: what says a file is not the one that
+/// was decoded last time.
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct FileVersion {
+    modified: Option<SystemTime>,
+    len: u64,
+}
+
+/// What a held frame is only valid for.
+///
+/// The file and its version are the obvious part. The pixel size is there as
+/// well because a frame is stored decoded *and scaled*: the same photo shown at
+/// 100% and at fit-to-screen really is different pixels, so only the size that
+/// was asked for can be handed back for it.
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct ImageCacheKey {
+    path: PathBuf,
+    version: FileVersion,
+    width: u32,
+    height: u32,
+}
+
+#[derive(Default)]
+struct ImageCache {
+    entries: HashMap<ImageCacheKey, ImageCacheEntry>,
+    bytes: usize,
+    tick: u64,
+}
+
+static IMAGE_CACHE: Lazy<Mutex<ImageCache>> = Lazy::new(|| Mutex::new(ImageCache::default()));
+
+fn file_version(path: &Path) -> FileVersion {
+    match std::fs::metadata(path) {
+        Ok(metadata) => FileVersion {
+            modified: metadata.modified().ok(),
+            len: metadata.len(),
+        },
+        Err(_) => FileVersion {
+            modified: None,
+            len: 0,
+        },
+    }
+}
+
+/// The memory the cache may hold, read from the configuration each time rather
+/// than captured, so an edit to `image_cache_mb` applies without a restart.
+fn image_cache_limit_bytes() -> usize {
+    let megabytes = CONFIG
+        .lock()
+        .map(|config| sanitize_image_cache_mb(config.image_cache_mb))
+        .unwrap_or(DEFAULT_IMAGE_CACHE_MB);
+
+    megabytes as usize * 1024 * 1024
+}
+
+/// Drop frames, least recently used first, until the cache fits inside `limit`.
+///
+/// A limit of zero empties it, which is what makes `image_cache_mb = 0` mean
+/// "hold nothing" rather than "hold everything until something else is stored".
+fn image_cache_trim(cache: &mut ImageCache, limit: usize) {
+    while cache.bytes > limit {
+        // Bound to its own statement so the borrow of `entries` has ended before
+        // the frame is removed.
+        let oldest = cache
+            .entries
+            .iter()
+            .min_by_key(|(_, entry)| entry.last_used)
+            .map(|(key, _)| (*key).clone());
+
+        let Some(oldest) = oldest else {
+            break;
+        };
+
+        if let Some(dropped) = cache.entries.remove(&oldest) {
+            cache.bytes -= dropped.bytes;
+        }
+    }
+}
+
+/// The frame held for `key`, if the cache still has it.
+fn image_cache_get(key: &ImageCacheKey) -> Option<ImageFrame> {
+    let limit = image_cache_limit_bytes();
+    let mut cache = IMAGE_CACHE.lock().ok()?;
+
+    image_cache_trim(&mut cache, limit);
+
+    cache.tick += 1;
+    let tick = cache.tick;
+
+    let entry = cache.entries.get_mut(key)?;
+    entry.last_used = tick;
+
+    Some(entry.frame.clone())
+}
+
+/// Hold `frame` for `key`, dropping whatever no longer fits beside it.
+fn image_cache_put(key: ImageCacheKey, frame: ImageFrame) {
+    let limit = image_cache_limit_bytes();
+    let Ok(mut cache) = IMAGE_CACHE.lock() else {
+        return;
+    };
+
+    image_cache_trim(&mut cache, limit);
+
+    let bytes = frame.pixels.len();
+    // A frame larger than the whole budget would evict everything else and still
+    // not fit, so it is simply not held.
+    if bytes > limit {
+        return;
+    }
+
+    cache.tick += 1;
+    let tick = cache.tick;
+
+    if let Some(previous) = cache.entries.insert(
+        key,
+        ImageCacheEntry {
+            frame,
+            bytes,
+            last_used: tick,
+        },
+    ) {
+        cache.bytes -= previous.bytes;
+    }
+    cache.bytes += bytes;
+
+    image_cache_trim(&mut cache, limit);
+}
+
+/// A still image as `MediaData`: one frame, nothing streaming.
+fn static_image_media(frame: ImageFrame) -> MediaData {
+    MediaData {
+        frames: vec![frame],
+        shared_frames: None,
+        all_frames_loaded: None,
+        current_frame: 0,
+        last_frame_time: Instant::now(),
+        media_type: MediaType::StaticImage,
+        stream_cancel: None,
+        video_process: None,
+        loading_start: None,
+        text_state: None,
+    }
+}
+
 /// Load a static image (JPG, PNG, BMP, static WebP, etc.)
+///
+/// Decoding one costs a full decode, a resample and two whole-buffer conversions,
+/// and a file list is a place a pointer is swept back and forth over, so a frame
+/// that has already been built is handed back rather than built again.
 fn load_static_image(
     path: &PathBuf,
     max_width: u32,
     max_height: u32,
     preview_scale: PreviewScale,
 ) -> Option<MediaData> {
+    // The header carries the image's own size, which is what the layout and the
+    // resample are computed from, so it is read first: it answers the decode
+    // limits without a decode, and it names the box the frame would be decoded
+    // into.
+    let dimensions = image_dimensions_with_header_check(path);
+
+    if let Some((width, height)) = dimensions {
+        if !image_within_decode_limits(width, height) {
+            return None;
+        }
+    }
+
+    let cache_key = dimensions.map(|(width, height)| {
+        let (target_width, target_height) =
+            scale_dimensions(width, height, max_width, max_height, preview_scale);
+
+        ImageCacheKey {
+            path: path.to_path_buf(),
+            version: file_version(path),
+            width: target_width,
+            height: target_height,
+        }
+    });
+
+    if let Some(key) = cache_key.as_ref() {
+        if let Some(frame) = image_cache_get(key) {
+            return Some(static_image_media(frame));
+        }
+    }
+
+    // A header that would not report its dimensions is not a reason to refuse the
+    // file: the decoder has the last word on whether it is an image at all, and a
+    // frame measured this way is simply not held.
     let img = if is_confirm_file_type_enabled() {
         decode_image_with_header_check(path)?
     } else {
         image::open(path).ok()?
     };
+
     let (orig_width, orig_height) = img.dimensions();
-    let (target_width, target_height) = scale_dimensions(
-        orig_width,
-        orig_height,
-        max_width,
-        max_height,
-        preview_scale,
-    );
+    let (target_width, target_height) = match cache_key.as_ref() {
+        Some(key) => (key.width, key.height),
+        None => scale_dimensions(orig_width, orig_height, max_width, max_height, preview_scale),
+    };
 
     let resized = if target_width != orig_width || target_height != orig_height {
         img.resize_exact(
@@ -1803,27 +2014,18 @@ fn load_static_image(
     };
 
     let rgba = resized.to_rgba8();
-    let bgra = rgba_to_bgra(rgba.as_raw());
-
     let frame = ImageFrame {
-        pixels: bgra,
+        pixels: rgba_to_bgra(rgba.as_raw()),
         width: target_width,
         height: target_height,
         delay_ms: 0,
     };
 
-    Some(MediaData {
-        frames: vec![frame],
-        shared_frames: None,
-        all_frames_loaded: None,
-        current_frame: 0,
-        last_frame_time: Instant::now(),
-        media_type: MediaType::StaticImage,
-        stream_cancel: None,
-        video_process: None,
-        loading_start: None,
-        text_state: None,
-    })
+    if let Some(key) = cache_key {
+        image_cache_put(key, frame.clone());
+    }
+
+    Some(static_image_media(frame))
 }
 
 /// Render the first page of a PDF through the PDF engine built into Windows.
@@ -2065,13 +2267,16 @@ fn validate_detected_crop(crop: VideoCrop, src_w: u32, src_h: u32) -> bool {
         && (trim_top - trim_bottom).abs() <= VIDEO_CROP_MAX_ASYMMETRY_PX
 }
 
-fn detect_video_crop(path: &PathBuf, src_w: u32, src_h: u32) -> Option<VideoCrop> {
+/// Every crop rectangle ffmpeg's detector reported for the file, with the number
+/// of frames that reported it. The source dimensions are not needed to collect
+/// them, which is what lets this run alongside the probe that reads them.
+fn collect_video_crop_candidates(path: &PathBuf) -> HashMap<(u32, u32, u32, u32), u32> {
     let filter = format!(
         "cropdetect={}:{}:0",
         VIDEO_CROPDETECT_LIMIT, VIDEO_CROPDETECT_ROUND
     );
 
-    let output = Command::new("ffmpeg")
+    let output = match Command::new("ffmpeg")
         .args([
             "-v",
             "info",
@@ -2095,7 +2300,10 @@ fn detect_video_crop(path: &PathBuf, src_w: u32, src_h: u32) -> Option<VideoCrop
         .stderr(Stdio::piped())
         .creation_flags(CREATE_NO_WINDOW)
         .output()
-        .ok()?;
+    {
+        Ok(output) => output,
+        Err(_) => return HashMap::new(),
+    };
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     let mut counts: HashMap<(u32, u32, u32, u32), u32> = HashMap::new();
@@ -2107,6 +2315,16 @@ fn detect_video_crop(path: &PathBuf, src_w: u32, src_h: u32) -> Option<VideoCrop
         }
     }
 
+    counts
+}
+
+/// The crop the detector was most sure of, among those that hold up against the
+/// source dimensions.
+fn best_valid_crop(
+    counts: HashMap<(u32, u32, u32, u32), u32>,
+    src_w: u32,
+    src_h: u32,
+) -> Option<VideoCrop> {
     let mut best: Option<(VideoCrop, u32)> = None;
     for ((width, height, x, y), count) in counts {
         let crop = VideoCrop {
@@ -2143,8 +2361,22 @@ fn get_video_geometry(path: &PathBuf) -> Option<VideoGeometry> {
         }
     }
 
-    let (src_w, src_h) = get_video_dimensions(path)?;
-    let crop = detect_video_crop(path, src_w, src_h);
+    // Reading the dimensions and detecting the crop are two external processes,
+    // and the detector is the one that decodes frames: neither needs the other's
+    // answer until the crop is validated, so they run at once and the hover waits
+    // for the slower one rather than for both in turn.
+    let (dimensions, candidates) = std::thread::scope(|scope| {
+        let dimensions = scope.spawn(|| get_video_dimensions(path));
+        let candidates = scope.spawn(|| collect_video_crop_candidates(path));
+
+        (
+            dimensions.join().unwrap_or(None),
+            candidates.join().unwrap_or_default(),
+        )
+    });
+
+    let (src_w, src_h) = dimensions?;
+    let crop = best_valid_crop(candidates, src_w, src_h);
 
     let geometry = if let Some(crop) = crop {
         VideoGeometry {
@@ -2652,6 +2884,14 @@ fn load_media(
     cancel: Arc<AtomicBool>,
 ) -> Option<MediaData> {
     if cancel.load(Ordering::Acquire) {
+        return None;
+    }
+
+    // Every loader below reads the file's bytes, so a file whose content is still
+    // in the cloud is answered here rather than after a download the user never
+    // asked for. The hook refuses these too; this is the boundary that reads, so
+    // it decides for itself rather than trusting that nothing reaches it.
+    if cloud_files::needs_download(path) {
         return None;
     }
 
