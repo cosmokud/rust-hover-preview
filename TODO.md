@@ -2,7 +2,10 @@
 
 ## Features
 
-- Add support for the Office formats; PDF is done (first page, rendered by the Windows PDF engine) and text is done (`.txt`, `.rtf`, `.nfo` and the source formats, colored by syntax definition, with full mode adding scrolling, selection and copy).
+- Add support for the Office formats.
+- Use native Windows playback for supported video files when FFMPEG is not detected.
+- Add support for popular image projects like PSD.
+- Add vector graphics support (SVG).
 
 ## Known Issues
 
