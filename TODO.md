@@ -6,4 +6,4 @@
 
 ## Known Issues
 
-- None currently tracked.
+- Hover functionality in Windows Explorer search results may become unresponsive or fail when handling large result sets containing a high volume of files.
