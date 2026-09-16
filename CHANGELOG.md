@@ -4,18 +4,16 @@
 
 ### Changed
 
-- Explorer hover previews resolve the file under the pointer by the item under it instead of by its name. The item is read from the view's accessibility tree in one batched call — its box, the name the view shows it under and Explorer's own `ItemIndex` — and that position is turned into a path by the Shell window's active `IFolderView2` through `SIGDN_FILESYSPATH`, which for a search result is the real file wherever it lives.
-- The pointer no longer keeps an index warm to answer with: the search-root index, the budgeted descent below the root, the view index and the folder index are the keyboard's and the focused item's alone now, and the view kind no longer selects a resolver. The legacy search-view index, its two caches, its background completion and its own search-root resolver are removed.
-- Documentation is up to date with the release: ARCHITECTURE.md's Pointer Resolution section describes the identity route and how a tabbed window's views are told apart, and the search-results known issue is gone from TODO.md.
-- Bumped version to 0.2.3 in Cargo.toml and Cargo.lock
+- Hover previews in a search results view are resolved from the item under the pointer instead of its file name, so a search of any size previews as fast as a folder does.
+- Removed the search-result indexing the old resolution needed. The keyboard's name lookups are unchanged.
+- Documentation updated: ARCHITECTURE.md describes the new resolution, and the search-results known issue is gone from TODO.md.
 
 ### Fixed
 
-- A hover preview in a search results view no longer waits on background walks: a search of several hundred results stays responsive, keeps the preview that is up, and no longer trips the hook's slow-probe pause.
-- Two search results that share a file name are told apart by the item under the pointer, so each of them previews its own file instead of the first one resolving for all of them.
-- The whole of an item's row belongs to the pointer, including the padding and empty space a view leaves after its text, so a Details or Content row previews from anywhere on it.
-- A search result previews in a window that holds tabs, whichever tab it is in. The window under the pointer was matched against the Shell windows and the first match was taken, and a window holding tabs is more than one match: it registers one Shell window per *tab*, and every one of them answers with the frame's own window, so a search in the second or third tab was resolved against the first tab's view. That view's item at that position belongs to another folder — or to no file at all — and a search view has nothing behind the identity route to fall back on, so nothing previewed; a folder view did preview, which is why it read as a search-only bug, the folder's name lookup having covered for it. The window's views are one candidate each now and the item settles which of them the pointer is in: only the view that is showing has that item, at that position, under that name, and what two of them answer has to agree — two tabs showing the same folder are one answer, while two tabs whose items differ answer nothing rather than the wrong tab's file. The window itself could never have settled it: the Windows 11 frame reports both of its views as visible, so a tab that is not showing cannot be told from the showing one by its window.
-- A preview in a window that holds tabs no longer goes stale when the tab changes. The view that answered last is kept and asked first only while it is the window's *only* registration; a window with tabs is never answered from the cache, because a cached tab is one of several and the cache cannot say which of them is showing.
+- Search results that share a file name each preview their own file.
+- A Details or Content row previews from anywhere on it, not only from its text.
+- A search result previews in any tab of an Explorer window, and follows the tab when it changes.
+- Bumped version to 0.2.3 in Cargo.toml and Cargo.lock
 
 ## [0.2.2] - 2026-09-16
 
