@@ -24,7 +24,8 @@ use windows::Win32::System::Com::{
 };
 use windows::Win32::System::Variant::VT_I4;
 use windows::Win32::UI::Accessibility::{
-    CUIAutomation, CUIAutomationRegistrar, IUIAutomation, IUIAutomation2, IUIAutomationCacheRequest,
+    CUIAutomation, CUIAutomation8, CUIAutomationRegistrar, IUIAutomation, IUIAutomation2,
+    IUIAutomationCacheRequest,
     IUIAutomationElement, IUIAutomationLegacyIAccessiblePattern, IUIAutomationRegistrar,
     IUIAutomationSelectionPattern, IUIAutomationTreeWalker, TreeScope_Children, TreeScope_Element,
     UIAutomationPropertyInfo, UIAutomationType_Int, UIA_BoundingRectanglePropertyId,
@@ -265,27 +266,27 @@ const UIA_TIMEOUT_MS: u32 = 500;
 /// The UI Automation client both paths resolve items with, with every call
 /// bounded.
 ///
-/// The timeouts are set and then read back, because a client that silently
-/// ignores them would be worse than none: it would look bounded while leaving
-/// the hover path able to block forever. A client that cannot be bounded at all
-/// is refused outright, and the hooks answer with no preview rather than with a
-/// wait that has no end.
+/// `CUIAutomation8` is the client that carries `IUIAutomation2`, which is where
+/// the timeouts live: the legacy `CUIAutomation` object does not answer for that
+/// interface at all, so asking it to be bounded is what failed — and, when that
+/// was treated as fatal, what left every hover without a preview. The legacy
+/// client is still the fallback, and a client that cannot be bounded is still
+/// used, because a client that cannot be bounded still resolves items: what it
+/// costs is the wait the timeouts were meant to remove, which is the behavior the
+/// app had before, and not a dead app.
 fn automation_client() -> Option<IUIAutomation> {
-    let automation: IUIAutomation =
-        unsafe { CoCreateInstance(&CUIAutomation, None, CLSCTX_ALL).ok()? };
-    let bounded: IUIAutomation2 = automation.cast().ok()?;
-
-    unsafe {
-        bounded.SetConnectionTimeout(UIA_TIMEOUT_MS).ok()?;
-        bounded.SetTransactionTimeout(UIA_TIMEOUT_MS).ok()?;
-    }
-
-    let applied = unsafe {
-        bounded.ConnectionTimeout().ok()? == UIA_TIMEOUT_MS
-            && bounded.TransactionTimeout().ok()? == UIA_TIMEOUT_MS
+    let automation: IUIAutomation = unsafe {
+        match CoCreateInstance(&CUIAutomation8, None, CLSCTX_ALL) {
+            Ok(automation) => automation,
+            Err(_) => CoCreateInstance(&CUIAutomation, None, CLSCTX_ALL).ok()?,
+        }
     };
-    if !applied {
-        return None;
+
+    if let Ok(bounded) = automation.cast::<IUIAutomation2>() {
+        unsafe {
+            let _ = bounded.SetConnectionTimeout(UIA_TIMEOUT_MS);
+            let _ = bounded.SetTransactionTimeout(UIA_TIMEOUT_MS);
+        }
     }
 
     Some(automation)
