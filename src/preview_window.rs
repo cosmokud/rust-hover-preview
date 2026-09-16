@@ -4190,34 +4190,57 @@ fn compute_keyboard_layout(
     let (orig_w, orig_h) = (orig_dims.0 as i32, orig_dims.1 as i32);
     let desired_scale = preview_scale.target_scale().unwrap_or(f32::INFINITY);
 
+    // What the placement is anchored at: the item's own edges for a box, and its
+    // *middle* for a row. An item far wider than it is tall and at least half the
+    // display across is a row — Content view draws every item that way, with the
+    // name and details at the row's left end and the rest of the row empty — and
+    // there is nothing *beside* a row to place a preview in or grow one from: what
+    // its edges leave is the space the view itself is not using (the navigation pane
+    // on one side, the window's edge on the other), which is where a preview ends up
+    // as a sliver standing next to the list. Anchoring at the middle is what the
+    // mouse path does with the cursor, so a row is read the way a hover over it is,
+    // and the preview is allowed to cover the rest of the row.
+    let item_width = (item_right - item_left).max(0);
+    let item_height = (item_bottom - item_top).max(1);
+    let display_width = (bounds.right - bounds.left).max(1);
+    let row_shaped = item_width >= item_height * 4 && item_width * 2 >= display_width;
+
+    let (anchor_left, anchor_top, anchor_right, anchor_bottom) = if row_shaped {
+        let center_x = (item_left + item_right) / 2;
+        let center_y = (item_top + item_bottom) / 2;
+        (center_x, center_y, center_x, center_y)
+    } else {
+        (item_left, item_top, item_right, item_bottom)
+    };
+
     if follow_cursor {
-        // Quadrant-based positioning relative to item rect edges
+        // Quadrant-based positioning relative to what the item is anchored at
         let quadrants = [
-            // Bottom-Right of item
+            // Bottom-Right of it
             (
-                bounds.right - item_right - gap,
-                bounds.bottom - item_bottom - gap,
-                item_right + gap,
-                item_bottom + gap,
+                bounds.right - anchor_right - gap,
+                bounds.bottom - anchor_bottom - gap,
+                anchor_right + gap,
+                anchor_bottom + gap,
             ),
-            // Bottom-Left of item
+            // Bottom-Left of it
             (
-                item_left - bounds.left - gap,
-                bounds.bottom - item_bottom - gap,
+                anchor_left - bounds.left - gap,
+                bounds.bottom - anchor_bottom - gap,
                 bounds.left,
-                item_bottom + gap,
+                anchor_bottom + gap,
             ),
-            // Top-Right of item
+            // Top-Right of it
             (
-                bounds.right - item_right - gap,
-                item_top - bounds.top - gap,
-                item_right + gap,
+                bounds.right - anchor_right - gap,
+                anchor_top - bounds.top - gap,
+                anchor_right + gap,
                 bounds.top,
             ),
-            // Top-Left of item
+            // Top-Left of it
             (
-                item_left - bounds.left - gap,
-                item_top - bounds.top - gap,
+                anchor_left - bounds.left - gap,
+                anchor_top - bounds.top - gap,
                 bounds.left,
                 bounds.top,
             ),
@@ -4262,11 +4285,14 @@ fn compute_keyboard_layout(
         }
 
         let (pos_x, pos_y) = match best_quadrant {
-            0 => (item_right + gap, item_bottom + gap),
-            1 => (item_left - gap - media_width, item_bottom + gap),
-            2 => (item_right + gap, item_top - gap - media_height),
-            3 => (item_left - gap - media_width, item_top - gap - media_height),
-            _ => (item_right + gap, item_bottom + gap),
+            0 => (anchor_right + gap, anchor_bottom + gap),
+            1 => (anchor_left - gap - media_width, anchor_bottom + gap),
+            2 => (anchor_right + gap, anchor_top - gap - media_height),
+            3 => (
+                anchor_left - gap - media_width,
+                anchor_top - gap - media_height,
+            ),
+            _ => (anchor_right + gap, anchor_bottom + gap),
         };
 
         Some(PreviewLayout {
@@ -4278,45 +4304,30 @@ fn compute_keyboard_layout(
             preview_h,
         })
     } else {
-        // Best spot mode: choose left or right side of item.
+        // Best spot mode: choose the left or right side of what the item is anchored
+        // at — its own edges for a box, its middle for a row (see above).
         //
-        // The room a side offers is the room past the item's own edge, which is what
-        // keeps the preview off the file it belongs to. That reading only holds for
-        // an item that is a *box*, though: Content view draws every item as a row as
-        // wide as the view, with its name and details written at the row's left end
-        // and the rest of the row empty. There is nothing beside a row to place a
-        // preview in — what its edges leave is the space the view itself is not using
-        // (the navigation pane on one side, the window's edge on the other) — and a
-        // preview squeezed in there is a sliver standing beside a list instead of a
-        // preview of it.
-        //
-        // An item that is both much wider than it is tall and at least half the
-        // display across is read as such a row: its room is then measured from its
-        // *middle*, the way the mouse path measures it from the cursor, so the
-        // preview lands in the empty space beside the row's own content and is
-        // allowed to cover the rest of the row. An item that leaves no room on
-        // either side — a box already touching both edges — is treated the same way.
-        let item_width = (item_right - item_left).max(0);
-        let item_height = (item_bottom - item_top).max(1);
-        let display_width = (bounds.right - bounds.left).max(1);
-        let row_shaped = item_width >= item_height * 4 && item_width * 2 >= display_width;
+        // The room a side offers is the room past that anchor, which for a box is
+        // what keeps the preview off the file it describes. A box that leaves no room
+        // on either side is placed from its middle with the display's own room, since
+        // a preview squeezed into what is left past its edge is a sliver while one
+        // placed from its middle takes the size the display allows; a row is already
+        // anchored there.
+        let edge_left_width = anchor_left - bounds.left - gap;
+        let edge_right_width = bounds.right - anchor_right - gap;
 
-        let edge_left_width = item_left - bounds.left - gap;
-        let edge_right_width = bounds.right - item_right - gap;
-
-        let (left_anchor_x, right_anchor_x, left_width, right_width) = if row_shaped
-            || (edge_left_width < MIN_BESIDE_ROOM_PX && edge_right_width < MIN_BESIDE_ROOM_PX)
-        {
-            let center = ((item_left + item_right) / 2).clamp(bounds.left, bounds.right);
-            (
-                center,
-                center,
-                center - bounds.left - gap,
-                bounds.right - center - gap,
-            )
-        } else {
-            (item_left, item_right, edge_left_width, edge_right_width)
-        };
+        let (left_anchor_x, right_anchor_x, left_width, right_width) =
+            if edge_left_width < MIN_BESIDE_ROOM_PX && edge_right_width < MIN_BESIDE_ROOM_PX {
+                let center = ((anchor_left + anchor_right) / 2).clamp(bounds.left, bounds.right);
+                (
+                    center,
+                    center,
+                    center - bounds.left - gap,
+                    bounds.right - center - gap,
+                )
+            } else {
+                (anchor_left, anchor_right, edge_left_width, edge_right_width)
+            };
 
         let full_height = bounds.height();
 
@@ -4355,9 +4366,9 @@ fn compute_keyboard_layout(
         } else {
             right_anchor_x + gap
         };
-        // The same rule as the mouse path, centered on the row the preview
+        // The same rule as the mouse path, centered on the line the preview
         // belongs to: beside the item it describes, not adrift in the display.
-        let pos_y = centered_top((item_top + item_bottom) / 2, media_height, bounds);
+        let pos_y = centered_top((anchor_top + anchor_bottom) / 2, media_height, bounds);
 
         Some(PreviewLayout {
             pos_x,
