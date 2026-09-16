@@ -2495,7 +2495,9 @@ fn get_item_at_point(point: POINT) -> Option<AccessibilityResult> {
                     }
                 }
 
-                // Try with the child variant first for name
+                // Try with the child variant first for name. A view can report text
+                // that is not a file's name here — see `name_could_be_previewed` —
+                // and the walk goes on to the parent item when it does.
                 if is_variant_under_cursor(acc, &child_variant, &point) {
                     if let Ok(name) = acc.get_accName(&child_variant) {
                         let name_str = name.to_string();
@@ -2503,7 +2505,9 @@ fn get_item_at_point(point: POINT) -> Option<AccessibilityResult> {
                             if let Some(path) = resolve_media_path_from_text(&name_str) {
                                 return Some(AccessibilityResult::FullPath(path));
                             }
-                            return Some(AccessibilityResult::FileName(name_str));
+                            if name_could_be_previewed(&name_str) {
+                                return Some(AccessibilityResult::FileName(name_str));
+                            }
                         }
                     }
                 }
@@ -2517,7 +2521,9 @@ fn get_item_at_point(point: POINT) -> Option<AccessibilityResult> {
                             if let Some(path) = resolve_media_path_from_text(&name_str) {
                                 return Some(AccessibilityResult::FullPath(path));
                             }
-                            return Some(AccessibilityResult::FileName(name_str));
+                            if name_could_be_previewed(&name_str) {
+                                return Some(AccessibilityResult::FileName(name_str));
+                            }
                         }
                     }
                 }
@@ -2531,7 +2537,10 @@ fn get_item_at_point(point: POINT) -> Option<AccessibilityResult> {
                 if is_variant_under_cursor(acc, &child_variant, &point) {
                     if let Ok(help) = acc.get_accHelp(&child_variant) {
                         let help_str = help.to_string();
-                        if !help_str.is_empty() && !is_container_name(&help_str) {
+                        if !help_str.is_empty()
+                            && !is_container_name(&help_str)
+                            && name_could_be_previewed(&help_str)
+                        {
                             return Some(AccessibilityResult::FileName(help_str));
                         }
                     }
@@ -2584,7 +2593,9 @@ fn try_get_item_from_parent(
                             if let Some(path) = resolve_media_path_from_text(&name_str) {
                                 return Some(AccessibilityResult::FullPath(path));
                             }
-                            return Some(AccessibilityResult::FileName(name_str));
+                            if name_could_be_previewed(&name_str) {
+                                return Some(AccessibilityResult::FileName(name_str));
+                            }
                         }
                     }
                 }
@@ -2784,6 +2795,36 @@ fn find_media_in_folder(folder: &str, item_name: &str) -> Option<PathBuf> {
     lookup_media_in_folder_index(&folder_path, &folder_key, item_name)
 }
 
+/// Whether a name could be a file this app previews: one whose extension is in a
+/// list the app knows, or a name the text lists carry.
+///
+/// A view can put text under the pointer that is not a file's name — the metadata
+/// line of a Content view row, the value of a column — and the accessibility tree
+/// reports it the same way it reports a file name. Taking it for the file under the
+/// pointer sends every lookup below after a file called `12 KB` and finds nothing,
+/// which is a preview that never appears even though a file *is* under the pointer;
+/// skipping it lets the walk go on to the item that carries the real name. A name
+/// that fails this is not a file the app could preview even if a folder held it, so
+/// nothing is lost by passing it over.
+fn name_could_be_previewed(name: &str) -> bool {
+    let name = name.trim();
+    if name.is_empty() {
+        return false;
+    }
+
+    let path = PathBuf::from(name);
+    if is_image_file(&path) || is_video_file(&path) || is_pdf_file(&path) {
+        return true;
+    }
+
+    match CONFIG.lock() {
+        Ok(config) => matches_text_lists(&path, &config.text_extensions, &config.text_names),
+        // Without the text lists the answer is unknown, and a name that is not a
+        // file is harmless: the lookups that follow simply find nothing.
+        Err(_) => true,
+    }
+}
+
 fn accessibility_result_from_name(name: String) -> Option<AccessibilityResult> {
     let name = name.trim().to_string();
     if name.is_empty() || is_container_name(&name) {
@@ -2792,6 +2833,10 @@ fn accessibility_result_from_name(name: String) -> Option<AccessibilityResult> {
 
     if let Some(path) = resolve_media_path_from_text(&name) {
         return Some(AccessibilityResult::FullPath(path));
+    }
+
+    if !name_could_be_previewed(&name) {
+        return None;
     }
 
     Some(AccessibilityResult::FileName(name))
