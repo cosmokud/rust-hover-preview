@@ -4170,6 +4170,12 @@ fn compute_mouse_layout(
     }
 }
 
+/// The least room beside an item a keyboard preview will squeeze into before it
+/// stops treating the item as something to sit beside. Below this the free space
+/// past the item's edge is a sliver, and the preview is placed from the item's
+/// middle instead — see `compute_keyboard_layout`.
+const MIN_BESIDE_ROOM_PX: i32 = 64;
+
 /// Compute preview layout for keyboard hover (relative to item bounding rect)
 /// Positions the preview so it doesn't block the selected file item
 fn compute_keyboard_layout(
@@ -4272,9 +4278,33 @@ fn compute_keyboard_layout(
             preview_h,
         })
     } else {
-        // Best spot mode: choose left or right side of item
-        let left_width = item_left - bounds.left - gap;
-        let right_width = bounds.right - item_right - gap;
+        // Best spot mode: choose left or right side of item.
+        //
+        // The room a side offers is the room past the item's own edge, which is what
+        // keeps the preview off the file it belongs to. A row as wide as the view
+        // leaves none on either side — Content view draws every item that way — and
+        // a preview squeezed into what is left of the display past its edge is a
+        // sliver: a text preview the height of the display and seven pixels wide is
+        // worse than one that overlaps the list. When neither side has room to
+        // speak of, the display's room is measured from the item's middle instead,
+        // the way the mouse path measures it from the cursor, so the preview lands
+        // beside that and takes the space it needs.
+        let edge_left_width = item_left - bounds.left - gap;
+        let edge_right_width = bounds.right - item_right - gap;
+
+        let (left_anchor_x, right_anchor_x, left_width, right_width) =
+            if edge_left_width < MIN_BESIDE_ROOM_PX && edge_right_width < MIN_BESIDE_ROOM_PX {
+                let center = ((item_left + item_right) / 2).clamp(bounds.left, bounds.right);
+                (
+                    center,
+                    center,
+                    center - bounds.left - gap,
+                    bounds.right - center - gap,
+                )
+            } else {
+                (item_left, item_right, edge_left_width, edge_right_width)
+            };
+
         let full_height = bounds.height();
 
         let left_scale_x = left_width as f32 / orig_w as f32;
@@ -4308,9 +4338,9 @@ fn compute_keyboard_layout(
         }
 
         let pos_x = if use_left {
-            item_left - gap - media_width
+            left_anchor_x - gap - media_width
         } else {
-            item_right + gap
+            right_anchor_x + gap
         };
         // The same rule as the mouse path, centered on the row the preview
         // belongs to: beside the item it describes, not adrift in the display.
