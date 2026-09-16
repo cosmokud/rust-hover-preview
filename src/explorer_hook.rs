@@ -25,7 +25,8 @@ use windows::Win32::System::Com::{
 use windows::Win32::System::Variant::VariantClear;
 use windows::Win32::UI::Accessibility::{
     CUIAutomation, IUIAutomation, IUIAutomationElement, IUIAutomationLegacyIAccessiblePattern,
-    UIA_DataItemControlTypeId, UIA_LegacyIAccessiblePatternId, UIA_ListItemControlTypeId,
+    TreeScope_Children, UIA_DataItemControlTypeId, UIA_LegacyIAccessiblePatternId,
+    UIA_ListItemControlTypeId,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, VK_DOWN, VK_END, VK_HOME, VK_LBUTTON, VK_LEFT, VK_MBUTTON, VK_NEXT, VK_PRIOR,
@@ -1277,11 +1278,6 @@ fn normalize_media_path(path: PathBuf) -> Option<PathBuf> {
     normalize_existing_path(path)
 }
 
-fn get_active_shell_view_under_cursor(screen_point: &POINT) -> Option<(IShellView, POINT)> {
-    let context = get_active_shell_view_context(screen_point)?;
-    Some((context.shell_view, context.client_point))
-}
-
 fn shell_item_to_path(shell_item: &IShellItem) -> Option<PathBuf> {
     unsafe {
         let display_name = shell_item
@@ -1386,13 +1382,13 @@ fn get_current_explorer_search_root_legacy() -> Option<String> {
     }
 }
 
-fn get_focused_shell_view_media_path(item: &FocusedItemInfo) -> Option<PathBuf> {
-    let focus_point = POINT {
-        x: item.rect.left + (item.rect.right - item.rect.left) / 2,
-        y: item.rect.top + (item.rect.bottom - item.rect.top) / 2,
-    };
-    let (shell_view, _) = get_active_shell_view_under_cursor(&focus_point)?;
-    let folder_view = shell_view.cast::<IFolderView>().ok()?;
+/// The Shell view's own focused item, as the path it resolves to.
+///
+/// This is the route a keyboard preview asks first, and it is the view itself
+/// that is asked — what it says is focused, or marked as the selection — rather
+/// than anything the accessibility tree reports.
+fn shell_view_focused_media_path(context: &ActiveShellViewContext) -> Option<PathBuf> {
+    let folder_view = context.shell_view.cast::<IFolderView>().ok()?;
 
     unsafe {
         for item_index in [
@@ -1412,6 +1408,138 @@ fn get_focused_shell_view_media_path(item: &FocusedItemInfo) -> Option<PathBuf> 
             if let Some(path) =
                 shell_item.and_then(|shell_item| shell_item_to_media_path(&shell_item))
             {
+                return Some(path);
+            }
+        }
+    }
+
+    None
+}
+
+/// The point in the middle of a focused item's box.
+fn focused_item_center(item: &FocusedItemInfo) -> POINT {
+    POINT {
+        x: item.rect.left + (item.rect.right - item.rect.left) / 2,
+        y: item.rect.top + (item.rect.bottom - item.rect.top) / 2,
+    }
+}
+
+/// Whether a path found for a keyboard preview is the file the focused item
+/// stands for — the check that makes a path found from the item's box safe to
+/// take, because a box is a place and the list can move under it.
+fn focused_path_is_item(item: &FocusedItemInfo, path: &PathBuf) -> bool {
+    match &item.result {
+        AccessibilityResult::FullPath(focused_path) => same_path(focused_path, path),
+        AccessibilityResult::FileName(name) => path_matches_item_name(path, name),
+    }
+}
+
+/// The file a focused item stands for, asked at the item's own box the way the
+/// pointer asks it about the item under the cursor.
+///
+/// A result from a search that spans folders is why the box is asked at all: the
+/// file is in none of the folders the results are gathered under, so no lookup by
+/// name can reach it, and the item itself is the only thing that knows where it
+/// is. The pointer reads that answer from the shell data model for the item under
+/// the cursor; the keyboard reads the same answer for the item the focus is on,
+/// which is what makes a result that spans folders preview exactly as a hovered
+/// one does.
+///
+/// The accessibility provider is asked at the item before this, in
+/// `get_focused_explorer_item` — see `focused_item_probe_points`, which is where a
+/// search result states the file it stands for. What is left for the box is the
+/// view and the data model. Every answer is taken only when it names the item: a
+/// list that scrolled under a rect read a moment earlier can put another file in
+/// that box.
+fn focused_item_path_at_box(item: &FocusedItemInfo) -> Option<PathBuf> {
+    let point = focused_item_center(item);
+
+    if let Some(context) = get_active_shell_view_context(&point) {
+        // The view's own focused item first, then the item that sits in the box —
+        // the same order the pointer tries them in.
+        if let Some(path) = shell_view_focused_media_path(&context) {
+            if focused_path_is_item(item, &path) {
+                return Some(path);
+            }
+        }
+
+        if let Some(path) = get_shell_data_model_file_from_context(&context) {
+            if focused_path_is_item(item, &path) {
+                return Some(path);
+            }
+        }
+    }
+
+    None
+}
+
+/// The points inside a focused item's box that are worth asking the accessibility
+/// provider about, in the order they are worth asking.
+///
+/// A search result states the file it stands for in the value of the text it
+/// shows, so the children a list item exposes are asked about first — that text is
+/// one of them, and its middle is where the provider answers with a path. The
+/// item's own middle comes next, and then two points just inside its left edge,
+/// which is where the name sits in a view that exposes no child for it at all, the
+/// details list among them.
+fn focused_item_probe_points(
+    automation: &IUIAutomation,
+    element: &IUIAutomationElement,
+    rect: &RECT,
+) -> Vec<POINT> {
+    let mut points = Vec::new();
+
+    unsafe {
+        if let Ok(condition) = automation.CreateTrueCondition() {
+            if let Ok(children) = element.FindAll(TreeScope_Children, &condition) {
+                if let Ok(count) = children.Length() {
+                    for index in 0..count.min(4) {
+                        if let Ok(child) = children.GetElement(index) {
+                            if let Ok(child_rect) = child.CurrentBoundingRectangle() {
+                                if child_rect.right > child_rect.left
+                                    && child_rect.bottom > child_rect.top
+                                {
+                                    points.push(POINT {
+                                        x: child_rect.left
+                                            + (child_rect.right - child_rect.left) / 2,
+                                        y: child_rect.top
+                                            + (child_rect.bottom - child_rect.top) / 2,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let height = (rect.bottom - rect.top).max(1);
+    let middle_y = rect.top + height / 2;
+    let clamp = |x: i32| x.min(rect.right - 2).max(rect.left + 1);
+
+    points.push(POINT {
+        x: clamp(rect.left + (rect.right - rect.left) / 2),
+        y: middle_y,
+    });
+    points.push(POINT {
+        x: clamp(rect.left + height * 2),
+        y: middle_y,
+    });
+    points.push(POINT {
+        x: clamp(rect.left + height / 2),
+        y: middle_y,
+    });
+
+    points
+}
+
+/// The path the accessibility provider gives up for a focused item, asked at each
+/// of its points until one of them answers with a file the item names.
+fn focused_item_provider_path(item_name: &str, points: &[POINT]) -> Option<PathBuf> {
+    for point in points {
+        if let Some(AccessibilityResult::FullPath(path)) = get_item_at_point(*point) {
+            if path_matches_item_name(&path, item_name) {
                 return Some(path);
             }
         }
@@ -2106,13 +2234,26 @@ fn get_item_under_cursor() -> Option<AccessibilityResult> {
             return None;
         }
 
+        get_item_at_point(cursor_pos)
+    }
+}
+
+/// Get the filename or full path of the item at a point, the way a pointer reads
+/// it.
+///
+/// The point is what makes this shared: an item under the cursor and the item a
+/// keyboard preview is about are the same question asked at two places, and every
+/// answer below is Explorer's — a search result gives up the file it stands for in
+/// its accessible value, whatever folder that file is in.
+fn get_item_at_point(point: POINT) -> Option<AccessibilityResult> {
+    unsafe {
         // Use accessibility to get the item info
         let mut accessible: Option<windows::Win32::UI::Accessibility::IAccessible> = None;
         let mut child_variant = VARIANT::default();
 
         let result = (|| -> Option<AccessibilityResult> {
             if windows::Win32::UI::Accessibility::AccessibleObjectFromPoint(
-                cursor_pos,
+                point,
                 &mut accessible,
                 &mut child_variant,
             )
@@ -2123,7 +2264,7 @@ fn get_item_under_cursor() -> Option<AccessibilityResult> {
 
             if let Some(ref acc) = accessible {
                 // First, try to get the value - this often contains the full path in search results
-                if is_variant_under_cursor(acc, &child_variant, &cursor_pos) {
+                if is_variant_under_cursor(acc, &child_variant, &point) {
                     if let Ok(value) = acc.get_accValue(&child_variant) {
                         let value_str = value.to_string();
                         if let Some(path) = resolve_media_path_from_text(&value_str) {
@@ -2133,7 +2274,7 @@ fn get_item_under_cursor() -> Option<AccessibilityResult> {
                 }
 
                 // Try with the child variant first for name
-                if is_variant_under_cursor(acc, &child_variant, &cursor_pos) {
+                if is_variant_under_cursor(acc, &child_variant, &point) {
                     if let Ok(name) = acc.get_accName(&child_variant) {
                         let name_str = name.to_string();
                         if !is_container_name(&name_str) {
@@ -2147,7 +2288,7 @@ fn get_item_under_cursor() -> Option<AccessibilityResult> {
 
                 // Try with default variant
                 let default_variant = VARIANT::default();
-                if is_variant_under_cursor(acc, &default_variant, &cursor_pos) {
+                if is_variant_under_cursor(acc, &default_variant, &point) {
                     if let Ok(name) = acc.get_accName(&default_variant) {
                         let name_str = name.to_string();
                         if !is_container_name(&name_str) {
@@ -2160,12 +2301,12 @@ fn get_item_under_cursor() -> Option<AccessibilityResult> {
                 }
 
                 // Try navigating parent chain to find item name (for list/details views)
-                if let Some(result) = try_get_item_from_parent(acc, &child_variant, &cursor_pos) {
+                if let Some(result) = try_get_item_from_parent(acc, &child_variant, &point) {
                     return Some(result);
                 }
 
                 // Try getting help text which sometimes has info
-                if is_variant_under_cursor(acc, &child_variant, &cursor_pos) {
+                if is_variant_under_cursor(acc, &child_variant, &point) {
                     if let Ok(help) = acc.get_accHelp(&child_variant) {
                         let help_str = help.to_string();
                         if !help_str.is_empty() && !is_container_name(&help_str) {
@@ -2175,7 +2316,7 @@ fn get_item_under_cursor() -> Option<AccessibilityResult> {
                 }
 
                 // Try description which may have path info
-                if is_variant_under_cursor(acc, &child_variant, &cursor_pos) {
+                if is_variant_under_cursor(acc, &child_variant, &point) {
                     if let Ok(desc) = acc.get_accDescription(&child_variant) {
                         let desc_str = desc.to_string();
                         if let Some(path) = resolve_media_path_from_text(&desc_str) {
@@ -2185,7 +2326,7 @@ fn get_item_under_cursor() -> Option<AccessibilityResult> {
                 }
 
                 // Try to walk up parent hierarchy more aggressively (for details view text cells)
-                if let Some(result) = try_deep_parent_search(acc, &cursor_pos) {
+                if let Some(result) = try_deep_parent_search(acc, &point) {
                     return Some(result);
                 }
             }
@@ -3277,13 +3418,26 @@ fn get_focused_explorer_item(automation: &IUIAutomation) -> Option<FocusedItemIn
             }
         }
 
-        // A result whose file is not in the folder it was found under: the name
-        // cannot name it, and the element's own value can — see
-        // `focused_item_media_path`. The pointer path reads the same value for the
-        // same result, which is why hovering one works while the keyboard needed
-        // this: a search that spans folders has no single folder to look a name up
-        // in, so the path has to come from the item itself.
+        // A result whose file is not in the folder it was found under: its name
+        // cannot name it, so the item itself is asked. The element's own accessible
+        // value is the first place to look — see `focused_item_media_path` — and
+        // the provider is asked at the item's box next.
         if let Some(path) = focused_item_media_path(&focused, &name) {
+            return Some(FocusedItemInfo {
+                result: AccessibilityResult::FullPath(path),
+                rect,
+            });
+        }
+
+        // The item's box, asked the way the pointer asks the item under the cursor:
+        // the accessibility provider at the item — at the text it shows before
+        // anywhere else — is where a search result states the file it stands for,
+        // whatever folder that file is in. A name is only findable in a folder that
+        // holds it, which is the one thing a search across folders never offers, so
+        // this is the question that has to be asked, and the one hovering the same
+        // result already gets an answer from.
+        let probe_points = focused_item_probe_points(automation, &focused, &rect);
+        if let Some(path) = focused_item_provider_path(&name, &probe_points) {
             return Some(FocusedItemInfo {
                 result: AccessibilityResult::FullPath(path),
                 rect,
@@ -3307,9 +3461,12 @@ fn resolve_focused_item_to_path(item: &FocusedItemInfo) -> Option<PathBuf> {
             }
         }
         AccessibilityResult::FileName(item_name) => {
-            // Keyboard focus has a direct Shell view focused item even in search-ms
-            // results. Prefer that full path when Explorer exposes it.
-            if let Some(path) = get_focused_shell_view_media_path(item) {
+            // The item's own box, asked what the pointer asks the window under the
+            // cursor: which item of the view sits there, and which item the view
+            // itself says is focused. The provider was asked for the item already —
+            // see `focused_item_probe_points` — and these are the two answers that
+            // can still name a result no folder holds.
+            if let Some(path) = focused_item_path_at_box(item) {
                 return Some(path);
             }
 
