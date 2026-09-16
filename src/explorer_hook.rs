@@ -64,6 +64,10 @@ struct ExplorerFoldersCache {
 
 struct ShellViewMediaIndex {
     built_at: Instant,
+    /// Whether the walk read every item of the view. One that did not is replaced
+    /// by a walk that runs off the hook thread, so a file the short walk did not
+    /// reach is only missing for as long as that takes.
+    complete: bool,
     by_display_name: HashMap<String, PathBuf>,
     by_file_name: HashMap<String, PathBuf>,
     by_stem: HashMap<String, PathBuf>,
@@ -106,28 +110,28 @@ struct HoverResolverHints {
     shell_view_hwnd: Option<isize>,
 }
 
-/// "Do not preview this file" latch, shared by the mouse hover path.
+/// "Do not preview this file" latch, shared by the mouse hover path. It is a
+/// delay, not a verdict: the file it names is held off the mouse path until the
+/// same-file rehover delay has passed, and released sooner when the cursor
+/// resolves another file. A keyboard preview that a mouse move dismissed latches
+/// the file it showed the same way — long enough that the handover cannot flash
+/// the file straight back, and no longer, because a pointer parked on that file
+/// afterwards is a user asking for it and not a repeat of the handover.
 #[derive(Default)]
 struct SuppressedHover {
     file: Option<PathBuf>,
     started_at: Option<Instant>,
-    /// Set when a keyboard preview was dismissed by mouse movement: the latch
-    /// never expires for that file and is released only when the cursor
-    /// resolves a different file, or when a keyboard preview takes over.
-    sticky: bool,
 }
 
 impl SuppressedHover {
     fn clear(&mut self) {
         self.file = None;
         self.started_at = None;
-        self.sticky = false;
     }
 
-    fn suppress(&mut self, file: PathBuf, sticky: bool) {
+    fn suppress(&mut self, file: PathBuf) {
         self.file = Some(file);
         self.started_at = Some(Instant::now());
-        self.sticky = sticky;
     }
 
     fn matches(&self, path: &PathBuf) -> bool {
@@ -137,13 +141,7 @@ impl SuppressedHover {
             .unwrap_or(false)
     }
 
-    /// Regular latches keep the same-file rehover delay; a sticky one never lets
-    /// the suppressed file back onto the mouse path.
     fn rehover_allowed(&self, required_delay_ms: u64) -> bool {
-        if self.sticky {
-            return false;
-        }
-
         self.started_at
             .map(|started| started.elapsed() >= Duration::from_millis(required_delay_ms))
             .unwrap_or(true)
@@ -287,6 +285,10 @@ impl ScrollSettleProbe {
 const FOLDER_INDEX_TTL_MS: u64 = 60000;
 const EXPLORER_FOLDERS_CACHE_TTL_MS: u64 = 250;
 const SHELL_VIEW_INDEX_TTL_MS: u64 = 5000;
+/// A Shell view index that saw every item cost a walk of the whole view, so it is
+/// kept longer than a short one — long enough that the walk is paid for by the
+/// hovers that read it rather than by the ones that follow it.
+const SHELL_VIEW_INDEX_COMPLETE_TTL_MS: u64 = 30000;
 const SHELL_VIEW_INDEX_MAX_ITEMS: i32 = 50000;
 const SHELL_VIEW_INDEX_SYNC_ITEM_LIMIT: i32 = 1000;
 /// How long a shell view may be walked for an index before the walk is left where
@@ -327,8 +329,12 @@ static EXPLORER_FOLDERS_CACHE: Lazy<Mutex<Option<ExplorerFoldersCache>>> =
     Lazy::new(|| Mutex::new(None));
 static SHELL_VIEW_MEDIA_INDEX: Lazy<Mutex<HashMap<isize, ShellViewMediaIndex>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
+static SHELL_VIEW_INDEX_BUILDING: Lazy<Mutex<HashSet<isize>>> =
+    Lazy::new(|| Mutex::new(HashSet::new()));
 static LEGACY_SEARCH_SHELL_VIEW_MEDIA_INDEX: Lazy<Mutex<HashMap<isize, ShellViewMediaIndex>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
+static LEGACY_SEARCH_SHELL_VIEW_INDEX_BUILDING: Lazy<Mutex<HashSet<isize>>> =
+    Lazy::new(|| Mutex::new(HashSet::new()));
 static SEARCH_ROOT_MEDIA_INDEX: Lazy<Mutex<HashMap<String, SearchRootMediaIndex>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 static SEARCH_ROOT_INDEX_BUILDING: Lazy<Mutex<HashSet<String>>> =
@@ -846,19 +852,34 @@ fn merge_common_folder_root(current: Option<PathBuf>, path: &Path) -> Option<Pat
 }
 
 fn get_shell_view_search_root(view_hwnd_key: isize) -> Option<String> {
-    let mut cache = SHELL_VIEW_MEDIA_INDEX.lock().ok()?;
-    cache.retain(|_, index| {
-        index.built_at.elapsed() <= Duration::from_millis(SHELL_VIEW_INDEX_TTL_MS)
-    });
+    let root = {
+        let mut cache = SHELL_VIEW_MEDIA_INDEX.lock().ok()?;
+        cache.retain(|_, index| shell_view_index_is_fresh(index));
 
-    if !cache.contains_key(&view_hwnd_key) {
-        let index = build_shell_view_media_index(view_hwnd_key)?;
-        cache.insert(view_hwnd_key, index);
-    }
+        if !cache.contains_key(&view_hwnd_key) {
+            let index = build_shell_view_media_index(
+                view_hwnd_key,
+                Some(Duration::from_millis(SHELL_VIEW_INDEX_BUILD_BUDGET_MS)),
+            )?;
+            cache.insert(view_hwnd_key, index);
+        }
 
-    cache
-        .get(&view_hwnd_key)
-        .and_then(|index| index.root_folder.clone())
+        let index = cache.get(&view_hwnd_key)?;
+        let root = index.root_folder.clone();
+
+        if !index.complete {
+            // The folders of some of the items are only the folders those have in
+            // common, which is a narrower root than the one the results really
+            // share: the walk is finished off the hook thread, and the root read
+            // after it is the one of them all.
+            drop(cache);
+            queue_shell_view_index_completion(view_hwnd_key, false);
+        }
+
+        root
+    };
+
+    root
 }
 
 fn resolve_search_root_from_context(context: &ActiveShellViewContext) -> Option<String> {
@@ -1556,7 +1577,18 @@ fn focused_item_provider_path(item_name: &str, points: &[POINT]) -> Option<PathB
     None
 }
 
-fn build_shell_view_media_index(view_hwnd_key: isize) -> Option<ShellViewMediaIndex> {
+/// Read a Shell view into an index, optionally under a time budget.
+///
+/// The walk costs a COM call, a file check and a media-gate test per item, all of
+/// it on the thread that asks for it, so the caller that runs on the hook loop
+/// gives it a budget and gets a short index back — one the file it wanted may not
+/// be in. `complete` says which it is, and a short one is replaced by a walk with
+/// no budget on a thread of its own, which is what keeps a missing file a matter
+/// of waiting a moment rather than of never being found.
+fn build_shell_view_media_index(
+    view_hwnd_key: isize,
+    budget: Option<Duration>,
+) -> Option<ShellViewMediaIndex> {
     let mut by_display_name = HashMap::new();
     let mut by_file_name = HashMap::new();
     let mut by_stem = HashMap::new();
@@ -1607,15 +1639,20 @@ fn build_shell_view_media_index(view_hwnd_key: isize) -> Option<ShellViewMediaIn
                 return None;
             }
             let item_count = item_count.min(SHELL_VIEW_INDEX_MAX_ITEMS);
-            let build_deadline =
-                Instant::now() + Duration::from_millis(SHELL_VIEW_INDEX_BUILD_BUDGET_MS);
+            let build_deadline = budget.map(|budget| Instant::now() + budget);
+            let mut complete = true;
 
             for item_index in 0..item_count {
-                // The walk is left where it is once its budget is out: a view of
-                // hundreds of items costs a COM call, a file check and a media-gate
-                // test per item, all of it with the hook loop stopped.
-                if Instant::now() >= build_deadline {
-                    break;
+                // The walk is left where it is once its budget is out, and says so:
+                // a view of hundreds of items costs a COM call, a file check and a
+                // media-gate test per item, all of it with the caller's thread
+                // stopped, and the caller that cannot wait asks for a complete index
+                // behind it instead.
+                if let Some(deadline) = build_deadline {
+                    if Instant::now() >= deadline {
+                        complete = false;
+                        break;
+                    }
                 }
 
                 let item_variant = VARIANT::from(item_index);
@@ -1656,6 +1693,7 @@ fn build_shell_view_media_index(view_hwnd_key: isize) -> Option<ShellViewMediaIn
 
             return Some(ShellViewMediaIndex {
                 built_at: Instant::now(),
+                complete,
                 by_display_name,
                 by_file_name,
                 by_stem,
@@ -1669,6 +1707,7 @@ fn build_shell_view_media_index(view_hwnd_key: isize) -> Option<ShellViewMediaIn
 
 fn build_legacy_search_shell_view_media_index(
     browser_hwnd_key: isize,
+    budget: Option<Duration>,
 ) -> Option<ShellViewMediaIndex> {
     let mut by_display_name = HashMap::new();
     let mut by_file_name = HashMap::new();
@@ -1707,15 +1746,20 @@ fn build_legacy_search_shell_view_media_index(
                 return None;
             }
             let item_count = item_count.min(SHELL_VIEW_INDEX_MAX_ITEMS);
-            let build_deadline =
-                Instant::now() + Duration::from_millis(SHELL_VIEW_INDEX_BUILD_BUDGET_MS);
+            let build_deadline = budget.map(|budget| Instant::now() + budget);
+            let mut complete = true;
 
             for item_index in 0..item_count {
-                // The walk is left where it is once its budget is out: a view of
-                // hundreds of items costs a COM call, a file check and a media-gate
-                // test per item, all of it with the hook loop stopped.
-                if Instant::now() >= build_deadline {
-                    break;
+                // The walk is left where it is once its budget is out, and says so:
+                // a view of hundreds of items costs a COM call, a file check and a
+                // media-gate test per item, all of it with the caller's thread
+                // stopped, and the caller that cannot wait asks for a complete index
+                // behind it instead.
+                if let Some(deadline) = build_deadline {
+                    if Instant::now() >= deadline {
+                        complete = false;
+                        break;
+                    }
                 }
 
                 let item_variant = VARIANT::from(item_index);
@@ -1756,6 +1800,7 @@ fn build_legacy_search_shell_view_media_index(
 
             return Some(ShellViewMediaIndex {
                 built_at: Instant::now(),
+                complete,
                 by_display_name,
                 by_file_name,
                 by_stem,
@@ -1822,17 +1867,28 @@ fn find_media_in_shell_view(view_hwnd_key: isize, item_name: &str) -> Option<Pat
     }
 
     let mut cache = SHELL_VIEW_MEDIA_INDEX.lock().ok()?;
-    cache.retain(|_, index| {
-        index.built_at.elapsed() <= Duration::from_millis(SHELL_VIEW_INDEX_TTL_MS)
-    });
+    cache.retain(|_, index| shell_view_index_is_fresh(index));
 
     if !cache.contains_key(&view_hwnd_key) {
-        let index = build_shell_view_media_index(view_hwnd_key)?;
+        let index = build_shell_view_media_index(
+            view_hwnd_key,
+            Some(Duration::from_millis(SHELL_VIEW_INDEX_BUILD_BUDGET_MS)),
+        )?;
         cache.insert(view_hwnd_key, index);
     }
 
     let index = cache.get(&view_hwnd_key)?;
-    lookup_path_in_shell_view_index(index, item_name)
+    let found = lookup_path_in_shell_view_index(index, item_name);
+    let needs_completion = !index.complete;
+
+    if needs_completion {
+        // A short index is only ever a stop-gap: the walk is finished off the hook
+        // thread whether or not this lookup found what it asked for, so a file that
+        // is not in it yet is a moment away rather than a mystery.
+        queue_shell_view_index_completion(view_hwnd_key, false);
+    }
+
+    found
 }
 
 fn find_media_in_shell_view_legacy(browser_hwnd_key: isize, item_name: &str) -> Option<PathBuf> {
@@ -1842,17 +1898,83 @@ fn find_media_in_shell_view_legacy(browser_hwnd_key: isize, item_name: &str) -> 
     }
 
     let mut cache = LEGACY_SEARCH_SHELL_VIEW_MEDIA_INDEX.lock().ok()?;
-    cache.retain(|_, index| {
-        index.built_at.elapsed() <= Duration::from_millis(SHELL_VIEW_INDEX_TTL_MS)
-    });
+    cache.retain(|_, index| shell_view_index_is_fresh(index));
 
     if !cache.contains_key(&browser_hwnd_key) {
-        let index = build_legacy_search_shell_view_media_index(browser_hwnd_key)?;
+        let index = build_legacy_search_shell_view_media_index(
+            browser_hwnd_key,
+            Some(Duration::from_millis(SHELL_VIEW_INDEX_BUILD_BUDGET_MS)),
+        )?;
         cache.insert(browser_hwnd_key, index);
     }
 
     let index = cache.get(&browser_hwnd_key)?;
-    lookup_path_in_shell_view_index(index, item_name)
+    let found = lookup_path_in_shell_view_index(index, item_name);
+    let needs_completion = !index.complete;
+
+    if needs_completion {
+        queue_shell_view_index_completion(browser_hwnd_key, true);
+    }
+
+    found
+}
+
+/// Whether a Shell view index is still worth reading. One that saw every item
+/// cost a walk of the whole view and is kept longer than a short one, which the
+/// next lookup will replace anyway.
+fn shell_view_index_is_fresh(index: &ShellViewMediaIndex) -> bool {
+    let ttl = if index.complete {
+        SHELL_VIEW_INDEX_COMPLETE_TTL_MS
+    } else {
+        SHELL_VIEW_INDEX_TTL_MS
+    };
+
+    index.built_at.elapsed() <= Duration::from_millis(ttl)
+}
+
+/// Finish off a Shell view index the hook loop could not wait for, on a thread of
+/// its own, and put it where the next lookup will read it.
+///
+/// The walk is the same one, without a budget: nothing waits for it, and the
+/// hook loop is free while it runs. A view is built once at a time — a second
+/// request for one already being built is dropped rather than raced.
+fn queue_shell_view_index_completion(view_hwnd_key: isize, legacy: bool) {
+    let building = if legacy {
+        &LEGACY_SEARCH_SHELL_VIEW_INDEX_BUILDING
+    } else {
+        &SHELL_VIEW_INDEX_BUILDING
+    };
+
+    let should_build = match building.lock() {
+        Ok(mut keys) => keys.insert(view_hwnd_key),
+        Err(_) => false,
+    };
+    if !should_build {
+        return;
+    }
+
+    std::thread::spawn(move || {
+        let built = if legacy {
+            build_legacy_search_shell_view_media_index(view_hwnd_key, None)
+        } else {
+            build_shell_view_media_index(view_hwnd_key, None)
+        };
+
+        if let Some(index) = built {
+            let cache = if legacy {
+                &LEGACY_SEARCH_SHELL_VIEW_MEDIA_INDEX
+            } else {
+                &SHELL_VIEW_MEDIA_INDEX
+            };
+            if let Ok(mut cache) = cache.lock() {
+                cache.insert(view_hwnd_key, index);
+            }
+        }
+
+        if let Ok(mut keys) = building.lock() {
+            keys.remove(&view_hwnd_key);
+        }
+    });
 }
 
 fn find_media_in_current_shell_view(item_name: &str) -> Option<PathBuf> {
@@ -4129,7 +4251,7 @@ pub fn run_explorer_hook() {
             {
                 suppress_preview_until_cursor_leaves_preview = true;
                 if let Some(file) = last_file.clone() {
-                    suppressed.suppress(file, false);
+                    suppressed.suppress(file);
                 }
                 hide_preview();
                 last_file = None;
@@ -4326,11 +4448,14 @@ pub fn run_explorer_hook() {
 
                 // Mouse movement always takes priority - dismiss keyboard hover.
                 // The keyboard preview may have been covering the cursor, so the
-                // file it showed stays latched until the cursor reaches another
-                // file, or the user navigates with the keyboard again.
+                // file it showed is latched the way any dismissed hover is: held
+                // off the mouse path for the same-file rehover delay, so the
+                // handover cannot flash it straight back, and previewable again
+                // after that — a pointer left sitting on the file is a user asking
+                // for it.
                 if is_keyboard_hover {
                     if let Some(file) = keyboard_file.clone() {
-                        suppressed.suppress(file, true);
+                        suppressed.suppress(file);
                     }
                     hide_preview();
                     keyboard_file = None;
@@ -4388,7 +4513,7 @@ pub fn run_explorer_hook() {
                         // it shows.
                         keep_while_scrolling_preview = true;
                     } else if let Some(file) = last_file.clone() {
-                        suppressed.suppress(file, false);
+                        suppressed.suppress(file);
                     }
 
                     if !keep_while_scrolling_preview {
@@ -4573,7 +4698,7 @@ pub fn run_explorer_hook() {
                                 >= Duration::from_millis(STATIONARY_SEARCH_MISS_HIDE_MS)
                             {
                                 match last_file.clone() {
-                                    Some(file) => suppressed.suppress(file, false),
+                                    Some(file) => suppressed.suppress(file),
                                     None => suppressed.clear(),
                                 }
                                 hide_preview();
@@ -4615,6 +4740,11 @@ pub fn run_explorer_hook() {
                             if suppressed.matches(&file_path) {
                                 let required_delay = hover_delay_ms.max(same_file_rehover_delay_ms);
                                 if !suppressed.rehover_allowed(required_delay) {
+                                    // The latch is a delay and not a verdict: the
+                                    // probe is left open so the file previews as
+                                    // soon as the delay has passed, rather than
+                                    // leaving a pointer parked on it unanswered.
+                                    stationary_hover_probe_done = false;
                                     continue;
                                 }
                             }
@@ -4637,7 +4767,7 @@ pub fn run_explorer_hook() {
                             // file: drop the preview that scrolled away, the same
                             // way the mouse-move path does.
                             match last_file.clone() {
-                                Some(file) => suppressed.suppress(file, false),
+                                Some(file) => suppressed.suppress(file),
                                 None => suppressed.clear(),
                             }
                             hide_preview();
@@ -4657,7 +4787,7 @@ pub fn run_explorer_hook() {
                                 >= Duration::from_millis(STATIONARY_SEARCH_MISS_HIDE_MS)
                             {
                                 match last_file.clone() {
-                                    Some(file) => suppressed.suppress(file, false),
+                                    Some(file) => suppressed.suppress(file),
                                     None => suppressed.clear(),
                                 }
                                 hide_preview();
