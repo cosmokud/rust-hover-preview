@@ -170,6 +170,10 @@ The release binary is written to `target/release/rust-hover-preview.exe`.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the full system overview. In short: Windows accessibility APIs and Shell COM identify the hovered or focused Explorer item, GDI paints the preview into a topmost layered window, text and code are highlighted with TextMate-style themes, Markdown is rendered, and FFmpeg handles video.
 
+## TODO
+
+See [TODO.md](TODO.md) for planned work, known bugs, and other issues.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
