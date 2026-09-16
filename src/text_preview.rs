@@ -184,9 +184,9 @@ pub struct TextFrame {
     pub first_line: usize,
     /// Lines the frame shows.
     pub visible_lines: usize,
-    /// Lines the preview can reach, which is why it scrolls at all.
+    /// Lines the preview can reach, which is why it scrolls at all, and the range
+    /// its scrollbar is drawn in.
     pub scrollable_lines: usize,
-    pub total_lines: usize,
     /// Present when the document is longer than the frame, which is also the only
     /// case in which the preview scrolls.
     pub scrollbar: Option<ScrollBar>,
@@ -435,7 +435,6 @@ pub fn render_scrolled(
         first_line: laid_out.first_line,
         visible_lines: laid_out.visible_lines,
         scrollable_lines,
-        total_lines: document.doc.total_lines(),
         scrollbar,
         lines,
     })
@@ -453,8 +452,14 @@ pub fn render_scrolled(
 struct TextDoc {
     text: String,
     /// Byte offset of the start of every line, so `line_starts.len()` is the
-    /// document's line count.
+    /// file's own line count.
     line_starts: Vec<usize>,
+    /// Lines a frame of this document is drawn in, when that is not the file's
+    /// own line count. A rendered Markdown document is the one producer whose
+    /// lines are its own — a paragraph is one line and the blank line between two
+    /// blocks is one the source does not have — so its scroll position, its
+    /// scrollbar and the lines it says are left out are all measured in those.
+    rendered_lines: Option<usize>,
     producer: Producer,
     /// Whether the read stopped at the byte cap rather than at the end of the
     /// file, in which case a file continues past what a preview can show.
@@ -466,8 +471,9 @@ struct TextDoc {
 }
 
 impl TextDoc {
+    /// Lines there are to show, in the space a frame is drawn in.
     fn total_lines(&self) -> usize {
-        self.line_starts.len()
+        self.rendered_lines.unwrap_or(self.line_starts.len())
     }
 
     /// Lines this preview can reach. A source file is styled a window at a time,
@@ -741,6 +747,7 @@ fn build_document(path: &Path, options: TextPreviewOptions) -> Option<TextDoc> {
         let stripped = strip_rtf(&source.text).join("\n");
         return Some(TextDoc {
             line_starts: line_starts(&stripped),
+            rendered_lines: None,
             text: stripped,
             producer: Producer::Plain,
             read_truncated: source.truncated,
@@ -749,14 +756,23 @@ fn build_document(path: &Path, options: TextPreviewOptions) -> Option<TextDoc> {
     }
 
     if is_markdown_extension(extension) && options.markdown_mode == MarkdownMode::Rendered {
-        return Some(TextDoc {
+        let mut document = TextDoc {
             line_starts: line_starts(&source.text),
+            rendered_lines: None,
             producer: Producer::Markdown,
             text: source.text,
             read_truncated: source.truncated,
             // A rendered document is prose: its paragraphs wrap.
             wrap: true,
-        });
+        };
+
+        // The walk that renders a document is also the only thing that can say
+        // how many lines it draws, so it is run once here, before anything asks
+        // to scroll: a scroll position past that count would be a frame with
+        // nothing in it.
+        let theme = text_theme::loaded(options.theme)?;
+        document.rendered_lines = Some(rendered_line_count(&document, theme));
+        return Some(document);
     }
 
     // NFO files carry ANSI color codes around plain text, so they are built from
@@ -764,6 +780,7 @@ fn build_document(path: &Path, options: TextPreviewOptions) -> Option<TextDoc> {
     if wants_ansi(extension) {
         return Some(TextDoc {
             line_starts: line_starts(&source.text),
+            rendered_lines: None,
             producer: Producer::Ansi,
             text: source.text,
             read_truncated: source.truncated,
@@ -781,6 +798,7 @@ fn build_document(path: &Path, options: TextPreviewOptions) -> Option<TextDoc> {
 
     Some(TextDoc {
         line_starts: line_starts(&source.text),
+        rendered_lines: None,
         producer: Producer::Highlighted { syntax },
         // A file no grammar claims is prose rather than code — a readme, a log, a
         // note — and prose that is cut off at the page edge is unreadable, so
@@ -1255,9 +1273,31 @@ fn heading_size_level(level: u8) -> u8 {
 /// A window of a rendered Markdown document. The walk is linear and cannot be
 /// resumed, so it runs over the whole text and keeps only the requested lines.
 fn window_markdown(doc: &TextDoc, theme: &LoadedTheme, first: usize, last: usize) -> TextWindow {
+    let mut builder = MarkdownBuilder::new(theme, first, last);
+    walk_markdown(doc, &mut builder);
+    builder.finish()
+}
+
+/// How many lines the rendered document has.
+///
+/// The same walk a window runs, keeping nothing: it is the only way to know, and
+/// it is what a preview's scroll range is measured in — a paragraph is one line
+/// and the blank line between two blocks is one the source does not have, so the
+/// file's own line count is not the one a frame is drawn in.
+fn rendered_line_count(doc: &TextDoc, theme: &LoadedTheme) -> usize {
+    // Every line is kept, and the walk finishes the way a window does: a blank
+    // line at the end of a document is padding rather than content, and counting
+    // it would leave the preview one line to scroll into with nothing in it.
+    let mut builder = MarkdownBuilder::new(theme, 0, usize::MAX);
+    walk_markdown(doc, &mut builder);
+    builder.finish().lines.len()
+}
+
+/// Walk the document's events into a builder, which keeps the lines it was asked
+/// for and counts all of them.
+fn walk_markdown(doc: &TextDoc, builder: &mut MarkdownBuilder<'_>) {
     let options =
         Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS;
-    let mut builder = MarkdownBuilder::new(theme, first, last);
 
     for event in Parser::new_ext(&doc.text, options) {
         match event {
@@ -1370,8 +1410,6 @@ fn window_markdown(doc: &TextDoc, theme: &LoadedTheme, first: usize, last: usize
             _ => {}
         }
     }
-
-    builder.finish()
 }
 
 // -------------------------------------------------------------------- source
@@ -2138,10 +2176,21 @@ struct BodyLayout {
     y: i32,
     content_right: i32,
     emitted: usize,
+    /// Whether the frame stopped because the box was full rather than because the
+    /// document ran out. A frame that is full has nothing to pull back into; one
+    /// that is not is the last screenful of the document, waiting to be filled by
+    /// the lines above it.
+    full: bool,
 }
 
 /// Lay the document out inside `box_width` x `box_height`, starting at
 /// `first_line`, and report the box the content needs.
+///
+/// `first_line` is in the lines the frame is drawn in — the document's own, except
+/// for a rendered Markdown document, whose lines are the ones its renderer makes.
+/// It is a request rather than a command: a frame that would end before the bottom
+/// of the box is pulled back until the lines left in the document fill it, so the
+/// last screenful of a document is a full one and its last line is on screen.
 ///
 /// Lines are clipped at the right edge rather than wrapped — column-aligned code
 /// reads better unwrapped — and only the lines the frame shows are ever styled,
@@ -2171,14 +2220,11 @@ fn layout(
         .unwrap_or(1)
         .max(1);
 
-    // How many lines a frame of this height holds, and so how deep it can start:
-    // a frame is pulled back until it can be filled from where it starts, which is
-    // what keeps the last screenful of a document full instead of showing two
-    // lines at the top of an otherwise empty box.
+    // How many lines a frame of this height holds, which is what tells a preview
+    // that cannot scroll how much of the document it is leaving out.
     let capacity = (((box_height.max(1) as i32 - padding * 2).max(0) / min_line_height) as usize)
         .max(1)
         .min(scrollable_lines.max(1));
-    let first_line = first_line.min(scrollable_lines.saturating_sub(capacity));
 
     // A line is kept for a note whenever the frame cannot show everything and no
     // scrollbar will say so: a file that was cut at the read cap, whose remainder
@@ -2190,6 +2236,11 @@ fn layout(
     } else {
         0
     };
+
+    // The frame starts where it was asked to, kept inside the lines there are: a
+    // request past the end of the document is the last line of it, never a box
+    // with nothing in it.
+    let mut first_line = first_line.min(scrollable_lines.saturating_sub(1));
     let mut body = lay_out_body(
         document,
         theme,
@@ -2199,6 +2250,39 @@ fn layout(
         scrollbar_space,
         note_height,
     );
+
+    // A frame is pulled back until it can be filled from where it starts, which is
+    // what keeps the last screenful of a document full instead of ending in empty
+    // page. What fills it are the lines above it, so those are walked backwards
+    // from its top: the pull-back is measured in the document's own lines rather
+    // than in the lines that fit, because one line can take two of the box's and a
+    // pull-back by the number of lines that fit would leave the end of the
+    // document out of reach.
+    if first_line > 0 && !body.full {
+        let bottom = body_bottom(box_height, padding, note_height);
+        let pulled_back = pulled_back_first_line(
+            document,
+            theme,
+            metrics,
+            first_line,
+            box_width,
+            scrollbar_space,
+            bottom - body.y,
+        );
+
+        if pulled_back != first_line {
+            first_line = pulled_back;
+            body = lay_out_body(
+                document,
+                theme,
+                metrics,
+                first_line,
+                (box_width, box_height),
+                scrollbar_space,
+                note_height,
+            );
+        }
+    }
 
     if note_needed {
         let bottom = box_height.max(1) as i32 - padding;
@@ -2244,6 +2328,77 @@ fn layout(
     }
 }
 
+/// The bottom edge of the text area inside a box, with `reserve` kept clear at the
+/// end of it for a line the caller is about to add.
+fn body_bottom(box_height: u32, padding: i32, reserve: i32) -> i32 {
+    (box_height.max(1) as i32 - padding).max(padding + 1) - reserve
+}
+
+/// Where a frame whose lines do not fill the box has to start for the box to be
+/// full, or the line it was asked for when it already is.
+///
+/// The frame ends at the last line of the document, so what can still fill it are
+/// the lines above that top, walked backwards while the box has room for another.
+/// What comes back is the earliest line whose tail still fits — which is where a
+/// preview stops when it is scrolled to the end, so the last line is on screen and
+/// nothing is left below it.
+///
+/// The walk is bounded by the room itself: every line takes at least the smallest
+/// line height of the box, so no more than that many can be added.
+fn pulled_back_first_line(
+    document: &CachedDocument,
+    theme: &LoadedTheme,
+    metrics: &TextMetrics,
+    first_line: usize,
+    box_width: u32,
+    scrollbar_space: i32,
+    room: i32,
+) -> usize {
+    if first_line == 0 || room <= 0 {
+        return first_line;
+    }
+
+    let doc = &document.doc;
+    let padding = metrics.padding;
+    let min_line_height = metrics
+        .line_height
+        .iter()
+        .copied()
+        .min()
+        .unwrap_or(1)
+        .max(1);
+    let take = ((room + min_line_height - 1) / min_line_height) as usize;
+    let from = first_line.saturating_sub(take);
+    let Some(window) = styled_window(&document.key, document, theme, from, first_line - from)
+    else {
+        return first_line;
+    };
+
+    let left = padding;
+    let right = (box_width.max(1) as i32 - padding - scrollbar_space).max(left + 1);
+    let mut start = first_line;
+    let mut room = room;
+
+    for index in (from..first_line).rev() {
+        let Some(line) = window.line(index) else {
+            break;
+        };
+
+        // The height the line takes in the frame, which is the height the
+        // placement gives it.
+        let needed = visual_lines_of(doc, line, metrics, left, right).len() as i32
+            * line_height(line, metrics);
+        if needed > room {
+            break;
+        }
+
+        room -= needed;
+        start = index;
+    }
+
+    start
+}
+
 /// The lines of the document that fit inside the box, starting at `first_line`.
 ///
 /// Only the window that will be drawn is styled: the request to [`styled_window`]
@@ -2264,7 +2419,7 @@ fn lay_out_body(
     let box_width = box_width.max(1) as i32;
     let left = padding;
     let right = (box_width - padding - scrollbar_space).max(left + 1);
-    let bottom = (box_height.max(1) as i32 - padding).max(padding + 1) - reserve;
+    let bottom = body_bottom(box_height, padding, reserve);
     let body_advance = metrics.advance[BODY_LEVEL as usize].max(1);
     let min_line_height = metrics
         .line_height
@@ -2283,6 +2438,7 @@ fn lay_out_body(
     let mut y = padding;
     let mut content_right = left + body_advance * MIN_CONTENT_CHARS;
     let mut emitted = 0usize;
+    let mut full = false;
 
     if let Some(window) = window {
         let mut index = first_line;
@@ -2293,20 +2449,11 @@ fn lay_out_body(
 
             let height = line_height(line, metrics);
             if y + height > bottom {
+                full = true;
                 break;
             }
 
-            let indent = left + metrics.indent(line.indent);
-            let text_right = match line.block {
-                LineBlock::Quote => right - metrics.quote_bar - 4,
-                _ => right,
-            };
-
-            let visual_lines = if doc.wrap {
-                wrap_line(line, indent, text_right, metrics)
-            } else {
-                vec![clip_line(line, indent, text_right, metrics)]
-            };
+            let visual_lines = visual_lines_of(doc, line, metrics, left, right);
 
             let mut placed = false;
             for runs in visual_lines {
@@ -2314,11 +2461,13 @@ fn lay_out_body(
                     break;
                 }
 
+                // An empty line has no runs to measure, so it adds nothing to the
+                // width the frame needs.
                 let right_edge = runs
                     .iter()
                     .map(|run| run.x + run.width)
                     .max()
-                    .unwrap_or(indent);
+                    .unwrap_or(left);
                 content_right = content_right.max(right_edge);
                 lines.push(LaidLine {
                     runs,
@@ -2331,6 +2480,7 @@ fn lay_out_body(
             }
 
             if !placed {
+                full = true;
                 break;
             }
             emitted += 1;
@@ -2350,6 +2500,33 @@ fn lay_out_body(
         y,
         content_right,
         emitted,
+        full,
+    }
+}
+
+/// One document line as the frame draws it inside its text column: the visual
+/// lines it takes, left to right. Code, markup and art are clipped at the right
+/// edge, so their columns line up; prose wraps between words.
+///
+/// Both the placement and the pull-back measure a line with this, so the height a
+/// line is given and the height it is walked back by cannot drift apart.
+fn visual_lines_of(
+    doc: &TextDoc,
+    line: &DocLine,
+    metrics: &TextMetrics,
+    left: i32,
+    right: i32,
+) -> Vec<Vec<LaidRun>> {
+    let indent = left + metrics.indent(line.indent);
+    let text_right = match line.block {
+        LineBlock::Quote => right - metrics.quote_bar - 4,
+        _ => right,
+    };
+
+    if doc.wrap {
+        wrap_line(line, indent, text_right, metrics)
+    } else {
+        vec![clip_line(line, indent, text_right, metrics)]
     }
 }
 
@@ -3046,8 +3223,8 @@ mod tests {
     use super::{
         cp437_char, decode_text, expand_tabs, frame_text, legacy_encoding, measure, position_in,
         render_scrolled, scroll_line_at_track_y, strip_rtf, styled_window, text_in, wants_ansi,
-        window_markdown, FrameLine, FrameRun, LegacyEncoding, LineBlock, Selection,
-        TextPreviewOptions, MAX_LINE_CHARS,
+        window_markdown, FrameLine, FrameRun, LegacyEncoding, LineBlock, Selection, TextFrame,
+        TextPreviewOptions, MAX_DOC_LINES, MAX_LINE_CHARS,
     };
     use crate::config::{MarkdownMode, TextTheme};
     use crate::text_theme;
@@ -3058,6 +3235,7 @@ mod tests {
     fn document_of(text: &str, producer: super::Producer, wrap: bool) -> super::TextDoc {
         super::TextDoc {
             line_starts: super::line_starts(text),
+            rendered_lines: None,
             text: text.to_string(),
             producer,
             read_truncated: false,
@@ -3793,7 +3971,7 @@ mod tests {
 
         assert!(first.scrollable(), "a long file should scroll");
         assert_eq!(first.first_line, 0);
-        assert!(first.visible_lines < first.total_lines);
+        assert!(first.visible_lines < first.scrollable_lines);
         assert_eq!(first.pixels.len(), (width * height * 4) as usize);
 
         let scrollbar = first.scrollbar.expect("a scrollbar");
@@ -3862,6 +4040,183 @@ mod tests {
 
         // The note is inside the box it was laid out for.
         assert!(last.top + last.height <= height as i32, "{note}");
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// Scroll a preview the way the wheel does — three lines a notch, kept inside
+    /// the lines the document has — and hand back the frame it stops on.
+    fn scroll_to_the_end(
+        path: &Path,
+        width: u32,
+        height: u32,
+        options: TextPreviewOptions,
+    ) -> TextFrame {
+        let mut frame = render_scrolled(path, 0, width, height, 96, options, None).unwrap();
+        let mut first = 0usize;
+        let mut visible = frame.visible_lines;
+
+        for _ in 0..10_000 {
+            let next = (first + 3).min(frame.scrollable_lines.saturating_sub(visible));
+            if next == first {
+                break;
+            }
+
+            frame = render_scrolled(path, next, width, height, 96, options, None).unwrap();
+            first = frame.first_line;
+            visible = frame.visible_lines;
+        }
+
+        frame
+    }
+
+    /// A document whose lines wrap has to be able to show its own last line. The
+    /// pull-back that keeps the last screenful full used to be measured in the
+    /// lines that fit, and one wrapped line takes more than one of those: the frame
+    /// filled short of the end, and the last lines of the file could never be
+    /// scrolled to.
+    #[test]
+    fn the_end_of_a_document_whose_lines_wrap_can_be_reached() {
+        let mut source = String::new();
+        for line in 0..400 {
+            source.push_str(&format!(
+                "line {line} of a paragraph long enough to wrap somewhere before the right edge\n"
+            ));
+        }
+        let path = fixture("wrapped-end.txt", source.as_bytes());
+        let options = options(TextTheme::Light, MarkdownMode::Rendered);
+
+        // The cross section of the bug: a preview tall enough to reach the bottom
+        // of the display holds more wrapped lines, so it fell further short.
+        let (width, height) = measure(&path, 900, 900, 96, options).unwrap();
+        let last = scroll_to_the_end(&path, width, height, options);
+
+        assert_eq!(
+            last.first_line + last.visible_lines,
+            last.scrollable_lines,
+            "the frame at the end of the document ends at its last line"
+        );
+        assert!(
+            frame_text(&last.lines).contains("line 399 of a paragraph"),
+            "the last line of the document is on screen"
+        );
+
+        // And it is still a full frame: the pull-back is what fills it, so less
+        // than a line is left below the last one.
+        let line_height = last.lines.first().map(|line| line.height).unwrap_or(1);
+        let bottom_gap = last
+            .lines
+            .last()
+            .map(|line| last.height as i32 - (line.top + line.height))
+            .unwrap_or(i32::MAX);
+        assert!(
+            bottom_gap < line_height,
+            "{bottom_gap} pixels were left below a frame of {line_height}-pixel lines"
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// A rendered Markdown document is drawn in the lines its renderer makes, and
+    /// those are what it scrolls through: a paragraph is one line, a heading is one,
+    /// and the blank line between two blocks is one the source does not have.
+    /// Counting the file's own lines instead scrolled the preview past the end of
+    /// what there was to draw, which was a frame of empty page.
+    #[test]
+    fn a_rendered_document_scrolls_through_the_lines_it_draws() {
+        let mut source = String::new();
+        for section in 0..300 {
+            source.push_str(&format!(
+                "## Section {section}\n\nA short paragraph for section {section}.\n\n"
+            ));
+        }
+        let path = fixture("rendered-end.md", source.as_bytes());
+        let options = options(TextTheme::Light, MarkdownMode::Rendered);
+
+        let (width, height) = measure(&path, 700, 500, 96, options).unwrap();
+        let first = render_scrolled(&path, 0, width, height, 96, options, None).unwrap();
+        assert!(
+            first.scrollable_lines < source.lines().count(),
+            "the scroll range is the lines the renderer draws, not the file's"
+        );
+
+        // Every position the wheel can reach paints something.
+        let mut position = first.visible_lines.max(1);
+        while position < first.scrollable_lines {
+            let frame = render_scrolled(&path, position, width, height, 96, options, None).unwrap();
+            assert!(
+                !frame.lines.is_empty(),
+                "a frame at line {position} of {} shows nothing",
+                first.scrollable_lines
+            );
+            position += frame.visible_lines.max(1);
+        }
+
+        let last = scroll_to_the_end(&path, width, height, options);
+        assert_eq!(last.first_line + last.visible_lines, last.scrollable_lines);
+        assert!(
+            frame_text(&last.lines).contains("Section 299"),
+            "the end of the document is the last line the renderer drew"
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// A file longer than a preview is allowed to walk through is scrolled to the
+    /// end of the range it can reach, not to a frame with nothing in it: the
+    /// scrollbar and the scroll stop at the same line, and that line is on screen
+    /// when they do.
+    #[test]
+    fn a_file_longer_than_the_scroll_range_stops_at_its_last_line() {
+        let mut source = String::new();
+        for line in 0..(MAX_DOC_LINES + 500) {
+            source.push_str(&format!("let value_{line} = {line};\n"));
+        }
+        let path = fixture("beyond-the-range.rs", source.as_bytes());
+        let options = options(TextTheme::Light, MarkdownMode::Rendered);
+
+        let (width, height) = measure(&path, 600, 400, 96, options).unwrap();
+        let first = render_scrolled(&path, 0, width, height, 96, options, None).unwrap();
+        assert_eq!(first.scrollable_lines, MAX_DOC_LINES);
+
+        let last = scroll_to_the_end(&path, width, height, options);
+        assert_eq!(last.first_line + last.visible_lines, MAX_DOC_LINES);
+        assert!(
+            frame_text(&last.lines).contains(&format!("let value_{}", MAX_DOC_LINES - 1)),
+            "the last line the preview can reach is on screen"
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// A position past the end of the document is not a frame of empty page: it is
+    /// the last screenful of it. That is where a scroll can arrive from — a thumb
+    /// dragged to the bottom of its track, a position left over from a file that
+    /// was longer when the preview opened — and it is what the end of the range
+    /// has to look like.
+    #[test]
+    fn a_position_past_the_end_lands_on_the_last_screenful() {
+        let mut source = String::new();
+        for line in 0..200 {
+            source.push_str(&format!("let value_{line} = {line};\n"));
+        }
+        let path = fixture("past-the-end.rs", source.as_bytes());
+        let options = options(TextTheme::Light, MarkdownMode::Rendered);
+
+        let (width, height) = measure(&path, 600, 300, 96, options).unwrap();
+        let start = render_scrolled(&path, 0, width, height, 96, options, None).unwrap();
+        let beyond = render_scrolled(&path, 100_000, width, height, 96, options, None).unwrap();
+
+        assert!(!beyond.lines.is_empty(), "there is never nothing to show");
+        assert_eq!(
+            beyond.first_line + beyond.visible_lines,
+            start.scrollable_lines,
+            "the frame shows the end of the document"
+        );
+        assert!(
+            frame_text(&beyond.lines).contains("let value_199"),
+            "the last line of the document is on screen"
+        );
 
         let _ = std::fs::remove_file(&path);
     }

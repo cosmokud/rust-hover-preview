@@ -287,9 +287,9 @@ struct TextPreviewState {
     /// Document line the frame starts at, and how many it shows.
     first_line: usize,
     visible_lines: usize,
-    /// Lines the preview can reach, and lines the file holds.
+    /// Lines the preview can reach, which is also the range its scrollbar is
+    /// drawn and dragged in.
     scrollable_lines: usize,
-    total_lines: usize,
     /// The bar drawn in the frame, kept so a drag can be tested against it.
     scrollbar: Option<text_preview::ScrollBar>,
     /// Whether the pointer is currently dragging the thumb.
@@ -1828,7 +1828,6 @@ fn load_text_preview(
         first_line: frame.first_line,
         visible_lines: frame.visible_lines,
         scrollable_lines: frame.scrollable_lines,
-        total_lines: frame.total_lines,
         scrollbar: frame.scrollbar,
         dragging: false,
         lines: frame.lines,
@@ -3463,7 +3462,7 @@ fn text_scroll_drag_target(x: i32, y: i32) -> Option<usize> {
             scrollbar.thumb,
             y,
             scroll.visible_lines,
-            scroll.total_lines,
+            scroll.scrollable_lines,
         ))
     })
 }
@@ -3478,7 +3477,7 @@ fn drag_target_for_y(y: i32) -> Option<usize> {
             scrollbar.thumb,
             y,
             scroll.visible_lines,
-            scroll.total_lines,
+            scroll.scrollable_lines,
         ))
     })
 }
@@ -5022,7 +5021,6 @@ mod tests {
             first_line: 100,
             visible_lines: 40,
             scrollable_lines: 200,
-            total_lines: 200,
             scrollbar: None,
             dragging: false,
             lines: Vec::new(),
@@ -5041,7 +5039,6 @@ mod tests {
         let fits = super::TextPreviewState {
             visible_lines: 200,
             scrollable_lines: 200,
-            total_lines: 200,
             ..scroll
         };
         assert!(!fits.can_scroll());
