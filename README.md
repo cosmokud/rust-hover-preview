@@ -16,7 +16,7 @@ A Windows 11 tray app inspired by QTTabBar that shows instant File Explorer prev
 - PDF first pages via the built-in Windows PDF engine
 - Text and code with syntax highlighting, rendered Markdown, and bundled/custom themes
 - Archive contents — zip, rar, 7z, tar — as a file tree with sizes, read without unpacking anything
-- Office documents — Word, Excel and PowerPoint — drawn from the picture the document saved, or from a page Office renders for a hover that rests
+- Office documents — Word, Excel and PowerPoint — drawn from a page Office renders in the background and keeps, so a document previews from its first hover and instantly after
 - Preview scaling from 25% to 400%, or fit-to-screen
 - Previews appear beside the cursor or focused item and are never clipped by screen edges
 - Tray menu and hand-editable `config.ini`
@@ -50,13 +50,11 @@ A preview lists what the archive holds — a summary line, then a tree of its fo
 
 `doc`, `docm`, `docx`, `dot`, `dotm`, `dotx`, `xls`, `xlsb`, `xlsm`, `xlsx`, `xlt`, `xltm`, `xltx`, `ppt`, `pptm`, `pptx`, `pps`, `ppsm`, `ppsx`, `pot`, `potm`, `potx`.
 
-A document is previewed from the picture Office saves inside it — `docProps/thumbnail.emf` for Word, a metafile of the first page that is vector, so a preview drawn from one is sharp at any size. It is read straight out of the file, which costs a few milliseconds and starts no Office process. The legacy `.doc`, `.xls` and `.ppt` formats keep theirs in the summary information stream of their compound file, and that is read too.
+A hover shows the document's page, rendered by the Word, Excel or PowerPoint installed on the machine and cached under `%LOCALAPPDATA%\rust-hover-preview\cache\office`. Nothing is launched until the pointer has rested on the document for two seconds — a sweep across a folder starts no engine — and the preview shows a spinner in the shape that family's pages have until the page arrives. Once it has been rendered, every later hover of that document is instant, and the engine is kept warm for a minute so a folder of documents costs one Office start rather than one per file.
 
-For a hover that rests, and for any document that saved no picture of itself — Excel only writes one when "Save Thumbnails" is on, a workbook saved by a macro carries none, and files from other tools often have neither — a page is rendered by the installed Office, in the background, and kept under `%LOCALAPPDATA%\rust-hover-preview\cache\office`. Word and Excel export page 1 to PDF, which the built-in Windows PDF engine then draws; PowerPoint exports slide 1 as an image. The preview shows the saved thumbnail (or a spinner) until the page is there, and nothing is launched until the pointer has rested on the document. See [Optional: Enable Office Page Rendering](#optional-enable-office-page-rendering).
+What a document saves inside itself is deliberately not used: the picture Office puts in a file is a thumbnail-sized metafile or bitmap, a couple of hundred pixels across, and a preview drawn from one is either tiny or an enlargement of something that small. The page is the whole of it.
 
-The instant path is the picture the document saved of itself, so a document that saved none is answered by the render tier: the rest, plus a few seconds for the first one while Office starts, then a fraction of a second per document while the engine stays warm. Turning thumbnails on in Word — File → Info → Properties → Advanced Properties → Summary → Save Thumbnails for all Documents — makes those documents instant too.
-
-Excel exports a workbook's first printed page, which goes through the print pipeline and so needs a printer on the machine. Where there is none, the used range's top-left is copied out as a picture instead — the corner of the sheet a person would see first, which is the most a machine without a printer can produce.
+Excel's page export goes through the print pipeline and so needs a printer on the machine; where there is none, the used range's top-left is copied out as a picture instead — the corner of the sheet a person would see first, which is the most a machine without a printer can produce.
 
 Add or remove formats through `config.ini`; the list is editable like the archive list.
 
@@ -107,9 +105,9 @@ ffprobe -version
 
 ## Optional: Enable Office Page Rendering
 
-A document that saved no thumbnail of itself still previews: the page is rendered by the Word, Excel or PowerPoint installed on this machine, in the background, and cached. Nothing beyond Office itself is needed, no document is ever saved or changed, and no engine is started until the pointer has rested on a document for two seconds — a sweep across a folder launches nothing.
+A Word, Excel or PowerPoint document previews as the page the installed Office draws for it, in the background, and what has been drawn is cached — so the second hover of a document is instant. Nothing beyond Office itself is needed, no document is ever saved or changed, and no engine is started until the pointer has rested on a document for two seconds: a sweep across a folder launches nothing. The first hover of a document costs the rest plus a few seconds while Office starts; the documents after it cost a fraction of a second each while the engine stays warm, and it is let go a minute after the last one.
 
-Excel's page export goes through the print pipeline, so it needs a printer installed on the machine; with none, a workbook is previewed from a picture of its used range instead. Word's automation runs whatever Word the machine has, and a document it cannot open — a password, an unreadable file — is answered with no preview.
+Excel's page export goes through the print pipeline, so it needs a printer installed on the machine; with none, a workbook is previewed from a picture of its used range instead. A document Office refuses to open — a password, an unreadable file — is answered with no preview.
 
 Turn it off under **Office Preview → Render With Office** in the tray, or with `office_render_enabled=false` in `config.ini`. What has been rendered is kept under `%LOCALAPPDATA%\rust-hover-preview\cache\office` up to `office_cache_mb` (256 MB by default, `0` for no cache — which also switches the tier off, since a page that cannot be kept is not worth an Office start).
 
@@ -205,7 +203,7 @@ Key settings:
 - `text_font_scale` — percentage from 1 to 1000; default is `125`. Archive listings follow it too.
 - `extensions` / `names` — text-preview gates. Extensions are written without dots; names match extensionless files.
 - `archive_extensions` — the archive-preview gate, under `[archive]`. Entries are written without dots, and an entry with a dot in it (`tar.gz`) is matched against the end of the file name.
-- `office_render_enabled` — whether an installed Office may render page 1 of a document that saved no thumbnail of itself; `office_cache_mb` bounds what those pages take on disk, and `0` switches both off.
+- `office_render_enabled` — whether the installed Office may draw a document's page in the background; `office_cache_mb` bounds what those pages take on disk, and `0` switches both off.
 - `office_extensions` — the Office-preview gate, under `[office]`, written without dots.
 - `trigger_key` / `trigger_key_mode` — key (`alt`, `ctrl`, `shift`, `win`) and mode (`disable` or `enable`).
 - `follow_cursor` — `true` for Follow Cursor, `false` for Best Position.

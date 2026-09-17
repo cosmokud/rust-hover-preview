@@ -7,10 +7,10 @@
 //!
 //! The question here is only what a file is *called*. What it *is* — an OOXML
 //! package or an OLE compound file — is settled by reading the file's own header,
-//! and that split is deliberate: the hover gate asks its question of every item
-//! the pointer touches, and a synchronizing provider's placeholder is a directory
-//! entry that can be answered for but a file that must not be opened, because
-//! opening it is what starts the download.
+//! and that split is deliberate: the hover gate asks its question of every item the
+//! pointer touches, and a synchronizing provider's placeholder is a directory entry
+//! that can be answered for but a file that must not be opened, because opening it
+//! is what starts the download.
 
 use crate::config::PreviewType;
 use crate::text_formats;
@@ -25,9 +25,9 @@ use std::path::Path;
 pub const DEFAULT_OFFICE_EXTENSIONS: &str =
     "doc,docm,docx,dot,dotm,dotx,xls,xlsb,xlsm,xlsx,xlt,xltm,xltx,ppt,pptm,pptx,pps,ppsm,ppsx,pot,potm,potx";
 
-/// The bytes a container is recognized by: an OOXML package is a zip, so it
-/// starts with the local header of its first part, and a legacy document is an
-/// OLE compound file with its own signature.
+/// The bytes a container is recognized by: an OOXML package is a zip, so it starts
+/// with the local header of its first part, and a legacy document is an OLE
+/// compound file with its own signature.
 const CONTAINER_PROBE_BYTES: usize = 8;
 const OOXML_MAGIC: [u8; 4] = [b'P', b'K', 0x03, 0x04];
 const OLE_MAGIC: [u8; 8] = [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
@@ -59,6 +59,16 @@ impl OfficeApp {
             Self::PowerPoint => "PowerPoint.Application",
         }
     }
+
+    /// The name the application's processes run under, which is how the engine
+    /// tells the instance it started from one the user already had open.
+    pub fn image_name(self) -> &'static str {
+        match self {
+            Self::Word => "WINWORD.EXE",
+            Self::Excel => "EXCEL.EXE",
+            Self::PowerPoint => "POWERPNT.EXE",
+        }
+    }
 }
 
 /// Whether the configured list claims `path`.
@@ -70,8 +80,8 @@ pub fn matches_office_list(path: &Path, extensions: &[String]) -> bool {
 /// use.
 ///
 /// Every name in the office list is a bare extension — unlike the archive list,
-/// which has to carry the dotted `tar.gz` — so anything that is not one is
-/// dropped rather than matched against.
+/// which has to carry the dotted `tar.gz` — so anything that is not one is dropped
+/// rather than matched against.
 pub fn sanitize_office_extensions(list: &str) -> Vec<String> {
     let mut extensions: Vec<String> = Vec::new();
 
@@ -111,9 +121,9 @@ pub fn is_office_preview(path: &Path) -> bool {
 /// Which application renders a document with this name, by the family its
 /// extension belongs to.
 ///
-/// The families are matched on their prefixes rather than on the built-in list,
-/// so an extension a user added — `docx2`, say — still finds its engine, and a
-/// format no engine claims is answered from its saved thumbnail alone.
+/// The families are matched on their prefixes rather than on the built-in list, so
+/// an extension a user added — `docx2`, say — still finds its engine, and a format
+/// no engine claims is answered with no preview at all.
 pub fn app_for(path: &Path) -> Option<OfficeApp> {
     let extension = path.extension()?.to_str()?.to_lowercase();
 
@@ -131,12 +141,12 @@ pub fn app_for(path: &Path) -> Option<OfficeApp> {
     None
 }
 
-/// The box a preview is placed for while its page is on the way, by the shape
-/// that family's pages have: a Word page is a portrait sheet, a workbook's first
-/// printed page is usually a landscape one, and a slide is a slide.
+/// The box a preview is placed for while its page is on the way, by the shape that
+/// family's pages have: a Word page is a portrait sheet, a workbook's first printed
+/// page is usually a landscape one, and a slide is a slide.
 ///
-/// It is only what the spinner is drawn in — as soon as a page or a saved picture
-/// exists, its own size is what the layout uses.
+/// It is only what the spinner is drawn in — as soon as the page exists, its own
+/// size is what the layout uses.
 pub fn default_page_size(path: &Path) -> (u32, u32) {
     match app_for(path) {
         Some(OfficeApp::Excel) => (1123, 794),
@@ -146,8 +156,11 @@ pub fn default_page_size(path: &Path) -> (u32, u32) {
 }
 
 /// The container the file's own header reports, or `None` for a file that is
-/// neither — a text file wearing a document's name, say, which is answered with
-/// no preview rather than a parse.
+/// neither — a text file wearing a document's name, say.
+///
+/// The render tier asks this before a path is handed to Office: what a document is
+/// called is the hover gate's question and what it *is* is the engine's, but a file
+/// that is not a document at all is not worth an Office start.
 pub fn container_kind(path: &Path) -> Option<OfficeContainer> {
     let mut file = File::open(path).ok()?;
     let mut probe = [0u8; CONTAINER_PROBE_BYTES];
