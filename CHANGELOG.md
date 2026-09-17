@@ -11,9 +11,12 @@
 
 - Office previews are drawn from the rendered page alone. The picture a document saves inside itself is no longer read at all: a thumbnail a couple of hundred pixels across is either tiny in a preview or an enlargement of something that small, and skipping it keeps the preview thread from parsing a zip or a compound file. The `cfb` reader the legacy formats needed went with it.
 - Nothing about an Office preview is held in memory between hovers. A page's own size is read from the cached file each time it is measured, so no cache of the app's can go stale, grow with the documents hovered, or stand between a hover and its preview.
-- While a page is being rendered the preview is the spinner's own box — just big enough for it — instead of one shaped like the page that is coming.
+- While a page is being rendered the preview is the spinner's own box — 64 pixels, just big enough for it — instead of one shaped like the page that is coming.
 - The page that arrives for the hover on screen replaces what is up without the preview being taken down first: the spinner stays while a large picture is decoded and is swapped for the page when it is ready, instead of blinking off and back.
 - A picture larger than the box it is shown in is now shrunk with the box filter rather than the smooth one, which is the difference between half a second and a quarter of a second for a worksheet's corner at screen resolution.
+- A worksheet whose rows are tall or columns wide is now copied out only as far as a preview could ever show it, so a report with wrapped headings is a smaller picture that draws sooner instead of several million pixels nobody sees.
+- A rendered page that cannot be read — a file left half-written, or one something else has corrupted — is dropped and rendered again rather than trusted, which is what a preview that blinked away on every hover of the same file was doing. Workbook pictures are also written beside their name and moved into place, so a hover never reads half of one.
+- A document that refuses a page is left alone for two minutes rather than ten, and an engine that would not start is not held against the file at all.
 
 ### Fixed
 

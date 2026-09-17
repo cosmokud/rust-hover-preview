@@ -6003,17 +6003,19 @@ pub fn run_preview_window() {
             match render_wait {
                 Some((false, _)) => office_render_pending = None,
                 Some((true, true)) => {
-                    // The engine is not coming back — a dialog inside Office can
-                    // hold it for good — so the preview comes down rather than
-                    // spinning forever, and the file is left alone for a while
-                    // instead of being asked for again on the next pass.
+                    // The preview has waited as long as it waits — a page that has
+                    // not arrived by now may still be coming, a very large document
+                    // takes as long as it takes — so the spinner comes down and the
+                    // hover is left to itself. The render is not abandoned with it:
+                    // it runs on and its page is cached, so the next hover of that
+                    // file shows it. Only the engine itself can say a render failed,
+                    // and it remembers that for the file.
                     let abandoned = office_render_pending
                         .take()
                         .map(|(path, _)| path)
                         .filter(|path| shown_path.as_deref() == Some(path.as_path()));
 
-                    if let Some(path) = abandoned {
-                        office_render::remember_failure(&path);
+                    if abandoned.is_some() {
                         pending_load = None;
                         if let Some(cancel) = pending_load_cancel.take() {
                             cancel.store(true, Ordering::Release);
