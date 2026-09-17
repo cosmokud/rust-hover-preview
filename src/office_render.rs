@@ -30,7 +30,7 @@
 //!   worker is current.
 
 use crate::cloud_files;
-use crate::config::{sanitize_office_cache_mb, PreviewType};
+use crate::config::{sanitize_office_cache_mb, PreviewType, DEFAULT_OFFICE_CACHE_MB};
 use crate::office_formats::{app_for, container_kind, OfficeApp};
 use crate::preview_window;
 use crate::CONFIG;
@@ -270,7 +270,7 @@ fn cache_limit_bytes() -> usize {
     let megabytes = CONFIG
         .lock()
         .map(|config| sanitize_office_cache_mb(config.office_cache_mb))
-        .unwrap_or(0);
+        .unwrap_or(DEFAULT_OFFICE_CACHE_MB);
 
     megabytes as usize * 1024 * 1024
 }

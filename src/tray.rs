@@ -1,8 +1,9 @@
 use crate::config::{
     sanitize_image_cache_mb, sanitize_office_cache_mb, sanitize_pdf_cache_mb,
     sanitize_text_cache_mb, sanitize_text_font_scale_percent, MarkdownMode, PreviewScale,
-    PreviewType, TextTheme, TransparentBackground, TriggerKeyMode, DEFAULT_PREVIEW_SCALE_PERCENT,
-    DEFAULT_TEXT_FONT_SCALE_PERCENT,
+    PreviewType, TextTheme, TransparentBackground, TriggerKeyMode, DEFAULT_IMAGE_CACHE_MB,
+    DEFAULT_OFFICE_CACHE_MB, DEFAULT_PDF_CACHE_MB, DEFAULT_PREVIEW_SCALE_PERCENT,
+    DEFAULT_TEXT_CACHE_MB, DEFAULT_TEXT_FONT_SCALE_PERCENT,
 };
 use crate::office_render;
 use crate::pdf_preview;
@@ -938,9 +939,9 @@ unsafe fn show_context_menu(hwnd: HWND) {
     // Add the "Cache" submenu: how much memory a preview's own data may be held in
     // between hovers — the frames a decoded image was shown as, the frames a text
     // preview was painted as, the pages a PDF was drawn as, and the pages Office
-    // rendered — each of them listed largest first. All of it is held in memory and
-    // nowhere else, nothing is written to disk, and every cache holds nothing at all
-    // until a size is chosen here.
+    // rendered — each of them listed largest first, with the size its own cache
+    // starts at marked. All of it is held in memory and nowhere else, and nothing is
+    // written to disk.
     let (image_cache_mb, office_cache_mb, pdf_cache_mb, text_cache_mb) = CONFIG
         .lock()
         .map(|c| {
@@ -951,29 +952,36 @@ unsafe fn show_context_menu(hwnd: HWND) {
                 c.text_cache_mb,
             )
         })
-        .unwrap_or((0, 0, 0, 0));
+        .unwrap_or((
+            DEFAULT_IMAGE_CACHE_MB,
+            DEFAULT_OFFICE_CACHE_MB,
+            DEFAULT_PDF_CACHE_MB,
+            DEFAULT_TEXT_CACHE_MB,
+        ));
 
     let cache_menu = CreatePopupMenu().unwrap();
 
-    // The labels are built once and kept: `AppendMenuW` is handed a pointer, so the
-    // wide strings have to outlive the call that lists them.
-    let cache_labels: Vec<Vec<u16>> = CACHE_SIZE_CHOICES_MB
-        .iter()
-        .map(|megabytes| {
-            cache_size_label(*megabytes)
-                .encode_utf16()
-                .chain(std::iter::once(0))
-                .collect()
-        })
-        .collect();
-
-    for (name, base, held) in [
-        (w!("Image"), ID_TRAY_IMAGE_CACHE_BASE, image_cache_mb),
-        (w!("Text"), ID_TRAY_TEXT_CACHE_BASE, text_cache_mb),
-        (w!("PDF"), ID_TRAY_PDF_CACHE_BASE, pdf_cache_mb),
-        (w!("Office"), ID_TRAY_OFFICE_CACHE_BASE, office_cache_mb),
+    // The labels are built once per cache and kept for as long as its sizes menu is
+    // being filled out: `AppendMenuW` is handed a pointer, so the wide strings have
+    // to outlive the call that lists them. Which size is the default is the one
+    // thing they say that differs between the caches.
+    for (name, base, held, default_mb) in [
+        (w!("Image"), ID_TRAY_IMAGE_CACHE_BASE, image_cache_mb, DEFAULT_IMAGE_CACHE_MB),
+        (w!("Text"), ID_TRAY_TEXT_CACHE_BASE, text_cache_mb, DEFAULT_TEXT_CACHE_MB),
+        (w!("PDF"), ID_TRAY_PDF_CACHE_BASE, pdf_cache_mb, DEFAULT_PDF_CACHE_MB),
+        (w!("Office"), ID_TRAY_OFFICE_CACHE_BASE, office_cache_mb, DEFAULT_OFFICE_CACHE_MB),
     ] {
         let sizes_menu = CreatePopupMenu().unwrap();
+
+        let cache_labels: Vec<Vec<u16>> = CACHE_SIZE_CHOICES_MB
+            .iter()
+            .map(|megabytes| {
+                cache_size_label(*megabytes, default_mb)
+                    .encode_utf16()
+                    .chain(std::iter::once(0))
+                    .collect()
+            })
+            .collect();
 
         for (index, _) in CACHE_SIZE_CHOICES_MB.iter().enumerate() {
             let _ = AppendMenuW(
@@ -1144,15 +1152,21 @@ fn toggle_preview_type(kind: PreviewType) {
     refresh_preview_types();
 }
 
-/// What a cache size is called in the menu. The two sizes at the ceiling are the
-/// only ones that are not a plain number of megabytes, and the smallest is the size
-/// every cache starts at.
-fn cache_size_label(megabytes: u32) -> String {
-    match megabytes {
-        0 => "0 MB (Default)".to_string(),
+/// What a cache size is called in the menu: the size, with the one the cache starts
+/// at marked as the default — the caches do not all start at the same one, which is
+/// why the default is passed in rather than written into the label. The two sizes at
+/// the ceiling are the only ones that are not a plain number of megabytes.
+fn cache_size_label(megabytes: u32, default_mb: u32) -> String {
+    let label = match megabytes {
         1024 => "1 GB".to_string(),
         2048 => "2 GB".to_string(),
         other => format!("{other} MB"),
+    };
+
+    if megabytes == default_mb {
+        format!("{label} (Default)")
+    } else {
+        label
     }
 }
 

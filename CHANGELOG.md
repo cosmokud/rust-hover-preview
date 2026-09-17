@@ -12,7 +12,7 @@
 ### Changed
 
 - Office previews are drawn from the rendered page, not from the thumbnail a document saves inside itself.
-- A rendered Office page is held in memory rather than written to disk: `office_cache_mb` is how much is kept between hovers, and nothing is kept by default.
+- A rendered Office page is held in memory rather than written to disk: `office_cache_mb` is how much is kept between hovers, and `64 MB` of it is kept by default.
 - A page is asked for in the box its family's pages have, and while it is on its way the preview is the spinner alone.
 - A PDF page and a rendered Office page are still sized from fit-to-screen, but a preview scale below `100%` now reduces that size instead of being ignored. `100%` and above are the fit-to-screen size they have always been, and image previews are unchanged.
 - The spinner a preview shows while it waits is the arc alone: its frame is transparent, so what is behind it is the desktop rather than a dark square. The arc carries a soft halo, which is what keeps it visible over a light background.
@@ -23,9 +23,9 @@
 - A worksheet's picture is copied out only as far as a preview can show it, and a large one is shrunk with the fast filter.
 - A worksheet's picture is asked for again if Excel refuses the first ask, and a page that cannot be read is rendered again rather than trusted.
 - A document that refuses a page is left alone for two minutes rather than ten.
-- New `Cache` submenu in the tray: the image and Office caches are sized from `0 MB` to `2 GB`, and both hold nothing at all until a size is chosen.
-- The `Cache` submenu lists its sizes largest first — `2 GB` at the top, `0 MB (Default)` at the bottom — and `Text Preview → Font Size` lists its steps the same way, with `90%`, `80%` and `70%` added below `100%`.
-- `image_cache_mb` defaults to `0` rather than `64`.
+- New `Cache` submenu in the tray: the image, text, PDF and Office caches are sized from `0 MB` to `2 GB`, and none of them writes anything to disk.
+- The `Cache` submenu lists its sizes largest first — `2 GB` at the top down to `0 MB` at the bottom, with the size each cache starts at marked `(Default)` — and `Text Preview → Font Size` lists its steps the same way, with `90%`, `80%` and `70%` added below `100%`.
+- `image_cache_mb` defaults to `0` rather than `64`, and the image, text and PDF caches hold nothing at all until a size is chosen. `office_cache_mb` defaults to `64`: producing a page costs an Office start and an export, so a document that has been drawn comes back without another render.
 - Removed the `Office Preview` submenu with it: Office previews are switched by the `Office` entry under `Preview Types`, and `office_render_enabled` is no longer read.
 
 ### Fixed
