@@ -16,6 +16,7 @@
 - The spinner a preview shows while it waits is the arc alone: its frame is transparent, so what is behind it is the desktop rather than a dark square. The arc carries a soft halo, which is what keeps it visible over a light background.
 - A document whose page still has to be rendered shows that spinner as soon as the hover finds there is nothing to draw, instead of two seconds later: the wait for the pointer to rest no longer passes with nothing on screen. Loads that may be about to finish keep the moment the spinner is given before it goes up.
 - A preview that is still on its way follows the pointer: the spinner is placed again as the cursor moves along the item it belongs to, and the page or frame that arrives replaces it where the pointer is rather than back where the hover started.
+- The spinner a document shows while its page is rendered is placed flush at the pointer's own corner — a pixel off it, so the pointer keeps its clicks — in whichever of the four the display has room for it, instead of a margin away from it and stepped clear of the name it covers, and its frame is the spinner's own size rather than a box the arc floated in the middle of.
 - A page arriving for a preview that is already on screen replaces it without the preview being taken down first.
 - A worksheet's picture is copied out only as far as a preview can show it, and a large one is shrunk with the fast filter.
 - A worksheet's picture is asked for again if Excel refuses the first ask, and a page that cannot be read is rendered again rather than trusted.

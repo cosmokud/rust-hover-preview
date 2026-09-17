@@ -17,14 +17,16 @@ use crate::pdf_preview;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-/// The box a preview is placed in while its page is being rendered: just enough
-/// for the spinner, since there is nothing else to show yet. The page's own size
-/// is what the layout uses the moment it exists, and the window is moved to it.
+/// The box a preview is placed in while its page is being rendered: the spinner's
+/// own frame, since there is nothing else to show yet. The page's own size is what
+/// the layout uses the moment it exists, and the window is moved to it.
 ///
-/// The box is placed at the size it is rather than fitted to the display — there
-/// is nothing in it to enlarge — so a hover that is waiting on Office costs a
-/// corner of the screen and not the whole of it.
-pub(crate) const WAITING_BOX: u32 = 64;
+/// The box is the size of the arc and its halo, so a spinner placed flush at the
+/// pointer is the spinner at the pointer rather than an empty frame around it;
+/// and it is placed at the size it is rather than fitted to the display — there is
+/// nothing in it to enlarge — so a hover that is waiting on Office costs a corner
+/// of the screen and not the whole of it.
+pub(crate) const WAITING_BOX: u32 = 36;
 
 /// What a preview of this document would be drawn from.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
