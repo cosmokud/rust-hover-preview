@@ -6,6 +6,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
+use crate::archive_formats::{sanitize_archive_extensions, DEFAULT_ARCHIVE_EXTENSIONS};
 use crate::text_formats::{
     sanitize_extensions, sanitize_names, DEFAULT_TEXT_EXTENSIONS, DEFAULT_TEXT_NAMES,
 };
@@ -15,6 +16,8 @@ const CONFIG_SECTION: &str = "settings";
 /// The text-preview extension list lives in its own section so the one long
 /// value stays easy to find and edit by hand.
 const TEXT_SECTION: &str = "text";
+/// The archive extension list lives in its own section for the same reason.
+const ARCHIVE_SECTION: &str = "archive";
 pub const DEFAULT_WEBP_PLAYBACK_FPS: u32 = 90;
 pub const MAX_WEBP_PLAYBACK_FPS: u32 = 90;
 pub const DEFAULT_PREVIEW_SCALE_PERCENT: u32 = 100;
@@ -291,6 +294,7 @@ pub enum PreviewType {
     Videos,
     Text,
     Pdf,
+    Archives,
 }
 
 impl PreviewType {
@@ -309,6 +313,7 @@ impl PreviewType {
             Self::Videos => config.video_preview_enabled,
             Self::Text => config.text_preview_enabled,
             Self::Pdf => config.pdf_preview_enabled,
+            Self::Archives => config.archive_preview_enabled,
         }
     }
 
@@ -319,6 +324,7 @@ impl PreviewType {
             Self::Videos => config.video_preview_enabled = enabled,
             Self::Text => config.text_preview_enabled = enabled,
             Self::Pdf => config.pdf_preview_enabled = enabled,
+            Self::Archives => config.archive_preview_enabled = enabled,
         }
     }
 }
@@ -395,6 +401,8 @@ pub struct AppConfig {
     pub text_preview_enabled: bool,
     /// Whether PDF previews may be shown at all.
     pub pdf_preview_enabled: bool,
+    /// Whether archive contents are listed at all, ahead of the extension list.
+    pub archive_preview_enabled: bool,
     /// Whether a text preview is more than something to look at: a preview that
     /// scrolls, that can be selected and copied from, and that a pointer can rest
     /// on without closing it. Off by default, because it changes what a preview
@@ -411,6 +419,8 @@ pub struct AppConfig {
     /// File names previewed as text — the ones with no extension to match, like
     /// `LICENSE` and `Makefile` — already normalized for lookup.
     pub text_names: Vec<String>,
+    /// Extensions previewed as archives, already normalized for lookup.
+    pub archive_extensions: Vec<String>,
 }
 
 impl Default for AppConfig {
@@ -436,11 +446,13 @@ impl Default for AppConfig {
             video_preview_enabled: true,
             text_preview_enabled: true,
             pdf_preview_enabled: true,
+            archive_preview_enabled: true,
             text_preview_full_mode: false,
             text_font_scale_percent: DEFAULT_TEXT_FONT_SCALE_PERCENT,
             text_scroll_far_edge_grace_pixels: DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS,
             text_extensions: sanitize_extensions(DEFAULT_TEXT_EXTENSIONS),
             text_names: sanitize_names(DEFAULT_TEXT_NAMES),
+            archive_extensions: sanitize_archive_extensions(DEFAULT_ARCHIVE_EXTENSIONS),
         }
     }
 }
@@ -589,6 +601,11 @@ impl AppConfig {
             );
             ini.set(
                 CONFIG_SECTION,
+                "archive_preview_enabled",
+                Some(self.archive_preview_enabled.to_string()),
+            );
+            ini.set(
+                CONFIG_SECTION,
                 "text_preview_full_mode",
                 Some(self.text_preview_full_mode.to_string()),
             );
@@ -616,6 +633,11 @@ impl AppConfig {
                 TEXT_SECTION,
                 "names",
                 Some(sanitize_names(&self.text_names.join(",")).join(",")),
+            );
+            ini.set(
+                ARCHIVE_SECTION,
+                "extensions",
+                Some(sanitize_archive_extensions(&self.archive_extensions.join(",")).join(",")),
             );
             let _ = ini.write(path.to_string_lossy().as_ref());
         }
@@ -703,6 +725,9 @@ impl AppConfig {
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "pdf_preview_enabled") {
             self.pdf_preview_enabled = value;
         }
+        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "archive_preview_enabled") {
+            self.archive_preview_enabled = value;
+        }
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "text_preview_full_mode") {
             self.text_preview_full_mode = value;
         }
@@ -722,6 +747,9 @@ impl AppConfig {
         }
         if let Some(value) = ini.get(TEXT_SECTION, "names") {
             self.text_names = sanitize_names(&value);
+        }
+        if let Some(value) = ini.get(ARCHIVE_SECTION, "extensions") {
+            self.archive_extensions = sanitize_archive_extensions(&value);
         }
     }
 }
