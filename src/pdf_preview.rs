@@ -233,8 +233,9 @@ fn read_stream_bytes(stream: &InMemoryRandomAccessStream) -> Option<Vec<u8>> {
 
 /// BGRA for GDI, with the alpha channel written as opaque: the page is painted
 /// on an opaque background above, so whatever the encoder leaves in the fourth
-/// byte cannot make the preview invisible.
-fn opaque_bgra(rgba: &[u8]) -> Vec<u8> {
+/// byte cannot make the preview invisible. Shared with the Office renderer, which
+/// draws a page of its own into the same kind of frame.
+pub(crate) fn opaque_bgra(rgba: &[u8]) -> Vec<u8> {
     let mut bgra = Vec::with_capacity(rgba.len());
     for chunk in rgba.chunks(4) {
         if chunk.len() == 4 {
