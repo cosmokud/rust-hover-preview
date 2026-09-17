@@ -13,6 +13,7 @@
 - Nothing about an Office preview is kept in memory between hovers.
 - A page is asked for in the box its family's pages have, and while it is on its way the preview is the spinner alone.
 - A PDF page and a rendered Office page are still sized from fit-to-screen, but a preview scale below `100%` now reduces that size instead of being ignored. `100%` and above are the fit-to-screen size they have always been, and image previews are unchanged.
+- The spinner a preview shows while it waits is the arc alone: its frame is transparent, so what is behind it is the desktop rather than a dark square. The arc carries a soft halo, which is what keeps it visible over a light background.
 - A page arriving for a preview that is already on screen replaces it without the preview being taken down first.
 - A worksheet's picture is copied out only as far as a preview can show it, and a large one is shrunk with the fast filter.
 - A worksheet's picture is asked for again if Excel refuses the first ask, and a page that cannot be read is rendered again rather than trusted.
