@@ -104,7 +104,7 @@ ffprobe -version
 - **Preview Delay** — Instant, Fast, Medium, Relaxed, Slow
 - **Same File Rehover Delay** — delay before the same file can preview again
 - **Video Volume** — Max, High, Medium, Low, Very Low, Mute
-- **Preview Position** — Follow Cursor or Best Position
+- **Preview Position** — Follow Cursor or Best Position, and whether to keep previews off the hovered item's name
 - **Enable Text Preview Full Mode** — adds scrolling, selection, and copy; off by default
 - **Text Preview Theme** — Atom One Light, One Dark Pro, or custom `.tmTheme`
 - **Text Preview Font Size** — 100%–400%
@@ -144,6 +144,7 @@ trigger_key=alt
 trigger_key_mode=disable
 confirm_file_type=false
 follow_cursor=false
+avoid_filename=false
 transparent_background=black
 video_volume=0
 preview_scale=100
@@ -171,6 +172,8 @@ Key settings:
 - `extensions` / `names` — text-preview gates. Extensions are written without dots; names match extensionless files.
 - `archive_extensions` — the archive-preview gate, under `[archive]`. Entries are written without dots, and an entry with a dot in it (`tar.gz`) is matched against the end of the file name.
 - `trigger_key` / `trigger_key_mode` — key (`alt`, `ctrl`, `shift`, `win`) and mode (`disable` or `enable`).
+- `follow_cursor` — `true` for Follow Cursor, `false` for Best Position.
+- `avoid_filename` — `true` keeps a preview off the name of the file it is about, so the item under the pointer or the keyboard stays readable while its preview is up. Applies to both positions.
 - `preview_scale` — percentage or `fit`.
 
 ## Build from Source

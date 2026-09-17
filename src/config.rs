@@ -383,6 +383,11 @@ pub struct AppConfig {
     pub trigger_key_mode: TriggerKeyMode,
     pub confirm_file_type: bool,
     pub follow_cursor: bool,
+    /// Whether a preview is placed clear of the name of the file it is about, so the
+    /// item the pointer is on or the keyboard is focused on stays readable while its
+    /// preview is up. Off by default, because it moves a preview from the place it
+    /// would otherwise have filled.
+    pub avoid_filename: bool,
     pub same_file_rehover_delay_ms: u64,
     pub webp_playback_fps: u32,
     /// Memory the decoded-image cache may hold, in megabytes. `0` switches the
@@ -434,6 +439,7 @@ impl Default for AppConfig {
             trigger_key_mode: TriggerKeyMode::Disable,
             confirm_file_type: false,
             follow_cursor: false,
+            avoid_filename: false,
             same_file_rehover_delay_ms: 750,
             webp_playback_fps: DEFAULT_WEBP_PLAYBACK_FPS,
             image_cache_mb: DEFAULT_IMAGE_CACHE_MB,
@@ -542,6 +548,11 @@ impl AppConfig {
                 CONFIG_SECTION,
                 "follow_cursor",
                 Some(self.follow_cursor.to_string()),
+            );
+            ini.set(
+                CONFIG_SECTION,
+                "avoid_filename",
+                Some(self.avoid_filename.to_string()),
             );
             ini.set(
                 CONFIG_SECTION,
@@ -674,6 +685,9 @@ impl AppConfig {
         }
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "follow_cursor") {
             self.follow_cursor = value;
+        }
+        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "avoid_filename") {
+            self.avoid_filename = value;
         }
         if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "same_file_rehover_delay_ms") {
             self.same_file_rehover_delay_ms = value;

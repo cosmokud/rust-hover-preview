@@ -48,6 +48,7 @@ const ID_TRAY_VOLUME_VERY_LOW: u16 = 1014; // 10%
 const ID_TRAY_VOLUME_MUTE: u16 = 1015; // 0%
 const ID_TRAY_POSITION_FOLLOW: u16 = 1020; // Follow cursor
 const ID_TRAY_POSITION_BEST: u16 = 1021; // Best position
+const ID_TRAY_POSITION_AVOID_NAME: u16 = 1022; // Keep previews off the hovered item's name
 const ID_TRAY_DELAY_INSTANT: u16 = 1030; // 0ms
 const ID_TRAY_DELAY_VERY_FAST: u16 = 1031; // 200ms
 const ID_TRAY_DELAY_MEDIUM: u16 = 1032; // 500ms
@@ -161,6 +162,7 @@ unsafe extern "system" fn tray_window_proc(
                 ID_TRAY_VOLUME_MUTE => set_volume(0),
                 ID_TRAY_POSITION_FOLLOW => set_follow_cursor(true),
                 ID_TRAY_POSITION_BEST => set_follow_cursor(false),
+                ID_TRAY_POSITION_AVOID_NAME => toggle_avoid_filename(),
                 ID_TRAY_DELAY_INSTANT => set_hover_delay(0),
                 ID_TRAY_DELAY_VERY_FAST => set_hover_delay(200),
                 ID_TRAY_DELAY_MEDIUM => set_hover_delay(500),
@@ -745,29 +747,52 @@ unsafe fn show_context_menu(hwnd: HWND) {
         w!("Video Volume"),
     );
 
-    // Add Cursor Position submenu
-    let follow_cursor = CONFIG.lock().map(|c| c.follow_cursor).unwrap_or(false);
+    // Add the "Preview Position" submenu: where a preview lands relative to the
+    // cursor or the focused item, and whether it is kept off the name of the item it
+    // is about. The two placements are one setting shown two ways, so they carry a
+    // radio mark each; avoiding the name is a setting of its own and carries a
+    // checkmark.
+    let (follow_cursor, avoid_filename) = CONFIG
+        .lock()
+        .map(|c| (c.follow_cursor, c.avoid_filename))
+        .unwrap_or((false, false));
     let position_menu = CreatePopupMenu().unwrap();
 
-    let pos_flag = |follow: bool| {
-        MF_STRING
-            | if follow_cursor == follow {
-                MF_CHECKED
-            } else {
-                MF_UNCHECKED
-            }
-    };
     let _ = AppendMenuW(
         position_menu,
-        pos_flag(true),
+        MF_STRING,
         ID_TRAY_POSITION_FOLLOW as usize,
         w!("Follow Cursor"),
     );
     let _ = AppendMenuW(
         position_menu,
-        pos_flag(false),
+        MF_STRING,
         ID_TRAY_POSITION_BEST as usize,
         w!("Best Position"),
+    );
+    let _ = CheckMenuRadioItem(
+        position_menu,
+        ID_TRAY_POSITION_FOLLOW as u32,
+        ID_TRAY_POSITION_BEST as u32,
+        if follow_cursor {
+            ID_TRAY_POSITION_FOLLOW as u32
+        } else {
+            ID_TRAY_POSITION_BEST as u32
+        },
+        MF_BYCOMMAND.0,
+    );
+
+    let _ = AppendMenuW(position_menu, MF_SEPARATOR, 0, PCWSTR::null());
+    let _ = AppendMenuW(
+        position_menu,
+        MF_STRING
+            | if avoid_filename {
+                MF_CHECKED
+            } else {
+                MF_UNCHECKED
+            },
+        ID_TRAY_POSITION_AVOID_NAME as usize,
+        w!("Avoid Filename"),
     );
 
     let _ = AppendMenuW(
@@ -1008,6 +1033,17 @@ fn set_volume(volume: u32) {
 fn set_follow_cursor(follow: bool) {
     if let Ok(mut config) = CONFIG.lock() {
         config.follow_cursor = follow;
+        config.save();
+    }
+}
+
+/// Whether a preview keeps off the name of the file it is about is a question the
+/// placement asks, and a placement is made when a preview is opened — so, like the
+/// position setting beside it, this applies to the next hover rather than moving the
+/// preview that is already up.
+fn toggle_avoid_filename() {
+    if let Ok(mut config) = CONFIG.lock() {
+        config.avoid_filename = !config.avoid_filename;
         config.save();
     }
 }

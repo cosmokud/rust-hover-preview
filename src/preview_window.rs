@@ -244,11 +244,28 @@ static VIDEO_GEOMETRY_CACHE: Lazy<Mutex<HashMap<PathBuf, VideoGeometry>>> =
 
 #[derive(Clone)]
 pub enum PreviewMessage {
-    Show(PathBuf, i32, i32),
+    /// A preview of the file the pointer hovers, opened from the cursor it was
+    /// hovered at.
+    ///
+    /// The region that comes with it is the text the hovered item draws — its name
+    /// above all — which the placement is kept off while `Avoid Filename` is on. See
+    /// `avoiding_text`. It is `None` when the setting is off, when the view reported
+    /// no text for the item, or when the walk found no item at the cursor.
+    Show(PathBuf, i32, i32, Option<ScreenRegion>),
     /// A preview of the focused item, whose box comes with it and — for an item
     /// that draws less than that box holds — where the item's own text stops, which
-    /// is the edge its preview is placed from. See `compute_keyboard_layout`.
-    ShowKeyboard(PathBuf, i32, i32, i32, i32, Option<i32>),
+    /// is the edge its preview is placed from. See `compute_keyboard_layout`. The
+    /// last region is the item's text itself, which the preview is kept off the same
+    /// way a hovered item's is.
+    ShowKeyboard(
+        PathBuf,
+        i32,
+        i32,
+        i32,
+        i32,
+        Option<i32>,
+        Option<ScreenRegion>,
+    ),
     Hide,
     Refresh,
     /// A preview type was switched on or off. Only a preview whose own kind is
@@ -574,10 +591,10 @@ impl MediaData {
     }
 }
 
-pub fn show_preview(path: &PathBuf, x: i32, y: i32) {
+pub fn show_preview(path: &PathBuf, x: i32, y: i32, avoid: Option<ScreenRegion>) {
     if let Ok(sender) = PREVIEW_SENDER.lock() {
         if let Some(ref tx) = *sender {
-            let _ = tx.send(PreviewMessage::Show(path.clone(), x, y));
+            let _ = tx.send(PreviewMessage::Show(path.clone(), x, y, avoid));
         }
     }
 }
@@ -589,6 +606,7 @@ pub fn show_preview_keyboard(
     item_right: i32,
     item_bottom: i32,
     content_right: Option<i32>,
+    avoid: Option<ScreenRegion>,
 ) {
     if let Ok(sender) = PREVIEW_SENDER.lock() {
         if let Some(ref tx) = *sender {
@@ -599,6 +617,7 @@ pub fn show_preview_keyboard(
                 item_right,
                 item_bottom,
                 content_right,
+                avoid,
             ));
         }
     }
@@ -4382,12 +4401,98 @@ fn centered_top(center: i32, height: i32, bounds: ScreenBounds) -> i32 {
     (center - height / 2).clamp(bounds.top, lowest)
 }
 
+/// A layout moved off the text the item it describes draws — the name the file is
+/// listed under, with the columns a row writes beside it.
+///
+/// A preview is placed beside what it belongs to rather than over it, and the text of
+/// the item it came from is part of what it belongs to: that item stays readable while
+/// its preview is up, which is what `Avoid Filename` asks for. The placement the
+/// position mode chose is therefore moved by the shortest step that clears the text —
+/// past its right edge, past its left, under it or over it, whichever asks the least
+/// of the preview — and only a step the display has room for is taken, so a preview
+/// moved off one edge is never pushed off another.
+///
+/// When none of the four fits — a preview as tall as the display beside a name that
+/// fills it — the placement is left where the mode put it. Covering the name is what
+/// it would have done without this, and a preview that is up is better than one with
+/// nowhere to go.
+///
+/// `gap` is the distance the placement keeps from what it is beside, so the text is
+/// cleared by that much rather than touched at its edge.
+fn avoiding_text(
+    layout: PreviewLayout,
+    avoid: Option<ScreenRegion>,
+    gap: i32,
+    bounds: ScreenBounds,
+) -> PreviewLayout {
+    let Some((text_left, text_top, text_right, text_bottom)) = avoid else {
+        return layout;
+    };
+
+    let width = layout.preview_w as i32;
+    let height = layout.preview_h as i32;
+    let (left, top) = (layout.pos_x, layout.pos_y);
+
+    let covers_text = left < text_right
+        && left + width > text_left
+        && top < text_bottom
+        && top + height > text_top;
+    if !covers_text {
+        return layout;
+    }
+
+    // The four ways out, each with the distance it moves the preview and whether the
+    // display has room for the preview once it is there.
+    let to_the_right = (text_right + gap, top);
+    let to_the_left = (text_left - gap - width, top);
+    let below = (left, text_bottom + gap);
+    let above = (left, text_top - gap - height);
+
+    let steps = [
+        (
+            to_the_right.0 - left,
+            to_the_right,
+            to_the_right.0 + width <= bounds.right,
+        ),
+        (
+            left - to_the_left.0,
+            to_the_left,
+            to_the_left.0 >= bounds.left,
+        ),
+        (below.1 - top, below, below.1 + height <= bounds.bottom),
+        (top - above.1, above, above.1 >= bounds.top),
+    ];
+
+    let mut best: Option<(i32, (i32, i32))> = None;
+    for (step, position, fits) in steps {
+        if !fits {
+            continue;
+        }
+        if best.map(|(best_step, _)| step < best_step).unwrap_or(true) {
+            best = Some((step, position));
+        }
+    }
+
+    match best {
+        Some((_, (pos_x, pos_y))) => PreviewLayout {
+            pos_x,
+            pos_y,
+            ..layout
+        },
+        None => layout,
+    }
+}
+
 /// Compute preview layout for mouse hover (relative to cursor position)
+///
+/// `avoid` is the text of the item the pointer is on — the name the file it previews
+/// is listed under — which the placement is kept off. See `avoiding_text`.
 fn compute_mouse_layout(
     cursor_x: i32,
     cursor_y: i32,
     orig_dims: (u32, u32),
     follow_cursor: bool,
+    avoid: Option<ScreenRegion>,
     preview_scale: PreviewScale,
     bounds: ScreenBounds,
 ) -> Option<PreviewLayout> {
@@ -4472,14 +4577,16 @@ fn compute_mouse_layout(
             _ => (cursor_x + offset, cursor_y + offset),
         };
 
-        Some(PreviewLayout {
+        let layout = PreviewLayout {
             pos_x,
             pos_y,
             max_width,
             max_height,
             preview_w,
             preview_h,
-        })
+        };
+
+        Some(avoiding_text(layout, avoid, offset, bounds))
     } else {
         let left_width = cursor_x - bounds.left - offset;
         let right_width = bounds.right - cursor_x - offset;
@@ -4527,14 +4634,16 @@ fn compute_mouse_layout(
         // what still keeps a tall preview inside the display.
         let pos_y = centered_top(cursor_y, media_height, bounds);
 
-        Some(PreviewLayout {
+        let layout = PreviewLayout {
             pos_x,
             pos_y,
             max_width,
             max_height,
             preview_w,
             preview_h,
-        })
+        };
+
+        Some(avoiding_text(layout, avoid, offset, bounds))
     }
 }
 
@@ -4549,13 +4658,17 @@ const MIN_BESIDE_ROOM_PX: i32 = 64;
 ///
 /// `content_right` is where the item's own text stops, for an item that draws less
 /// than the box it is given — Content view draws every row that way, and the hook
-/// reads the edge off the row's text (see `explorer_hook::item_content_right`).
+/// reads the edge off the row's text (see `explorer_hook::item_text_box`).
 /// Every other item draws what its box says and passes `None`.
+///
+/// `avoid` is that same text as a region — the box the item's name is drawn in —
+/// which the placement is kept off. See `avoiding_text`.
 fn compute_keyboard_layout(
     item_rect: (i32, i32, i32, i32),
     content_right: Option<i32>,
     orig_dims: (u32, u32),
     follow_cursor: bool,
+    avoid: Option<ScreenRegion>,
     preview_scale: PreviewScale,
     bounds: ScreenBounds,
 ) -> Option<PreviewLayout> {
@@ -4622,14 +4735,16 @@ fn compute_keyboard_layout(
                 item_top - gap - preview_h as i32
             };
 
-            return Some(PreviewLayout {
+            let layout = PreviewLayout {
                 pos_x,
                 pos_y,
                 max_width,
                 max_height,
                 preview_w,
                 preview_h,
-            });
+            };
+
+            return Some(avoiding_text(layout, avoid, gap, bounds));
         }
     }
 
@@ -4728,14 +4843,16 @@ fn compute_keyboard_layout(
             _ => (anchor_right + gap, anchor_bottom + gap),
         };
 
-        Some(PreviewLayout {
+        let layout = PreviewLayout {
             pos_x,
             pos_y,
             max_width,
             max_height,
             preview_w,
             preview_h,
-        })
+        };
+
+        Some(avoiding_text(layout, avoid, gap, bounds))
     } else {
         // Best spot mode: choose the left or right side of what the item is anchored
         // at — its own edges for a box, its middle for a row that leaves no tail to
@@ -4804,14 +4921,16 @@ fn compute_keyboard_layout(
         // belongs to: beside the item it describes, not adrift in the display.
         let pos_y = centered_top((anchor_top + anchor_bottom) / 2, media_height, bounds);
 
-        Some(PreviewLayout {
+        let layout = PreviewLayout {
             pos_x,
             pos_y,
             max_width,
             max_height,
             preview_w,
             preview_h,
-        })
+        };
+
+        Some(avoiding_text(layout, avoid, gap, bounds))
     }
 }
 
@@ -5144,7 +5263,7 @@ pub fn run_preview_window() {
                 .then(|| preview_msg.clone());
 
                 match preview_msg {
-                    PreviewMessage::Show(path, x, y) => {
+                    PreviewMessage::Show(path, x, y, avoid) => {
                         show_requested = true;
                         // Remember where this preview was opened from: the region
                         // that keeps a scrollable preview alive stretches from
@@ -5164,6 +5283,7 @@ pub fn run_preview_window() {
                                 y,
                                 orig_dims,
                                 follow_cursor,
+                                avoid,
                                 preview_scale,
                                 bounds,
                             ) {
@@ -5173,6 +5293,7 @@ pub fn run_preview_window() {
                                         y,
                                         size,
                                         follow_cursor,
+                                        avoid,
                                         preview_scale,
                                         bounds,
                                     )
@@ -5184,7 +5305,7 @@ pub fn run_preview_window() {
                             }
                         }
                     }
-                    PreviewMessage::ShowKeyboard(path, il, it, ir, ib, content_right) => {
+                    PreviewMessage::ShowKeyboard(path, il, it, ir, ib, content_right, avoid) => {
                         show_requested = true;
                         // The focused item lives inside the Explorer window, so
                         // its center resolves to that window's monitor.
@@ -5203,6 +5324,7 @@ pub fn run_preview_window() {
                                 content_right,
                                 orig_dims,
                                 follow_cursor,
+                                avoid,
                                 preview_scale,
                                 bounds,
                             ) {
@@ -5212,6 +5334,7 @@ pub fn run_preview_window() {
                                         content_right,
                                         size,
                                         follow_cursor,
+                                        avoid,
                                         preview_scale,
                                         bounds,
                                     )
@@ -5479,5 +5602,99 @@ pub fn run_preview_window() {
         let (_, cvar) = &*load_request_slot;
         cvar.notify_all();
         let _ = load_worker.join();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A display to place on: 1000 by 800 at its top-left corner.
+    fn bounds() -> ScreenBounds {
+        ScreenBounds {
+            left: 0,
+            top: 0,
+            right: 1000,
+            bottom: 800,
+        }
+    }
+
+    fn layout(pos_x: i32, pos_y: i32, width: u32, height: u32) -> PreviewLayout {
+        PreviewLayout {
+            pos_x,
+            pos_y,
+            max_width: width,
+            max_height: height,
+            preview_w: width,
+            preview_h: height,
+        }
+    }
+
+    #[test]
+    fn leaves_a_placement_that_is_already_clear_of_the_text() {
+        // The name is drawn to the left of the cursor's column, so the preview beside
+        // the cursor is already off it.
+        let name = (100, 300, 400, 320);
+        let placement = avoiding_text(layout(420, 300, 300, 300), Some(name), 20, bounds());
+
+        assert_eq!((placement.pos_x, placement.pos_y), (420, 300));
+    }
+
+    #[test]
+    fn moves_a_preview_out_of_the_name_it_covers() {
+        // A row of a Details view: the pointer's item draws its name in a band twenty
+        // pixels tall, and the preview came out beside the cursor with its top inside
+        // that band. Down is the shortest way out, so it ends up just under the name,
+        // where its own column already was.
+        let name = (100, 300, 400, 320);
+        let placement = avoiding_text(layout(120, 300, 300, 300), Some(name), 20, bounds());
+
+        assert_eq!((placement.pos_x, placement.pos_y), (120, 340));
+    }
+
+    #[test]
+    fn takes_the_side_when_the_display_has_no_room_under_the_name() {
+        // The same placement on a display that ends below it: the preview cannot drop
+        // under the name, so it goes past the name's right edge, which the display
+        // has room for.
+        let name = (100, 300, 400, 320);
+        let short = ScreenBounds {
+            bottom: 500,
+            ..bounds()
+        };
+        let placement = avoiding_text(layout(120, 300, 300, 300), Some(name), 20, short);
+
+        assert_eq!((placement.pos_x, placement.pos_y), (420, 300));
+    }
+
+    #[test]
+    fn leaves_a_preview_it_cannot_clear_where_it_is() {
+        // A display with no room on any side of the name: the placement is what the
+        // mode chose, since covering the name is what it would have done anyway.
+        let name = (100, 100, 300, 120);
+        let tight = ScreenBounds {
+            right: 400,
+            bottom: 220,
+            ..bounds()
+        };
+        let placement = avoiding_text(layout(150, 110, 200, 100), Some(name), 20, tight);
+
+        assert_eq!((placement.pos_x, placement.pos_y), (150, 110));
+    }
+
+    #[test]
+    fn keeps_the_preview_inside_the_display_it_moves_on() {
+        // Clearing the name to the right is the shorter step here, but the display
+        // ends before the preview would, so the step under the name is taken instead.
+        let name = (100, 300, 700, 320);
+        let narrow = ScreenBounds {
+            right: 900,
+            ..bounds()
+        };
+        let placement = avoiding_text(layout(690, 100, 200, 300), Some(name), 20, narrow);
+
+        // 720 is the name's right edge plus the gap, and 720 + 200 leaves the
+        // display; 340 is its bottom plus the gap, and 340 + 300 does not.
+        assert_eq!((placement.pos_x, placement.pos_y), (690, 340));
     }
 }
