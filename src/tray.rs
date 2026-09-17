@@ -1,9 +1,10 @@
 use crate::config::{
-    sanitize_text_font_scale_percent, MarkdownMode, PreviewScale, PreviewType, TextTheme,
-    TransparentBackground, TriggerKeyMode, DEFAULT_PREVIEW_SCALE_PERCENT,
-    DEFAULT_TEXT_FONT_SCALE_PERCENT,
+    sanitize_image_cache_mb, sanitize_office_cache_mb, sanitize_text_font_scale_percent,
+    MarkdownMode, PreviewScale, PreviewType, TextTheme, TransparentBackground, TriggerKeyMode,
+    DEFAULT_PREVIEW_SCALE_PERCENT, DEFAULT_TEXT_FONT_SCALE_PERCENT,
 };
-use crate::preview_window::{refresh_preview, refresh_preview_types};
+use crate::office_render;
+use crate::preview_window::{refresh_preview, refresh_preview_types, trim_image_cache};
 use crate::text_theme;
 use crate::theme_files;
 use crate::{startup, CONFIG, RUNNING};
@@ -80,8 +81,15 @@ const ID_TRAY_TYPE_TEXT: u16 = 1064;
 const ID_TRAY_TYPE_PDF: u16 = 1065;
 const ID_TRAY_TYPE_ARCHIVES: u16 = 1066;
 const ID_TRAY_TYPE_OFFICE: u16 = 1067;
-/// The `Office Preview` submenu's own setting.
-const ID_TRAY_OFFICE_RENDER: u16 = 1068;
+/// The `Cache` submenu: one command per size it offers, in the order it lists
+/// them, for each of the two caches it sizes. They start past the range the
+/// `theme` folder's own items occupy (see `ID_TRAY_THEME_CUSTOM_BASE`).
+const ID_TRAY_IMAGE_CACHE_BASE: u16 = 1300;
+const ID_TRAY_OFFICE_CACHE_BASE: u16 = 1320;
+/// The sizes the `Cache` submenu offers, in megabytes: the whole range the two
+/// settings allow, so a size a hand-edited `config.ini` puts past the last of them
+/// is shown with nothing checked rather than rounded to one of these.
+const CACHE_SIZE_CHOICES_MB: [u32; 9] = [0, 16, 32, 64, 128, 256, 512, 1024, 2048];
 const ID_TRAY_FONT_100: u16 = 1072;
 const ID_TRAY_FONT_125: u16 = 1073;
 const ID_TRAY_FONT_150: u16 = 1074;
@@ -189,7 +197,7 @@ unsafe extern "system" fn tray_window_proc(
                 ID_TRAY_THEME_DARK => set_theme(TextTheme::Dark),
                 // The `theme` folder's items, by the position the submenu gave
                 // them rather than any position in the folder.
-                cmd if cmd >= ID_TRAY_THEME_CUSTOM_BASE => {
+                cmd if (ID_TRAY_THEME_CUSTOM_BASE..ID_TRAY_IMAGE_CACHE_BASE).contains(&cmd) => {
                     set_theme_from_menu((cmd - ID_TRAY_THEME_CUSTOM_BASE) as usize)
                 }
                 ID_TRAY_MARKDOWN_RENDERED => set_markdown_mode(MarkdownMode::Rendered),
@@ -201,7 +209,13 @@ unsafe extern "system" fn tray_window_proc(
                 ID_TRAY_TYPE_PDF => toggle_preview_type(PreviewType::Pdf),
                 ID_TRAY_TYPE_ARCHIVES => toggle_preview_type(PreviewType::Archives),
                 ID_TRAY_TYPE_OFFICE => toggle_preview_type(PreviewType::Office),
-                ID_TRAY_OFFICE_RENDER => toggle_office_render(),
+                // A cache size, by the position it was listed at.
+                cmd if (ID_TRAY_IMAGE_CACHE_BASE..ID_TRAY_OFFICE_CACHE_BASE).contains(&cmd) => {
+                    set_image_cache_mb(cmd - ID_TRAY_IMAGE_CACHE_BASE)
+                }
+                cmd if cmd >= ID_TRAY_OFFICE_CACHE_BASE => {
+                    set_office_cache_mb(cmd - ID_TRAY_OFFICE_CACHE_BASE)
+                }
                 ID_TRAY_FONT_100 => set_text_font_scale(100),
                 ID_TRAY_FONT_125 => set_text_font_scale(125),
                 ID_TRAY_FONT_150 => set_text_font_scale(150),
@@ -611,33 +625,6 @@ unsafe fn show_context_menu(hwnd: HWND) {
         w!("Text Preview"),
     );
 
-    // Add the "Office Preview" submenu: whether an installed Office may draw a
-    // page for a document whose preview would otherwise only be a spinner.
-    // Nothing is rebuilt when it changes: whether a page is asked for is a
-    // question the next hover answers for itself.
-    let office_menu = CreatePopupMenu().unwrap();
-    let office_render_enabled = CONFIG
-        .lock()
-        .map(|c| c.office_render_enabled)
-        .unwrap_or(true);
-    let _ = AppendMenuW(
-        office_menu,
-        MF_STRING
-            | if office_render_enabled {
-                MF_CHECKED
-            } else {
-                MF_UNCHECKED
-            },
-        ID_TRAY_OFFICE_RENDER as usize,
-        w!("Render With Office"),
-    );
-    let _ = AppendMenuW(
-        menu,
-        MF_STRING | MF_POPUP,
-        office_menu.0 as usize,
-        w!("Office Preview"),
-    );
-
     // Add the "Timing" submenu: how long a hover waits before its preview opens,
     // and how long the same file is held off after its preview was dismissed.
     let timing_menu = CreatePopupMenu().unwrap();
@@ -942,6 +929,74 @@ unsafe fn show_context_menu(hwnd: HWND) {
         w!("Volume"),
     );
 
+    // Add the "Cache" submenu: how much memory a preview's own data may be held in
+    // between hovers — the frames a decoded image was shown as, and the pages Office
+    // rendered. Both are held in memory and nowhere else, neither is written to disk,
+    // and both hold nothing at all until a size is chosen here.
+    let (image_cache_mb, office_cache_mb) = CONFIG
+        .lock()
+        .map(|c| (c.image_cache_mb, c.office_cache_mb))
+        .unwrap_or((0, 0));
+
+    let cache_menu = CreatePopupMenu().unwrap();
+
+    // The labels are built once and kept: `AppendMenuW` is handed a pointer, so the
+    // wide strings have to outlive the call that lists them.
+    let cache_labels: Vec<Vec<u16>> = CACHE_SIZE_CHOICES_MB
+        .iter()
+        .map(|megabytes| {
+            cache_size_label(*megabytes)
+                .encode_utf16()
+                .chain(std::iter::once(0))
+                .collect()
+        })
+        .collect();
+
+    for (name, base, held) in [
+        (w!("Image"), ID_TRAY_IMAGE_CACHE_BASE, image_cache_mb),
+        (w!("Office"), ID_TRAY_OFFICE_CACHE_BASE, office_cache_mb),
+    ] {
+        let sizes_menu = CreatePopupMenu().unwrap();
+
+        for (index, _) in CACHE_SIZE_CHOICES_MB.iter().enumerate() {
+            let _ = AppendMenuW(
+                sizes_menu,
+                MF_STRING,
+                (base + index as u16) as usize,
+                PCWSTR(cache_labels[index].as_ptr()),
+            );
+        }
+
+        // A size the menu does not offer — one a hand-edited `config.ini` asked for
+        // — leaves every item unmarked rather than marking the nearest one.
+        if let Some(index) = CACHE_SIZE_CHOICES_MB
+            .iter()
+            .position(|megabytes| *megabytes == held)
+        {
+            let _ = CheckMenuRadioItem(
+                sizes_menu,
+                base as u32,
+                (base + CACHE_SIZE_CHOICES_MB.len() as u16 - 1) as u32,
+                (base + index as u16) as u32,
+                MF_BYCOMMAND.0,
+            );
+        }
+
+        let _ = AppendMenuW(
+            cache_menu,
+            MF_STRING | MF_POPUP,
+            sizes_menu.0 as usize,
+            name,
+        );
+    }
+
+    let _ = AppendMenuW(
+        menu,
+        MF_STRING | MF_POPUP,
+        cache_menu.0 as usize,
+        w!("Cache"),
+    );
+
     let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
 
     // Add "Run at Startup" with checkmark
@@ -1072,13 +1127,59 @@ fn toggle_preview_type(kind: PreviewType) {
     refresh_preview_types();
 }
 
-/// Whether an installed Office may render a page for a document. It changes what a
-/// later hover does rather than what is on screen, so nothing is rebuilt here.
-fn toggle_office_render() {
+/// What a cache size is called in the menu. The two sizes at the ceiling are the
+/// only ones that are not a plain number of megabytes, and the smallest is the size
+/// both caches start at.
+fn cache_size_label(megabytes: u32) -> String {
+    match megabytes {
+        0 => "0 MB (Default)".to_string(),
+        1024 => "1 GB".to_string(),
+        2048 => "2 GB".to_string(),
+        other => format!("{other} MB"),
+    }
+}
+
+/// The size an item of the `Cache` submenu stands for, by the position it was
+/// listed at. An id past the last size the menu offered is one that is not there.
+fn cache_size_at(index: u16) -> Option<u32> {
+    CACHE_SIZE_CHOICES_MB.get(index as usize).copied()
+}
+
+/// How much memory the decoded-image cache may hold.
+///
+/// A preview on screen is not drawn from the cache but from the frame it was
+/// loaded as, so nothing on screen changes — what changes is how much is freed, and
+/// a smaller size frees it now rather than at the next decode.
+fn set_image_cache_mb(index: u16) {
+    let Some(megabytes) = cache_size_at(index) else {
+        return;
+    };
+
     if let Ok(mut config) = CONFIG.lock() {
-        config.office_render_enabled = !config.office_render_enabled;
+        config.image_cache_mb = sanitize_image_cache_mb(megabytes);
         config.save();
     }
+
+    trim_image_cache();
+}
+
+/// How much memory the pages Office rendered may be held in, between hovers.
+///
+/// Unlike the sizes beside it this does not switch anything off: a page is rendered
+/// for the hover that asks for it whatever the size, and a size of nothing means it
+/// is dropped when that hover ends. So nothing is rebuilt here either — the next
+/// hover answers for itself.
+fn set_office_cache_mb(index: u16) {
+    let Some(megabytes) = cache_size_at(index) else {
+        return;
+    };
+
+    if let Ok(mut config) = CONFIG.lock() {
+        config.office_cache_mb = sanitize_office_cache_mb(megabytes);
+        config.save();
+    }
+
+    office_render::trim_now();
 }
 
 /// Full mode changes what a text preview *is* rather than what it shows — it

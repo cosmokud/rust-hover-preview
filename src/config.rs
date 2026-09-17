@@ -34,13 +34,21 @@ pub const MAX_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS: f32 = 1000.0;
 /// Memory the decoded-image cache may hold. A preview is decoded at the size the
 /// layout asked for, so this is a ceiling on retained pixels rather than on
 /// files: how many images fit depends entirely on how large they are shown.
-pub const DEFAULT_IMAGE_CACHE_MB: u32 = 64;
+///
+/// Nothing is held by default: a picture is decoded for the hover that asked for
+/// it, and keeping frames for the folders that are hovered most is a choice the
+/// user makes.
+pub const DEFAULT_IMAGE_CACHE_MB: u32 = 0;
 pub const MAX_IMAGE_CACHE_MB: u32 = 2048;
-/// Disk the rendered Office pages may hold. A render is what the preview shows for
-/// a document, and producing one costs an Office start, so what has been rendered
-/// is kept and dropped oldest first.
-pub const DEFAULT_OFFICE_CACHE_MB: u32 = 256;
-pub const MAX_OFFICE_CACHE_MB: u32 = 4096;
+/// Memory the rendered Office pages may hold. A render is what the preview shows
+/// for a document, and producing one costs an Office start, so what has been
+/// rendered can be kept and dropped least recently used first.
+///
+/// Nothing is held by default, and a page costs a render either way: an Office
+/// document has no other source for its preview, so a budget of nothing means a
+/// page lives only while the hover it was rendered for does.
+pub const DEFAULT_OFFICE_CACHE_MB: u32 = 0;
+pub const MAX_OFFICE_CACHE_MB: u32 = 2048;
 
 pub fn sanitize_webp_playback_fps(value: u32) -> u32 {
     match value {
@@ -60,10 +68,10 @@ pub fn sanitize_image_cache_mb(value: u32) -> u32 {
 
 /// The rendered-page cache size in megabytes.
 ///
-/// `0` is a cache that holds nothing, and since a page that cannot be kept is not
-/// worth an Office start it switches the render tier off with it — the reason
-/// `office_render_enabled` and this setting both have to allow a render for one
-/// to happen.
+/// `0` is a cache that holds nothing rather than a render tier that is switched
+/// off: a page is rendered for the hover that asks for it and dropped when that
+/// hover is over, so the only question a size answers is how much of it is kept
+/// between hovers.
 pub fn sanitize_office_cache_mb(value: u32) -> u32 {
     value.min(MAX_OFFICE_CACHE_MB)
 }
@@ -457,11 +465,9 @@ pub struct AppConfig {
     pub archive_preview_enabled: bool,
     /// Whether Office documents are previewed at all, ahead of the extension list.
     pub office_preview_enabled: bool,
-    /// Whether an installed Office may render a page for a document the preview
-    /// would otherwise show nothing for. On by default, and the reason a document
-    /// has a preview the first time it is hovered.
-    pub office_render_enabled: bool,
-    /// Disk the rendered pages may hold, in megabytes.
+    /// Memory the rendered pages may hold, in megabytes, between hovers. A page is
+    /// still rendered at `0` — a document has no other source for its preview — it
+    /// is simply not kept once the hover it was rendered for is over.
     pub office_cache_mb: u32,
     /// Whether a text preview is more than something to look at: a preview that
     /// scrolls, that can be selected and copied from, and that a pointer can rest
@@ -511,7 +517,6 @@ impl Default for AppConfig {
             pdf_preview_enabled: true,
             archive_preview_enabled: true,
             office_preview_enabled: true,
-            office_render_enabled: true,
             office_cache_mb: DEFAULT_OFFICE_CACHE_MB,
             text_preview_full_mode: false,
             text_font_scale_percent: DEFAULT_TEXT_FONT_SCALE_PERCENT,
@@ -683,11 +688,6 @@ impl AppConfig {
             );
             ini.set(
                 CONFIG_SECTION,
-                "office_render_enabled",
-                Some(self.office_render_enabled.to_string()),
-            );
-            ini.set(
-                CONFIG_SECTION,
                 "office_cache_mb",
                 Some(sanitize_office_cache_mb(self.office_cache_mb).to_string()),
             );
@@ -825,9 +825,6 @@ impl AppConfig {
         }
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "office_preview_enabled") {
             self.office_preview_enabled = value;
-        }
-        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "office_render_enabled") {
-            self.office_render_enabled = value;
         }
         if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "office_cache_mb") {
             if let Ok(value) = u32::try_from(value) {

@@ -2089,6 +2089,16 @@ fn image_cache_trim(cache: &mut ImageCache, limit: usize) {
     }
 }
 
+/// Trim the image cache to the configured size now, which is what the tray asks for
+/// when a smaller size is chosen: what is over the new budget is freed at the moment
+/// it is set rather than at the next decode that happens to pass through here.
+pub(crate) fn trim_image_cache() {
+    let limit = image_cache_limit_bytes();
+    if let Ok(mut cache) = IMAGE_CACHE.lock() {
+        image_cache_trim(&mut cache, limit);
+    }
+}
+
 /// The frame held for `key`, if the cache still has it.
 fn image_cache_get(key: &ImageCacheKey) -> Option<ImageFrame> {
     let limit = image_cache_limit_bytes();
@@ -5856,8 +5866,8 @@ pub fn run_preview_window() {
             // A page the render tier has finished with, for the hover that asked
             // for it: that hover is replayed, which measures the page itself and
             // draws it in place of the spinner it supersedes. A payload from an
-            // older hover is dropped here — the page it wrote stays in the cache
-            // for the next pass.
+            // older hover is dropped here — the page it wrote is kept as far as the
+            // cache budget allows, and no further.
             if let Some((ready_path, ready_generation, ready_ok)) = office_render_ready {
                 office_render_pending = None;
 
@@ -5907,6 +5917,13 @@ pub fn run_preview_window() {
                             *current = None;
                         }
                     }
+                } else {
+                    // The hover this page was rendered for is over: it landed after
+                    // the pointer had moved on, so nothing is waiting for it. What was
+                    // rendered is kept as far as the budget allows and no further — at
+                    // a size of nothing it is dropped here rather than held for a
+                    // hover that has already gone.
+                    office_render::hover_ended(&ready_path);
                 }
             }
 
@@ -6041,6 +6058,17 @@ pub fn run_preview_window() {
                         }
                         current_video_path = None;
                         video_pos = (0, 0, 0, 0);
+
+                        // The page held for the preview that is going away is no
+                        // longer being waited on: at a budget of nothing it is
+                        // dropped here rather than kept until something else is
+                        // rendered to make room for. What is on screen is read from
+                        // the show this message takes down — the message itself is a
+                        // hide, and `show_path` names this message's own path here.
+                        if let Some(path) = current_show.as_ref().and_then(self::show_path) {
+                            office_render::hover_ended(path);
+                        }
+
                         current_show = None;
                         office_render_due = None;
                         office_render_pending = None;

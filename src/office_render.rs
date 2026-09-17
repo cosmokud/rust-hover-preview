@@ -1,5 +1,5 @@
 //! The Office render tier: Word, Excel or PowerPoint draws a document's first
-//! page, once, into a cache file the preview then draws from.
+//! page, once, and the preview then draws from it.
 //!
 //! Nothing here is ever on the hover path. A page is asked for only after the
 //! pointer has rested on a file, it is drawn on a thread of its own, and the
@@ -20,12 +20,17 @@
 //!   one render, never the tier: a worker that has been inside one piece of work
 //!   for too long is given up on, the process it started is ended with it, and
 //!   the next hover is answered by a fresh worker. Nothing waits on this thread.
-//! * **Nothing is held in memory.** What a hover shows comes off the disk, and
-//!   the only things kept here are the request slot, the files that have refused a
-//!   page, and which worker is current.
+//! * **A page lives in memory, never on disk.** Office's export calls take a file
+//!   name rather than a stream, so one render writes one scratch file under the
+//!   temp folder — and reads it back into memory and deletes it in the same breath,
+//!   before the hover that asked for it ends. What is kept afterwards is bounded by
+//!   `office_cache_mb`, and at a budget of nothing the page is dropped the moment
+//!   its hover is over: the disk is never a cache, and the only other things kept
+//!   here are the request slot, the files that have refused a page, and which
+//!   worker is current.
 
 use crate::cloud_files;
-use crate::config::sanitize_office_cache_mb;
+use crate::config::{sanitize_office_cache_mb, PreviewType};
 use crate::office_formats::{app_for, container_kind, OfficeApp};
 use crate::preview_window;
 use crate::CONFIG;
@@ -35,7 +40,7 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use windows::core::{GUID, PCWSTR, PWSTR, VARIANT};
@@ -170,11 +175,46 @@ impl RenderedKind {
     }
 }
 
-/// A page that has been rendered for a document and is waiting in the cache.
+/// A page that has been rendered for a document and is being held in memory.
 pub(crate) struct CachedRender {
-    pub(crate) path: PathBuf,
     pub(crate) kind: RenderedKind,
+    /// What Office exported, read back out of the scratch file it was written to.
+    pub(crate) bytes: Arc<Vec<u8>>,
+    /// The page's own size, filled in the first time a layout asks for it.
+    ///
+    /// It is read from the bytes by the side that may talk to the PDF engine, and
+    /// it is kept on the entry rather than in a cache of its own so that it cannot
+    /// outlive the page it was read from: a document that is saved again is a new
+    /// entry, and the size is read from the new page.
+    pub(crate) dimensions: Arc<OnceLock<Option<(u32, u32)>>>,
 }
+
+/// A page being held: the bytes, and when they were last asked for.
+struct CacheEntry {
+    kind: RenderedKind,
+    bytes: Arc<Vec<u8>>,
+    dimensions: Arc<OnceLock<Option<(u32, u32)>>>,
+    size: usize,
+    last_used: u64,
+}
+
+/// The pages held in memory, and how much of the budget they take.
+#[derive(Default)]
+struct RenderCache {
+    entries: HashMap<String, CacheEntry>,
+    bytes: usize,
+    /// A counter rather than a clock, so the order pages are dropped in cannot be
+    /// changed by the system clock moving.
+    tick: u64,
+    /// The page whose hover is in flight, if there is one.
+    ///
+    /// It is never dropped to make room: at a budget of nothing it is the only page
+    /// held, and it is what the preview about to be shown draws. It goes when the
+    /// hover it belongs to does (`hover_ended`).
+    held: Option<String>,
+}
+
+static RENDERS: Lazy<Mutex<RenderCache>> = Lazy::new(|| Mutex::new(RenderCache::default()));
 
 struct RenderRequest {
     source: PathBuf,
@@ -216,47 +256,170 @@ static WORKER_BUSY: Lazy<Mutex<Option<(u64, Instant)>>> = Lazy::new(|| Mutex::ne
 /// what a stuck render costs is the render, not the user's work.
 static OWNED_ENGINE: Lazy<Mutex<Option<(OfficeApp, u32)>>> = Lazy::new(|| Mutex::new(None));
 
-/// Whether the render tier may run at all: the tray's `Render With Office`
-/// setting, and a cache that can hold what it produces — a page that cannot be
-/// kept is not worth an Office start.
+/// Whether the render tier may run at all: the `Office` gate in the tray's
+/// `Preview Types` submenu.
+///
+/// A cache budget of nothing is not a switch. An Office document has no other
+/// source for its preview, so a page still has to be rendered to be shown — it is
+/// simply not kept once the hover that asked for it is over.
 pub(crate) fn enabled() -> bool {
-    CONFIG
-        .lock()
-        .map(|config| {
-            config.office_render_enabled && sanitize_office_cache_mb(config.office_cache_mb) > 0
-        })
-        .unwrap_or(false)
+    PreviewType::Office.enabled()
 }
 
-fn cache_limit_bytes() -> u64 {
+fn cache_limit_bytes() -> usize {
     let megabytes = CONFIG
         .lock()
         .map(|config| sanitize_office_cache_mb(config.office_cache_mb))
         .unwrap_or(0);
 
-    megabytes as u64 * 1024 * 1024
+    megabytes as usize * 1024 * 1024
 }
 
-/// The page rendered for this version of the file, if a file for one is there.
+/// The page rendered for this version of the file, if one is being held.
 ///
-/// What the file *holds* is not asked here: whether a page can actually be read out
-/// of it is a question for the side that draws it (`office_preview`), whose threads
-/// may talk to the PDF engine — this one is apartment-threaded for Office, and a
-/// WinRT call waited on from here would deadlock.
+/// What the bytes *are* is not asked here: whether a page can actually be read out
+/// of them is a question for the side that draws it (`office_preview`), whose
+/// threads may talk to the PDF engine — this one is apartment-threaded for Office,
+/// and a WinRT call waited on from here would deadlock.
 pub(crate) fn cached_render(source: &Path) -> Option<CachedRender> {
-    let folder = cache_folder()?;
     let key = cache_key(source);
+    let limit = cache_limit_bytes();
+    let mut cache = RENDERS.lock().ok()?;
 
-    for kind in [RenderedKind::Pdf, RenderedKind::Png, RenderedKind::Bmp] {
-        let path = folder.join(format!("{key}.{}", kind.extension()));
-        if let Ok(metadata) = std::fs::metadata(&path) {
-            if metadata.len() > 0 {
-                return Some(CachedRender { path, kind });
-            }
+    cache_trim(&mut cache, limit);
+
+    cache.tick += 1;
+    let tick = cache.tick;
+
+    let entry = cache.entries.get_mut(&key)?;
+    entry.last_used = tick;
+
+    Some(CachedRender {
+        kind: entry.kind,
+        bytes: entry.bytes.clone(),
+        dimensions: entry.dimensions.clone(),
+    })
+}
+
+/// Hold the page a render just produced, dropping whatever no longer fits beside it.
+fn store_render(source: &Path, kind: RenderedKind, bytes: Vec<u8>) {
+    let key = cache_key(source);
+    let limit = cache_limit_bytes();
+    let Ok(mut cache) = RENDERS.lock() else {
+        return;
+    };
+
+    cache.tick += 1;
+    let tick = cache.tick;
+    let size = bytes.len();
+
+    let previous = cache.entries.insert(
+        key.clone(),
+        CacheEntry {
+            kind,
+            bytes: Arc::new(bytes),
+            dimensions: Arc::new(OnceLock::new()),
+            size,
+            last_used: tick,
+        },
+    );
+    if let Some(previous) = previous {
+        cache.bytes -= previous.size;
+    }
+    cache.bytes += size;
+
+    // The page just rendered is the one a hover is waiting for, so it is held
+    // whatever the budget says: dropping it here would leave the spinner with
+    // nothing to replace it. It is released when that hover ends.
+    cache.held = Some(key);
+
+    cache_trim(&mut cache, limit);
+}
+
+/// Drop pages, least recently used first, until the cache fits inside `limit`.
+///
+/// The page a hover is waiting for is never one of them, which is what a budget of
+/// nothing means: nothing is kept *between* hovers, rather than no page being
+/// shown at all. A limit of zero therefore empties the cache of everything else.
+fn cache_trim(cache: &mut RenderCache, limit: usize) {
+    while cache.bytes > limit {
+        // Bound to its own statement so the borrow of `entries` has ended before
+        // the entry is removed.
+        let oldest = cache
+            .entries
+            .iter()
+            .filter(|(key, _)| Some(key.as_str()) != cache.held.as_deref())
+            .min_by_key(|(_, entry)| entry.last_used)
+            .map(|(key, _)| key.clone());
+
+        let Some(oldest) = oldest else {
+            break;
+        };
+
+        if let Some(dropped) = cache.entries.remove(&oldest) {
+            cache.bytes -= dropped.size;
         }
     }
+}
 
-    None
+/// The hover a page was rendered for is over: it is no longer being waited on, so
+/// at a budget of nothing it is dropped now rather than lingering until the next
+/// render happens to make room.
+pub(crate) fn hover_ended(source: &Path) {
+    let key = cache_key(source);
+    let limit = cache_limit_bytes();
+    let Ok(mut cache) = RENDERS.lock() else {
+        return;
+    };
+
+    if cache.held.as_deref() == Some(key.as_str()) {
+        cache.held = None;
+    }
+
+    cache_trim(&mut cache, limit);
+}
+
+/// Drop the page held for a document: bytes that cannot be drawn — one a render
+/// cut short, or one something else corrupted — are not a page. What this gets is
+/// the document rendered again rather than a preview that blinks away every time
+/// it is hovered.
+pub(crate) fn forget(source: &Path) {
+    let key = cache_key(source);
+    let Ok(mut cache) = RENDERS.lock() else {
+        return;
+    };
+
+    if let Some(dropped) = cache.entries.remove(&key) {
+        cache.bytes -= dropped.size;
+    }
+    if cache.held.as_deref() == Some(key.as_str()) {
+        cache.held = None;
+    }
+}
+
+/// Trim the cache to the configured size now, which is what the tray asks for when
+/// a smaller size is chosen: what is over the new budget is freed at the moment it
+/// is set rather than at the next render.
+pub(crate) fn trim_now() {
+    let limit = cache_limit_bytes();
+    if let Ok(mut cache) = RENDERS.lock() {
+        cache_trim(&mut cache, limit);
+    }
+}
+
+/// Delete what earlier versions cached on disk: the rendered pages under the
+/// user's cache folder, and any scratch file a render that was ended mid-flight
+/// left behind in the temp folder.
+///
+/// Only the `office` folder is removed — in the installed layout the app's own
+/// executable and uninstaller live beside it in that same directory, and a page
+/// cache is not worth risking them for.
+pub(crate) fn discard_old_disk_cache() {
+    if let Some(dirs) = BaseDirs::new() {
+        let _ = std::fs::remove_dir_all(dirs.cache_dir().join("rust-hover-preview").join("office"));
+    }
+
+    let _ = std::fs::remove_dir_all(scratch_folder());
 }
 
 /// Ask for a page to be rendered, unless one is already waiting or the file has
@@ -473,7 +636,8 @@ fn worker_main() {
             idle_since = Instant::now();
 
             match outcome {
-                RenderOutcome::Rendered => trim_cache(),
+                // The page is already held: storing it is what trimmed the cache.
+                RenderOutcome::Rendered => {}
                 // A refusal is the document's, and is remembered against it so the
                 // next hover does not ask again straight away. An engine that would
                 // not start is not: that is the machine's business, and the file is
@@ -608,7 +772,7 @@ fn render_request(engine: &mut Option<Engine>, request: &RenderRequest) -> Rende
         return RenderOutcome::Rendered;
     }
 
-    let Some(target) = cache_target(&request.source) else {
+    let Some(target) = render_target() else {
         return RenderOutcome::Refused;
     };
 
@@ -648,8 +812,13 @@ fn render_request(engine: &mut Option<Engine>, request: &RenderRequest) -> Rende
         };
 
         // What the renderer wrote is the answer, whatever it chose to write: the
-        // cache says which file it was.
-        if rendered && cached_render(&request.source).is_some() {
+        // file it left behind is read here and deleted, and the page is held in
+        // memory. Reading it whatever the render reported is also what keeps the
+        // scratch folder empty — a file a failed export left behind is not one the
+        // next attempt is allowed to find.
+        let page = take_render(&target);
+        if let Some((kind, bytes)) = page.filter(|_| rendered) {
+            store_render(&request.source, kind, bytes);
             return RenderOutcome::Rendered;
         }
         if retried {
@@ -731,7 +900,7 @@ impl Engine {
         })
     }
 
-    fn render(&self, source: &Path, target: &CacheTarget, width: u32, height: u32) -> bool {
+    fn render(&self, source: &Path, target: &RenderTarget, width: u32, height: u32) -> bool {
         match self.app_kind {
             OfficeApp::Word => render_word(&self.app, source, target),
             OfficeApp::Excel => render_excel(&self.app, source, target),
@@ -907,7 +1076,7 @@ fn alerts_off(app_kind: OfficeApp) -> VARIANT {
 
 // --------------------------------------------------------------- the render
 
-fn render_word(app: &Object, source: &Path, target: &CacheTarget) -> bool {
+fn render_word(app: &Object, source: &Path, target: &RenderTarget) -> bool {
     let Some(documents) = app.member("Documents") else {
         return false;
     };
@@ -945,7 +1114,7 @@ fn render_word(app: &Object, source: &Path, target: &CacheTarget) -> bool {
     rendered
 }
 
-fn render_excel(app: &Object, source: &Path, target: &CacheTarget) -> bool {
+fn render_excel(app: &Object, source: &Path, target: &RenderTarget) -> bool {
     let Some(workbooks) = app.member("Workbooks") else {
         return false;
     };
@@ -975,7 +1144,7 @@ fn render_excel(app: &Object, source: &Path, target: &CacheTarget) -> bool {
 }
 
 /// The first worksheet's first printed page, as a PDF.
-fn export_first_page(workbook: &Object, target: &CacheTarget) -> bool {
+fn export_first_page(workbook: &Object, target: &RenderTarget) -> bool {
     let Some(sheet) = workbook
         .member("Worksheets")
         .and_then(|sheets| sheets.item(1))
@@ -1016,11 +1185,11 @@ fn printer_installed(app: &Object) -> bool {
 ///
 /// This is what a machine with no printer gets instead of a page: the range is
 /// copied the way a person copies it — `CopyPicture` — and the bitmap Excel puts
-/// on the clipboard is written to the cache as a BMP, the one image format that
-/// is exactly the bytes the clipboard holds. What it shows is the corner of the
-/// sheet a person would see first rather than the sheet's printed layout, which
-/// is the most such a machine can produce.
-fn copy_used_range_picture(workbook: &Object, target: &CacheTarget) -> bool {
+/// on the clipboard is written out as a BMP, the one image format that is exactly
+/// the bytes the clipboard holds. What it shows is the corner of the sheet a person
+/// would see first rather than the sheet's printed layout, which is the most such a
+/// machine can produce.
+fn copy_used_range_picture(workbook: &Object, target: &RenderTarget) -> bool {
     let Some(sheet) = workbook
         .member("Worksheets")
         .and_then(|sheets| sheets.item(1))
@@ -1196,8 +1365,9 @@ fn read_clipboard_dib(empty: bool) -> Option<Vec<u8>> {
 /// its pixels, and a BMP file is those bytes with a fourteen-byte header in front
 /// of them.
 ///
-/// It is written beside its name and moved into place, so a reader never sees half
-/// a picture: a hover can land on a file whose render is being written.
+/// It is written beside its name and moved into place, so that a render which is
+/// ended part-way through the write leaves something that is obviously not a
+/// picture rather than half of one under the name a page is read from.
 fn write_bmp(path: &Path, dib: &[u8]) -> std::io::Result<()> {
     let offset = dib_pixel_offset(dib).unwrap_or(54);
     let mut file = Vec::with_capacity(dib.len() + 14);
@@ -1238,7 +1408,7 @@ fn dib_pixel_offset(dib: &[u8]) -> Option<u32> {
 fn render_powerpoint(
     app: &Object,
     source: &Path,
-    target: &CacheTarget,
+    target: &RenderTarget,
     width: u32,
     height: u32,
 ) -> bool {
@@ -1386,7 +1556,7 @@ fn has_zone_identifier(path: &str) -> bool {
 fn copy_to_temp(source: &str) -> Option<PathBuf> {
     static COUNTER: AtomicU32 = AtomicU32::new(0);
 
-    let folder = std::env::temp_dir().join("rust-hover-preview");
+    let folder = scratch_folder();
     std::fs::create_dir_all(&folder).ok()?;
 
     let extension = Path::new(source)
@@ -1404,13 +1574,20 @@ fn copy_to_temp(source: &str) -> Option<PathBuf> {
     Some(target)
 }
 
-// ------------------------------------------------------------ the disk cache
+// ---------------------------------------------------------- the scratch file
 
-fn cache_folder() -> Option<PathBuf> {
-    BaseDirs::new().map(|dirs| dirs.cache_dir().join("rust-hover-preview").join("office"))
+/// Where a render is written before it is read back into memory.
+///
+/// Office's export calls take a file name rather than a stream, so a page has to
+/// land somewhere before it can be held. It is this app's own folder under the
+/// temp folder — the same one a document Office will not open is copied into — and
+/// the file is deleted the moment it has been read, so what is on disk is one
+/// render in flight and nothing else.
+fn scratch_folder() -> PathBuf {
+    std::env::temp_dir().join("rust-hover-preview")
 }
 
-/// What a cached render is keyed by: the file, and the version of it that was
+/// What a held page is keyed by: the file, and the version of it that was
 /// rendered.
 fn cache_key(source: &Path) -> String {
     let metadata = std::fs::metadata(source).ok();
@@ -1429,74 +1606,70 @@ fn cache_key(source: &Path) -> String {
     format!("{:016x}", hasher.finish())
 }
 
-/// Where a render for this version of the file is written. Which file it is —
-/// which extension — is the renderer's to choose, since what a document can be
-/// drawn from is not known until it has been asked.
-struct CacheTarget {
+/// Where one render writes its page. Which file it is — which extension — is the
+/// renderer's to choose, since what a document can be drawn from is not known
+/// until it has been asked.
+struct RenderTarget {
     folder: PathBuf,
-    key: String,
+    stem: String,
 }
 
-impl CacheTarget {
+impl RenderTarget {
     fn file(&self, extension: &str) -> PathBuf {
-        self.folder.join(format!("{}.{extension}", self.key))
+        self.folder.join(format!("{}.{extension}", self.stem))
     }
 }
 
-fn cache_target(source: &Path) -> Option<CacheTarget> {
-    let folder = cache_folder()?;
+/// A name of this render's own, so that a file left behind by a process which was
+/// ended mid-render is never mistaken for the page a later one just wrote.
+fn render_target() -> Option<RenderTarget> {
+    static COUNTER: AtomicU32 = AtomicU32::new(0);
+
+    let folder = scratch_folder();
     std::fs::create_dir_all(&folder).ok()?;
 
-    Some(CacheTarget {
+    Some(RenderTarget {
         folder,
-        key: cache_key(source),
+        stem: format!(
+            "page-{}-{}",
+            std::process::id(),
+            COUNTER.fetch_add(1, Ordering::Relaxed)
+        ),
     })
 }
 
-/// Drop the oldest renders until the cache fits its budget. A cache that cannot
-/// be trimmed is not an error: what it costs is disk, not correctness.
-fn trim_cache() {
-    let Some(folder) = cache_folder() else {
-        return;
-    };
-    let limit = cache_limit_bytes();
-    let Ok(entries) = std::fs::read_dir(&folder) else {
-        return;
-    };
+/// Read the page a render wrote and delete it, whichever of the files a render can
+/// produce it turned out to be.
+///
+/// Every candidate is removed whether or not it is the one read — an empty file
+/// Office gave up on, or one this app's own reading could not take, is not left for
+/// the next attempt to find. What comes back is the bytes and the kind they are.
+fn take_render(target: &RenderTarget) -> Option<(RenderedKind, Vec<u8>)> {
+    let mut taken = None;
 
-    let mut files: Vec<(SystemTime, u64, PathBuf)> = Vec::new();
-    let mut total: u64 = 0;
-
-    for entry in entries.flatten() {
-        let Ok(metadata) = entry.metadata() else {
-            continue;
-        };
-        if !metadata.is_file() {
+    for kind in [RenderedKind::Pdf, RenderedKind::Png, RenderedKind::Bmp] {
+        let path = target.file(kind.extension());
+        if std::fs::metadata(&path).is_err() {
             continue;
         }
 
-        total += metadata.len();
-        files.push((
-            metadata.modified().unwrap_or(UNIX_EPOCH),
-            metadata.len(),
-            entry.path(),
-        ));
-    }
+        let bytes = std::fs::read(&path);
+        let _ = std::fs::remove_file(&path);
 
-    if total <= limit {
-        return;
-    }
-
-    files.sort_by_key(|(modified, _, _)| *modified);
-
-    for (_, len, path) in files {
-        if total <= limit {
-            break;
-        }
-        if std::fs::remove_file(&path).is_ok() {
-            total = total.saturating_sub(len);
+        if taken.is_none() {
+            if let Ok(bytes) = bytes {
+                if !bytes.is_empty() {
+                    taken = Some((kind, bytes));
+                }
+            }
         }
     }
+
+    // A picture is written beside its name and moved into place, so a process that
+    // was ended inside that write leaves the half it had written under this name.
+    let _ = std::fs::remove_file(target.file("bmp.writing"));
+
+    taken
 }
 
 // ----------------------------------------------------------- late binding
@@ -2001,34 +2174,30 @@ mod tests {
         }
     }
 
-    /// A cache file that cannot be read is not a page: the side that draws a preview
-    /// drops it, so the document is rendered again rather than answered with a
-    /// preview that blinks away every time it is hovered.
+    /// A page that cannot be read is not a page: the side that draws a preview drops
+    /// it, so the document is rendered again rather than answered with a preview that
+    /// blinks away every time it is hovered.
     #[test]
-    fn forgets_a_cache_file_it_cannot_read() {
+    fn forgets_a_page_it_cannot_read() {
         use crate::office_preview::{measure, source_kind, SourceKind};
 
         let folder = std::env::temp_dir()
             .join("rust-hover-preview-office-tests")
-            .join("cache");
+            .join("pages");
         std::fs::create_dir_all(&folder).expect("a test folder");
-        let source = folder.join("cached.docx");
+        let source = folder.join("held.docx");
         std::fs::write(&source, b"a document").expect("a written document");
-
-        let cache = cache_folder().expect("a cache folder");
-        std::fs::create_dir_all(&cache).expect("a cache folder");
-        let rendered = cache.join(format!("{}.bmp", cache_key(&source)));
 
         // A picture that can be read is a page, and its own size is what the layout
         // places the preview by.
-        std::fs::write(&rendered, bmp_bytes(2, 2, [10, 20, 30, 255])).expect("a written page");
+        store_render(&source, RenderedKind::Bmp, bmp_bytes(2, 2, [10, 20, 30, 255]));
         assert_eq!(measure(&source), Some((2, 2)), "a page that can be read");
         assert_eq!(source_kind(&source), SourceKind::Raster);
 
         // One that cannot is dropped, and the answer is that nothing is rendered yet.
-        std::fs::write(&rendered, b"not a picture at all").expect("a written broken page");
+        store_render(&source, RenderedKind::Bmp, b"not a picture at all".to_vec());
         assert_eq!(source_kind(&source), SourceKind::None, "nothing to draw");
-        assert!(!rendered.exists(), "the broken file is gone");
+        assert!(cached_render(&source).is_none(), "the broken page is gone");
 
         let _ = std::fs::remove_file(&source);
     }
@@ -2159,14 +2328,8 @@ mod tests {
                 last_failure().unwrap_or_else(|| "none recorded".to_string())
             );
             match cached_render(&path) {
-                Some(cached) => println!(
-                    "cache: {} ({} bytes)",
-                    cached.path.display(),
-                    std::fs::metadata(&cached.path)
-                        .map(|m| m.len())
-                        .unwrap_or(0)
-                ),
-                None => println!("cache: none"),
+                Some(cached) => println!("page: {:?} ({} bytes)", cached.kind, cached.bytes.len()),
+                None => println!("page: none"),
             }
 
             // The half a hover does after the render: measure it, then draw it —
@@ -2357,14 +2520,11 @@ mod tests {
             }
             match cached_render(&path) {
                 Some(cached) => println!(
-                    "cache file: {} ({} bytes, {:?})",
-                    cached.path.display(),
-                    std::fs::metadata(&cached.path)
-                        .map(|m| m.len())
-                        .unwrap_or(0),
-                    cached.kind
+                    "held page: {:?} ({} bytes)",
+                    cached.kind,
+                    cached.bytes.len()
                 ),
-                None => println!("cache file: none"),
+                None => println!("held page: none"),
             }
 
             // Drawing happens on a thread of its own, in a multithreaded

@@ -9,7 +9,7 @@ use std::sync::Mutex;
 use windows::core::PCWSTR;
 use windows::Data::Pdf::{PdfDocument, PdfPage, PdfPageRenderOptions};
 use windows::Graphics::Imaging::BitmapEncoder;
-use windows::Storage::Streams::{DataReader, IRandomAccessStream, InMemoryRandomAccessStream};
+use windows::Storage::Streams::{DataReader, DataWriter, IRandomAccessStream, InMemoryRandomAccessStream};
 use windows::UI::Color;
 use windows::Win32::System::Com::{
     CoInitializeEx, IStream, COINIT_MULTITHREADED, STGM_READ, STGM_SHARE_DENY_NONE,
@@ -100,11 +100,52 @@ pub fn render_first_page(
     }
 
     let document = open_document(path)?;
+    remember_opened_dimensions(path, &document);
+    render_opened_first_page(&document, max_width, max_height)
+}
+
+/// The same, for a PDF that is already in memory.
+///
+/// This is the page a document renderer exported: it was written to a file and read
+/// back out of it, so it never has to be opened from a path of its own — and it is
+/// drawn exactly as a PDF on disk is, at whatever size the preview is shown at.
+pub fn render_first_page_of_bytes(
+    bytes: &[u8],
+    max_width: u32,
+    max_height: u32,
+) -> Option<(Vec<u8>, u32, u32)> {
+    if !has_pdf_header_in(bytes) {
+        return None;
+    }
+
+    let document = open_document_from_bytes(bytes)?;
+    render_opened_first_page(&document, max_width, max_height)
+}
+
+/// Page 1's size in DIPs, for a PDF that is already in memory.
+///
+/// It is read here rather than remembered: what is in memory is one document's
+/// page, and the entry holding it carries its own size, so nothing about it can
+/// outlive the page it was read from.
+pub fn page_dimensions_of_bytes(bytes: &[u8]) -> Option<(u32, u32)> {
+    if !has_pdf_header_in(bytes) {
+        return None;
+    }
+
+    let document = open_document_from_bytes(bytes)?;
+    let size = document.GetPage(0).ok()?.Size().ok()?;
+    page_size_in_dips(size.Width, size.Height)
+}
+
+/// Page 1 of a document that has already been opened, fitted and drawn.
+fn render_opened_first_page(
+    document: &PdfDocument,
+    max_width: u32,
+    max_height: u32,
+) -> Option<(Vec<u8>, u32, u32)> {
     let page = document.GetPage(0).ok()?;
     let size = page.Size().ok()?;
-    let dimensions = page_size_in_dips(size.Width, size.Height);
     let (render_width, render_height) = fit_page(size.Width, size.Height, max_width, max_height)?;
-    remember_page_dimensions(path, dimensions);
 
     let bytes = render_page(&page, render_width, render_height)?;
     let image = image::load_from_memory(&bytes).ok()?.to_rgba8();
@@ -114,6 +155,21 @@ pub fn render_first_page(
     }
 
     Some((opaque_bgra(image.as_raw()), width, height))
+}
+
+/// Hand the size of a document that has just been opened to the cache the measure
+/// reads from, so a file opened for its render is not opened again to be measured.
+///
+/// A document whose first page gives no size is recorded as such, which is what
+/// keeps a broken file from being parsed on every hover.
+fn remember_opened_dimensions(path: &Path, document: &PdfDocument) {
+    let dimensions = document
+        .GetPage(0)
+        .ok()
+        .and_then(|page| page.Size().ok())
+        .and_then(|size| page_size_in_dips(size.Width, size.Height));
+
+    remember_page_dimensions(path, dimensions);
 }
 
 fn probe_page_dimensions(path: &Path) -> Option<(u32, u32)> {
@@ -184,6 +240,29 @@ fn open_document(path: &Path) -> Option<PdfDocument> {
         CreateRandomAccessStreamOverStream(&file, BSOS_DEFAULT).ok()?
     };
 
+    PdfDocument::LoadFromStreamAsync(&stream).ok()?.get().ok()
+}
+
+/// Open a document that is already in memory.
+///
+/// A page a document renderer exported is the one PDF here that has no path worth
+/// reading: it was written to a scratch file, read back out of it and deleted, so
+/// it is handed to the engine as the bytes it is. The stream is this process's own,
+/// which makes it the cheaper form rather than a dearer one — no file is opened,
+/// and nothing is read twice.
+fn open_document_from_bytes(bytes: &[u8]) -> Option<PdfDocument> {
+    let stream = InMemoryRandomAccessStream::new().ok()?;
+
+    let output = stream.GetOutputStreamAt(0).ok()?;
+    let writer = DataWriter::CreateDataWriter(&output).ok()?;
+    writer.WriteBytes(bytes).ok()?;
+    writer.StoreAsync().ok()?.get().ok()?;
+    // A document is read from wherever it is told to begin, and the writer leaves
+    // the stream at its end.
+    stream.Seek(0).ok()?;
+
+    // The document is read out of the stream the bytes were just written into,
+    // which is the same call the file form makes with a stream of its own.
     PdfDocument::LoadFromStreamAsync(&stream).ok()?.get().ok()
 }
 
@@ -261,7 +340,14 @@ fn has_pdf_header(path: &Path) -> bool {
         Err(_) => return false,
     };
 
-    probe[..read]
+    has_pdf_header_in(&probe[..read])
+}
+
+/// The same question, asked of bytes that are already in memory.
+fn has_pdf_header_in(bytes: &[u8]) -> bool {
+    let probe = &bytes[..bytes.len().min(PDF_HEADER_PROBE_BYTES)];
+
+    probe
         .windows(PDF_HEADER.len())
         .any(|window| window == PDF_HEADER)
 }
