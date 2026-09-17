@@ -391,6 +391,11 @@ pub struct AppConfig {
     /// alone would have them.
     pub avoid_filename: bool,
     pub same_file_rehover_delay_ms: u64,
+    /// How long navigation input — a held navigation key, or the wheel turning —
+    /// holds previews back. While input is arriving inside this window nothing is
+    /// previewed, and the item the navigation lands on previews once the input has
+    /// stopped for this long.
+    pub navigation_delay_ms: u64,
     pub webp_playback_fps: u32,
     /// Memory the decoded-image cache may hold, in megabytes. `0` switches the
     /// cache off, so every preview is decoded again.
@@ -443,6 +448,7 @@ impl Default for AppConfig {
             follow_cursor: false,
             avoid_filename: true,
             same_file_rehover_delay_ms: 750,
+            navigation_delay_ms: 200,
             webp_playback_fps: DEFAULT_WEBP_PLAYBACK_FPS,
             image_cache_mb: DEFAULT_IMAGE_CACHE_MB,
             transparent_background: TransparentBackground::Black,
@@ -560,6 +566,11 @@ impl AppConfig {
                 CONFIG_SECTION,
                 "same_file_rehover_delay_ms",
                 Some(self.same_file_rehover_delay_ms.to_string()),
+            );
+            ini.set(
+                CONFIG_SECTION,
+                "navigation_delay_ms",
+                Some(self.navigation_delay_ms.to_string()),
             );
             ini.set(
                 CONFIG_SECTION,
@@ -693,6 +704,9 @@ impl AppConfig {
         }
         if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "same_file_rehover_delay_ms") {
             self.same_file_rehover_delay_ms = value;
+        }
+        if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "navigation_delay_ms") {
+            self.navigation_delay_ms = value;
         }
         if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "webp_playback_fps") {
             if let Ok(value) = u32::try_from(value) {
