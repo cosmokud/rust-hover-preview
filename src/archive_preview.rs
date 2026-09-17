@@ -40,6 +40,10 @@ const INDENT_SPACES: i32 = 3;
 /// at the same column whatever the glyph's own advance is.
 const ICON_CELL_ADVANCES: i32 = 2;
 
+/// Room kept after that cell, so a glyph that fills it is not drawn against the
+/// name beside it.
+const ICON_TEXT_GAP_ADVANCES: i32 = 1;
+
 /// Room between the widest name and the size column.
 const SIZE_GAP_ADVANCES: i32 = 3;
 
@@ -431,7 +435,7 @@ fn build_page(
     let header_height = metrics.line_height[HEADER_LEVEL as usize];
     let padding = metrics.padding;
     let gap = body_advance * SIZE_GAP_ADVANCES;
-    let icon_cell = body_advance * ICON_CELL_ADVANCES;
+    let icon_cell = body_advance * (ICON_CELL_ADVANCES + ICON_TEXT_GAP_ADVANCES);
     let indent = body_advance * INDENT_SPACES;
 
     let page_color = rgb(theme.background());
@@ -613,7 +617,7 @@ fn header_runs(
 ) -> Vec<PageRun> {
     let advance = metrics.advance[HEADER_LEVEL as usize].max(1);
     let body_advance = metrics.advance[BODY_LEVEL as usize].max(1);
-    let cell = body_advance * ICON_CELL_ADVANCES;
+    let cell = body_advance * (ICON_CELL_ADVANCES + ICON_TEXT_GAP_ADVANCES);
 
     let mut runs = Vec::new();
     let mut x = metrics.padding;
