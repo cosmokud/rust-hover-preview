@@ -1,30 +1,32 @@
 //! The Office render tier: Word, Excel or PowerPoint draws a document's first
 //! page, once, into a cache file the preview then draws from.
 //!
-//! The saved thumbnail is the fast path (see `office_thumbnail`), but not every
-//! document has one — Excel only writes one when "Save Thumbnails" is on, a macro
-//! that saves a workbook writes none, and anything produced outside Office may
-//! carry no picture at all. This is what covers those documents, and it is also
-//! what replaces a small thumbnail with a real page for a hover that rests.
+//! Nothing here is ever on the hover path. A page is asked for only after the
+//! pointer has rested on a file, it is drawn on a thread of its own, and the
+//! preview shows a spinner in the meantime — so what a document costs is bounded
+//! by the render tier even when it is an Office start, an export and a dialogs
+//! worth of waiting.
 //!
-//! Nothing here is ever on the hover path. A render is asked for only after the
-//! pointer has rested on a file, it runs on a thread of its own, and the preview
-//! shows the thumbnail (or a spinner) until the page is there.
-//!
-//! Two rules shape the rest:
+//! Three rules shape the rest:
 //!
 //! * **The user's Office is never disturbed.** An automation instance may attach
 //!   to a running Word or Excel — the applications are registered for multiple
 //!   use — so nothing is hidden that is already visible, the settings that are
-//!   changed are restored, and only an instance this app created is quit.
+//!   changed are restored, and only an instance this app created is quit or
+//!   ended.
 //! * **A stuck engine must not wedge the app.** The calls below are COM calls
 //!   into another process and cannot be cancelled or bounded; the thread that
-//!   makes them may be lost to a modal dialog inside Office, and what that costs
-//!   is the render tier, never the preview window. Nothing waits on this thread.
+//!   makes them may be lost to a modal dialog inside Office. What that costs is
+//!   one render, never the tier: a worker that has been inside one piece of work
+//!   for too long is given up on, the process it started is ended with it, and
+//!   the next hover is answered by a fresh worker. Nothing waits on this thread.
+//! * **Nothing is held in memory.** What a hover shows comes off the disk, and
+//!   the only things kept here are the request slot, the files that have refused a
+//!   page, and which worker is current.
 
 use crate::cloud_files;
 use crate::config::sanitize_office_cache_mb;
-use crate::office_formats::{app_for, OfficeApp};
+use crate::office_formats::{app_for, container_kind, OfficeApp};
 use crate::preview_window;
 use crate::CONFIG;
 use directories::BaseDirs;
@@ -32,21 +34,29 @@ use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use windows::core::{GUID, PCWSTR, VARIANT};
-use windows::Win32::Foundation::{HGLOBAL, LPARAM, WPARAM};
+use windows::core::{GUID, PCWSTR, PWSTR, VARIANT};
+use windows::Win32::Foundation::{CloseHandle, HGLOBAL, LPARAM, WPARAM};
 use windows::Win32::System::Com::{
     CLSIDFromProgID, CoCreateInstance, CoInitializeEx, IDispatch, CLSCTX_LOCAL_SERVER,
     COINIT_APARTMENTTHREADED, DISPATCH_FLAGS, DISPATCH_METHOD, DISPATCH_PROPERTYGET,
     DISPATCH_PROPERTYPUT, DISPPARAMS, EXCEPINFO,
 };
-use windows::Win32::System::DataExchange::{CloseClipboard, GetClipboardData, OpenClipboard};
+use windows::Win32::System::DataExchange::{
+    CloseClipboard, EmptyClipboard, GetClipboardData, OpenClipboard,
+};
+use windows::Win32::System::Diagnostics::ToolHelp::{
+    CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
+};
 use windows::Win32::System::Memory::{GlobalLock, GlobalSize, GlobalUnlock};
 use windows::Win32::System::Ole::CF_DIB;
-use windows::Win32::System::Threading::GetCurrentThreadId;
+use windows::Win32::System::Threading::{
+    GetCurrentThreadId, GetExitCodeProcess, OpenProcess, QueryFullProcessImageNameW,
+    TerminateProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, MsgWaitForMultipleObjectsEx, PeekMessageW, PostThreadMessageW,
     TranslateMessage, MSG, MWMO_INPUTAVAILABLE, PM_REMOVE, QS_ALLINPUT, WM_APP,
@@ -83,6 +93,21 @@ const CLIPBOARD_ATTEMPTS: usize = 5;
 /// `xlScreen` and `xlBitmap`: the appearance and format `CopyPicture` is asked for.
 const XL_SCREEN: i32 = 1;
 const XL_BITMAP: i32 = 2;
+/// How long the worker may be inside one piece of work before it is given up on.
+///
+/// The work that can block is not only the render: quitting an engine is another
+/// COM call, and a dialog inside Office holds any of them for as long as it is up.
+/// An Office start, an export and the dialogs in between are seconds at worst, so
+/// a worker that has been inside one of them this long is not coming back.
+const WORKER_GIVE_UP: Duration = Duration::from_secs(30);
+/// Files remembered as having refused a page. The map is cleared wholesale when it
+/// is full, the way the app's other memories are: what a refusal costs is a wait,
+/// so a few of them are worth remembering and a list of them is not.
+const FAILURE_CACHE_MAX_ENTRIES: usize = 64;
+/// The longest image path `QueryFullProcessImageNameW` is given room for.
+const MAX_IMAGE_PATH: usize = 260;
+/// What `GetExitCodeProcess` reports for a process that is still running.
+const STILL_ACTIVE: u32 = 259;
 /// The value that switches macro execution off entirely.
 const MSO_AUTOMATION_SECURITY_FORCE_DISABLE: i32 = 3;
 /// What a property put is identified by, in the parameter block that carries it.
@@ -138,8 +163,23 @@ static FAILURES: Lazy<Mutex<HashMap<PathBuf, Failure>>> = Lazy::new(|| Mutex::ne
 static WORKER_HANDLE: Lazy<Mutex<Option<std::thread::JoinHandle<()>>>> =
     Lazy::new(|| Mutex::new(None));
 static WORKER_STARTING: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+/// Which worker is the current one.
+///
+/// A worker that has been given up on keeps running — nothing can stop a COM call
+/// — and this is what keeps it from being mistaken for the worker that replaced
+/// it, including when it finally returns and cleans up.
+static WORKER_GENERATION: AtomicU64 = AtomicU64::new(0);
 static WORKER_THREAD: AtomicU32 = AtomicU32::new(0);
-static WORKER_BUSY: AtomicBool = AtomicBool::new(false);
+/// The work a worker is inside, and which generation of worker is inside it. Every
+/// step that can block is done inside this marker — the render, and the engine
+/// being ended — so "the worker is stuck" is a question about the whole thread
+/// rather than about one call in it.
+static WORKER_BUSY: Lazy<Mutex<Option<(u64, Instant)>>> = Lazy::new(|| Mutex::new(None));
+/// The Office process this app started, with the family it belongs to.
+///
+/// An instance the user already had open is never recorded here, and never ended:
+/// what a stuck render costs is the render, not the user's work.
+static OWNED_ENGINE: Lazy<Mutex<Option<(OfficeApp, u32)>>> = Lazy::new(|| Mutex::new(None));
 
 /// Whether the render tier may run at all: the tray's `Render With Office`
 /// setting, and a cache that can hold what it produces — a page that cannot be
@@ -193,6 +233,15 @@ pub(crate) fn request(source: &Path, width: u32, height: u32, generation: u64) {
         return;
     }
 
+    // A worker that has been inside one piece of work for longer than any of them
+    // takes is not coming back — a dialog inside Office holds a COM call for good
+    // — so it is left where it is, the Office process it started is ended with it,
+    // and the request goes to a worker that can answer it. This is what keeps one
+    // stuck document, or one stuck quit, from costing every document after it.
+    if work_is_stuck() {
+        abandon_worker();
+    }
+
     if let Ok(mut slot) = REQUEST.lock() {
         *slot = Some(RenderRequest {
             source: source.to_path_buf(),
@@ -227,15 +276,18 @@ pub(crate) fn remember_failure(source: &Path) {
     };
 
     if let Ok(mut failures) = FAILURES.lock() {
+        if failures.len() >= FAILURE_CACHE_MAX_ENTRIES && !failures.contains_key(source) {
+            failures.clear();
+        }
         failures.insert(source.to_path_buf(), failure);
     }
 }
 
-/// Stop the worker, joining it only when it is not inside a render: a COM call
-/// into Office cannot be cancelled, and waiting on one would hold the app's exit
-/// for as long as Office takes.
+/// Stop the worker, joining it only when it is not inside anything that can block:
+/// a COM call into Office cannot be cancelled, and waiting on one would hold the
+/// app's exit for as long as Office takes.
 pub(crate) fn shutdown() {
-    if WORKER_BUSY.load(Ordering::Acquire) {
+    if work_in_flight() {
         return;
     }
 
@@ -243,6 +295,42 @@ pub(crate) fn shutdown() {
         if let Some(handle) = handle.take() {
             let _ = handle.join();
         }
+    }
+}
+
+fn work_in_flight() -> bool {
+    WORKER_BUSY
+        .lock()
+        .ok()
+        .map(|busy| busy.is_some())
+        .unwrap_or(false)
+}
+
+/// Whether the worker has been inside one piece of work for longer than any of
+/// them takes.
+fn work_is_stuck() -> bool {
+    WORKER_BUSY
+        .lock()
+        .ok()
+        .and_then(|busy| *busy)
+        .map(|(_, since)| since.elapsed() >= WORKER_GIVE_UP)
+        .unwrap_or(false)
+}
+
+/// Stop counting on the worker that is inside a piece of work, and end the Office
+/// process it started.
+///
+/// The thread itself is left where it is: it is inside a COM call nothing can
+/// cancel, and what it holds is one document's render, which is not worth the
+/// tier. Its generation is moved on so that everything it does on the way out —
+/// clearing the thread id, ending an engine — is conditional on it still being the
+/// current worker, which it no longer is.
+fn abandon_worker() {
+    terminate_owned_engine();
+    WORKER_GENERATION.fetch_add(1, Ordering::AcqRel);
+    WORKER_THREAD.store(0, Ordering::Release);
+    if let Ok(mut busy) = WORKER_BUSY.lock() {
+        *busy = None;
     }
 }
 
@@ -287,6 +375,11 @@ fn start_worker() {
 /// pumped — the opposite of every other worker in this app, which initializes a
 /// multithreaded apartment for WinRT.
 fn worker_main() {
+    // Which worker this is. One that has been given up on is still running, and
+    // everything it does on the way out is conditional on this still being the
+    // current generation, so it cannot take the place of its replacement.
+    let generation = WORKER_GENERATION.fetch_add(1, Ordering::AcqRel) + 1;
+
     unsafe {
         let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
         // The thread's message queue has to exist before another thread can post
@@ -297,10 +390,15 @@ fn worker_main() {
         WORKER_THREAD.store(GetCurrentThreadId(), Ordering::Release);
     }
 
+    // The thread id is handed back however this thread ends, a panic included:
+    // losing it would leave every later request posted to a thread that is gone,
+    // which is a render tier that never answers again.
+    let _registration = WorkerRegistration { generation };
+
     let mut engine: Option<Engine> = None;
     let mut idle_since = Instant::now();
 
-    while crate::RUNNING.load(Ordering::Acquire) {
+    while crate::RUNNING.load(Ordering::Acquire) && is_current_worker(generation) {
         pump_messages();
 
         if let Some(request) = take_request() {
@@ -308,9 +406,14 @@ fn worker_main() {
                 continue;
             }
 
-            WORKER_BUSY.store(true, Ordering::Release);
-            let rendered = render_request(&mut engine, &request);
-            WORKER_BUSY.store(false, Ordering::Release);
+            begin_work(generation);
+            // A panic inside one document's render is that document's failure, not
+            // the tier's: the thread goes on to the next hover.
+            let rendered = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                render_request(&mut engine, &request)
+            }))
+            .unwrap_or(false);
+            end_work(generation);
             idle_since = Instant::now();
 
             if rendered {
@@ -324,10 +427,13 @@ fn worker_main() {
         }
 
         // Nothing to do. The engine is kept warm for a minute after the last
-        // render and then let go, which is also when this thread ends: an idle
-        // app should have no Office process and no polling thread.
+        // render and then let go, which is also when this thread ends: an idle app
+        // should have no Office process and no polling thread. Letting it go is a
+        // COM call of its own, so it happens inside the marker like the rest.
         if engine.is_some() && idle_since.elapsed() >= Duration::from_secs(ENGINE_IDLE_SECS) {
+            begin_work(generation);
             engine = None;
+            end_work(generation);
         }
         if engine.is_none() {
             break;
@@ -336,14 +442,58 @@ fn worker_main() {
         wait_for_message(500);
     }
 
+    // Whatever engine is left is let go the same way, inside the marker.
+    if engine.is_some() {
+        begin_work(generation);
+        drop(engine.take());
+        end_work(generation);
+    }
+
     // A request that arrived while this thread was shutting down would otherwise
-    // sit in the slot with nobody to run it.
-    if take_request().is_some() && crate::RUNNING.load(Ordering::Acquire) {
-        start_worker();
+    // sit in the slot with nobody to run it — and only the worker that is still
+    // the current one may hand it on, since an abandoned thread starting a worker
+    // would leave two of them running.
+    if is_current_worker(generation) {
+        WORKER_THREAD.store(0, Ordering::Release);
+        if take_request().is_some() && crate::RUNNING.load(Ordering::Acquire) {
+            start_worker();
+        }
     }
 
     unsafe {
         windows::Win32::System::Com::CoUninitialize();
+    }
+}
+
+fn is_current_worker(generation: u64) -> bool {
+    WORKER_GENERATION.load(Ordering::Acquire) == generation
+}
+
+/// Hands the worker's thread id back when the thread stops being the current one,
+/// whether it ends normally or unwinds out of something unexpected.
+struct WorkerRegistration {
+    generation: u64,
+}
+
+impl Drop for WorkerRegistration {
+    fn drop(&mut self) {
+        if is_current_worker(self.generation) {
+            WORKER_THREAD.store(0, Ordering::Release);
+        }
+    }
+}
+
+fn begin_work(generation: u64) {
+    if let Ok(mut busy) = WORKER_BUSY.lock() {
+        *busy = Some((generation, Instant::now()));
+    }
+}
+
+fn end_work(generation: u64) {
+    if let Ok(mut busy) = WORKER_BUSY.lock() {
+        if busy.map(|(busy_generation, _)| busy_generation) == Some(generation) {
+            *busy = None;
+        }
     }
 }
 
@@ -376,9 +526,16 @@ fn render_request(engine: &mut Option<Engine>, request: &RenderRequest) -> bool 
     };
 
     // The gate every loader asks before it reads: a document whose content is
-    // still in the cloud would be downloaded by the open, and the engine is not
-    // an exception to that.
+    // still in the cloud would be downloaded by the open, and the engine is not an
+    // exception to that.
     if cloud_files::needs_download(&request.source) {
+        return false;
+    }
+
+    // What the file is *called* is what got it here; what it *is* is its own
+    // header's answer, and a file that is not a document at all is not worth an
+    // Office start.
+    if container_kind(&request.source).is_none() {
         return false;
     }
 
@@ -425,15 +582,22 @@ fn render_request(engine: &mut Option<Engine>, request: &RenderRequest) -> bool 
 struct Engine {
     app_kind: OfficeApp,
     app: Object,
-    /// Whether the instance was already running for the user when it was
-    /// reached. Such an instance is never hidden and never quit.
+    /// Whether the instance was already running for the user when it was reached.
+    /// Such an instance is never hidden, never quit, and never ended.
     attached: bool,
+    /// The process this app started, when it started one: what may be ended if the
+    /// engine stops answering, and what must never be ended otherwise.
+    owned_pid: u32,
     previous_alerts: Option<VARIANT>,
     previous_security: Option<VARIANT>,
 }
 
 impl Engine {
     fn create(app_kind: OfficeApp) -> Option<Self> {
+        // What is running before the instance is created, so the process this app
+        // starts can be told from one the user already had open.
+        let before = processes_named(app_kind.image_name());
+
         let app = Object::create(app_kind.prog_id())?;
 
         // An instance this app created is hidden already; the user's is visible,
@@ -442,6 +606,18 @@ impl Engine {
             .value("Visible")
             .and_then(|value| bool::try_from(&value).ok())
             .unwrap_or(false);
+
+        let owned_pid = if attached {
+            0
+        } else {
+            processes_named(app_kind.image_name())
+                .into_iter()
+                .find(|pid| !before.contains(pid))
+                .unwrap_or(0)
+        };
+        if owned_pid != 0 {
+            remember_owned_engine(app_kind, owned_pid);
+        }
 
         let previous_alerts = app.value("DisplayAlerts");
         let previous_security = app.value("AutomationSecurity");
@@ -463,6 +639,7 @@ impl Engine {
             app_kind,
             app,
             attached,
+            owned_pid,
             previous_alerts,
             previous_security,
         })
@@ -489,7 +666,147 @@ impl Drop for Engine {
         if !self.attached {
             let _ = self.app.call("Quit", &[]);
         }
+
+        if self.owned_pid != 0 {
+            // An Office application finishes quitting while its automation client
+            // is pumping: one that is told to quit and then abandoned can sit there
+            // for good, which is what an Excel instance left behind every time
+            // looks like. So the quit is given a moment of pumping, and a process
+            // that is still there after it — one this app started, and verified as
+            // still being that application — is ended rather than left running.
+            if !wait_for_exit(self.owned_pid) {
+                terminate_process(self.owned_pid, self.app_kind.image_name());
+            }
+            forget_owned_engine(self.owned_pid);
+        }
     }
+}
+
+/// Give a process a moment to exit, pumping messages while it does — which is what
+/// an Office application that has been asked to quit may be waiting for. `true`
+/// when it is gone.
+fn wait_for_exit(pid: u32) -> bool {
+    let deadline = Instant::now() + Duration::from_secs(2);
+
+    while Instant::now() < deadline {
+        if !process_is_running(pid) {
+            return true;
+        }
+        wait_for_message(50);
+    }
+
+    !process_is_running(pid)
+}
+
+/// Whether a process is still running, by id. A process that cannot be opened is
+/// one that is gone.
+fn process_is_running(pid: u32) -> bool {
+    unsafe {
+        let Ok(handle) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) else {
+            return false;
+        };
+
+        let mut code = 0u32;
+        let running = GetExitCodeProcess(handle, &mut code).is_ok() && code == STILL_ACTIVE;
+        let _ = CloseHandle(handle);
+        running
+    }
+}
+
+/// Record the Office process this app started, so a render that never returns can
+/// end it — and only it.
+fn remember_owned_engine(app_kind: OfficeApp, pid: u32) {
+    if let Ok(mut owned) = OWNED_ENGINE.lock() {
+        *owned = Some((app_kind, pid));
+    }
+}
+
+fn forget_owned_engine(pid: u32) {
+    if let Ok(mut owned) = OWNED_ENGINE.lock() {
+        if owned.map(|(_, owned_pid)| owned_pid) == Some(pid) {
+            *owned = None;
+        }
+    }
+}
+
+/// End the Office process this app started, if it is still there and still that
+/// application.
+///
+/// Requested and never waited on, the way a stuck `ffplay` is: a process inside
+/// kernel I/O cannot be ended by anyone in user mode, and what it costs is the
+/// render in flight rather than the app. Only an instance this app started is
+/// ended — the user's own Office is never touched — and only after the record of
+/// it has been taken, so two callers cannot both end it.
+fn terminate_owned_engine() {
+    let Some((app_kind, pid)) = OWNED_ENGINE.lock().ok().and_then(|mut owned| owned.take()) else {
+        return;
+    };
+
+    terminate_process(pid, app_kind.image_name());
+}
+
+fn terminate_process(pid: u32, image_name: &str) {
+    unsafe {
+        let Ok(handle) = OpenProcess(
+            PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION,
+            false,
+            pid,
+        ) else {
+            return;
+        };
+
+        // Only a process that is still the application it was: a recycled id must
+        // never hit something else.
+        let mut name = [0u16; MAX_IMAGE_PATH];
+        let mut length = name.len() as u32;
+        let named = QueryFullProcessImageNameW(
+            handle,
+            PROCESS_NAME_WIN32,
+            PWSTR(name.as_mut_ptr()),
+            &mut length,
+        )
+        .is_ok()
+            && String::from_utf16_lossy(&name[..length as usize])
+                .to_ascii_uppercase()
+                .ends_with(image_name);
+
+        if named {
+            let _ = TerminateProcess(handle, 1);
+        }
+        let _ = CloseHandle(handle);
+    }
+}
+
+/// The processes running an image of this name, by executable name.
+fn processes_named(image_name: &str) -> Vec<u32> {
+    let mut found = Vec::new();
+
+    unsafe {
+        let Ok(snapshot) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) else {
+            return found;
+        };
+
+        let mut entry = PROCESSENTRY32W {
+            dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
+            ..Default::default()
+        };
+
+        if Process32FirstW(snapshot, &mut entry).is_ok() {
+            loop {
+                let name = String::from_utf16_lossy(&entry.szExeFile);
+                if name.trim_end_matches('\0').eq_ignore_ascii_case(image_name) {
+                    found.push(entry.th32ProcessID);
+                }
+                if Process32NextW(snapshot, &mut entry).is_err() {
+                    break;
+                }
+            }
+        }
+
+        let _ = CloseHandle(snapshot);
+    }
+
+    found
 }
 
 /// What suppresses a dialog in each application: Word and PowerPoint take a
@@ -698,6 +1015,14 @@ fn read_clipboard_dib() -> Option<Vec<u8>> {
                 }
                 let _ = GlobalUnlock(handle);
             }
+        }
+
+        // The picture is taken rather than borrowed. Leaving it on the clipboard is
+        // what makes Excel ask, on its way out, whether a large amount of
+        // information should stay there — a dialog no one is present to answer,
+        // which holds the quit and with it the worker.
+        if dib.is_some() {
+            let _ = EmptyClipboard();
         }
 
         let _ = CloseClipboard();
@@ -1281,6 +1606,10 @@ mod tests {
     /// little content in it so that a page has something to show.
     fn write_sample(app_kind: OfficeApp, path: &Path) -> Option<()> {
         let app = Object::create(app_kind.prog_id())?;
+        // The hygiene the engine applies, which a fixture that leaves it out hangs
+        // on: an alert is a dialog no one is present to answer.
+        let _ = app.set("DisplayAlerts", alerts_off(app_kind));
+
         let collection = app.member(match app_kind {
             OfficeApp::Word => "Documents",
             OfficeApp::Excel => "Workbooks",
@@ -1346,7 +1675,7 @@ mod tests {
             ),
         };
 
-        let _ = document.call("Close", &[]);
+        let _ = document.call("Close", &[("SaveChanges", VARIANT::from(false))]);
         let _ = app.call("Quit", &[]);
 
         saved.map(|_| ())
@@ -1392,27 +1721,13 @@ mod tests {
                 }
             }
 
-            let started = Instant::now();
-            match crate::office_thumbnail::thumbnail_for(&path, None) {
-                Some(thumbnail) => println!(
-                    "saved picture: {:?} {}x{} read in {:?}",
-                    thumbnail.kind,
-                    thumbnail.width,
-                    thumbnail.height,
-                    started.elapsed()
-                ),
-                None => println!("saved picture: none, looked for in {:?}", started.elapsed()),
-            }
-
-            let started = Instant::now();
-            match crate::office_preview::render(&path, 800, 600, None) {
-                Some((pixels, width, height)) => println!(
-                    "drawn: {width}x{height}, {} pixels, in {:?}",
-                    pixels.len() / 4,
-                    started.elapsed()
-                ),
-                None => println!("drawn: nothing, in {:?}", started.elapsed()),
-            }
+            // What the hover would show before anything is rendered: nothing, so
+            // the spinner's box is what the layout places.
+            println!(
+                "before a render: source {:?}, box {:?}",
+                crate::office_preview::source_kind(&path),
+                crate::office_formats::default_page_size(&path)
+            );
 
             let mut engine = None;
             let request = RenderRequest {
@@ -1426,6 +1741,16 @@ mod tests {
             let rendered = render_request(&mut engine, &request);
             println!("rendered: {rendered} in {:?}", started.elapsed());
 
+            // What the engine made of the instance: an attached one is the user's
+            // and is never hidden, quit or ended; one this app started is.
+            match engine.as_ref() {
+                Some(engine) => println!(
+                    "engine: attached={} owned_pid={}",
+                    engine.attached, engine.owned_pid
+                ),
+                None => println!("engine: none"),
+            }
+
             if !rendered {
                 println!(
                     "last failure: {}",
@@ -1434,13 +1759,37 @@ mod tests {
             }
             match cached_render(&path) {
                 Some(cached) => println!(
-                    "cache file: {} ({} bytes)",
+                    "cache file: {} ({} bytes, source {:?})",
                     cached.path.display(),
                     std::fs::metadata(&cached.path)
                         .map(|m| m.len())
-                        .unwrap_or(0)
+                        .unwrap_or(0),
+                    crate::office_preview::source_kind(&path)
                 ),
                 None => println!("cache file: none"),
+            }
+
+            // Drawing happens on a thread of its own, in a multithreaded
+            // apartment, which is where the app draws too: this thread is
+            // apartment-threaded for the automation above, and a WinRT call waited
+            // on from a single-threaded apartment deadlocks without a pump.
+            let drawing = path.clone();
+            let started = Instant::now();
+            let drawn = std::thread::spawn(move || {
+                crate::pdf_preview::initialize_apartment();
+                crate::office_preview::render(&drawing, 800, 600, None)
+            })
+            .join()
+            .ok()
+            .flatten();
+
+            match drawn {
+                Some((pixels, width, height)) => println!(
+                    "drawn: {width}x{height}, {} pixels, in {:?}",
+                    pixels.len() / 4,
+                    started.elapsed()
+                ),
+                None => println!("drawn: nothing, in {:?}", started.elapsed()),
             }
 
             drop(engine);

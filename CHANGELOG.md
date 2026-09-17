@@ -4,18 +4,23 @@
 
 ### Added
 
-- Office previews: hovering a Word, Excel or PowerPoint document shows a page of it, drawn from the picture the document saved of itself — the `docProps/thumbnail.emf` of an OOXML package, or the summary information stream of a legacy `.doc`, `.xls` or `.ppt` — read in-process and rasterized with GDI, so a hover costs a few milliseconds and starts no Office process.
-- A render tier for the documents that saved no picture of themselves, and for a hover that rests on one whose picture is small: the installed Office exports page 1 to PDF (PowerPoint exports slide 1 as an image) in the background and the page is cached under `%LOCALAPPDATA%\rust-hover-preview\cache\office`, shown in place of the thumbnail once it exists. No engine is started until the pointer has rested on the file for two seconds.
+- Office previews: hovering a Word, Excel or PowerPoint document shows a page of it, drawn by the installed Office in the background — Word and Excel export page 1 to PDF, PowerPoint exports slide 1 as an image, and a workbook on a machine with no printer is copied out as a picture of its used range — with the page cached under `%LOCALAPPDATA%\rust-hover-preview\cache\office`, so a document previews from its first hover and instantly after. No engine is started until the pointer has rested on the file for two seconds.
 - `office_preview_enabled`, `office_render_enabled` and `office_cache_mb` in `config.ini`, an editable `[office] extensions` list, an `Office` entry in the tray's `Preview Types` submenu, and an `Office Preview` submenu carrying `Render With Office`.
 
 ### Changed
 
 - The legacy Office formats are read through the `cfb` compound-file reader, which opens the one summary information stream their picture lives in and nothing else.
+- Office previews are drawn from the rendered page alone. The picture a document saves inside itself is no longer read at all: a thumbnail a couple of hundred pixels across is either tiny in a preview or an enlargement of something that small, and skipping it keeps the preview thread from parsing a zip or a compound file. The `cfb` reader the legacy formats needed went with it.
+- Nothing about an Office preview is held in memory between hovers. A page's own size is read from the cached file each time it is measured, so no cache of the app's can go stale, grow with the documents hovered, or stand between a hover and its preview.
 
 ### Fixed
 
 - PowerPoint decks preview: a slide is reached through the collection's item — `Slides.Item(1)`, which is what VBA's `Slides(1)` means — because asking `Slides` itself for one is answered with "member not found", which left decks with a spinner and nothing else.
 - Excel workbooks preview on a machine with no printer: exporting a page goes through the print pipeline and refuses to run without one, so where `ActivePrinter` reports none — or the export fails — the used range's top-left is copied out as a picture instead. A machine with a printer exports its page as before.
+- A render that never returns no longer costs the documents after it: a worker still inside one piece of work after thirty seconds is given up on when the next hover arrives, the Office process this app started is ended with it, and a fresh worker answers that hover. Ending an engine counts as such work, so a quit that hangs is given up on too. A panic inside one render is contained the same way — that document fails, not the tier — and a worker hands its thread id back however its thread ends.
+- An Office engine no longer survives its own quit, which is what left an Excel instance running after the first workbook: Excel finishes quitting while its automation client is pumping, so the quit is given a moment of pumping and a process that is still there afterwards — one this app started, verified as still being that application — is ended. Every later render used to attach to the instance that had been left behind, so a workbook preview could stop working for good.
+- The picture a workbook is copied out as is taken off the clipboard rather than left on it: leaving it there is what makes Excel ask, on its way out, whether a large amount of information should stay on the clipboard — a dialog no one is present to answer.
+- A file that is not a document at all — a text file named `.docx`, say — no longer starts an Office engine: the file's own header has to say it is an OOXML package or an OLE compound file first.
 - The box a preview is placed for while its page is being rendered now follows the family: a portrait sheet for Word, a landscape one for Excel, a 16:9 slide for PowerPoint, instead of one portrait page for all three.
 - A render that produces nothing now remembers what Office said about it, and an ignored test (`cargo test -- --ignored office_render_smoke_test`) drives a document of each family through the real path and reports every step.
 

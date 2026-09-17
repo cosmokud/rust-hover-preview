@@ -9,7 +9,6 @@ mod explorer_hook;
 mod office_formats;
 mod office_preview;
 mod office_render;
-mod office_thumbnail;
 mod pdf_preview;
 mod preview_window;
 mod single_instance;
