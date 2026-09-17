@@ -1,13 +1,5 @@
 # Changelog
 
-## [Unreleased]
-
-### Changed
-
-- The tray menu is grouped into categories and its labels shortened: `Preview` and `Preview Types` lead, then `Background`, `Confirm File Type` and `Trigger Key (Alt)`, then the `Text Preview`, `Timing`, `Placement` and `Volume` submenus, and `Run at Startup`, `Edit Config.ini` and `Exit` last. Related settings that were scattered as siblings now sit together — the theme, font size and Markdown mode under `Text Preview`, the two delays under `Timing`, the position and scaling under `Placement` — and the menu is shorter to scan for it. Every item keeps its command ID, its handler, and its checkmark or radio mark.
-- `Edit Config.ini` is labelled with the version that is running — `Edit Config.ini (v0.2.5)` — read from the crate rather than typed in.
-- The `(Default)` suffixes are gone from the theme, font size, Markdown and scaling menus: the checkmark marks what is current, and the default is what the documentation is for.
-
 ## [0.2.5] - 2026-09-17
 
 ### Added
@@ -19,6 +11,7 @@
 
 ### Changed
 
+- The tray menu is grouped into categories — `Text Preview`, `Timing`, `Placement` and `Volume` among them — with shorter labels, and `Config.ini` carries the running version.
 - The minimum supported Rust version is now 1.88, the `zip` crate's floor.
 - The GDI painting a text preview and an archive listing share moved into `text_paint.rs`.
 - Archive listings keep room between an entry's icon and its name.
