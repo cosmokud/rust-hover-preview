@@ -1,3 +1,5 @@
+use crate::archive_formats;
+use crate::archive_preview::{self, ArchivePreviewOptions};
 use crate::cloud_files;
 use crate::config::{
     sanitize_image_cache_mb, sanitize_webp_playback_fps, MarkdownMode, PreviewScale, PreviewType,
@@ -264,6 +266,7 @@ enum MediaType {
     Video,
     Pdf,
     Text,
+    Archive,
     Loading,
 }
 
@@ -277,8 +280,16 @@ impl MediaType {
             Self::Video => Some(PreviewType::Videos),
             Self::Text => Some(PreviewType::Text),
             Self::Pdf => Some(PreviewType::Pdf),
+            Self::Archive => Some(PreviewType::Archives),
             Self::Loading => None,
         }
+    }
+
+    /// Whether this preview's appearance is painted into its own frame rather
+    /// than recomposited from shared pixels, which is what decides whether a
+    /// theme switch means rebuilding it.
+    fn is_painted(&self) -> bool {
+        matches!(self, Self::Text | Self::Archive)
     }
 }
 
@@ -898,16 +909,31 @@ fn current_text_options() -> TextPreviewOptions {
         })
 }
 
-/// Whether the preview on screen is a text preview, whose appearance is baked
-/// into its painted frame rather than recomposited from shared pixels.
-fn current_media_is_text() -> bool {
+/// The options an archive preview is laid out and painted with, read from the
+/// configuration the way a text preview's are.
+fn current_archive_options() -> ArchivePreviewOptions {
+    CONFIG
+        .lock()
+        .map(|cfg| ArchivePreviewOptions {
+            theme: cfg.theme,
+            font_scale_percent: cfg.text_font_scale_percent,
+        })
+        .unwrap_or(ArchivePreviewOptions {
+            theme: TextTheme::Light,
+            font_scale_percent: DEFAULT_TEXT_FONT_SCALE_PERCENT,
+        })
+}
+
+/// Whether the preview on screen is one whose appearance is baked into its
+/// painted frame rather than recomposited from shared pixels.
+fn current_media_is_painted() -> bool {
     CURRENT_MEDIA
         .lock()
         .map(|media| {
-            matches!(
-                media.as_ref().map(|media| &media.media_type),
-                Some(MediaType::Text)
-            )
+            media
+                .as_ref()
+                .map(|media| media.media_type.is_painted())
+                .unwrap_or(false)
         })
         .unwrap_or(false)
 }
@@ -942,7 +968,7 @@ fn current_media_kind() -> Option<PreviewType> {
 fn effective_preview_scale(path: &Path, preview_scale: PreviewScale) -> PreviewScale {
     if pdf_preview::is_pdf_file(path) {
         PreviewScale::FitToScreen
-    } else if is_text_preview(path) {
+    } else if is_text_preview(path) || archive_formats::is_archive_file(path) {
         PreviewScale::Percent(100)
     } else {
         preview_scale
@@ -2133,6 +2159,40 @@ fn load_text_preview(
     })
 }
 
+/// Load an archive's contents as a page of its own, the way a text preview is
+/// loaded: measured first, then painted into exactly the box the layout planned.
+fn load_archive_preview(
+    path: &Path,
+    width: u32,
+    height: u32,
+    dpi: u32,
+    options: ArchivePreviewOptions,
+    cancel: &AtomicBool,
+) -> Option<MediaData> {
+    let (pixels, width, height) = archive_preview::render(path, width, height, dpi, options)?;
+    if cancel.load(Ordering::Acquire) {
+        return None;
+    }
+
+    Some(MediaData {
+        frames: vec![ImageFrame {
+            pixels,
+            width,
+            height,
+            delay_ms: 0,
+        }],
+        shared_frames: None,
+        all_frames_loaded: None,
+        current_frame: 0,
+        last_frame_time: Instant::now(),
+        media_type: MediaType::Archive,
+        stream_cancel: None,
+        video_process: None,
+        loading_start: None,
+        text_state: None,
+    })
+}
+
 /// Extract video thumbnail using ffmpeg and create frames for preview
 fn load_video_thumbnail(
     path: &PathBuf,
@@ -2909,6 +2969,17 @@ fn load_media(
         return load_pdf_first_page(path, max_width, max_height, preview_scale);
     }
 
+    if archive_formats::is_archive_file(path) {
+        return load_archive_preview(
+            path,
+            max_width,
+            max_height,
+            dpi,
+            current_archive_options(),
+            &cancel,
+        );
+    }
+
     if text_formats::is_text_file(path) {
         return load_text_preview(path, max_width, max_height, dpi, current_text_options());
     }
@@ -3020,6 +3091,18 @@ fn media_dimensions(path: &PathBuf, bounds: ScreenBounds, dpi: u32) -> Option<(u
         let cap_width = (bounds.right - bounds.left).max(1) as u32;
         let cap_height = bounds.height().max(1) as u32;
         return text_preview::measure(path, cap_width, cap_height, dpi, current_text_options());
+    }
+
+    if archive_formats::is_archive_preview(path) {
+        let cap_width = (bounds.right - bounds.left).max(1) as u32;
+        let cap_height = bounds.height().max(1) as u32;
+        return archive_preview::measure(
+            path,
+            cap_width,
+            cap_height,
+            dpi,
+            current_archive_options(),
+        );
     }
 
     get_media_dimensions(path)
@@ -5012,11 +5095,12 @@ pub fn run_preview_window() {
                 match preview_msg {
                     PreviewMessage::Refresh => {
                         if latest_preview_msg.is_none() {
-                            // A text preview's colors are in the painted frame,
-                            // so a theme or Markdown switch rebuilds it from the
-                            // hover it came from; every other preview only needs
-                            // the frame composited again.
-                            match (current_media_is_text(), current_show.clone()) {
+                            // A painted preview's colors are in its frame — the
+                            // colors and glyphs of a text preview and the theme of
+                            // an archive listing alike — so a theme switch rebuilds
+                            // it from the hover it came from; every other preview
+                            // only needs the frame composited again.
+                            match (current_media_is_painted(), current_show.clone()) {
                                 (true, Some(show)) => latest_preview_msg = Some(show),
                                 _ => refresh_requested = true,
                             }
@@ -5183,11 +5267,13 @@ pub fn run_preview_window() {
                     let preview_w = layout.preview_w;
                     let preview_h = layout.preview_h;
 
-                    // A text preview is rendered at the size the layout planned
-                    // for it: text is never scaled to fill a box, so the planned
-                    // box is the box it draws into. Every other format is loaded
-                    // against the free space it may be scaled within.
-                    let (load_width, load_height) = if is_text_preview(&path) {
+                    // A text or archive preview is rendered at the size the
+                    // layout planned for it: both are painted at a fixed font
+                    // size, so the planned box is the box they draw into rather
+                    // than a space to be scaled within. Every other format is
+                    // loaded against the free space it may be scaled within.
+                    let painted = is_text_preview(&path) || archive_formats::is_archive_file(&path);
+                    let (load_width, load_height) = if painted {
                         (preview_w, preview_h)
                     } else {
                         (max_width, max_height)
