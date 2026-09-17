@@ -51,7 +51,7 @@ A preview lists what the archive holds — a summary line, then a tree of its fo
 
 ### Themes
 
-Text, code, and archive listings use Atom One Light (default), One Dark Pro, or any `.tmTheme` file placed in `%APPDATA%\rust-hover-preview\theme`. Archive listings follow the `Text Preview Font Size` setting.
+Text, code, and archive listings use Atom One Light (default), One Dark Pro, or any `.tmTheme` file placed in `%APPDATA%\rust-hover-preview\theme`. Archive listings follow the tray's **Text Preview → Font Size** setting.
 
 ## Installation
 
@@ -99,22 +99,25 @@ ffprobe -version
 
 ## System Tray Menu
 
-- **Enable Preview** — turn previews on or off
-- **Toggle Preview Types** — Images, Videos, Text, PDF, Archives: switch a kind of preview off without touching its file list
-- **Preview Delay** — Instant, Fast, Medium, Relaxed, Slow
-- **Same File Rehover Delay** — delay before the same file can preview again
-- **Video Volume** — Max, High, Medium, Low, Very Low, Mute
-- **Preview Position** — Follow Cursor or Best Position, and whether to keep previews off the hovered item's name
-- **Enable Text Preview Full Mode** — adds scrolling, selection, and copy; off by default
-- **Text Preview Theme** — Atom One Light, One Dark Pro, or custom `.tmTheme`
-- **Text Preview Font Size** — 100%–400%
-- **Markdown Preview** — Rendered or Highlighted Source
-- **Preview Scaling** — Fit to Screen or 25%–400%
-- **Transparent Background** — Transparent, Black, White, or Checkerboard
-- **Trigger Key (Alt)** — hold to disable or enable previews
+- **Preview** — turn previews on or off
+- **Preview Types** — Images, Videos, Text, PDF, Archives: switch a kind of preview off without touching its file list
+- **Background** — Transparent, Black, White, or Checkerboard
 - **Confirm File Type** — validate file content against extension
+- **Trigger Key (Alt)** — hold to disable or enable previews
+- **Text Preview**
+  - **Full Mode** — adds scrolling, selection, and copy; off by default
+  - **Theme** — Atom One Light, One Dark Pro, or custom `.tmTheme`
+  - **Font Size** — 100%–400%
+  - **Markdown** — Rendered or Source
+- **Timing**
+  - **Delay** — Instant, Fast, Medium, Relaxed, Slow
+  - **Rehover Delay** — delay before the same file can preview again
+- **Placement**
+  - **Position** — Follow Cursor or Best Position, and whether to keep previews off the hovered item's name
+  - **Scaling** — Fit to Screen or 25%–400%
+- **Volume** — Max, High, Medium, Low, Very Low, Mute
 - **Run at Startup** — add or remove the Windows startup entry
-- **Edit Config.ini** — open the configuration file
+- **Edit Config.ini** — open the configuration file; the item is named for the running version
 - **Exit** — close the app
 
 ## Configuration

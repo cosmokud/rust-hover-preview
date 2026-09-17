@@ -621,7 +621,7 @@ fn is_image_file(path: &PathBuf) -> bool {
 }
 
 /// Whether a preview may be shown for `path`: the kind of preview it would get,
-/// and whether that kind is switched on in the tray's `Toggle Preview Types`
+/// and whether that kind is switched on in the tray's `Preview Types`
 /// submenu.
 ///
 /// The kinds are asked the way the renderer asks them — a video first, then a
@@ -652,7 +652,7 @@ fn is_media_file(path: &PathBuf) -> bool {
 }
 
 /// Whether a preview is placed clear of the name of the file it is about, as the
-/// tray's `Preview Position` submenu and `config.ini` have it.
+/// tray's `Position` submenu and `config.ini` have it.
 fn avoid_filename_enabled() -> bool {
     CONFIG
         .lock()
