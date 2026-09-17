@@ -5,8 +5,8 @@
 //! itself is deliberately not read — it is a thumbnail-sized metafile or bitmap, a
 //! couple of hundred pixels across, and a preview drawn from one is either tiny or
 //! an enlargement of something that small — so a document whose page is not there
-//! yet is answered with a spinner in the shape its family's pages have, and the
-//! page itself the moment it arrives.
+//! yet is answered with a spinner in a box of its own, and the page itself the
+//! moment it arrives.
 //!
 //! Nothing here is kept in memory between hovers. What a preview is drawn from is
 //! a file on disk, and its size is read from that file, so a hover costs what
@@ -20,6 +20,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// The box a preview is placed in while its page is being rendered: just enough
 /// for the spinner, since there is nothing else to show yet. The page's own size
 /// is what the layout uses the moment it exists, and the window is moved to it.
+///
+/// The box is placed at the size it is rather than fitted to the display — there
+/// is nothing in it to enlarge — so a hover that is waiting on Office costs a
+/// corner of the screen and not the whole of it.
 pub(crate) const WAITING_BOX: u32 = 64;
 
 /// What a preview of this document would be drawn from.
