@@ -68,10 +68,12 @@ const WM_OFFICE_RENDER: u32 = WM_APP + 3;
 /// How long the engine is kept alive after its last render, so a folder of
 /// documents costs one Office start rather than one per file.
 const ENGINE_IDLE_SECS: u64 = 60;
-/// How long a file that failed to render is left alone. Office refused it for a
+/// How long a file that refused a page is left alone. Office refused it for a
 /// reason — a password, a repair dialog, a document in Protected View — and the
-/// answer will not be different a moment later, so the wait is the user's.
-const FAILURE_BACKOFF: Duration = Duration::from_secs(600);
+/// answer will not be different a moment later, so the wait is the user's. It is
+/// short enough that a refusal that was really the machine's — an Office that would
+/// not start, a license that had to be sorted out — is tried again before long.
+const FAILURE_BACKOFF: Duration = Duration::from_secs(120);
 /// How long a queued request is still worth running. A render can take seconds,
 /// and by the time a long one is done the pointer has moved on.
 const REQUEST_STALE_SECS: u64 = 30;
@@ -87,6 +89,24 @@ const MAX_OFFICE_PATH: usize = 240;
 /// the sheet holds.
 const PICTURE_MAX_ROWS: i32 = 40;
 const PICTURE_MAX_COLUMNS: i32 = 14;
+/// The most a worksheet's picture may be, in pixels.
+///
+/// What a preview can show is bounded by the display, and a report whose rows are
+/// tall — wrapped headings, merged cells — or whose columns are wide would
+/// otherwise be copied out at several million pixels: slow to copy, slow to write
+/// and slow to draw, all to show a corner no preview can hold. The window the
+/// picture is taken from is cut down until what it would draw fits these.
+const PICTURE_MAX_PIXELS_WIDTH: f64 = 1400.0;
+const PICTURE_MAX_PIXELS_HEIGHT: f64 = 1000.0;
+/// The least of a sheet still worth copying: less than this shows too little to be
+/// a preview of anything.
+const PICTURE_MIN_ROWS: i32 = 4;
+const PICTURE_MIN_COLUMNS: i32 = 3;
+/// How many times the window may be cut down before it is copied as it stands.
+const PICTURE_FIT_ATTEMPTS: usize = 8;
+/// Points to pixels, as Excel lays a sheet out at 96 DPI: a point is a 72nd of an
+/// inch.
+const PICTURE_PIXELS_PER_POINT: f64 = 96.0 / 72.0;
 /// The clipboard is shared with every other process: a look that cannot open it,
 /// or finds nothing in it, is retried this many times.
 const CLIPBOARD_ATTEMPTS: usize = 5;
@@ -97,9 +117,12 @@ const XL_BITMAP: i32 = 2;
 ///
 /// The work that can block is not only the render: quitting an engine is another
 /// COM call, and a dialog inside Office holds any of them for as long as it is up.
-/// An Office start, an export and the dialogs in between are seconds at worst, so
-/// a worker that has been inside one of them this long is not coming back.
-const WORKER_GIVE_UP: Duration = Duration::from_secs(30);
+/// An Office start, an export and the dialogs in between are seconds at worst, so a
+/// worker that has been inside one of them this long is not coming back. It is
+/// minutes rather than seconds because a very large document — half a gigabyte of
+/// Word, say — is slow to open without being stuck at all, and abandoning it would
+/// throw away the page it was about to cache.
+const WORKER_GIVE_UP: Duration = Duration::from_secs(120);
 /// Files remembered as having refused a page. The map is cleared wholesale when it
 /// is full, the way the app's other memories are: what a refusal costs is a wait,
 /// so a few of them are worth remembering and a list of them is not.
@@ -202,7 +225,12 @@ fn cache_limit_bytes() -> u64 {
     megabytes as u64 * 1024 * 1024
 }
 
-/// The page rendered for this version of the file, if one is waiting.
+/// The page rendered for this version of the file, if a file for one is there.
+///
+/// What the file *holds* is not asked here: whether a page can actually be read out
+/// of it is a question for the side that draws it (`office_preview`), whose threads
+/// may talk to the PDF engine — this one is apartment-threaded for Office, and a
+/// WinRT call waited on from here would deadlock.
 pub(crate) fn cached_render(source: &Path) -> Option<CachedRender> {
     let folder = cache_folder()?;
     let key = cache_key(source);
@@ -353,6 +381,22 @@ fn failed_recently(source: &Path) -> bool {
 
 // --------------------------------------------------------------- the worker
 
+/// What one request came to.
+///
+/// The difference between the last two matters: a document that refused a page is
+/// worth leaving alone for a while, while an engine that would not start is the
+/// machine's problem and says nothing about the document — so only a refusal is
+/// remembered against the file.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RenderOutcome {
+    /// The page is in the cache.
+    Rendered,
+    /// Office was asked and gave no page.
+    Refused,
+    /// There was no engine to ask: Office would not start, or the family has none.
+    NoEngine,
+}
+
 fn start_worker() {
     let Ok(_starting) = WORKER_STARTING.lock() else {
         return;
@@ -409,20 +453,28 @@ fn worker_main() {
             begin_work(generation);
             // A panic inside one document's render is that document's failure, not
             // the tier's: the thread goes on to the next hover.
-            let rendered = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 render_request(&mut engine, &request)
             }))
-            .unwrap_or(false);
+            .unwrap_or(RenderOutcome::Refused);
             end_work(generation);
             idle_since = Instant::now();
 
-            if rendered {
-                trim_cache();
-            } else {
-                remember_failure(&request.source);
+            match outcome {
+                RenderOutcome::Rendered => trim_cache(),
+                // A refusal is the document's, and is remembered against it so the
+                // next hover does not ask again straight away. An engine that would
+                // not start is not: that is the machine's business, and the file is
+                // worth asking about again.
+                RenderOutcome::Refused => remember_failure(&request.source),
+                RenderOutcome::NoEngine => {}
             }
 
-            preview_window::notify_office_render(&request.source, request.generation, rendered);
+            preview_window::notify_office_render(
+                &request.source,
+                request.generation,
+                outcome == RenderOutcome::Rendered,
+            );
             continue;
         }
 
@@ -520,32 +572,32 @@ fn wait_for_message(milliseconds: u32) {
     }
 }
 
-fn render_request(engine: &mut Option<Engine>, request: &RenderRequest) -> bool {
+fn render_request(engine: &mut Option<Engine>, request: &RenderRequest) -> RenderOutcome {
     let Some(app_kind) = app_for(&request.source) else {
-        return false;
+        return RenderOutcome::NoEngine;
     };
 
     // The gate every loader asks before it reads: a document whose content is
     // still in the cloud would be downloaded by the open, and the engine is not an
     // exception to that.
     if cloud_files::needs_download(&request.source) {
-        return false;
+        return RenderOutcome::Refused;
     }
 
     // What the file is *called* is what got it here; what it *is* is its own
     // header's answer, and a file that is not a document at all is not worth an
     // Office start.
     if container_kind(&request.source).is_none() {
-        return false;
+        return RenderOutcome::Refused;
     }
 
     // Another hover may have produced this page while this request waited.
     if cached_render(&request.source).is_some() {
-        return true;
+        return RenderOutcome::Rendered;
     }
 
     let Some(target) = cache_target(&request.source) else {
-        return false;
+        return RenderOutcome::Refused;
     };
 
     // A different family's engine is dropped first, which quits it: an engine is
@@ -555,14 +607,14 @@ fn render_request(engine: &mut Option<Engine>, request: &RenderRequest) -> bool 
         _ => {
             *engine = None;
             let Some(created) = Engine::create(app_kind) else {
-                return false;
+                return RenderOutcome::NoEngine;
             };
             *engine = Some(created);
         }
     }
 
     let Some(engine) = engine.as_ref() else {
-        return false;
+        return RenderOutcome::NoEngine;
     };
 
     let source = PreparedSource::new(&request.source);
@@ -573,7 +625,11 @@ fn render_request(engine: &mut Option<Engine>, request: &RenderRequest) -> bool 
 
     // What the renderer wrote is the answer, whatever it chose to write: the
     // cache says which file it was.
-    rendered && cached_render(&request.source).is_some()
+    if rendered && cached_render(&request.source).is_some() {
+        RenderOutcome::Rendered
+    } else {
+        RenderOutcome::Refused
+    }
 }
 
 // ------------------------------------------------------------------ engines
@@ -951,12 +1007,7 @@ fn copy_used_range_picture(workbook: &Object, target: &CacheTarget) -> bool {
         return false;
     };
 
-    let rows = rows.clamp(1, PICTURE_MAX_ROWS);
-    let columns = columns.clamp(1, PICTURE_MAX_COLUMNS);
-    let Some(range) = used
-        .call_args("Resize", &[VARIANT::from(rows), VARIANT::from(columns)])
-        .and_then(Object::from_variant)
-    else {
+    let Some(range) = picture_range(&used, rows, columns) else {
         return false;
     };
 
@@ -975,6 +1026,63 @@ fn copy_used_range_picture(workbook: &Object, target: &CacheTarget) -> bool {
     };
 
     write_bmp(&target.file("bmp"), &dib).is_ok()
+}
+
+/// The window of the used range the picture is taken from: its top-left corner, cut
+/// down until what it would draw fits the box a preview could ever show.
+///
+/// Only the range's own measurements are asked for — never its cells — so a sheet
+/// of a million rows costs the same as a small one, and what comes back is the
+/// corner a person would see first rather than a page of it.
+fn picture_range(used: &Object, rows: i32, columns: i32) -> Option<Object> {
+    let mut rows = rows.clamp(1, PICTURE_MAX_ROWS);
+    let mut columns = columns.clamp(1, PICTURE_MAX_COLUMNS);
+    let mut range = resize_range(used, rows, columns);
+
+    for _ in 0..PICTURE_FIT_ATTEMPTS {
+        let Some(current) = range.as_ref() else {
+            break;
+        };
+        let (Some(width), Some(height)) =
+            (point_size(current, "Width"), point_size(current, "Height"))
+        else {
+            break;
+        };
+
+        let over_width = width * PICTURE_PIXELS_PER_POINT > PICTURE_MAX_PIXELS_WIDTH;
+        let over_height = height * PICTURE_PIXELS_PER_POINT > PICTURE_MAX_PIXELS_HEIGHT;
+        if !over_width && !over_height {
+            break;
+        }
+
+        // Whichever side is over its budget gives way, down to the least of a sheet
+        // that is still worth copying.
+        if over_height && rows > PICTURE_MIN_ROWS {
+            rows = (rows / 2).max(PICTURE_MIN_ROWS);
+        } else if over_width && columns > PICTURE_MIN_COLUMNS {
+            columns = (columns / 2).max(PICTURE_MIN_COLUMNS);
+        } else {
+            break;
+        }
+
+        range = resize_range(used, rows, columns);
+    }
+
+    range
+}
+
+/// The top-left window of a range, `rows` by `columns` cells of it.
+fn resize_range(range: &Object, rows: i32, columns: i32) -> Option<Object> {
+    range
+        .call_args("Resize", &[VARIANT::from(rows), VARIANT::from(columns)])
+        .and_then(Object::from_variant)
+}
+
+/// One of a range's own measurements, in points.
+fn point_size(range: &Object, property: &str) -> Option<f64> {
+    range
+        .value(property)
+        .and_then(|value| f64::try_from(&value).ok())
 }
 
 /// How many items a collection holds.
@@ -1033,6 +1141,9 @@ fn read_clipboard_dib() -> Option<Vec<u8>> {
 /// What the clipboard held, written as a BMP file: a DIB is a `BITMAPINFO` and
 /// its pixels, and a BMP file is those bytes with a fourteen-byte header in front
 /// of them.
+///
+/// It is written beside its name and moved into place, so a reader never sees half
+/// a picture: a hover can land on a file whose render is being written.
 fn write_bmp(path: &Path, dib: &[u8]) -> std::io::Result<()> {
     let offset = dib_pixel_offset(dib).unwrap_or(54);
     let mut file = Vec::with_capacity(dib.len() + 14);
@@ -1043,7 +1154,9 @@ fn write_bmp(path: &Path, dib: &[u8]) -> std::io::Result<()> {
     file.extend_from_slice(&offset.to_le_bytes());
     file.extend_from_slice(dib);
 
-    std::fs::write(path, file)
+    let writing = path.with_extension("bmp.writing");
+    std::fs::write(&writing, file)?;
+    std::fs::rename(&writing, path)
 }
 
 /// Where a DIB's pixels start, past its header and its colour table.
@@ -1602,6 +1715,124 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
+    /// The engine's own lifecycle: one is started for each family, let go, and
+    /// nothing is left behind.
+    #[test]
+    #[ignore = "starts the installed Office"]
+    fn engine_lifecycle_probe() {
+        unsafe {
+            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        }
+
+        for app_kind in [OfficeApp::Word, OfficeApp::Excel, OfficeApp::PowerPoint] {
+            println!("\n--- {app_kind:?} ---");
+            println!("before: {:?}", processes_named(app_kind.image_name()));
+
+            let Some(engine) = Engine::create(app_kind) else {
+                println!("created: no");
+                continue;
+            };
+            println!(
+                "created: attached={} owned_pid={}",
+                engine.attached, engine.owned_pid
+            );
+
+            drop(engine);
+            std::thread::sleep(Duration::from_secs(3));
+            println!("after: {:?}", processes_named(app_kind.image_name()));
+        }
+    }
+
+    /// A cache file that cannot be read is not a page: the side that draws a preview
+    /// drops it, so the document is rendered again rather than answered with a
+    /// preview that blinks away every time it is hovered.
+    #[test]
+    fn forgets_a_cache_file_it_cannot_read() {
+        use crate::office_preview::{measure, source_kind, SourceKind};
+
+        let folder = std::env::temp_dir()
+            .join("rust-hover-preview-office-tests")
+            .join("cache");
+        std::fs::create_dir_all(&folder).expect("a test folder");
+        let source = folder.join("cached.docx");
+        std::fs::write(&source, b"a document").expect("a written document");
+
+        let cache = cache_folder().expect("a cache folder");
+        std::fs::create_dir_all(&cache).expect("a cache folder");
+        let rendered = cache.join(format!("{}.bmp", cache_key(&source)));
+
+        // A picture that can be read is a page, and its own size is what the layout
+        // places the preview by.
+        std::fs::write(&rendered, bmp_bytes(2, 2, [10, 20, 30, 255])).expect("a written page");
+        assert_eq!(measure(&source), Some((2, 2)), "a page that can be read");
+        assert_eq!(source_kind(&source), SourceKind::Raster);
+
+        // One that cannot is dropped, and the answer is that nothing is rendered yet.
+        std::fs::write(&rendered, b"not a picture at all").expect("a written broken page");
+        assert_eq!(source_kind(&source), SourceKind::None, "nothing to draw");
+        assert!(!rendered.exists(), "the broken file is gone");
+
+        let _ = std::fs::remove_file(&source);
+    }
+
+    /// A BMP holding one colour, written the way a workbook's picture is.
+    fn bmp_bytes(width: u32, height: u32, color: [u8; 4]) -> Vec<u8> {
+        let pixel_bytes = (width * height * 4) as u32;
+        let mut dib = Vec::new();
+        dib.extend_from_slice(&40u32.to_le_bytes());
+        dib.extend_from_slice(&(width as i32).to_le_bytes());
+        dib.extend_from_slice(&(height as i32).to_le_bytes());
+        dib.extend_from_slice(&1u16.to_le_bytes());
+        dib.extend_from_slice(&32u16.to_le_bytes());
+        dib.extend_from_slice(&0u32.to_le_bytes());
+        dib.extend_from_slice(&pixel_bytes.to_le_bytes());
+        for _ in 0..4 {
+            dib.extend_from_slice(&0i32.to_le_bytes());
+        }
+        for _ in 0..(width * height) {
+            dib.extend_from_slice(&color);
+        }
+
+        let mut file = Vec::new();
+        file.extend_from_slice(b"BM");
+        file.extend_from_slice(&((dib.len() + 14) as u32).to_le_bytes());
+        file.extend_from_slice(&0u16.to_le_bytes());
+        file.extend_from_slice(&0u16.to_le_bytes());
+        file.extend_from_slice(&54u32.to_le_bytes());
+        file.extend_from_slice(&dib);
+        file
+    }
+
+    /// A file that was downloaded carries a zone identifier, which is what puts
+    /// Word and Excel into Protected View — where a page cannot be exported — so it
+    /// is rendered from a copy made without it. A file that was never downloaded
+    /// must not be copied: a large document is expensive to copy for nothing.
+    #[test]
+    fn sees_a_zone_identifier() {
+        // A folder of this module's own: the tests run beside each other, and one
+        // of them clearing its fixtures must not take another's with it.
+        let folder = std::env::temp_dir()
+            .join("rust-hover-preview-office-tests")
+            .join("zones");
+        std::fs::create_dir_all(&folder).expect("a test folder");
+
+        let path = folder.join("marked.docx");
+        std::fs::write(&path, b"a document").expect("a written document");
+        let plain = path.to_string_lossy().to_string();
+        assert!(!has_zone_identifier(&plain), "nothing marks it yet");
+
+        // The stream Windows writes beside a downloaded file, written the way any
+        // process could write it.
+        std::fs::write(
+            format!("{plain}:Zone.Identifier"),
+            b"[ZoneTransfer]\r\nZoneId=3\r\n",
+        )
+        .expect("a written stream");
+        assert!(has_zone_identifier(&plain), "the stream is seen");
+
+        let _ = std::fs::remove_file(&path);
+    }
+
     /// Renders documents that are already on disk, named in `RHP_OFFICE_PROBE`
     /// (separated by `;`), through the real code path and reports what happened.
     ///
@@ -1645,8 +1876,12 @@ mod tests {
             };
 
             let started = Instant::now();
-            let rendered = render_request(&mut engine, &request);
-            println!("rendered: {rendered} in {:?}", started.elapsed());
+            let outcome = render_request(&mut engine, &request);
+            println!(
+                "rendered: {} in {:?}",
+                outcome == RenderOutcome::Rendered,
+                started.elapsed()
+            );
             match engine.as_ref() {
                 Some(engine) => println!(
                     "engine: attached={} owned_pid={}",
@@ -1671,24 +1906,18 @@ mod tests {
 
             // The half a hover does after the render: measure it, then draw it —
             // on a thread of its own, in a multithreaded apartment, which is where
-            // the app draws.
-            println!("measured: {:?}", crate::office_preview::measure(&path));
-            if let Some(cached) = cached_render(&path) {
-                println!("dimensions: {:?}", image::image_dimensions(&cached.path));
-                match image::open(&cached.path) {
-                    Ok(image) => println!("decoded: {}x{}", image.width(), image.height()),
-                    Err(error) => println!("decode failed: {error}"),
-                }
-            }
-
+            // the app does both.
             let drawing = path.clone();
-            let drawn = std::thread::spawn(move || {
+            let (measured, drawn) = std::thread::spawn(move || {
                 crate::pdf_preview::initialize_apartment();
-                crate::office_preview::render(&drawing, 1200, 900, None)
+                let measured = crate::office_preview::measure(&drawing);
+                let drawn = crate::office_preview::render(&drawing, 1200, 900, None);
+                (measured, drawn)
             })
             .join()
-            .ok()
-            .flatten();
+            .expect("the drawing thread");
+
+            println!("measured: {measured:?}");
             match drawn {
                 Some((pixels, width, height)) => {
                     println!("drawn: {width}x{height} ({} pixels)", pixels.len() / 4)
@@ -1838,8 +2067,12 @@ mod tests {
                 requested: Instant::now(),
             };
             let started = Instant::now();
-            let rendered = render_request(&mut engine, &request);
-            println!("rendered: {rendered} in {:?}", started.elapsed());
+            let outcome = render_request(&mut engine, &request);
+            println!(
+                "rendered: {} in {:?}",
+                outcome == RenderOutcome::Rendered,
+                started.elapsed()
+            );
 
             // What the engine made of the instance: an attached one is the user's
             // and is never hidden, quit or ended; one this app started is.
@@ -1851,7 +2084,7 @@ mod tests {
                 None => println!("engine: none"),
             }
 
-            if !rendered {
+            if outcome != RenderOutcome::Rendered {
                 println!(
                     "last failure: {}",
                     last_failure().unwrap_or_else(|| "none recorded".to_string())
@@ -1859,12 +2092,12 @@ mod tests {
             }
             match cached_render(&path) {
                 Some(cached) => println!(
-                    "cache file: {} ({} bytes, source {:?})",
+                    "cache file: {} ({} bytes, {:?})",
                     cached.path.display(),
                     std::fs::metadata(&cached.path)
                         .map(|m| m.len())
                         .unwrap_or(0),
-                    crate::office_preview::source_kind(&path)
+                    cached.kind
                 ),
                 None => println!("cache file: none"),
             }
