@@ -50,7 +50,7 @@ A preview lists what the archive holds — a summary line, then a tree of its fo
 
 `doc`, `docm`, `docx`, `dot`, `dotm`, `dotx`, `xls`, `xlsb`, `xlsm`, `xlsx`, `xlt`, `xltm`, `xltx`, `ppt`, `pptm`, `pptx`, `pps`, `ppsm`, `ppsx`, `pot`, `potm`, `potx`.
 
-A hover shows the document's page, rendered by the Word, Excel or PowerPoint installed on the machine and cached under `%LOCALAPPDATA%\rust-hover-preview\cache\office`. Nothing is launched until the pointer has rested on the document for two seconds — a sweep across a folder starts no engine — and until the page arrives the preview is a small spinner of its own, which goes up as soon as the hover finds there is nothing drawn yet and sits at the pointer's own corner — flush against it, in whichever of the four the screen has room for — while the render runs, until the page replaces it. The page fills the room the display has, the way a PDF's does; a preview scale below 100% shows it smaller. Once a document has been rendered, every later hover of it is instant, and the engine is kept warm for a minute so a folder of documents costs one Office start rather than one per file.
+A hover shows the document's page, rendered by the Word, Excel or PowerPoint installed on the machine. Nothing is launched until the pointer has rested on the document for two seconds — a sweep across a folder starts no engine — and until the page arrives the preview is a small spinner of its own, which goes up as soon as the hover finds there is nothing drawn yet and sits at the pointer's own corner — flush against it, in whichever of the four the screen has room for — while the render runs, until the page replaces it. The page fills the room the display has, the way a PDF's does; a preview scale below 100% shows it smaller. Nothing is written to disk: the page is held in memory, and **Cache → Office** decides how much of it is kept between hovers. At the default of `0 MB` every hover renders again, and the engine is kept warm for a minute so a folder of documents costs one Office start rather than one per file; a size of `64 MB` and up keeps the pages of the folders you hover most, so their next hover comes straight up.
 
 What a document saves inside itself is deliberately not used: the picture Office puts in a file is a thumbnail-sized metafile or bitmap, a couple of hundred pixels across, and a preview drawn from one is either tiny or an enlargement of something that small. The page is the whole of it.
 
@@ -105,11 +105,11 @@ ffprobe -version
 
 ## Optional: Enable Office Page Rendering
 
-A Word, Excel or PowerPoint document previews as the page the installed Office draws for it, in the background, and what has been drawn is cached — so the second hover of a document is instant. Nothing beyond Office itself is needed, no document is ever saved or changed, and no engine is started until the pointer has rested on a document for two seconds: a sweep across a folder launches nothing. The first hover of a document costs the rest plus a few seconds while Office starts; the documents after it cost a fraction of a second each while the engine stays warm, and it is let go a minute after the last one.
+A Word, Excel or PowerPoint document previews as the page the installed Office draws for it, in the background. Nothing beyond Office itself is needed, no document is ever saved or changed, and no engine is started until the pointer has rested on a document for two seconds: a sweep across a folder launches nothing. The first hover of a document costs the rest plus a few seconds while Office starts; the documents after it cost a fraction of a second each while the engine stays warm, and it is let go a minute after the last one. A page that has been drawn can be kept in memory for the next hover — **Cache → Office** sizes that, and it holds nothing by default.
 
 Excel's page export goes through the print pipeline, so it needs a printer installed on the machine; with none, a workbook is previewed from a picture of its used range instead. A document Office refuses to open — a password, an unreadable file — is answered with no preview.
 
-Turn it off under **Office Preview → Render With Office** in the tray, or with `office_render_enabled=false` in `config.ini`. What has been rendered is kept under `%LOCALAPPDATA%\rust-hover-preview\cache\office` up to `office_cache_mb` (256 MB by default, `0` for no cache — which also switches the tier off, since a page that cannot be kept is not worth an Office start).
+Turn it off under **Preview Types → Office** in the tray, or with `office_preview_enabled=false` in `config.ini`. A rendered page is held in memory and never written to disk, and **Cache → Office** (`office_cache_mb`, `0` by default) is how much may be kept between hovers: at `0` nothing is kept, so every hover draws the page again, and any size up to `2 GB` keeps the pages you have already hovered.
 
 ## Usage
 
@@ -130,8 +130,6 @@ Turn it off under **Office Preview → Render With Office** in the tray, or with
   - **Theme** — Atom One Light, One Dark Pro, or custom `.tmTheme`
   - **Font Size** — 100%–400%
   - **Markdown** — Rendered or Source
-- **Office Preview**
-  - **Render With Office** — let the installed Office draw page 1 of a document that saved no thumbnail of itself; on by default
 - **Timing**
   - **Delay** — Instant, Fast, Medium, Relaxed, Slow
   - **Rehover Delay** — delay before the same file can preview again
@@ -139,6 +137,9 @@ Turn it off under **Office Preview → Render With Office** in the tray, or with
   - **Position** — Follow Cursor or Best Position, and whether to keep previews off the hovered item's name
   - **Scaling** — Fit to Screen or 25%–400%
 - **Volume** — Max, High, Medium, Low, Very Low, Mute
+- **Cache**
+  - **Image** — how much memory decoded image frames may be kept in between hovers, `0 MB` (default) to `2 GB`
+  - **Office** — how much memory rendered Office pages may be kept in between hovers, `0 MB` (default) to `2 GB`
 - **Run at Startup** — add or remove the Windows startup entry
 - **Config.ini** — open the configuration file; the item is named for the running version
 - **Exit** — close the app
@@ -167,8 +168,8 @@ text_preview_enabled=true
 pdf_preview_enabled=true
 archive_preview_enabled=true
 office_preview_enabled=true
-office_render_enabled=true
-office_cache_mb=256
+office_cache_mb=0
+image_cache_mb=0
 trigger_key=alt
 trigger_key_mode=disable
 confirm_file_type=false
@@ -203,7 +204,8 @@ Key settings:
 - `text_font_scale` — percentage from 1 to 1000; default is `125`. Archive listings follow it too.
 - `extensions` / `names` — text-preview gates. Extensions are written without dots; names match extensionless files.
 - `archive_extensions` — the archive-preview gate, under `[archive]`. Entries are written without dots, and an entry with a dot in it (`tar.gz`) is matched against the end of the file name.
-- `office_render_enabled` — whether the installed Office may draw a document's page in the background; `office_cache_mb` bounds what those pages take on disk, and `0` switches both off.
+- `image_cache_mb` — how much memory decoded image frames may be kept in, in megabytes, so hovering back over a folder does not decode the same pictures again; `0` (the default) holds nothing, and the value is capped at `2048`.
+- `office_cache_mb` — the same for the pages Office rendered, capped at `2048`. `0` holds nothing, but a page is still rendered for the hover that asks for it: this size is only how much is kept between hovers.
 - `office_extensions` — the Office-preview gate, under `[office]`, written without dots.
 - `trigger_key` / `trigger_key_mode` — key (`alt`, `ctrl`, `shift`, `win`) and mode (`disable` or `enable`).
 - `follow_cursor` — `true` for Follow Cursor, `false` for Best Position.

@@ -49,6 +49,11 @@ fn main() {
     configure_dpi_awareness();
     sync_startup_setting();
 
+    // A page is held in memory and nowhere else, so whatever an earlier version left
+    // in the cache folder — and whatever a render that was ended mid-flight left in
+    // the temp folder — is dropped before anything starts writing there again.
+    office_render::discard_old_disk_cache();
+
     // Initialize COM
     unsafe {
         let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
