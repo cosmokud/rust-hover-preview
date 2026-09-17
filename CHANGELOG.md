@@ -12,6 +12,7 @@
 - Office previews are drawn from the rendered page, not from the thumbnail a document saves inside itself.
 - Nothing about an Office preview is kept in memory between hovers.
 - A page is asked for in the box its family's pages have, and while it is on its way the preview is the spinner alone.
+- A PDF page and a rendered Office page are still sized from fit-to-screen, but a preview scale below `100%` now reduces that size instead of being ignored. `100%` and above are the fit-to-screen size they have always been, and image previews are unchanged.
 - A page arriving for a preview that is already on screen replaces it without the preview being taken down first.
 - A worksheet's picture is copied out only as far as a preview can show it, and a large one is shrunk with the fast filter.
 - A worksheet's picture is asked for again if Excel refuses the first ask, and a page that cannot be read is rendered again rather than trusted.
@@ -25,6 +26,7 @@
 - An Office instance that gives no page — one whose license has run out, say — is dropped and the render is asked of a fresh one, so an instance that has stopped answering no longer costs every document hovered after it.
 - The picture a workbook is copied out as is taken off the clipboard.
 - A file that is not a document no longer starts an Office engine.
+- The spinner a document shows while its page is being rendered is the small box it was meant to be, instead of a square the size of the display.
 
 ## [0.2.5] - 2026-09-17
 

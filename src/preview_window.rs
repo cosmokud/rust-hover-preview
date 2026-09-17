@@ -1019,7 +1019,7 @@ struct OfficeRenderDue {
     path: PathBuf,
     generation: u64,
     at: Instant,
-    /// The box the layout planned, which is what a slide is exported at.
+    /// The box the page is asked for in, which is what a slide is exported at.
     width: u32,
     height: u32,
 }
@@ -1067,8 +1067,10 @@ fn arm_office_render(
 ///
 /// A PDF page is a vector, so the engine draws it at whatever size it is asked
 /// for and a larger preview is sharper text rather than an enlarged raster. The
-/// configured scale could only hold that back, so a PDF always takes the space
-/// the display allows.
+/// room the display has is therefore the page's size, and a configured percentage
+/// below `100%` reduces that size rather than being ignored — the page is no
+/// longer enlarged by it either, since enlarging a page is what fit-to-screen
+/// already does (see `fit_reduced`).
 ///
 /// Text is the opposite case: it is drawn at a fixed, display-scaled font size,
 /// so enlarging it would only stretch the window around text that stays the same
@@ -1079,7 +1081,7 @@ fn arm_office_render(
 /// Every other format keeps the configured scale.
 fn effective_preview_scale(path: &Path, preview_scale: PreviewScale) -> PreviewScale {
     if pdf_preview::is_pdf_file(path) {
-        PreviewScale::FitToScreen
+        fit_reduced(preview_scale)
     } else if is_text_preview(path) || archive_formats::is_archive_file(path) {
         PreviewScale::Percent(100)
     } else if office_formats::is_office_file(path) {
@@ -1088,13 +1090,39 @@ fn effective_preview_scale(path: &Path, preview_scale: PreviewScale) -> PreviewS
         // answered with where no printer can export a page is the exception: it
         // is only as good as the pixels it holds, so it follows the configured
         // scale the way an image does rather than being enlarged to fit.
-        if office_preview::source_kind(path).may_be_enlarged() {
-            PreviewScale::FitToScreen
-        } else {
-            preview_scale
+        match office_preview::source_kind(path) {
+            // Nothing to draw and a page on the way: what is on screen is the
+            // spinner in a box of its own, and a box that small is placed at the
+            // size it is rather than fitted to the display the way a page is.
+            office_preview::SourceKind::None => PreviewScale::Percent(100),
+            source => {
+                if source.may_be_enlarged() {
+                    fit_reduced(preview_scale)
+                } else {
+                    preview_scale
+                }
+            }
         }
     } else {
         preview_scale
+    }
+}
+
+/// The room the display has, reduced to the configured share of it where the
+/// configuration asks for less than the whole of it.
+///
+/// A source drawn at any size it is asked for — a PDF page, a page Office
+/// rendered — is laid out at fit-to-screen, because the display's room is free
+/// quality there. A configured percentage at or above `100%` asks for at least
+/// that room and is answered with it, so those settings are one setting for such
+/// a source; one below `100%` is a size the user picked, and is answered by
+/// reducing the fitted size — `50%` halves it — rather than being ignored.
+fn fit_reduced(preview_scale: PreviewScale) -> PreviewScale {
+    match preview_scale {
+        PreviewScale::Percent(percent) if percent < 100 => {
+            PreviewScale::FitToScreenReduced(percent)
+        }
+        _ => PreviewScale::FitToScreen,
     }
 }
 
@@ -1221,6 +1249,33 @@ fn blend_pixel_over(px: &[u8], dst: &mut [u8], bg_b: u32, bg_g: u32, bg_r: u32) 
     dst[3] = 255;
 }
 
+/// The scale a preview of `orig` size takes inside a room, for the scale the
+/// configuration asked for.
+///
+/// One function answers it for every use — the size a preview is given, and the
+/// room the position modes choose between — so the scale the layout plans and the
+/// scale the renderer draws at cannot come apart.
+fn scale_in_room(
+    room_width: f32,
+    room_height: f32,
+    orig_width: f32,
+    orig_height: f32,
+    preview_scale: PreviewScale,
+) -> f32 {
+    let fit_scale = (room_width / orig_width).min(room_height / orig_height);
+
+    // A requested percentage is honored when it fits; anything larger than the
+    // available area falls back to the fit scale so nothing is ever clipped. A
+    // scale that is a reduction of the fit is a share *of* it, and is applied
+    // after it.
+    let scale = match preview_scale.target_scale() {
+        Some(target_scale) => target_scale.min(fit_scale),
+        None => fit_scale,
+    };
+
+    scale * preview_scale.fit_share()
+}
+
 /// Scale media dimensions to the requested preview scale while never exceeding
 /// `max_width`/`max_height`, so the preview always stays fully inside the screen.
 fn scale_dimensions(
@@ -1230,15 +1285,13 @@ fn scale_dimensions(
     max_height: u32,
     preview_scale: PreviewScale,
 ) -> (u32, u32) {
-    let fit_scale =
-        (max_width as f32 / orig_width as f32).min(max_height as f32 / orig_height as f32);
-
-    // A requested percentage is honored when it fits; anything larger than the
-    // available area falls back to the fit scale so nothing is ever clipped.
-    let scale = match preview_scale.target_scale() {
-        Some(target_scale) => target_scale.min(fit_scale),
-        None => fit_scale,
-    };
+    let scale = scale_in_room(
+        max_width as f32,
+        max_height as f32,
+        orig_width as f32,
+        orig_height as f32,
+        preview_scale,
+    );
 
     // Rounded so a fit scale lands on the exact available size, then clamped so
     // float error can never push the preview past the screen edge.
@@ -4749,7 +4802,6 @@ fn compute_mouse_layout(
 ) -> Option<PreviewLayout> {
     let offset = 20;
     let (orig_w, orig_h) = (orig_dims.0 as i32, orig_dims.1 as i32);
-    let desired_scale = preview_scale.target_scale().unwrap_or(f32::INFINITY);
 
     if follow_cursor {
         let quadrants = [
@@ -4786,9 +4838,13 @@ fn compute_mouse_layout(
             if avail_w <= 0 || avail_h <= 0 {
                 continue;
             }
-            let scale_x = avail_w as f32 / orig_w as f32;
-            let scale_y = avail_h as f32 / orig_h as f32;
-            let scale = scale_x.min(scale_y).min(desired_scale);
+            let scale = scale_in_room(
+                avail_w as f32,
+                avail_h as f32,
+                orig_w as f32,
+                orig_h as f32,
+                preview_scale,
+            );
             if scale > best_scale {
                 best_scale = scale;
                 best_quadrant = i;
@@ -4850,13 +4906,20 @@ fn compute_mouse_layout(
         let right_width = bounds.right - cursor_x - offset;
         let full_height = bounds.height();
 
-        let left_scale_x = left_width as f32 / orig_w as f32;
-        let left_scale_y = full_height as f32 / orig_h as f32;
-        let left_scale = left_scale_x.min(left_scale_y).min(desired_scale);
-
-        let right_scale_x = right_width as f32 / orig_w as f32;
-        let right_scale_y = full_height as f32 / orig_h as f32;
-        let right_scale = right_scale_x.min(right_scale_y).min(desired_scale);
+        let left_scale = scale_in_room(
+            left_width as f32,
+            full_height as f32,
+            orig_w as f32,
+            orig_h as f32,
+            preview_scale,
+        );
+        let right_scale = scale_in_room(
+            right_width as f32,
+            full_height as f32,
+            orig_w as f32,
+            orig_h as f32,
+            preview_scale,
+        );
 
         let (use_left, max_width, max_height) = if left_scale > right_scale && left_width > 0 {
             (true, left_width.max(1) as u32, full_height as u32)
@@ -4940,7 +5003,6 @@ fn compute_keyboard_layout(
     let (item_left, item_top, item_right, item_bottom) = item_rect;
     let gap = 10;
     let (orig_w, orig_h) = (orig_dims.0 as i32, orig_dims.1 as i32);
-    let desired_scale = preview_scale.target_scale().unwrap_or(f32::INFINITY);
 
     // An item far wider than it is tall and at least half the display across is a
     // row of the list — Content view draws every item that way, as a box as wide as
@@ -5073,9 +5135,13 @@ fn compute_keyboard_layout(
             if avail_w <= 0 || avail_h <= 0 {
                 continue;
             }
-            let scale_x = avail_w as f32 / orig_w as f32;
-            let scale_y = avail_h as f32 / orig_h as f32;
-            let scale = scale_x.min(scale_y).min(desired_scale);
+            let scale = scale_in_room(
+                avail_w as f32,
+                avail_h as f32,
+                orig_w as f32,
+                orig_h as f32,
+                preview_scale,
+            );
             if scale > best_scale {
                 best_scale = scale;
                 best_quadrant = i;
@@ -5161,13 +5227,20 @@ fn compute_keyboard_layout(
 
         let full_height = bounds.height();
 
-        let left_scale_x = left_width as f32 / orig_w as f32;
-        let left_scale_y = full_height as f32 / orig_h as f32;
-        let left_scale = left_scale_x.min(left_scale_y).min(desired_scale);
-
-        let right_scale_x = right_width as f32 / orig_w as f32;
-        let right_scale_y = full_height as f32 / orig_h as f32;
-        let right_scale = right_scale_x.min(right_scale_y).min(desired_scale);
+        let left_scale = scale_in_room(
+            left_width as f32,
+            full_height as f32,
+            orig_w as f32,
+            orig_h as f32,
+            preview_scale,
+        );
+        let right_scale = scale_in_room(
+            right_width as f32,
+            full_height as f32,
+            orig_w as f32,
+            orig_h as f32,
+            preview_scale,
+        );
 
         let (use_left, max_width, max_height) = if left_scale > right_scale && left_width > 0 {
             (true, left_width.max(1) as u32, full_height as u32)
@@ -5448,13 +5521,11 @@ pub fn run_preview_window() {
                             // Nothing to draw yet and a page on the way: the
                             // pending load stays armed, so the spinner appears
                             // at its delay instead of the preview being dropped
-                            // and the page having nowhere to land.
-                            let (width, height) = pending_load
-                                .as_ref()
-                                .map(|pl| (pl.width, pl.height))
-                                .unwrap_or_else(|| {
-                                    office_formats::default_page_size(&result.path)
-                                });
+                            // and the page having nowhere to land. The page is
+                            // asked for in the box its family's pages have: the
+                            // spinner's own box is a spinner's, and says nothing
+                            // about how large the page will be drawn.
+                            let (width, height) = office_formats::default_page_size(&result.path);
                             arm_office_render(
                                 &mut office_render_due,
                                 &result.path,
@@ -6117,6 +6188,124 @@ mod tests {
             20,
             bounds,
         )
+    }
+
+    /// A page — a PDF's, or one Office rendered — is drawn at the room the display
+    /// has, because the room is free quality there. Every setting at or above
+    /// `100%` asks for at least that room, so they are one setting for a page; only
+    /// a setting below it is a size the user picked, and it is answered by
+    /// reducing the fitted size rather than by ignoring it.
+    #[test]
+    fn a_page_takes_the_room_the_display_has() {
+        let pdf = PathBuf::from(r"C:\docs\report.pdf");
+
+        for configured in [
+            PreviewScale::FitToScreen,
+            PreviewScale::Percent(100),
+            PreviewScale::Percent(200),
+            PreviewScale::Percent(400),
+        ] {
+            assert_eq!(
+                effective_preview_scale(&pdf, configured),
+                PreviewScale::FitToScreen
+            );
+        }
+
+        assert_eq!(
+            effective_preview_scale(&pdf, PreviewScale::Percent(50)),
+            PreviewScale::FitToScreenReduced(50)
+        );
+        assert_eq!(
+            effective_preview_scale(&pdf, PreviewScale::Percent(25)),
+            PreviewScale::FitToScreenReduced(25)
+        );
+    }
+
+    /// A share of the fitted size is not a share of the media's own size, and the
+    /// difference is the point: `50%` is half the media — the same size whatever
+    /// room it has — while a reduced fit is half of what the room would have
+    /// allowed, so it grows with the room.
+    #[test]
+    fn reduces_the_fitted_size_by_the_configured_share() {
+        // 800 by 600 in a 400 by 300 room: the fit is half the media's size, so
+        // half of the fit is a quarter of it.
+        assert_eq!(
+            scale_dimensions(800, 600, 400, 300, PreviewScale::FitToScreen),
+            (400, 300)
+        );
+        assert_eq!(
+            scale_dimensions(800, 600, 400, 300, PreviewScale::FitToScreenReduced(50)),
+            (200, 150)
+        );
+        assert_eq!(
+            scale_dimensions(800, 600, 400, 300, PreviewScale::FitToScreenReduced(25)),
+            (100, 75)
+        );
+
+        // The same media in a room that allows all of it: 50% of the media is 400
+        // by 300, while half of the fitted 800 by 600 is not.
+        assert_eq!(
+            scale_dimensions(800, 600, 1900, 1000, PreviewScale::Percent(50)),
+            (400, 300)
+        );
+        assert_eq!(
+            scale_dimensions(800, 600, 1900, 1000, PreviewScale::FitToScreenReduced(50)),
+            (667, 500)
+        );
+    }
+
+    /// A document whose page has not been rendered yet is a spinner, and the
+    /// spinner is placed at its own size: fitted to the display it would be a
+    /// screen-sized square with a spinner drawn in the middle of it.
+    #[test]
+    fn a_document_with_no_page_yet_waits_in_the_spinners_own_box() {
+        let waiting = PathBuf::from(r"C:\docs\not-rendered-yet.docx");
+        let scale = effective_preview_scale(&waiting, PreviewScale::Percent(400));
+
+        assert_eq!(scale, PreviewScale::Percent(100));
+        assert_eq!(
+            scale_dimensions(
+                office_preview::WAITING_BOX,
+                office_preview::WAITING_BOX,
+                1920,
+                1080,
+                scale,
+            ),
+            (office_preview::WAITING_BOX, office_preview::WAITING_BOX)
+        );
+    }
+
+    /// The layout applies the reduction the same way the size it plans does, so a
+    /// preview placed for a page is the reduction of the one fit-to-screen would
+    /// have placed — not the room's own size with a percentage applied to it
+    /// somewhere else.
+    #[test]
+    fn a_layout_reduces_a_page_by_the_configured_share() {
+        let full = compute_mouse_layout(
+            300,
+            300,
+            (800, 600),
+            false,
+            None,
+            PreviewScale::FitToScreen,
+            bounds(),
+        )
+        .expect("a placed page");
+        let half = compute_mouse_layout(
+            300,
+            300,
+            (800, 600),
+            false,
+            None,
+            PreviewScale::FitToScreenReduced(50),
+            bounds(),
+        )
+        .expect("a placed page");
+
+        assert_eq!(
+            (full.preview_w, full.preview_h),
+            (half.preview_w * 2, half.preview_h * 2)
+        );
     }
 
     #[test]

@@ -116,6 +116,15 @@ fn sanitize_preview_scale_percent(value: u32) -> u32 {
 pub enum PreviewScale {
     /// Scale as large as the available display area allows.
     FitToScreen,
+    /// Scale as large as the available display area allows, then reduced to this
+    /// share of it.
+    ///
+    /// This is a scale the app derives rather than one the configuration holds: a
+    /// source that is drawn at any size it is asked for — a PDF page, a page
+    /// Office rendered — is laid out at fit-to-screen, because the display's room
+    /// is free quality there, and a configured percentage below `100` is answered
+    /// by reducing that size rather than ignored.
+    FitToScreenReduced(u32),
     /// Scale by a percentage of the media's native size.
     Percent(u32),
 }
@@ -124,6 +133,10 @@ impl PreviewScale {
     pub fn as_str(self) -> String {
         match self {
             Self::FitToScreen => "fit".to_string(),
+            // Never written: the reduced fit is derived from the configured scale,
+            // and what a file would be read back as is the plain fit it is a share
+            // of.
+            Self::FitToScreenReduced(_) => "fit".to_string(),
             Self::Percent(percent) => sanitize_preview_scale_percent(percent).to_string(),
         }
     }
@@ -132,8 +145,19 @@ impl PreviewScale {
     /// should use the largest scale the display area allows.
     pub fn target_scale(self) -> Option<f32> {
         match self {
-            Self::FitToScreen => None,
+            Self::FitToScreen | Self::FitToScreenReduced(_) => None,
             Self::Percent(percent) => Some(sanitize_preview_scale_percent(percent) as f32 / 100.0),
+        }
+    }
+
+    /// The share of the fitted size this scale asks for: `1.0` where the preview
+    /// takes the room it is given, less where it is a reduction of that room.
+    pub fn fit_share(self) -> f32 {
+        match self {
+            Self::FitToScreenReduced(percent) => {
+                sanitize_preview_scale_percent(percent) as f32 / 100.0
+            }
+            _ => 1.0,
         }
     }
 
