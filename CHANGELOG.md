@@ -37,6 +37,7 @@
 - The picture a workbook is copied out as is taken off the clipboard.
 - A file that is not a document no longer starts an Office engine.
 - The spinner a document shows while its page is being rendered is the small box it was meant to be, instead of a square the size of the display.
+- A video replaced in place is measured and cropped again, instead of being previewed by the answer about the file it used to be: the geometry cache is keyed by the file's version as well as its path.
 
 ## [0.2.5] - 2026-09-17
 

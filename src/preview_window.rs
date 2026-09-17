@@ -242,7 +242,17 @@ static NOACTIVATE_MONITOR_STARTED: AtomicBool = AtomicBool::new(false);
 static RESUME_FROM_SLEEP: AtomicBool = AtomicBool::new(false);
 
 static CURRENT_MEDIA: Lazy<Mutex<Option<MediaData>>> = Lazy::new(|| Mutex::new(None));
-static VIDEO_GEOMETRY_CACHE: Lazy<Mutex<HashMap<PathBuf, VideoGeometry>>> =
+/// What a probed geometry is only valid for: the file and the version of it that
+/// was probed, so a video replaced in place is probed again rather than cropped and
+/// sized by the answer about the file it used to be — the same rule every other
+/// held picture in this module follows.
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct VideoGeometryKey {
+    path: PathBuf,
+    version: FileVersion,
+}
+
+static VIDEO_GEOMETRY_CACHE: Lazy<Mutex<HashMap<VideoGeometryKey, VideoGeometry>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
 #[derive(Clone)]
@@ -2654,9 +2664,16 @@ fn best_valid_crop(
     best.map(|(crop, _)| crop)
 }
 
+/// The geometry a video preview is sized and cropped by, from the cache when the
+/// file and its version have been probed before.
 fn get_video_geometry(path: &PathBuf) -> Option<VideoGeometry> {
+    let key = VideoGeometryKey {
+        path: path.clone(),
+        version: file_version(path),
+    };
+
     if let Ok(cache) = VIDEO_GEOMETRY_CACHE.lock() {
-        if let Some(cached) = cache.get(path) {
+        if let Some(cached) = cache.get(&key) {
             return Some(*cached);
         }
     }
@@ -2693,10 +2710,10 @@ fn get_video_geometry(path: &PathBuf) -> Option<VideoGeometry> {
     };
 
     if let Ok(mut cache) = VIDEO_GEOMETRY_CACHE.lock() {
-        if !cache.contains_key(path) && cache.len() >= VIDEO_GEOMETRY_CACHE_MAX_ENTRIES {
+        if !cache.contains_key(&key) && cache.len() >= VIDEO_GEOMETRY_CACHE_MAX_ENTRIES {
             cache.clear();
         }
-        cache.insert(path.clone(), geometry);
+        cache.insert(key, geometry);
     }
 
     Some(geometry)
@@ -6834,6 +6851,34 @@ mod tests {
         // 720 is the name's right edge plus the gap, and 720 + 200 leaves the display;
         // 340 is its bottom plus the gap, and 340 + 300 does not.
         assert_eq!((placement.pos_x, placement.pos_y), (690, 340));
+    }
+
+    /// A video replaced in place is probed again rather than cropped and sized by
+    /// the answer about the file it used to be: the version is part of what a probed
+    /// geometry is held for.
+    #[test]
+    fn keys_a_probed_geometry_by_the_files_version() {
+        // A folder of this module's own: the tests run beside each other, and one
+        // of them clearing its fixtures must not take another's with it.
+        let folder = std::env::temp_dir()
+            .join("rust-hover-preview-video-tests")
+            .join("geometry");
+        std::fs::create_dir_all(&folder).expect("a test folder");
+        let path = folder.join("keyed.mp4");
+        std::fs::write(&path, b"one").expect("a written file");
+
+        let key = |path: &PathBuf| VideoGeometryKey {
+            path: path.clone(),
+            version: file_version(path),
+        };
+
+        let first = key(&path);
+        assert!(first == key(&path), "the same file is the same key");
+
+        std::fs::write(&path, b"a longer file").expect("a rewritten file");
+        assert!(first != key(&path), "a rewritten file is another key");
+
+        let _ = std::fs::remove_file(&path);
     }
 
     /// The whole path a hover takes for a document that is already on disk: measure
