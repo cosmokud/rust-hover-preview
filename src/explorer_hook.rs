@@ -149,14 +149,13 @@ struct HoveredItem {
     /// The box the item occupies on screen, which is what says the pointer is
     /// inside it and where a keyboard preview is placed.
     bounds: RECT,
-    /// Where the text the item draws stops, for an item that draws less than the
-    /// box it is given: Content view draws every row as a box as wide as the view
-    /// with its name and columns written into the left end of it, so the box says
-    /// where the row is while the text says how much of it is used — and the empty
-    /// tail past the text is the only room a keyboard preview of that row can take.
-    /// `None` for an item that draws what its box says, which is every other view,
-    /// and for one whose text reaches the end of its box anyway.
-    content_right: Option<i32>,
+    /// The box the item draws its own text in — its name, and the columns a view
+    /// that draws its items as rows writes beside it — or `None` when the view
+    /// reported no text, or the walk that would have read one was not asked for it.
+    /// One region answers two questions: where the text stops, which is the edge a
+    /// keyboard preview is placed from, and the box the name is drawn in, which is
+    /// what `Avoid Filename` keeps a preview off.
+    text_box: Option<RECT>,
     /// The window the item is drawn in, whose frame is the window the item's view
     /// belongs to.
     native_window: isize,
@@ -168,6 +167,29 @@ impl HoveredItem {
     /// answer is only taken when both looks agree.
     fn same_item(&self, other: &HoveredItem) -> bool {
         self.index == other.index && self.name == other.name
+    }
+
+    /// Where the item's own text stops, or `None` when it draws text to the end of
+    /// its box — which is also what an item whose text the view does not place
+    /// answers.
+    fn content_right(&self) -> Option<i32> {
+        self.text_box
+            .filter(|text| text.right < self.bounds.right)
+            .map(|text| text.right)
+    }
+
+    /// The region a preview of this item is kept off while `Avoid Filename` is on:
+    /// the box the item draws its own text in, which is where its name is, or the
+    /// item's own box for a view that reports no text — the name is drawn inside that
+    /// box whatever the view says about it, so an item whose text cannot be measured
+    /// is avoided as the whole of itself.
+    fn avoid_box(&self) -> Option<(i32, i32, i32, i32)> {
+        if !avoid_filename_enabled() {
+            return None;
+        }
+
+        let text = self.text_box.unwrap_or(self.bounds);
+        Some((text.left, text.top, text.right, text.bottom))
     }
 }
 
@@ -627,6 +649,15 @@ fn is_media_file(path: &PathBuf) -> bool {
     }
 
     is_image_file(path) && PreviewType::Images.enabled_in(&config)
+}
+
+/// Whether a preview is placed clear of the name of the file it is about, as the
+/// tray's `Preview Position` submenu and `config.ini` have it.
+fn avoid_filename_enabled() -> bool {
+    CONFIG
+        .lock()
+        .map(|config| config.avoid_filename)
+        .unwrap_or(false)
 }
 
 fn same_path(a: &PathBuf, b: &PathBuf) -> bool {
@@ -1148,14 +1179,21 @@ fn is_valid_file_path(s: &str) -> bool {
 
 /// The item the pointer is over, as the view's accessibility provider reports it,
 /// or nothing when the pointer is over no item at all.
-fn uia_item_from_point(resolver: &ItemResolver, point: POINT) -> Option<HoveredItem> {
+///
+/// `measure_content` asks the walk for the item's own text as well, which a preview
+/// is placed from. A plain probe passes `false`: it answers which file the pointer is
+/// on, and a preview that keeps off the name of that file asks for the text when it
+/// is about to be shown — see `avoid_box_under_cursor`.
+fn uia_item_from_point(
+    resolver: &ItemResolver,
+    point: POINT,
+    measure_content: bool,
+) -> Option<HoveredItem> {
     let automation = resolver.automation.as_ref()?;
     let cache = resolver.cache.as_ref()?;
     let element = unsafe { automation.ElementFromPointBuildCache(point, cache) }.ok()?;
 
-    // A pointer has a position of its own to place a preview beside, so the item's
-    // own text is not measured for it.
-    walk_to_item(resolver, &element, Some(point), false)
+    walk_to_item(resolver, &element, Some(point), measure_content)
 }
 
 /// The item the keyboard is on: the element Explorer says holds the focus, or the
@@ -1176,7 +1214,7 @@ fn uia_item_from_focus(resolver: &ItemResolver) -> Option<HoveredItem> {
     };
 
     // A keyboard preview is placed from the item alone, so where the item's own
-    // text stops is read with it — see `item_content_right`.
+    // text stops is read with it — see `item_text_box`.
     walk_to_item(resolver, &start, None, true)
 }
 
@@ -1243,12 +1281,16 @@ fn item_from_element(
         }
     }
 
-    // Only an item wide enough to be a row of the view can be drawing less than its
-    // box holds, which is the one case where measuring its text answers anything —
-    // see `item_content_right`.
+    // The item's own text is read only where it can answer, and only when the caller
+    // wants it: a row of the view can be drawing less than its box holds, which is the
+    // one case where measuring *where* the text stops says anything, and the box the
+    // text is drawn in is what `Avoid Filename` places a preview from — so a row is
+    // measured for the first reason, and an item of any shape for the second. See
+    // `item_text_box`.
     let wide = bounds.right - bounds.left >= (bounds.bottom - bounds.top).max(1) * 4;
-    let content_right = (measure_content && wide)
-        .then(|| item_content_right(resolver, element, &bounds))
+    let read_text = measure_content && (wide || avoid_filename_enabled());
+    let text_box = read_text
+        .then(|| item_text_box(resolver, element, &bounds))
         .flatten();
 
     Some(HoveredItem {
@@ -1256,34 +1298,33 @@ fn item_from_element(
         name: element_name(element).unwrap_or_default().trim().to_string(),
         value: element_value(element),
         bounds,
-        content_right,
+        text_box,
         native_window: element_native_window(element),
     })
 }
 
-/// Where the text an item draws stops, or `None` when the item draws text to the
-/// end of its box.
+/// The box the item draws its own text in, or `None` when it draws none.
 ///
-/// A view gives every item the box it occupies, and for most views that box is
-/// what the item draws: an icon, a thumbnail, a tile. Content view is the one that
-/// differs — it draws every item as a row as wide as the view and writes the name
-/// and the columns into the left end of it, so the box says where the row is while
-/// the text says how much of the row is used. The empty tail past the text is the
-/// only room beside such a row, and a keyboard preview takes its place and its size
-/// from there, so the edge has to be measured rather than assumed.
+/// A view gives every item the box it occupies, and what it draws inside that box
+/// is reported the way a view reports everything: each piece of an item's text — a
+/// Content row's name and path, a Details row's name, type, modified date and size,
+/// the label under an icon — is an element of its own carrying the box it is drawn
+/// in, child of the item. Reading them answers both questions an item cannot answer
+/// by its box: where its text stops, which is the only room a row drawing less than
+/// its box holds leaves for a preview beside it, and where its name is, which
+/// `Avoid Filename` keeps a preview off.
 ///
-/// It is measured from the row's own children, because that is how the view reports
-/// what it draws: each piece of the row's text — the name and path, the type, the
-/// modified date, the size — is an element of its own carrying the box it is drawn
-/// in, and the rightmost of them is the edge the row's content stops at. The read is
-/// batched into one round trip with the properties the rest of the walk already
-/// asks for. A row that reports no text at all — a view that draws its columns some
-/// other way — is answered with `None`, which leaves the item measured by its box.
-fn item_content_right(
+/// It is measured from the item's own children for the same reason: a view reports
+/// what it draws as children, and the rightmost of them is the edge the row's content
+/// stops at. The read is batched into one round trip with the properties the rest of
+/// the walk already asks for. A view that draws its columns some other way reports no
+/// text at all, and is answered with `None`, which leaves the item measured by its box
+/// — see [`HoveredItem::avoid_box`].
+fn item_text_box(
     resolver: &ItemResolver,
     element: &IUIAutomationElement,
     bounds: &RECT,
-) -> Option<i32> {
+) -> Option<RECT> {
     let automation = resolver.automation.as_ref()?;
     let cache = resolver.cache.as_ref()?;
 
@@ -1294,7 +1335,7 @@ fn item_content_right(
             .ok()?;
         let count = children.Length().ok()?;
 
-        let mut rightmost: Option<i32> = None;
+        let mut text_box: Option<RECT> = None;
         for index in 0..count {
             let Ok(child) = children.GetElement(index) else {
                 continue;
@@ -1308,12 +1349,20 @@ fn item_content_right(
             if rect.right <= rect.left {
                 continue;
             }
-            rightmost = Some(rightmost.map_or(rect.right, |value| value.max(rect.right)));
+            text_box = Some(match text_box {
+                Some(union) => RECT {
+                    left: union.left.min(rect.left),
+                    top: union.top.min(rect.top),
+                    right: union.right.max(rect.right),
+                    bottom: union.bottom.max(rect.bottom),
+                },
+                None => rect,
+            });
         }
 
-        // An item whose text runs to the end of its box has no tail, and one whose
-        // text is reported past it is reported wrong: either way the box answers.
-        rightmost.filter(|right| *right < bounds.right)
+        // Text reported outside the item's box is reported wrong, and the box is what
+        // answers for an item whose text the view does not place.
+        text_box.filter(|text| text.right > bounds.left && text.left < bounds.right)
     }
 }
 
@@ -1726,14 +1775,14 @@ fn get_file_under_cursor(resolver: &mut ItemResolver) -> Option<PathBuf> {
 /// name that nothing can vouch for is left unanswered rather than guessed at — a
 /// search across folders is full of names that belong to more than one file.
 fn resolve_file_under_cursor(resolver: &mut ItemResolver, point: POINT) -> Option<PathBuf> {
-    let item = uia_item_from_point(resolver, point)?;
+    let item = uia_item_from_point(resolver, point, false)?;
 
     if let Some(root_key) = root_window_at(point).map(|window| window.0 as isize) {
         if let Some(path) = item_file_path(resolver, root_key, &item) {
             // The view is asked twice: a wheel turns the list under a parked
             // pointer, and an item that is no longer at the point the first answer
             // described is not what that answer is about.
-            if uia_item_from_point(resolver, point)
+            if uia_item_from_point(resolver, point, false)
                 .map(|again| again.same_item(&item))
                 .unwrap_or(false)
             {
@@ -1772,6 +1821,26 @@ fn get_file_under_cursor_checked(
     }
 
     result
+}
+
+/// The region a preview of the file under the pointer is kept off while `Avoid
+/// Filename` is on: the box the item's own text is drawn in, which is where its name
+/// is, or the item's own box when the view reports no text for it.
+///
+/// Asked when a preview is about to be shown rather than with every probe. A probe
+/// answers which file the pointer is on, and that answer is what the rest of the loop
+/// runs on; where that file's name is drawn is a question only a preview asks, and it
+/// is asked here so that a pointer merely sweeping over a list pays nothing for it. A
+/// walk that finds no item at all leaves the preview placed as it always was.
+fn avoid_box_under_cursor(resolver: &ItemResolver, point: POINT) -> Option<(i32, i32, i32, i32)> {
+    // Read before the walk as well as inside `avoid_box`: with the setting off there
+    // is no region to be had, so the item is never asked for one.
+    if !avoid_filename_enabled() {
+        return None;
+    }
+
+    let item = uia_item_from_point(resolver, point, true)?;
+    item.avoid_box()
 }
 
 /// Quick check if foreground window is Explorer (cheap, no COM)
@@ -3284,7 +3353,8 @@ pub fn run_explorer_hook() {
                                         focused_info.item.bounds.top,
                                         focused_info.item.bounds.right,
                                         focused_info.item.bounds.bottom,
-                                        focused_info.item.content_right,
+                                        focused_info.item.content_right(),
+                                        focused_info.item.avoid_box(),
                                     );
                                 }
                             } else {
@@ -3343,7 +3413,8 @@ pub fn run_explorer_hook() {
                                     focused_info.item.bounds.top,
                                     focused_info.item.bounds.right,
                                     focused_info.item.bounds.bottom,
-                                    focused_info.item.content_right,
+                                    focused_info.item.content_right(),
+                                    focused_info.item.avoid_box(),
                                 );
                             }
                         } else {
@@ -3449,7 +3520,12 @@ pub fn run_explorer_hook() {
                             } else {
                                 None
                             };
-                            show_preview(&file_path, cursor_pos.x, cursor_pos.y);
+                            show_preview(
+                                &file_path,
+                                cursor_pos.x,
+                                cursor_pos.y,
+                                avoid_box_under_cursor(&resolver, cursor_pos),
+                            );
                         }
                     } else {
                         if scroll_driven {
