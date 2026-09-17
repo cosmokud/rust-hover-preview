@@ -234,7 +234,7 @@ unsafe fn show_context_menu(hwnd: HWND) {
         config.reload_from_disk();
     }
 
-    // Add "Preview" with checkmark
+    // Add "Enable Preview" with checkmark
     let preview_enabled = CONFIG.lock().map(|c| c.preview_enabled).unwrap_or(true);
     let enable_flags = MF_STRING
         | if preview_enabled {
@@ -246,7 +246,7 @@ unsafe fn show_context_menu(hwnd: HWND) {
         menu,
         enable_flags,
         ID_TRAY_ENABLE as usize,
-        w!("Preview"),
+        w!("Enable Preview"),
     );
 
     // Add the "Preview Types" submenu: one gate per kind of preview, on by
@@ -921,8 +921,8 @@ unsafe fn show_context_menu(hwnd: HWND) {
         };
     let _ = AppendMenuW(menu, flags, ID_TRAY_STARTUP as usize, w!("Run at Startup"));
 
-    // Add "Edit Config.ini", the label carrying the version that is running
-    let config_label = format!("Edit Config.ini (v{})", env!("CARGO_PKG_VERSION"));
+    // Add "Config.ini", the label carrying the version that is running
+    let config_label = format!("Config.ini (v{})", env!("CARGO_PKG_VERSION"));
     let config_label_wide: Vec<u16> = config_label
         .encode_utf16()
         .chain(std::iter::once(0))

@@ -99,7 +99,7 @@ ffprobe -version
 
 ## System Tray Menu
 
-- **Preview** — turn previews on or off
+- **Enable Preview** — turn previews on or off
 - **Preview Types** — Images, Videos, Text, PDF, Archives: switch a kind of preview off without touching its file list
 - **Background** — Transparent, Black, White, or Checkerboard
 - **Confirm File Type** — validate file content against extension
@@ -117,7 +117,7 @@ ffprobe -version
   - **Scaling** — Fit to Screen or 25%–400%
 - **Volume** — Max, High, Medium, Low, Very Low, Mute
 - **Run at Startup** — add or remove the Windows startup entry
-- **Edit Config.ini** — open the configuration file; the item is named for the running version
+- **Config.ini** — open the configuration file; the item is named for the running version
 - **Exit** — close the app
 
 ## Configuration
