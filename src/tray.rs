@@ -612,9 +612,9 @@ unsafe fn show_context_menu(hwnd: HWND) {
     );
 
     // Add the "Office Preview" submenu: whether an installed Office may draw a
-    // page for a document whose saved thumbnail is missing — or is smaller than
-    // the preview would like to be. Nothing is rebuilt when it changes: whether
-    // a page is asked for is a question the next hover answers for itself.
+    // page for a document whose preview would otherwise only be a spinner.
+    // Nothing is rebuilt when it changes: whether a page is asked for is a
+    // question the next hover answers for itself.
     let office_menu = CreatePopupMenu().unwrap();
     let office_render_enabled = CONFIG
         .lock()
@@ -1072,9 +1072,8 @@ fn toggle_preview_type(kind: PreviewType) {
     refresh_preview_types();
 }
 
-/// Whether an installed Office may render a page for a document that saved no
-/// thumbnail of itself, or one too small to enlarge. It changes what a later
-/// hover does rather than what is on screen, so nothing is rebuilt here.
+/// Whether an installed Office may render a page for a document. It changes what a
+/// later hover does rather than what is on screen, so nothing is rebuilt here.
 fn toggle_office_render() {
     if let Ok(mut config) = CONFIG.lock() {
         config.office_render_enabled = !config.office_render_enabled;

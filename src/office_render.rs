@@ -95,21 +95,33 @@ const PICTURE_MAX_COLUMNS: i32 = 14;
 /// tall — wrapped headings, merged cells — or whose columns are wide would
 /// otherwise be copied out at several million pixels: slow to copy, slow to write
 /// and slow to draw, all to show a corner no preview can hold. The window the
-/// picture is taken from is cut down until what it would draw fits these.
-const PICTURE_MAX_PIXELS_WIDTH: f64 = 1400.0;
-const PICTURE_MAX_PIXELS_HEIGHT: f64 = 1000.0;
+/// picture is taken from is cut down until what it would draw fits these — and they
+/// are deliberately smaller than a display, because a picture is shown at its own
+/// size (the configured scale) rather than fitted to the screen the way a page is,
+/// and a corner of a sheet filling the screen is not a preview of anything.
+const PICTURE_MAX_PIXELS_WIDTH: f64 = 900.0;
+const PICTURE_MAX_PIXELS_HEIGHT: f64 = 700.0;
 /// The least of a sheet still worth copying: less than this shows too little to be
 /// a preview of anything.
 const PICTURE_MIN_ROWS: i32 = 4;
 const PICTURE_MIN_COLUMNS: i32 = 3;
 /// How many times the window may be cut down before it is copied as it stands.
-const PICTURE_FIT_ATTEMPTS: usize = 8;
+const PICTURE_FIT_ATTEMPTS: usize = 6;
 /// Points to pixels, as Excel lays a sheet out at 96 DPI: a point is a 72nd of an
 /// inch.
 const PICTURE_PIXELS_PER_POINT: f64 = 96.0 / 72.0;
 /// The clipboard is shared with every other process: a look that cannot open it,
 /// or finds nothing in it, is retried this many times.
 const CLIPBOARD_ATTEMPTS: usize = 5;
+/// How many times a picture is asked for, and how long between the asks.
+///
+/// The first copy of a workbook Excel has just opened is regularly refused — an
+/// exception saying the `CopyPicture` property of the range could not be got, which
+/// is Excel still laying the sheet out rather than anything about the document — and
+/// the next attempt a moment later is answered. Asking only once is what left whole
+/// workbooks with no preview while their neighbours in the same folder had one.
+const PICTURE_COPY_ATTEMPTS: usize = 3;
+const PICTURE_COPY_RETRY_MS: u64 = 120;
 /// `xlScreen` and `xlBitmap`: the appearance and format `CopyPicture` is asked for.
 const XL_SCREEN: i32 = 1;
 const XL_BITMAP: i32 = 2;
@@ -602,33 +614,46 @@ fn render_request(engine: &mut Option<Engine>, request: &RenderRequest) -> Rende
 
     // A different family's engine is dropped first, which quits it: an engine is
     // kept for the family it was created for and nothing else.
-    match engine {
-        Some(engine) if engine.app_kind == app_kind => {}
-        _ => {
-            *engine = None;
-            let Some(created) = Engine::create(app_kind) else {
-                return RenderOutcome::NoEngine;
-            };
-            *engine = Some(created);
+    //
+    // An instance created for this very request that gives no page is given up on
+    // and the render is tried once more on a new one: an Office that is still
+    // starting, or one that comes up reporting its license as expired, refuses work
+    // for reasons that have nothing to do with the document. Once, so that a
+    // document which will never render is not asked for twice on every hover.
+    let mut retried = false;
+    loop {
+        let created_here = match engine {
+            Some(engine) if engine.app_kind == app_kind => false,
+            _ => {
+                *engine = None;
+                let Some(created) = Engine::create(app_kind) else {
+                    return RenderOutcome::NoEngine;
+                };
+                *engine = Some(created);
+                true
+            }
+        };
+
+        let Some(engine) = engine.as_ref() else {
+            return RenderOutcome::NoEngine;
+        };
+
+        let source = PreparedSource::new(&request.source);
+        let width = request.width.max(1);
+        let height = request.height.max(1);
+        let rendered = engine.render(&source.path, &target, width, height);
+        source.cleanup();
+
+        // What the renderer wrote is the answer, whatever it chose to write: the
+        // cache says which file it was.
+        if rendered && cached_render(&request.source).is_some() {
+            return RenderOutcome::Rendered;
         }
-    }
+        if !created_here || retried {
+            return RenderOutcome::Refused;
+        }
 
-    let Some(engine) = engine.as_ref() else {
-        return RenderOutcome::NoEngine;
-    };
-
-    let source = PreparedSource::new(&request.source);
-    let width = request.width.max(1);
-    let height = request.height.max(1);
-    let rendered = engine.render(&source.path, &target, width, height);
-    source.cleanup();
-
-    // What the renderer wrote is the answer, whatever it chose to write: the
-    // cache says which file it was.
-    if rendered && cached_render(&request.source).is_some() {
-        RenderOutcome::Rendered
-    } else {
-        RenderOutcome::Refused
+        retried = true;
     }
 }
 
@@ -1011,21 +1036,25 @@ fn copy_used_range_picture(workbook: &Object, target: &CacheTarget) -> bool {
         return false;
     };
 
-    let copied = range
-        .call_args(
-            "CopyPicture",
-            &[VARIANT::from(XL_SCREEN), VARIANT::from(XL_BITMAP)],
-        )
-        .is_some();
-    if !copied {
-        return false;
+    for attempt in 0..PICTURE_COPY_ATTEMPTS {
+        let copied = range
+            .call_args(
+                "CopyPicture",
+                &[VARIANT::from(XL_SCREEN), VARIANT::from(XL_BITMAP)],
+            )
+            .is_some();
+        if copied {
+            if let Some(dib) = clipboard_dib() {
+                return write_bmp(&target.file("bmp"), &dib).is_ok();
+            }
+        }
+
+        if attempt + 1 < PICTURE_COPY_ATTEMPTS {
+            std::thread::sleep(Duration::from_millis(PICTURE_COPY_RETRY_MS));
+        }
     }
 
-    let Some(dib) = clipboard_dib() else {
-        return false;
-    };
-
-    write_bmp(&target.file("bmp"), &dib).is_ok()
+    false
 }
 
 /// The window of the used range the picture is taken from: its top-left corner, cut
@@ -1033,7 +1062,10 @@ fn copy_used_range_picture(workbook: &Object, target: &CacheTarget) -> bool {
 ///
 /// Only the range's own measurements are asked for — never its cells — so a sheet
 /// of a million rows costs the same as a small one, and what comes back is the
-/// corner a person would see first rather than a page of it.
+/// corner a person would see first rather than a page of it. Each cut is in
+/// proportion to how far over the budget the range is, so a sheet whose rows are
+/// tall keeps as many of them as the budget allows instead of being halved until a
+/// sliver is left.
 fn picture_range(used: &Object, rows: i32, columns: i32) -> Option<Object> {
     let mut rows = rows.clamp(1, PICTURE_MAX_ROWS);
     let mut columns = columns.clamp(1, PICTURE_MAX_COLUMNS);
@@ -1049,22 +1081,32 @@ fn picture_range(used: &Object, rows: i32, columns: i32) -> Option<Object> {
             break;
         };
 
-        let over_width = width * PICTURE_PIXELS_PER_POINT > PICTURE_MAX_PIXELS_WIDTH;
-        let over_height = height * PICTURE_PIXELS_PER_POINT > PICTURE_MAX_PIXELS_HEIGHT;
-        if !over_width && !over_height {
+        let width_px = width * PICTURE_PIXELS_PER_POINT;
+        let height_px = height * PICTURE_PIXELS_PER_POINT;
+        if width_px <= PICTURE_MAX_PIXELS_WIDTH && height_px <= PICTURE_MAX_PIXELS_HEIGHT {
             break;
         }
 
-        // Whichever side is over its budget gives way, down to the least of a sheet
-        // that is still worth copying.
-        if over_height && rows > PICTURE_MIN_ROWS {
-            rows = (rows / 2).max(PICTURE_MIN_ROWS);
-        } else if over_width && columns > PICTURE_MIN_COLUMNS {
-            columns = (columns / 2).max(PICTURE_MIN_COLUMNS);
+        let fitted_rows = if height_px > PICTURE_MAX_PIXELS_HEIGHT {
+            (rows as f64 * PICTURE_MAX_PIXELS_HEIGHT / height_px).floor() as i32
         } else {
+            rows
+        };
+        let fitted_columns = if width_px > PICTURE_MAX_PIXELS_WIDTH {
+            (columns as f64 * PICTURE_MAX_PIXELS_WIDTH / width_px).floor() as i32
+        } else {
+            columns
+        };
+
+        let fitted_rows = fitted_rows.clamp(PICTURE_MIN_ROWS, rows);
+        let fitted_columns = fitted_columns.clamp(PICTURE_MIN_COLUMNS, columns);
+        // Whatever is left is smaller than a cell: copy it as it stands.
+        if fitted_rows == rows && fitted_columns == columns {
             break;
         }
 
+        rows = fitted_rows;
+        columns = fitted_columns;
         range = resize_range(used, rows, columns);
     }
 
@@ -1094,8 +1136,15 @@ fn collection_count(collection: Option<Object>) -> Option<i32> {
 
 /// The bitmap Excel has just put on the clipboard.
 fn clipboard_dib() -> Option<Vec<u8>> {
+    clipboard_dib_inner(true)
+}
+
+/// `empty` says whether the clipboard is cleared once the picture has been taken.
+/// It is, in the app: leaving Excel's copy on the clipboard is what makes Excel ask,
+/// on its way out, whether a large amount of information should stay there.
+fn clipboard_dib_inner(empty: bool) -> Option<Vec<u8>> {
     for attempt in 0..CLIPBOARD_ATTEMPTS {
-        if let Some(dib) = read_clipboard_dib() {
+        if let Some(dib) = read_clipboard_dib(empty) {
             return Some(dib);
         }
         if attempt + 1 < CLIPBOARD_ATTEMPTS {
@@ -1106,7 +1155,7 @@ fn clipboard_dib() -> Option<Vec<u8>> {
     None
 }
 
-fn read_clipboard_dib() -> Option<Vec<u8>> {
+fn read_clipboard_dib(empty: bool) -> Option<Vec<u8>> {
     unsafe {
         if OpenClipboard(None).is_err() {
             return None;
@@ -1129,7 +1178,7 @@ fn read_clipboard_dib() -> Option<Vec<u8>> {
         // what makes Excel ask, on its way out, whether a large amount of
         // information should stay there — a dialog no one is present to answer,
         // which holds the quit and with it the worker.
-        if dib.is_some() {
+        if dib.is_some() && empty {
             let _ = EmptyClipboard();
         }
 
@@ -1715,6 +1764,210 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
+    /// Whether one Excel instance can copy more than one picture, and what the
+    /// clipboard has to do with it: reads 1 and 2 leave the clipboard alone, read 3
+    /// clears it, read 4 shows whether the next copy still works.
+    ///
+    /// `$env:RHP_OFFICE_PROBE = "C:\docs\one.xlsx;C:\docs\two.xls"`
+    /// `cargo test -- --ignored --nocapture copy_picture_repeat_probe`
+    #[test]
+    #[ignore = "starts the installed Excel"]
+    fn copy_picture_repeat_probe() {
+        unsafe {
+            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        }
+
+        let Ok(list) = std::env::var("RHP_OFFICE_PROBE") else {
+            println!("set RHP_OFFICE_PROBE to one or more paths, separated by ';'");
+            return;
+        };
+
+        let Some(engine) = Engine::create(OfficeApp::Excel) else {
+            println!("no Excel");
+            return;
+        };
+
+        for (index, path) in list
+            .split(';')
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+            .enumerate()
+        {
+            println!("\n--- {path} ---");
+            let source = PreparedSource::new(Path::new(path));
+            let Some(workbook) = engine
+                .app
+                .member("Workbooks")
+                .and_then(|workbooks| {
+                    workbooks.call(
+                        "Open",
+                        &[
+                            ("FileName", path_variant(&source.path)),
+                            ("UpdateLinks", VARIANT::from(0i32)),
+                            ("ReadOnly", VARIANT::from(true)),
+                            ("AddToMru", VARIANT::from(false)),
+                            ("IgnoreReadOnlyRecommended", VARIANT::from(true)),
+                        ],
+                    )
+                })
+                .and_then(Object::from_variant)
+            else {
+                println!("open failed");
+                source.cleanup();
+                continue;
+            };
+
+            let range = workbook
+                .member("Worksheets")
+                .and_then(|sheets| sheets.item(1))
+                .and_then(|sheet| sheet.member("UsedRange"))
+                .and_then(|used| resize_range(&used, 10, 8));
+
+            for attempt in 1..=4 {
+                let Some(range) = range.as_ref() else {
+                    break;
+                };
+                let copied = range
+                    .call_args(
+                        "CopyPicture",
+                        &[VARIANT::from(XL_SCREEN), VARIANT::from(XL_BITMAP)],
+                    )
+                    .is_some();
+                // The third read is the one the app's own path does — it clears the
+                // clipboard; the others leave it as Excel left it.
+                let dib = clipboard_dib_inner(attempt == 3);
+                println!(
+                    "  attempt {attempt} (file {}): copied={copied} picture={:?} failure={:?}",
+                    index + 1,
+                    dib.as_deref().and_then(dib_dimensions),
+                    last_failure()
+                );
+            }
+
+            let _ = workbook.call("Close", &[("SaveChanges", VARIANT::from(false))]);
+            source.cleanup();
+        }
+
+        drop(engine);
+    }
+
+    /// What Excel reports for a range's own size, next to what the range's first
+    /// rows and columns report — the two do not agree, which is why the picture's
+    /// window is fitted the way it is.
+    ///
+    /// `$env:RHP_OFFICE_PROBE = "C:\docs\one.xlsx"`
+    /// `cargo test -- --ignored --nocapture worksheet_measurement_probe`
+    #[test]
+    #[ignore = "starts the installed Excel"]
+    fn worksheet_measurement_probe() {
+        unsafe {
+            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        }
+
+        let Ok(list) = std::env::var("RHP_OFFICE_PROBE") else {
+            println!("set RHP_OFFICE_PROBE to one or more paths, separated by ';'");
+            return;
+        };
+
+        for path in list
+            .split(';')
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+        {
+            println!("\n--- {path} ---");
+            let source = PreparedSource::new(Path::new(path));
+
+            // A fresh instance for every file, so a refusal can be told from one the
+            // instance was already in.
+            let Some(engine) = Engine::create(OfficeApp::Excel) else {
+                println!("no Excel");
+                source.cleanup();
+                continue;
+            };
+            let Some(workbooks) = engine.app.member("Workbooks") else {
+                source.cleanup();
+                continue;
+            };
+            let Some(workbook) = workbooks
+                .call(
+                    "Open",
+                    &[
+                        ("FileName", path_variant(&source.path)),
+                        ("UpdateLinks", VARIANT::from(0i32)),
+                        ("ReadOnly", VARIANT::from(true)),
+                        ("AddToMru", VARIANT::from(false)),
+                        ("IgnoreReadOnlyRecommended", VARIANT::from(true)),
+                    ],
+                )
+                .and_then(Object::from_variant)
+            else {
+                println!("open failed");
+                source.cleanup();
+                continue;
+            };
+
+            if let Some(used) = workbook
+                .member("Worksheets")
+                .and_then(|sheets| sheets.item(1))
+                .and_then(|sheet| sheet.member("UsedRange"))
+            {
+                println!(
+                    "used: {}x{} cells, {}x{} points",
+                    collection_count(used.member("Rows")).unwrap_or(0),
+                    collection_count(used.member("Columns")).unwrap_or(0),
+                    point_size(&used, "Width").unwrap_or(f64::NAN),
+                    point_size(&used, "Height").unwrap_or(f64::NAN),
+                );
+                for rows in [40, 20, 10, 5, 4] {
+                    match resize_range(&used, rows, 14) {
+                        Some(range) => println!(
+                            "  resize({rows}, 14): {}x{} points",
+                            point_size(&range, "Width").unwrap_or(f64::NAN),
+                            point_size(&range, "Height").unwrap_or(f64::NAN),
+                        ),
+                        None => println!("  resize({rows}, 14): none"),
+                    }
+
+                    // What that window actually comes out as, which is the only
+                    // answer that matters: the copy is what the picture is.
+                    if let Some(range) = resize_range(&used, rows, 14) {
+                        let copied = range
+                            .call_args(
+                                "CopyPicture",
+                                &[VARIANT::from(XL_SCREEN), VARIANT::from(XL_BITMAP)],
+                            )
+                            .is_some();
+                        match copied.then(clipboard_dib).flatten() {
+                            Some(dib) => println!("    copy: {:?} pixels", dib_dimensions(&dib)),
+                            None => println!(
+                                "    copy: nothing — {}",
+                                last_failure().unwrap_or_else(|| "no failure recorded".to_string())
+                            ),
+                        }
+                    }
+                }
+                for rows in [1, 4, 9, 40] {
+                    let height = used
+                        .call_args("Rows", &[VARIANT::from(rows)])
+                        .and_then(Object::from_variant)
+                        .and_then(|range| point_size(&range, "Height"));
+                    println!("  rows({rows}).Height: {height:?}");
+                }
+                for columns in [1, 3, 14] {
+                    let width = used
+                        .call_args("Columns", &[VARIANT::from(columns)])
+                        .and_then(Object::from_variant)
+                        .and_then(|range| point_size(&range, "Width"));
+                    println!("  columns({columns}).Width: {width:?}");
+                }
+            }
+
+            let _ = workbook.call("Close", &[("SaveChanges", VARIANT::from(false))]);
+            source.cleanup();
+            drop(engine);
+        }
+    }
+
     /// The engine's own lifecycle: one is started for each family, let go, and
     /// nothing is left behind.
     #[test]
@@ -1773,6 +2026,13 @@ mod tests {
         assert!(!rendered.exists(), "the broken file is gone");
 
         let _ = std::fs::remove_file(&source);
+    }
+
+    /// A DIB's own size, as a picture of it would be.
+    fn dib_dimensions(dib: &[u8]) -> Option<(i32, i32)> {
+        let width = i32::from_le_bytes(dib.get(4..8)?.try_into().ok()?);
+        let height = i32::from_le_bytes(dib.get(8..12)?.try_into().ok()?);
+        Some((width, height))
     }
 
     /// A BMP holding one colour, written the way a workbook's picture is.

@@ -1083,12 +1083,11 @@ fn effective_preview_scale(path: &Path, preview_scale: PreviewScale) -> PreviewS
     } else if is_text_preview(path) || archive_formats::is_archive_file(path) {
         PreviewScale::Percent(100)
     } else if office_formats::is_office_file(path) {
-        // A page Office rendered and a metafile the document saved are both
-        // drawn at whatever size they are asked for, so the room the display
-        // has is free quality — the rule a PDF follows. A raster picture a
-        // document saved is the exception: it is only as good as the pixels it
-        // holds, so it follows the configured scale the way an image does
-        // rather than being enlarged to fit.
+        // A page Office rendered is vector, so the room the display has is free
+        // quality — the rule a PDF follows. The raster picture a workbook is
+        // answered with where no printer can export a page is the exception: it
+        // is only as good as the pixels it holds, so it follows the configured
+        // scale the way an image does rather than being enlarged to fit.
         if office_preview::source_kind(path).may_be_enlarged() {
             PreviewScale::FitToScreen
         } else {
@@ -3635,6 +3634,11 @@ struct PendingLoad {
     width: u32,
     height: u32,
     spinner_shown: bool,
+    /// Whether this load is replacing what is already on screen — the page that
+    /// arrived for the hover that is up — rather than opening a new preview. An
+    /// upgrade never shows the spinner: what is there stays where it is, at its own
+    /// size, until the page is ready.
+    upgrade: bool,
 }
 
 /// Reusable layered-window surface: one memory DC with one DIB section selected
@@ -5430,9 +5434,8 @@ pub fn run_preview_window() {
                                 let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
                             }
 
-                            // Whether what is on screen is a saved thumbnail or
-                            // a rendered page, a better page is one Office
-                            // start away once the pointer has rested.
+                            // A page for this document is one Office start away
+                            // once the pointer has rested.
                             arm_office_render(
                                 &mut office_render_due,
                                 &result.path,
@@ -5478,7 +5481,10 @@ pub fn run_preview_window() {
 
             // Show loading spinner if a background load has been pending for 3+ seconds
             if let Some(ref mut pl) = pending_load {
-                if !pl.spinner_shown && pl.started.elapsed() >= Duration::from_secs(2) {
+                if !pl.spinner_shown
+                    && !pl.upgrade
+                    && pl.started.elapsed() >= Duration::from_secs(2)
+                {
                     pl.spinner_shown = true;
                     let loading = create_loading_media(pl.width, pl.height);
                     let _ = MoveWindow(
@@ -5592,9 +5598,9 @@ pub fn run_preview_window() {
 
             // A page the render tier has finished with, for the hover that asked
             // for it: that hover is replayed, which measures the page itself and
-            // draws it in place of the thumbnail or the spinner it supersedes. A
-            // payload from an older hover is dropped here — the page it wrote
-            // stays in the cache for the next pass.
+            // draws it in place of the spinner it supersedes. A payload from an
+            // older hover is dropped here — the page it wrote stays in the cache
+            // for the next pass.
             if let Some((ready_path, ready_generation, ready_ok)) = office_render_ready {
                 office_render_pending = None;
 
@@ -5614,9 +5620,9 @@ pub fn run_preview_window() {
                         latest_preview_msg = current_show.clone();
                     }
                 } else if hovered {
-                    // Nothing was drawn and nothing is coming. A thumbnail
-                    // stays — it is a preview like any other — while a spinner
-                    // has nothing left to stand in for.
+                    // Nothing was drawn and nothing is coming. A preview that is
+                    // not a spinner is kept — it is a preview like any other —
+                    // while a spinner has nothing left to stand in for.
                     let showing_spinner = CURRENT_MEDIA
                         .lock()
                         .map(|media| {
@@ -5917,6 +5923,7 @@ pub fn run_preview_window() {
                             width: preview_w,
                             height: preview_h,
                             spinner_shown: false,
+                            upgrade: upgrading,
                         });
 
                         queue_load_request(

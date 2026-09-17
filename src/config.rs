@@ -36,9 +36,9 @@ pub const MAX_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS: f32 = 1000.0;
 /// files: how many images fit depends entirely on how large they are shown.
 pub const DEFAULT_IMAGE_CACHE_MB: u32 = 64;
 pub const MAX_IMAGE_CACHE_MB: u32 = 2048;
-/// Disk the rendered Office pages may hold. A render is what the preview shows
-/// for a document that saved no thumbnail of itself, and producing one costs an
-/// Office start, so what has been rendered is kept and dropped oldest first.
+/// Disk the rendered Office pages may hold. A render is what the preview shows for
+/// a document, and producing one costs an Office start, so what has been rendered
+/// is kept and dropped oldest first.
 pub const DEFAULT_OFFICE_CACHE_MB: u32 = 256;
 pub const MAX_OFFICE_CACHE_MB: u32 = 4096;
 
@@ -434,9 +434,8 @@ pub struct AppConfig {
     /// Whether Office documents are previewed at all, ahead of the extension list.
     pub office_preview_enabled: bool,
     /// Whether an installed Office may render a page for a document the preview
-    /// would otherwise show nothing — or a small saved thumbnail — for. On by
-    /// default, and the reason a document that saved no picture of itself still
-    /// has a preview.
+    /// would otherwise show nothing for. On by default, and the reason a document
+    /// has a preview the first time it is hovered.
     pub office_render_enabled: bool,
     /// Disk the rendered pages may hold, in megabytes.
     pub office_cache_mb: u32,
