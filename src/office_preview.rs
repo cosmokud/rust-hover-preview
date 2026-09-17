@@ -53,8 +53,15 @@ impl SourceKind {
 /// Which of the document's sources a preview would be drawn from, asked by the
 /// layout before it decides how large the preview may be.
 pub(crate) fn source_kind(path: &Path) -> SourceKind {
-    if office_render::cached_render(path).is_some() {
-        return SourceKind::Page;
+    if let Some(cached) = office_render::cached_render(path) {
+        // A page Office exported is vector and is drawn at whatever size it is
+        // asked for; the picture a workbook is answered with on a machine that
+        // cannot export a page is a screen bitmap, and enlarging it would only
+        // stretch the pixels it holds.
+        return match cached.kind {
+            RenderedKind::Bmp => SourceKind::Raster,
+            RenderedKind::Pdf | RenderedKind::Png => SourceKind::Page,
+        };
     }
 
     match office_thumbnail::thumbnail_for(path, None) {
@@ -82,12 +89,10 @@ pub(crate) fn measure(path: &Path) -> Option<(u32, u32)> {
     }
 
     // Nothing saved and nothing rendered yet: a page is what is coming, so the
-    // preview is placed for a page's box and the spinner fills it.
+    // preview is placed for the box that family's pages have and the spinner
+    // fills it.
     if office_render::enabled() {
-        return Some((
-            pdf_preview::DEFAULT_PAGE_WIDTH,
-            pdf_preview::DEFAULT_PAGE_HEIGHT,
-        ));
+        return Some(crate::office_formats::default_page_size(path));
     }
 
     None
@@ -114,7 +119,8 @@ pub(crate) fn render(
 fn rendered_dimensions(cached: &CachedRender) -> Option<(u32, u32)> {
     match cached.kind {
         RenderedKind::Pdf => pdf_preview::page_dimensions(&cached.path),
-        RenderedKind::Png => image::image_dimensions(&cached.path).ok(),
+        // A slide's PNG and a workbook's bitmap are both read the way any image is.
+        RenderedKind::Png | RenderedKind::Bmp => image::image_dimensions(&cached.path).ok(),
     }
 }
 
@@ -129,7 +135,7 @@ fn render_cached(
         RenderedKind::Pdf => {
             pdf_preview::render_first_page(&cached.path, target_width, target_height)
         }
-        RenderedKind::Png => {
+        RenderedKind::Png | RenderedKind::Bmp => {
             let image = image::open(&cached.path).ok()?;
             let resized = image.resize_exact(
                 target_width,
@@ -427,6 +433,65 @@ mod tests {
 
         header.extend_from_slice(bits);
         header
+    }
+
+    /// A BMP holding one colour, built the way the workbook picture path builds
+    /// one: a `BITMAPINFO` and its pixels with a file header in front of them. The
+    /// alpha byte is zero, which is what Excel writes there.
+    fn bmp_bytes(width: u32, height: u32, color: [u8; 4]) -> Vec<u8> {
+        let pixel_bytes = (width * height * 4) as u32;
+        let mut dib = Vec::new();
+        dib.extend_from_slice(&40u32.to_le_bytes()); // header size
+        dib.extend_from_slice(&(width as i32).to_le_bytes());
+        dib.extend_from_slice(&(height as i32).to_le_bytes());
+        dib.extend_from_slice(&1u16.to_le_bytes()); // planes
+        dib.extend_from_slice(&32u16.to_le_bytes()); // bits per pixel
+        dib.extend_from_slice(&0u32.to_le_bytes()); // BI_RGB
+        dib.extend_from_slice(&pixel_bytes.to_le_bytes());
+        for _ in 0..4 {
+            dib.extend_from_slice(&0i32.to_le_bytes()); // resolution and colours
+        }
+        for _ in 0..(width * height) {
+            dib.extend_from_slice(&color);
+        }
+
+        let mut file = Vec::new();
+        file.extend_from_slice(b"BM");
+        file.extend_from_slice(&((dib.len() + 14) as u32).to_le_bytes());
+        file.extend_from_slice(&0u16.to_le_bytes());
+        file.extend_from_slice(&0u16.to_le_bytes());
+        file.extend_from_slice(&54u32.to_le_bytes()); // where the pixels start
+        file.extend_from_slice(&dib);
+        file
+    }
+
+    /// The picture a workbook is answered with is drawn like any other frame, and
+    /// it is opaque whatever its own alpha bytes say.
+    #[test]
+    fn draws_a_workbook_picture_opaquely() {
+        let folder = std::env::temp_dir()
+            .join("rust-hover-preview-office-tests")
+            .join("preview");
+        std::fs::create_dir_all(&folder).expect("a test folder");
+        let path = folder.join("used-range.bmp");
+        std::fs::write(&path, bmp_bytes(2, 2, [40, 90, 200, 0])).expect("a written picture");
+
+        let cached = crate::office_render::CachedRender {
+            path: path.clone(),
+            kind: crate::office_render::RenderedKind::Bmp,
+        };
+        let (pixels, width, height) = render_cached(&cached, 4, 4).expect("a drawn picture");
+
+        assert_eq!((width, height), (4, 4));
+        assert_eq!(pixels.len(), 4 * 4 * 4);
+        assert!(
+            pixels.chunks_exact(4).all(|pixel| pixel[3] == 255),
+            "a drawn picture is opaque"
+        );
+        // Blue, green, red — the order the frame is in — and the colour survived.
+        assert_eq!(&pixels[..3], &[40, 90, 200]);
+
+        let _ = std::fs::remove_file(&path);
     }
 
     /// A document is previewed the way a hover previews one: the file's own header

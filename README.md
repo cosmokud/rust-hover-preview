@@ -54,6 +54,10 @@ A document is previewed from the picture Office saves inside it — `docProps/th
 
 For a hover that rests, and for any document that saved no picture of itself — Excel only writes one when "Save Thumbnails" is on, a workbook saved by a macro carries none, and files from other tools often have neither — a page is rendered by the installed Office, in the background, and kept under `%LOCALAPPDATA%\rust-hover-preview\cache\office`. Word and Excel export page 1 to PDF, which the built-in Windows PDF engine then draws; PowerPoint exports slide 1 as an image. The preview shows the saved thumbnail (or a spinner) until the page is there, and nothing is launched until the pointer has rested on the document. See [Optional: Enable Office Page Rendering](#optional-enable-office-page-rendering).
 
+The instant path is the picture the document saved of itself, so a document that saved none is answered by the render tier: the rest, plus a few seconds for the first one while Office starts, then a fraction of a second per document while the engine stays warm. Turning thumbnails on in Word — File → Info → Properties → Advanced Properties → Summary → Save Thumbnails for all Documents — makes those documents instant too.
+
+Excel exports a workbook's first printed page, which goes through the print pipeline and so needs a printer on the machine. Where there is none, the used range's top-left is copied out as a picture instead — the corner of the sheet a person would see first, which is the most a machine without a printer can produce.
+
 Add or remove formats through `config.ini`; the list is editable like the archive list.
 
 ### Videos (FFmpeg required)
@@ -104,6 +108,8 @@ ffprobe -version
 ## Optional: Enable Office Page Rendering
 
 A document that saved no thumbnail of itself still previews: the page is rendered by the Word, Excel or PowerPoint installed on this machine, in the background, and cached. Nothing beyond Office itself is needed, no document is ever saved or changed, and no engine is started until the pointer has rested on a document for two seconds — a sweep across a folder launches nothing.
+
+Excel's page export goes through the print pipeline, so it needs a printer installed on the machine; with none, a workbook is previewed from a picture of its used range instead. Word's automation runs whatever Word the machine has, and a document it cannot open — a password, an unreadable file — is answered with no preview.
 
 Turn it off under **Office Preview → Render With Office** in the tray, or with `office_render_enabled=false` in `config.ini`. What has been rendered is kept under `%LOCALAPPDATA%\rust-hover-preview\cache\office` up to `office_cache_mb` (256 MB by default, `0` for no cache — which also switches the tier off, since a page that cannot be kept is not worth an Office start).
 
