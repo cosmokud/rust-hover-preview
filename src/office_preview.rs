@@ -20,7 +20,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// The box a preview is placed in while its page is being rendered: just enough
 /// for the spinner, since there is nothing else to show yet. The page's own size
 /// is what the layout uses the moment it exists, and the window is moved to it.
-pub(crate) const WAITING_BOX: u32 = 128;
+pub(crate) const WAITING_BOX: u32 = 64;
 
 /// What a preview of this document would be drawn from.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -47,16 +47,37 @@ impl SourceKind {
 /// Which of the document's sources a preview would be drawn from, asked by the
 /// layout before it decides how large the preview may be.
 pub(crate) fn source_kind(path: &Path) -> SourceKind {
-    match office_render::cached_render(path) {
-        // A page Office exported is drawn at whatever size it is asked for; the
-        // picture a workbook is answered with on a machine that cannot export a
-        // page is a screen bitmap, and enlarging that would only stretch it.
-        Some(cached) => match cached.kind {
-            RenderedKind::Pdf | RenderedKind::Png => SourceKind::Page,
-            RenderedKind::Bmp => SourceKind::Raster,
-        },
-        None => SourceKind::None,
+    let Some(cached) = usable_render(path) else {
+        return SourceKind::None;
+    };
+
+    // A page Office exported is drawn at whatever size it is asked for; the picture
+    // a workbook is answered with on a machine that cannot export a page is a screen
+    // bitmap, and enlarging that would only stretch it.
+    match cached.kind {
+        RenderedKind::Pdf | RenderedKind::Png => SourceKind::Page,
+        RenderedKind::Bmp => SourceKind::Raster,
     }
+}
+
+/// The page waiting for this document, if there is one and it can be read.
+///
+/// A cache file that cannot be read is not a page: one left half-written by a
+/// process that was ended mid-render, or one something else has corrupted, would
+/// otherwise be handed to a preview that blinks away the moment it tries to draw
+/// it — and it would be trusted forever, because "a page is already rendered for
+/// this file" is what stops another render. So a file that will not give up its page
+/// is dropped here, which is what gets the document rendered again. This is the side
+/// that may ask the PDF engine — its threads are multithreaded apartments — which is
+/// why the check lives here rather than where the cache is listed.
+fn usable_render(path: &Path) -> Option<CachedRender> {
+    let cached = office_render::cached_render(path)?;
+    if rendered_dimensions(&cached).is_some() {
+        return Some(cached);
+    }
+
+    let _ = std::fs::remove_file(&cached.path);
+    None
 }
 
 /// The size the layout places a preview of this document from.
@@ -66,7 +87,7 @@ pub(crate) fn source_kind(path: &Path) -> SourceKind {
 /// switched off, is answered with no preview rather than with a box that would
 /// spin forever.
 pub(crate) fn measure(path: &Path) -> Option<(u32, u32)> {
-    if let Some(cached) = office_render::cached_render(path) {
+    if let Some(cached) = usable_render(path) {
         if let Some(dimensions) = rendered_dimensions(&cached) {
             return Some(dimensions);
         }
@@ -96,7 +117,7 @@ pub(crate) fn render(
         return None;
     }
 
-    let cached = office_render::cached_render(path)?;
+    let cached = usable_render(path)?;
     render_cached(&cached, target_width, target_height)
 }
 
