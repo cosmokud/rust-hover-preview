@@ -36,7 +36,7 @@ A Windows 11 tray app inspired by QTTabBar that shows instant File Explorer prev
 
 `txt`, `md`, `rtf`, `nfo`, `json`, `toml`, `yaml`, `xml`, `ini`, `csv`, `log`, `sql`, `py`, `js`, `ts`, `rs`, `go`, `c`, `h`, `cpp`, `cs`, `java`, `kt`, `swift`, `php`, `rb`, `lua`, `sh`, `ps1`, `bat`, `html`, `css`, and more.
 
-Extensionless repository files such as `LICENSE`, `Makefile`, `Dockerfile`, and `.gitignore` are also supported. Text previews show the first screenful, with long lines wrapped instead of cut off. Markdown can be rendered or shown as source. Full mode adds scrolling, selection, copy; it is off by default.
+Extensionless repository files such as `LICENSE`, `Makefile`, `Dockerfile`, and `.gitignore` are also supported. Text previews show the first screenful, with long lines wrapped instead of cut off. Markdown can be rendered or shown as source. Full mode adds scrolling, selection, copy; it is off by default. A painted preview is held in memory for the next hover, and **Cache → Text** decides how much of it is kept: nothing by default.
 
 You can add custom extensions via `config.ini`.
 
@@ -139,6 +139,7 @@ Turn it off under **Preview Types → Office** in the tray, or with `office_prev
 - **Volume** — Max, High, Medium, Low, Very Low, Mute
 - **Cache** — each of these lists its sizes largest first, `2 GB` at the top and `0 MB (Default)` at the bottom:
   - **Image** — how much memory decoded image frames may be kept in between hovers
+  - **Text** — the same for the frames text previews were painted as
   - **PDF** — the same for the pages PDF previews were rendered as
   - **Office** — the same for the pages Office rendered
 - **Run at Startup** — add or remove the Windows startup entry
@@ -171,6 +172,7 @@ archive_preview_enabled=true
 office_preview_enabled=true
 office_cache_mb=0
 pdf_cache_mb=0
+text_cache_mb=0
 image_cache_mb=0
 trigger_key=alt
 trigger_key_mode=disable
@@ -209,6 +211,7 @@ Key settings:
 - `image_cache_mb` — how much memory decoded image frames may be kept in, in megabytes, so hovering back over a folder does not decode the same pictures again; `0` (the default) holds nothing, and the value is capped at `2048`.
 - `office_cache_mb` — the same for the pages Office rendered, capped at `2048`. `0` holds nothing, but a page is still rendered for the hover that asks for it: this size is only how much is kept between hovers.
 - `pdf_cache_mb` — the same for the pages PDF previews were rendered as, capped at `2048`. A page is stored as the pixels it was drawn as, so the size is per file *and* per preview size: the same PDF hovered at fit-to-screen and at `25%` is held as two pages.
+- `text_cache_mb` — the same for the frames text previews were painted as, capped at `2048`. A frame is stored as the pixels it was painted into, so the size is per file, per box and per scroll position; a frame a selection is painted into is never held.
 - `office_extensions` — the Office-preview gate, under `[office]`, written without dots.
 - `trigger_key` / `trigger_key_mode` — key (`alt`, `ctrl`, `shift`, `win`) and mode (`disable` or `enable`).
 - `follow_cursor` — `true` for Follow Cursor, `false` for Best Position.

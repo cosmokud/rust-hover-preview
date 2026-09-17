@@ -58,6 +58,16 @@ pub const MAX_OFFICE_CACHE_MB: u32 = 2048;
 /// makes.
 pub const DEFAULT_PDF_CACHE_MB: u32 = 0;
 pub const MAX_PDF_CACHE_MB: u32 = 2048;
+/// Memory the frames a text preview was painted as may hold. A frame is stored as
+/// the pixels it was painted into, so the box it was painted in and the scroll
+/// position it starts at are part of what is kept rather than only the file it came
+/// from.
+///
+/// Nothing is held by default: a frame is painted for the hover that asks for it,
+/// and keeping the frames of the files that are hovered most is a choice the user
+/// makes.
+pub const DEFAULT_TEXT_CACHE_MB: u32 = 0;
+pub const MAX_TEXT_CACHE_MB: u32 = 2048;
 
 pub fn sanitize_webp_playback_fps(value: u32) -> u32 {
     match value {
@@ -92,6 +102,15 @@ pub fn sanitize_office_cache_mb(value: u32) -> u32 {
 /// question a size answers is how much of what was drawn is kept between hovers.
 pub fn sanitize_pdf_cache_mb(value: u32) -> u32 {
     value.min(MAX_PDF_CACHE_MB)
+}
+
+/// The painted-text-frame cache size in megabytes.
+///
+/// `0` is a cache that holds nothing rather than a text preview that is switched
+/// off: a frame is painted for the hover that asks for it either way, so the only
+/// question a size answers is how much of what was painted is kept between hovers.
+pub fn sanitize_text_cache_mb(value: u32) -> u32 {
+    value.min(MAX_TEXT_CACHE_MB)
 }
 
 /// The text preview font scale, where `0` and nonsense land back on the default.
@@ -491,6 +510,10 @@ pub struct AppConfig {
     /// hovers. A page is rendered at `0` like at any other size; it is simply not
     /// kept once the hover that asked for it is over.
     pub pdf_cache_mb: u32,
+    /// Memory the frames text previews were painted as may hold, in megabytes,
+    /// between hovers. A frame is painted at `0` like at any other size; it is
+    /// simply not kept once the hover that asked for it is over.
+    pub text_cache_mb: u32,
     /// Whether a text preview is more than something to look at: a preview that
     /// scrolls, that can be selected and copied from, and that a pointer can rest
     /// on without closing it. Off by default, because it changes what a preview
@@ -541,6 +564,7 @@ impl Default for AppConfig {
             office_preview_enabled: true,
             office_cache_mb: DEFAULT_OFFICE_CACHE_MB,
             pdf_cache_mb: DEFAULT_PDF_CACHE_MB,
+            text_cache_mb: DEFAULT_TEXT_CACHE_MB,
             text_preview_full_mode: false,
             text_font_scale_percent: DEFAULT_TEXT_FONT_SCALE_PERCENT,
             text_scroll_far_edge_grace_pixels: DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS,
@@ -721,6 +745,11 @@ impl AppConfig {
             );
             ini.set(
                 CONFIG_SECTION,
+                "text_cache_mb",
+                Some(sanitize_text_cache_mb(self.text_cache_mb).to_string()),
+            );
+            ini.set(
+                CONFIG_SECTION,
                 "text_preview_full_mode",
                 Some(self.text_preview_full_mode.to_string()),
             );
@@ -862,6 +891,11 @@ impl AppConfig {
         if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "pdf_cache_mb") {
             if let Ok(value) = u32::try_from(value) {
                 self.pdf_cache_mb = sanitize_pdf_cache_mb(value);
+            }
+        }
+        if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "text_cache_mb") {
+            if let Ok(value) = u32::try_from(value) {
+                self.text_cache_mb = sanitize_text_cache_mb(value);
             }
         }
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "text_preview_full_mode") {

@@ -1,12 +1,13 @@
 use crate::config::{
     sanitize_image_cache_mb, sanitize_office_cache_mb, sanitize_pdf_cache_mb,
-    sanitize_text_font_scale_percent, MarkdownMode, PreviewScale, PreviewType, TextTheme,
-    TransparentBackground, TriggerKeyMode, DEFAULT_PREVIEW_SCALE_PERCENT,
+    sanitize_text_cache_mb, sanitize_text_font_scale_percent, MarkdownMode, PreviewScale,
+    PreviewType, TextTheme, TransparentBackground, TriggerKeyMode, DEFAULT_PREVIEW_SCALE_PERCENT,
     DEFAULT_TEXT_FONT_SCALE_PERCENT,
 };
 use crate::office_render;
 use crate::pdf_preview;
 use crate::preview_window::{refresh_preview, refresh_preview_types, trim_image_cache};
+use crate::text_preview;
 use crate::text_theme;
 use crate::theme_files;
 use crate::{startup, CONFIG, RUNNING};
@@ -89,6 +90,7 @@ const ID_TRAY_TYPE_OFFICE: u16 = 1067;
 const ID_TRAY_IMAGE_CACHE_BASE: u16 = 1300;
 const ID_TRAY_OFFICE_CACHE_BASE: u16 = 1320;
 const ID_TRAY_PDF_CACHE_BASE: u16 = 1340;
+const ID_TRAY_TEXT_CACHE_BASE: u16 = 1360;
 /// The sizes the `Cache` submenu offers, in megabytes, largest first — `2 GB` at
 /// the top and a cache that holds nothing at the bottom — and the whole range the
 /// settings allow, so a size a hand-edited `config.ini` asks for that is not one of
@@ -223,8 +225,11 @@ unsafe extern "system" fn tray_window_proc(
                 cmd if (ID_TRAY_OFFICE_CACHE_BASE..ID_TRAY_PDF_CACHE_BASE).contains(&cmd) => {
                     set_office_cache_mb(cmd - ID_TRAY_OFFICE_CACHE_BASE)
                 }
-                cmd if cmd >= ID_TRAY_PDF_CACHE_BASE => {
+                cmd if (ID_TRAY_PDF_CACHE_BASE..ID_TRAY_TEXT_CACHE_BASE).contains(&cmd) => {
                     set_pdf_cache_mb(cmd - ID_TRAY_PDF_CACHE_BASE)
+                }
+                cmd if cmd >= ID_TRAY_TEXT_CACHE_BASE => {
+                    set_text_cache_mb(cmd - ID_TRAY_TEXT_CACHE_BASE)
                 }
                 ID_TRAY_FONT_400 => set_text_font_scale(400),
                 ID_TRAY_FONT_300 => set_text_font_scale(300),
@@ -931,14 +936,22 @@ unsafe fn show_context_menu(hwnd: HWND) {
     );
 
     // Add the "Cache" submenu: how much memory a preview's own data may be held in
-    // between hovers — the frames a decoded image was shown as, the pages a PDF was
-    // drawn as, and the pages Office rendered — each of them listed largest first.
-    // All of it is held in memory and nowhere else, nothing is written to disk, and
-    // every cache holds nothing at all until a size is chosen here.
-    let (image_cache_mb, office_cache_mb, pdf_cache_mb) = CONFIG
+    // between hovers — the frames a decoded image was shown as, the frames a text
+    // preview was painted as, the pages a PDF was drawn as, and the pages Office
+    // rendered — each of them listed largest first. All of it is held in memory and
+    // nowhere else, nothing is written to disk, and every cache holds nothing at all
+    // until a size is chosen here.
+    let (image_cache_mb, office_cache_mb, pdf_cache_mb, text_cache_mb) = CONFIG
         .lock()
-        .map(|c| (c.image_cache_mb, c.office_cache_mb, c.pdf_cache_mb))
-        .unwrap_or((0, 0, 0));
+        .map(|c| {
+            (
+                c.image_cache_mb,
+                c.office_cache_mb,
+                c.pdf_cache_mb,
+                c.text_cache_mb,
+            )
+        })
+        .unwrap_or((0, 0, 0, 0));
 
     let cache_menu = CreatePopupMenu().unwrap();
 
@@ -956,6 +969,7 @@ unsafe fn show_context_menu(hwnd: HWND) {
 
     for (name, base, held) in [
         (w!("Image"), ID_TRAY_IMAGE_CACHE_BASE, image_cache_mb),
+        (w!("Text"), ID_TRAY_TEXT_CACHE_BASE, text_cache_mb),
         (w!("PDF"), ID_TRAY_PDF_CACHE_BASE, pdf_cache_mb),
         (w!("Office"), ID_TRAY_OFFICE_CACHE_BASE, office_cache_mb),
     ] {
@@ -1204,6 +1218,27 @@ fn set_pdf_cache_mb(index: u16) {
     }
 
     pdf_preview::trim_now();
+}
+
+/// How much memory the frames a text preview was painted as may be held in,
+/// between hovers.
+///
+/// Like the caches beside it this switches nothing off: a frame is painted for the
+/// hover that asks for it whatever the size, and a size of nothing means it is
+/// dropped the moment it has been painted. So nothing on screen changes here —
+/// what changes is how much is freed, and a smaller size frees it now rather than
+/// at the next paint.
+fn set_text_cache_mb(index: u16) {
+    let Some(megabytes) = cache_size_at(index) else {
+        return;
+    };
+
+    if let Ok(mut config) = CONFIG.lock() {
+        config.text_cache_mb = sanitize_text_cache_mb(megabytes);
+        config.save();
+    }
+
+    text_preview::trim_now();
 }
 
 /// Full mode changes what a text preview *is* rather than what it shows — it

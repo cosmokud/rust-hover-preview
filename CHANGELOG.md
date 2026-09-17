@@ -7,6 +7,7 @@
 - Office previews: hovering a Word, Excel or PowerPoint document shows a page of it, rendered by the installed Office. No engine starts until the pointer has rested on the file for two seconds.
 - `office_preview_enabled` and `office_cache_mb` in `config.ini`, an editable `[office] extensions` list, and an `Office` entry in the tray's `Preview Types` submenu.
 - `pdf_cache_mb` in `config.ini` and a `PDF` entry in the tray's `Cache` submenu: the page a PDF preview was drawn as is held in memory between hovers, so hovering back over a file does not render it again. Nothing is held by default, and the value is capped at `2048`.
+- `text_cache_mb` in `config.ini` and a `Text` entry in the tray's `Cache` submenu: the frame a text preview was painted as is held in memory between hovers, so hovering back over a file does not paint it again. Nothing is held by default, and the value is capped at `2048`. A frame a selection is painted into is never held.
 
 ### Changed
 
