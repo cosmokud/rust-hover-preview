@@ -1602,6 +1602,104 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
+    /// Renders documents that are already on disk, named in `RHP_OFFICE_PROBE`
+    /// (separated by `;`), through the real code path and reports what happened.
+    ///
+    /// Ignored like the smoke test, and the way to look at a document that will not
+    /// preview:
+    /// `$env:RHP_OFFICE_PROBE = "C:\docs\one.xlsx;C:\docs\two.xls"`
+    /// `cargo test -- --ignored --nocapture office_render_probe`
+    #[test]
+    #[ignore = "starts the installed Office"]
+    fn office_render_probe() {
+        unsafe {
+            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        }
+
+        let Ok(list) = std::env::var("RHP_OFFICE_PROBE") else {
+            println!("set RHP_OFFICE_PROBE to one or more paths, separated by ';'");
+            return;
+        };
+
+        for path in list
+            .split(';')
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+        {
+            let path = PathBuf::from(path);
+            println!("\n--- {} ---", path.display());
+            println!(
+                "exists: {} container: {:?} engine: {:?}",
+                path.exists(),
+                container_kind(&path),
+                app_for(&path)
+            );
+
+            let mut engine = None;
+            let request = RenderRequest {
+                source: path.clone(),
+                width: 1280,
+                height: 800,
+                generation: 1,
+                requested: Instant::now(),
+            };
+
+            let started = Instant::now();
+            let rendered = render_request(&mut engine, &request);
+            println!("rendered: {rendered} in {:?}", started.elapsed());
+            match engine.as_ref() {
+                Some(engine) => println!(
+                    "engine: attached={} owned_pid={}",
+                    engine.attached, engine.owned_pid
+                ),
+                None => println!("engine: none"),
+            }
+            println!(
+                "last failure: {}",
+                last_failure().unwrap_or_else(|| "none recorded".to_string())
+            );
+            match cached_render(&path) {
+                Some(cached) => println!(
+                    "cache: {} ({} bytes)",
+                    cached.path.display(),
+                    std::fs::metadata(&cached.path)
+                        .map(|m| m.len())
+                        .unwrap_or(0)
+                ),
+                None => println!("cache: none"),
+            }
+
+            // The half a hover does after the render: measure it, then draw it —
+            // on a thread of its own, in a multithreaded apartment, which is where
+            // the app draws.
+            println!("measured: {:?}", crate::office_preview::measure(&path));
+            if let Some(cached) = cached_render(&path) {
+                println!("dimensions: {:?}", image::image_dimensions(&cached.path));
+                match image::open(&cached.path) {
+                    Ok(image) => println!("decoded: {}x{}", image.width(), image.height()),
+                    Err(error) => println!("decode failed: {error}"),
+                }
+            }
+
+            let drawing = path.clone();
+            let drawn = std::thread::spawn(move || {
+                crate::pdf_preview::initialize_apartment();
+                crate::office_preview::render(&drawing, 1200, 900, None)
+            })
+            .join()
+            .ok()
+            .flatten();
+            match drawn {
+                Some((pixels, width, height)) => {
+                    println!("drawn: {width}x{height} ({} pixels)", pixels.len() / 4)
+                }
+                None => println!("drawn: nothing"),
+            }
+
+            drop(engine);
+        }
+    }
+
     /// A document of the given family, written by the application itself, with a
     /// little content in it so that a page has something to show.
     fn write_sample(app_kind: OfficeApp, path: &Path) -> Option<()> {
@@ -1721,11 +1819,13 @@ mod tests {
                 }
             }
 
-            // What the hover would show before anything is rendered: nothing, so
-            // the spinner's box is what the layout places.
+            // What the hover would show before anything is rendered: nothing, so the
+            // spinner's own box is what the layout places, and the page is asked for
+            // in the box that family's pages have.
             println!(
-                "before a render: source {:?}, box {:?}",
+                "before a render: source {:?}, spinner box {}, render box {:?}",
                 crate::office_preview::source_kind(&path),
+                crate::office_preview::WAITING_BOX,
                 crate::office_formats::default_page_size(&path)
             );
 

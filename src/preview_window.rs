@@ -5290,6 +5290,9 @@ pub fn run_preview_window() {
         // it, and whether one has been asked for and is being waited on.
         let mut office_render_due: Option<OfficeRenderDue> = None;
         let mut office_render_pending: Option<(PathBuf, u64)> = None;
+        // A page that arrived for the hover already on screen, and is being loaded
+        // to replace what is there rather than to open a new preview.
+        let mut office_upgrade: Option<PathBuf> = None;
 
         // Message loop
         let mut msg = MSG::default();
@@ -5601,6 +5604,13 @@ pub fn run_preview_window() {
 
                 if hovered && ready_ok {
                     if latest_preview_msg.is_none() {
+                        // The page is there, so the hover is replayed: that measures
+                        // the page itself, moves the window to its size and loads it.
+                        // It is an upgrade rather than a new preview, though, and what
+                        // is on screen stays while it happens — hiding the spinner for
+                        // the second a large picture takes to decode is a blink the
+                        // user sees and reads as the preview failing.
+                        office_upgrade = Some(ready_path.clone());
                         latest_preview_msg = current_show.clone();
                     }
                 } else if hovered {
@@ -5749,6 +5759,7 @@ pub fn run_preview_window() {
                         current_show = None;
                         office_render_due = None;
                         office_render_pending = None;
+                        office_upgrade = None;
                     }
                     PreviewMessage::Refresh => {
                         render_layered_preview(hwnd);
@@ -5772,6 +5783,12 @@ pub fn run_preview_window() {
                     let max_height = layout.max_height;
                     let preview_w = layout.preview_w;
                     let preview_h = layout.preview_h;
+
+                    // A page that arrived for the hover already on screen is an
+                    // upgrade: what is there — the spinner — stays up while the page
+                    // is loaded, and is replaced when it lands.
+                    let upgrading = office_upgrade.as_deref() == Some(path.as_path());
+                    office_upgrade = None;
 
                     // A text or archive preview is rendered at the size the
                     // layout planned for it: both are painted at a fixed font
@@ -5875,15 +5892,17 @@ pub fn run_preview_window() {
                         if let Some(cancel) = pending_load_cancel.take() {
                             cancel.store(true, Ordering::Release);
                         }
-                        if let Ok(mut media_guard) = CURRENT_MEDIA.lock() {
-                            if let Some(ref mut media) = *media_guard {
-                                media.cancel_background_work();
+                        if !upgrading {
+                            if let Ok(mut media_guard) = CURRENT_MEDIA.lock() {
+                                if let Some(ref mut media) = *media_guard {
+                                    media.cancel_background_work();
+                                }
+                                // Clear immediately so old pixels never flash while
+                                // the new target is being decoded.
+                                *media_guard = None;
                             }
-                            // Clear immediately so old pixels never flash while
-                            // the new target is being decoded.
-                            *media_guard = None;
+                            let _ = ShowWindow(hwnd, SW_HIDE);
                         }
-                        let _ = ShowWindow(hwnd, SW_HIDE);
 
                         // Start background load; spinner will appear after 2s
                         current_generation += 1;
@@ -5937,6 +5956,7 @@ pub fn run_preview_window() {
                     current_show = None;
                     office_render_due = None;
                     office_render_pending = None;
+                    office_upgrade = None;
                 }
             } else if refresh_requested {
                 render_layered_preview(hwnd);
@@ -6177,5 +6197,85 @@ mod tests {
         // 720 is the name's right edge plus the gap, and 720 + 200 leaves the display;
         // 340 is its bottom plus the gap, and 340 + 300 does not.
         assert_eq!((placement.pos_x, placement.pos_y), (690, 340));
+    }
+
+    /// The whole path a hover takes for a document that is already on disk: measure
+    /// it, place it, load it. Ignored, and driven by `RHP_OFFICE_PROBE` —
+    /// `$env:RHP_OFFICE_PROBE = "C:\docs\one.xlsx"; cargo test -- --ignored --nocapture office_hover_probe`
+    /// — for a document whose preview does not appear.
+    #[test]
+    #[ignore = "reads the files named in RHP_OFFICE_PROBE"]
+    fn office_hover_probe() {
+        // The drawing half of the app runs in a multithreaded apartment.
+        pdf_preview::initialize_apartment();
+
+        let Ok(list) = std::env::var("RHP_OFFICE_PROBE") else {
+            println!("set RHP_OFFICE_PROBE to one or more paths, separated by ';'");
+            return;
+        };
+
+        // A display with a cursor on it, which is what a hover arrives with.
+        let bounds = ScreenBounds {
+            left: 0,
+            top: 0,
+            right: 1920,
+            bottom: 1080,
+        };
+        let (cursor_x, cursor_y) = (900, 500);
+        let dpi = 96;
+
+        for path in list.split(';').map(str::trim).filter(|path| !path.is_empty()) {
+            let path = PathBuf::from(path);
+            println!("\n--- {} ---", path.display());
+
+            let configured = current_preview_scale();
+            let scale = effective_preview_scale(&path, configured);
+            println!("scale: configured {configured:?}, effective {scale:?}");
+
+            let Some(dimensions) = media_dimensions(&path, bounds, dpi) else {
+                println!("measure: nothing — the hover shows no preview");
+                continue;
+            };
+            println!("measure: {dimensions:?}");
+
+            let Some(layout) = compute_mouse_layout(
+                cursor_x, cursor_y, dimensions, false, None, scale, bounds,
+            ) else {
+                println!("layout: none — the hover shows no preview");
+                continue;
+            };
+            println!(
+                "layout: {}x{} at ({}, {}), free room {}x{}",
+                layout.preview_w,
+                layout.preview_h,
+                layout.pos_x,
+                layout.pos_y,
+                layout.max_width,
+                layout.max_height
+            );
+
+            let cancel = Arc::new(AtomicBool::new(false));
+            let started = Instant::now();
+            match load_media(
+                &path,
+                layout.max_width,
+                layout.max_height,
+                scale,
+                dpi,
+                Arc::clone(&cancel),
+            ) {
+                Some(media) => println!(
+                    "loaded: {}x{}, {} frame(s), in {:?}",
+                    media.current_width(),
+                    media.current_height(),
+                    media.frames.len(),
+                    started.elapsed()
+                ),
+                None => println!(
+                    "loaded: nothing — the hover blinks, in {:?}",
+                    started.elapsed()
+                ),
+            }
+        }
     }
 }
