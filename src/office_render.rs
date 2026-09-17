@@ -615,44 +615,49 @@ fn render_request(engine: &mut Option<Engine>, request: &RenderRequest) -> Rende
     // A different family's engine is dropped first, which quits it: an engine is
     // kept for the family it was created for and nothing else.
     //
-    // An instance created for this very request that gives no page is given up on
-    // and the render is tried once more on a new one: an Office that is still
-    // starting, or one that comes up reporting its license as expired, refuses work
-    // for reasons that have nothing to do with the document. Once, so that a
-    // document which will never render is not asked for twice on every hover.
+    // An instance that gives no page is given up on and the render is tried once
+    // more on a new one, whether it was made for this request or kept warm from the
+    // last: an Office that is still starting, or one whose license has run out —
+    // which answers for a while and then refuses the copy with "the license to use
+    // this application has expired", an answer about the instance rather than about
+    // the document — refuses work for reasons that have nothing to do with the
+    // file, and a fresh instance answers where the old one would not. The failed
+    // instance is dropped rather than asked again, since a warm one is exactly
+    // where a license runs out. Once, so that a document which will never render is
+    // not asked for twice on every hover.
     let mut retried = false;
     loop {
-        let created_here = match engine {
-            Some(engine) if engine.app_kind == app_kind => false,
-            _ => {
-                *engine = None;
-                let Some(created) = Engine::create(app_kind) else {
-                    return RenderOutcome::NoEngine;
-                };
-                *engine = Some(created);
-                true
-            }
-        };
+        if engine.as_ref().map(|engine| engine.app_kind) != Some(app_kind) {
+            *engine = None;
+        }
+        if engine.is_none() {
+            let Some(created) = Engine::create(app_kind) else {
+                return RenderOutcome::NoEngine;
+            };
+            *engine = Some(created);
+        }
 
-        let Some(engine) = engine.as_ref() else {
-            return RenderOutcome::NoEngine;
+        let rendered = {
+            let engine = engine.as_ref().expect("an engine was just created");
+            let source = PreparedSource::new(&request.source);
+            let width = request.width.max(1);
+            let height = request.height.max(1);
+            let rendered = engine.render(&source.path, &target, width, height);
+            source.cleanup();
+            rendered
         };
-
-        let source = PreparedSource::new(&request.source);
-        let width = request.width.max(1);
-        let height = request.height.max(1);
-        let rendered = engine.render(&source.path, &target, width, height);
-        source.cleanup();
 
         // What the renderer wrote is the answer, whatever it chose to write: the
         // cache says which file it was.
         if rendered && cached_render(&request.source).is_some() {
             return RenderOutcome::Rendered;
         }
-        if !created_here || retried {
+        if retried {
             return RenderOutcome::Refused;
         }
 
+        // The instance that failed is let go, and the next pass asks a new one.
+        *engine = None;
         retried = true;
     }
 }

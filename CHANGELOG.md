@@ -22,6 +22,7 @@
 - PowerPoint decks preview.
 - Excel workbooks preview on a machine with no printer.
 - An Office engine no longer survives its own quit, and a render that never returns no longer costs the documents after it.
+- An Office instance that gives no page — one whose license has run out, say — is dropped and the render is asked of a fresh one, so an instance that has stopped answering no longer costs every document hovered after it.
 - The picture a workbook is copied out as is taken off the clipboard.
 - A file that is not a document no longer starts an Office engine.
 
