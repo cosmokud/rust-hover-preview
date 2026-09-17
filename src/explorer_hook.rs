@@ -519,7 +519,6 @@ const FOLDER_PROBE_TRIGGER_MS: u64 = 400;
 const DISPLAY_CHANGE_BACKOFF_MS: u64 = 1500;
 const KEYBOARD_FOCUS_INPUT_GRACE_MS: u64 = 500;
 const HOVER_RESOLVER_INPUT_GRACE_MS: u64 = 1500;
-const WHEEL_SCROLL_SETTLE_MS: u64 = 150;
 const MOUSE_MOVE_PX: i32 = 5;
 const KEYBOARD_POINTER_MOVE_TOLERANCE_PX: i32 = 20;
 const KEYBOARD_PREVIEW_BOX_WATCH_MS: u64 = 2500;
@@ -585,8 +584,28 @@ fn recent_elapsed_within(elapsed: Option<Duration>, limit_ms: u64) -> bool {
         .unwrap_or(false)
 }
 
-fn should_probe_keyboard_focus(recent_navigation_elapsed: Option<Duration>) -> bool {
-    recent_elapsed_within(recent_navigation_elapsed, KEYBOARD_FOCUS_INPUT_GRACE_MS)
+fn should_probe_keyboard_focus(
+    recent_navigation_elapsed: Option<Duration>,
+    navigation_delay_ms: u64,
+) -> bool {
+    // The probe window covers the navigation delay as well as the input grace:
+    // the item the keyboard landed on is previewed only after the hold has
+    // passed, and a window that closed before then would leave it without a
+    // preview for good.
+    recent_elapsed_within(
+        recent_navigation_elapsed,
+        KEYBOARD_FOCUS_INPUT_GRACE_MS.max(navigation_delay_ms),
+    )
+}
+
+/// Whether navigation input is still arriving — a wheel tick, a held navigation
+/// key, or the focus move it drove — seen less than `navigation_delay_ms` ago.
+/// The comparison is strict, so a delay of zero holds nothing: Instant means
+/// navigation is answered as soon as it is seen.
+fn navigation_hold_active(elapsed: Option<Duration>, navigation_delay_ms: u64) -> bool {
+    elapsed
+        .map(|elapsed| elapsed < Duration::from_millis(navigation_delay_ms))
+        .unwrap_or(false)
 }
 
 fn should_probe_hover_resolver(
@@ -2586,12 +2605,13 @@ pub fn run_explorer_hook() {
                 c.hover_delay_ms,
                 c.trigger_key_mode,
                 c.same_file_rehover_delay_ms,
+                c.navigation_delay_ms,
             );
             // Resolved once per config change instead of once per tick.
             let vk = off_trigger_key_to_vk(&c.trigger_key);
             (snapshot, vk)
         })
-        .unwrap_or(((true, 0, TriggerKeyMode::Disable, 750), Some(0x12)));
+        .unwrap_or(((true, 0, TriggerKeyMode::Disable, 750, 200), Some(0x12)));
     let mut slow_explorer_probe_count = 0u32;
     let mut explorer_probe_backoff_until: Option<Instant> = None;
     let mut last_display_signature = current_display_signature();
@@ -2706,6 +2726,7 @@ pub fn run_explorer_hook() {
                 config.hover_delay_ms,
                 config.trigger_key_mode,
                 config.same_file_rehover_delay_ms,
+                config.navigation_delay_ms,
             );
             trigger_key_vk = off_trigger_key_to_vk(&config.trigger_key);
         }
@@ -2714,6 +2735,7 @@ pub fn run_explorer_hook() {
         let hover_delay_ms = config_snapshot.1;
         let trigger_key_mode = config_snapshot.2;
         let same_file_rehover_delay_ms = config_snapshot.3;
+        let navigation_delay_ms = config_snapshot.4;
 
         // One question, two settings: the key either stops previews while it is
         // held, or is the only thing that lets them happen. Either way, what is left
@@ -2901,9 +2923,9 @@ pub fn run_explorer_hook() {
                     last_keyboard_navigation_input_at = None;
                 }
             }
-            let scrolling = recent_elapsed_within(
+            let scrolling = navigation_hold_active(
                 last_wheel_tick_at.map(|at| at.elapsed()),
-                WHEEL_SCROLL_SETTLE_MS,
+                navigation_delay_ms,
             );
 
             if moved
@@ -3148,6 +3170,7 @@ pub fn run_explorer_hook() {
                     let mut keyboard_unlocked = false;
                     if should_probe_keyboard_focus(
                         last_keyboard_navigation_input_at.map(|at| at.elapsed()),
+                        navigation_delay_ms,
                     ) && is_foreground_explorer()
                         && last_keyboard_focus_probe.elapsed()
                             >= Duration::from_millis(KEYBOARD_FOCUS_PROBE_MS)
@@ -3201,6 +3224,12 @@ pub fn run_explorer_hook() {
                 pointer_pause.clear();
                 scroll_probe.disarm();
                 keyboard_screen_owner = false;
+                // The move is the mouse taking over from the keyboard, so the hold
+                // a released key left behind ends with it: a preview the pointer
+                // raises must not wait out the navigation delay of input the
+                // keyboard is no longer driving. A key still under a finger
+                // re-arms the hold on the next tick, as the keyboard's own input.
+                last_keyboard_navigation_input_at = None;
 
                 // Mouse movement always takes priority - dismiss keyboard hover.
                 // The keyboard preview may have been covering the cursor, so the
@@ -3278,11 +3307,17 @@ pub fn run_explorer_hook() {
                 continue;
             }
 
-            // The wheel is still turning, so any preview on screen belongs to a
-            // file that has scrolled away. Hold the stability window open and
-            // skip the focus/hover probes: the item that lands under the cursor
-            // is resolved below once the list stops moving.
-            if scrolling {
+            // Navigation is still arriving — the wheel is turning, or a
+            // navigation key is under a finger — so any preview on screen belongs
+            // to an item the user has already left, and the item the navigation is
+            // on its way to is not the one to preview yet. Keep the window open and
+            // skip the focus/hover probes: the item the navigation lands on is
+            // resolved below once the input has stopped for the navigation delay.
+            let keyboard_navigating = navigation_hold_active(
+                last_keyboard_navigation_input_at.map(|at| at.elapsed()),
+                navigation_delay_ms,
+            );
+            if scrolling || keyboard_navigating {
                 hover_start = Some(loop_now);
                 stationary_search_miss_started_at = None;
                 stationary_hover_probe_done = false;
@@ -3291,8 +3326,10 @@ pub fn run_explorer_hook() {
 
             // Mouse is stationary - check for keyboard navigation
             // Only when Explorer is the foreground window (keyboard input goes there)
-            if should_probe_keyboard_focus(last_keyboard_navigation_input_at.map(|at| at.elapsed()))
-                && is_foreground_explorer()
+            if should_probe_keyboard_focus(
+                last_keyboard_navigation_input_at.map(|at| at.elapsed()),
+                navigation_delay_ms,
+            ) && is_foreground_explorer()
                 && last_keyboard_focus_probe.elapsed()
                     >= Duration::from_millis(KEYBOARD_FOCUS_PROBE_MS)
             {
