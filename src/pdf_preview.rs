@@ -1,4 +1,5 @@
-use crate::config::PreviewType;
+use crate::config::{sanitize_pdf_cache_mb, PreviewType, DEFAULT_PDF_CACHE_MB};
+use crate::CONFIG;
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::fs::File;
@@ -6,6 +7,7 @@ use std::io::Read;
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::time::SystemTime;
 use windows::core::PCWSTR;
 use windows::Data::Pdf::{PdfDocument, PdfPage, PdfPageRenderOptions};
 use windows::Graphics::Imaging::BitmapEncoder;
@@ -87,21 +89,180 @@ fn remember_page_dimensions(path: &Path, dimensions: Option<(u32, u32)>) {
     }
 }
 
+/// What a held page is only valid for: the file, the version of it that was
+/// rendered, and the box it was rendered into.
+///
+/// The box is part of it because a page is stored as the pixels it was drawn as —
+/// the same page at fit-to-screen and at `25%` really is different pixels — so only
+/// the size that was asked for can be handed back for it; the version is there
+/// because a file edited in place has to be drawn again.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+struct PageCacheKey {
+    path: PathBuf,
+    modified: Option<SystemTime>,
+    len: u64,
+    width: u32,
+    height: u32,
+}
+
+/// A page being held: the pixels, and when they were last asked for.
+struct PageCacheEntry {
+    pixels: Vec<u8>,
+    width: u32,
+    height: u32,
+    size: usize,
+    last_used: u64,
+}
+
+/// The pages held in memory, and how much of the budget they take.
+#[derive(Default)]
+struct PageCache {
+    entries: HashMap<PageCacheKey, PageCacheEntry>,
+    bytes: usize,
+    /// A counter rather than a clock, so the order pages are dropped in cannot be
+    /// changed by the system clock moving.
+    tick: u64,
+}
+
+static RENDERED_PAGES: Lazy<Mutex<PageCache>> = Lazy::new(|| Mutex::new(PageCache::default()));
+
+/// The memory the cache may hold, read from the configuration each time rather
+/// than captured, so an edit to `pdf_cache_mb` applies without a restart.
+fn page_cache_limit_bytes() -> usize {
+    let megabytes = CONFIG
+        .lock()
+        .map(|config| sanitize_pdf_cache_mb(config.pdf_cache_mb))
+        .unwrap_or(DEFAULT_PDF_CACHE_MB);
+
+    megabytes as usize * 1024 * 1024
+}
+
+fn page_cache_key(path: &Path, width: u32, height: u32) -> PageCacheKey {
+    let metadata = std::fs::metadata(path).ok();
+
+    PageCacheKey {
+        path: path.to_path_buf(),
+        modified: metadata
+            .as_ref()
+            .and_then(|metadata| metadata.modified().ok()),
+        len: metadata.map(|metadata| metadata.len()).unwrap_or(0),
+        width,
+        height,
+    }
+}
+
+/// The page held for this file at this size, if the cache still has it.
+fn page_cache_get(key: &PageCacheKey) -> Option<(Vec<u8>, u32, u32)> {
+    let limit = page_cache_limit_bytes();
+    let mut cache = RENDERED_PAGES.lock().ok()?;
+
+    page_cache_trim(&mut cache, limit);
+
+    cache.tick += 1;
+    let tick = cache.tick;
+
+    let entry = cache.entries.get_mut(key)?;
+    entry.last_used = tick;
+
+    Some((entry.pixels.clone(), entry.width, entry.height))
+}
+
+/// Hold the page just rendered, dropping whatever no longer fits beside it.
+fn page_cache_put(key: PageCacheKey, pixels: &[u8], width: u32, height: u32) {
+    let limit = page_cache_limit_bytes();
+    let Ok(mut cache) = RENDERED_PAGES.lock() else {
+        return;
+    };
+
+    page_cache_trim(&mut cache, limit);
+
+    let size = pixels.len();
+    // A page larger than the whole budget would evict everything else and still
+    // not fit, so it is simply not held — which is every page at a budget of
+    // nothing, and is what makes that size mean "hold nothing".
+    if size > limit {
+        return;
+    }
+
+    cache.tick += 1;
+    let tick = cache.tick;
+
+    if let Some(previous) = cache.entries.insert(
+        key,
+        PageCacheEntry {
+            pixels: pixels.to_vec(),
+            width,
+            height,
+            size,
+            last_used: tick,
+        },
+    ) {
+        cache.bytes -= previous.size;
+    }
+    cache.bytes += size;
+
+    page_cache_trim(&mut cache, limit);
+}
+
+/// Drop pages, least recently used first, until the cache fits inside `limit`.
+fn page_cache_trim(cache: &mut PageCache, limit: usize) {
+    while cache.bytes > limit {
+        // Bound to its own statement so the borrow of `entries` has ended before
+        // the entry is removed.
+        let oldest = cache
+            .entries
+            .iter()
+            .min_by_key(|(_, entry)| entry.last_used)
+            .map(|(key, _)| key.clone());
+
+        let Some(oldest) = oldest else {
+            break;
+        };
+
+        if let Some(dropped) = cache.entries.remove(&oldest) {
+            cache.bytes -= dropped.size;
+        }
+    }
+}
+
+/// Trim the cache to the configured size now, which is what the tray asks for when
+/// a smaller size is chosen: what is over the new budget is freed at the moment it
+/// is set rather than at the next render that happens to pass through here.
+pub(crate) fn trim_now() {
+    let limit = page_cache_limit_bytes();
+    if let Ok(mut cache) = RENDERED_PAGES.lock() {
+        page_cache_trim(&mut cache, limit);
+    }
+}
+
 /// Render page 1 into the largest box that fits `max_width` x `max_height`
 /// without changing the page's aspect ratio, and return BGRA pixels with the
 /// size they were rendered at.
+///
+/// What was drawn is held in memory for the next hover of the same file at the same
+/// size — the render opens the document and rasters the page, which is the whole of
+/// what a PDF hover costs — up to `pdf_cache_mb`, and the cache is consulted before
+/// anything is opened, so a hit never pays for the engine at all.
 pub fn render_first_page(
     path: &Path,
     max_width: u32,
     max_height: u32,
 ) -> Option<(Vec<u8>, u32, u32)> {
+    let key = page_cache_key(path, max_width, max_height);
+    if let Some(page) = page_cache_get(&key) {
+        return Some(page);
+    }
+
     if !has_pdf_header(path) {
         return None;
     }
 
     let document = open_document(path)?;
     remember_opened_dimensions(path, &document);
-    render_opened_first_page(&document, max_width, max_height)
+    let (pixels, width, height) = render_opened_first_page(&document, max_width, max_height)?;
+    page_cache_put(key, &pixels, width, height);
+
+    Some((pixels, width, height))
 }
 
 /// The same, for a PDF that is already in memory.
@@ -350,4 +511,83 @@ fn has_pdf_header_in(bytes: &[u8]) -> bool {
     probe
         .windows(PDF_HEADER.len())
         .any(|window| window == PDF_HEADER)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A key of this module's own, for a page that was never rendered.
+    fn key(name: &str) -> PageCacheKey {
+        PageCacheKey {
+            path: PathBuf::from(name),
+            modified: None,
+            len: 0,
+            width: 100,
+            height: 200,
+        }
+    }
+
+    /// A held page of `size` bytes.
+    fn entry(size: usize, last_used: u64) -> PageCacheEntry {
+        PageCacheEntry {
+            pixels: vec![0u8; size],
+            width: 100,
+            height: 200,
+            size,
+            last_used,
+        }
+    }
+
+    /// The page that was asked for least recently is the one that goes, and the
+    /// bytes the cache reports are the bytes that are left in it.
+    #[test]
+    fn trims_the_page_cache_least_recently_used_first() {
+        let mut cache = PageCache::default();
+        cache.entries.insert(key("old"), entry(64, 1));
+        cache.entries.insert(key("new"), entry(64, 2));
+        cache.bytes = 128;
+
+        page_cache_trim(&mut cache, 64);
+
+        assert!(cache.entries.contains_key(&key("new")), "the newer page stays");
+        assert!(!cache.entries.contains_key(&key("old")), "the older page goes");
+        assert_eq!(cache.bytes, 64, "the budget is what is held");
+
+        // A budget of nothing empties it, which is what `0 MB` means.
+        page_cache_trim(&mut cache, 0);
+        assert!(cache.entries.is_empty());
+        assert_eq!(cache.bytes, 0);
+    }
+
+    /// The file, its version and the box it was drawn into are what a page is held
+    /// for: any of them changing is another page.
+    #[test]
+    fn keys_a_page_by_the_file_its_version_and_the_box() {
+        // A folder of this module's own: the tests run beside each other, and one
+        // of them clearing its fixtures must not take another's with it.
+        let folder = std::env::temp_dir()
+            .join("rust-hover-preview-pdf-tests")
+            .join("keys");
+        std::fs::create_dir_all(&folder).expect("a test folder");
+        let path = folder.join("keyed.pdf");
+        std::fs::write(&path, b"one").expect("a written file");
+
+        let first = page_cache_key(&path, 800, 600);
+        assert_eq!(first, page_cache_key(&path, 800, 600));
+        assert_ne!(
+            first,
+            page_cache_key(&path, 600, 800),
+            "another box is another page"
+        );
+
+        std::fs::write(&path, b"a rewritten file").expect("a rewritten file");
+        assert_ne!(
+            first,
+            page_cache_key(&path, 800, 600),
+            "a rewritten file is another page"
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
 }

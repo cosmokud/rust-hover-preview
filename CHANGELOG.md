@@ -6,6 +6,7 @@
 
 - Office previews: hovering a Word, Excel or PowerPoint document shows a page of it, rendered by the installed Office. No engine starts until the pointer has rested on the file for two seconds.
 - `office_preview_enabled` and `office_cache_mb` in `config.ini`, an editable `[office] extensions` list, and an `Office` entry in the tray's `Preview Types` submenu.
+- `pdf_cache_mb` in `config.ini` and a `PDF` entry in the tray's `Cache` submenu: the page a PDF preview was drawn as is held in memory between hovers, so hovering back over a file does not render it again. Nothing is held by default, and the value is capped at `2048`.
 
 ### Changed
 
@@ -22,6 +23,7 @@
 - A worksheet's picture is asked for again if Excel refuses the first ask, and a page that cannot be read is rendered again rather than trusted.
 - A document that refuses a page is left alone for two minutes rather than ten.
 - New `Cache` submenu in the tray: the image and Office caches are sized from `0 MB` to `2 GB`, and both hold nothing at all until a size is chosen.
+- The `Cache` submenu lists its sizes largest first — `2 GB` at the top, `0 MB (Default)` at the bottom — and `Text Preview → Font Size` lists its steps the same way, with `90%`, `80%` and `70%` added below `100%`.
 - `image_cache_mb` defaults to `0` rather than `64`.
 - Removed the `Office Preview` submenu with it: Office previews are switched by the `Office` entry under `Preview Types`, and `office_render_enabled` is no longer read.
 
