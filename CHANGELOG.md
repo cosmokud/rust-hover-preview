@@ -4,17 +4,17 @@
 
 ### Added
 
-- Archive previews: hovering a `.zip`, `.rar`, `.7z`, `.tar`, `.tar.gz` — and the zip containers `.zipx`, `.jar`, `.apk`, `.xpi` and `.cbz` — shows a summary line and a capped tree of what the archive holds, with folders first, each file's size right-aligned, and `… and N more items` when the page runs out of room. Nothing is unpacked: only the archive's own table of contents is read, so a five-gigabyte archive previews as fast as a small one.
-- `archive_preview_enabled` and an `[archive] extensions` list in `config.ini`, and an `Archives` entry in the tray's `Toggle Preview Types` submenu. The list is editable, so a container it does not name can be added.
-- Archive listings are painted with the same themes, fonts and margins as text previews and follow the `Text Preview Font Size` setting; switching theme or font size redraws an open listing.
-- `Avoid Filename` in the tray's `Preview Position` submenu, or `avoid_filename` in `config.ini`: a preview is moved clear of the name of the file it is about — off the text the item draws, by the shortest step that clears it and still fits the display — so the item under the pointer or the keyboard stays readable while its preview is up. It applies to `Follow Cursor` and `Best Position` alike, for a row of a Details or Content view as much as for the label under an icon, and off by default because it moves a preview from the place it would otherwise have filled.
+- Archive previews: hovering an archive shows a summary line and a capped tree of what it holds, read from its own table of contents without unpacking anything.
+- `archive_preview_enabled` and an `[archive] extensions` list in `config.ini`, plus an `Archives` entry in the tray's `Toggle Preview Types` submenu.
+- Archive listings are painted with the text preview's themes, fonts and margins, and follow the `Text Preview Font Size` setting.
+- `Avoid Filename` in the tray's `Preview Position` submenu, or `avoid_filename` in `config.ini`: a preview is moved clear of the name of the file it is about, and resized where the display leaves no room for it beside the name. On by default, and applies to both positions.
 
 ### Changed
 
-- The minimum supported Rust version is now 1.88, which is the `zip` crate's floor.
-- The GDI painting a text preview and an archive listing share moved into `text_paint.rs`; text previews are unchanged by it.
-- Archive listings keep room between an entry's icon and its name instead of drawing the two against each other.
-- The tray's `Preview Position` entries carry radio marks, the way the trigger key's two modes do: `Follow Cursor` and `Best Position` are one setting shown two ways, and `Avoid Filename` is a setting of its own with a checkmark of its own.
+- The minimum supported Rust version is now 1.88, the `zip` crate's floor.
+- The GDI painting a text preview and an archive listing share moved into `text_paint.rs`.
+- Archive listings keep room between an entry's icon and its name.
+- The tray's `Preview Position` entries carry radio marks, and `Avoid Filename` a checkmark of its own.
 - RAR archives are read through RARLAB's UnRAR sources compiled in by the `unrar` crate. See the licence note in README.
 
 ## [0.2.4] - 2026-09-17

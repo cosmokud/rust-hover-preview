@@ -755,7 +755,7 @@ unsafe fn show_context_menu(hwnd: HWND) {
     let (follow_cursor, avoid_filename) = CONFIG
         .lock()
         .map(|c| (c.follow_cursor, c.avoid_filename))
-        .unwrap_or((false, false));
+        .unwrap_or((false, true));
     let position_menu = CreatePopupMenu().unwrap();
 
     let _ = AppendMenuW(

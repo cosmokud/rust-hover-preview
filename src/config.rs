@@ -385,8 +385,10 @@ pub struct AppConfig {
     pub follow_cursor: bool,
     /// Whether a preview is placed clear of the name of the file it is about, so the
     /// item the pointer is on or the keyboard is focused on stays readable while its
-    /// preview is up. Off by default, because it moves a preview from the place it
-    /// would otherwise have filled.
+    /// preview is up. On by default: the name of the file being previewed is part of
+    /// what the preview is about, and a preview that covers it hides the one thing the
+    /// pointer's item says. Turning it off puts previews back where the position modes
+    /// alone would have them.
     pub avoid_filename: bool,
     pub same_file_rehover_delay_ms: u64,
     pub webp_playback_fps: u32,
@@ -439,7 +441,7 @@ impl Default for AppConfig {
             trigger_key_mode: TriggerKeyMode::Disable,
             confirm_file_type: false,
             follow_cursor: false,
-            avoid_filename: false,
+            avoid_filename: true,
             same_file_rehover_delay_ms: 750,
             webp_playback_fps: DEFAULT_WEBP_PLAYBACK_FPS,
             image_cache_mb: DEFAULT_IMAGE_CACHE_MB,
