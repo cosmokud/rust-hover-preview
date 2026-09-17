@@ -3398,7 +3398,14 @@ fn monitor_dpi_from_point(x: i32, y: i32) -> u32 {
     96
 }
 
-/// Render a single frame of the loading spinner animation (BGRA pixels)
+/// Render a single frame of the loading spinner animation (BGRA pixels).
+///
+/// The frame is the arc and nothing else: the box it is drawn in is transparent,
+/// so what a hover that is waiting shows is a spinner rather than a square of its
+/// own. The arc is white, with a soft dark halo drawn under it, because a preview
+/// goes over whatever Explorer happens to be drawing — the halo is what keeps the
+/// spinner visible over a light background, and the white arc is what keeps it
+/// visible over a dark one.
 fn render_loading_frame(width: u32, height: u32, angle: f32) -> Vec<u8> {
     let total_pixels = (width as usize) * (height as usize);
     let mut pixels = vec![0u8; total_pixels * 4];
@@ -3409,26 +3416,24 @@ fn render_loading_frame(width: u32, height: u32, angle: f32) -> Vec<u8> {
     // Spinner proportional to window size, clamped for aesthetics
     let radius = (width.min(height) as f32 * 0.08).clamp(10.0, 32.0);
     let thickness = (radius * 0.32).clamp(2.5, 7.0);
-
-    // Background color (dark charcoal)
-    let bg: [u8; 3] = [30, 30, 30];
-
-    // Fill background
-    for pixel in pixels.chunks_exact_mut(4) {
-        pixel[0] = bg[0]; // B
-        pixel[1] = bg[1]; // G
-        pixel[2] = bg[2]; // R
-        pixel[3] = 255; // A
-    }
+    // How far the halo reaches past the arc, and how much of it there is where it
+    // meets the arc's own edge. Both are drawn from the arc's size, so a large
+    // spinner gets a halo in proportion.
+    let halo_width = thickness;
+    let halo_opacity = 0.85;
+    // What the halo is made of: dark enough to read over a light file list, and
+    // light enough to read as a shadow rather than a second arc.
+    let halo_shade = 12.0;
 
     let two_pi = std::f32::consts::PI * 2.0;
     let arc_length = std::f32::consts::PI * 1.5; // 270-degree arc
 
-    // Only iterate over the bounding box of the spinner ring
-    let min_x = ((cx - radius - thickness - 2.0).max(0.0)) as u32;
-    let max_x = ((cx + radius + thickness + 2.0).min(width as f32 - 1.0)) as u32;
-    let min_y = ((cy - radius - thickness - 2.0).max(0.0)) as u32;
-    let max_y = ((cy + radius + thickness + 2.0).min(height as f32 - 1.0)) as u32;
+    // Only iterate over the bounding box of the spinner's own ring and halo
+    let reach = radius + thickness + halo_width + 1.0;
+    let min_x = ((cx - reach).max(0.0)) as u32;
+    let max_x = ((cx + reach).min(width as f32 - 1.0)) as u32;
+    let min_y = ((cy - reach).max(0.0)) as u32;
+    let max_y = ((cy + reach).min(height as f32 - 1.0)) as u32;
 
     for y in min_y..=max_y {
         for x in min_x..=max_x {
@@ -3437,35 +3442,44 @@ fn render_loading_frame(width: u32, height: u32, angle: f32) -> Vec<u8> {
             let dist = (dx * dx + dy * dy).sqrt();
 
             let ring_dist = (dist - radius).abs();
-            if ring_dist > thickness + 1.0 {
-                continue;
-            }
-
-            // Anti-aliased smooth edge
-            let edge_alpha = (1.0 - (ring_dist - thickness + 1.0).max(0.0)).clamp(0.0, 1.0);
-            if edge_alpha <= 0.0 {
+            if ring_dist > thickness + halo_width {
                 continue;
             }
 
             let pixel_angle = dy.atan2(dx);
             let relative = (pixel_angle - angle).rem_euclid(two_pi);
-
-            if relative <= arc_length {
-                // Smooth gradient: ease-in from tail (transparent) to head (bright)
-                let t = relative / arc_length;
-                let t_smooth = t * t; // quadratic ease-in
-                let alpha = edge_alpha * t_smooth;
-
-                let idx = ((y * width + x) * 4) as usize;
-                let blend = |bg_c: u8, fg: u8, a: f32| -> u8 {
-                    ((bg_c as f32) * (1.0 - a) + (fg as f32) * a).clamp(0.0, 255.0) as u8
-                };
-
-                pixels[idx] = blend(bg[0], 255, alpha); // B
-                pixels[idx + 1] = blend(bg[1], 255, alpha); // G
-                pixels[idx + 2] = blend(bg[2], 255, alpha); // R
-                pixels[idx + 3] = 255;
+            if relative > arc_length {
+                continue;
             }
+
+            // Smooth gradient: ease-in from tail (transparent) to head (bright)
+            let t = relative / arc_length;
+            let t_smooth = t * t; // quadratic ease-in
+
+            // Anti-aliased smooth edge, and the halo under it: full where the arc
+            // covers it and fading out from the arc's edge, which is what leaves a
+            // dark rim past an arc that is white.
+            let arc = (1.0 - (ring_dist - thickness + 1.0).max(0.0)).clamp(0.0, 1.0) * t_smooth;
+            let halo = (1.0 - (ring_dist - thickness).max(0.0) / halo_width).clamp(0.0, 1.0)
+                * halo_opacity
+                * t_smooth;
+
+            // The arc over the halo, over nothing at all: the alpha is how much of
+            // the two there is, and the colour is what is left of them once that is
+            // known — white where the arc covers, the halo's shade where only the
+            // halo does.
+            let alpha = arc + halo * (1.0 - arc);
+            if alpha <= 0.0 {
+                continue;
+            }
+            let shade = ((255.0 * arc + halo_shade * halo * (1.0 - arc)) / alpha).clamp(0.0, 255.0);
+
+            let idx = ((y * width + x) * 4) as usize;
+            let shade = shade as u8;
+            pixels[idx] = shade; // B
+            pixels[idx + 1] = shade; // G
+            pixels[idx + 2] = shade; // R
+            pixels[idx + 3] = (alpha.clamp(0.0, 1.0) * 255.0) as u8;
         }
     }
 
@@ -3814,7 +3828,15 @@ unsafe fn render_layered_preview(hwnd: HWND) {
             return None;
         }
 
-        let background = current_transparent_background();
+        // The spinner is nothing but an arc, and what is behind it is the desktop:
+        // a backdrop of the configured kind would put back the square its frame is
+        // transparent to avoid. Every other preview is composited over that
+        // backdrop as it always was.
+        let background = if media.media_type.is_loading() {
+            TransparentBackground::Transparent
+        } else {
+            current_transparent_background()
+        };
         let bits = ensure_layered_surface(width, height)?;
         let out = unsafe { std::slice::from_raw_parts_mut(bits, expected_size) };
 
@@ -6272,6 +6294,28 @@ mod tests {
                 scale,
             ),
             (office_preview::WAITING_BOX, office_preview::WAITING_BOX)
+        );
+    }
+
+    /// The spinner is the arc alone: the box it is drawn in is transparent, so a
+    /// hover that is waiting shows a spinner rather than a square of its own.
+    #[test]
+    fn draws_the_spinner_without_a_box_around_it() {
+        let frame = render_loading_frame(64, 64, 0.0);
+        assert_eq!(frame.len(), 64 * 64 * 4);
+
+        // The corners — and so the box the arc is drawn in — are nothing at all.
+        for corner in [0usize, 63, 64 * 63, 64 * 64 - 1] {
+            assert_eq!(&frame[corner * 4..corner * 4 + 4], &[0, 0, 0, 0]);
+        }
+
+        // The arc is drawn, and the halo under it and the arc's own tail are
+        // partly there rather than filled in.
+        let alphas: Vec<u8> = frame.chunks_exact(4).map(|pixel| pixel[3]).collect();
+        assert!(alphas.iter().any(|&alpha| alpha > 200), "the arc is drawn");
+        assert!(
+            alphas.iter().any(|&alpha| (1..=200).contains(&alpha)),
+            "the halo and the tail fade rather than fill"
         );
     }
 
