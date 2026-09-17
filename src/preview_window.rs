@@ -58,7 +58,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DispatchMessageW,
-    EnumWindows, GetSystemMetrics, GetWindow, GetWindowLongPtrW, GetWindowRect,
+    EnumWindows, GetCursorPos, GetSystemMetrics, GetWindow, GetWindowLongPtrW, GetWindowRect,
     GetWindowThreadProcessId, IsWindow, IsWindowVisible, LoadCursorW, MoveWindow, PeekMessageW,
     RegisterClassExW, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow,
     TrackPopupMenu, TranslateMessage, UpdateLayeredWindow, CS_HREDRAW, CS_VREDRAW, GWL_EXSTYLE,
@@ -3701,6 +3701,21 @@ fn spawn_load_worker(
 /// show and seconds of work ahead of it — which is what `spinner_due` decides.
 const LOAD_SPINNER_DELAY_SECS: u64 = 2;
 
+/// What placing a hover's preview again needs, kept on a pending load.
+///
+/// The size is not measured again when the preview follows the pointer: a cursor
+/// moving along the item it belongs to finds the same media, and measuring it per
+/// tick would re-read a header, a listing or a document sixty times a second to
+/// learn what the hover already knew. What is recomputed is the place — that is
+/// what the cursor decides.
+#[derive(Clone, Copy)]
+struct HoverPlacement {
+    orig_dims: (u32, u32),
+    avoid: Option<ScreenRegion>,
+    follow_cursor: bool,
+    preview_scale: PreviewScale,
+}
+
 /// Tracks a pending background load so we can show the spinner while it runs.
 struct PendingLoad {
     generation: u64,
@@ -3710,6 +3725,11 @@ struct PendingLoad {
     width: u32,
     height: u32,
     spinner_shown: bool,
+    /// The mouse hover this load came from, if it was one. A preview that is still
+    /// on its way follows the pointer, so it is placed again for a cursor that has
+    /// moved along the item since; a keyboard hover's placement belongs to the
+    /// item and carries none.
+    placement: Option<HoverPlacement>,
     /// Whether the load came back with nothing to draw and a page on the way.
     /// Nothing can be shown until that page lands, and asking for it is seconds
     /// of work, so the spinner goes up at once rather than after the delay a load
@@ -3734,6 +3754,41 @@ impl PendingLoad {
             && !self.upgrade
             && (self.awaiting_render
                 || self.started.elapsed() >= Duration::from_secs(LOAD_SPINNER_DELAY_SECS))
+    }
+
+    /// Place this load's preview again for `cursor`, when it is one that follows
+    /// the pointer: the size the hover measured, its `Avoid Filename` region and
+    /// its scale, and the display the pointer is on now. Answers whether the place
+    /// it came out at is a new one, so the window is only moved when it is.
+    ///
+    /// A load that answered nothing, or a keyboard hover, is left where it is.
+    fn follow_pointer(&mut self, cursor: POINT) -> bool {
+        let Some(placement) = self.placement else {
+            return false;
+        };
+
+        let Some(layout) = compute_mouse_layout(
+            cursor.x,
+            cursor.y,
+            placement.orig_dims,
+            placement.follow_cursor,
+            placement.avoid,
+            placement.preview_scale,
+            monitor_bounds_from_point(cursor.x, cursor.y),
+        ) else {
+            return false;
+        };
+
+        let moved = (layout.pos_x, layout.pos_y) != (self.pos_x, self.pos_y)
+            || (layout.preview_w, layout.preview_h) != (self.width, self.height);
+        if moved {
+            self.pos_x = layout.pos_x;
+            self.pos_y = layout.pos_y;
+            self.width = layout.preview_w;
+            self.height = layout.preview_h;
+        }
+
+        moved
     }
 }
 
@@ -3931,6 +3986,42 @@ unsafe fn render_layered_preview(hwnd: HWND) {
     );
 
     publish_text_scroll_keep_alive(hwnd);
+}
+
+/// Put the loading spinner on screen for a pending load, at the box that load is
+/// planned for.
+///
+/// The window is moved before the spinner is installed, so a `WM_DPICHANGED`
+/// reset from crossing displays cannot discard it, and the spinner is painted
+/// before the window is revealed, so the previous preview cannot flash at the new
+/// place. It is also what moves a spinner whose box has changed size while it was
+/// up: the frame is drawn at the size of the box it goes into.
+unsafe fn show_loading_spinner(hwnd: HWND, pl: &PendingLoad) {
+    let _ = MoveWindow(
+        hwnd,
+        pl.pos_x,
+        pl.pos_y,
+        pl.width as i32,
+        pl.height as i32,
+        false,
+    );
+
+    let loading = create_loading_media(pl.width, pl.height);
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        *current = Some(loading);
+    }
+
+    render_layered_preview(hwnd);
+    let _ = SetWindowPos(
+        hwnd,
+        HWND_TOPMOST,
+        pl.pos_x,
+        pl.pos_y,
+        pl.width as i32,
+        pl.height as i32,
+        SWP_NOACTIVATE | SWP_SHOWWINDOW,
+    );
+    let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
 }
 
 /// Publish — or withdraw — the region in which the pointer keeps a scrollable
@@ -4641,6 +4732,13 @@ fn virtual_screen_bounds() -> ScreenBounds {
             bottom: top + height,
         }
     }
+}
+
+/// Where the pointer is, in screen coordinates.
+fn cursor_position() -> Option<POINT> {
+    let mut point = POINT::default();
+    unsafe { GetCursorPos(&mut point) }.ok()?;
+    Some(point)
 }
 
 /// Usable bounds of the display nearest to `(x, y)`. Anchoring layout to a
@@ -5607,6 +5705,35 @@ pub fn run_preview_window() {
                 }
             }
 
+            // A preview that is still on its way follows the pointer: while a
+            // load runs the spinner is the only thing on screen, and a cursor
+            // that moves along the item the preview belongs to would otherwise
+            // leave it behind. Nothing is measured again — the hover's own size
+            // and `Avoid Filename` region are what it is placed with — so this
+            // costs a cursor read and a placement per tick, and the window is
+            // moved only when the place it comes out at has changed.
+            if let Some(ref mut pl) = pending_load {
+                if let Some(cursor) = cursor_position() {
+                    let box_before = (pl.width, pl.height);
+                    if pl.follow_pointer(cursor) && pl.spinner_shown {
+                        if (pl.width, pl.height) == box_before {
+                            let _ = MoveWindow(
+                                hwnd,
+                                pl.pos_x,
+                                pl.pos_y,
+                                pl.width as i32,
+                                pl.height as i32,
+                                false,
+                            );
+                        } else {
+                            // The spinner's own box changed size, so its frame is
+                            // drawn again at the size it now goes into.
+                            show_loading_spinner(hwnd, pl);
+                        }
+                    }
+                }
+            }
+
             // Show the loading spinner while a background load runs, once the
             // wait is worth showing — at once for one that is waiting on a page
             // to be rendered, and after a moment for one that may be about to
@@ -5614,33 +5741,7 @@ pub fn run_preview_window() {
             if let Some(ref mut pl) = pending_load {
                 if pl.spinner_due() {
                     pl.spinner_shown = true;
-                    let loading = create_loading_media(pl.width, pl.height);
-                    let _ = MoveWindow(
-                        hwnd,
-                        pl.pos_x,
-                        pl.pos_y,
-                        pl.width as i32,
-                        pl.height as i32,
-                        false,
-                    );
-                    // Install the spinner after the move so a WM_DPICHANGED
-                    // reset from crossing displays cannot discard it.
-                    if let Ok(mut current) = CURRENT_MEDIA.lock() {
-                        *current = Some(loading);
-                    }
-                    // Paint the spinner before revealing the window so the
-                    // previous preview cannot flash at the new position.
-                    render_layered_preview(hwnd);
-                    let _ = SetWindowPos(
-                        hwnd,
-                        HWND_TOPMOST,
-                        pl.pos_x,
-                        pl.pos_y,
-                        pl.width as i32,
-                        pl.height as i32,
-                        SWP_NOACTIVATE | SWP_SHOWWINDOW,
-                    );
-                    let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+                    show_loading_spinner(hwnd, pl);
                 }
             }
 
@@ -5745,7 +5846,18 @@ pub fn run_preview_window() {
                         // the second a large picture takes to decode is a blink the
                         // user sees and reads as the preview failing.
                         office_upgrade = Some(ready_path.clone());
-                        latest_preview_msg = current_show.clone();
+                        // A mouse hover is replayed where the pointer is now: the
+                        // spinner it replaces was kept with the pointer while the
+                        // render ran, and a page that jumped back to where the
+                        // hover started would jump away from where it was waited
+                        // for. A keyboard hover is the item's own place and is
+                        // replayed as it came.
+                        latest_preview_msg = match (current_show.clone(), cursor_position()) {
+                            (Some(PreviewMessage::Show(path, _, _, avoid)), Some(cursor)) => {
+                                Some(PreviewMessage::Show(path, cursor.x, cursor.y, avoid))
+                            }
+                            (show, _) => show,
+                        };
                     }
                 } else if hovered {
                     // Nothing was drawn and nothing is coming. A preview that is
@@ -5774,6 +5886,7 @@ pub fn run_preview_window() {
                 // Common variables for Show/ShowKeyboard - set in match, used after
                 let mut show_path: Option<PathBuf> = None;
                 let mut show_layout: Option<PreviewLayout> = None;
+                let mut show_placement: Option<HoverPlacement> = None;
                 let mut show_is_video: bool = false;
                 let mut show_requested = false;
                 let mut preview_scale = current_preview_scale();
@@ -5822,6 +5935,12 @@ pub fn run_preview_window() {
                                 });
                                 show_is_video = is_video;
                                 show_layout = Some(layout);
+                                show_placement = Some(HoverPlacement {
+                                    orig_dims,
+                                    avoid,
+                                    follow_cursor,
+                                    preview_scale,
+                                });
                                 show_path = Some(path);
                                 show_dpi = dpi;
                             }
@@ -6052,6 +6171,7 @@ pub fn run_preview_window() {
                             width: preview_w,
                             height: preview_h,
                             spinner_shown: false,
+                            placement: show_placement,
                             awaiting_render: false,
                             upgrade: upgrading,
                         });
@@ -6369,6 +6489,7 @@ mod tests {
             width: 64,
             height: 64,
             spinner_shown: false,
+            placement: None,
             awaiting_render,
             upgrade,
         };
@@ -6388,6 +6509,64 @@ mod tests {
         let mut showing = load(false, Duration::from_secs(10), false);
         showing.spinner_shown = true;
         assert!(!showing.spinner_due());
+    }
+
+    /// A preview that is still on its way follows the pointer: it is placed again
+    /// for a cursor that has moved along the item, kept where it is when the
+    /// cursor has not moved, and left alone when the hover it came from was the
+    /// keyboard's rather than the pointer's.
+    #[test]
+    fn a_pending_preview_follows_the_pointer() {
+        let pending = |placement: Option<HoverPlacement>| PendingLoad {
+            generation: 1,
+            started: Instant::now(),
+            pos_x: 0,
+            pos_y: 0,
+            width: 0,
+            height: 0,
+            spinner_shown: true,
+            placement,
+            awaiting_render: false,
+            upgrade: false,
+        };
+        let placement = HoverPlacement {
+            orig_dims: (800, 600),
+            avoid: None,
+            follow_cursor: false,
+            preview_scale: PreviewScale::FitToScreen,
+        };
+
+        let mut pl = pending(Some(placement));
+        assert!(
+            pl.follow_pointer(POINT { x: 300, y: 300 }),
+            "placed for the cursor"
+        );
+        let placed = (pl.pos_x, pl.pos_y, pl.width, pl.height);
+
+        // The cursor has not moved, so the place has not changed: nothing to move.
+        assert!(!pl.follow_pointer(POINT { x: 300, y: 300 }));
+        assert_eq!((pl.pos_x, pl.pos_y, pl.width, pl.height), placed);
+
+        // The cursor has moved: the preview is placed again, somewhere else.
+        assert!(pl.follow_pointer(POINT { x: 200, y: 300 }));
+        assert_ne!((pl.pos_x, pl.pos_y, pl.width, pl.height), placed);
+
+        // A spinner box is the size the hover measured and stays that size while
+        // the cursor moves along the item — the scale it was planned with is the
+        // effective one, which for a document waiting on a render is `100%`.
+        let mut waiting = pending(Some(HoverPlacement {
+            orig_dims: (64, 64),
+            preview_scale: PreviewScale::Percent(100),
+            ..placement
+        }));
+        assert!(waiting.follow_pointer(POINT { x: 300, y: 300 }));
+        assert!(waiting.follow_pointer(POINT { x: 500, y: 300 }));
+        assert_eq!((waiting.width, waiting.height), (64, 64));
+
+        // A keyboard hover's placement is the item's own: it follows nothing.
+        let mut keyboard = pending(None);
+        assert!(!keyboard.follow_pointer(POINT { x: 640, y: 400 }));
+        assert_eq!((keyboard.pos_x, keyboard.pos_y), (0, 0));
     }
 
     /// The layout applies the reduction the same way the size it plans does, so a
