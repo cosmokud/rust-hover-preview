@@ -73,7 +73,7 @@ const ID_TRAY_THEME_DARK: u16 = 1051; // One Dark Pro
 const ID_TRAY_MARKDOWN_RENDERED: u16 = 1052; // Rendered document
 const ID_TRAY_MARKDOWN_SOURCE: u16 = 1053; // Highlighted Markdown source
 const ID_TRAY_TEXT_FULL_MODE: u16 = 1061; // Text previews scroll/select on/off
-/// The `Toggle Preview Types` submenu, one command per kind of preview.
+/// The `Preview Types` submenu, one command per kind of preview.
 const ID_TRAY_TYPE_IMAGES: u16 = 1062;
 const ID_TRAY_TYPE_VIDEOS: u16 = 1063;
 const ID_TRAY_TYPE_TEXT: u16 = 1064;
@@ -101,7 +101,7 @@ const TRAY_CLASS: PCWSTR = w!("RustHoverPreviewTrayClass");
 static mut TRAY_HWND: HWND = HWND(std::ptr::null_mut());
 static mut TASKBAR_CREATED: u32 = 0;
 
-/// The custom themes the `Text Preview Theme` submenu last listed, in the order it
+/// The custom themes the `Theme` submenu last listed, in the order it
 /// listed them: a command ID carries a position, and this is what it was a
 /// position in. The menu can outlive a change to the folder, so a click has to
 /// select the file the item it landed on named rather than whatever is in that
@@ -234,7 +234,7 @@ unsafe fn show_context_menu(hwnd: HWND) {
         config.reload_from_disk();
     }
 
-    // Add "Enable Preview" with checkmark
+    // Add "Preview" with checkmark
     let preview_enabled = CONFIG.lock().map(|c| c.preview_enabled).unwrap_or(true);
     let enable_flags = MF_STRING
         | if preview_enabled {
@@ -246,10 +246,10 @@ unsafe fn show_context_menu(hwnd: HWND) {
         menu,
         enable_flags,
         ID_TRAY_ENABLE as usize,
-        w!("Enable Preview"),
+        w!("Preview"),
     );
 
-    // Add the "Toggle Preview Types" submenu: one gate per kind of preview, on by
+    // Add the "Preview Types" submenu: one gate per kind of preview, on by
     // default. A gate is only whether previews of that kind may be shown at all —
     // the lists and settings that decide which files of that kind preview are left
     // alone, so switching one off and back on restores what was configured.
@@ -280,75 +280,10 @@ unsafe fn show_context_menu(hwnd: HWND) {
         menu,
         MF_STRING | MF_POPUP,
         types_menu.0 as usize,
-        w!("Toggle Preview Types"),
+        w!("Preview Types"),
     );
 
-    // Add the "Trigger Key (Alt)" submenu: the key it watches, and what holding it
-    // does. Which of the two is active is shown with radio marks, because only one
-    // of them can be.
-    let (trigger_key, trigger_key_mode) = CONFIG
-        .lock()
-        .map(|c| (c.trigger_key.clone(), c.trigger_key_mode))
-        .unwrap_or(("alt".to_string(), TriggerKeyMode::Disable));
-    let trigger_menu = CreatePopupMenu().unwrap();
-
-    let mut trigger_key_chars = trigger_key.chars();
-    let trigger_key_display = match trigger_key_chars.next() {
-        Some(first) => first.to_uppercase().collect::<String>() + trigger_key_chars.as_str(),
-        None => trigger_key,
-    };
-    let trigger_label = format!("Trigger Key ({trigger_key_display})");
-    let trigger_label_wide: Vec<u16> = trigger_label
-        .encode_utf16()
-        .chain(std::iter::once(0))
-        .collect();
-
-    let _ = AppendMenuW(
-        trigger_menu,
-        MF_STRING,
-        ID_TRAY_TRIGGER_DISABLE as usize,
-        w!("Trigger Key to Disable Preview"),
-    );
-    let _ = AppendMenuW(
-        trigger_menu,
-        MF_STRING,
-        ID_TRAY_TRIGGER_ENABLE as usize,
-        w!("Trigger Key to Enable Preview"),
-    );
-    let _ = CheckMenuRadioItem(
-        trigger_menu,
-        ID_TRAY_TRIGGER_DISABLE as u32,
-        ID_TRAY_TRIGGER_ENABLE as u32,
-        match trigger_key_mode {
-            TriggerKeyMode::Disable => ID_TRAY_TRIGGER_DISABLE as u32,
-            TriggerKeyMode::Enable => ID_TRAY_TRIGGER_ENABLE as u32,
-        },
-        MF_BYCOMMAND.0,
-    );
-
-    let _ = AppendMenuW(
-        menu,
-        MF_STRING | MF_POPUP,
-        trigger_menu.0 as usize,
-        PCWSTR(trigger_label_wide.as_ptr()),
-    );
-
-    // Add "Confirm File Type" with checkmark (content/header sniffing)
-    let confirm_file_type = CONFIG.lock().map(|c| c.confirm_file_type).unwrap_or(false);
-    let confirm_flags = MF_STRING
-        | if confirm_file_type {
-            MF_CHECKED
-        } else {
-            MF_UNCHECKED
-        };
-    let _ = AppendMenuW(
-        menu,
-        confirm_flags,
-        ID_TRAY_CONFIRM_FILE_TYPE as usize,
-        w!("Confirm File Type"),
-    );
-
-    // Add Transparent Background submenu
+    // Add the "Background" submenu
     let transparent_background = CONFIG
         .lock()
         .map(|c| c.transparent_background)
@@ -391,10 +326,83 @@ unsafe fn show_context_menu(hwnd: HWND) {
         menu,
         MF_STRING | MF_POPUP,
         background_menu.0 as usize,
-        w!("Transparent Background"),
+        w!("Background"),
     );
 
-    // Add "Enable Text Preview Full Mode" with checkmark
+    let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
+
+    // Add "Confirm File Type" with checkmark (content/header sniffing)
+    let confirm_file_type = CONFIG.lock().map(|c| c.confirm_file_type).unwrap_or(false);
+    let confirm_flags = MF_STRING
+        | if confirm_file_type {
+            MF_CHECKED
+        } else {
+            MF_UNCHECKED
+        };
+    let _ = AppendMenuW(
+        menu,
+        confirm_flags,
+        ID_TRAY_CONFIRM_FILE_TYPE as usize,
+        w!("Confirm File Type"),
+    );
+
+    // Add the "Trigger Key (Alt)" submenu: the key it watches, and what holding it
+    // does. Which of the two is active is shown with radio marks, because only one
+    // of them can be.
+    let (trigger_key, trigger_key_mode) = CONFIG
+        .lock()
+        .map(|c| (c.trigger_key.clone(), c.trigger_key_mode))
+        .unwrap_or(("alt".to_string(), TriggerKeyMode::Disable));
+    let trigger_menu = CreatePopupMenu().unwrap();
+
+    let mut trigger_key_chars = trigger_key.chars();
+    let trigger_key_display = match trigger_key_chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + trigger_key_chars.as_str(),
+        None => trigger_key,
+    };
+    let trigger_label = format!("Trigger Key ({trigger_key_display})");
+    let trigger_label_wide: Vec<u16> = trigger_label
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+
+    let _ = AppendMenuW(
+        trigger_menu,
+        MF_STRING,
+        ID_TRAY_TRIGGER_DISABLE as usize,
+        w!("Hold to Disable Preview"),
+    );
+    let _ = AppendMenuW(
+        trigger_menu,
+        MF_STRING,
+        ID_TRAY_TRIGGER_ENABLE as usize,
+        w!("Hold to Enable Preview"),
+    );
+    let _ = CheckMenuRadioItem(
+        trigger_menu,
+        ID_TRAY_TRIGGER_DISABLE as u32,
+        ID_TRAY_TRIGGER_ENABLE as u32,
+        match trigger_key_mode {
+            TriggerKeyMode::Disable => ID_TRAY_TRIGGER_DISABLE as u32,
+            TriggerKeyMode::Enable => ID_TRAY_TRIGGER_ENABLE as u32,
+        },
+        MF_BYCOMMAND.0,
+    );
+
+    let _ = AppendMenuW(
+        menu,
+        MF_STRING | MF_POPUP,
+        trigger_menu.0 as usize,
+        PCWSTR(trigger_label_wide.as_ptr()),
+    );
+
+    let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
+
+    // Add the "Text Preview" submenu: whether full mode is on, and the theme, size
+    // and Markdown mode a text preview is painted with.
+    let text_menu = CreatePopupMenu().unwrap();
+
+    // Add "Full Mode" with checkmark
     let text_full_mode = CONFIG
         .lock()
         .map(|c| c.text_preview_full_mode)
@@ -406,13 +414,13 @@ unsafe fn show_context_menu(hwnd: HWND) {
             MF_UNCHECKED
         };
     let _ = AppendMenuW(
-        menu,
+        text_menu,
         text_full_flags,
         ID_TRAY_TEXT_FULL_MODE as usize,
-        w!("Enable Text Preview Full Mode"),
+        w!("Full Mode"),
     );
 
-    // Add Text Preview Theme submenu
+    // Add the Theme submenu
     let theme = CONFIG.lock().map(|c| c.theme).unwrap_or(TextTheme::Light);
 
     // The folder is read here rather than once at startup: the files these names
@@ -443,7 +451,7 @@ unsafe fn show_context_menu(hwnd: HWND) {
         theme_menu,
         theme_flag(TextTheme::Light),
         ID_TRAY_THEME_LIGHT as usize,
-        w!("Atom One Light (Default)"),
+        w!("Atom One Light"),
     );
     let _ = AppendMenuW(
         theme_menu,
@@ -479,13 +487,13 @@ unsafe fn show_context_menu(hwnd: HWND) {
     }
 
     let _ = AppendMenuW(
-        menu,
+        text_menu,
         MF_STRING | MF_POPUP,
         theme_menu.0 as usize,
-        w!("Text Preview Theme"),
+        w!("Theme"),
     );
 
-    // Add Text Preview Font Size submenu. A hand-edited size between these steps
+    // Add the Font Size submenu. A hand-edited size between these steps
     // simply matches none of them, which is why the values are read as written.
     let font_scale = CONFIG
         .lock()
@@ -511,7 +519,7 @@ unsafe fn show_context_menu(hwnd: HWND) {
         font_menu,
         font_flag(125),
         ID_TRAY_FONT_125 as usize,
-        w!("125% (Default)"),
+        w!("125%"),
     );
     let _ = AppendMenuW(
         font_menu,
@@ -550,13 +558,13 @@ unsafe fn show_context_menu(hwnd: HWND) {
         w!("400%"),
     );
     let _ = AppendMenuW(
-        menu,
+        text_menu,
         MF_STRING | MF_POPUP,
         font_menu.0 as usize,
-        w!("Text Preview Font Size"),
+        w!("Font Size"),
     );
 
-    // Add Markdown submenu
+    // Add the Markdown submenu
     let markdown_mode = CONFIG
         .lock()
         .map(|c| c.markdown_mode)
@@ -575,22 +583,33 @@ unsafe fn show_context_menu(hwnd: HWND) {
         markdown_menu,
         markdown_flag(MarkdownMode::Rendered),
         ID_TRAY_MARKDOWN_RENDERED as usize,
-        w!("Rendered (Default)"),
+        w!("Rendered"),
     );
     let _ = AppendMenuW(
         markdown_menu,
         markdown_flag(MarkdownMode::Source),
         ID_TRAY_MARKDOWN_SOURCE as usize,
-        w!("Highlighted Source"),
+        w!("Source"),
     );
+    let _ = AppendMenuW(
+        text_menu,
+        MF_STRING | MF_POPUP,
+        markdown_menu.0 as usize,
+        w!("Markdown"),
+    );
+
     let _ = AppendMenuW(
         menu,
         MF_STRING | MF_POPUP,
-        markdown_menu.0 as usize,
-        w!("Markdown Preview"),
+        text_menu.0 as usize,
+        w!("Text Preview"),
     );
 
-    // Add Preview Delay submenu
+    // Add the "Timing" submenu: how long a hover waits before its preview opens,
+    // and how long the same file is held off after its preview was dismissed.
+    let timing_menu = CreatePopupMenu().unwrap();
+
+    // Add the Delay submenu
     let hover_delay_ms = CONFIG.lock().map(|c| c.hover_delay_ms).unwrap_or(0);
     let delay_menu = CreatePopupMenu().unwrap();
 
@@ -634,10 +653,10 @@ unsafe fn show_context_menu(hwnd: HWND) {
     );
 
     let _ = AppendMenuW(
-        menu,
+        timing_menu,
         MF_STRING | MF_POPUP,
         delay_menu.0 as usize,
-        w!("Preview Delay"),
+        w!("Delay"),
     );
 
     let same_file_rehover_delay_ms = CONFIG
@@ -685,13 +704,156 @@ unsafe fn show_context_menu(hwnd: HWND) {
         w!("Slow (1000 ms)"),
     );
     let _ = AppendMenuW(
-        menu,
+        timing_menu,
         MF_STRING | MF_POPUP,
         rehover_delay_menu.0 as usize,
-        w!("Same File Rehover Delay"),
+        w!("Rehover Delay"),
     );
 
-    // Add Volume submenu
+    let _ = AppendMenuW(
+        menu,
+        MF_STRING | MF_POPUP,
+        timing_menu.0 as usize,
+        w!("Timing"),
+    );
+
+    // Add the "Placement" submenu: where a preview lands relative to the cursor or
+    // the focused item, and how large it is.
+    let placement_menu = CreatePopupMenu().unwrap();
+
+    // Add the Position submenu: which side a preview takes, and whether it is kept
+    // off the name of the item it is about. The two placements are one setting shown
+    // two ways, so they carry a radio mark each; avoiding the name is a setting of
+    // its own and carries a checkmark.
+    let (follow_cursor, avoid_filename) = CONFIG
+        .lock()
+        .map(|c| (c.follow_cursor, c.avoid_filename))
+        .unwrap_or((false, true));
+    let position_menu = CreatePopupMenu().unwrap();
+
+    let _ = AppendMenuW(
+        position_menu,
+        MF_STRING,
+        ID_TRAY_POSITION_FOLLOW as usize,
+        w!("Follow Cursor"),
+    );
+    let _ = AppendMenuW(
+        position_menu,
+        MF_STRING,
+        ID_TRAY_POSITION_BEST as usize,
+        w!("Best Position"),
+    );
+    let _ = CheckMenuRadioItem(
+        position_menu,
+        ID_TRAY_POSITION_FOLLOW as u32,
+        ID_TRAY_POSITION_BEST as u32,
+        if follow_cursor {
+            ID_TRAY_POSITION_FOLLOW as u32
+        } else {
+            ID_TRAY_POSITION_BEST as u32
+        },
+        MF_BYCOMMAND.0,
+    );
+
+    let _ = AppendMenuW(position_menu, MF_SEPARATOR, 0, PCWSTR::null());
+    let _ = AppendMenuW(
+        position_menu,
+        MF_STRING
+            | if avoid_filename {
+                MF_CHECKED
+            } else {
+                MF_UNCHECKED
+            },
+        ID_TRAY_POSITION_AVOID_NAME as usize,
+        w!("Avoid Filename"),
+    );
+
+    let _ = AppendMenuW(
+        placement_menu,
+        MF_STRING | MF_POPUP,
+        position_menu.0 as usize,
+        w!("Position"),
+    );
+
+    // Add the Scaling submenu
+    let preview_scale = CONFIG
+        .lock()
+        .map(|c| c.preview_scale)
+        .unwrap_or(PreviewScale::Percent(DEFAULT_PREVIEW_SCALE_PERCENT));
+    let scale_menu = CreatePopupMenu().unwrap();
+
+    let scale_flag = |scale: PreviewScale| {
+        MF_STRING
+            | if preview_scale == scale {
+                MF_CHECKED
+            } else {
+                MF_UNCHECKED
+            }
+    };
+    let _ = AppendMenuW(
+        scale_menu,
+        scale_flag(PreviewScale::FitToScreen),
+        ID_TRAY_SCALE_FIT as usize,
+        w!("Fit to Screen"),
+    );
+    let _ = AppendMenuW(
+        scale_menu,
+        scale_flag(PreviewScale::Percent(400)),
+        ID_TRAY_SCALE_400 as usize,
+        w!("400%"),
+    );
+    let _ = AppendMenuW(
+        scale_menu,
+        scale_flag(PreviewScale::Percent(300)),
+        ID_TRAY_SCALE_300 as usize,
+        w!("300%"),
+    );
+    let _ = AppendMenuW(
+        scale_menu,
+        scale_flag(PreviewScale::Percent(200)),
+        ID_TRAY_SCALE_200 as usize,
+        w!("200%"),
+    );
+    let _ = AppendMenuW(
+        scale_menu,
+        scale_flag(PreviewScale::Percent(150)),
+        ID_TRAY_SCALE_150 as usize,
+        w!("150%"),
+    );
+    let _ = AppendMenuW(
+        scale_menu,
+        scale_flag(PreviewScale::Percent(100)),
+        ID_TRAY_SCALE_100 as usize,
+        w!("100%"),
+    );
+    let _ = AppendMenuW(
+        scale_menu,
+        scale_flag(PreviewScale::Percent(50)),
+        ID_TRAY_SCALE_50 as usize,
+        w!("50%"),
+    );
+    let _ = AppendMenuW(
+        scale_menu,
+        scale_flag(PreviewScale::Percent(25)),
+        ID_TRAY_SCALE_25 as usize,
+        w!("25%"),
+    );
+
+    let _ = AppendMenuW(
+        placement_menu,
+        MF_STRING | MF_POPUP,
+        scale_menu.0 as usize,
+        w!("Scaling"),
+    );
+
+    let _ = AppendMenuW(
+        menu,
+        MF_STRING | MF_POPUP,
+        placement_menu.0 as usize,
+        w!("Placement"),
+    );
+
+    // Add the Volume submenu
     let current_volume = CONFIG.lock().map(|c| c.video_volume).unwrap_or(0);
     let volume_menu = CreatePopupMenu().unwrap();
 
@@ -744,134 +906,10 @@ unsafe fn show_context_menu(hwnd: HWND) {
         menu,
         MF_STRING | MF_POPUP,
         volume_menu.0 as usize,
-        w!("Video Volume"),
+        w!("Volume"),
     );
 
-    // Add the "Preview Position" submenu: where a preview lands relative to the
-    // cursor or the focused item, and whether it is kept off the name of the item it
-    // is about. The two placements are one setting shown two ways, so they carry a
-    // radio mark each; avoiding the name is a setting of its own and carries a
-    // checkmark.
-    let (follow_cursor, avoid_filename) = CONFIG
-        .lock()
-        .map(|c| (c.follow_cursor, c.avoid_filename))
-        .unwrap_or((false, true));
-    let position_menu = CreatePopupMenu().unwrap();
-
-    let _ = AppendMenuW(
-        position_menu,
-        MF_STRING,
-        ID_TRAY_POSITION_FOLLOW as usize,
-        w!("Follow Cursor"),
-    );
-    let _ = AppendMenuW(
-        position_menu,
-        MF_STRING,
-        ID_TRAY_POSITION_BEST as usize,
-        w!("Best Position"),
-    );
-    let _ = CheckMenuRadioItem(
-        position_menu,
-        ID_TRAY_POSITION_FOLLOW as u32,
-        ID_TRAY_POSITION_BEST as u32,
-        if follow_cursor {
-            ID_TRAY_POSITION_FOLLOW as u32
-        } else {
-            ID_TRAY_POSITION_BEST as u32
-        },
-        MF_BYCOMMAND.0,
-    );
-
-    let _ = AppendMenuW(position_menu, MF_SEPARATOR, 0, PCWSTR::null());
-    let _ = AppendMenuW(
-        position_menu,
-        MF_STRING
-            | if avoid_filename {
-                MF_CHECKED
-            } else {
-                MF_UNCHECKED
-            },
-        ID_TRAY_POSITION_AVOID_NAME as usize,
-        w!("Avoid Filename"),
-    );
-
-    let _ = AppendMenuW(
-        menu,
-        MF_STRING | MF_POPUP,
-        position_menu.0 as usize,
-        w!("Preview Position"),
-    );
-
-    // Add Preview Scaling submenu
-    let preview_scale = CONFIG
-        .lock()
-        .map(|c| c.preview_scale)
-        .unwrap_or(PreviewScale::Percent(DEFAULT_PREVIEW_SCALE_PERCENT));
-    let scale_menu = CreatePopupMenu().unwrap();
-
-    let scale_flag = |scale: PreviewScale| {
-        MF_STRING
-            | if preview_scale == scale {
-                MF_CHECKED
-            } else {
-                MF_UNCHECKED
-            }
-    };
-    let _ = AppendMenuW(
-        scale_menu,
-        scale_flag(PreviewScale::FitToScreen),
-        ID_TRAY_SCALE_FIT as usize,
-        w!("Fit to Screen"),
-    );
-    let _ = AppendMenuW(
-        scale_menu,
-        scale_flag(PreviewScale::Percent(400)),
-        ID_TRAY_SCALE_400 as usize,
-        w!("400%"),
-    );
-    let _ = AppendMenuW(
-        scale_menu,
-        scale_flag(PreviewScale::Percent(300)),
-        ID_TRAY_SCALE_300 as usize,
-        w!("300%"),
-    );
-    let _ = AppendMenuW(
-        scale_menu,
-        scale_flag(PreviewScale::Percent(200)),
-        ID_TRAY_SCALE_200 as usize,
-        w!("200%"),
-    );
-    let _ = AppendMenuW(
-        scale_menu,
-        scale_flag(PreviewScale::Percent(150)),
-        ID_TRAY_SCALE_150 as usize,
-        w!("150%"),
-    );
-    let _ = AppendMenuW(
-        scale_menu,
-        scale_flag(PreviewScale::Percent(100)),
-        ID_TRAY_SCALE_100 as usize,
-        w!("100% (Default)"),
-    );
-    let _ = AppendMenuW(
-        scale_menu,
-        scale_flag(PreviewScale::Percent(50)),
-        ID_TRAY_SCALE_50 as usize,
-        w!("50%"),
-    );
-    let _ = AppendMenuW(
-        scale_menu,
-        scale_flag(PreviewScale::Percent(25)),
-        ID_TRAY_SCALE_25 as usize,
-        w!("25%"),
-    );
-
-    let _ = AppendMenuW(
-        menu,
-        MF_STRING | MF_POPUP,
-        scale_menu.0 as usize,
-        w!("Preview Scaling"),
-    );
+    let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
 
     // Add "Run at Startup" with checkmark
     let startup_enabled = CONFIG.lock().map(|c| c.run_at_startup).unwrap_or(false);
@@ -883,12 +921,17 @@ unsafe fn show_context_menu(hwnd: HWND) {
         };
     let _ = AppendMenuW(menu, flags, ID_TRAY_STARTUP as usize, w!("Run at Startup"));
 
-    // Add "Edit Config.ini"
+    // Add "Edit Config.ini", the label carrying the version that is running
+    let config_label = format!("Edit Config.ini (v{})", env!("CARGO_PKG_VERSION"));
+    let config_label_wide: Vec<u16> = config_label
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
     let _ = AppendMenuW(
         menu,
         MF_STRING,
         ID_TRAY_OPEN_CONFIG as usize,
-        w!("Edit Config.ini"),
+        PCWSTR(config_label_wide.as_ptr()),
     );
 
     // Add Exit
