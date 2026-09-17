@@ -50,7 +50,7 @@ pub fn is_pdf_file(path: &Path) -> bool {
 }
 
 /// Whether a PDF preview may be shown for `path`: the file a page would be read
-/// from, and the `PDF` gate in the tray's `Toggle Preview Types` submenu.
+/// from, and the `PDF` gate in the tray's `Preview Types` submenu.
 pub fn is_pdf_preview(path: &Path) -> bool {
     is_pdf_file(path) && PreviewType::Pdf.enabled()
 }

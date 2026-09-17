@@ -282,7 +282,7 @@ impl MarkdownMode {
     }
 }
 
-/// A kind of preview, as the tray's `Toggle Preview Types` submenu lists them.
+/// A kind of preview, as the tray's `Preview Types` submenu lists them.
 ///
 /// A gate is not a file list: it says whether previews of that kind may be shown
 /// at all, and the lists that decide *which* files of that kind are previewed are

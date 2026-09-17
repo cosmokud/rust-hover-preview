@@ -42,7 +42,7 @@ pub fn is_video_file(path: &Path) -> bool {
 }
 
 /// Whether a video preview may be shown for `path`: a file FFmpeg can demux, and
-/// the `Videos` gate in the tray's `Toggle Preview Types` submenu.
+/// the `Videos` gate in the tray's `Preview Types` submenu.
 ///
 /// [`is_video_file`] is the classification on its own, which is what asks whether
 /// a file is a video rather than whether one may be shown — a `.ts` a video gate
