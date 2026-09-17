@@ -1,9 +1,11 @@
 use crate::config::{
-    sanitize_image_cache_mb, sanitize_office_cache_mb, sanitize_text_font_scale_percent,
-    MarkdownMode, PreviewScale, PreviewType, TextTheme, TransparentBackground, TriggerKeyMode,
-    DEFAULT_PREVIEW_SCALE_PERCENT, DEFAULT_TEXT_FONT_SCALE_PERCENT,
+    sanitize_image_cache_mb, sanitize_office_cache_mb, sanitize_pdf_cache_mb,
+    sanitize_text_font_scale_percent, MarkdownMode, PreviewScale, PreviewType, TextTheme,
+    TransparentBackground, TriggerKeyMode, DEFAULT_PREVIEW_SCALE_PERCENT,
+    DEFAULT_TEXT_FONT_SCALE_PERCENT,
 };
 use crate::office_render;
+use crate::pdf_preview;
 use crate::preview_window::{refresh_preview, refresh_preview_types, trim_image_cache};
 use crate::text_theme;
 use crate::theme_files;
@@ -82,14 +84,16 @@ const ID_TRAY_TYPE_PDF: u16 = 1065;
 const ID_TRAY_TYPE_ARCHIVES: u16 = 1066;
 const ID_TRAY_TYPE_OFFICE: u16 = 1067;
 /// The `Cache` submenu: one command per size it offers, in the order it lists
-/// them, for each of the two caches it sizes. They start past the range the
-/// `theme` folder's own items occupy (see `ID_TRAY_THEME_CUSTOM_BASE`).
+/// them, for each of the caches it sizes. They start past the range the `theme`
+/// folder's own items occupy (see `ID_TRAY_THEME_CUSTOM_BASE`).
 const ID_TRAY_IMAGE_CACHE_BASE: u16 = 1300;
 const ID_TRAY_OFFICE_CACHE_BASE: u16 = 1320;
-/// The sizes the `Cache` submenu offers, in megabytes: the whole range the two
-/// settings allow, so a size a hand-edited `config.ini` puts past the last of them
-/// is shown with nothing checked rather than rounded to one of these.
-const CACHE_SIZE_CHOICES_MB: [u32; 9] = [0, 16, 32, 64, 128, 256, 512, 1024, 2048];
+const ID_TRAY_PDF_CACHE_BASE: u16 = 1340;
+/// The sizes the `Cache` submenu offers, in megabytes, largest first — `2 GB` at
+/// the top and a cache that holds nothing at the bottom — and the whole range the
+/// settings allow, so a size a hand-edited `config.ini` asks for that is not one of
+/// these is shown with nothing checked rather than rounded to one of them.
+const CACHE_SIZE_CHOICES_MB: [u32; 9] = [2048, 1024, 512, 256, 128, 64, 32, 16, 0];
 const ID_TRAY_FONT_100: u16 = 1072;
 const ID_TRAY_FONT_125: u16 = 1073;
 const ID_TRAY_FONT_150: u16 = 1074;
@@ -98,8 +102,11 @@ const ID_TRAY_FONT_200: u16 = 1076;
 const ID_TRAY_FONT_250: u16 = 1077;
 const ID_TRAY_FONT_300: u16 = 1078;
 const ID_TRAY_FONT_400: u16 = 1079;
+const ID_TRAY_FONT_90: u16 = 1080;
+const ID_TRAY_FONT_80: u16 = 1081;
+const ID_TRAY_FONT_70: u16 = 1082;
 /// Where the `theme` folder's own items start: one command ID each, in the order
-/// the submenu listed them. The IDs the app uses end at 1079, so these collide
+/// the submenu listed them. The IDs the app uses end at 1082, so these collide
 /// with nothing.
 const ID_TRAY_THEME_CUSTOM_BASE: u16 = 1100;
 /// How many files the theme submenu will list. A menu that long is unusable well
@@ -213,17 +220,23 @@ unsafe extern "system" fn tray_window_proc(
                 cmd if (ID_TRAY_IMAGE_CACHE_BASE..ID_TRAY_OFFICE_CACHE_BASE).contains(&cmd) => {
                     set_image_cache_mb(cmd - ID_TRAY_IMAGE_CACHE_BASE)
                 }
-                cmd if cmd >= ID_TRAY_OFFICE_CACHE_BASE => {
+                cmd if (ID_TRAY_OFFICE_CACHE_BASE..ID_TRAY_PDF_CACHE_BASE).contains(&cmd) => {
                     set_office_cache_mb(cmd - ID_TRAY_OFFICE_CACHE_BASE)
                 }
-                ID_TRAY_FONT_100 => set_text_font_scale(100),
-                ID_TRAY_FONT_125 => set_text_font_scale(125),
-                ID_TRAY_FONT_150 => set_text_font_scale(150),
-                ID_TRAY_FONT_175 => set_text_font_scale(175),
-                ID_TRAY_FONT_200 => set_text_font_scale(200),
-                ID_TRAY_FONT_250 => set_text_font_scale(250),
-                ID_TRAY_FONT_300 => set_text_font_scale(300),
+                cmd if cmd >= ID_TRAY_PDF_CACHE_BASE => {
+                    set_pdf_cache_mb(cmd - ID_TRAY_PDF_CACHE_BASE)
+                }
                 ID_TRAY_FONT_400 => set_text_font_scale(400),
+                ID_TRAY_FONT_300 => set_text_font_scale(300),
+                ID_TRAY_FONT_250 => set_text_font_scale(250),
+                ID_TRAY_FONT_200 => set_text_font_scale(200),
+                ID_TRAY_FONT_175 => set_text_font_scale(175),
+                ID_TRAY_FONT_150 => set_text_font_scale(150),
+                ID_TRAY_FONT_125 => set_text_font_scale(125),
+                ID_TRAY_FONT_100 => set_text_font_scale(100),
+                ID_TRAY_FONT_90 => set_text_font_scale(90),
+                ID_TRAY_FONT_80 => set_text_font_scale(80),
+                ID_TRAY_FONT_70 => set_text_font_scale(70),
                 _ => {}
             }
             LRESULT(0)
@@ -513,8 +526,10 @@ unsafe fn show_context_menu(hwnd: HWND) {
         w!("Theme"),
     );
 
-    // Add the Font Size submenu. A hand-edited size between these steps
-    // simply matches none of them, which is why the values are read as written.
+    // Add the Font Size submenu, largest first: the steps a size can be picked
+    // from, from the largest down to the smallest. A hand-edited size between these
+    // steps simply matches none of them, which is why the values are read as
+    // written.
     let font_scale = CONFIG
         .lock()
         .map(|c| sanitize_text_font_scale_percent(c.text_font_scale_percent))
@@ -529,54 +544,40 @@ unsafe fn show_context_menu(hwnd: HWND) {
                 MF_UNCHECKED
             }
     };
-    let _ = AppendMenuW(
-        font_menu,
-        font_flag(100),
-        ID_TRAY_FONT_100 as usize,
-        w!("100%"),
-    );
-    let _ = AppendMenuW(
-        font_menu,
-        font_flag(125),
-        ID_TRAY_FONT_125 as usize,
-        w!("125%"),
-    );
-    let _ = AppendMenuW(
-        font_menu,
-        font_flag(150),
-        ID_TRAY_FONT_150 as usize,
-        w!("150%"),
-    );
-    let _ = AppendMenuW(
-        font_menu,
-        font_flag(175),
-        ID_TRAY_FONT_175 as usize,
-        w!("175%"),
-    );
-    let _ = AppendMenuW(
-        font_menu,
-        font_flag(200),
-        ID_TRAY_FONT_200 as usize,
-        w!("200%"),
-    );
-    let _ = AppendMenuW(
-        font_menu,
-        font_flag(250),
-        ID_TRAY_FONT_250 as usize,
-        w!("250%"),
-    );
-    let _ = AppendMenuW(
-        font_menu,
-        font_flag(300),
-        ID_TRAY_FONT_300 as usize,
-        w!("300%"),
-    );
-    let _ = AppendMenuW(
-        font_menu,
-        font_flag(400),
-        ID_TRAY_FONT_400 as usize,
-        w!("400%"),
-    );
+    let font_steps: [(u32, u16); 11] = [
+        (400, ID_TRAY_FONT_400),
+        (300, ID_TRAY_FONT_300),
+        (250, ID_TRAY_FONT_250),
+        (200, ID_TRAY_FONT_200),
+        (175, ID_TRAY_FONT_175),
+        (150, ID_TRAY_FONT_150),
+        (125, ID_TRAY_FONT_125),
+        (100, ID_TRAY_FONT_100),
+        (90, ID_TRAY_FONT_90),
+        (80, ID_TRAY_FONT_80),
+        (70, ID_TRAY_FONT_70),
+    ];
+
+    // The labels are built once and kept: `AppendMenuW` is handed a pointer, so the
+    // wide strings have to outlive the call that lists them.
+    let font_labels: Vec<Vec<u16>> = font_steps
+        .iter()
+        .map(|(percent, _)| {
+            format!("{percent}%")
+                .encode_utf16()
+                .chain(std::iter::once(0))
+                .collect()
+        })
+        .collect();
+
+    for (index, (percent, id)) in font_steps.iter().enumerate() {
+        let _ = AppendMenuW(
+            font_menu,
+            font_flag(*percent),
+            *id as usize,
+            PCWSTR(font_labels[index].as_ptr()),
+        );
+    }
     let _ = AppendMenuW(
         text_menu,
         MF_STRING | MF_POPUP,
@@ -930,13 +931,14 @@ unsafe fn show_context_menu(hwnd: HWND) {
     );
 
     // Add the "Cache" submenu: how much memory a preview's own data may be held in
-    // between hovers — the frames a decoded image was shown as, and the pages Office
-    // rendered. Both are held in memory and nowhere else, neither is written to disk,
-    // and both hold nothing at all until a size is chosen here.
-    let (image_cache_mb, office_cache_mb) = CONFIG
+    // between hovers — the frames a decoded image was shown as, the pages a PDF was
+    // drawn as, and the pages Office rendered — each of them listed largest first.
+    // All of it is held in memory and nowhere else, nothing is written to disk, and
+    // every cache holds nothing at all until a size is chosen here.
+    let (image_cache_mb, office_cache_mb, pdf_cache_mb) = CONFIG
         .lock()
-        .map(|c| (c.image_cache_mb, c.office_cache_mb))
-        .unwrap_or((0, 0));
+        .map(|c| (c.image_cache_mb, c.office_cache_mb, c.pdf_cache_mb))
+        .unwrap_or((0, 0, 0));
 
     let cache_menu = CreatePopupMenu().unwrap();
 
@@ -954,6 +956,7 @@ unsafe fn show_context_menu(hwnd: HWND) {
 
     for (name, base, held) in [
         (w!("Image"), ID_TRAY_IMAGE_CACHE_BASE, image_cache_mb),
+        (w!("PDF"), ID_TRAY_PDF_CACHE_BASE, pdf_cache_mb),
         (w!("Office"), ID_TRAY_OFFICE_CACHE_BASE, office_cache_mb),
     ] {
         let sizes_menu = CreatePopupMenu().unwrap();
@@ -1129,7 +1132,7 @@ fn toggle_preview_type(kind: PreviewType) {
 
 /// What a cache size is called in the menu. The two sizes at the ceiling are the
 /// only ones that are not a plain number of megabytes, and the smallest is the size
-/// both caches start at.
+/// every cache starts at.
 fn cache_size_label(megabytes: u32) -> String {
     match megabytes {
         0 => "0 MB (Default)".to_string(),
@@ -1180,6 +1183,27 @@ fn set_office_cache_mb(index: u16) {
     }
 
     office_render::trim_now();
+}
+
+/// How much memory the pages a PDF preview was drawn as may be held in, between
+/// hovers.
+///
+/// Like the caches beside it this switches nothing off: a page is rendered for the
+/// hover that asks for it whatever the size, and a size of nothing means it is
+/// dropped the moment it has been drawn. So nothing on screen changes here —
+/// what changes is how much is freed, and a smaller size frees it now rather than
+/// at the next render.
+fn set_pdf_cache_mb(index: u16) {
+    let Some(megabytes) = cache_size_at(index) else {
+        return;
+    };
+
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pdf_cache_mb = sanitize_pdf_cache_mb(megabytes);
+        config.save();
+    }
+
+    pdf_preview::trim_now();
 }
 
 /// Full mode changes what a text preview *is* rather than what it shows — it
