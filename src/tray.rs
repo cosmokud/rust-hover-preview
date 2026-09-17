@@ -87,14 +87,8 @@ const ID_TRAY_FONT_200: u16 = 1076;
 const ID_TRAY_FONT_250: u16 = 1077;
 const ID_TRAY_FONT_300: u16 = 1078;
 const ID_TRAY_FONT_400: u16 = 1079;
-/// The `Navigation Delay` submenu: how long navigation input holds previews back.
-const ID_TRAY_NAV_DELAY_INSTANT: u16 = 1080; // 0ms
-const ID_TRAY_NAV_DELAY_FAST: u16 = 1081; // 200ms
-const ID_TRAY_NAV_DELAY_MEDIUM: u16 = 1082; // 500ms
-const ID_TRAY_NAV_DELAY_FAST_PLUS: u16 = 1083; // 750ms
-const ID_TRAY_NAV_DELAY_SLOW: u16 = 1084; // 1000ms
 /// Where the `theme` folder's own items start: one command ID each, in the order
-/// the submenu listed them. The IDs the app uses end at 1084, so these collide
+/// the submenu listed them. The IDs the app uses end at 1079, so these collide
 /// with nothing.
 const ID_TRAY_THEME_CUSTOM_BASE: u16 = 1100;
 /// How many files the theme submenu will list. A menu that long is unusable well
@@ -179,11 +173,6 @@ unsafe extern "system" fn tray_window_proc(
                 ID_TRAY_REHOVER_DELAY_MEDIUM => set_same_file_rehover_delay(500),
                 ID_TRAY_REHOVER_DELAY_FAST_PLUS => set_same_file_rehover_delay(750),
                 ID_TRAY_REHOVER_DELAY_SLOW => set_same_file_rehover_delay(1000),
-                ID_TRAY_NAV_DELAY_INSTANT => set_navigation_delay(0),
-                ID_TRAY_NAV_DELAY_FAST => set_navigation_delay(200),
-                ID_TRAY_NAV_DELAY_MEDIUM => set_navigation_delay(500),
-                ID_TRAY_NAV_DELAY_FAST_PLUS => set_navigation_delay(750),
-                ID_TRAY_NAV_DELAY_SLOW => set_navigation_delay(1000),
                 ID_TRAY_OPEN_CONFIG => open_config_file(),
                 ID_TRAY_SCALE_FIT => set_preview_scale(PreviewScale::FitToScreen),
                 ID_TRAY_SCALE_400 => set_preview_scale(PreviewScale::Percent(400)),
@@ -617,9 +606,7 @@ unsafe fn show_context_menu(hwnd: HWND) {
     );
 
     // Add the "Timing" submenu: how long a hover waits before its preview opens,
-    // how long the same file is held off after its preview was dismissed, and how
-    // long navigation input — a held navigation key, or the wheel turning — holds
-    // previews back.
+    // and how long the same file is held off after its preview was dismissed.
     let timing_menu = CreatePopupMenu().unwrap();
 
     // Add the Delay submenu
@@ -721,57 +708,6 @@ unsafe fn show_context_menu(hwnd: HWND) {
         MF_STRING | MF_POPUP,
         rehover_delay_menu.0 as usize,
         w!("Rehover Delay"),
-    );
-
-    // Add the Navigation Delay submenu: how long a held navigation key or the
-    // wheel turning keeps previews held back, so a preview follows the item the
-    // navigation lands on rather than every item passed on the way.
-    let navigation_delay_ms = CONFIG.lock().map(|c| c.navigation_delay_ms).unwrap_or(200);
-    let navigation_delay_menu = CreatePopupMenu().unwrap();
-
-    let navigation_delay_flag = |delay: u64| {
-        MF_STRING
-            | if navigation_delay_ms == delay {
-                MF_CHECKED
-            } else {
-                MF_UNCHECKED
-            }
-    };
-    let _ = AppendMenuW(
-        navigation_delay_menu,
-        navigation_delay_flag(0),
-        ID_TRAY_NAV_DELAY_INSTANT as usize,
-        w!("Instant (0 ms)"),
-    );
-    let _ = AppendMenuW(
-        navigation_delay_menu,
-        navigation_delay_flag(200),
-        ID_TRAY_NAV_DELAY_FAST as usize,
-        w!("Fast (200 ms)"),
-    );
-    let _ = AppendMenuW(
-        navigation_delay_menu,
-        navigation_delay_flag(500),
-        ID_TRAY_NAV_DELAY_MEDIUM as usize,
-        w!("Medium (500 ms)"),
-    );
-    let _ = AppendMenuW(
-        navigation_delay_menu,
-        navigation_delay_flag(750),
-        ID_TRAY_NAV_DELAY_FAST_PLUS as usize,
-        w!("Relaxed (750 ms)"),
-    );
-    let _ = AppendMenuW(
-        navigation_delay_menu,
-        navigation_delay_flag(1000),
-        ID_TRAY_NAV_DELAY_SLOW as usize,
-        w!("Slow (1000 ms)"),
-    );
-    let _ = AppendMenuW(
-        timing_menu,
-        MF_STRING | MF_POPUP,
-        navigation_delay_menu.0 as usize,
-        w!("Navigation Delay"),
     );
 
     let _ = AppendMenuW(
@@ -1172,13 +1108,6 @@ fn set_hover_delay(hover_delay_ms: u64) {
 fn set_same_file_rehover_delay(delay_ms: u64) {
     if let Ok(mut config) = CONFIG.lock() {
         config.same_file_rehover_delay_ms = delay_ms;
-        config.save();
-    }
-}
-
-fn set_navigation_delay(delay_ms: u64) {
-    if let Ok(mut config) = CONFIG.lock() {
-        config.navigation_delay_ms = delay_ms;
         config.save();
     }
 }

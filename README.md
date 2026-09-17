@@ -112,7 +112,6 @@ ffprobe -version
 - **Timing**
   - **Delay** — Instant, Fast, Medium, Relaxed, Slow
   - **Rehover Delay** — delay before the same file can preview again
-  - **Navigation Delay** — how long held arrow keys or wheel scrolling hold previews back
 - **Placement**
   - **Position** — Follow Cursor or Best Position, and whether to keep previews off the hovered item's name
   - **Scaling** — Fit to Screen or 25%–400%
@@ -138,7 +137,6 @@ Example:
 run_at_startup=true
 hover_delay_ms=0
 same_file_rehover_delay_ms=750
-navigation_delay_ms=200
 preview_enabled=true
 image_preview_enabled=true
 video_preview_enabled=true

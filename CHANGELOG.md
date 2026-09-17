@@ -8,7 +8,6 @@
 - `archive_preview_enabled` and an `[archive] extensions` list in `config.ini`, plus an `Archives` entry in the tray's `Toggle Preview Types` submenu.
 - Archive listings are painted with the text preview's themes, fonts and margins, and follow the `Text Preview Font Size` setting.
 - `Avoid Filename` in the tray's `Preview Position` submenu, or `avoid_filename` in `config.ini`: a preview is moved clear of the name of the file it is about, and resized where the display leaves no room for it beside the name. On by default, and applies to both positions.
-- `Navigation Delay` in the tray's `Timing` submenu, or `navigation_delay_ms` in `config.ini`: how long held arrow keys or wheel scrolling hold previews back. Default `200` ms, `0` for Instant.
 
 ### Changed
 
@@ -18,7 +17,6 @@
 - Archive listings keep room between an entry's icon and its name.
 - The tray's `Preview Position` entries carry radio marks, and `Avoid Filename` a checkmark of its own.
 - RAR archives are read through RARLAB's UnRAR sources compiled in by the `unrar` crate. See the licence note in README.
-- Wheel scrolling and held arrow keys now hold previews back by the same `Navigation Delay`, so a preview follows the item navigation lands on instead of every item passed on the way.
 
 ## [0.2.4] - 2026-09-17
 
