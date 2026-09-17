@@ -17,6 +17,11 @@ use crate::pdf_preview;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+/// The box a preview is placed in while its page is being rendered: just enough
+/// for the spinner, since there is nothing else to show yet. The page's own size
+/// is what the layout uses the moment it exists, and the window is moved to it.
+pub(crate) const WAITING_BOX: u32 = 128;
+
 /// What a preview of this document would be drawn from.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum SourceKind {
@@ -67,10 +72,10 @@ pub(crate) fn measure(path: &Path) -> Option<(u32, u32)> {
         }
     }
 
-    // Nothing rendered yet: a page is what is coming, so the preview is placed for
-    // the box that family's pages have and the spinner fills it.
+    // Nothing rendered yet: a page is what is coming, so the preview is a spinner
+    // in a box of its own until it arrives.
     if office_render::enabled() {
-        return Some(crate::office_formats::default_page_size(path));
+        return Some((WAITING_BOX, WAITING_BOX));
     }
 
     None
@@ -116,11 +121,19 @@ fn render_cached(
         }
         RenderedKind::Png | RenderedKind::Bmp => {
             let image = image::open(&cached.path).ok()?;
-            let resized = image.resize_exact(
-                target_width,
-                target_height,
-                image::imageops::FilterType::Triangle,
-            );
+            // A picture can be far larger than the box it is shown in — a
+            // worksheet's corner at screen resolution is millions of pixels — so
+            // shrinking uses the box filter, which is the fast one, and enlarging
+            // the smooth one.
+            let resized = if target_width <= image.width() && target_height <= image.height() {
+                image.thumbnail_exact(target_width, target_height)
+            } else {
+                image.resize_exact(
+                    target_width,
+                    target_height,
+                    image::imageops::FilterType::Triangle,
+                )
+            };
 
             Some((
                 pdf_preview::opaque_bgra(resized.to_rgba8().as_raw()),

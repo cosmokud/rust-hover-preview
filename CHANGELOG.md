@@ -9,9 +9,11 @@
 
 ### Changed
 
-- The legacy Office formats are read through the `cfb` compound-file reader, which opens the one summary information stream their picture lives in and nothing else.
 - Office previews are drawn from the rendered page alone. The picture a document saves inside itself is no longer read at all: a thumbnail a couple of hundred pixels across is either tiny in a preview or an enlargement of something that small, and skipping it keeps the preview thread from parsing a zip or a compound file. The `cfb` reader the legacy formats needed went with it.
 - Nothing about an Office preview is held in memory between hovers. A page's own size is read from the cached file each time it is measured, so no cache of the app's can go stale, grow with the documents hovered, or stand between a hover and its preview.
+- While a page is being rendered the preview is the spinner's own box — just big enough for it — instead of one shaped like the page that is coming.
+- The page that arrives for the hover on screen replaces what is up without the preview being taken down first: the spinner stays while a large picture is decoded and is swapped for the page when it is ready, instead of blinking off and back.
+- A picture larger than the box it is shown in is now shrunk with the box filter rather than the smooth one, which is the difference between half a second and a quarter of a second for a worksheet's corner at screen resolution.
 
 ### Fixed
 

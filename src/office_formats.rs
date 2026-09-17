@@ -141,12 +141,14 @@ pub fn app_for(path: &Path) -> Option<OfficeApp> {
     None
 }
 
-/// The box a preview is placed for while its page is on the way, by the shape that
-/// family's pages have: a Word page is a portrait sheet, a workbook's first printed
-/// page is usually a landscape one, and a slide is a slide.
+/// The box a document's page is asked for in, by the shape that family's pages
+/// have: a Word page is a portrait sheet, a workbook's first printed page is
+/// usually a landscape one, and a slide is a slide.
 ///
-/// It is only what the spinner is drawn in — as soon as the page exists, its own
-/// size is what the layout uses.
+/// It is what a render is asked for — a slide is exported at that width — and what
+/// a preview is placed by while the page is on its way. A spinner is drawn in a box
+/// of its own (`office_preview::WAITING_BOX`), so what this really decides is the
+/// size a render comes back at.
 pub fn default_page_size(path: &Path) -> (u32, u32) {
     match app_for(path) {
         Some(OfficeApp::Excel) => (1123, 794),

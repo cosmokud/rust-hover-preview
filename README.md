@@ -50,7 +50,7 @@ A preview lists what the archive holds — a summary line, then a tree of its fo
 
 `doc`, `docm`, `docx`, `dot`, `dotm`, `dotx`, `xls`, `xlsb`, `xlsm`, `xlsx`, `xlt`, `xltm`, `xltx`, `ppt`, `pptm`, `pptx`, `pps`, `ppsm`, `ppsx`, `pot`, `potm`, `potx`.
 
-A hover shows the document's page, rendered by the Word, Excel or PowerPoint installed on the machine and cached under `%LOCALAPPDATA%\rust-hover-preview\cache\office`. Nothing is launched until the pointer has rested on the document for two seconds — a sweep across a folder starts no engine — and the preview shows a spinner in the shape that family's pages have until the page arrives. Once it has been rendered, every later hover of that document is instant, and the engine is kept warm for a minute so a folder of documents costs one Office start rather than one per file.
+A hover shows the document's page, rendered by the Word, Excel or PowerPoint installed on the machine and cached under `%LOCALAPPDATA%\rust-hover-preview\cache\office`. Nothing is launched until the pointer has rested on the document for two seconds — a sweep across a folder starts no engine — and until the page arrives the preview is a small spinner of its own, which stays up while the page is loaded and is replaced by it when it lands. Once a document has been rendered, every later hover of it is instant, and the engine is kept warm for a minute so a folder of documents costs one Office start rather than one per file.
 
 What a document saves inside itself is deliberately not used: the picture Office puts in a file is a thumbnail-sized metafile or bitmap, a couple of hundred pixels across, and a preview drawn from one is either tiny or an enlargement of something that small. The page is the whole of it.
 
