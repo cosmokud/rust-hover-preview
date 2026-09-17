@@ -17,7 +17,7 @@ A Windows 11 tray app inspired by QTTabBar that shows instant File Explorer prev
 - Text and code with syntax highlighting, rendered Markdown, and bundled/custom themes
 - Archive contents — zip, rar, 7z, tar — as a file tree with sizes, read without unpacking anything
 - Office documents — Word, Excel and PowerPoint — drawn from a page Office renders in the background and keeps, so a document previews from its first hover and instantly after
-- Preview scaling from 25% to 400%, or fit-to-screen
+- Preview scaling from 25% to 400%, or fit-to-screen — a PDF page and a rendered Office page are sized from fit-to-screen, reduced by a setting below 100%
 - Previews appear beside the cursor or focused item and are never clipped by screen edges
 - Tray menu and hand-editable `config.ini`
 - DPI aware, single-instance, sleep/resume resilient, and light on idle CPU
@@ -30,7 +30,7 @@ A Windows 11 tray app inspired by QTTabBar that shows instant File Explorer prev
 
 ### PDF
 
-`pdf` — the first page is rendered by the Windows PDF engine. Password-protected and damaged files are skipped.
+`pdf` — the first page is rendered by the Windows PDF engine. Password-protected and damaged files are skipped. The page fills the room the display has; a preview scale below 100% shows it smaller.
 
 ### Text and code
 
@@ -50,7 +50,7 @@ A preview lists what the archive holds — a summary line, then a tree of its fo
 
 `doc`, `docm`, `docx`, `dot`, `dotm`, `dotx`, `xls`, `xlsb`, `xlsm`, `xlsx`, `xlt`, `xltm`, `xltx`, `ppt`, `pptm`, `pptx`, `pps`, `ppsm`, `ppsx`, `pot`, `potm`, `potx`.
 
-A hover shows the document's page, rendered by the Word, Excel or PowerPoint installed on the machine and cached under `%LOCALAPPDATA%\rust-hover-preview\cache\office`. Nothing is launched until the pointer has rested on the document for two seconds — a sweep across a folder starts no engine — and until the page arrives the preview is a small spinner of its own, which stays up while the page is loaded and is replaced by it when it lands. Once a document has been rendered, every later hover of it is instant, and the engine is kept warm for a minute so a folder of documents costs one Office start rather than one per file.
+A hover shows the document's page, rendered by the Word, Excel or PowerPoint installed on the machine and cached under `%LOCALAPPDATA%\rust-hover-preview\cache\office`. Nothing is launched until the pointer has rested on the document for two seconds — a sweep across a folder starts no engine — and until the page arrives the preview is a small spinner of its own, which stays up while the page is loaded and is replaced by it when it lands. The page fills the room the display has, the way a PDF's does; a preview scale below 100% shows it smaller. Once a document has been rendered, every later hover of it is instant, and the engine is kept warm for a minute so a folder of documents costs one Office start rather than one per file.
 
 What a document saves inside itself is deliberately not used: the picture Office puts in a file is a thumbnail-sized metafile or bitmap, a couple of hundred pixels across, and a preview drawn from one is either tiny or an enlargement of something that small. The page is the whole of it.
 
