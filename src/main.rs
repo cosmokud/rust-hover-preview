@@ -6,6 +6,10 @@ mod archive_preview;
 mod cloud_files;
 mod config;
 mod explorer_hook;
+mod office_formats;
+mod office_preview;
+mod office_render;
+mod office_thumbnail;
 mod pdf_preview;
 mod preview_window;
 mod single_instance;
@@ -96,6 +100,10 @@ fn main() {
     // Signal other threads to stop
     RUNNING.store(false, Ordering::SeqCst);
     wheel_input::request_stop();
+
+    // The engine thread is joined only when it is idle: a COM call into Office
+    // cannot be cancelled, and the app's exit must not wait on one.
+    office_render::shutdown();
 
     // Wait for threads to finish (with timeout)
     let _ = preview_handle.join();
