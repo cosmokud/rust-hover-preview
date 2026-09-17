@@ -1,19 +1,22 @@
 //! Measuring and drawing the page rendered for an Office document.
 //!
 //! A preview is drawn from one source and one only: the page the render tier
-//! produced and cached (see `office_render`). The picture a document saves inside
-//! itself is deliberately not read — it is a thumbnail-sized metafile or bitmap, a
-//! couple of hundred pixels across, and a preview drawn from one is either tiny or
-//! an enlargement of something that small — so a document whose page is not there
-//! yet is answered with a spinner in a box of its own, and the page itself the
-//! moment it arrives.
+//! produced and is holding in memory (see `office_render`). The picture a document
+//! saves inside itself is deliberately not read — it is a thumbnail-sized metafile
+//! or bitmap, a couple of hundred pixels across, and a preview drawn from one is
+//! either tiny or an enlargement of something that small — so a document whose page
+//! is not there yet is answered with a spinner in a box of its own, and the page
+//! itself the moment it arrives.
 //!
-//! Nothing here is kept in memory between hovers. What a preview is drawn from is
-//! a file on disk, and its size is read from that file, so a hover costs what
-//! opening the file costs — milliseconds — and nothing can go stale.
+//! Nothing is kept *here*: the page belongs to the render tier, which holds it up to
+//! the memory the user configured and drops it when that hover is over. What this
+//! module does with it is cheap either way — a page already in memory costs a header
+//! parse to measure and one raster to draw — and the size it reads is kept on the
+//! page itself, so it cannot outlive the page it was read from.
 
 use crate::office_render::{self, CachedRender, RenderedKind};
 use crate::pdf_preview;
+use std::io::Cursor;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -68,21 +71,21 @@ pub(crate) fn source_kind(path: &Path) -> SourceKind {
 
 /// The page waiting for this document, if there is one and it can be read.
 ///
-/// A cache file that cannot be read is not a page: one left half-written by a
-/// process that was ended mid-render, or one something else has corrupted, would
-/// otherwise be handed to a preview that blinks away the moment it tries to draw
-/// it — and it would be trusted forever, because "a page is already rendered for
-/// this file" is what stops another render. So a file that will not give up its page
-/// is dropped here, which is what gets the document rendered again. This is the side
-/// that may ask the PDF engine — its threads are multithreaded apartments — which is
-/// why the check lives here rather than where the cache is listed.
+/// A page that cannot be read is not a page: one a render cut short, or one
+/// something else corrupted, would otherwise be handed to a preview that blinks away
+/// the moment it tries to draw it — and it would be trusted forever, because "a page
+/// is already rendered for this file" is what stops another render. So a page that
+/// will not give up its size is dropped here, which is what gets the document
+/// rendered again. This is the side that may ask the PDF engine — its threads are
+/// multithreaded apartments — which is why the check lives here rather than where the
+/// page is held.
 fn usable_render(path: &Path) -> Option<CachedRender> {
     let cached = office_render::cached_render(path)?;
     if rendered_dimensions(&cached).is_some() {
         return Some(cached);
     }
 
-    let _ = std::fs::remove_file(&cached.path);
+    office_render::forget(path);
     None
 }
 
@@ -127,12 +130,25 @@ pub(crate) fn render(
     render_cached(&cached, target_width, target_height)
 }
 
+/// The page's own size, read from the bytes the first time it is asked for and kept
+/// on the page from then on: the layout asks for it more than once per hover, and a
+/// PDF page is parsed to be measured.
 fn rendered_dimensions(cached: &CachedRender) -> Option<(u32, u32)> {
-    match cached.kind {
-        RenderedKind::Pdf => pdf_preview::page_dimensions(&cached.path),
+    *cached.dimensions.get_or_init(|| match cached.kind {
+        RenderedKind::Pdf => pdf_preview::page_dimensions_of_bytes(&cached.bytes),
         // A slide's PNG and a workbook's bitmap are both read the way any image is.
-        RenderedKind::Png | RenderedKind::Bmp => image::image_dimensions(&cached.path).ok(),
-    }
+        RenderedKind::Png | RenderedKind::Bmp => image_dimensions_of(&cached.bytes),
+    })
+}
+
+/// An image's own size, read from the header of bytes already in memory — the
+/// decode itself is not paid for to answer a question about a size.
+fn image_dimensions_of(bytes: &[u8]) -> Option<(u32, u32)> {
+    image::ImageReader::new(Cursor::new(bytes))
+        .with_guessed_format()
+        .ok()?
+        .into_dimensions()
+        .ok()
 }
 
 fn render_cached(
@@ -144,10 +160,10 @@ fn render_cached(
         // The page is rendered at the size it is shown at rather than enlarged
         // afterwards, which is what keeps a scaled-up preview sharp.
         RenderedKind::Pdf => {
-            pdf_preview::render_first_page(&cached.path, target_width, target_height)
+            pdf_preview::render_first_page_of_bytes(&cached.bytes, target_width, target_height)
         }
         RenderedKind::Png | RenderedKind::Bmp => {
-            let image = image::open(&cached.path).ok()?;
+            let image = image::load_from_memory(&cached.bytes[..]).ok()?;
             // A picture can be far larger than the box it is shown in — a
             // worksheet's corner at screen resolution is millions of pixels — so
             // shrinking uses the box filter, which is the fast one, and enlarging
@@ -205,21 +221,21 @@ mod tests {
         file
     }
 
+    /// A page as the render tier holds one: the bytes Office wrote, and which kind
+    /// of page they are. Nothing is written to disk to make one.
+    fn held_page(kind: RenderedKind, bytes: Vec<u8>) -> CachedRender {
+        CachedRender {
+            kind,
+            bytes: std::sync::Arc::new(bytes),
+            dimensions: std::sync::Arc::new(std::sync::OnceLock::new()),
+        }
+    }
+
     /// The picture a workbook is answered with is drawn like any other frame, and
     /// it is opaque whatever its own alpha bytes say.
     #[test]
     fn draws_a_workbook_picture_opaquely() {
-        let folder = std::env::temp_dir()
-            .join("rust-hover-preview-office-tests")
-            .join("preview");
-        std::fs::create_dir_all(&folder).expect("a test folder");
-        let path = folder.join("used-range.bmp");
-        std::fs::write(&path, bmp_bytes(2, 2, [40, 90, 200, 0])).expect("a written picture");
-
-        let cached = CachedRender {
-            path: path.clone(),
-            kind: RenderedKind::Bmp,
-        };
+        let cached = held_page(RenderedKind::Bmp, bmp_bytes(2, 2, [40, 90, 200, 0]));
         let (pixels, width, height) = render_cached(&cached, 4, 4).expect("a drawn picture");
 
         assert_eq!((width, height), (4, 4));
@@ -230,32 +246,22 @@ mod tests {
         );
         // Blue, green, red — the order the frame is in — and the colour survived.
         assert_eq!(&pixels[..3], &[40, 90, 200]);
-
-        let _ = std::fs::remove_file(&path);
     }
 
     /// A slide is drawn at the size the layout asked for.
     #[test]
     fn draws_a_slide_at_the_size_it_is_asked_for() {
-        let folder = std::env::temp_dir()
-            .join("rust-hover-preview-office-tests")
-            .join("preview");
-        std::fs::create_dir_all(&folder).expect("a test folder");
-        let path = folder.join("slide.png");
-
         let slide = image::RgbaImage::from_pixel(8, 4, image::Rgba([10, 20, 30, 255]));
-        slide.save(&path).expect("a written slide");
+        let mut written = Cursor::new(Vec::new());
+        slide
+            .write_to(&mut written, image::ImageFormat::Png)
+            .expect("a written slide");
 
-        let cached = CachedRender {
-            path: path.clone(),
-            kind: RenderedKind::Png,
-        };
+        let cached = held_page(RenderedKind::Png, written.into_inner());
         let (pixels, width, height) = render_cached(&cached, 32, 16).expect("a drawn slide");
 
         assert_eq!((width, height), (32, 16));
         assert_eq!(pixels.len(), 32 * 16 * 4);
         assert_eq!(&pixels[..3], &[30, 20, 10]);
-
-        let _ = std::fs::remove_file(&path);
     }
 }

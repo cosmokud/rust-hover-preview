@@ -4,13 +4,13 @@
 
 ### Added
 
-- Office previews: hovering a Word, Excel or PowerPoint document shows a page of it, rendered by the installed Office and cached under `%LOCALAPPDATA%\rust-hover-preview\cache\office`. No engine starts until the pointer has rested on the file for two seconds.
-- `office_preview_enabled`, `office_render_enabled` and `office_cache_mb` in `config.ini`, an editable `[office] extensions` list, and `Office` entries in the tray's `Preview Types` and `Office Preview` submenus.
+- Office previews: hovering a Word, Excel or PowerPoint document shows a page of it, rendered by the installed Office. No engine starts until the pointer has rested on the file for two seconds.
+- `office_preview_enabled` and `office_cache_mb` in `config.ini`, an editable `[office] extensions` list, and an `Office` entry in the tray's `Preview Types` submenu.
 
 ### Changed
 
 - Office previews are drawn from the rendered page, not from the thumbnail a document saves inside itself.
-- Nothing about an Office preview is kept in memory between hovers.
+- A rendered Office page is held in memory rather than written to disk: `office_cache_mb` is how much is kept between hovers, and nothing is kept by default.
 - A page is asked for in the box its family's pages have, and while it is on its way the preview is the spinner alone.
 - A PDF page and a rendered Office page are still sized from fit-to-screen, but a preview scale below `100%` now reduces that size instead of being ignored. `100%` and above are the fit-to-screen size they have always been, and image previews are unchanged.
 - The spinner a preview shows while it waits is the arc alone: its frame is transparent, so what is behind it is the desktop rather than a dark square. The arc carries a soft halo, which is what keeps it visible over a light background.
@@ -21,6 +21,9 @@
 - A worksheet's picture is copied out only as far as a preview can show it, and a large one is shrunk with the fast filter.
 - A worksheet's picture is asked for again if Excel refuses the first ask, and a page that cannot be read is rendered again rather than trusted.
 - A document that refuses a page is left alone for two minutes rather than ten.
+- New `Cache` submenu in the tray: the image and Office caches are sized from `0 MB` to `2 GB`, and both hold nothing at all until a size is chosen.
+- `image_cache_mb` defaults to `0` rather than `64`.
+- Removed the `Office Preview` submenu with it: Office previews are switched by the `Office` entry under `Preview Types`, and `office_render_enabled` is no longer read.
 
 ### Fixed
 
