@@ -13,12 +13,13 @@
 //! and theme, so a second hover, a theme switch or a repaint costs a layout
 //! instead of a parse.
 
-use crate::config::{MarkdownMode, TextTheme};
+use crate::config::{sanitize_text_cache_mb, MarkdownMode, TextTheme, DEFAULT_TEXT_CACHE_MB};
 use crate::text_paint::{
     blend, fill_rect, plain_style, readable, rgb, scaled, text_style, DibSurface, RunPainter,
     TextStyle, TextMetrics, BODY_LEVEL, SIZE_LEVELS,
 };
 use crate::text_theme::{self, LoadedTheme};
+use crate::CONFIG;
 use once_cell::sync::Lazy;
 use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
 use std::cell::RefCell;
@@ -143,6 +144,7 @@ impl Selection {
 
 /// One painted text preview: its pixels, what it took to lay it out, and where the
 /// text landed.
+#[derive(Clone)]
 pub struct TextFrame {
     pub pixels: Vec<u8>,
     pub width: u32,
@@ -291,6 +293,172 @@ pub fn measure(
     result
 }
 
+/// What a held frame is only valid for: the file and its version, the options it
+/// was painted with, and the box and scroll position it was painted at.
+///
+/// The font scale is part of it, unlike a parsed document's key: the same text
+/// painted at 70% and at 200% really is different pixels. The theme's reading
+/// counter is there for the same reason it is in `DocKey` — a user's theme file can
+/// be edited under a name that does not change.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+struct FrameKey {
+    path: PathBuf,
+    modified: Option<SystemTime>,
+    len: u64,
+    theme: TextTheme,
+    theme_generation: u64,
+    markdown_mode: MarkdownMode,
+    font_scale_percent: u32,
+    full_mode: bool,
+    dpi: u32,
+    width: u32,
+    height: u32,
+    first_line: usize,
+}
+
+/// A frame being held: the painted preview, and when it was last asked for.
+struct FrameCacheEntry {
+    frame: TextFrame,
+    size: usize,
+    last_used: u64,
+}
+
+/// The frames held in memory, and how much of the budget they take.
+#[derive(Default)]
+struct FrameCache {
+    entries: HashMap<FrameKey, FrameCacheEntry>,
+    bytes: usize,
+    /// A counter rather than a clock, so the order frames are dropped in cannot be
+    /// changed by the system clock moving.
+    tick: u64,
+}
+
+static FRAMES: Lazy<Mutex<FrameCache>> = Lazy::new(|| Mutex::new(FrameCache::default()));
+
+/// The memory the cache may hold, read from the configuration each time rather
+/// than captured, so an edit to `text_cache_mb` applies without a restart.
+fn frame_cache_limit_bytes() -> usize {
+    let megabytes = CONFIG
+        .lock()
+        .map(|config| sanitize_text_cache_mb(config.text_cache_mb))
+        .unwrap_or(DEFAULT_TEXT_CACHE_MB);
+
+    megabytes as usize * 1024 * 1024
+}
+
+/// What this render would be held as. A file whose metadata cannot be read is not
+/// held at all: nothing about it would say when it changed.
+fn frame_key(
+    path: &Path,
+    first_line: usize,
+    width: u32,
+    height: u32,
+    dpi: u32,
+    options: TextPreviewOptions,
+) -> Option<FrameKey> {
+    let metadata = std::fs::metadata(path).ok()?;
+
+    Some(FrameKey {
+        path: path.to_path_buf(),
+        modified: metadata.modified().ok(),
+        len: metadata.len(),
+        theme: options.theme,
+        theme_generation: match options.theme {
+            TextTheme::Custom(_) => text_theme::generation(),
+            _ => 0,
+        },
+        markdown_mode: options.markdown_mode,
+        font_scale_percent: options.font_scale_percent,
+        full_mode: options.full_mode,
+        dpi,
+        width,
+        height,
+        first_line,
+    })
+}
+
+/// The frame held for this render, if the cache still has it.
+fn frame_cache_get(key: &FrameKey) -> Option<TextFrame> {
+    let limit = frame_cache_limit_bytes();
+    let mut cache = FRAMES.lock().ok()?;
+
+    frame_cache_trim(&mut cache, limit);
+
+    cache.tick += 1;
+    let tick = cache.tick;
+
+    let entry = cache.entries.get_mut(key)?;
+    entry.last_used = tick;
+
+    Some(entry.frame.clone())
+}
+
+/// Hold the frame just painted, dropping whatever no longer fits beside it.
+fn frame_cache_put(key: FrameKey, frame: &TextFrame) {
+    let limit = frame_cache_limit_bytes();
+    let Ok(mut cache) = FRAMES.lock() else {
+        return;
+    };
+
+    frame_cache_trim(&mut cache, limit);
+
+    let size = frame.pixels.len();
+    // A frame larger than the whole budget would evict everything else and still
+    // not fit, so it is simply not held — which is every frame at a budget of
+    // nothing, and is what makes that size mean "hold nothing".
+    if size > limit {
+        return;
+    }
+
+    cache.tick += 1;
+    let tick = cache.tick;
+
+    if let Some(previous) = cache.entries.insert(
+        key,
+        FrameCacheEntry {
+            frame: frame.clone(),
+            size,
+            last_used: tick,
+        },
+    ) {
+        cache.bytes -= previous.size;
+    }
+    cache.bytes += size;
+
+    frame_cache_trim(&mut cache, limit);
+}
+
+/// Drop frames, least recently used first, until the cache fits inside `limit`.
+fn frame_cache_trim(cache: &mut FrameCache, limit: usize) {
+    while cache.bytes > limit {
+        // Bound to its own statement so the borrow of `entries` has ended before
+        // the entry is removed.
+        let oldest = cache
+            .entries
+            .iter()
+            .min_by_key(|(_, entry)| entry.last_used)
+            .map(|(key, _)| key.clone());
+
+        let Some(oldest) = oldest else {
+            break;
+        };
+
+        if let Some(dropped) = cache.entries.remove(&oldest) {
+            cache.bytes -= dropped.size;
+        }
+    }
+}
+
+/// Trim the cache to the configured size now, which is what the tray asks for when
+/// a smaller size is chosen: what is over the new budget is freed at the moment it
+/// is set rather than at the next paint that happens to pass through here.
+pub(crate) fn trim_now() {
+    let limit = frame_cache_limit_bytes();
+    if let Ok(mut cache) = FRAMES.lock() {
+        frame_cache_trim(&mut cache, limit);
+    }
+}
+
 /// Paint the preview at a scroll position, together with the scrollbar the frame
 /// needs and the numbers that describe where the preview is.
 ///
@@ -298,6 +466,12 @@ pub fn measure(
 /// is nearly over is pulled back so the frame is still full, and a preview that
 /// fits is always at line 0. What comes back is what was actually painted, so the
 /// caller can scroll from there without guessing.
+///
+/// What was painted is held in memory for the next render of the same file with the
+/// same options at the same box and position — laying a screenful out and drawing
+/// every run of it is the whole of what a text hover costs — up to `text_cache_mb`.
+/// A frame a selection is painted into is not held: that is a picture of a drag
+/// rather than of the file, and it is different for every one of them.
 pub fn render_scrolled(
     path: &Path,
     first_line: usize,
@@ -309,6 +483,16 @@ pub fn render_scrolled(
 ) -> Option<TextFrame> {
     if width == 0 || height == 0 {
         return None;
+    }
+
+    let key = selection
+        .is_none()
+        .then(|| frame_key(path, first_line, width, height, dpi, options))
+        .flatten();
+    if let Some(key) = key.as_ref() {
+        if let Some(frame) = frame_cache_get(key) {
+            return Some(frame);
+        }
     }
 
     let document = document(path, options)?;
@@ -387,7 +571,7 @@ pub fn render_scrolled(
         })
         .collect();
 
-    Some(TextFrame {
+    let frame = TextFrame {
         pixels: surface.pixels(),
         width,
         height,
@@ -396,7 +580,13 @@ pub fn render_scrolled(
         scrollable_lines,
         scrollbar,
         lines,
-    })
+    };
+
+    if let Some(key) = key {
+        frame_cache_put(key, &frame);
+    }
+
+    Some(frame)
 }
 
 // ---------------------------------------------------------------- documents
@@ -2857,6 +3047,102 @@ mod tests {
 
             write_png(&dir, name, &frame);
         }
+    }
+
+    /// A frame key of this module's own, for a frame that was never painted.
+    fn key(name: &str, first_line: usize) -> FrameKey {
+        FrameKey {
+            path: PathBuf::from(name),
+            modified: None,
+            len: 0,
+            theme: TextTheme::Light,
+            theme_generation: 0,
+            markdown_mode: MarkdownMode::Rendered,
+            font_scale_percent: 125,
+            full_mode: true,
+            dpi: 96,
+            width: 800,
+            height: 600,
+            first_line,
+        }
+    }
+
+    /// A held frame of `size` pixels.
+    fn held(size: usize, last_used: u64) -> FrameCacheEntry {
+        FrameCacheEntry {
+            frame: TextFrame {
+                pixels: vec![0u8; size],
+                width: 800,
+                height: 600,
+                first_line: 0,
+                visible_lines: 10,
+                scrollable_lines: 10,
+                scrollbar: None,
+                lines: Vec::new(),
+            },
+            size,
+            last_used,
+        }
+    }
+
+    /// The frame that was asked for least recently is the one that goes, and the
+    /// bytes the cache reports are the bytes that are left in it.
+    #[test]
+    fn trims_the_frame_cache_least_recently_used_first() {
+        let mut cache = FrameCache::default();
+        cache.entries.insert(key("old", 0), held(64, 1));
+        cache.entries.insert(key("new", 0), held(64, 2));
+        cache.bytes = 128;
+
+        frame_cache_trim(&mut cache, 64);
+
+        assert!(cache.entries.contains_key(&key("new", 0)), "the newer frame stays");
+        assert!(!cache.entries.contains_key(&key("old", 0)), "the older frame goes");
+        assert_eq!(cache.bytes, 64, "the budget is what is held");
+
+        // A budget of nothing empties it, which is what `0 MB` means.
+        frame_cache_trim(&mut cache, 0);
+        assert!(cache.entries.is_empty());
+        assert_eq!(cache.bytes, 0);
+    }
+
+    /// The file, its version, the options and the box a frame was painted in, and
+    /// the line it starts at: any of them changing is another frame.
+    #[test]
+    fn keys_a_frame_by_the_file_its_options_and_the_box() {
+        let dir = scratch("keys");
+        let source = dir.join("keyed.txt");
+        fs::write(&source, b"one").expect("a written file");
+
+        let options = TextPreviewOptions {
+            theme: TextTheme::Light,
+            markdown_mode: MarkdownMode::Rendered,
+            font_scale_percent: 125,
+            full_mode: true,
+        };
+        let at = |first_line, width, height, options| {
+            frame_key(&source, first_line, width, height, 96, options).expect("a key")
+        };
+
+        let first = at(0, 800, 600, options);
+        assert_eq!(first, at(0, 800, 600, options));
+        assert_ne!(first, at(4, 800, 600, options), "another position is another frame");
+        assert_ne!(first, at(0, 600, 800, options), "another box is another frame");
+
+        let scaled = TextPreviewOptions {
+            font_scale_percent: 200,
+            ..options
+        };
+        assert_ne!(first, at(0, 800, 600, scaled), "another size is another frame");
+
+        fs::write(&source, b"a rewritten file").expect("a rewritten file");
+        assert_ne!(
+            first,
+            at(0, 800, 600, options),
+            "a rewritten file is another frame"
+        );
+
+        let _ = fs::remove_file(&source);
     }
 }
 
