@@ -12,6 +12,7 @@
 
 - The minimum supported Rust version is now 1.88, which is the `zip` crate's floor.
 - The GDI painting a text preview and an archive listing share moved into `text_paint.rs`; text previews are unchanged by it.
+- Archive listings keep room between an entry's icon and its name instead of drawing the two against each other.
 - RAR archives are read through RARLAB's UnRAR sources compiled in by the `unrar` crate. See the licence note in README.
 
 ## [0.2.4] - 2026-09-17

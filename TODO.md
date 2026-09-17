@@ -2,7 +2,9 @@
 
 ## Features
 
-- Add support for Office document formats (.docx, .xlsx, .pptx).
-- Add support for popular image project files (.psd, .xcf, .ai).
-- Add support for vector graphics formats (.svg, .eps).
-- Use native Windows playback for supported video files when FFMPEG is not detected.
+- **File Format Support:**
+  - Office documents (`.docx`, `.xlsx`, `.pptx`)
+  - Design & project files (`.psd`, `.xcf`, `.ai`)
+  - Vector graphics (`.svg`, `.eps`)
+- Add preview integration for voidtools Everything search.
+- Fall back to native Windows playback for video files when FFmpeg is missing.
