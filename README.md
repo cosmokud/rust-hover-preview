@@ -28,15 +28,19 @@ A Windows 11 tray app inspired by QTTabBar that shows instant File Explorer prev
 
 `jpg`, `jpeg`, `png`, `apng`, `gif`, `bmp`, `ico`, `tiff`, `webp`, `tga`, `hdr`, `exr`, `qoi`, and more. Animated GIF, APNG, and WebP files play; animation is detected from file content.
 
+### Videos (FFmpeg required)
+
+`mp4`, `webm`, `mkv`, `avi`, `mov`, `wmv`, `flv`, `m4v`, `ts`, `m2ts`, `mts`, `mpg`, `mpeg`, `vob`, `3gp`, `ogv`, `rmvb`, `asf`, `divx`, `f4v`, `mxf`, `dv`. FFmpeg-supported containers and codecs generally work.
+
 ### PDF
 
-`pdf` — the first page is rendered by the Windows PDF engine. Password-protected and damaged files are skipped. The page fills the room the display has; a preview scale below 100% shows it smaller. A rendered page is held in memory for the next hover, and **Cache → PDF** decides how much of it is kept: nothing by default.
+`pdf` — the first page is rendered by the Windows PDF engine. Password-protected and damaged files are skipped.
 
 ### Text and code
 
 `txt`, `md`, `rtf`, `nfo`, `json`, `toml`, `yaml`, `xml`, `ini`, `csv`, `log`, `sql`, `py`, `js`, `ts`, `rs`, `go`, `c`, `h`, `cpp`, `cs`, `java`, `kt`, `swift`, `php`, `rb`, `lua`, `sh`, `ps1`, `bat`, `html`, `css`, and more.
 
-Extensionless repository files such as `LICENSE`, `Makefile`, `Dockerfile`, and `.gitignore` are also supported. Text previews show the first screenful, with long lines wrapped instead of cut off. Markdown can be rendered or shown as source. Full mode adds scrolling, selection, copy; it is off by default. A painted preview is held in memory for the next hover, and **Cache → Text** decides how much of it is kept: nothing by default.
+Extensionless repository files such as `LICENSE`, `Makefile`, `Dockerfile`, and `.gitignore` are also supported. Markdown can be rendered or shown as source. Full mode adds scrolling, selection, copy;
 
 You can add custom extensions via `config.ini`.
 
@@ -44,23 +48,13 @@ You can add custom extensions via `config.ini`.
 
 `zip`, `zipx`, `jar`, `apk`, `xpi`, `cbz`, `rar`, `7z`, `tar`, `tgz`, and `tar.gz`.
 
-A preview lists what the archive holds — a summary line, then a tree of its folders and files with each file's size, folders first and a `… and N more items` line when the listing is long. Nothing is unpacked: only the archive's own table of contents is read, so a preview of a five-gigabyte archive costs the same as a small one. Encrypted archives are marked, and one whose file table is encrypted says so instead of guessing. Add or remove formats through `config.ini`; the list is editable, so a container this list does not name — a `.docx`, say — can be added as the zip it is.
+Add or remove formats through `config.ini`; the list is editable like the archive list.
 
 ### Office documents
 
 `doc`, `docm`, `docx`, `dot`, `dotm`, `dotx`, `xls`, `xlsb`, `xlsm`, `xlsx`, `xlt`, `xltm`, `xltx`, `ppt`, `pptm`, `pptx`, `pps`, `ppsm`, `ppsx`, `pot`, `potm`, `potx`.
 
-A hover shows the document's page, rendered by the Word, Excel or PowerPoint installed on the machine. Nothing is launched until the pointer has rested on the document for two seconds — a sweep across a folder starts no engine — and until the page arrives the preview is a small spinner of its own, which goes up as soon as the hover finds there is nothing drawn yet and sits at the pointer's own corner — flush against it, in whichever of the four the screen has room for — while the render runs, until the page replaces it. The page fills the room the display has, the way a PDF's does; a preview scale below 100% shows it smaller. Nothing is written to disk: the page is held in memory, and **Cache → Office** decides how much of it is kept between hovers. At the default of `0 MB` every hover renders again, and the engine is kept warm for a minute so a folder of documents costs one Office start rather than one per file; a size of `64 MB` and up keeps the pages of the folders you hover most, so their next hover comes straight up.
-
-What a document saves inside itself is deliberately not used: the picture Office puts in a file is a thumbnail-sized metafile or bitmap, a couple of hundred pixels across, and a preview drawn from one is either tiny or an enlargement of something that small. The page is the whole of it.
-
-Excel's page export goes through the print pipeline and so needs a printer on the machine; where there is none, the used range's top-left is copied out as a picture instead — the corner of the sheet a person would see first, which is the most a machine without a printer can produce.
-
 Add or remove formats through `config.ini`; the list is editable like the archive list.
-
-### Videos (FFmpeg required)
-
-`mp4`, `webm`, `mkv`, `avi`, `mov`, `wmv`, `flv`, `m4v`, `ts`, `m2ts`, `mts`, `mpg`, `mpeg`, `vob`, `3gp`, `ogv`, `rmvb`, `asf`, `divx`, `f4v`, `mxf`, `dv`. FFmpeg-supported containers and codecs generally work. `.ts` and `.mts` are previewed as video only when they contain MPEG-TS packets.
 
 ### Themes
 
@@ -103,14 +97,6 @@ ffplay -version
 ffprobe -version
 ```
 
-## Optional: Enable Office Page Rendering
-
-A Word, Excel or PowerPoint document previews as the page the installed Office draws for it, in the background. Nothing beyond Office itself is needed, no document is ever saved or changed, and no engine is started until the pointer has rested on a document for two seconds: a sweep across a folder launches nothing. The first hover of a document costs the rest plus a few seconds while Office starts; the documents after it cost a fraction of a second each while the engine stays warm, and it is let go a minute after the last one. A page that has been drawn can be kept in memory for the next hover — **Cache → Office** sizes that, and it holds nothing by default.
-
-Excel's page export goes through the print pipeline, so it needs a printer installed on the machine; with none, a workbook is previewed from a picture of its used range instead. A document Office refuses to open — a password, an unreadable file — is answered with no preview.
-
-Turn it off under **Preview Types → Office** in the tray, or with `office_preview_enabled=false` in `config.ini`. A rendered page is held in memory and never written to disk, and **Cache → Office** (`office_cache_mb`, `0` by default) is how much may be kept between hovers: at `0` nothing is kept, so every hover draws the page again, and any size up to `2 GB` keeps the pages you have already hovered.
-
 ## Usage
 
 1. Start the app — a tray icon appears.
@@ -137,7 +123,7 @@ Turn it off under **Preview Types → Office** in the tray, or with `office_prev
   - **Position** — Follow Cursor or Best Position, and whether to keep previews off the hovered item's name
   - **Scaling** — Fit to Screen or 25%–400%
 - **Volume** — Max, High, Medium, Low, Very Low, Mute
-- **Cache** — each of these lists its sizes largest first, `2 GB` at the top and `0 MB (Default)` at the bottom:
+- **Cache** — each of these lists its sizes largest first, `2 GB` at the top down to `0 MB`, with the size that cache starts at marked `(Default)` — `0 MB` for Image, Text and PDF, `64 MB` for Office:
   - **Image** — how much memory decoded image frames may be kept in between hovers
   - **Text** — the same for the frames text previews were painted as
   - **PDF** — the same for the pages PDF previews were rendered as
@@ -170,7 +156,7 @@ text_preview_enabled=true
 pdf_preview_enabled=true
 archive_preview_enabled=true
 office_preview_enabled=true
-office_cache_mb=0
+office_cache_mb=64
 pdf_cache_mb=0
 text_cache_mb=0
 image_cache_mb=0
@@ -209,8 +195,8 @@ Key settings:
 - `extensions` / `names` — text-preview gates. Extensions are written without dots; names match extensionless files.
 - `archive_extensions` — the archive-preview gate, under `[archive]`. Entries are written without dots, and an entry with a dot in it (`tar.gz`) is matched against the end of the file name.
 - `image_cache_mb` — how much memory decoded image frames may be kept in, in megabytes, so hovering back over a folder does not decode the same pictures again; `0` (the default) holds nothing, and the value is capped at `2048`.
-- `office_cache_mb` — the same for the pages Office rendered, capped at `2048`. `0` holds nothing, but a page is still rendered for the hover that asks for it: this size is only how much is kept between hovers.
-- `pdf_cache_mb` — the same for the pages PDF previews were rendered as, capped at `2048`. A page is stored as the pixels it was drawn as, so the size is per file *and* per preview size: the same PDF hovered at fit-to-screen and at `25%` is held as two pages.
+- `office_cache_mb` — the same for the pages Office rendered, capped at `2048`; default is `64`, because producing a page costs an Office start and an export, so what has been drawn is worth keeping. `0` holds nothing, but a page is still rendered for the hover that asks for it: this size is only how much is kept between hovers.
+- `pdf_cache_mb` — the same for the pages PDF previews were rendered as, capped at `2048`. A page is stored as the pixels it was drawn as, so the size is per file _and_ per preview size: the same PDF hovered at fit-to-screen and at `25%` is held as two pages.
 - `text_cache_mb` — the same for the frames text previews were painted as, capped at `2048`. A frame is stored as the pixels it was painted into, so the size is per file, per box and per scroll position; a frame a selection is painted into is never held.
 - `office_extensions` — the Office-preview gate, under `[office]`, written without dots.
 - `trigger_key` / `trigger_key_mode` — key (`alt`, `ctrl`, `shift`, `win`) and mode (`disable` or `enable`).

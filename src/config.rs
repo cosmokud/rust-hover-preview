@@ -41,13 +41,10 @@ pub const MAX_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS: f32 = 1000.0;
 pub const DEFAULT_IMAGE_CACHE_MB: u32 = 0;
 pub const MAX_IMAGE_CACHE_MB: u32 = 2048;
 /// Memory the rendered Office pages may hold. A render is what the preview shows
-/// for a document, and producing one costs an Office start, so what has been
-/// rendered can be kept and dropped least recently used first.
-///
-/// Nothing is held by default, and a page costs a render either way: an Office
-/// document has no other source for its preview, so a budget of nothing means a
-/// page lives only while the hover it was rendered for does.
-pub const DEFAULT_OFFICE_CACHE_MB: u32 = 0;
+/// for a document, and producing one costs an Office start and an export, so what
+/// has been rendered is kept by default: a page that has been drawn comes back
+/// without another render.
+pub const DEFAULT_OFFICE_CACHE_MB: u32 = 64;
 pub const MAX_OFFICE_CACHE_MB: u32 = 2048;
 /// Memory the pages a PDF preview was drawn as may hold. A page is stored as the
 /// pixels it was rendered into, so the size the layout asked for is part of what
