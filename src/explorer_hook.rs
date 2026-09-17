@@ -1,6 +1,7 @@
 use crate::archive_formats::matches_archive_list;
 use crate::cloud_files;
 use crate::config::{PreviewType, TriggerKeyMode};
+use crate::office_formats::matches_office_list;
 use crate::pdf_preview::is_pdf_file;
 use crate::preview_window::{
     cursor_preview_hover, hide_preview, kill_stray_video_process, preview_screen_rect,
@@ -625,11 +626,11 @@ fn is_image_file(path: &PathBuf) -> bool {
 /// submenu.
 ///
 /// The kinds are asked the way the renderer asks them — a video first, then a
-/// PDF, then the archive list, then the text lists, then the image extensions —
-/// so the two cannot disagree about what a file is. A video goes first because
-/// only its content settles the extensions it shares with text: a `.ts` carrying
-/// MPEG-TS packets is a video however the gates stand, and one that does not is
-/// the TypeScript source the text lists claim.
+/// PDF, then the archive list, then the office list, then the text lists, then
+/// the image extensions — so the two cannot disagree about what a file is. A
+/// video goes first because only its content settles the extensions it shares
+/// with text: a `.ts` carrying MPEG-TS packets is a video however the gates
+/// stand, and one that does not is the TypeScript source the text lists claim.
 fn is_media_file(path: &PathBuf) -> bool {
     let Ok(config) = CONFIG.lock() else {
         return false;
@@ -643,6 +644,9 @@ fn is_media_file(path: &PathBuf) -> bool {
     }
     if matches_archive_list(path, &config.archive_extensions) {
         return PreviewType::Archives.enabled_in(&config);
+    }
+    if matches_office_list(path, &config.office_extensions) {
+        return PreviewType::Office.enabled_in(&config);
     }
     if matches_text_lists(path, &config.text_extensions, &config.text_names) {
         return PreviewType::Text.enabled_in(&config);

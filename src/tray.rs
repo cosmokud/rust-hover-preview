@@ -79,6 +79,9 @@ const ID_TRAY_TYPE_VIDEOS: u16 = 1063;
 const ID_TRAY_TYPE_TEXT: u16 = 1064;
 const ID_TRAY_TYPE_PDF: u16 = 1065;
 const ID_TRAY_TYPE_ARCHIVES: u16 = 1066;
+const ID_TRAY_TYPE_OFFICE: u16 = 1067;
+/// The `Office Preview` submenu's own setting.
+const ID_TRAY_OFFICE_RENDER: u16 = 1068;
 const ID_TRAY_FONT_100: u16 = 1072;
 const ID_TRAY_FONT_125: u16 = 1073;
 const ID_TRAY_FONT_150: u16 = 1074;
@@ -197,6 +200,8 @@ unsafe extern "system" fn tray_window_proc(
                 ID_TRAY_TYPE_TEXT => toggle_preview_type(PreviewType::Text),
                 ID_TRAY_TYPE_PDF => toggle_preview_type(PreviewType::Pdf),
                 ID_TRAY_TYPE_ARCHIVES => toggle_preview_type(PreviewType::Archives),
+                ID_TRAY_TYPE_OFFICE => toggle_preview_type(PreviewType::Office),
+                ID_TRAY_OFFICE_RENDER => toggle_office_render(),
                 ID_TRAY_FONT_100 => set_text_font_scale(100),
                 ID_TRAY_FONT_125 => set_text_font_scale(125),
                 ID_TRAY_FONT_150 => set_text_font_scale(150),
@@ -263,6 +268,7 @@ unsafe fn show_context_menu(hwnd: HWND) {
             ID_TRAY_TYPE_ARCHIVES,
             w!("Archives"),
         ),
+        (PreviewType::Office, ID_TRAY_TYPE_OFFICE, w!("Office")),
     ];
     let types_menu = CreatePopupMenu().unwrap();
 
@@ -603,6 +609,33 @@ unsafe fn show_context_menu(hwnd: HWND) {
         MF_STRING | MF_POPUP,
         text_menu.0 as usize,
         w!("Text Preview"),
+    );
+
+    // Add the "Office Preview" submenu: whether an installed Office may draw a
+    // page for a document whose saved thumbnail is missing — or is smaller than
+    // the preview would like to be. Nothing is rebuilt when it changes: whether
+    // a page is asked for is a question the next hover answers for itself.
+    let office_menu = CreatePopupMenu().unwrap();
+    let office_render_enabled = CONFIG
+        .lock()
+        .map(|c| c.office_render_enabled)
+        .unwrap_or(true);
+    let _ = AppendMenuW(
+        office_menu,
+        MF_STRING
+            | if office_render_enabled {
+                MF_CHECKED
+            } else {
+                MF_UNCHECKED
+            },
+        ID_TRAY_OFFICE_RENDER as usize,
+        w!("Render With Office"),
+    );
+    let _ = AppendMenuW(
+        menu,
+        MF_STRING | MF_POPUP,
+        office_menu.0 as usize,
+        w!("Office Preview"),
     );
 
     // Add the "Timing" submenu: how long a hover waits before its preview opens,
@@ -1037,6 +1070,16 @@ fn toggle_preview_type(kind: PreviewType) {
         config.save();
     }
     refresh_preview_types();
+}
+
+/// Whether an installed Office may render a page for a document that saved no
+/// thumbnail of itself, or one too small to enlarge. It changes what a later
+/// hover does rather than what is on screen, so nothing is rebuilt here.
+fn toggle_office_render() {
+    if let Ok(mut config) = CONFIG.lock() {
+        config.office_render_enabled = !config.office_render_enabled;
+        config.save();
+    }
 }
 
 /// Full mode changes what a text preview *is* rather than what it shows — it

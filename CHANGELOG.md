@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.2.6]
+
+### Added
+
+- Office previews: hovering a Word, Excel or PowerPoint document shows a page of it, drawn from the picture the document saved of itself — the `docProps/thumbnail.emf` of an OOXML package, or the summary information stream of a legacy `.doc`, `.xls` or `.ppt` — read in-process and rasterized with GDI, so a hover costs a few milliseconds and starts no Office process.
+- A render tier for the documents that saved no picture of themselves, and for a hover that rests on one whose picture is small: the installed Office exports page 1 to PDF (PowerPoint exports slide 1 as an image) in the background and the page is cached under `%LOCALAPPDATA%\rust-hover-preview\cache\office`, shown in place of the thumbnail once it exists. No engine is started until the pointer has rested on the file for two seconds.
+- `office_preview_enabled`, `office_render_enabled` and `office_cache_mb` in `config.ini`, an editable `[office] extensions` list, an `Office` entry in the tray's `Preview Types` submenu, and an `Office Preview` submenu carrying `Render With Office`.
+
+### Changed
+
+- The legacy Office formats are read through the `cfb` compound-file reader, which opens the one summary information stream their picture lives in and nothing else.
+
 ## [0.2.5] - 2026-09-17
 
 ### Added

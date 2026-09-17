@@ -7,6 +7,9 @@ use crate::config::{
     DEFAULT_TEXT_FONT_SCALE_PERCENT, DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS,
     DEFAULT_WEBP_PLAYBACK_FPS,
 };
+use crate::office_formats;
+use crate::office_preview;
+use crate::office_render;
 use crate::pdf_preview;
 use crate::text_formats;
 use crate::text_preview::{self, TextPreviewOptions};
@@ -272,6 +275,15 @@ pub enum PreviewMessage {
     /// now off is rebuilt, and it is rebuilt from the hover it came from, so it
     /// goes away on the spot rather than at the next pointer move.
     RefreshTypes,
+    /// The render tier is done with a document: a page is waiting in the cache,
+    /// or there is no page. The generation is the hover that asked for it, so a
+    /// render landing after the pointer has moved on is ignored — the page is
+    /// still cached for the next hover either way.
+    OfficeRenderReady {
+        path: PathBuf,
+        generation: u64,
+        ok: bool,
+    },
 }
 
 /// Represents different types of media we can display
@@ -284,6 +296,7 @@ enum MediaType {
     Pdf,
     Text,
     Archive,
+    Office,
     Loading,
 }
 
@@ -298,8 +311,14 @@ impl MediaType {
             Self::Text => Some(PreviewType::Text),
             Self::Pdf => Some(PreviewType::Pdf),
             Self::Archive => Some(PreviewType::Archives),
+            Self::Office => Some(PreviewType::Office),
             Self::Loading => None,
         }
+    }
+
+    /// Whether this is the spinner standing in for a preview that is not ready.
+    fn is_loading(&self) -> bool {
+        matches!(self, Self::Loading)
     }
 
     /// Whether this preview's appearance is painted into its own frame rather
@@ -668,6 +687,21 @@ pub fn refresh_preview_types() {
     }
 }
 
+/// The render tier is done with a document. Sent from the engine thread through
+/// the same channel every other message arrives on, so the preview loop learns
+/// about a page the moment it exists.
+pub fn notify_office_render(path: &Path, generation: u64, ok: bool) {
+    if let Ok(sender) = PREVIEW_SENDER.lock() {
+        if let Some(ref tx) = *sender {
+            let _ = tx.send(PreviewMessage::OfficeRenderReady {
+                path: path.to_path_buf(),
+                generation,
+                ok,
+            });
+        }
+    }
+}
+
 /// Which preview surface the pointer is currently on.
 #[derive(Clone, Copy)]
 pub struct PreviewCursorHover {
@@ -970,6 +1004,65 @@ fn current_media_kind() -> Option<PreviewType> {
         .flatten()
 }
 
+/// How long the pointer has to rest on a document before the render tier is
+/// asked for a page. A sweep across a folder of documents starts no engine: what
+/// is asked for is a page for a hover that has settled.
+const OFFICE_RENDER_REST_SECS: u64 = 2;
+/// How long a preview waits for a page before it stops waiting. An engine can be
+/// held by a dialog inside Office, and a spinner that never ends is worse than
+/// the picture the document saved — so past this the preview comes down and the
+/// file is left alone.
+const OFFICE_RENDER_WAIT_SECS: u64 = 25;
+
+/// A page a preview is owed, and when to ask for it.
+struct OfficeRenderDue {
+    path: PathBuf,
+    generation: u64,
+    at: Instant,
+    /// The box the layout planned, which is what a slide is exported at.
+    width: u32,
+    height: u32,
+}
+
+/// The file a hover message is about.
+fn show_path(show: &PreviewMessage) -> Option<&PathBuf> {
+    match show {
+        PreviewMessage::Show(path, ..) | PreviewMessage::ShowKeyboard(path, ..) => Some(path),
+        _ => None,
+    }
+}
+
+/// Whether this hover is owed a render: an Office document with no page in the
+/// cache yet, with the render tier switched on.
+fn office_render_is_due(path: &Path) -> bool {
+    office_formats::is_office_preview(path)
+        && office_render::enabled()
+        && office_render::cached_render(path).is_none()
+}
+
+/// Arm the render for a preview that has just been installed, or has just found
+/// nothing to draw. It is asked for once the pointer has rested on the file, and
+/// a hover that ends before then is never asked for at all.
+fn arm_office_render(
+    due: &mut Option<OfficeRenderDue>,
+    path: &Path,
+    generation: u64,
+    width: u32,
+    height: u32,
+) {
+    if !office_render_is_due(path) {
+        return;
+    }
+
+    *due = Some(OfficeRenderDue {
+        path: path.to_path_buf(),
+        generation,
+        at: Instant::now() + Duration::from_secs(OFFICE_RENDER_REST_SECS),
+        width,
+        height,
+    });
+}
+
 /// The scale a preview is laid out and rendered with.
 ///
 /// A PDF page is a vector, so the engine draws it at whatever size it is asked
@@ -989,6 +1082,18 @@ fn effective_preview_scale(path: &Path, preview_scale: PreviewScale) -> PreviewS
         PreviewScale::FitToScreen
     } else if is_text_preview(path) || archive_formats::is_archive_file(path) {
         PreviewScale::Percent(100)
+    } else if office_formats::is_office_file(path) {
+        // A page Office rendered and a metafile the document saved are both
+        // drawn at whatever size they are asked for, so the room the display
+        // has is free quality — the rule a PDF follows. A raster picture a
+        // document saved is the exception: it is only as good as the pixels it
+        // holds, so it follows the configured scale the way an image does
+        // rather than being enlarged to fit.
+        if office_preview::source_kind(path).may_be_enlarged() {
+            PreviewScale::FitToScreen
+        } else {
+            preview_scale
+        }
     } else {
         preview_scale
     }
@@ -2122,6 +2227,56 @@ fn load_pdf_first_page(
     })
 }
 
+/// Render a page of an Office document into the box the layout planned.
+///
+/// Two sources are tried in the order of what they are worth: the page Office
+/// rendered in the background, when there is one, and the picture the document
+/// saved inside itself. The renderer is asked for the source's own aspect ratio
+/// inside the box, so a page that is not the shape the layout assumed is
+/// letterboxed instead of stretched.
+fn load_office_preview(
+    path: &PathBuf,
+    max_width: u32,
+    max_height: u32,
+    preview_scale: PreviewScale,
+    cancel: &Arc<AtomicBool>,
+) -> Option<MediaData> {
+    let (source_width, source_height) = office_preview::measure(path).unwrap_or((
+        pdf_preview::DEFAULT_PAGE_WIDTH,
+        pdf_preview::DEFAULT_PAGE_HEIGHT,
+    ));
+    let (target_width, target_height) = scale_dimensions(
+        source_width,
+        source_height,
+        max_width,
+        max_height,
+        preview_scale,
+    );
+
+    let (pixels, width, height) =
+        office_preview::render(path, target_width, target_height, Some(cancel))?;
+
+    let frame = ImageFrame {
+        pixels,
+        width,
+        height,
+        delay_ms: 0,
+    };
+
+    Some(MediaData {
+        frames: vec![frame],
+        shared_frames: None,
+        all_frames_loaded: None,
+        current_frame: 0,
+        last_frame_time: Instant::now(),
+        media_type: MediaType::Office,
+        stream_cancel: None,
+        video_process: None,
+        loading_start: None,
+        text_state: None,
+    })
+}
+
 /// Render a text file into the box the layout planned for it.
 ///
 /// Unlike an image, text is not scaled to the box: the font is a fixed,
@@ -2999,6 +3154,10 @@ fn load_media(
         );
     }
 
+    if office_formats::is_office_file(path) {
+        return load_office_preview(path, max_width, max_height, preview_scale, &cancel);
+    }
+
     if text_formats::is_text_file(path) {
         return load_text_preview(path, max_width, max_height, dpi, current_text_options());
     }
@@ -3082,6 +3241,14 @@ fn get_media_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
     // PDF reports no dimensions, which drops the preview instead of guessing.
     if pdf_preview::is_pdf_preview(path) {
         return pdf_preview::page_dimensions(path);
+    }
+
+    // An Office document is measured from the page that has been rendered for it,
+    // or from the picture the document saved. A document with neither is measured
+    // as the page it is about to get — while the render tier is on, which is the
+    // only case where one is coming.
+    if office_formats::is_office_preview(path) {
+        return office_preview::measure(path);
     }
 
     // Whatever is left is an image, so the `Images` gate is what decides it. A
@@ -3352,7 +3519,11 @@ fn overlay_loading_spinner(pixels: &mut [u8], width: u32, height: u32, angle: f3
 /// Result from background image loading thread
 struct LoadResult {
     generation: u64,
+    path: PathBuf,
     media: Option<MediaData>,
+    /// Nothing to draw yet, and a page on the way: the preview stays pending
+    /// rather than being dropped, so the page has something to replace.
+    awaiting_render: bool,
 }
 
 /// A decode request consumed by the dedicated loader worker.
@@ -3445,9 +3616,13 @@ fn spawn_load_worker(
             }))
             .unwrap_or(None);
 
+            let awaiting_render = media.is_none() && office_render_is_due(&request.path);
+
             let _ = result_tx.send(LoadResult {
                 generation: request.generation,
+                path: request.path.clone(),
                 media,
+                awaiting_render,
             });
         }
     })
@@ -5113,6 +5288,10 @@ pub fn run_preview_window() {
         let mut pending_load: Option<PendingLoad> = None;
         let mut pending_load_cancel: Option<Arc<AtomicBool>> = None;
         let mut last_stream_overlay_repaint = Instant::now();
+        // The page the render tier owes the preview on screen: when to ask for
+        // it, and whether one has been asked for and is being waited on.
+        let mut office_render_due: Option<OfficeRenderDue> = None;
+        let mut office_render_pending: Option<(PathBuf, u64)> = None;
 
         // Message loop
         let mut msg = MSG::default();
@@ -5207,6 +5386,14 @@ pub fn run_preview_window() {
                             });
                             pending_load_cancel = None;
 
+                            // What this load was planned for: the box the layout
+                            // came out with, which is the size a slide is
+                            // exported at when a page is asked for later.
+                            let render_box = pending
+                                .as_ref()
+                                .map(|pl| (pl.width, pl.height))
+                                .unwrap_or((media_data.current_width(), media_data.current_height()));
+
                             // Move before installing the frame. Crossing between
                             // displays of different scale sends WM_DPICHANGED,
                             // which resets the preview and would otherwise
@@ -5241,6 +5428,37 @@ pub fn run_preview_window() {
                                 );
                                 let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
                             }
+
+                            // Whether what is on screen is a saved thumbnail or
+                            // a rendered page, a better page is one Office
+                            // start away once the pointer has rested.
+                            arm_office_render(
+                                &mut office_render_due,
+                                &result.path,
+                                result.generation,
+                                render_box.0,
+                                render_box.1,
+                            );
+                        }
+                        None if result.awaiting_render => {
+                            // Nothing to draw yet and a page on the way: the
+                            // pending load stays armed, so the spinner appears
+                            // at its delay instead of the preview being dropped
+                            // and the page having nowhere to land.
+                            let (width, height) = pending_load
+                                .as_ref()
+                                .map(|pl| (pl.width, pl.height))
+                                .unwrap_or((
+                                    pdf_preview::DEFAULT_PAGE_WIDTH,
+                                    pdf_preview::DEFAULT_PAGE_HEIGHT,
+                                ));
+                            arm_office_render(
+                                &mut office_render_due,
+                                &result.path,
+                                result.generation,
+                                width,
+                                height,
+                            );
                         }
                         None => {
                             // Loading failed, hide window
@@ -5313,6 +5531,9 @@ pub fn run_preview_window() {
             // layouts for files the cursor has already left.
             let mut latest_preview_msg: Option<PreviewMessage> = None;
             let mut refresh_requested = false;
+            // The render tier's own message, held apart from the hovers: it is
+            // not a hover to act on but an answer about the one on screen.
+            let mut office_render_ready: Option<(PathBuf, u64, bool)> = None;
             let mut next_preview_msg = carried_preview_msg.take();
             loop {
                 let Some(preview_msg) = next_preview_msg.or_else(|| rx.try_recv().ok()) else {
@@ -5350,9 +5571,60 @@ pub fn run_preview_window() {
                             }
                         }
                     }
+                    PreviewMessage::OfficeRenderReady {
+                        path,
+                        generation,
+                        ok,
+                    } => {
+                        // The newest hover wins, as it does over every other
+                        // message: a page that lands in the same tick as a new
+                        // hover is not the answer to it.
+                        if latest_preview_msg.is_none() && office_render_ready.is_none() {
+                            office_render_ready = Some((path, generation, ok));
+                        }
+                    }
                     other => {
                         latest_preview_msg = Some(other);
                         refresh_requested = false;
+                    }
+                }
+            }
+
+            // A page the render tier has finished with, for the hover that asked
+            // for it: that hover is replayed, which measures the page itself and
+            // draws it in place of the thumbnail or the spinner it supersedes. A
+            // payload from an older hover is dropped here — the page it wrote
+            // stays in the cache for the next pass.
+            if let Some((ready_path, ready_generation, ready_ok)) = office_render_ready {
+                office_render_pending = None;
+
+                let shown = current_show.as_ref().and_then(show_path);
+                let hovered = ready_generation == current_generation
+                    && shown.map(|path| path.as_path()) == Some(ready_path.as_path());
+
+                if hovered && ready_ok {
+                    if latest_preview_msg.is_none() {
+                        latest_preview_msg = current_show.clone();
+                    }
+                } else if hovered {
+                    // Nothing was drawn and nothing is coming. A thumbnail
+                    // stays — it is a preview like any other — while a spinner
+                    // has nothing left to stand in for.
+                    let showing_spinner = CURRENT_MEDIA
+                        .lock()
+                        .map(|media| {
+                            media
+                                .as_ref()
+                                .map(|media| media.media_type.is_loading())
+                                .unwrap_or(false)
+                        })
+                        .unwrap_or(false);
+                    if showing_spinner {
+                        pending_load = None;
+                        let _ = ShowWindow(hwnd, SW_HIDE);
+                        if let Ok(mut current) = CURRENT_MEDIA.lock() {
+                            *current = None;
+                        }
                     }
                 }
             }
@@ -5478,6 +5750,8 @@ pub fn run_preview_window() {
                         current_video_path = None;
                         video_pos = (0, 0, 0, 0);
                         current_show = None;
+                        office_render_due = None;
+                        office_render_pending = None;
                     }
                     PreviewMessage::Refresh => {
                         render_layered_preview(hwnd);
@@ -5486,6 +5760,9 @@ pub fn run_preview_window() {
                     // is where the kind of the preview on screen is known; it
                     // replays the hover instead of arriving here as itself.
                     PreviewMessage::RefreshTypes => {}
+                    // Likewise answered above: a rendered page replays the hover
+                    // it belongs to rather than being handled as a message here.
+                    PreviewMessage::OfficeRenderReady { .. } => {}
                 }
 
                 // Shared load/display logic for Show and ShowKeyboard
@@ -5661,6 +5938,8 @@ pub fn run_preview_window() {
                     current_video_path = None;
                     video_pos = (0, 0, 0, 0);
                     current_show = None;
+                    office_render_due = None;
+                    office_render_pending = None;
                 }
             } else if refresh_requested {
                 render_layered_preview(hwnd);
@@ -5672,6 +5951,63 @@ pub fn run_preview_window() {
             // everything is the menu's `Select All`, not a key of its own.
             if text_preview_copy_requested() {
                 copy_text_preview(hwnd);
+            }
+
+            // The page the render tier is owed, asked for once the pointer has
+            // rested on the file — and the cap on waiting for one. Both are read
+            // against the hover on screen rather than remembered: a render that
+            // outlives its hover is dropped here and its page left in the cache.
+            let shown_path = current_show.as_ref().and_then(show_path).cloned();
+
+            if let Some(due) = office_render_due.as_ref() {
+                let hovered = due.generation == current_generation
+                    && shown_path.as_deref() == Some(due.path.as_path());
+
+                if !hovered {
+                    office_render_due = None;
+                } else if Instant::now() >= due.at {
+                    let due = office_render_due.take().expect("the due render");
+                    office_render_pending = Some((due.path.clone(), due.generation));
+                    office_render::request(&due.path, due.width, due.height, due.generation);
+                }
+            }
+
+            let render_wait = office_render_pending.as_ref().map(|(path, generation)| {
+                let hovered =
+                    *generation == current_generation && shown_path.as_deref() == Some(path.as_path());
+                let waited = pending_load
+                    .as_ref()
+                    .map(|pl| pl.started.elapsed() >= Duration::from_secs(OFFICE_RENDER_WAIT_SECS))
+                    .unwrap_or(false);
+
+                (hovered, waited)
+            });
+
+            match render_wait {
+                Some((false, _)) => office_render_pending = None,
+                Some((true, true)) => {
+                    // The engine is not coming back — a dialog inside Office can
+                    // hold it for good — so the preview comes down rather than
+                    // spinning forever, and the file is left alone for a while
+                    // instead of being asked for again on the next pass.
+                    let abandoned = office_render_pending
+                        .take()
+                        .map(|(path, _)| path)
+                        .filter(|path| shown_path.as_deref() == Some(path.as_path()));
+
+                    if let Some(path) = abandoned {
+                        office_render::remember_failure(&path);
+                        pending_load = None;
+                        if let Some(cancel) = pending_load_cancel.take() {
+                            cancel.store(true, Ordering::Release);
+                        }
+                        let _ = ShowWindow(hwnd, SW_HIDE);
+                        if let Ok(mut current) = CURRENT_MEDIA.lock() {
+                            *current = None;
+                        }
+                    }
+                }
+                _ => {}
             }
 
             // Keep the pointer region in step with the window rather than only

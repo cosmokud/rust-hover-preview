@@ -1,6 +1,6 @@
 [package]
 name = "rust-hover-preview"
-version = "0.2.5"
+version = "0.2.6"
 edition = "2021"
 description = "Windows 11 system tray app that shows image, video, PDF, text, and archive previews on hover in Explorer"
 authors = ["Rust Hover Preview Contributors"]
@@ -77,6 +77,11 @@ sevenz-rust2 = { version = "0.20", default-features = false }
 unrar = "0.5"
 tar = "0.4"
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+
+# The compound-file reader behind the legacy Office formats: the picture a
+# Word 97-2003, Excel 97-2003 or PowerPoint 97-2003 document saves lives in its
+# summary information stream, and this opens that one stream and nothing else.
+cfb = "0.10"
 
 [build-dependencies]
 winres = "0.1"
