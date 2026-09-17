@@ -4401,6 +4401,12 @@ fn centered_top(center: i32, height: i32, bounds: ScreenBounds) -> i32 {
     (center - height / 2).clamp(bounds.top, lowest)
 }
 
+/// The least room a way out of the text may leave before a preview is resized into
+/// it. Below this the room is a sliver — the tail past a name that fills its row, the
+/// last strip of a display under a row at the bottom — and a preview squeezed into it
+/// says less than the one left over the name would have.
+const MIN_AVOID_ROOM_PX: i32 = 64;
+
 /// A layout moved off the text the item it describes draws — the name the file is
 /// listed under, with the columns a row writes beside it.
 ///
@@ -4412,15 +4418,21 @@ fn centered_top(center: i32, height: i32, bounds: ScreenBounds) -> i32 {
 /// of the preview — and only a step the display has room for is taken, so a preview
 /// moved off one edge is never pushed off another.
 ///
-/// When none of the four fits — a preview as tall as the display beside a name that
-/// fills it — the placement is left where the mode put it. Covering the name is what
-/// it would have done without this, and a preview that is up is better than one with
-/// nowhere to go.
+/// A preview too large for every one of those rooms is *resized* into the roomiest of
+/// them rather than left where it covers the text. That is the case a preview filling
+/// the display lands in: nothing can be moved into place beside a name while the
+/// preview is as wide and as tall as the display, so it is the size that gives, and the
+/// preview shows as much as the room beside the name can hold — which is the same rule
+/// that sized it in the first place, applied to the room that is left. A room too small
+/// to be worth having is not taken at all, so a preview is never squeezed into a sliver
+/// to get off a name that a usable preview would have covered anyway.
 ///
 /// `gap` is the distance the placement keeps from what it is beside, so the text is
 /// cleared by that much rather than touched at its edge.
 fn avoiding_text(
     layout: PreviewLayout,
+    orig_dims: (u32, u32),
+    preview_scale: PreviewScale,
     avoid: Option<ScreenRegion>,
     gap: i32,
     bounds: ScreenBounds,
@@ -4429,9 +4441,8 @@ fn avoiding_text(
         return layout;
     };
 
-    let width = layout.preview_w as i32;
-    let height = layout.preview_h as i32;
     let (left, top) = (layout.pos_x, layout.pos_y);
+    let (width, height) = (layout.preview_w as i32, layout.preview_h as i32);
 
     let covers_text = left < text_right
         && left + width > text_left
@@ -4441,44 +4452,107 @@ fn avoiding_text(
         return layout;
     }
 
-    // The four ways out, each with the distance it moves the preview and whether the
-    // display has room for the preview once it is there.
-    let to_the_right = (text_right + gap, top);
-    let to_the_left = (text_left - gap - width, top);
-    let below = (left, text_bottom + gap);
-    let above = (left, text_top - gap - height);
+    // Where a preview clear of the text would sit: past the text's right edge, before
+    // its left one, under it and over it, each a gap away from it.
+    let past_right = text_right + gap;
+    let before_left = text_left - gap;
+    let under = text_bottom + gap;
+    let over = text_top - gap;
 
-    let steps = [
-        (
-            to_the_right.0 - left,
-            to_the_right,
-            to_the_right.0 + width <= bounds.right,
-        ),
-        (
-            left - to_the_left.0,
-            to_the_left,
-            to_the_left.0 >= bounds.left,
-        ),
-        (below.1 - top, below, below.1 + height <= bounds.bottom),
-        (top - above.1, above, above.1 >= bounds.top),
+    // The four ways out of the text, each as the room the display has on that side,
+    // whether that room is a width — a step to either side — or a height, where the
+    // preview sits in it, and whether that anchor is the preview's own far edge. A
+    // step right or down grows away from the text from its near edge and a step left
+    // or up from its far one.
+    let ways_out = [
+        (bounds.right - past_right, true, past_right, false),
+        (before_left - bounds.left, true, before_left, true),
+        (bounds.bottom - under, false, under, false),
+        (over - bounds.top, false, over, true),
     ];
 
-    let mut best: Option<(i32, (i32, i32))> = None;
-    for (step, position, fits) in steps {
-        if !fits {
+    let mut best: Option<(i64, i32, PreviewLayout)> = None;
+    for (room, along_width, anchor, far_edge) in ways_out {
+        let room = room.max(0);
+
+        // The box the way out offers: the room where it constrains the preview, and
+        // what the mode allowed it where it does not — a preview moved off the text is
+        // never enlarged by the move.
+        let (max_width, max_height) = if along_width {
+            (room.min(layout.max_width as i32) as u32, layout.max_height)
+        } else {
+            (layout.max_width, room.min(layout.max_height as i32) as u32)
+        };
+        if max_width == 0 || max_height == 0 {
             continue;
         }
-        if best.map(|(best_step, _)| step < best_step).unwrap_or(true) {
-            best = Some((step, position));
+
+        let (preview_w, preview_h) = scale_dimensions(
+            orig_dims.0,
+            orig_dims.1,
+            max_width,
+            max_height,
+            preview_scale,
+        );
+        if preview_w == 0 || preview_h == 0 {
+            continue;
+        }
+
+        // A way out that costs the preview its size is only taken where the room left
+        // is worth having; one that costs it nothing is taken however little room it
+        // leaves, since the preview was already going to be that small.
+        let natural_size = if along_width { width } else { height };
+        let size_there = if along_width {
+            preview_w as i32
+        } else {
+            preview_h as i32
+        };
+        if size_there < natural_size && room < MIN_AVOID_ROOM_PX {
+            continue;
+        }
+
+        let placement = PreviewLayout {
+            pos_x: if along_width {
+                if far_edge {
+                    anchor - preview_w as i32
+                } else {
+                    anchor
+                }
+            } else {
+                left
+            },
+            pos_y: if along_width {
+                top
+            } else if far_edge {
+                anchor - preview_h as i32
+            } else {
+                anchor
+            },
+            max_width,
+            max_height,
+            preview_w,
+            preview_h,
+        };
+
+        // The largest preview wins, and the shortest move breaks a tie: every way out
+        // that fits the preview as it stands offers it the same size, so those are the
+        // ones the move decides between, and only a preview that has to shrink is
+        // chosen between by what the room holds.
+        let area = preview_w as i64 * preview_h as i64;
+        let step = (placement.pos_x - left).abs() + (placement.pos_y - top).abs();
+        let better = match &best {
+            Some((best_area, best_step, _)) => {
+                area > *best_area || (area == *best_area && step < *best_step)
+            }
+            None => true,
+        };
+        if better {
+            best = Some((area, step, placement));
         }
     }
 
     match best {
-        Some((_, (pos_x, pos_y))) => PreviewLayout {
-            pos_x,
-            pos_y,
-            ..layout
-        },
+        Some((_, _, placement)) => placement,
         None => layout,
     }
 }
@@ -4586,7 +4660,14 @@ fn compute_mouse_layout(
             preview_h,
         };
 
-        Some(avoiding_text(layout, avoid, offset, bounds))
+        Some(avoiding_text(
+            layout,
+            orig_dims,
+            preview_scale,
+            avoid,
+            offset,
+            bounds,
+        ))
     } else {
         let left_width = cursor_x - bounds.left - offset;
         let right_width = bounds.right - cursor_x - offset;
@@ -4643,7 +4724,14 @@ fn compute_mouse_layout(
             preview_h,
         };
 
-        Some(avoiding_text(layout, avoid, offset, bounds))
+        Some(avoiding_text(
+            layout,
+            orig_dims,
+            preview_scale,
+            avoid,
+            offset,
+            bounds,
+        ))
     }
 }
 
@@ -4744,7 +4832,14 @@ fn compute_keyboard_layout(
                 preview_h,
             };
 
-            return Some(avoiding_text(layout, avoid, gap, bounds));
+            return Some(avoiding_text(
+                layout,
+                orig_dims,
+                preview_scale,
+                avoid,
+                gap,
+                bounds,
+            ));
         }
     }
 
@@ -4852,7 +4947,14 @@ fn compute_keyboard_layout(
             preview_h,
         };
 
-        Some(avoiding_text(layout, avoid, gap, bounds))
+        Some(avoiding_text(
+            layout,
+            orig_dims,
+            preview_scale,
+            avoid,
+            gap,
+            bounds,
+        ))
     } else {
         // Best spot mode: choose the left or right side of what the item is anchored
         // at — its own edges for a box, its middle for a row that leaves no tail to
@@ -4930,7 +5032,14 @@ fn compute_keyboard_layout(
             preview_h,
         };
 
-        Some(avoiding_text(layout, avoid, gap, bounds))
+        Some(avoiding_text(
+            layout,
+            orig_dims,
+            preview_scale,
+            avoid,
+            gap,
+            bounds,
+        ))
     }
 }
 
@@ -5630,12 +5739,30 @@ mod tests {
         }
     }
 
+    /// A placement kept off `name`, at the size the media's own scale allows — the
+    /// arrangement the figures are easy to read in.
+    fn placed(
+        placement: PreviewLayout,
+        media: (u32, u32),
+        name: (i32, i32, i32, i32),
+        bounds: ScreenBounds,
+    ) -> PreviewLayout {
+        avoiding_text(
+            placement,
+            media,
+            PreviewScale::Percent(100),
+            Some(name),
+            20,
+            bounds,
+        )
+    }
+
     #[test]
     fn leaves_a_placement_that_is_already_clear_of_the_text() {
         // The name is drawn to the left of the cursor's column, so the preview beside
         // the cursor is already off it.
         let name = (100, 300, 400, 320);
-        let placement = avoiding_text(layout(420, 300, 300, 300), Some(name), 20, bounds());
+        let placement = placed(layout(420, 300, 300, 300), (300, 300), name, bounds());
 
         assert_eq!((placement.pos_x, placement.pos_y), (420, 300));
     }
@@ -5647,54 +5774,75 @@ mod tests {
         // that band. Down is the shortest way out, so it ends up just under the name,
         // where its own column already was.
         let name = (100, 300, 400, 320);
-        let placement = avoiding_text(layout(120, 300, 300, 300), Some(name), 20, bounds());
+        let placement = placed(layout(120, 300, 300, 300), (300, 300), name, bounds());
 
         assert_eq!((placement.pos_x, placement.pos_y), (120, 340));
+        assert_eq!((placement.preview_w, placement.preview_h), (300, 300));
     }
 
     #[test]
     fn takes_the_side_when_the_display_has_no_room_under_the_name() {
         // The same placement on a display that ends below it: the preview cannot drop
-        // under the name, so it goes past the name's right edge, which the display
-        // has room for.
+        // under the name at its own size, so it goes past the name's right edge, which
+        // the display has room for.
         let name = (100, 300, 400, 320);
         let short = ScreenBounds {
             bottom: 500,
             ..bounds()
         };
-        let placement = avoiding_text(layout(120, 300, 300, 300), Some(name), 20, short);
+        let placement = placed(layout(120, 300, 300, 300), (300, 300), name, short);
 
         assert_eq!((placement.pos_x, placement.pos_y), (420, 300));
+        assert_eq!((placement.preview_w, placement.preview_h), (300, 300));
     }
 
     #[test]
-    fn leaves_a_preview_it_cannot_clear_where_it_is() {
-        // A display with no room on any side of the name: the placement is what the
-        // mode chose, since covering the name is what it would have done anyway.
-        let name = (100, 100, 300, 120);
-        let tight = ScreenBounds {
-            right: 400,
-            bottom: 220,
-            ..bounds()
-        };
-        let placement = avoiding_text(layout(150, 110, 200, 100), Some(name), 20, tight);
+    fn resizes_a_preview_too_large_to_get_off_the_name() {
+        // A preview as large as the display allows, beside a row whose name spans most
+        // of it: no way out holds the preview as it stands, so the size is what gives
+        // and the roomiest way out is taken. Under the name, that is the full width the
+        // mode allowed and the height the display leaves below the row.
+        let name = (100, 300, 700, 320);
+        let placement = placed(layout(0, 0, 1000, 800), (1000, 800), name, bounds());
 
-        assert_eq!((placement.pos_x, placement.pos_y), (150, 110));
+        assert_eq!((placement.pos_x, placement.pos_y), (0, 340));
+        assert_eq!((placement.preview_w, placement.preview_h), (575, 460));
+        // The name it was moved off is clear of it: the top edge is the row's bottom
+        // plus the gap the claim above was measured with.
+        assert!(placement.pos_y >= 320 + 20);
+    }
+
+    #[test]
+    fn leaves_a_preview_alone_when_every_way_out_is_a_sliver() {
+        // A display with no room worth having on any side of the name: the placement is
+        // what the mode chose, since a preview squeezed into a sliver says less than the
+        // one left over the name.
+        let name = (40, 80, 360, 100);
+        let tight = ScreenBounds {
+            left: 0,
+            top: 0,
+            right: 400,
+            bottom: 180,
+        };
+        let placement = placed(layout(150, 80, 200, 90), (200, 90), name, tight);
+
+        assert_eq!((placement.pos_x, placement.pos_y), (150, 80));
     }
 
     #[test]
     fn keeps_the_preview_inside_the_display_it_moves_on() {
-        // Clearing the name to the right is the shorter step here, but the display
-        // ends before the preview would, so the step under the name is taken instead.
+        // Clearing the name to the right falls short of what the preview needs here, so
+        // the step under the name is taken instead — resized into the room it leaves
+        // when even that is not enough for it as it stands.
         let name = (100, 300, 700, 320);
         let narrow = ScreenBounds {
             right: 900,
             ..bounds()
         };
-        let placement = avoiding_text(layout(690, 100, 200, 300), Some(name), 20, narrow);
+        let placement = placed(layout(690, 100, 200, 300), (200, 300), name, narrow);
 
-        // 720 is the name's right edge plus the gap, and 720 + 200 leaves the
-        // display; 340 is its bottom plus the gap, and 340 + 300 does not.
+        // 720 is the name's right edge plus the gap, and 720 + 200 leaves the display;
+        // 340 is its bottom plus the gap, and 340 + 300 does not.
         assert_eq!((placement.pos_x, placement.pos_y), (690, 340));
     }
 }

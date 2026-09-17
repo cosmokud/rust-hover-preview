@@ -144,7 +144,7 @@ trigger_key=alt
 trigger_key_mode=disable
 confirm_file_type=false
 follow_cursor=false
-avoid_filename=false
+avoid_filename=true
 transparent_background=black
 video_volume=0
 preview_scale=100
@@ -173,7 +173,7 @@ Key settings:
 - `archive_extensions` — the archive-preview gate, under `[archive]`. Entries are written without dots, and an entry with a dot in it (`tar.gz`) is matched against the end of the file name.
 - `trigger_key` / `trigger_key_mode` — key (`alt`, `ctrl`, `shift`, `win`) and mode (`disable` or `enable`).
 - `follow_cursor` — `true` for Follow Cursor, `false` for Best Position.
-- `avoid_filename` — `true` keeps a preview off the name of the file it is about, so the item under the pointer or the keyboard stays readable while its preview is up. Applies to both positions.
+- `avoid_filename` — `true` (the default) keeps a preview off the name of the file it is about, moving it — and, where the display leaves no room beside the name, resizing it — so the item under the pointer or the keyboard stays readable while its preview is up. Applies to both positions.
 - `preview_scale` — percentage or `fit`.
 
 ## Build from Source
