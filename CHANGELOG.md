@@ -12,6 +12,13 @@
 
 - The legacy Office formats are read through the `cfb` compound-file reader, which opens the one summary information stream their picture lives in and nothing else.
 
+### Fixed
+
+- PowerPoint decks preview: a slide is reached through the collection's item — `Slides.Item(1)`, which is what VBA's `Slides(1)` means — because asking `Slides` itself for one is answered with "member not found", which left decks with a spinner and nothing else.
+- Excel workbooks preview on a machine with no printer: exporting a page goes through the print pipeline and refuses to run without one, so where `ActivePrinter` reports none — or the export fails — the used range's top-left is copied out as a picture instead. A machine with a printer exports its page as before.
+- The box a preview is placed for while its page is being rendered now follows the family: a portrait sheet for Word, a landscape one for Excel, a 16:9 slide for PowerPoint, instead of one portrait page for all three.
+- A render that produces nothing now remembers what Office said about it, and an ignored test (`cargo test -- --ignored office_render_smoke_test`) drives a document of each family through the real path and reports every step.
+
 ## [0.2.5] - 2026-09-17
 
 ### Added

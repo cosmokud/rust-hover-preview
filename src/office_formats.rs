@@ -131,6 +131,20 @@ pub fn app_for(path: &Path) -> Option<OfficeApp> {
     None
 }
 
+/// The box a preview is placed for while its page is on the way, by the shape
+/// that family's pages have: a Word page is a portrait sheet, a workbook's first
+/// printed page is usually a landscape one, and a slide is a slide.
+///
+/// It is only what the spinner is drawn in — as soon as a page or a saved picture
+/// exists, its own size is what the layout uses.
+pub fn default_page_size(path: &Path) -> (u32, u32) {
+    match app_for(path) {
+        Some(OfficeApp::Excel) => (1123, 794),
+        Some(OfficeApp::PowerPoint) => (1280, 720),
+        Some(OfficeApp::Word) | None => (794, 1123),
+    }
+}
+
 /// The container the file's own header reports, or `None` for a file that is
 /// neither — a text file wearing a document's name, say, which is answered with
 /// no preview rather than a parse.

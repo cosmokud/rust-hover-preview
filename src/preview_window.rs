@@ -2241,10 +2241,8 @@ fn load_office_preview(
     preview_scale: PreviewScale,
     cancel: &Arc<AtomicBool>,
 ) -> Option<MediaData> {
-    let (source_width, source_height) = office_preview::measure(path).unwrap_or((
-        pdf_preview::DEFAULT_PAGE_WIDTH,
-        pdf_preview::DEFAULT_PAGE_HEIGHT,
-    ));
+    let (source_width, source_height) =
+        office_preview::measure(path).unwrap_or_else(|| office_formats::default_page_size(path));
     let (target_width, target_height) = scale_dimensions(
         source_width,
         source_height,
@@ -5448,10 +5446,9 @@ pub fn run_preview_window() {
                             let (width, height) = pending_load
                                 .as_ref()
                                 .map(|pl| (pl.width, pl.height))
-                                .unwrap_or((
-                                    pdf_preview::DEFAULT_PAGE_WIDTH,
-                                    pdf_preview::DEFAULT_PAGE_HEIGHT,
-                                ));
+                                .unwrap_or_else(|| {
+                                    office_formats::default_page_size(&result.path)
+                                });
                             arm_office_render(
                                 &mut office_render_due,
                                 &result.path,

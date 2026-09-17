@@ -37,12 +37,15 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use windows::core::{GUID, PCWSTR, VARIANT};
-use windows::Win32::Foundation::{LPARAM, WPARAM};
+use windows::Win32::Foundation::{HGLOBAL, LPARAM, WPARAM};
 use windows::Win32::System::Com::{
     CLSIDFromProgID, CoCreateInstance, CoInitializeEx, IDispatch, CLSCTX_LOCAL_SERVER,
     COINIT_APARTMENTTHREADED, DISPATCH_FLAGS, DISPATCH_METHOD, DISPATCH_PROPERTYGET,
-    DISPATCH_PROPERTYPUT, DISPPARAMS,
+    DISPATCH_PROPERTYPUT, DISPPARAMS, EXCEPINFO,
 };
+use windows::Win32::System::DataExchange::{CloseClipboard, GetClipboardData, OpenClipboard};
+use windows::Win32::System::Memory::{GlobalLock, GlobalSize, GlobalUnlock};
+use windows::Win32::System::Ole::CF_DIB;
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, MsgWaitForMultipleObjectsEx, PeekMessageW, PostThreadMessageW,
@@ -69,18 +72,32 @@ const MAX_SLIDE_EXPORT_WIDTH: u32 = 1920;
 /// Paths at least this long are handed to Office as a copy in the temp folder.
 /// Office is not a long-path consumer of the plain form the app converts to.
 const MAX_OFFICE_PATH: usize = 240;
+/// How much of a worksheet's used range is copied out when the machine has no
+/// printer to export a page with: the corner a person sees first, not every row
+/// the sheet holds.
+const PICTURE_MAX_ROWS: i32 = 40;
+const PICTURE_MAX_COLUMNS: i32 = 14;
+/// The clipboard is shared with every other process: a look that cannot open it,
+/// or finds nothing in it, is retried this many times.
+const CLIPBOARD_ATTEMPTS: usize = 5;
+/// `xlScreen` and `xlBitmap`: the appearance and format `CopyPicture` is asked for.
+const XL_SCREEN: i32 = 1;
+const XL_BITMAP: i32 = 2;
 /// The value that switches macro execution off entirely.
 const MSO_AUTOMATION_SECURITY_FORCE_DISABLE: i32 = 3;
 /// What a property put is identified by, in the parameter block that carries it.
 const DISPID_PROPERTYPUT: i32 = -3;
 
-/// Which of the two files a render can produce.
+/// Which of the files a render can produce.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum RenderedKind {
     /// A one-page PDF, which the existing PDF renderer draws.
     Pdf,
     /// A PNG of the first slide.
     Png,
+    /// A bitmap of a workbook's used range, for a machine whose Excel cannot
+    /// export a page at all — see `render_excel`.
+    Bmp,
 }
 
 impl RenderedKind {
@@ -88,6 +105,7 @@ impl RenderedKind {
         match self {
             Self::Pdf => "pdf",
             Self::Png => "png",
+            Self::Bmp => "bmp",
         }
     }
 }
@@ -107,7 +125,8 @@ struct RenderRequest {
 }
 
 /// What failed, the version of the file that failed, and when. Held in memory
-/// only: a failure is not a property of the file worth keeping across runs.
+/// only: a failure is not a property of the file worth keeping across runs. What
+/// Office said about it is kept beside this, in the diagnostic below.
 struct Failure {
     modified: Option<SystemTime>,
     len: u64,
@@ -148,7 +167,7 @@ pub(crate) fn cached_render(source: &Path) -> Option<CachedRender> {
     let folder = cache_folder()?;
     let key = cache_key(source);
 
-    for kind in [RenderedKind::Pdf, RenderedKind::Png] {
+    for kind in [RenderedKind::Pdf, RenderedKind::Png, RenderedKind::Bmp] {
         let path = folder.join(format!("{key}.{}", kind.extension()));
         if let Ok(metadata) = std::fs::metadata(&path) {
             if metadata.len() > 0 {
@@ -368,7 +387,7 @@ fn render_request(engine: &mut Option<Engine>, request: &RenderRequest) -> bool 
         return true;
     }
 
-    let Some(target) = cache_target(&request.source, app_kind) else {
+    let Some(target) = cache_target(&request.source) else {
         return false;
     };
 
@@ -395,10 +414,9 @@ fn render_request(engine: &mut Option<Engine>, request: &RenderRequest) -> bool 
     let rendered = engine.render(&source.path, &target, width, height);
     source.cleanup();
 
-    rendered
-        && std::fs::metadata(&target.path)
-            .map(|m| m.len() > 0)
-            .unwrap_or(false)
+    // What the renderer wrote is the answer, whatever it chose to write: the
+    // cache says which file it was.
+    rendered && cached_render(&request.source).is_some()
 }
 
 // ------------------------------------------------------------------ engines
@@ -510,7 +528,7 @@ fn render_word(app: &Object, source: &Path, target: &CacheTarget) -> bool {
         .call(
             "ExportAsFixedFormat",
             &[
-                ("OutputFileName", path_variant(&target.path)),
+                ("OutputFileName", path_variant(&target.file("pdf"))),
                 ("ExportFormat", VARIANT::from(17i32)), // wdExportFormatPDF
                 ("OpenAfterExport", VARIANT::from(false)),
                 ("Range", VARIANT::from(3i32)), // wdExportFromTo
@@ -542,25 +560,187 @@ fn render_excel(app: &Object, source: &Path, target: &CacheTarget) -> bool {
         return false;
     };
 
-    // The first worksheet's first printed page is the workbook's first page.
-    let rendered = workbook
-        .member_at("Worksheets", 1)
-        .and_then(|sheet| {
-            sheet.call(
-                "ExportAsFixedFormat",
-                &[
-                    ("Type", VARIANT::from(0i32)), // xlTypePDF
-                    ("Filename", path_variant(&target.path)),
-                    ("From", VARIANT::from(1i32)),
-                    ("To", VARIANT::from(1i32)),
-                    ("OpenAfterPublish", VARIANT::from(false)),
-                ],
-            )
-        })
-        .is_some();
+    // A workbook's first page is what it prints, and exporting one goes through
+    // the print pipeline: Excel needs a printer on the machine for it, and a
+    // machine with none — no printer at all, which is not the same as a sheet
+    // without a print area — cannot export a page however it is asked.
+    let printed = printer_installed(app) && export_first_page(&workbook, target);
+    let rendered = printed || copy_used_range_picture(&workbook, target);
 
     let _ = workbook.call("Close", &[("SaveChanges", VARIANT::from(false))]);
     rendered
+}
+
+/// The first worksheet's first printed page, as a PDF.
+fn export_first_page(workbook: &Object, target: &CacheTarget) -> bool {
+    let Some(sheet) = workbook
+        .member("Worksheets")
+        .and_then(|sheets| sheets.item(1))
+    else {
+        return false;
+    };
+
+    let output = target.file("pdf");
+    let exported = sheet
+        .call(
+            "ExportAsFixedFormat",
+            &[
+                ("Type", VARIANT::from(0i32)), // xlTypePDF
+                ("Filename", path_variant(&output)),
+                ("From", VARIANT::from(1i32)),
+                ("To", VARIANT::from(1i32)),
+                ("OpenAfterPublish", VARIANT::from(false)),
+            ],
+        )
+        .is_some();
+
+    exported && output.exists()
+}
+
+/// Whether the machine has a printer, which is what an export to a page needs.
+///
+/// Excel answers `ActivePrinter` with a name when there is one, and with the
+/// sentence "unknown printer (check your Control Panel)" when there is not — so
+/// the question is asked before the export rather than answered by its failure.
+fn printer_installed(app: &Object) -> bool {
+    app.value("ActivePrinter")
+        .map(|value| value.to_string())
+        .map(|name| !name.trim().is_empty() && !name.contains("unknown printer"))
+        .unwrap_or(false)
+}
+
+/// The used range's top-left, copied out of Excel as a picture.
+///
+/// This is what a machine with no printer gets instead of a page: the range is
+/// copied the way a person copies it — `CopyPicture` — and the bitmap Excel puts
+/// on the clipboard is written to the cache as a BMP, the one image format that
+/// is exactly the bytes the clipboard holds. What it shows is the corner of the
+/// sheet a person would see first rather than the sheet's printed layout, which
+/// is the most such a machine can produce.
+fn copy_used_range_picture(workbook: &Object, target: &CacheTarget) -> bool {
+    let Some(sheet) = workbook
+        .member("Worksheets")
+        .and_then(|sheets| sheets.item(1))
+    else {
+        return false;
+    };
+    let Some(used) = sheet.member("UsedRange") else {
+        return false;
+    };
+    let (Some(rows), Some(columns)) = (
+        collection_count(used.member("Rows")),
+        collection_count(used.member("Columns")),
+    ) else {
+        return false;
+    };
+
+    let rows = rows.clamp(1, PICTURE_MAX_ROWS);
+    let columns = columns.clamp(1, PICTURE_MAX_COLUMNS);
+    let Some(range) = used
+        .call_args("Resize", &[VARIANT::from(rows), VARIANT::from(columns)])
+        .and_then(Object::from_variant)
+    else {
+        return false;
+    };
+
+    let copied = range
+        .call_args(
+            "CopyPicture",
+            &[VARIANT::from(XL_SCREEN), VARIANT::from(XL_BITMAP)],
+        )
+        .is_some();
+    if !copied {
+        return false;
+    }
+
+    let Some(dib) = clipboard_dib() else {
+        return false;
+    };
+
+    write_bmp(&target.file("bmp"), &dib).is_ok()
+}
+
+/// How many items a collection holds.
+fn collection_count(collection: Option<Object>) -> Option<i32> {
+    collection
+        .and_then(|collection| collection.value("Count"))
+        .and_then(|count| i32::try_from(&count).ok())
+}
+
+/// The bitmap Excel has just put on the clipboard.
+fn clipboard_dib() -> Option<Vec<u8>> {
+    for attempt in 0..CLIPBOARD_ATTEMPTS {
+        if let Some(dib) = read_clipboard_dib() {
+            return Some(dib);
+        }
+        if attempt + 1 < CLIPBOARD_ATTEMPTS {
+            std::thread::sleep(Duration::from_millis(30));
+        }
+    }
+
+    None
+}
+
+fn read_clipboard_dib() -> Option<Vec<u8>> {
+    unsafe {
+        if OpenClipboard(None).is_err() {
+            return None;
+        }
+
+        let mut dib = None;
+        if let Ok(handle) = GetClipboardData(CF_DIB.0 as u32) {
+            let handle = HGLOBAL(handle.0);
+            let size = GlobalSize(handle);
+            let pointer = GlobalLock(handle) as *const u8;
+            if !pointer.is_null() {
+                if size > 0 {
+                    dib = Some(std::slice::from_raw_parts(pointer, size).to_vec());
+                }
+                let _ = GlobalUnlock(handle);
+            }
+        }
+
+        let _ = CloseClipboard();
+        dib
+    }
+}
+
+/// What the clipboard held, written as a BMP file: a DIB is a `BITMAPINFO` and
+/// its pixels, and a BMP file is those bytes with a fourteen-byte header in front
+/// of them.
+fn write_bmp(path: &Path, dib: &[u8]) -> std::io::Result<()> {
+    let offset = dib_pixel_offset(dib).unwrap_or(54);
+    let mut file = Vec::with_capacity(dib.len() + 14);
+    file.extend_from_slice(b"BM");
+    file.extend_from_slice(&((dib.len() + 14) as u32).to_le_bytes());
+    file.extend_from_slice(&0u16.to_le_bytes()); // reserved
+    file.extend_from_slice(&0u16.to_le_bytes()); // reserved
+    file.extend_from_slice(&offset.to_le_bytes());
+    file.extend_from_slice(dib);
+
+    std::fs::write(path, file)
+}
+
+/// Where a DIB's pixels start, past its header and its colour table.
+fn dib_pixel_offset(dib: &[u8]) -> Option<u32> {
+    let header = u32::from_le_bytes(dib.get(0..4)?.try_into().ok()?) as usize;
+    if header < 40 || header > dib.len() {
+        return None;
+    }
+
+    let bit_count = u16::from_le_bytes(dib.get(14..16)?.try_into().ok()?) as u32;
+    let used_colors = u32::from_le_bytes(dib.get(32..36)?.try_into().ok()?);
+    let palette_entries = if bit_count <= 8 {
+        if used_colors != 0 {
+            used_colors
+        } else {
+            1u32 << bit_count
+        }
+    } else {
+        0
+    };
+
+    Some((14 + header) as u32 + palette_entries * 4)
 }
 
 fn render_powerpoint(
@@ -587,22 +767,27 @@ fn render_powerpoint(
     };
 
     // A slide is exported as an image rather than the deck as a PDF: the export
-    // writes slide 1 alone instead of every slide the deck holds.
+    // writes slide 1 alone instead of every slide the deck holds. It is reached
+    // through the collection's item, which PowerPoint exposes as a method —
+    // asking `Slides` itself for one is answered with "member not found".
     let rendered = presentation
-        .member_at("Slides", 1)
-        .and_then(|slide| {
+        .member("Slides")
+        .and_then(|slides| slides.item(1))
+        .map(|slide| {
             let (export_width, export_height) = slide_export_size(&presentation, width, height);
-            slide.call(
-                "Export",
-                &[
-                    ("FileName", path_variant(&target.path)),
-                    ("FilterName", VARIANT::from("PNG")),
-                    ("ScaleWidth", VARIANT::from(export_width)),
-                    ("ScaleHeight", VARIANT::from(export_height)),
-                ],
-            )
+            slide
+                .call(
+                    "Export",
+                    &[
+                        ("FileName", path_variant(&target.file("png"))),
+                        ("FilterName", VARIANT::from("PNG")),
+                        ("ScaleWidth", VARIANT::from(export_width)),
+                        ("ScaleHeight", VARIANT::from(export_height)),
+                    ],
+                )
+                .is_some()
         })
-        .is_some();
+        .unwrap_or(false);
 
     let _ = presentation.call("Close", &[]);
     rendered
@@ -752,21 +937,27 @@ fn cache_key(source: &Path) -> String {
     format!("{:016x}", hasher.finish())
 }
 
+/// Where a render for this version of the file is written. Which file it is —
+/// which extension — is the renderer's to choose, since what a document can be
+/// drawn from is not known until it has been asked.
 struct CacheTarget {
-    path: PathBuf,
+    folder: PathBuf,
+    key: String,
 }
 
-fn cache_target(source: &Path, app_kind: OfficeApp) -> Option<CacheTarget> {
+impl CacheTarget {
+    fn file(&self, extension: &str) -> PathBuf {
+        self.folder.join(format!("{}.{extension}", self.key))
+    }
+}
+
+fn cache_target(source: &Path) -> Option<CacheTarget> {
     let folder = cache_folder()?;
     std::fs::create_dir_all(&folder).ok()?;
 
-    let kind = match app_kind {
-        OfficeApp::PowerPoint => RenderedKind::Png,
-        _ => RenderedKind::Pdf,
-    };
-
     Some(CacheTarget {
-        path: folder.join(format!("{}.{}", cache_key(source), kind.extension())),
+        folder,
+        key: cache_key(source),
     })
 }
 
@@ -881,6 +1072,7 @@ impl Object {
 
     fn invoke(
         &self,
+        name: &str,
         member: i32,
         flags: DISPATCH_FLAGS,
         values: &mut [VARIANT],
@@ -901,38 +1093,77 @@ impl Object {
             cNamedArgs: ids.len() as u32,
         };
         let mut result = VARIANT::new();
+        // An automation failure carries its reason in the exception, not in the
+        // HRESULT, so it is asked for rather than left behind.
+        let mut exception = EXCEPINFO::default();
 
-        unsafe {
-            self.0
-                .Invoke(
-                    member,
-                    &GUID::zeroed(),
-                    0,
-                    flags,
-                    &params,
-                    Some(&mut result),
-                    None,
-                    None,
-                )
-                .ok()?;
+        let outcome = unsafe {
+            self.0.Invoke(
+                member,
+                &GUID::zeroed(),
+                0,
+                flags,
+                &params,
+                Some(&mut result),
+                Some(&mut exception),
+                None,
+            )
+        };
+
+        // A failed call is remembered with its reason: what it costs is one string
+        // per failure, and what it buys is a document that can be looked at instead
+        // of guessed about.
+        if let Err(error) = &outcome {
+            record_failure(name, error, &exception);
         }
 
+        outcome.ok()?;
         Some(result)
     }
 
     /// A property's value.
     fn value(&self, name: &str) -> Option<VARIANT> {
         let member = self.dispatch_id(name)?;
-        self.invoke(member, DISPATCH_PROPERTYGET, &mut [], &mut [])
+        self.invoke(name, member, DISPATCH_PROPERTYGET, &mut [], &mut [])
     }
 
-    /// A property that takes an index — `Worksheets(1)`, `Slides(1)`.
-    fn member_at(&self, name: &str, index: i32) -> Option<Self> {
-        let member = self.dispatch_id(name)?;
+    /// An item out of a collection, reached the way VBA reaches it when it writes
+    /// `Slides(1)`.
+    ///
+    /// Some collections expose `Item` as a property and others as a method —
+    /// PowerPoint's `Slides` is the second kind, and asking it as a property is
+    /// answered with "member not found" — so the invoke says it may be either,
+    /// which is what both kinds answer to.
+    fn item(&self, index: i32) -> Option<Self> {
+        let member = self.dispatch_id("Item")?;
         let mut values = [VARIANT::from(index)];
-        let value = self.invoke(member, DISPATCH_PROPERTYGET, &mut values, &mut [])?;
+        let value = self.invoke(
+            "Item",
+            member,
+            DISPATCH_PROPERTYGET | DISPATCH_METHOD,
+            &mut values,
+            &mut [],
+        )?;
 
         Self::from_variant(value)
+    }
+
+    /// A call with positional arguments, in the order they are written here: the
+    /// parameter block carries them reversed, which is what the server expects.
+    ///
+    /// It is the way to reach the members whose parameter names do not resolve —
+    /// `Range("A1:B2")` is one — and it needs no names to be right.
+    fn call_args(&self, name: &str, args: &[VARIANT]) -> Option<VARIANT> {
+        let member = self.dispatch_id(name)?;
+        let mut values: Vec<VARIANT> = args.iter().rev().cloned().collect();
+
+        self.invoke(
+            name,
+            member,
+            DISPATCH_PROPERTYGET | DISPATCH_METHOD,
+            &mut values,
+            &mut [],
+        )
     }
 
     /// An object property.
@@ -945,7 +1176,7 @@ impl Object {
         let mut values = [value];
         let mut ids = [DISPID_PROPERTYPUT];
 
-        self.invoke(member, DISPATCH_PROPERTYPUT, &mut values, &mut ids)?;
+        self.invoke(name, member, DISPATCH_PROPERTYPUT, &mut values, &mut ids)?;
         Some(())
     }
 
@@ -963,7 +1194,7 @@ impl Object {
             values.push(value.clone());
         }
 
-        self.invoke(member, DISPATCH_METHOD, &mut values, &mut ids)
+        self.invoke(name, member, DISPATCH_METHOD, &mut values, &mut ids)
     }
 }
 
@@ -973,6 +1204,37 @@ fn wide_string(value: &str) -> Vec<u16> {
 
 fn path_variant(path: &Path) -> VARIANT {
     VARIANT::from(path.to_string_lossy().as_ref())
+}
+
+thread_local! {
+    /// What the last automation call failed with. It is kept because a render that
+    /// produces nothing is otherwise silent — the file is simply left alone for a
+    /// while — and this is what says which call refused and why: the diagnostic
+    /// below prints it, and a failure remembered for a file carries it.
+    static LAST_FAILURE: std::cell::RefCell<Option<String>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+fn record_failure(name: &str, error: &windows::core::Error, exception: &EXCEPINFO) {
+    // An automation failure's reason is in the exception rather than in the
+    // HRESULT, which for a failed call is only DISP_E_EXCEPTION.
+    let description = exception.bstrDescription.to_string();
+    let detail = if description.is_empty() {
+        error.message()
+    } else {
+        format!("{} — {description}", error.message())
+    };
+
+    LAST_FAILURE.with(|slot| {
+        *slot.borrow_mut() = Some(format!("{name}: 0x{:08X} {detail}", error.code().0));
+    });
+}
+
+/// What the last automation call failed with, if one did. Read by the diagnostic
+/// below: a render that produces nothing is otherwise silent.
+#[cfg(test)]
+pub(crate) fn last_failure() -> Option<String> {
+    LAST_FAILURE.with(|slot| slot.borrow().clone())
 }
 
 #[cfg(test)]
@@ -1013,5 +1275,175 @@ mod tests {
         assert_ne!(first, cache_key(&path));
 
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// A document of the given family, written by the application itself, with a
+    /// little content in it so that a page has something to show.
+    fn write_sample(app_kind: OfficeApp, path: &Path) -> Option<()> {
+        let app = Object::create(app_kind.prog_id())?;
+        let collection = app.member(match app_kind {
+            OfficeApp::Word => "Documents",
+            OfficeApp::Excel => "Workbooks",
+            OfficeApp::PowerPoint => "Presentations",
+        })?;
+        let document = Object::from_variant(collection.call("Add", &[])?)?;
+
+        match app_kind {
+            OfficeApp::Word => {}
+            OfficeApp::Excel => {
+                if let Some(sheet) = document
+                    .member("Worksheets")
+                    .and_then(|sheets| sheets.item(1))
+                {
+                    for (cell, value) in [
+                        ("A1", "Item"),
+                        ("B1", "Qty"),
+                        ("A2", "Widget"),
+                        ("B2", "3"),
+                        ("A3", "Gadget"),
+                        ("B3", "7"),
+                    ] {
+                        if let Some(range) = sheet
+                            .call_args("Range", &[VARIANT::from(cell)])
+                            .and_then(Object::from_variant)
+                        {
+                            let _ = range.set("Value2", VARIANT::from(value));
+                        }
+                    }
+                }
+            }
+            OfficeApp::PowerPoint => {
+                if let Some(slides) = document.member("Slides") {
+                    let _ = slides.call_args(
+                        "Add",
+                        &[VARIANT::from(1i32), VARIANT::from(1i32)], // index, layout
+                    );
+                }
+            }
+        }
+
+        let saved = match app_kind {
+            OfficeApp::Word => document.call(
+                "SaveAs2",
+                &[
+                    ("FileName", path_variant(path)),
+                    ("FileFormat", VARIANT::from(12i32)), // wdFormatXMLDocument
+                ],
+            ),
+            OfficeApp::Excel => document.call(
+                "SaveAs",
+                &[
+                    ("Filename", path_variant(path)),
+                    ("FileFormat", VARIANT::from(51i32)), // xlOpenXMLWorkbook
+                ],
+            ),
+            OfficeApp::PowerPoint => document.call(
+                "SaveAs",
+                &[
+                    ("FileName", path_variant(path)),
+                    ("Format", VARIANT::from(24i32)), // ppSaveAsOpenXMLPresentation
+                ],
+            ),
+        };
+
+        let _ = document.call("Close", &[]);
+        let _ = app.call("Quit", &[]);
+
+        saved.map(|_| ())
+    }
+
+    /// One document of each family, written and then rendered through the real
+    /// code path, reporting what every step did.
+    ///
+    /// Ignored because it starts the installed Office and writes sample documents
+    /// into the scratchpad. Run it when a document produces no page:
+    /// `cargo test -- --ignored --nocapture office_render_smoke_test`.
+    #[test]
+    #[ignore = "starts the installed Office and writes sample documents"]
+    fn office_render_smoke_test() {
+        unsafe {
+            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        }
+
+        let folder = std::env::var_os("COMMANDCODE_SCRATCHPAD")
+            .map(PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir)
+            .join("office-smoke-test");
+        std::fs::create_dir_all(&folder).expect("a scratch folder");
+
+        for (app_kind, name) in [
+            (OfficeApp::Word, "sample.docx"),
+            (OfficeApp::Excel, "sample.xlsx"),
+            (OfficeApp::PowerPoint, "sample.pptx"),
+        ] {
+            println!("\n--- {name} ---");
+            let path = folder.join(name);
+            let _ = std::fs::remove_file(&path);
+
+            let started = Instant::now();
+            match write_sample(app_kind, &path) {
+                Some(()) => println!("written: {} in {:?}", path.display(), started.elapsed()),
+                None => {
+                    println!(
+                        "written: no ({})",
+                        last_failure().unwrap_or_else(|| "no failure recorded".to_string())
+                    );
+                    continue;
+                }
+            }
+
+            let started = Instant::now();
+            match crate::office_thumbnail::thumbnail_for(&path, None) {
+                Some(thumbnail) => println!(
+                    "saved picture: {:?} {}x{} read in {:?}",
+                    thumbnail.kind,
+                    thumbnail.width,
+                    thumbnail.height,
+                    started.elapsed()
+                ),
+                None => println!("saved picture: none, looked for in {:?}", started.elapsed()),
+            }
+
+            let started = Instant::now();
+            match crate::office_preview::render(&path, 800, 600, None) {
+                Some((pixels, width, height)) => println!(
+                    "drawn: {width}x{height}, {} pixels, in {:?}",
+                    pixels.len() / 4,
+                    started.elapsed()
+                ),
+                None => println!("drawn: nothing, in {:?}", started.elapsed()),
+            }
+
+            let mut engine = None;
+            let request = RenderRequest {
+                source: path.clone(),
+                width: 1280,
+                height: 800,
+                generation: 1,
+                requested: Instant::now(),
+            };
+            let started = Instant::now();
+            let rendered = render_request(&mut engine, &request);
+            println!("rendered: {rendered} in {:?}", started.elapsed());
+
+            if !rendered {
+                println!(
+                    "last failure: {}",
+                    last_failure().unwrap_or_else(|| "none recorded".to_string())
+                );
+            }
+            match cached_render(&path) {
+                Some(cached) => println!(
+                    "cache file: {} ({} bytes)",
+                    cached.path.display(),
+                    std::fs::metadata(&cached.path)
+                        .map(|m| m.len())
+                        .unwrap_or(0)
+                ),
+                None => println!("cache file: none"),
+            }
+
+            drop(engine);
+        }
     }
 }
