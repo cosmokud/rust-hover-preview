@@ -1,6 +1,6 @@
 # Rust Hover Preview
 
-![Rust](https://img.shields.io/badge/Rust-1.70+-orange?logo=rust)
+![Rust](https://img.shields.io/badge/Rust-1.88+-orange?logo=rust)
 ![Windows](https://img.shields.io/badge/Platform-Windows-blue?logo=windows)
 ![License](https://img.shields.io/badge/License-MIT-green)
 
@@ -15,6 +15,7 @@ A Windows 11 tray app inspired by QTTabBar that shows instant File Explorer prev
 - Videos through FFmpeg
 - PDF first pages via the built-in Windows PDF engine
 - Text and code with syntax highlighting, rendered Markdown, and bundled/custom themes
+- Archive contents — zip, rar, 7z, tar — as a file tree with sizes, read without unpacking anything
 - Preview scaling from 25% to 400%, or fit-to-screen
 - Previews appear beside the cursor or focused item and are never clipped by screen edges
 - Tray menu and hand-editable `config.ini`
@@ -38,13 +39,19 @@ Extensionless repository files such as `LICENSE`, `Makefile`, `Dockerfile`, and 
 
 You can add custom extensions via `config.ini`.
 
+### Archives
+
+`zip`, `zipx`, `jar`, `apk`, `xpi`, `cbz`, `rar`, `7z`, `tar`, `tgz`, and `tar.gz`.
+
+A preview lists what the archive holds — a summary line, then a tree of its folders and files with each file's size, folders first and a `… and N more items` line when the listing is long. Nothing is unpacked: only the archive's own table of contents is read, so a preview of a five-gigabyte archive costs the same as a small one. Encrypted archives are marked, and one whose file table is encrypted says so instead of guessing. Add or remove formats through `config.ini`; the list is editable, so a container this list does not name — a `.docx`, say — can be added as the zip it is.
+
 ### Videos (FFmpeg required)
 
 `mp4`, `webm`, `mkv`, `avi`, `mov`, `wmv`, `flv`, `m4v`, `ts`, `m2ts`, `mts`, `mpg`, `mpeg`, `vob`, `3gp`, `ogv`, `rmvb`, `asf`, `divx`, `f4v`, `mxf`, `dv`. FFmpeg-supported containers and codecs generally work. `.ts` and `.mts` are previewed as video only when they contain MPEG-TS packets.
 
 ### Themes
 
-Text and code use Atom One Light (default), One Dark Pro, or any `.tmTheme` file placed in `%APPDATA%\rust-hover-preview\theme`.
+Text, code, and archive listings use Atom One Light (default), One Dark Pro, or any `.tmTheme` file placed in `%APPDATA%\rust-hover-preview\theme`. Archive listings follow the `Text Preview Font Size` setting.
 
 ## Installation
 
@@ -93,7 +100,7 @@ ffprobe -version
 ## System Tray Menu
 
 - **Enable Preview** — turn previews on or off
-- **Toggle Preview Types** — Images, Videos, Text, PDF: switch a kind of preview off without touching its file list
+- **Toggle Preview Types** — Images, Videos, Text, PDF, Archives: switch a kind of preview off without touching its file list
 - **Preview Delay** — Instant, Fast, Medium, Relaxed, Slow
 - **Same File Rehover Delay** — delay before the same file can preview again
 - **Video Volume** — Max, High, Medium, Low, Very Low, Mute
@@ -132,6 +139,7 @@ image_preview_enabled=true
 video_preview_enabled=true
 text_preview_enabled=true
 pdf_preview_enabled=true
+archive_preview_enabled=true
 trigger_key=alt
 trigger_key_mode=disable
 confirm_file_type=false
@@ -148,22 +156,26 @@ text_font_scale=125
 [text]
 extensions=txt,text,log,nfo,md,markdown,json,toml,yaml,py,js,ts,rs,...
 names=license,notice,makefile,dockerfile,gitignore,.gitattributes,...
+
+[archive]
+extensions=zip,zipx,jar,apk,xpi,cbz,rar,7z,tar,tgz,tar.gz
 ```
 
 Key settings:
 
 - `theme` — `light` (default), `dark`, or a custom theme as `custom:<name>`.
 - `markdown_mode` — `rendered` or `source`.
-- `image_preview_enabled` / `video_preview_enabled` / `text_preview_enabled` / `pdf_preview_enabled` — whether previews of that kind may be shown at all, without changing the lists of files it covers.
+- `image_preview_enabled` / `video_preview_enabled` / `text_preview_enabled` / `pdf_preview_enabled` / `archive_preview_enabled` — whether previews of that kind may be shown at all, without changing the lists of files it covers.
 - `text_preview_full_mode` — `true` adds scrolling, selection, and copy.
-- `text_font_scale` — percentage from 1 to 1000; default is `125`.
+- `text_font_scale` — percentage from 1 to 1000; default is `125`. Archive listings follow it too.
 - `extensions` / `names` — text-preview gates. Extensions are written without dots; names match extensionless files.
+- `archive_extensions` — the archive-preview gate, under `[archive]`. Entries are written without dots, and an entry with a dot in it (`tar.gz`) is matched against the end of the file name.
 - `trigger_key` / `trigger_key_mode` — key (`alt`, `ctrl`, `shift`, `win`) and mode (`disable` or `enable`).
 - `preview_scale` — percentage or `fit`.
 
 ## Build from Source
 
-Requirements: Windows 11, Rust 1.70+, Visual Studio Build Tools (MSVC), and the Windows SDK.
+Requirements: Windows 11, Rust 1.88+, Visual Studio Build Tools (MSVC / C++), and the Windows SDK.
 
 ```bash
 cargo build            # debug
@@ -174,7 +186,7 @@ The release binary is written to `target/release/rust-hover-preview.exe`.
 
 ## Architecture
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the full system overview. In short: Windows accessibility APIs and Shell COM identify the hovered or focused Explorer item, GDI paints the preview into a topmost layered window, text and code are highlighted with TextMate-style themes, Markdown is rendered, and FFmpeg handles video.
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the full system overview. In short: Windows accessibility APIs and Shell COM identify the hovered or focused Explorer item, GDI paints the preview into a topmost layered window, text and code are highlighted with TextMate-style themes, Markdown is rendered, archive contents are listed from the archives' own tables of contents, and FFmpeg handles video.
 
 ## TODO
 
@@ -183,3 +195,5 @@ See [TODO.md](TODO.md) for planned work, known bugs, and other issues.
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+RAR archives are read with RARLAB's UnRAR sources, compiled into the binary by the `unrar` crate. UnRAR source code may be used in any software to handle RAR archives without limitations and free of charge, but it may not be used to develop a RAR-compatible archiver or to recreate the RAR compression algorithm, which is proprietary. See [RARLAB's licence](https://www.rarlab.com/license.htm) for the full terms.

@@ -13,7 +13,11 @@
 //! and theme, so a second hover, a theme switch or a repaint costs a layout
 //! instead of a parse.
 
-use crate::config::{sanitize_text_font_scale_percent, MarkdownMode, TextTheme};
+use crate::config::{MarkdownMode, TextTheme};
+use crate::text_paint::{
+    blend, fill_rect, plain_style, readable, rgb, scaled, text_style, DibSurface, RunPainter,
+    TextStyle, TextMetrics, BODY_LEVEL, SIZE_LEVELS,
+};
 use crate::text_theme::{self, LoadedTheme};
 use once_cell::sync::Lazy;
 use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
@@ -25,17 +29,10 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 use syntect::easy::HighlightLines;
-use syntect::highlighting::{Color, FontStyle, HighlightState, Style};
+use syntect::highlighting::HighlightState;
 use syntect::parsing::{ParseState, SyntaxReference, SyntaxSet};
-use windows::core::PCWSTR;
-use windows::Win32::Foundation::{COLORREF, RECT, SIZE};
-use windows::Win32::Graphics::Gdi::{
-    CreateCompatibleDC, CreateDIBSection, CreateFontW, DeleteDC, DeleteObject, ExtTextOutW,
-    GetTextExtentPoint32W, GetTextMetricsW, SelectObject, SetBkColor, SetBkMode, SetTextColor,
-    BITMAPINFO, BITMAPINFOHEADER, BI_RGB, CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET,
-    DIB_RGB_COLORS, ETO_CLIPPED, ETO_OPAQUE, FF_MODERN, FIXED_PITCH, HBITMAP, HDC, HFONT, HGDIOBJ,
-    OPAQUE, OUT_TT_PRECIS, TEXTMETRICW,
-};
+use windows::Win32::Foundation::RECT;
+use windows::Win32::Graphics::Gdi::{CreateCompatibleDC, DeleteDC};
 
 /// Bytes read from the file. A preview shows one screenful, and this bounds the
 /// work a hover can trigger on a file that happens to be enormous.
@@ -66,38 +63,12 @@ const TAB_WIDTH: usize = 4;
 /// Parsed documents kept in memory, keyed by file and rendering options.
 const DOC_CACHE_MAX_ENTRIES: usize = 24;
 
-/// Size steps the document model uses: body text, four heading levels.
-const SIZE_LEVELS: usize = 5;
-const LEVEL_FONT_PIXELS: [i32; SIZE_LEVELS] = [13, 20, 17, 15, 14];
-const LEVEL_EXTRA_LEADING: [i32; SIZE_LEVELS] = [0, 8, 6, 3, 0];
-const BODY_LEVEL: u8 = 0;
-
-const PADDING_PIXELS: f32 = 12.0;
-const QUOTE_BAR_PIXELS: i32 = 4;
-
-/// The scrollbar drawn when a document is longer than the frame: a thin groove
-/// near the right edge, and the room kept clear for it.
-const SCROLLBAR_WIDTH_PIXELS: i32 = 6;
-const SCROLLBAR_MARGIN_PIXELS: i32 = 4;
 /// Shortest the thumb gets, so a document of a thousand screens still has
 /// something to grab.
 const SCROLLBAR_MIN_THUMB_PIXELS: i32 = 24;
 
 /// Narrow files still get a window wide enough to look like one.
 const MIN_CONTENT_CHARS: i32 = 16;
-
-/// Consolas ships with Windows, is fixed pitch, and carries the box-drawing
-/// characters NFO art is made of; bold and italic keep the same advance, which
-/// is what lets the layout measure a line by counting characters.
-const FONT_FACE: &str = "Consolas";
-
-const MIN_DPI: u32 = 48;
-const MAX_DPI: u32 = 480;
-
-/// Bounds on the combined display and font scale, so a hand-edited font size
-/// cannot ask for glyphs larger than a screen or smaller than a pixel.
-const MIN_SCALE: f32 = 0.25;
-const MAX_SCALE: f32 = 16.0;
 
 /// The options a preview is built with. They are passed in rather than read from
 /// the configuration inside this module so the cache key and the caller's intent
@@ -625,17 +596,6 @@ struct Span {
     style: TextStyle,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct TextStyle {
-    foreground: [u8; 3],
-    background: Option<[u8; 3]>,
-    bold: bool,
-    italic: bool,
-    underline: bool,
-    strike: bool,
-    level: u8,
-}
-
 /// The parsed document for `path`, from the cache when the file, its mode and
 /// its theme are unchanged.
 fn document(path: &Path, options: TextPreviewOptions) -> Option<Arc<CachedDocument>> {
@@ -968,22 +928,6 @@ fn extension_of(path: &Path) -> String {
         .and_then(|ext| ext.to_str())
         .unwrap_or("")
         .to_lowercase()
-}
-
-fn text_style(style: &Style, level: u8) -> TextStyle {
-    TextStyle {
-        foreground: rgb(style.foreground),
-        background: None,
-        bold: style.font_style.contains(FontStyle::BOLD),
-        italic: style.font_style.contains(FontStyle::ITALIC),
-        underline: style.font_style.contains(FontStyle::UNDERLINE),
-        strike: false,
-        level,
-    }
-}
-
-fn rgb(color: Color) -> [u8; 3] {
-    [color.r, color.g, color.b]
 }
 
 // ------------------------------------------------------------------ markdown
@@ -1988,196 +1932,7 @@ fn apply_sgr(style: &mut TextStyle, parameters: &str, base: TextStyle, palette: 
     }
 }
 
-fn luminance(color: [u8; 3]) -> f32 {
-    (0.2126 * color[0] as f32 + 0.7152 * color[1] as f32 + 0.0722 * color[2] as f32) / 255.0
-}
-
-fn blend(base: [u8; 3], other: [u8; 3], amount: f32) -> [u8; 3] {
-    let mix = |a: u8, b: u8| (a as f32 + (b as f32 - a as f32) * amount).round() as u8;
-    [
-        mix(base[0], other[0]),
-        mix(base[1], other[1]),
-        mix(base[2], other[2]),
-    ]
-}
-
-/// Pull a color away from the page until it can be read on it.
-fn readable(color: [u8; 3], background: [u8; 3]) -> [u8; 3] {
-    let on_light_page = luminance(background) > 0.5;
-    let limit = 0.45;
-    let target = if on_light_page {
-        [0, 0, 0]
-    } else {
-        [255, 255, 255]
-    };
-
-    let mut result = color;
-    for step in 0..=10 {
-        let value = luminance(result);
-        let too_close = if on_light_page {
-            value > limit
-        } else {
-            value < limit
-        };
-        if !too_close {
-            break;
-        }
-        result = blend(color, target, step as f32 / 10.0);
-    }
-
-    result
-}
-
 // -------------------------------------------------------------------- layout
-
-/// Advance and line height for each size level at one scale. Answering costs a
-/// font created and deleted per level, and the answer depends on nothing but the
-/// scale, so a display scale and font size are measured once and kept.
-const LEVEL_METRICS_MAX_ENTRIES: usize = 16;
-
-#[derive(Clone, Copy)]
-struct LevelMetrics {
-    advance: [i32; SIZE_LEVELS],
-    line_height: [i32; SIZE_LEVELS],
-}
-
-static LEVEL_METRICS: Lazy<Mutex<HashMap<(u32, u32), LevelMetrics>>> =
-    Lazy::new(|| Mutex::new(HashMap::new()));
-
-/// Font metrics for one display scale and font scale, taken from GDI once per
-/// scale and font size.
-struct TextMetrics {
-    scale: f32,
-    padding: i32,
-    quote_bar: i32,
-    advance: [i32; SIZE_LEVELS],
-    line_height: [i32; SIZE_LEVELS],
-}
-
-impl TextMetrics {
-    /// `dpi` is the display's own scale and `font_scale_percent` the configured
-    /// text size on top of it. They multiply into one scale, so the glyphs, the
-    /// line spacing and the page margin all grow together and a preview at 200%
-    /// is the same page twice the size rather than the same page in a bigger box.
-    fn new(dc: HDC, dpi: u32, font_scale_percent: u32) -> Option<Self> {
-        let dpi = dpi.clamp(MIN_DPI, MAX_DPI);
-        let font_scale_percent = sanitize_text_font_scale_percent(font_scale_percent);
-        let font_scale = font_scale_percent as f32 / 100.0;
-        // A preview is still a preview: past this the config is asking for a
-        // handful of characters per screen, which GDI font sizes stop being
-        // useful for.
-        let scale = (dpi as f32 / 96.0 * font_scale).clamp(MIN_SCALE, MAX_SCALE);
-
-        let levels = level_metrics(dc, (dpi, font_scale_percent), scale)?;
-
-        Some(Self {
-            scale,
-            padding: scaled(PADDING_PIXELS as i32, scale),
-            quote_bar: scaled(QUOTE_BAR_PIXELS, scale),
-            advance: levels.advance,
-            line_height: levels.line_height,
-        })
-    }
-
-    fn indent(&self, characters: u8) -> i32 {
-        characters as i32 * self.advance[BODY_LEVEL as usize]
-    }
-
-    /// Room the scrollbar and its margin take from the right edge of the text.
-    fn scrollbar_space(&self) -> i32 {
-        scaled(SCROLLBAR_WIDTH_PIXELS + SCROLLBAR_MARGIN_PIXELS, self.scale)
-    }
-
-    fn scrollbar_width(&self) -> i32 {
-        scaled(SCROLLBAR_WIDTH_PIXELS, self.scale).max(1)
-    }
-}
-
-/// The five levels at `scale`, from the cache when this display scale and font
-/// size have been measured before.
-fn level_metrics(dc: HDC, key: (u32, u32), scale: f32) -> Option<LevelMetrics> {
-    if let Ok(cache) = LEVEL_METRICS.lock() {
-        if let Some(cached) = cache.get(&key) {
-            return Some(*cached);
-        }
-    }
-
-    let measured = measure_levels(dc, scale)?;
-
-    if let Ok(mut cache) = LEVEL_METRICS.lock() {
-        if !cache.contains_key(&key) && cache.len() >= LEVEL_METRICS_MAX_ENTRIES {
-            cache.clear();
-        }
-        cache.insert(key, measured);
-    }
-
-    Some(measured)
-}
-
-/// Measure the five size levels against `dc`, leaving no font behind: each level
-/// is created, asked for its advance and line height, and deleted again.
-fn measure_levels(dc: HDC, scale: f32) -> Option<LevelMetrics> {
-    let mut advance = [0i32; SIZE_LEVELS];
-    let mut line_height = [0i32; SIZE_LEVELS];
-
-    for level in 0..SIZE_LEVELS {
-        let pixels = scaled(LEVEL_FONT_PIXELS[level], scale);
-        let font = create_font(pixels, &plain_style(level as u8));
-        if font.0.is_null() {
-            return None;
-        }
-
-        let mut keep = false;
-        unsafe {
-            let previous = SelectObject(dc, font);
-
-            let mut metrics = TEXTMETRICW::default();
-            let measured = GetTextMetricsW(dc, &mut metrics).as_bool();
-
-            // The advance of one character is the whole measurement a fixed
-            // pitch face needs.
-            let sample = [b'0' as u16];
-            let mut extent = SIZE::default();
-            let sampled = GetTextExtentPoint32W(dc, &sample, &mut extent).as_bool();
-
-            let _ = SelectObject(dc, previous);
-            let _ = DeleteObject(font);
-
-            if measured && sampled && extent.cx > 0 {
-                advance[level] = extent.cx;
-                line_height[level] = metrics.tmHeight
-                    + metrics.tmExternalLeading
-                    + scaled(LEVEL_EXTRA_LEADING[level], scale);
-                keep = true;
-            }
-        }
-
-        if !keep {
-            return None;
-        }
-    }
-
-    Some(LevelMetrics {
-        advance,
-        line_height,
-    })
-}
-
-fn plain_style(level: u8) -> TextStyle {
-    TextStyle {
-        foreground: [0, 0, 0],
-        background: None,
-        bold: false,
-        italic: false,
-        underline: false,
-        strike: false,
-        level,
-    }
-}
-
-fn scaled(pixels: i32, scale: f32) -> i32 {
-    ((pixels as f32) * scale).round().max(1.0) as i32
-}
 
 struct LaidRun {
     text: String,
@@ -2802,171 +2557,6 @@ pub fn scroll_line_at_track_y(
 
 // ------------------------------------------------------------------ painting
 
-/// A memory DC with a top-down 32-bit DIB section selected into it: the surface
-/// GDI draws the preview's text on before it is read back as a frame.
-struct DibSurface {
-    dc: HDC,
-    bitmap: HBITMAP,
-    previous_bitmap: HGDIOBJ,
-    bits: *mut u8,
-    width: u32,
-    height: u32,
-}
-
-impl DibSurface {
-    fn create(width: u32, height: u32) -> Option<Self> {
-        let dc = unsafe { CreateCompatibleDC(None) };
-        if dc.0.is_null() {
-            return None;
-        }
-
-        let info = BITMAPINFO {
-            bmiHeader: BITMAPINFOHEADER {
-                biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-                biWidth: width as i32,
-                biHeight: -(height as i32),
-                biPlanes: 1,
-                biBitCount: 32,
-                biCompression: BI_RGB.0,
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-
-        let mut bits: *mut core::ffi::c_void = std::ptr::null_mut();
-        let bitmap = unsafe { CreateDIBSection(dc, &info, DIB_RGB_COLORS, &mut bits, None, 0) };
-        let Ok(bitmap) = bitmap else {
-            unsafe {
-                let _ = DeleteDC(dc);
-            }
-            return None;
-        };
-
-        if bits.is_null() {
-            unsafe {
-                let _ = DeleteObject(bitmap);
-                let _ = DeleteDC(dc);
-            }
-            return None;
-        }
-
-        let previous_bitmap = unsafe { SelectObject(dc, bitmap) };
-
-        Some(Self {
-            dc,
-            bitmap,
-            previous_bitmap,
-            bits: bits as *mut u8,
-            width,
-            height,
-        })
-    }
-
-    /// The painted surface as BGRA. GDI writes color but not alpha, so the alpha
-    /// byte is forced opaque here: a text preview is a page, and the layers above
-    /// it composite it as one.
-    fn pixels(&self) -> Vec<u8> {
-        let length = self.width as usize * self.height as usize * 4;
-        let mut pixels = unsafe { std::slice::from_raw_parts(self.bits, length) }.to_vec();
-        for pixel in pixels.chunks_exact_mut(4) {
-            pixel[3] = 255;
-        }
-        pixels
-    }
-}
-
-impl Drop for DibSurface {
-    fn drop(&mut self) {
-        unsafe {
-            let _ = SelectObject(self.dc, self.previous_bitmap);
-            let _ = DeleteObject(self.bitmap);
-            let _ = DeleteDC(self.dc);
-        }
-    }
-}
-
-/// Fonts are created per style and size, once per paint, and deleted with this
-/// holder. The DC is handed back its original object before they go.
-struct FontCache {
-    fonts: Vec<(TextStyleKey, HFONT)>,
-}
-
-#[derive(PartialEq, Eq)]
-struct TextStyleKey {
-    level: u8,
-    bold: bool,
-    italic: bool,
-    underline: bool,
-    strike: bool,
-}
-
-impl TextStyleKey {
-    fn of(style: &TextStyle) -> Self {
-        Self {
-            level: (style.level as usize).min(SIZE_LEVELS - 1) as u8,
-            bold: style.bold,
-            italic: style.italic,
-            underline: style.underline,
-            strike: style.strike,
-        }
-    }
-}
-
-impl FontCache {
-    fn new() -> Self {
-        Self { fonts: Vec::new() }
-    }
-
-    unsafe fn get(&mut self, style: &TextStyle, scale: f32) -> HFONT {
-        let key = TextStyleKey::of(style);
-        if let Some((_, font)) = self.fonts.iter().find(|(cached, _)| *cached == key) {
-            return *font;
-        }
-
-        let pixels = scaled(LEVEL_FONT_PIXELS[key.level as usize], scale);
-        let font = create_font(pixels, style);
-        self.fonts.push((key, font));
-        font
-    }
-}
-
-impl Drop for FontCache {
-    fn drop(&mut self) {
-        for (_, font) in &self.fonts {
-            unsafe {
-                let _ = DeleteObject(*font);
-            }
-        }
-    }
-}
-
-fn create_font(pixels: i32, style: &TextStyle) -> HFONT {
-    let face: Vec<u16> = FONT_FACE.encode_utf16().chain(std::iter::once(0)).collect();
-
-    unsafe {
-        CreateFontW(
-            pixels,
-            0,
-            0,
-            0,
-            if style.bold { 700 } else { 400 },
-            style.italic as u32,
-            style.underline as u32,
-            style.strike as u32,
-            DEFAULT_CHARSET.0 as u32,
-            OUT_TT_PRECIS.0 as u32,
-            CLIP_DEFAULT_PRECIS.0 as u32,
-            CLEARTYPE_QUALITY.0 as u32,
-            FIXED_PITCH.0 as u32 | FF_MODERN.0 as u32,
-            PCWSTR(face.as_ptr()),
-        )
-    }
-}
-
-fn colorref(color: [u8; 3]) -> COLORREF {
-    COLORREF(color[0] as u32 | ((color[1] as u32) << 8) | ((color[2] as u32) << 16))
-}
-
 /// The part of a line's selection that falls inside one of its runs, as character
 /// offsets within that run, or `None` when the selection does not touch it.
 ///
@@ -3000,38 +2590,6 @@ fn selected_part(
     let to = line_to.saturating_sub(run_start).min(run_characters);
 
     (from < to).then_some((from, to))
-}
-
-/// Draw one piece of a run at `x`, filling its rectangle with its background as it
-/// goes, so a piece of a selected run carries the highlight instead of the page.
-unsafe fn paint_run(
-    surface: &DibSurface,
-    text: &str,
-    x: i32,
-    top: i32,
-    rect: RECT,
-    foreground: [u8; 3],
-    background: [u8; 3],
-) {
-    if text.is_empty() {
-        return;
-    }
-
-    let wide: Vec<u16> = text.encode_utf16().collect();
-    SetTextColor(surface.dc, colorref(foreground));
-    SetBkColor(surface.dc, colorref(background));
-    SetBkMode(surface.dc, OPAQUE);
-
-    let _ = ExtTextOutW(
-        surface.dc,
-        x,
-        top,
-        ETO_OPAQUE | ETO_CLIPPED,
-        Some(&rect),
-        PCWSTR(wide.as_ptr()),
-        wide.len() as u32,
-        None,
-    );
 }
 
 /// Paint the background, the block decorations, the text and a selection, and the
@@ -3103,9 +2661,7 @@ unsafe fn paint(
         }
     }
 
-    let mut fonts = FontCache::new();
-    let mut previous_font: Option<HGDIOBJ> = None;
-    let mut selected: Option<TextStyleKey> = None;
+    let mut painter = RunPainter::new(surface, metrics.scale);
 
     for (line_index, line) in laid_out.lines.iter().enumerate() {
         let mut run_start = 0usize;
@@ -3116,16 +2672,6 @@ unsafe fn paint(
                 selected_part(line_index, run_start, run_characters, selection)
             });
             run_start += run_characters;
-
-            let key = TextStyleKey::of(&run.style);
-            if selected.as_ref() != Some(&key) {
-                let font = fonts.get(&run.style, metrics.scale);
-                let previous = SelectObject(surface.dc, font);
-                if previous_font.is_none() {
-                    previous_font = Some(previous);
-                }
-                selected = Some(key);
-            }
 
             if run.text.is_empty() {
                 continue;
@@ -3156,12 +2702,10 @@ unsafe fn paint(
                         characters[start..end].iter().collect::<String>()
                     };
 
-                    paint_run(
-                        surface,
+                    painter.draw(
                         &piece(0, from),
-                        run.x,
-                        line.top,
                         rect,
+                        &run.style,
                         run.style.foreground,
                         run_background,
                     );
@@ -3171,36 +2715,30 @@ unsafe fn paint(
                         right: run.x + (to as f32 * advance).round() as i32,
                         ..rect
                     };
-                    paint_run(
-                        surface,
+                    painter.draw(
                         &piece(from, to),
-                        highlight_rect.left,
-                        line.top,
                         highlight_rect,
+                        &run.style,
                         highlight_foreground.unwrap_or(run.style.foreground),
                         highlight,
                     );
 
                     let tail_x = run.x + (to as f32 * advance).round() as i32;
-                    paint_run(
-                        surface,
+                    painter.draw(
                         &piece(to, characters.len()),
-                        tail_x,
-                        line.top,
                         RECT {
                             left: tail_x,
                             ..rect
                         },
+                        &run.style,
                         run.style.foreground,
                         run_background,
                     );
                 }
-                None => paint_run(
-                    surface,
+                None => painter.draw(
                     &run.text,
-                    run.x,
-                    line.top,
                     rect,
+                    &run.style,
                     run.style.foreground,
                     run_background,
                 ),
@@ -3208,10 +2746,9 @@ unsafe fn paint(
         }
     }
 
-    if let Some(previous) = previous_font {
-        let _ = SelectObject(surface.dc, previous);
-    }
-    drop(fonts);
+    // The fonts go with the painter, and it puts the surface's own object back
+    // before they are deleted.
+    drop(painter);
 
     // The scrollbar goes last so it sits above everything, including a line that
     // ran to the right edge.
@@ -3242,29 +2779,84 @@ unsafe fn paint(
     }
 }
 
-fn fill_rect(surface: &DibSurface, rect: RECT, color: [u8; 3]) {
-    let width = surface.width as i32;
-    let height = surface.height as i32;
-    let left = rect.left.clamp(0, width);
-    let right = rect.right.clamp(0, width);
-    let top = rect.top.clamp(0, height);
-    let bottom = rect.bottom.clamp(0, height);
-    if left >= right || top >= bottom {
-        return;
+// ---------------------------------------------------------------------- tests
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    /// Where the fixtures and the pictures of them are written. The scratchpad
+    /// the session hands out, so a render can be looked at rather than only
+    /// asserted.
+    fn scratch(label: &str) -> PathBuf {
+        let root = std::env::var_os("COMMANDCODE_SCRATCHPAD")
+            .map(PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir)
+            .join("text-preview")
+            .join(label);
+        fs::create_dir_all(&root).expect("a fixture directory");
+        root
     }
 
-    let pixels = unsafe {
-        std::slice::from_raw_parts_mut(surface.bits, width as usize * height as usize * 4)
-    };
+    fn write_png(dir: &Path, name: &str, frame: &TextFrame) {
+        let mut rgba = frame.pixels.clone();
+        for pixel in rgba.chunks_exact_mut(4) {
+            pixel.swap(0, 2);
+        }
+        image::save_buffer(
+            dir.join(format!("{name}.png")),
+            &rgba,
+            frame.width,
+            frame.height,
+            image::ExtendedColorType::Rgba8,
+        )
+        .expect("a written picture");
+    }
 
-    for y in top..bottom {
-        let row = y as usize * width as usize * 4;
-        for x in left..right {
-            let index = row + x as usize * 4;
-            pixels[index] = color[2];
-            pixels[index + 1] = color[1];
-            pixels[index + 2] = color[0];
-            pixels[index + 3] = 255;
+    /// The painting a text preview does is shared with archive listings, so the
+    /// path is worth a smoke test of its own: a page is measured, painted, and
+    /// opaque, and what it paints is the frame the compositor gets.
+    #[test]
+    fn draws_pages_of_text() {
+        let dir = scratch("pages");
+        let source = dir.join("sample.rs");
+        fs::write(
+            &source,
+            "fn main() {\n    // a comment\n    let answer = 42;\n    println!(\"{answer}\");\n}\n",
+        )
+        .expect("a source file");
+
+        let markdown = dir.join("sample.md");
+        fs::write(
+            &markdown,
+            "# Heading\n\nSome *emphasis*, a [link](https://example.com), and `code`.\n\n```rust\nlet x = 1;\n```\n",
+        )
+        .expect("a document");
+
+        for (path, name, full_mode, theme) in [
+            (&source, "source-light", false, TextTheme::Light),
+            (&markdown, "markdown-dark", true, TextTheme::Dark),
+        ] {
+            let options = TextPreviewOptions {
+                theme,
+                markdown_mode: MarkdownMode::Rendered,
+                font_scale_percent: 125,
+                full_mode,
+            };
+
+            let (width, height) = measure(path, 1_920, 1_200, 96, options).expect("a measured page");
+            let frame =
+                render_scrolled(path, 0, width, height, 96, options, None).expect("a page");
+
+            assert!(frame.width > 0 && frame.height > 0, "{name}");
+            assert!(
+                frame.pixels.chunks_exact(4).all(|pixel| pixel[3] == 255),
+                "{name} is a page, so every pixel of it is opaque"
+            );
+
+            write_png(&dir, name, &frame);
         }
     }
 }
+

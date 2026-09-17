@@ -77,6 +77,7 @@ const ID_TRAY_TYPE_IMAGES: u16 = 1062;
 const ID_TRAY_TYPE_VIDEOS: u16 = 1063;
 const ID_TRAY_TYPE_TEXT: u16 = 1064;
 const ID_TRAY_TYPE_PDF: u16 = 1065;
+const ID_TRAY_TYPE_ARCHIVES: u16 = 1066;
 const ID_TRAY_FONT_100: u16 = 1072;
 const ID_TRAY_FONT_125: u16 = 1073;
 const ID_TRAY_FONT_150: u16 = 1074;
@@ -193,6 +194,7 @@ unsafe extern "system" fn tray_window_proc(
                 ID_TRAY_TYPE_VIDEOS => toggle_preview_type(PreviewType::Videos),
                 ID_TRAY_TYPE_TEXT => toggle_preview_type(PreviewType::Text),
                 ID_TRAY_TYPE_PDF => toggle_preview_type(PreviewType::Pdf),
+                ID_TRAY_TYPE_ARCHIVES => toggle_preview_type(PreviewType::Archives),
                 ID_TRAY_FONT_100 => set_text_font_scale(100),
                 ID_TRAY_FONT_125 => set_text_font_scale(125),
                 ID_TRAY_FONT_150 => set_text_font_scale(150),
@@ -254,6 +256,11 @@ unsafe fn show_context_menu(hwnd: HWND) {
         (PreviewType::Videos, ID_TRAY_TYPE_VIDEOS, w!("Videos")),
         (PreviewType::Text, ID_TRAY_TYPE_TEXT, w!("Text")),
         (PreviewType::Pdf, ID_TRAY_TYPE_PDF, w!("PDF")),
+        (
+            PreviewType::Archives,
+            ID_TRAY_TYPE_ARCHIVES,
+            w!("Archives"),
+        ),
     ];
     let types_menu = CreatePopupMenu().unwrap();
 

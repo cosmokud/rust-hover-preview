@@ -1,12 +1,12 @@
 [package]
 name = "rust-hover-preview"
-version = "0.2.4"
+version = "0.2.5"
 edition = "2021"
-description = "Windows 11 system tray app that shows image, video, PDF, and text previews on hover in Explorer"
+description = "Windows 11 system tray app that shows image, video, PDF, text, and archive previews on hover in Explorer"
 authors = ["Rust Hover Preview Contributors"]
 license = "MIT"
 readme = "README.md"
-rust-version = "1.70"
+rust-version = "1.88"
 build = "build.rs"
 
 [dependencies]
@@ -67,8 +67,24 @@ two-face = { version = "0.4.3", default-features = false, features = ["syntect-o
 # CommonMark parsing for the rendered Markdown preview mode
 pulldown-cmark = { version = "0.10.0", default-features = false }
 
+# Archive listings: every reader below decompresses nothing, which is what a
+# listing needs, so the zip crate's compression features and the 7z codecs are
+# off. RAR has no settled pure-Rust reader — the one that exists pulls in
+# GPL-3.0 code and needs a newer rustc — so the official UnRAR sources are
+# compiled in by unrar_sys instead; see the UnRAR licence note in README.
+zip = { version = "8", default-features = false }
+sevenz-rust2 = { version = "0.20", default-features = false }
+unrar = "0.5"
+tar = "0.4"
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+
 [build-dependencies]
 winres = "0.1"
+
+[dev-dependencies]
+# The app only ever reads a 7z, so the encoder is a test-only feature of a crate
+# it already depends on: the archive tests build their own fixtures.
+sevenz-rust2 = { version = "0.20", features = ["compress", "util"] }
 
 [profile.release]
 opt-level = 3

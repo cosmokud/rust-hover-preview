@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.2.5] - 2026-09-17
+
+### Added
+
+- Archive previews: hovering a `.zip`, `.rar`, `.7z`, `.tar`, `.tar.gz` — and the zip containers `.zipx`, `.jar`, `.apk`, `.xpi` and `.cbz` — shows a summary line and a capped tree of what the archive holds, with folders first, each file's size right-aligned, and `… and N more items` when the page runs out of room. Nothing is unpacked: only the archive's own table of contents is read, so a five-gigabyte archive previews as fast as a small one.
+- `archive_preview_enabled` and an `[archive] extensions` list in `config.ini`, and an `Archives` entry in the tray's `Toggle Preview Types` submenu. The list is editable, so a container it does not name can be added.
+- Archive listings are painted with the same themes, fonts and margins as text previews and follow the `Text Preview Font Size` setting; switching theme or font size redraws an open listing.
+
+### Changed
+
+- The minimum supported Rust version is now 1.88, which is the `zip` crate's floor.
+- The GDI painting a text preview and an archive listing share moved into `text_paint.rs`; text previews are unchanged by it.
+- RAR archives are read through RARLAB's UnRAR sources compiled in by the `unrar` crate. See the licence note in README.
+
 ## [0.2.4] - 2026-09-17
 
 ### Added

@@ -1,5 +1,8 @@
 #![windows_subsystem = "windows"]
 
+mod archive_formats;
+mod archive_listing;
+mod archive_preview;
 mod cloud_files;
 mod config;
 mod explorer_hook;
@@ -8,6 +11,7 @@ mod preview_window;
 mod single_instance;
 mod startup;
 mod text_formats;
+mod text_paint;
 mod text_preview;
 mod text_theme;
 mod theme_files;
