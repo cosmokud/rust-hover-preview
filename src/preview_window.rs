@@ -3692,7 +3692,16 @@ fn spawn_load_worker(
     })
 }
 
-/// Tracks a pending background load so we can show the spinner after a delay
+/// How long a background load may run before the spinner is put up for it.
+///
+/// The window is hidden while a load runs, so one that finishes inside this has
+/// gone straight from nothing to the preview: the delay is what keeps a decode
+/// that takes a few milliseconds from flashing a spinner on the way past. A load
+/// that came back waiting on the render tier is not given it — it has nothing to
+/// show and seconds of work ahead of it — which is what `spinner_due` decides.
+const LOAD_SPINNER_DELAY_SECS: u64 = 2;
+
+/// Tracks a pending background load so we can show the spinner while it runs.
 struct PendingLoad {
     generation: u64,
     started: Instant,
@@ -3701,11 +3710,31 @@ struct PendingLoad {
     width: u32,
     height: u32,
     spinner_shown: bool,
+    /// Whether the load came back with nothing to draw and a page on the way.
+    /// Nothing can be shown until that page lands, and asking for it is seconds
+    /// of work, so the spinner goes up at once rather than after the delay a load
+    /// that might finish in milliseconds is given.
+    awaiting_render: bool,
     /// Whether this load is replacing what is already on screen — the page that
     /// arrived for the hover that is up — rather than opening a new preview. An
     /// upgrade never shows the spinner: what is there stays where it is, at its own
     /// size, until the page is ready.
     upgrade: bool,
+}
+
+impl PendingLoad {
+    /// Whether the spinner is due for this load: at once where the wait is a
+    /// render's, and once it has run for `LOAD_SPINNER_DELAY_SECS` otherwise.
+    ///
+    /// An upgrade is never due — what is on screen stays where it is, at its own
+    /// size, until the page replaces it — and a load that already has its spinner
+    /// up is not due again.
+    fn spinner_due(&self) -> bool {
+        !self.spinner_shown
+            && !self.upgrade
+            && (self.awaiting_render
+                || self.started.elapsed() >= Duration::from_secs(LOAD_SPINNER_DELAY_SECS))
+    }
 }
 
 /// Reusable layered-window surface: one memory DC with one DIB section selected
@@ -5541,12 +5570,18 @@ pub fn run_preview_window() {
                         }
                         None if result.awaiting_render => {
                             // Nothing to draw yet and a page on the way: the
-                            // pending load stays armed, so the spinner appears
-                            // at its delay instead of the preview being dropped
-                            // and the page having nowhere to land. The page is
-                            // asked for in the box its family's pages have: the
-                            // spinner's own box is a spinner's, and says nothing
-                            // about how large the page will be drawn.
+                            // pending load stays armed, so the preview is not
+                            // dropped and the page has somewhere to land — and it
+                            // is told what it is waiting on, which is what puts
+                            // the spinner up at once rather than after the delay
+                            // a load that may be about to finish is given. The
+                            // page is asked for in the box its family's pages
+                            // have: the spinner's own box is a spinner's, and
+                            // says nothing about how large the page will be
+                            // drawn.
+                            if let Some(pl) = pending_load.as_mut() {
+                                pl.awaiting_render = true;
+                            }
                             let (width, height) = office_formats::default_page_size(&result.path);
                             arm_office_render(
                                 &mut office_render_due,
@@ -5572,12 +5607,12 @@ pub fn run_preview_window() {
                 }
             }
 
-            // Show loading spinner if a background load has been pending for 3+ seconds
+            // Show the loading spinner while a background load runs, once the
+            // wait is worth showing — at once for one that is waiting on a page
+            // to be rendered, and after a moment for one that may be about to
+            // finish (see `spinner_due`).
             if let Some(ref mut pl) = pending_load {
-                if !pl.spinner_shown
-                    && !pl.upgrade
-                    && pl.started.elapsed() >= Duration::from_secs(2)
-                {
+                if pl.spinner_due() {
                     pl.spinner_shown = true;
                     let loading = create_loading_media(pl.width, pl.height);
                     let _ = MoveWindow(
@@ -6003,7 +6038,8 @@ pub fn run_preview_window() {
                             let _ = ShowWindow(hwnd, SW_HIDE);
                         }
 
-                        // Start background load; spinner will appear after 2s
+                        // Start background load; the spinner follows if the wait
+                        // turns out to be worth showing (see `spinner_due`).
                         current_generation += 1;
                         let gen = current_generation;
                         let load_cancel = Arc::new(AtomicBool::new(false));
@@ -6016,6 +6052,7 @@ pub fn run_preview_window() {
                             width: preview_w,
                             height: preview_h,
                             spinner_shown: false,
+                            awaiting_render: false,
                             upgrade: upgrading,
                         });
 
@@ -6317,6 +6354,40 @@ mod tests {
             alphas.iter().any(|&alpha| (1..=200).contains(&alpha)),
             "the halo and the tail fade rather than fill"
         );
+    }
+
+    /// A load that may be about to finish is given a moment before the spinner
+    /// goes up, while one that came back waiting on a render is not: it has
+    /// nothing to show, and the wait ahead of it is seconds of Office's time.
+    #[test]
+    fn puts_the_spinner_up_at_once_only_for_a_wait_that_is_known() {
+        let load = |awaiting_render: bool, age: Duration, upgrade: bool| PendingLoad {
+            generation: 1,
+            started: Instant::now() - age,
+            pos_x: 0,
+            pos_y: 0,
+            width: 64,
+            height: 64,
+            spinner_shown: false,
+            awaiting_render,
+            upgrade,
+        };
+
+        // A page on the way, a moment into the wait: the spinner is due already.
+        assert!(load(true, Duration::from_millis(20), false).spinner_due());
+
+        // A load that may be about to finish: not yet, and due once it has run
+        // for the delay.
+        assert!(!load(false, Duration::from_millis(20), false).spinner_due());
+        assert!(load(false, Duration::from_secs(LOAD_SPINNER_DELAY_SECS), false).spinner_due());
+
+        // An upgrade never: what is on screen stays until the page replaces it.
+        assert!(!load(true, Duration::from_secs(10), true).spinner_due());
+
+        // And a spinner that is already up is not put up a second time.
+        let mut showing = load(false, Duration::from_secs(10), false);
+        showing.spinner_shown = true;
+        assert!(!showing.spinner_due());
     }
 
     /// The layout applies the reduction the same way the size it plans does, so a
