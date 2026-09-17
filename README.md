@@ -30,7 +30,7 @@ A Windows 11 tray app inspired by QTTabBar that shows instant File Explorer prev
 
 ### PDF
 
-`pdf` — the first page is rendered by the Windows PDF engine. Password-protected and damaged files are skipped. The page fills the room the display has; a preview scale below 100% shows it smaller.
+`pdf` — the first page is rendered by the Windows PDF engine. Password-protected and damaged files are skipped. The page fills the room the display has; a preview scale below 100% shows it smaller. A rendered page is held in memory for the next hover, and **Cache → PDF** decides how much of it is kept: nothing by default.
 
 ### Text and code
 
@@ -128,7 +128,7 @@ Turn it off under **Preview Types → Office** in the tray, or with `office_prev
 - **Text Preview**
   - **Full Mode** — adds scrolling, selection, and copy; off by default
   - **Theme** — Atom One Light, One Dark Pro, or custom `.tmTheme`
-  - **Font Size** — 100%–400%
+  - **Font Size** — 400% at the top down to 70% at the bottom
   - **Markdown** — Rendered or Source
 - **Timing**
   - **Delay** — Instant, Fast, Medium, Relaxed, Slow
@@ -137,9 +137,10 @@ Turn it off under **Preview Types → Office** in the tray, or with `office_prev
   - **Position** — Follow Cursor or Best Position, and whether to keep previews off the hovered item's name
   - **Scaling** — Fit to Screen or 25%–400%
 - **Volume** — Max, High, Medium, Low, Very Low, Mute
-- **Cache**
-  - **Image** — how much memory decoded image frames may be kept in between hovers, `0 MB` (default) to `2 GB`
-  - **Office** — how much memory rendered Office pages may be kept in between hovers, `0 MB` (default) to `2 GB`
+- **Cache** — each of these lists its sizes largest first, `2 GB` at the top and `0 MB (Default)` at the bottom:
+  - **Image** — how much memory decoded image frames may be kept in between hovers
+  - **PDF** — the same for the pages PDF previews were rendered as
+  - **Office** — the same for the pages Office rendered
 - **Run at Startup** — add or remove the Windows startup entry
 - **Config.ini** — open the configuration file; the item is named for the running version
 - **Exit** — close the app
@@ -169,6 +170,7 @@ pdf_preview_enabled=true
 archive_preview_enabled=true
 office_preview_enabled=true
 office_cache_mb=0
+pdf_cache_mb=0
 image_cache_mb=0
 trigger_key=alt
 trigger_key_mode=disable
@@ -206,6 +208,7 @@ Key settings:
 - `archive_extensions` — the archive-preview gate, under `[archive]`. Entries are written without dots, and an entry with a dot in it (`tar.gz`) is matched against the end of the file name.
 - `image_cache_mb` — how much memory decoded image frames may be kept in, in megabytes, so hovering back over a folder does not decode the same pictures again; `0` (the default) holds nothing, and the value is capped at `2048`.
 - `office_cache_mb` — the same for the pages Office rendered, capped at `2048`. `0` holds nothing, but a page is still rendered for the hover that asks for it: this size is only how much is kept between hovers.
+- `pdf_cache_mb` — the same for the pages PDF previews were rendered as, capped at `2048`. A page is stored as the pixels it was drawn as, so the size is per file *and* per preview size: the same PDF hovered at fit-to-screen and at `25%` is held as two pages.
 - `office_extensions` — the Office-preview gate, under `[office]`, written without dots.
 - `trigger_key` / `trigger_key_mode` — key (`alt`, `ctrl`, `shift`, `win`) and mode (`disable` or `enable`).
 - `follow_cursor` — `true` for Follow Cursor, `false` for Best Position.
