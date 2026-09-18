@@ -2,6 +2,10 @@
 
 ## [0.2.7]
 
+### Added
+
+- A check in the tray `Trigger Key` submenu, and `trigger_key_enabled` in `config.ini`, to switch the trigger key off without changing its mode.
+
 ### Changed
 
 - Video previews no longer write `%TEMP%\rust-hover-preview-video.log`; hovered paths are not written to disk.

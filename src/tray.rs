@@ -43,6 +43,7 @@ const ID_TRAY_ENABLE: u16 = 1003;
 const ID_TRAY_CONFIRM_FILE_TYPE: u16 = 1004;
 const ID_TRAY_TRIGGER_DISABLE: u16 = 1005; // Hold the trigger key to stop previews
 const ID_TRAY_TRIGGER_ENABLE: u16 = 1006; // Hold the trigger key to allow previews
+const ID_TRAY_TRIGGER_ENABLED: u16 = 1068; // Whether the trigger key is watched at all
 const ID_TRAY_BG_TRANSPARENT: u16 = 1007;
 const ID_TRAY_BG_BLACK: u16 = 1008;
 const ID_TRAY_BG_WHITE: u16 = 1009;
@@ -194,6 +195,7 @@ unsafe extern "system" fn tray_window_proc(
                 }
                 ID_TRAY_TRIGGER_DISABLE => set_trigger_key_mode(TriggerKeyMode::Disable),
                 ID_TRAY_TRIGGER_ENABLE => set_trigger_key_mode(TriggerKeyMode::Enable),
+                ID_TRAY_TRIGGER_ENABLED => toggle_trigger_key_enabled(),
                 ID_TRAY_BG_TRANSPARENT => {
                     set_transparent_background(TransparentBackground::Transparent)
                 }
@@ -419,13 +421,19 @@ unsafe fn show_context_menu(hwnd: HWND) {
         w!("Confirm File Type"),
     );
 
-    // Add the "Trigger Key (Alt)" submenu: the key it watches, and what holding it
-    // does. Which of the two is active is shown with radio marks, because only one
-    // of them can be.
-    let (trigger_key, trigger_key_mode) = CONFIG
+    // Add the "Trigger Key (Alt)" submenu: whether the key is watched at all, the
+    // key it watches, and what holding it does. Which of the two modes is active is
+    // shown with radio marks, because only one of them can be.
+    let (trigger_key, trigger_key_mode, trigger_key_enabled) = CONFIG
         .lock()
-        .map(|c| (c.trigger_key.clone(), c.trigger_key_mode))
-        .unwrap_or(("alt".to_string(), TriggerKeyMode::Disable));
+        .map(|c| {
+            (
+                c.trigger_key.clone(),
+                c.trigger_key_mode,
+                c.trigger_key_enabled,
+            )
+        })
+        .unwrap_or(("alt".to_string(), TriggerKeyMode::Disable, true));
     let trigger_menu = CreatePopupMenu().unwrap();
 
     let mut trigger_key_chars = trigger_key.chars();
@@ -438,6 +446,21 @@ unsafe fn show_context_menu(hwnd: HWND) {
         .encode_utf16()
         .chain(std::iter::once(0))
         .collect();
+
+    // The key itself first: with it off, nothing watches it, and the two items
+    // below say what holding it would do.
+    let _ = AppendMenuW(
+        trigger_menu,
+        MF_STRING
+            | if trigger_key_enabled {
+                MF_CHECKED
+            } else {
+                MF_UNCHECKED
+            },
+        ID_TRAY_TRIGGER_ENABLED as usize,
+        w!("Enable Trigger Key"),
+    );
+    let _ = AppendMenuW(trigger_menu, MF_SEPARATOR, 0, PCWSTR::null());
 
     let _ = AppendMenuW(
         trigger_menu,
@@ -1198,6 +1221,17 @@ fn toggle_preview_enabled() {
 fn set_trigger_key_mode(mode: TriggerKeyMode) {
     if let Ok(mut config) = CONFIG.lock() {
         config.trigger_key_mode = mode;
+        config.save();
+    }
+    refresh_preview();
+}
+
+/// Whether the key is watched is a setting rather than a view of one, so the preview
+/// on screen is rebuilt: switching the key off while it is held lets a preview
+/// through, and switching it back on while it is held takes one away.
+fn toggle_trigger_key_enabled() {
+    if let Ok(mut config) = CONFIG.lock() {
+        config.trigger_key_enabled = !config.trigger_key_enabled;
         config.save();
     }
     refresh_preview();
