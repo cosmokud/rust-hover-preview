@@ -48,19 +48,27 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use windows::core::{GUID, PCWSTR, PWSTR, VARIANT};
-use windows::Win32::Foundation::{CloseHandle, HGLOBAL, LPARAM, WPARAM};
+use windows::Win32::Foundation::{CloseHandle, LPARAM, WPARAM};
 use windows::Win32::System::Com::{
     CLSIDFromProgID, CoCreateInstance, CoInitializeEx, IDispatch, CLSCTX_LOCAL_SERVER,
     COINIT_APARTMENTTHREADED, DISPATCH_FLAGS, DISPATCH_METHOD, DISPATCH_PROPERTYGET,
     DISPATCH_PROPERTYPUT, DISPPARAMS, EXCEPINFO,
 };
-use windows::Win32::System::DataExchange::{
-    CloseClipboard, EmptyClipboard, GetClipboardData, OpenClipboard,
-};
 use windows::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
 };
+// The clipboard is read by the diagnostics below the tests and by nothing else: a
+// worksheet's page comes out of the print pipeline now, so nothing in the app takes
+// a picture off the clipboard any more.
+#[cfg(test)]
+use windows::Win32::Foundation::HGLOBAL;
+#[cfg(test)]
+use windows::Win32::System::DataExchange::{
+    CloseClipboard, EmptyClipboard, GetClipboardData, OpenClipboard,
+};
+#[cfg(test)]
 use windows::Win32::System::Memory::{GlobalLock, GlobalSize, GlobalUnlock};
+#[cfg(test)]
 use windows::Win32::System::Ole::CF_DIB;
 use windows::Win32::System::Threading::{
     GetCurrentThreadId, GetExitCodeProcess, OpenProcess, QueryFullProcessImageNameW,
@@ -104,50 +112,30 @@ const MAX_SLIDE_EXPORT_WIDTH: u32 = 1920;
 /// Paths at least this long are handed to Office as a copy in the temp folder.
 /// Office is not a long-path consumer of the plain form the app converts to.
 const MAX_OFFICE_PATH: usize = 240;
-/// How much of a worksheet's used range is copied out when the machine has no
-/// printer to export a page with: the corner a person sees first, not every row
-/// the sheet holds.
-const PICTURE_MAX_ROWS: i32 = 40;
-const PICTURE_MAX_COLUMNS: i32 = 14;
-/// The most a worksheet's picture may be, in pixels.
+/// How much of a worksheet a page is exported from: the top-left window of its used
+/// range, in cells.
 ///
-/// What a preview can show is bounded by the display, and a report whose rows are
-/// tall — wrapped headings, merged cells — or whose columns are wide would
-/// otherwise be copied out at several million pixels: slow to copy, slow to write
-/// and slow to draw, all to show a corner no preview can hold. The window the
-/// picture is taken from is cut down until what it would draw fits these — and they
-/// are deliberately smaller than a display, because a picture is shown at its own
-/// size (the configured scale) rather than fitted to the screen the way a page is,
-/// and a corner of a sheet filling the screen is not a preview of anything.
-const PICTURE_MAX_PIXELS_WIDTH: f64 = 900.0;
-const PICTURE_MAX_PIXELS_HEIGHT: f64 = 700.0;
-/// The least of a sheet still worth copying: less than this shows too little to be
-/// a preview of anything.
-const PICTURE_MIN_ROWS: i32 = 4;
-const PICTURE_MIN_COLUMNS: i32 = 3;
-/// How many times the window may be cut down before it is copied as it stands.
-const PICTURE_FIT_ATTEMPTS: usize = 6;
-/// Points to pixels, as Excel lays a sheet out at 96 DPI: a point is a 72nd of an
-/// inch.
-const PICTURE_PIXELS_PER_POINT: f64 = 96.0 / 72.0;
+/// A printed page holds fewer than a hundred rows and a few dozen columns at any
+/// paper size and scale, so this is several times a page and page 1 is always inside
+/// it. What it is not is a hundred thousand rows, which is what the used range of a
+/// workbook of a few kilobytes can be: formatting that runs down a column makes a
+/// used range out of cells that hold nothing, and `ExportAsFixedFormat` lays out
+/// every one of them to find out where page 1 ends.
+const PAGE_MAX_ROWS: i32 = 128;
+const PAGE_MAX_COLUMNS: i32 = 64;
 /// The clipboard is shared with every other process: a look that cannot open it,
 /// or finds nothing in it, is retried this many times.
-const CLIPBOARD_ATTEMPTS: usize = 5;
-/// How many times a picture is asked for, and how long between the asks.
 ///
-/// The first copy of a workbook Excel has just opened is regularly refused — an
-/// exception saying the `CopyPicture` property of the range could not be got, which
-/// is Excel still laying the sheet out rather than anything about the document — and
-/// the next attempt a moment later is answered. Asking only once is what left whole
-/// workbooks with no preview while their neighbours in the same folder had one.
-const PICTURE_COPY_ATTEMPTS: usize = 3;
-const PICTURE_COPY_RETRY_MS: u64 = 120;
+/// Only the diagnostics below the tests use any of this any more: a worksheet's
+/// page is exported now, and the corner picture that used to be taken off the
+/// clipboard where a machine had no print queue is gone.
+#[cfg(test)]
+const CLIPBOARD_ATTEMPTS: usize = 5;
 /// `xlScreen` and `xlBitmap`: the appearance and format `CopyPicture` is asked for.
+#[cfg(test)]
 const XL_SCREEN: i32 = 1;
+#[cfg(test)]
 const XL_BITMAP: i32 = 2;
-/// `XlCalculation::xlCalculationManual`: a workbook is opened without being
-/// recalculated, so what is exported is the page the file was saved as.
-const XL_CALCULATION_MANUAL: i32 = -4135;
 /// How long the worker may be inside one piece of work before it is given up on.
 ///
 /// The work that can block is not only the render: quitting an engine is another
@@ -888,8 +876,6 @@ struct Engine {
     /// read fresh for each render rather than once at creation.
     previous_alerts: Option<VARIANT>,
     previous_security: Option<VARIANT>,
-    /// Excel's calculation mode, for the one family that has one.
-    previous_calculation: Option<VARIANT>,
 }
 
 impl Engine {
@@ -932,7 +918,6 @@ impl Engine {
             settings_taken: false,
             previous_alerts: None,
             previous_security: None,
-            previous_calculation: None,
         })
     }
 
@@ -976,28 +961,6 @@ impl Engine {
         );
         let _ = self.app.set("DisplayAlerts", alerts_off(self.app_kind));
 
-        // A workbook is the one document whose page is not read out of the file: it
-        // is laid out for printing out of the values in it, and Excel recalculates a
-        // workbook as it opens it unless it is told not to. What a preview shows is
-        // the page the file was saved as — the values a person sees the moment they
-        // open it in Excel are the same ones, because Excel has nothing but the file
-        // to calculate from until they change something. Paying for the recalculation
-        // is what makes a workbook of a few kilobytes cost more than a deck of
-        // megabytes: a sheet of formulas is small to store and expensive to compute,
-        // and the computation is not what the preview is of.
-        //
-        // It is taken and put back with the rest, so a user's own Excel is not left
-        // in manual calculation — which would show them stale numbers for the rest of
-        // the session. Putting automatic calculation back is itself a recalculation
-        // of whatever the instance has open, which is the state it would have been in
-        // had this app never touched it.
-        if self.app_kind == OfficeApp::Excel {
-            self.previous_calculation = self.app.value("Calculation");
-            let _ = self
-                .app
-                .set("Calculation", VARIANT::from(XL_CALCULATION_MANUAL));
-        }
-
         self.settings_taken = true;
     }
 
@@ -1017,9 +980,6 @@ impl Engine {
         }
         if let Some(security) = self.previous_security.take() {
             let _ = self.app.set("AutomationSecurity", security);
-        }
-        if let Some(calculation) = self.previous_calculation.take() {
-            let _ = self.app.set("Calculation", calculation);
         }
         self.settings_taken = false;
     }
@@ -1341,18 +1301,28 @@ fn render_excel(app: &Object, source: &Path, target: &RenderTarget) -> bool {
         return false;
     };
 
-    // A workbook's first page is what it prints, and exporting one goes through
-    // the print pipeline: Excel needs a printer on the machine for it, and a
-    // machine with none — no printer at all, which is not the same as a sheet
-    // without a print area — cannot export a page however it is asked.
-    let printed = printer_installed(app) && export_first_page(&workbook, target);
-    let rendered = printed || copy_used_range_picture(&workbook, target);
-
-    let _ = workbook.call("Close", &[("SaveChanges", VARIANT::from(false))]);
-    rendered
+    // A workbook's first page is what it prints, and exporting one goes through the
+    // print pipeline: Excel needs a print queue on the machine for it — the one
+    // Windows ships with is enough, and no hardware is involved — and a machine with
+    // none cannot export a page however it is asked. There is no other source for
+    // one: the corner picture this used to fall back to drew the top-left of the
+    // sheet rather than a page of it, and a preview of a workbook that is a
+    // different thing depending on what a machine has installed is worse than a
+    // preview that is absent.
+    printer_installed(app) && export_first_page(&workbook, target)
 }
 
 /// The first worksheet's first printed page, as a PDF.
+///
+/// A used range that reaches past a page is exported as the top-left window of
+/// itself rather than as the worksheet. `ExportAsFixedFormat` has to lay a sheet out
+/// for printing to find out what page 1 is, and that walk is over the used range
+/// rather than over the data in it — so a workbook whose formatting runs down a
+/// column pays for a hundred thousand empty cells to draw a page that holds forty of
+/// them. A window is enough for the page that is asked for, because pagination runs
+/// from the top-left: page 1 of the window is page 1 of the sheet. A used range that
+/// already fits the window is left alone, so an ordinary sheet is exported exactly
+/// as it was before there was one.
 fn export_first_page(workbook: &Object, target: &RenderTarget) -> bool {
     let Some(sheet) = workbook
         .member("Worksheets")
@@ -1360,14 +1330,34 @@ fn export_first_page(workbook: &Object, target: &RenderTarget) -> bool {
     else {
         return false;
     };
-
     let output = target.file("pdf");
-    let exported = sheet
+
+    if let Some(window) = used_window(&sheet) {
+        if export_page(&window, &output) {
+            return true;
+        }
+        // Nothing usable came of it, so whatever it left is removed before the
+        // sheet is asked: a file still lying there would answer for the attempt
+        // that comes after it.
+        let _ = std::fs::remove_file(&output);
+    }
+
+    export_page(&sheet, &output)
+}
+
+/// One page of `source` — a worksheet, or the window of one — written to `output`.
+///
+/// The page is asked for by number, and `1` to `1` is the first one. What the page
+/// looks like is the sheet's own print setup either way, so a window is not a
+/// different page from the sheet's; it is the same page, reached without laying out
+/// everything below it.
+fn export_page(source: &Object, output: &Path) -> bool {
+    let exported = source
         .call(
             "ExportAsFixedFormat",
             &[
                 ("Type", VARIANT::from(0i32)), // xlTypePDF
-                ("Filename", path_variant(&output)),
+                ("Filename", path_variant(output)),
                 ("From", VARIANT::from(1i32)),
                 ("To", VARIANT::from(1i32)),
                 ("OpenAfterPublish", VARIANT::from(false)),
@@ -1376,6 +1366,23 @@ fn export_first_page(workbook: &Object, target: &RenderTarget) -> bool {
         .is_some();
 
     exported && output.exists()
+}
+
+/// The top-left window of a worksheet's used range, when the range reaches past it.
+///
+/// `None` when it already fits — there is nothing to bound, and the sheet answers
+/// for itself, print areas and all — and when it cannot be measured at all, which
+/// leaves the sheet to be exported as it is rather than refusing it.
+fn used_window(sheet: &Object) -> Option<Object> {
+    let used = sheet.member("UsedRange")?;
+    let rows = collection_count(used.member("Rows"))?;
+    let columns = collection_count(used.member("Columns"))?;
+
+    if rows <= PAGE_MAX_ROWS && columns <= PAGE_MAX_COLUMNS {
+        return None;
+    }
+
+    resize_range(&used, rows.min(PAGE_MAX_ROWS), columns.min(PAGE_MAX_COLUMNS))
 }
 
 /// Whether the machine has a printer, which is what an export to a page needs.
@@ -1390,112 +1397,6 @@ fn printer_installed(app: &Object) -> bool {
         .unwrap_or(false)
 }
 
-/// The used range's top-left, copied out of Excel as a picture.
-///
-/// This is what a machine with no printer gets instead of a page: the range is
-/// copied the way a person copies it — `CopyPicture` — and the bitmap Excel puts
-/// on the clipboard is written out as a BMP, the one image format that is exactly
-/// the bytes the clipboard holds. What it shows is the corner of the sheet a person
-/// would see first rather than the sheet's printed layout, which is the most such a
-/// machine can produce.
-fn copy_used_range_picture(workbook: &Object, target: &RenderTarget) -> bool {
-    let Some(sheet) = workbook
-        .member("Worksheets")
-        .and_then(|sheets| sheets.item(1))
-    else {
-        return false;
-    };
-    let Some(used) = sheet.member("UsedRange") else {
-        return false;
-    };
-    let (Some(rows), Some(columns)) = (
-        collection_count(used.member("Rows")),
-        collection_count(used.member("Columns")),
-    ) else {
-        return false;
-    };
-
-    let Some(range) = picture_range(&used, rows, columns) else {
-        return false;
-    };
-
-    for attempt in 0..PICTURE_COPY_ATTEMPTS {
-        let copied = range
-            .call_args(
-                "CopyPicture",
-                &[VARIANT::from(XL_SCREEN), VARIANT::from(XL_BITMAP)],
-            )
-            .is_some();
-        if copied {
-            if let Some(dib) = clipboard_dib() {
-                return write_bmp(&target.file("bmp"), &dib).is_ok();
-            }
-        }
-
-        if attempt + 1 < PICTURE_COPY_ATTEMPTS {
-            std::thread::sleep(Duration::from_millis(PICTURE_COPY_RETRY_MS));
-        }
-    }
-
-    false
-}
-
-/// The window of the used range the picture is taken from: its top-left corner, cut
-/// down until what it would draw fits the box a preview could ever show.
-///
-/// Only the range's own measurements are asked for — never its cells — so a sheet
-/// of a million rows costs the same as a small one, and what comes back is the
-/// corner a person would see first rather than a page of it. Each cut is in
-/// proportion to how far over the budget the range is, so a sheet whose rows are
-/// tall keeps as many of them as the budget allows instead of being halved until a
-/// sliver is left.
-fn picture_range(used: &Object, rows: i32, columns: i32) -> Option<Object> {
-    let mut rows = rows.clamp(1, PICTURE_MAX_ROWS);
-    let mut columns = columns.clamp(1, PICTURE_MAX_COLUMNS);
-    let mut range = resize_range(used, rows, columns);
-
-    for _ in 0..PICTURE_FIT_ATTEMPTS {
-        let Some(current) = range.as_ref() else {
-            break;
-        };
-        let (Some(width), Some(height)) =
-            (point_size(current, "Width"), point_size(current, "Height"))
-        else {
-            break;
-        };
-
-        let width_px = width * PICTURE_PIXELS_PER_POINT;
-        let height_px = height * PICTURE_PIXELS_PER_POINT;
-        if width_px <= PICTURE_MAX_PIXELS_WIDTH && height_px <= PICTURE_MAX_PIXELS_HEIGHT {
-            break;
-        }
-
-        let fitted_rows = if height_px > PICTURE_MAX_PIXELS_HEIGHT {
-            (rows as f64 * PICTURE_MAX_PIXELS_HEIGHT / height_px).floor() as i32
-        } else {
-            rows
-        };
-        let fitted_columns = if width_px > PICTURE_MAX_PIXELS_WIDTH {
-            (columns as f64 * PICTURE_MAX_PIXELS_WIDTH / width_px).floor() as i32
-        } else {
-            columns
-        };
-
-        let fitted_rows = fitted_rows.clamp(PICTURE_MIN_ROWS, rows);
-        let fitted_columns = fitted_columns.clamp(PICTURE_MIN_COLUMNS, columns);
-        // Whatever is left is smaller than a cell: copy it as it stands.
-        if fitted_rows == rows && fitted_columns == columns {
-            break;
-        }
-
-        rows = fitted_rows;
-        columns = fitted_columns;
-        range = resize_range(used, rows, columns);
-    }
-
-    range
-}
-
 /// The top-left window of a range, `rows` by `columns` cells of it.
 fn resize_range(range: &Object, rows: i32, columns: i32) -> Option<Object> {
     range
@@ -1504,6 +1405,7 @@ fn resize_range(range: &Object, rows: i32, columns: i32) -> Option<Object> {
 }
 
 /// One of a range's own measurements, in points.
+#[cfg(test)]
 fn point_size(range: &Object, property: &str) -> Option<f64> {
     range
         .value(property)
@@ -1518,13 +1420,17 @@ fn collection_count(collection: Option<Object>) -> Option<i32> {
 }
 
 /// The bitmap Excel has just put on the clipboard.
+#[cfg(test)]
 fn clipboard_dib() -> Option<Vec<u8>> {
     clipboard_dib_inner(true)
 }
 
 /// `empty` says whether the clipboard is cleared once the picture has been taken.
-/// It is, in the app: leaving Excel's copy on the clipboard is what makes Excel ask,
-/// on its way out, whether a large amount of information should stay there.
+/// Leaving Excel's copy on it is what makes Excel ask, on its way out, whether a
+/// large amount of information should stay there — a dialog no one is present to
+/// answer, which holds the quit and with it the worker — so a caller that is done
+/// with the picture clears it.
+#[cfg(test)]
 fn clipboard_dib_inner(empty: bool) -> Option<Vec<u8>> {
     for attempt in 0..CLIPBOARD_ATTEMPTS {
         if let Some(dib) = read_clipboard_dib(empty) {
@@ -1538,6 +1444,7 @@ fn clipboard_dib_inner(empty: bool) -> Option<Vec<u8>> {
     None
 }
 
+#[cfg(test)]
 fn read_clipboard_dib(empty: bool) -> Option<Vec<u8>> {
     unsafe {
         if OpenClipboard(None).is_err() {
@@ -1568,50 +1475,6 @@ fn read_clipboard_dib(empty: bool) -> Option<Vec<u8>> {
         let _ = CloseClipboard();
         dib
     }
-}
-
-/// What the clipboard held, written as a BMP file: a DIB is a `BITMAPINFO` and
-/// its pixels, and a BMP file is those bytes with a fourteen-byte header in front
-/// of them.
-///
-/// It is written beside its name and moved into place, so that a render which is
-/// ended part-way through the write leaves something that is obviously not a
-/// picture rather than half of one under the name a page is read from.
-fn write_bmp(path: &Path, dib: &[u8]) -> std::io::Result<()> {
-    let offset = dib_pixel_offset(dib).unwrap_or(54);
-    let mut file = Vec::with_capacity(dib.len() + 14);
-    file.extend_from_slice(b"BM");
-    file.extend_from_slice(&((dib.len() + 14) as u32).to_le_bytes());
-    file.extend_from_slice(&0u16.to_le_bytes()); // reserved
-    file.extend_from_slice(&0u16.to_le_bytes()); // reserved
-    file.extend_from_slice(&offset.to_le_bytes());
-    file.extend_from_slice(dib);
-
-    let writing = path.with_extension("bmp.writing");
-    std::fs::write(&writing, file)?;
-    std::fs::rename(&writing, path)
-}
-
-/// Where a DIB's pixels start, past its header and its colour table.
-fn dib_pixel_offset(dib: &[u8]) -> Option<u32> {
-    let header = u32::from_le_bytes(dib.get(0..4)?.try_into().ok()?) as usize;
-    if header < 40 || header > dib.len() {
-        return None;
-    }
-
-    let bit_count = u16::from_le_bytes(dib.get(14..16)?.try_into().ok()?) as u32;
-    let used_colors = u32::from_le_bytes(dib.get(32..36)?.try_into().ok()?);
-    let palette_entries = if bit_count <= 8 {
-        if used_colors != 0 {
-            used_colors
-        } else {
-            1u32 << bit_count
-        }
-    } else {
-        0
-    };
-
-    Some((14 + header) as u32 + palette_entries * 4)
 }
 
 fn render_powerpoint(
@@ -2853,5 +2716,87 @@ mod tests {
         }
 
         engines.drop_all();
+    }
+
+    /// What a used range that reaches far past a page costs to draw a page of.
+    ///
+    /// Two cells of content and one value written a hundred thousand rows down is all
+    /// it takes to give a workbook of a few kilobytes a used range of a hundred
+    /// thousand rows: every cell between them holds nothing and counts as used all
+    /// the same. `ExportAsFixedFormat` lays that whole range out to find out where
+    /// page 1 ends unless the page is asked for as the window of it, so both are
+    /// measured here — the sheet as it was asked for before there was a window, and
+    /// the window as the render asks for it now.
+    ///
+    /// Ignored because it starts the installed Excel.
+    /// `cargo test -- --ignored --nocapture excel_used_range_probe`
+    #[test]
+    #[ignore = "starts the installed Excel"]
+    fn excel_used_range_probe() {
+        unsafe {
+            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        }
+
+        let Some(app) = Object::create(OfficeApp::Excel.prog_id()) else {
+            println!("no Excel");
+            return;
+        };
+        let _ = app.set("DisplayAlerts", alerts_off(OfficeApp::Excel));
+
+        let Some(workbook) = app
+            .member("Workbooks")
+            .and_then(|books| books.call("Add", &[]))
+            .and_then(Object::from_variant)
+        else {
+            println!("no workbook");
+            return;
+        };
+        let Some(sheet) = workbook
+            .member("Worksheets")
+            .and_then(|sheets| sheets.item(1))
+        else {
+            println!("no worksheet");
+            return;
+        };
+
+        for (cell, value) in [("A1", "Item"), ("A2", "Widget"), ("A100000", "far")] {
+            if let Some(range) = sheet
+                .call_args("Range", &[VARIANT::from(cell)])
+                .and_then(Object::from_variant)
+            {
+                let _ = range.set("Value2", VARIANT::from(value));
+            }
+        }
+
+        let used = sheet.member("UsedRange");
+        println!(
+            "used range: {:?} rows x {:?} columns",
+            used.as_ref()
+                .and_then(|used| collection_count(used.member("Rows"))),
+            used.as_ref()
+                .and_then(|used| collection_count(used.member("Columns"))),
+        );
+
+        let target = render_target().expect("a scratch file");
+
+        // The sheet, asked for as the whole sheet: what this did before the window.
+        let started = Instant::now();
+        let whole = export_page(&sheet, &target.file("pdf"));
+        println!("whole sheet: {whole} in {:?}", started.elapsed());
+        let _ = take_render(&target);
+
+        // The window: what the render asks for now.
+        match used_window(&sheet) {
+            Some(window) => {
+                let started = Instant::now();
+                let bounded = export_page(&window, &target.file("pdf"));
+                println!("window: {bounded} in {:?}", started.elapsed());
+                let _ = take_render(&target);
+            }
+            None => println!("window: the used range already fits one"),
+        }
+
+        let _ = workbook.call("Close", &[("SaveChanges", VARIANT::from(false))]);
+        let _ = app.call("Quit", &[]);
     }
 }
