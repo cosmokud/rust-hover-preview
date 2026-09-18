@@ -72,8 +72,11 @@ use windows::Win32::UI::WindowsAndMessaging::{
 const WM_OFFICE_RENDER: u32 = WM_APP + 3;
 
 /// How long the engine is kept alive after its last render, so a folder of
-/// documents costs one Office start rather than one per file.
-const ENGINE_IDLE_SECS: u64 = 60;
+/// documents costs one Office start rather than one per file. Long enough that a
+/// browsing session — a folder now, another one after a pause — keeps the engine
+/// it started, and still short enough that a tray app left alone is not holding
+/// an Office process for the rest of the day.
+const ENGINE_IDLE_SECS: u64 = 600;
 /// How long a file that refused a page is left alone. Office refused it for a
 /// reason — a password, a repair dialog, a document in Protected View — and the
 /// answer will not be different a moment later, so the wait is the user's. It is
@@ -251,11 +254,13 @@ static WORKER_THREAD: AtomicU32 = AtomicU32::new(0);
 /// being ended — so "the worker is stuck" is a question about the whole thread
 /// rather than about one call in it.
 static WORKER_BUSY: Lazy<Mutex<Option<(u64, Instant)>>> = Lazy::new(|| Mutex::new(None));
-/// The Office process this app started, with the family it belongs to.
+/// The Office processes this app started, each with the family it belongs to.
 ///
 /// An instance the user already had open is never recorded here, and never ended:
-/// what a stuck render costs is the render, not the user's work.
-static OWNED_ENGINE: Lazy<Mutex<Option<(OfficeApp, u32)>>> = Lazy::new(|| Mutex::new(None));
+/// what a stuck render costs is the render, not the user's work. Every family the
+/// tier has started one for is held, because a worker that has to be given up on
+/// is holding all of its engines at once.
+static OWNED_ENGINES: Lazy<Mutex<Vec<(OfficeApp, u32)>>> = Lazy::new(|| Mutex::new(Vec::new()));
 
 /// Whether the render tier may run at all: the `Office` gate in the tray's
 /// `Preview Types` submenu.
@@ -530,7 +535,7 @@ fn work_is_stuck() -> bool {
 /// clearing the thread id, ending an engine — is conditional on it still being the
 /// current worker, which it no longer is.
 fn abandon_worker() {
-    terminate_owned_engine();
+    terminate_owned_engines();
     WORKER_GENERATION.fetch_add(1, Ordering::AcqRel);
     WORKER_THREAD.store(0, Ordering::Release);
     if let Ok(mut busy) = WORKER_BUSY.lock() {
@@ -615,8 +620,7 @@ fn worker_main() {
     // which is a render tier that never answers again.
     let _registration = WorkerRegistration { generation };
 
-    let mut engine: Option<Engine> = None;
-    let mut idle_since = Instant::now();
+    let mut engines = Engines::new();
 
     while crate::RUNNING.load(Ordering::Acquire) && is_current_worker(generation) {
         pump_messages();
@@ -630,11 +634,10 @@ fn worker_main() {
             // A panic inside one document's render is that document's failure, not
             // the tier's: the thread goes on to the next hover.
             let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                render_request(&mut engine, &request)
+                render_request(&mut engines, &request)
             }))
             .unwrap_or(RenderOutcome::Refused);
             end_work(generation);
-            idle_since = Instant::now();
 
             match outcome {
                 // The page is already held: storing it is what trimmed the cache.
@@ -655,26 +658,28 @@ fn worker_main() {
             continue;
         }
 
-        // Nothing to do. The engine is kept warm for a minute after the last
-        // render and then let go, which is also when this thread ends: an idle app
-        // should have no Office process and no polling thread. Letting it go is a
-        // COM call of its own, so it happens inside the marker like the rest.
-        if engine.is_some() && idle_since.elapsed() >= Duration::from_secs(ENGINE_IDLE_SECS) {
+        // Nothing to do. An engine that has gone long enough without a page is let
+        // go, each on its own clock — so the family asked for most recently is the
+        // one that outlives the others — and this thread ends with the last of
+        // them: an app left alone should end up with no Office process and no
+        // polling thread. Letting an engine go is a COM call of its own, so it
+        // happens inside the marker like the rest.
+        if engines.has_idle() {
             begin_work(generation);
-            engine = None;
+            engines.drop_idle();
             end_work(generation);
         }
-        if engine.is_none() {
+        if engines.is_empty() {
             break;
         }
 
         wait_for_message(500);
     }
 
-    // Whatever engine is left is let go the same way, inside the marker.
-    if engine.is_some() {
+    // Whatever engines are left are let go the same way, inside the marker.
+    if !engines.is_empty() {
         begin_work(generation);
-        drop(engine.take());
+        engines.drop_all();
         end_work(generation);
     }
 
@@ -749,7 +754,7 @@ fn wait_for_message(milliseconds: u32) {
     }
 }
 
-fn render_request(engine: &mut Option<Engine>, request: &RenderRequest) -> RenderOutcome {
+fn render_request(engines: &mut Engines, request: &RenderRequest) -> RenderOutcome {
     let Some(app_kind) = app_for(&request.source) else {
         return RenderOutcome::NoEngine;
     };
@@ -777,9 +782,6 @@ fn render_request(engine: &mut Option<Engine>, request: &RenderRequest) -> Rende
         return RenderOutcome::Refused;
     };
 
-    // A different family's engine is dropped first, which quits it: an engine is
-    // kept for the family it was created for and nothing else.
-    //
     // An instance that gives no page is given up on and the render is tried once
     // more on a new one, whether it was made for this request or kept warm from the
     // last: an Office that is still starting, or one whose license has run out —
@@ -792,22 +794,25 @@ fn render_request(engine: &mut Option<Engine>, request: &RenderRequest) -> Rende
     // not asked for twice on every hover.
     let mut retried = false;
     loop {
-        if engine.as_ref().map(|engine| engine.app_kind) != Some(app_kind) {
-            *engine = None;
-        }
-        if engine.is_none() {
+        if engines.get(app_kind).is_none() {
             let Some(created) = Engine::create(app_kind) else {
                 return RenderOutcome::NoEngine;
             };
-            *engine = Some(created);
+            *engines.slot(app_kind) = Some(created);
         }
 
         let rendered = {
-            let engine = engine.as_ref().expect("an engine was just created");
+            let engine = engines
+                .slot(app_kind)
+                .as_mut()
+                .expect("an engine was just created");
             let source = PreparedSource::new(&request.source);
             let width = request.width.max(1);
             let height = request.height.max(1);
             let rendered = engine.render(&source.path, &target, width, height);
+            // The engine that was just asked is the one that was just used, so it
+            // is that engine's own clock that starts again.
+            engine.idle_since = Instant::now();
             source.cleanup();
             rendered
         };
@@ -827,7 +832,7 @@ fn render_request(engine: &mut Option<Engine>, request: &RenderRequest) -> Rende
         }
 
         // The instance that failed is let go, and the next pass asks a new one.
-        *engine = None;
+        *engines.slot(app_kind) = None;
         retried = true;
     }
 }
@@ -844,6 +849,10 @@ struct Engine {
     /// The process this app started, when it started one: what may be ended if the
     /// engine stops answering, and what must never be ended otherwise.
     owned_pid: u32,
+    /// When this engine last drew a page. Each family's engine is on its own
+    /// clock, so the family asked for most recently is the one that outlives the
+    /// others rather than one idle time standing for all of them.
+    idle_since: Instant,
     previous_alerts: Option<VARIANT>,
     previous_security: Option<VARIANT>,
 }
@@ -896,6 +905,7 @@ impl Engine {
             app,
             attached,
             owned_pid,
+            idle_since: Instant::now(),
             previous_alerts,
             previous_security,
         })
@@ -907,6 +917,12 @@ impl Engine {
             OfficeApp::Excel => render_excel(&self.app, source, target),
             OfficeApp::PowerPoint => render_powerpoint(&self.app, source, target, width, height),
         }
+    }
+
+    /// Whether this engine has gone long enough without drawing a page to be let
+    /// go.
+    fn is_idle(&self) -> bool {
+        self.idle_since.elapsed() >= Duration::from_secs(ENGINE_IDLE_SECS)
     }
 }
 
@@ -934,6 +950,89 @@ impl Drop for Engine {
                 terminate_process(self.owned_pid, self.app_kind.image_name());
             }
             forget_owned_engine(self.owned_pid);
+        }
+    }
+}
+
+/// The engines the tier is holding, one per family.
+///
+/// A family's engine is only ever asked for its own documents — Word cannot open
+/// a workbook and Excel cannot open a deck — so one slot for the whole tier meant
+/// a folder holding one of each cost an Office start every time the pointer
+/// crossed between them, with the family it had just left quit on the way out.
+/// Each family keeps its own engine instead: three at the very most, since three
+/// is how many families a preview can ask about, and only for the ones actually
+/// being asked for pages.
+///
+/// Each is let go on its own clock rather than the tier having one idle time
+/// between them, so the family last asked for is the one that outlives the rest.
+struct Engines {
+    word: Option<Engine>,
+    excel: Option<Engine>,
+    powerpoint: Option<Engine>,
+}
+
+impl Engines {
+    fn new() -> Self {
+        Self {
+            word: None,
+            excel: None,
+            powerpoint: None,
+        }
+    }
+
+    fn slot(&mut self, app_kind: OfficeApp) -> &mut Option<Engine> {
+        match app_kind {
+            OfficeApp::Word => &mut self.word,
+            OfficeApp::Excel => &mut self.excel,
+            OfficeApp::PowerPoint => &mut self.powerpoint,
+        }
+    }
+
+    fn get(&self, app_kind: OfficeApp) -> Option<&Engine> {
+        match app_kind {
+            OfficeApp::Word => self.word.as_ref(),
+            OfficeApp::Excel => self.excel.as_ref(),
+            OfficeApp::PowerPoint => self.powerpoint.as_ref(),
+        }
+    }
+
+    /// The three slots, for the sweeps that act on every engine rather than on
+    /// one family's.
+    fn all_mut(&mut self) -> [&mut Option<Engine>; 3] {
+        [&mut self.word, &mut self.excel, &mut self.powerpoint]
+    }
+
+    fn iter(&self) -> impl Iterator<Item = &Engine> {
+        [&self.word, &self.excel, &self.powerpoint]
+            .into_iter()
+            .flatten()
+    }
+
+    /// Whether any engine has gone long enough without a page to be let go.
+    fn has_idle(&self) -> bool {
+        self.iter().any(Engine::is_idle)
+    }
+
+    /// Let go of every engine that has been idle long enough. Each drop is a COM
+    /// call of its own, which is why the caller does this inside the work marker.
+    fn drop_idle(&mut self) {
+        for engine in self.all_mut() {
+            if engine.as_ref().is_some_and(Engine::is_idle) {
+                *engine = None;
+            }
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.iter().next().is_none()
+    }
+
+    /// Let go of every engine that is left, which is what the worker does as it
+    /// ends: the thread owns them, so they go with it.
+    fn drop_all(&mut self) {
+        for engine in self.all_mut() {
+            *engine = None;
         }
     }
 }
@@ -970,35 +1069,42 @@ fn process_is_running(pid: u32) -> bool {
 }
 
 /// Record the Office process this app started, so a render that never returns can
-/// end it — and only it.
+/// end it — and only it. One record per family, which is one per engine: a family's
+/// previous engine has been dropped by the time its replacement is created.
 fn remember_owned_engine(app_kind: OfficeApp, pid: u32) {
-    if let Ok(mut owned) = OWNED_ENGINE.lock() {
-        *owned = Some((app_kind, pid));
+    if let Ok(mut owned) = OWNED_ENGINES.lock() {
+        owned.retain(|(kind, _)| *kind != app_kind);
+        owned.push((app_kind, pid));
     }
 }
 
 fn forget_owned_engine(pid: u32) {
-    if let Ok(mut owned) = OWNED_ENGINE.lock() {
-        if owned.map(|(_, owned_pid)| owned_pid) == Some(pid) {
-            *owned = None;
-        }
+    if let Ok(mut owned) = OWNED_ENGINES.lock() {
+        owned.retain(|(_, owned_pid)| *owned_pid != pid);
     }
 }
 
-/// End the Office process this app started, if it is still there and still that
-/// application.
+/// End the Office processes this app started, if they are still there and still
+/// that application.
 ///
 /// Requested and never waited on, the way a stuck `ffplay` is: a process inside
 /// kernel I/O cannot be ended by anyone in user mode, and what it costs is the
 /// render in flight rather than the app. Only an instance this app started is
 /// ended — the user's own Office is never touched — and only after the record of
-/// it has been taken, so two callers cannot both end it.
-fn terminate_owned_engine() {
-    let Some((app_kind, pid)) = OWNED_ENGINE.lock().ok().and_then(|mut owned| owned.take()) else {
-        return;
+/// it has been taken, so two callers cannot both end it. Every family goes, since
+/// the worker being given up on was holding all of the engines at once and none of
+/// them can be reached again.
+fn terminate_owned_engines() {
+    let owned = {
+        let Ok(mut owned) = OWNED_ENGINES.lock() else {
+            return;
+        };
+        std::mem::take(&mut *owned)
     };
 
-    terminate_process(pid, app_kind.image_name());
+    for (app_kind, pid) in owned {
+        terminate_process(pid, app_kind.image_name());
+    }
 }
 
 fn terminate_process(pid: u32, image_name: &str) {
@@ -2301,7 +2407,7 @@ mod tests {
                 app_for(&path)
             );
 
-            let mut engine = None;
+            let mut engines = Engines::new();
             let request = RenderRequest {
                 source: path.clone(),
                 width: 1280,
@@ -2311,13 +2417,13 @@ mod tests {
             };
 
             let started = Instant::now();
-            let outcome = render_request(&mut engine, &request);
+            let outcome = render_request(&mut engines, &request);
             println!(
                 "rendered: {} in {:?}",
                 outcome == RenderOutcome::Rendered,
                 started.elapsed()
             );
-            match engine.as_ref() {
+            match app_for(&path).and_then(|app_kind| engines.get(app_kind)) {
                 Some(engine) => println!(
                     "engine: attached={} owned_pid={}",
                     engine.attached, engine.owned_pid
@@ -2354,7 +2460,7 @@ mod tests {
                 None => println!("drawn: nothing"),
             }
 
-            drop(engine);
+            engines.drop_all();
         }
     }
 
@@ -2487,7 +2593,7 @@ mod tests {
                 crate::office_formats::default_page_size(&path)
             );
 
-            let mut engine = None;
+            let mut engines = Engines::new();
             let request = RenderRequest {
                 source: path.clone(),
                 width: 1280,
@@ -2496,7 +2602,7 @@ mod tests {
                 requested: Instant::now(),
             };
             let started = Instant::now();
-            let outcome = render_request(&mut engine, &request);
+            let outcome = render_request(&mut engines, &request);
             println!(
                 "rendered: {} in {:?}",
                 outcome == RenderOutcome::Rendered,
@@ -2505,7 +2611,7 @@ mod tests {
 
             // What the engine made of the instance: an attached one is the user's
             // and is never hidden, quit or ended; one this app started is.
-            match engine.as_ref() {
+            match engines.get(app_kind) {
                 Some(engine) => println!(
                     "engine: attached={} owned_pid={}",
                     engine.attached, engine.owned_pid
@@ -2551,7 +2657,99 @@ mod tests {
                 None => println!("drawn: nothing, in {:?}", started.elapsed()),
             }
 
-            drop(engine);
+            engines.drop_all();
         }
+    }
+
+    /// The engines the tier holds, one per family, side by side.
+    ///
+    /// A folder can hold a document, a workbook and a deck, and one engine for the
+    /// whole tier meant the pointer crossing between them quit one application and
+    /// started another every time it did. Each family keeps its own now, so what
+    /// the second pass below times is an engine that is already there rather than a
+    /// cold start, and what it counts is three engines held at once.
+    ///
+    /// Ignored because it starts the installed Office and writes sample documents.
+    /// `cargo test -- --ignored --nocapture office_engines_side_by_side`
+    #[test]
+    #[ignore = "starts the installed Office and writes sample documents"]
+    fn office_engines_side_by_side() {
+        unsafe {
+            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        }
+
+        let folder = std::env::var_os("COMMANDCODE_SCRATCHPAD")
+            .map(PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir)
+            .join("office-engines");
+        std::fs::create_dir_all(&folder).expect("a scratch folder");
+
+        // A sample per family and a copy of it: the copy is another path, so the
+        // page cache cannot answer for it and the second pass really renders.
+        let mut samples: Vec<(&str, OfficeApp, PathBuf, PathBuf)> = Vec::new();
+        for (app_kind, name) in [
+            (OfficeApp::Word, "sample.docx"),
+            (OfficeApp::Excel, "sample.xlsx"),
+            (OfficeApp::PowerPoint, "sample.pptx"),
+        ] {
+            let path = folder.join(name);
+            let again = folder.join(format!("again-{name}"));
+            let _ = std::fs::remove_file(&path);
+            let _ = std::fs::remove_file(&again);
+
+            if write_sample(app_kind, &path).is_none() {
+                println!("{name}: not written, skipped");
+                continue;
+            }
+            let _ = std::fs::copy(&path, &again);
+            samples.push((name, app_kind, path, again));
+        }
+
+        // One holder across all three families, which is what the tier keeps.
+        let mut engines = Engines::new();
+
+        let render_one = |engines: &mut Engines, path: &Path| {
+            let request = RenderRequest {
+                source: path.to_path_buf(),
+                width: 1280,
+                height: 800,
+                generation: 1,
+                requested: Instant::now(),
+            };
+            let started = Instant::now();
+            let outcome = render_request(engines, &request);
+            (outcome, started.elapsed())
+        };
+
+        println!("\n--- cold, one family after another ---");
+        for (name, _, path, _) in &samples {
+            let (outcome, took) = render_one(&mut engines, path);
+            println!(
+                "{name}: rendered {} in {took:?}, engines held {}",
+                outcome == RenderOutcome::Rendered,
+                engines.iter().count()
+            );
+        }
+
+        println!("\n--- warm, a second document of each family ---");
+        for (name, _, _, again) in &samples {
+            let (outcome, took) = render_one(&mut engines, again);
+            println!(
+                "{name}: rendered {} in {took:?}, engines held {}",
+                outcome == RenderOutcome::Rendered,
+                engines.iter().count()
+            );
+        }
+
+        // What the tier is for: the family rendered first is still held after the
+        // other two have been asked for.
+        for (name, app_kind, _, _) in &samples {
+            assert!(
+                engines.get(*app_kind).is_some(),
+                "{name} left no engine behind"
+            );
+        }
+
+        engines.drop_all();
     }
 }
