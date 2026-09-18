@@ -187,36 +187,56 @@ fn note_engine_up() {
     }
 }
 
-/// How large a document is drawn inside a window of `area`.
+/// The page the engine is pointed at, written beside this run's state.
 ///
-/// The engine lays a document out at the size the document asks for and does not shrink
-/// it to the window it was given: a window smaller than that size would show the
-/// document's top-left corner and nothing else, and one larger would show it in a corner
-/// of empty background. What makes the configured scale mean the document rather than
-/// the window is this factor — the window is the size the layout planned, and the
-/// document is scaled to fill it — so `50%` is the whole document at half size, `100%`
-/// is the document at the size it asks for, and fit-to-screen is the whole of it as
-/// large as the display allows.
+/// The document is not the page. A browser draws a standalone SVG at the size it asks
+/// for — it does not stretch one to the window it was given — so a document given to the
+/// engine as the page is drawn small in a large window, and the window this app lays out
+/// is whatever the configured scale asked for: a document asking for 120 pixels is a
+/// 120-pixel picture in an 800-pixel window at `100%`, and at fit-to-screen it is a
+/// 120-pixel picture in a display-sized window. What is given to the engine instead is
+/// this page: an image of the document, in a box that is the whole page. An image *is*
+/// scaled to the box it is given, whatever its own size is, which is the one thing that
+/// makes the window and the document the same size at every scale.
 ///
-/// It is the smaller of the two ratios, so a window whose shape is not quite the
-/// document's — which rounding can leave a pixel out — shows all of it rather than
-/// cutting an edge off.
-pub fn zoom_for(path: &Path, area: Area) -> f64 {
-    let Some((width, height)) = svg_preview::measure(path) else {
-        return 1.0;
-    };
+/// Nothing is given up for that. An SVG drawn as an image is animated and not scripted,
+/// which is the rule this engine runs under anyway: in an image a document cannot run
+/// code, cannot take the pointer, and cannot reach anything outside itself — not a file
+/// beside it, not a URL — so a document that links to the world is drawn without it.
+/// Chromium parses it as XML, in the mode built for animated images, so the document is
+/// the document rather than a copy of it in a page of our own.
+///
+/// The version is the document's own modification time, which is what keeps an edited
+/// file from being answered out of the browser's image cache: the URL changes when the
+/// file does, and the same file at the same version is drawn again from memory.
+fn frame_page(path: &Path, version: u64) -> Option<(PathBuf, String)> {
+    let document = file_url(path)?;
+    let page = user_data_folder().join("frame.html");
 
-    let scale = (area.width as f64 / width as f64).min(area.height as f64 / height as f64);
+    // The version is in the image's URL and in the page's, so neither is answered out
+    // of the browser's cache with a document that has been written since it was read.
+    let html = format!(
+        "<!doctype html><meta charset=\"utf-8\"><title>preview</title>\
+         <style>html,body{{margin:0;padding:0;height:100%;overflow:hidden}}\
+         img{{display:block;width:100%;height:100%;object-fit:contain}}</style>\
+         <img src=\"{}?v={version}\" alt=\"\">",
+        escape_attribute(&document)
+    );
 
-    if scale.is_finite() && scale > 0.0 {
-        scale
-    } else {
-        1.0
-    }
+    std::fs::create_dir_all(user_data_folder()).ok()?;
+    std::fs::write(&page, html).ok()?;
+
+    let url = format!("{}?v={version}", file_url(&page)?);
+
+    Some((page, url))
 }
 
-/// Ask the engine to play `path` in a window at `area`, with the document drawn `zoom`
-/// times its own size (see `zoom_for`).
+/// A URL as an attribute value: the two characters that would end it early.
+fn escape_attribute(url: &str) -> String {
+    url.replace('&', "&amp;").replace('"', "&quot;")
+}
+
+/// Ask the engine to play `path` in a window at `area`.
 ///
 /// The answer is immediate and says nothing about whether the document arrived: the
 /// engine works on its own thread, and what it does with this is navigates, waits for
@@ -226,7 +246,7 @@ pub fn zoom_for(path: &Path, area: Area) -> f64 {
 ///
 /// A document that does not move is not the engine's: a browser is not started for a
 /// picture, and a hover onto one is drawn by this app as it always was.
-pub fn show(path: &Path, area: Area, background: TransparentBackground, zoom: f64) {
+pub fn show(path: &Path, area: Area, background: TransparentBackground) {
     if !moves(path) {
         trace(&format!("show({}): not the engine's", path.display()));
         return;
@@ -243,7 +263,6 @@ pub fn show(path: &Path, area: Area, background: TransparentBackground, zoom: f6
         path: path.to_path_buf(),
         area,
         background,
-        zoom,
     }) {
         trace(&format!(
             "show({}): the engine's thread is gone: {error}",
@@ -286,7 +305,6 @@ enum Command {
         path: PathBuf,
         area: Area,
         background: TransparentBackground,
-        zoom: f64,
     },
     Hide,
     Shutdown,
@@ -368,7 +386,6 @@ fn engine_thread(commands: Receiver<Command>) {
                 path,
                 area,
                 background,
-                zoom,
             }) => {
                 trace(&format!("engine: show {}", path.display()));
 
@@ -387,7 +404,7 @@ fn engine_thread(commands: Receiver<Command>) {
                 }
 
                 if let Some(host) = host.as_mut() {
-                    host.show(&path, area, background, zoom);
+                    host.show(&path, area, background);
                     trace(&format!("engine: shown: {}", is_showing()));
                 }
                 idle_since = Instant::now();
@@ -506,13 +523,8 @@ impl Host {
         })
     }
 
-    fn show(&mut self, path: &Path, area: Area, background: TransparentBackground, zoom: f64) {
+    fn show(&mut self, path: &Path, area: Area, background: TransparentBackground) {
         unsafe {
-            // The document is drawn at its own size by the engine, so the window's is
-            // not the size it comes out as: this is what makes the two agree, and what
-            // makes the configured scale mean the document rather than the window.
-            let _ = self.controller.SetZoomFactor(zoom);
-
             // The background is a setting of the controller rather than of the page,
             // and it belongs to the interface that added it.
             if let Ok(controller) = self
@@ -592,12 +604,22 @@ impl Host {
         let _ = &self.environment;
     }
 
-    /// Point the engine at a file and wait for it to arrive, pumping the thread's
-    /// messages while it does.
+    /// Point the engine at the document and wait for the page to arrive, pumping the
+    /// thread's messages while it does.
+    ///
+    /// What it is pointed at is the page `frame_page` writes rather than the document
+    /// itself, which is what makes the document the size of the window: see there.
     fn navigate(&self, path: &Path) -> bool {
-        let Some(url) = file_url(path) else {
+        let version = file_version(path);
+        let Some((page, url)) = frame_page(path, version) else {
             return false;
         };
+
+        trace(&format!(
+            "engine: page {} for {}",
+            page.display(),
+            path.display()
+        ));
         let url = wide(&url);
         let (sender, receiver) = mpsc::channel();
 
@@ -851,6 +873,23 @@ fn configure(webview: &ICoreWebView2) {
     }
 }
 
+/// A file's version: when it was last written, in milliseconds since the epoch, and
+/// nothing at all when that cannot be read.
+///
+/// It goes into the URL the document is drawn by, so an edited file is a different URL
+/// and the browser's cache cannot answer a hover with the document as it was. A version
+/// that cannot be read is a URL a hover shares with the previous one, which is no worse
+/// than not asking: what comes back is the cache's copy of a document that has not been
+/// changed as far as this app can tell.
+fn file_version(path: &Path) -> u64 {
+    std::fs::metadata(path)
+        .and_then(|meta| meta.modified())
+        .ok()
+        .and_then(|modified| modified.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|since| since.as_millis() as u64)
+        .unwrap_or(0)
+}
+
 /// The engine's background, which is what the preview's own backdrop setting means to a
 /// window that composites for itself.
 fn background_color(background: TransparentBackground) -> COREWEBVIEW2_COLOR {
@@ -952,35 +991,35 @@ fn pwstr_to_string(value: PWSTR) -> Option<String> {
 mod tests {
     use super::*;
 
-    /// The document is drawn to fill the window the layout gave it, whatever size that
-    /// is: a window of the document's own size is drawn at its own size, half the size
-    /// is drawn at half rather than showing a corner of it, and a window larger than the
-    /// document — fit-to-screen on a small one — is drawn up into it.
+    /// The page the engine is pointed at is what makes a document the size of the window
+    /// it was given: the document goes in an image, and an image is scaled to its box
+    /// whatever size it asks for. What a document may not do — run code, leave the page —
+    /// is what an image may not do either, which is why it is drawn this way rather than
+    /// being put in the page as markup.
+    ///
+    /// A document whose name needs escaping is the case the URL builder and the attribute
+    /// have to agree on: an `&` written as itself ends the attribute early and the image
+    /// is a document the browser never found.
     #[test]
-    fn a_document_is_drawn_to_fill_the_window_it_is_given() {
-        let folder = std::env::temp_dir().join("rust-hover-preview-zoom-tests");
+    fn the_page_draws_the_document_as_an_image_that_fills_it() {
+        let folder = std::env::temp_dir().join("rust-hover-preview-frame-tests");
         std::fs::create_dir_all(&folder).expect("a test folder");
-        let path = folder.join("wide.svg");
+        let document = folder.join("a document & one.svg");
         std::fs::write(
-            &path,
-            br#"<svg xmlns="http://www.w3.org/2000/svg" width="800" height="400"></svg>"#,
+            &document,
+            br#"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"></svg>"#,
         )
         .expect("a written file");
 
-        let area = |width, height| Area {
-            x: 0,
-            y: 0,
-            width,
-            height,
-        };
+        let (page, url) = frame_page(&document, 42).expect("a page for a document");
+        let html = std::fs::read_to_string(&page).expect("a written page");
 
-        assert_eq!(zoom_for(&path, area(800, 400)), 1.0);
-        assert_eq!(zoom_for(&path, area(400, 200)), 0.5);
-        assert_eq!(zoom_for(&path, area(1600, 800)), 2.0);
-
-        // A window whose shape is not the document's shows all of it rather than
-        // cutting an edge off.
-        assert_eq!(zoom_for(&path, area(400, 400)), 0.5);
+        assert!(html.contains("width:100%;height:100%;object-fit:contain"));
+        assert!(html.contains("file:///"));
+        assert!(html.contains("a%20document%20&amp;%20one.svg"));
+        assert!(html.contains("?v=42"));
+        assert!(url.ends_with("?v=42"));
+        assert!(url.starts_with("file:///"));
     }
 
     /// What a hover's path becomes when it is handed to the engine: the Shell's
@@ -1035,12 +1074,23 @@ mod tests {
         println!("runtime: {:?}", runtime_version());
         println!("available: {}", is_available());
 
-        let area = Area {
-            x: 60,
-            y: 60,
-            width: 800,
-            height: 800,
-        };
+        let area = std::env::var("RHP_WEBVIEW_PROBE_AREA")
+            .ok()
+            .and_then(|size| {
+                let (width, height) = size.split_once('x')?;
+                Some(Area {
+                    x: 60,
+                    y: 60,
+                    width: width.trim().parse().ok()?,
+                    height: height.trim().parse().ok()?,
+                })
+            })
+            .unwrap_or(Area {
+                x: 60,
+                y: 60,
+                width: 800,
+                height: 800,
+            });
 
         for path in &paths {
             // Each document is measured from nothing on screen, so what the wait below
@@ -1053,11 +1103,18 @@ mod tests {
             }
 
             let moving = moves(path);
-            let zoom = zoom_for(path, area);
-            println!("{}: moves={moving} zoom={zoom:.3}", path.display());
+            println!("{}: moves={moving}", path.display());
 
             let started = Instant::now();
-            show(path, area, TransparentBackground::Transparent, zoom);
+            // Black by default, because a probe that measures what a document is drawn
+            // at reads the screen and a transparent window shows the desktop through it,
+            // which reads as a document that fills its window whatever it actually
+            // draws. White is for a document drawn in dark strokes.
+            let background = match std::env::var("RHP_WEBVIEW_PROBE_BACKGROUND").as_deref() {
+                Ok("white") => TransparentBackground::White,
+                _ => TransparentBackground::Black,
+            };
+            show(path, area, background);
 
             // The engine answers on its own thread; this is the wait for it to have
             // arrived rather than a measurement of the navigation itself.
@@ -1077,7 +1134,14 @@ mod tests {
                 timings.navigate_ms
             );
 
-            std::thread::sleep(Duration::from_millis(1500));
+            // Kept up long enough for the screen to be looked at, which is what a probe
+            // measuring what a document is drawn at needs and what a probe measuring a
+            // navigation does not.
+            let hold = std::env::var("RHP_WEBVIEW_PROBE_HOLD_MS")
+                .ok()
+                .and_then(|ms| ms.trim().parse().ok())
+                .unwrap_or(1500);
+            std::thread::sleep(Duration::from_millis(hold));
         }
 
         hide();
