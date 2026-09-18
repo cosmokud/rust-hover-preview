@@ -1,11 +1,12 @@
 //! The Office render tier: Word, Excel or PowerPoint draws a document's first
 //! page, once, and the preview then draws from it.
 //!
-//! Nothing here is ever on the hover path. A page is asked for only after the
-//! pointer has rested on a file, it is drawn on a thread of its own, and the
-//! preview shows a spinner in the meantime — so what a document costs is bounded
-//! by the render tier even when it is an Office start, an export and a dialogs
-//! worth of waiting.
+//! Nothing here is ever on the hover path. A page is asked for the moment a
+//! hover needs one, it is drawn on a thread of its own, and the preview shows a
+//! spinner in the meantime — so what a document costs is bounded by the render
+//! tier even when it is an Office start, an export and a dialogs worth of
+//! waiting, and what the hover waits for is that render rather than a timer in
+//! front of it.
 //!
 //! Three rules shape the rest:
 //!

@@ -4,7 +4,7 @@
 
 ### Added
 
-- Office previews for Word, Excel and PowerPoint, rendered by the installed Office after a two-second hover.
+- Office previews for Word, Excel and PowerPoint, rendered by the installed Office.
 - `office_preview_enabled`, `office_cache_mb`, an editable `[office] extensions` list, and an `Office` entry under `Preview Types`.
 - Editable `[image]` and `[video]` extension lists in `config.ini`, so which pictures and videos preview is a file edit like the text, archive and office lists.
 - A deleted `extensions=` key comes back with its built-in list, in the file as well as in memory.
@@ -15,6 +15,7 @@
 
 - The built-in extension and file-name lists are written in alphabetical order, and a list still holding them is rewritten in that order on upgrade.
 - Office previews render pages instead of using saved thumbnails; rendered pages stay in memory (`office_cache_mb`, default `64 MB`).
+- A document's page is asked for as soon as it is hovered rather than after a two-second rest, so a preview waits for the render instead of for a timer in front of it.
 - PDF and Office pages use fit-to-screen sizing, but preview scales below `100%` now reduce it; `100%`+ and image previews are unchanged.
 - The waiting spinner is now a transparent haloed arc, appears immediately, follows the pointer, and is placed flush at the pointer's corner.
 - A page arriving over an existing preview replaces it without taking the preview down first.

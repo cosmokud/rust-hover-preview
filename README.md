@@ -17,7 +17,7 @@ A Windows 11 tray app inspired by QTTabBar that shows instant File Explorer prev
 - Text and code with syntax highlighting, rendered Markdown, and bundled/custom themes
 - Archive contents — zip, rar, 7z, tar — as a file tree with sizes, read without unpacking anything
 - Office documents — Word, Excel and PowerPoint — drawn from a page Office renders in the background and keeps, so a document previews from its first hover and instantly after
-- Preview scaling from 25% to 400%, or fit-to-screen — a PDF page and a rendered Office page are sized from fit-to-screen, reduced by a setting below 100%
+- Preview scaling from 25% to 400%, or fit-to-screen
 - Previews appear beside the cursor or focused item and are never clipped by screen edges
 - Tray menu and hand-editable `config.ini`
 - DPI aware, single-instance, sleep/resume resilient, and light on idle CPU
