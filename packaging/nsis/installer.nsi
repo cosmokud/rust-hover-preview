@@ -1,0 +1,576 @@
+; Template for the NSIS installer cargo-packager builds, pointed at by
+; `[package.metadata.packager.nsis] template` in Cargo.toml. The placeholders
+; in double braces are filled in by cargo-packager.
+;
+; This is cargo-packager 0.11.8's own template with two differences:
+;   - there is no "Already Installed" page: a previous installation is removed
+;     automatically, before anything is written, instead of being offered as a
+;     choice;
+;   - a running copy of the app is terminated rather than prompted for.
+; Upgrading cargo-packager means diffing this file against the upstream
+; template at crates/packager/src/package/nsis/installer.nsi.
+
+; Set the compression algorithm.
+!if "{{compression}}" == ""
+  SetCompressor /SOLID lzma
+!else
+  SetCompressor /SOLID "{{compression}}"
+!endif
+
+Unicode true
+
+!include MUI2.nsh
+!include FileFunc.nsh
+!include x64.nsh
+!include WordFunc.nsh
+!include "FileAssociation.nsh"
+!include "StrFunc.nsh"
+!include "StrFunc.nsh"
+${StrCase}
+${StrLoc}
+
+!define MANUFACTURER "{{manufacturer}}"
+!define PRODUCTNAME "{{product_name}}"
+!define VERSION "{{version}}"
+!define VERSIONWITHBUILD "{{version_with_build}}"
+!define SHORTDESCRIPTION "{{short_description}}"
+!define INSTALLMODE "{{install_mode}}"
+!define LICENSE "{{license}}"
+!define INSTALLERICON "{{installer_icon}}"
+!define SIDEBARIMAGE "{{sidebar_image}}"
+!define HEADERIMAGE "{{header_image}}"
+!define MAINBINARYNAME "{{main_binary_name}}"
+!define MAINBINARYSRCPATH "{{main_binary_path}}"
+!define IDENTIFIER "{{identifier}}"
+!define COPYRIGHT "{{copyright}}"
+!define OUTFILE "{{out_file}}"
+!define ARCH "{{arch}}"
+!define PLUGINSPATH "{{additional_plugins_path}}"
+!define ALLOWDOWNGRADES "{{allow_downgrades}}"
+!define DISPLAYLANGUAGESELECTOR "{{display_language_selector}}"
+!define UNINSTKEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCTNAME}"
+!define MANUPRODUCTKEY "Software\${MANUFACTURER}\${PRODUCTNAME}"
+!define UNINSTALLERSIGNCOMMAND "{{uninstaller_sign_cmd}}"
+!define ESTIMATEDSIZE "{{estimated_size}}"
+
+Name "${PRODUCTNAME}"
+BrandingText "${COPYRIGHT}"
+OutFile "${OUTFILE}"
+
+VIProductVersion "${VERSIONWITHBUILD}"
+VIAddVersionKey "ProductName" "${PRODUCTNAME}"
+VIAddVersionKey "FileDescription" "${SHORTDESCRIPTION}"
+VIAddVersionKey "LegalCopyright" "${COPYRIGHT}"
+VIAddVersionKey "FileVersion" "${VERSION}"
+VIAddVersionKey "ProductVersion" "${VERSION}"
+
+; Plugins path, currently exists for linux only
+!if "${PLUGINSPATH}" != ""
+    !addplugindir "${PLUGINSPATH}"
+!endif
+
+!if "${UNINSTALLERSIGNCOMMAND}" != ""
+  !uninstfinalize '${UNINSTALLERSIGNCOMMAND}'
+!endif
+
+; Handle install mode, `perUser`, `perMachine` or `both`
+!if "${INSTALLMODE}" == "perMachine"
+  RequestExecutionLevel highest
+!endif
+
+!if "${INSTALLMODE}" == "currentUser"
+  RequestExecutionLevel user
+!endif
+
+!if "${INSTALLMODE}" == "both"
+  !define MULTIUSER_MUI
+  !define MULTIUSER_INSTALLMODE_INSTDIR "${PRODUCTNAME}"
+  !define MULTIUSER_INSTALLMODE_COMMANDLINE
+  !if "${ARCH}" == "x64"
+    !define MULTIUSER_USE_PROGRAMFILES64
+  !else if "${ARCH}" == "arm64"
+    !define MULTIUSER_USE_PROGRAMFILES64
+  !endif
+  !define MULTIUSER_INSTALLMODE_DEFAULT_REGISTRY_KEY "${UNINSTKEY}"
+  !define MULTIUSER_INSTALLMODE_DEFAULT_REGISTRY_VALUENAME "CurrentUser"
+  !define MULTIUSER_INSTALLMODEPAGE_SHOWUSERNAME
+  !define MULTIUSER_INSTALLMODE_FUNCTION RestorePreviousInstallLocation
+  !define MULTIUSER_EXECUTIONLEVEL Highest
+  !include MultiUser.nsh
+!endif
+
+; installer icon
+!if "${INSTALLERICON}" != ""
+  !define MUI_ICON "${INSTALLERICON}"
+!endif
+
+; installer sidebar image
+!if "${SIDEBARIMAGE}" != ""
+  !define MUI_WELCOMEFINISHPAGE_BITMAP "${SIDEBARIMAGE}"
+!endif
+
+; installer header image
+!if "${HEADERIMAGE}" != ""
+  !define MUI_HEADERIMAGE
+  !define MUI_HEADERIMAGE_BITMAP  "${HEADERIMAGE}"
+!endif
+
+; Define registry key to store installer language
+!define MUI_LANGDLL_REGISTRY_ROOT "HKCU"
+!define MUI_LANGDLL_REGISTRY_KEY "${MANUPRODUCTKEY}"
+!define MUI_LANGDLL_REGISTRY_VALUENAME "Installer Language"
+
+; Installer pages, must be ordered as they appear
+; 1. Welcome Page
+!define MUI_PAGE_CUSTOMFUNCTION_PRE SkipIfPassive
+!insertmacro MUI_PAGE_WELCOME
+
+; 2. License Page (if defined)
+!if "${LICENSE}" != ""
+  !define MUI_PAGE_CUSTOMFUNCTION_PRE SkipIfPassive
+  !insertmacro MUI_PAGE_LICENSE "${LICENSE}"
+!endif
+
+; 3. Install mode (if it is set to `both`)
+!if "${INSTALLMODE}" == "both"
+  !define MUI_PAGE_CUSTOMFUNCTION_PRE SkipIfPassive
+  !insertmacro MULTIUSER_PAGE_INSTALLMODE
+!endif
+
+; 4. Choose install directory page
+!define MUI_PAGE_CUSTOMFUNCTION_PRE SkipIfPassive
+!insertmacro MUI_PAGE_DIRECTORY
+
+; 5. Start menu shortcut page
+!define MUI_PAGE_CUSTOMFUNCTION_PRE SkipIfPassive
+Var AppStartMenuFolder
+!insertmacro MUI_PAGE_STARTMENU Application $AppStartMenuFolder
+
+; 6. Installation page
+!insertmacro MUI_PAGE_INSTFILES
+
+; 7. Finish page
+;
+; Don't auto jump to finish page after installation page,
+; because the installation page has useful info that can be used debug any issues with the installer.
+!define MUI_FINISHPAGE_NOAUTOCLOSE
+; Use show readme button in the finish page as a button create a desktop shortcut
+!define MUI_FINISHPAGE_SHOWREADME
+!define MUI_FINISHPAGE_SHOWREADME_TEXT "$(createDesktop)"
+!define MUI_FINISHPAGE_SHOWREADME_FUNCTION CreateDesktopShortcut
+; Show run app after installation.
+!define MUI_FINISHPAGE_RUN "$INSTDIR\${MAINBINARYNAME}.exe"
+!define MUI_PAGE_CUSTOMFUNCTION_PRE SkipIfPassive
+!insertmacro MUI_PAGE_FINISH
+
+; Uninstaller Pages
+; 1. Confirm uninstall page
+{{#if appdata_paths}}
+Var DeleteAppDataCheckbox
+Var DeleteAppDataCheckboxState
+!define /ifndef WS_EX_LAYOUTRTL         0x00400000
+!define MUI_PAGE_CUSTOMFUNCTION_SHOW un.ConfirmShow
+Function un.ConfirmShow
+    FindWindow $1 "#32770" "" $HWNDPARENT ; Find inner dialog
+    ${If} $(^RTL) == 1
+      System::Call 'USER32::CreateWindowEx(i${__NSD_CheckBox_EXSTYLE}|${WS_EX_LAYOUTRTL},t"${__NSD_CheckBox_CLASS}",t "$(deleteAppData)",i${__NSD_CheckBox_STYLE},i 50,i 100,i 400, i 25,i$1,i0,i0,i0)i.s'
+    ${Else}
+      System::Call 'USER32::CreateWindowEx(i${__NSD_CheckBox_EXSTYLE},t"${__NSD_CheckBox_CLASS}",t "$(deleteAppData)",i${__NSD_CheckBox_STYLE},i 0,i 100,i 400, i 25,i$1,i0,i0,i0)i.s'
+    ${EndIf}
+    Pop $DeleteAppDataCheckbox
+    SendMessage $HWNDPARENT ${WM_GETFONT} 0 0 $1
+    SendMessage $DeleteAppDataCheckbox ${WM_SETFONT} $1 1
+FunctionEnd
+!define MUI_PAGE_CUSTOMFUNCTION_LEAVE un.ConfirmLeave
+Function un.ConfirmLeave
+    SendMessage $DeleteAppDataCheckbox ${BM_GETCHECK} 0 0 $DeleteAppDataCheckboxState
+FunctionEnd
+{{/if}}
+!insertmacro MUI_UNPAGE_CONFIRM
+
+; 2. Uninstalling Page
+!insertmacro MUI_UNPAGE_INSTFILES
+
+;Languages
+{{#each languages}}
+!insertmacro MUI_LANGUAGE "{{this}}"
+{{/each}}
+!insertmacro MUI_RESERVEFILE_LANGDLL
+{{#each language_files}}
+  !include "{{this}}"
+{{/each}}
+
+!macro SetContext
+  !if "${INSTALLMODE}" == "currentUser"
+    SetShellVarContext current
+  !else if "${INSTALLMODE}" == "perMachine"
+    SetShellVarContext all
+  !endif
+
+  ${If} ${RunningX64}
+    !if "${ARCH}" == "x64"
+      SetRegView 64
+    !else if "${ARCH}" == "arm64"
+      SetRegView 64
+    !else
+      SetRegView 32
+    !endif
+  ${EndIf}
+!macroend
+
+Var PassiveMode
+Function .onInit
+  ${GetOptions} $CMDLINE "/P" $PassiveMode
+  IfErrors +2 0
+    StrCpy $PassiveMode 1
+
+  !if "${DISPLAYLANGUAGESELECTOR}" == "true"
+    !insertmacro MUI_LANGDLL_DISPLAY
+  !endif
+
+  !insertmacro SetContext
+
+  ${If} $INSTDIR == ""
+    ; Set default install location
+    !if "${INSTALLMODE}" == "perMachine"
+      ${If} ${RunningX64}
+        !if "${ARCH}" == "x64"
+          StrCpy $INSTDIR "$PROGRAMFILES64\${PRODUCTNAME}"
+        !else if "${ARCH}" == "arm64"
+          StrCpy $INSTDIR "$PROGRAMFILES64\${PRODUCTNAME}"
+        !else
+          StrCpy $INSTDIR "$PROGRAMFILES\${PRODUCTNAME}"
+        !endif
+      ${Else}
+        StrCpy $INSTDIR "$PROGRAMFILES\${PRODUCTNAME}"
+      ${EndIf}
+    !else if "${INSTALLMODE}" == "currentUser"
+      StrCpy $INSTDIR "$LOCALAPPDATA\${PRODUCTNAME}"
+    !endif
+
+    Call RestorePreviousInstallLocation
+  ${EndIf}
+
+
+  !if "${INSTALLMODE}" == "both"
+    !insertmacro MULTIUSER_INIT
+  !endif
+FunctionEnd
+
+
+Section EarlyChecks
+  ; Abort silent installer if downgrades is disabled
+  !if "${ALLOWDOWNGRADES}" == "false"
+  IfSilent 0 silent_downgrades_done
+    ; If downgrading
+    ${If} $R0 == -1
+      System::Call 'kernel32::AttachConsole(i -1)i.r0'
+      ${If} $0 != 0
+        System::Call 'kernel32::GetStdHandle(i -11)i.r0'
+        System::call 'kernel32::SetConsoleTextAttribute(i r0, i 0x0004)' ; set red color
+        FileWrite $0 "$(silentDowngrades)"
+      ${EndIf}
+      Abort
+    ${EndIf}
+  silent_downgrades_done:
+  !endif
+
+SectionEnd
+
+{{#if preinstall_section}}
+{{unescape_newlines preinstall_section}}
+{{/if}}
+
+!macro CheckIfAppIsRunning
+  nsis_tauri_utils::FindProcess "${MAINBINARYNAME}.exe"
+  Pop $R0
+  ${If} $R0 = 0
+      ; A running copy is terminated without asking: this installer is a
+      ; replacement for it, and a prompt only stands between the user and the
+      ; update.
+      StrCpy $R1 0
+      kill:
+        nsis_tauri_utils::KillProcess "${MAINBINARYNAME}.exe"
+        Pop $R0
+        Sleep 500
+        nsis_tauri_utils::FindProcess "${MAINBINARYNAME}.exe"
+        Pop $R0
+        ${If} $R0 = 0
+          IntOp $R1 $R1 + 1
+          ${If} $R1 < 3
+            Goto kill
+          ${EndIf}
+          IfSilent silent ui
+          silent:
+            System::Call 'kernel32::AttachConsole(i -1)i.r0'
+            ${If} $0 != 0
+              System::Call 'kernel32::GetStdHandle(i -11)i.r0'
+              System::call 'kernel32::SetConsoleTextAttribute(i r0, i 0x0004)' ; set red color
+              FileWrite $0 "$(appRunning)$\n"
+            ${EndIf}
+            Abort
+          ui:
+            Abort "$(failedToKillApp)"
+        ${EndIf}
+  ${EndIf}
+!macroend
+
+Section Install
+  ; A running copy is closed, and a previous installation of the product is
+  ; removed, before anything is written.
+  !insertmacro CheckIfAppIsRunning
+  Call UninstallPreviousInstallation
+
+  SetOutPath $INSTDIR
+
+  ; Copy main executable
+  File "${MAINBINARYSRCPATH}"
+
+  ; Create resources directory structure
+  {{#each resources_dirs}}
+    CreateDirectory "$INSTDIR\\{{this}}"
+  {{/each}}
+
+  ; Copy resources
+  {{#each resources}}
+    File /a "/oname={{this}}" "{{@key}}"
+  {{/each}}
+
+  ; Copy external binaries
+  {{#each binaries}}
+    File /a "/oname={{this}}" "{{@key}}"
+  {{/each}}
+
+  ; Create file associations
+  {{#each file_associations as |association| ~}}
+    {{#each association.extensions as |ext| ~}}
+       !insertmacro APP_ASSOCIATE "{{ext}}" "{{or association.name ext}}" "{{association-description association.description ext}}" "$INSTDIR\${MAINBINARYNAME}.exe,0" "Open with ${PRODUCTNAME}" "$INSTDIR\${MAINBINARYNAME}.exe $\"%1$\""
+    {{/each}}
+  {{/each}}
+
+  ; Register deep links
+  {{#each deep_link_protocols as |protocol| ~}}
+    WriteRegStr SHCTX "Software\Classes\\{{protocol}}" "URL Protocol" ""
+    WriteRegStr SHCTX "Software\Classes\\{{protocol}}" "" "URL:${BUNDLEID} protocol"
+    WriteRegStr SHCTX "Software\Classes\\{{protocol}}\DefaultIcon" "" "$\"$INSTDIR\${MAINBINARYNAME}.exe$\",0"
+    WriteRegStr SHCTX "Software\Classes\\{{protocol}}\shell\open\command" "" "$\"$INSTDIR\${MAINBINARYNAME}.exe$\" $\"%1$\""
+  {{/each}}
+
+  ; Create uninstaller
+  WriteUninstaller "$INSTDIR\uninstall.exe"
+
+  ; Save $INSTDIR in registry for future installations
+  WriteRegStr SHCTX "${MANUPRODUCTKEY}" "" $INSTDIR
+
+  !if "${INSTALLMODE}" == "both"
+    ; Save install mode to be selected by default for the next installation such as updating
+    ; or when uninstalling
+    WriteRegStr SHCTX "${UNINSTKEY}" $MultiUser.InstallMode 1
+  !endif
+
+  ; Registry information for add/remove programs
+  WriteRegStr SHCTX "${UNINSTKEY}" "DisplayName" "${PRODUCTNAME}"
+  WriteRegStr SHCTX "${UNINSTKEY}" "DisplayIcon" "$\"$INSTDIR\${MAINBINARYNAME}.exe$\""
+  WriteRegStr SHCTX "${UNINSTKEY}" "DisplayVersion" "${VERSION}"
+  WriteRegStr SHCTX "${UNINSTKEY}" "Publisher" "${MANUFACTURER}"
+  WriteRegStr SHCTX "${UNINSTKEY}" "InstallLocation" "$\"$INSTDIR$\""
+  WriteRegStr SHCTX "${UNINSTKEY}" "UninstallString" "$\"$INSTDIR\uninstall.exe$\""
+  WriteRegDWORD SHCTX "${UNINSTKEY}" "NoModify" "1"
+  WriteRegDWORD SHCTX "${UNINSTKEY}" "NoRepair" "1"
+  WriteRegDWORD SHCTX "${UNINSTKEY}" "EstimatedSize" "${ESTIMATEDSIZE}"
+
+  ; Create start menu shortcut (GUI)
+  !insertmacro MUI_STARTMENU_WRITE_BEGIN Application
+    Call CreateStartMenuShortcut
+  !insertmacro MUI_STARTMENU_WRITE_END
+
+  ; Create shortcuts for silent and passive installers, which
+  ; can be disabled by passing `/NS` flag
+  ; GUI installer has buttons for users to control creating them
+  IfSilent check_ns_flag 0
+  ${IfThen} $PassiveMode == 1 ${|} Goto check_ns_flag ${|}
+  Goto shortcuts_done
+  check_ns_flag:
+    ${GetOptions} $CMDLINE "/NS" $R0
+    IfErrors 0 shortcuts_done
+      Call CreateDesktopShortcut
+      Call CreateStartMenuShortcut
+  shortcuts_done:
+
+  ; Auto close this page for passive mode
+  ${IfThen} $PassiveMode == 1 ${|} SetAutoClose true ${|}
+SectionEnd
+
+Function .onInstSuccess
+  ; Check for `/R` flag only in silent and passive installers because
+  ; GUI installer has a toggle for the user to (re)start the app
+  IfSilent check_r_flag 0
+  ${IfThen} $PassiveMode == 1 ${|} Goto check_r_flag ${|}
+  Goto run_done
+  check_r_flag:
+    ${GetOptions} $CMDLINE "/R" $R0
+    IfErrors run_done 0
+      Exec '"$INSTDIR\${MAINBINARYNAME}.exe"'
+  run_done:
+FunctionEnd
+
+Function un.onInit
+  !insertmacro SetContext
+
+  !if "${INSTALLMODE}" == "both"
+    !insertmacro MULTIUSER_UNINIT
+  !endif
+
+  !insertmacro MUI_UNGETLANGUAGE
+FunctionEnd
+
+Section Uninstall
+  !insertmacro CheckIfAppIsRunning
+
+  ; Delete the app directory and its content from disk
+  ; Copy main executable
+  Delete "$INSTDIR\${MAINBINARYNAME}.exe"
+
+  ; Delete resources
+  {{#each resources}}
+    Delete "$INSTDIR\\{{this}}"
+  {{/each}}
+
+  ; Delete external binaries
+  {{#each binaries}}
+    Delete "$INSTDIR\\{{this}}"
+  {{/each}}
+
+  ; Delete app associations
+  {{#each file_associations as |association| ~}}
+    {{#each association.ext as |ext| ~}}
+      !insertmacro APP_UNASSOCIATE "{{ext}}" "{{or association.name ext}}"
+    {{/each}}
+  {{/each}}
+
+  ; Delete deep links
+  {{#each deep_link_protocols as |protocol| ~}}
+    ReadRegStr $R7 SHCTX "Software\Classes\\{{protocol}}\shell\open\command" ""
+    !if $R7 == "$\"$INSTDIR\${MAINBINARYNAME}.exe$\" $\"%1$\""
+      DeleteRegKey SHCTX "Software\Classes\\{{protocol}}"
+    !endif
+  {{/each}}
+
+  ; Delete uninstaller
+  Delete "$INSTDIR\uninstall.exe"
+
+  {{#each resources_dirs}}
+  RMDir /REBOOTOK "$INSTDIR\\{{this}}"
+  {{/each}}
+  RMDir "$INSTDIR"
+
+  ; Remove start menu shortcut
+  !insertmacro MUI_STARTMENU_GETFOLDER Application $AppStartMenuFolder
+  Delete "$SMPROGRAMS\$AppStartMenuFolder\${PRODUCTNAME}.lnk"
+  RMDir "$SMPROGRAMS\$AppStartMenuFolder"
+
+  ; Remove desktop shortcuts
+  Delete "$DESKTOP\${PRODUCTNAME}.lnk"
+
+  ; Remove registry information for add/remove programs
+  !if "${INSTALLMODE}" == "both"
+    DeleteRegKey SHCTX "${UNINSTKEY}"
+  !else if "${INSTALLMODE}" == "perMachine"
+    DeleteRegKey HKLM "${UNINSTKEY}"
+  !else
+    DeleteRegKey HKCU "${UNINSTKEY}"
+  !endif
+
+  DeleteRegValue HKCU "${MANUPRODUCTKEY}" "Installer Language"
+
+  ; Delete app data
+  {{#if appdata_paths}}
+  ${If} $DeleteAppDataCheckboxState == 1
+      SetShellVarContext current
+      {{#each appdata_paths}}
+      RmDir /r "{{unescape_dollar_sign this}}"
+      {{/each}}
+  ${EndIf}
+  {{/if}}
+
+  ${GetOptions} $CMDLINE "/P" $R0
+  IfErrors +2 0
+    SetAutoClose true
+SectionEnd
+
+Function RestorePreviousInstallLocation
+  ReadRegStr $4 SHCTX "${MANUPRODUCTKEY}" ""
+  StrCmp $4 "" +2 0
+    StrCpy $INSTDIR $4
+FunctionEnd
+
+; Removes a previous installation without asking: this installer replaces it,
+; so the maintenance page the upstream template shows has nothing to ask.
+Function UninstallPreviousInstallation
+  ; An installation made by the WiX/MSI installer keeps its entry under a UUID
+  ; and is removed by Windows Installer.
+  StrCpy $0 0
+  wix_loop:
+    EnumRegKey $1 HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall" $0
+    StrCmp $1 "" wix_done ; Exit loop if there is no more keys to loop on
+    IntOp $0 $0 + 1
+    ReadRegStr $R0 HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$1" "DisplayName"
+    ReadRegStr $R1 HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$1" "Publisher"
+    StrCmp "$R0$R1" "${PRODUCTNAME}${MANUFACTURER}" 0 wix_loop
+    ReadRegStr $R2 HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$1" "UninstallString"
+    ${StrCase} $R1 $R2 "L"
+    ${StrLoc} $R0 $R1 "msiexec" ">"
+    StrCmp $R0 0 0 wix_done
+    ; The product code sits between the braces of the uninstall string, which
+    ; is all Windows Installer needs to remove the product silently.
+    ${StrLoc} $R1 $R2 "{" ">"
+    StrCmp $R1 "" wix_done
+    StrCpy $R2 $R2 -1 $R1
+    ${StrLoc} $R3 $R2 "}" ">"
+    StrCmp $R3 "" wix_done
+    IntOp $R3 $R3 + 1
+    StrCpy $R2 $R2 $R3
+    ExecWait 'msiexec /x "$R2" /qn /norestart' $0
+  wix_done:
+
+  ; An installation made by this installer is removed by its own uninstaller,
+  ; run in the directory it was installed into. It is run silently, which is
+  ; also what keeps the user's configuration: the uninstaller asks about the
+  ; application data, and a silent one is answered with no.
+  ReadRegStr $R0 SHCTX "${UNINSTKEY}" ""
+  ReadRegStr $R1 SHCTX "${UNINSTKEY}" "UninstallString"
+  ${IfThen} "$R0$R1" == "" ${|} Return ${|}
+
+  ReadRegStr $4 SHCTX "${MANUPRODUCTKEY}" ""
+  ${IfThen} $4 == "" ${|} StrCpy $4 $INSTDIR ${|}
+
+  StrCpy $0 $R1 1
+  ${IfThen} $0 == '"' ${|} StrCpy $R1 $R1 -1 1 ${|} ; Strip quotes from UninstallString
+  ; `_?=` is read to the end of the command line, so the path is left
+  ; unquoted and kept last.
+  ExecWait '"$R1" /S _?=$4' $0
+
+  ${If} $0 <> 0
+  ${OrIf} ${FileExists} "$4\${MAINBINARYNAME}.exe"
+    MessageBox MB_ICONEXCLAMATION "$(unableToUninstall)"
+    Abort
+  ${EndIf}
+
+  Delete "$R1"
+  RMDir "$4"
+FunctionEnd
+
+Function SkipIfPassive
+  ${IfThen} $PassiveMode == 1  ${|} Abort ${|}
+FunctionEnd
+
+Function CreateDesktopShortcut
+  CreateShortcut "$DESKTOP\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
+  ApplicationID::Set "$DESKTOP\${PRODUCTNAME}.lnk" "${IDENTIFIER}"
+FunctionEnd
+
+Function CreateStartMenuShortcut
+  CreateDirectory "$SMPROGRAMS\$AppStartMenuFolder"
+  CreateShortcut "$SMPROGRAMS\$AppStartMenuFolder\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
+  ApplicationID::Set "$SMPROGRAMS\$AppStartMenuFolder\${PRODUCTNAME}.lnk" "${IDENTIFIER}"
+FunctionEnd

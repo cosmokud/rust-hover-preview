@@ -236,3 +236,4 @@ Themes the user adds live in `%APPDATA%\rust-hover-preview\theme`, beside `confi
 - Windows resources are set in `build.rs` through `winres`.
 - A release build ends a running copy of the app before the crate is linked, because Windows will not let the linker replace an open binary. `src` is watched so the rebuild an edit asks for is the one that gets it; debug builds are left alone.
 - Release installers are produced by `cargo packager` (NSIS `.exe` setup).
+- The NSIS setup is built from `packaging/nsis/installer.nsi`, cargo-packager's own template with its "Already Installed" page removed: an older installation is uninstalled silently before anything is copied, and a running copy of the app is closed without asking.
