@@ -1014,25 +1014,11 @@ fn current_media_kind() -> Option<PreviewType> {
         .flatten()
 }
 
-/// How long the pointer has to rest on a document before the render tier is
-/// asked for a page. A sweep across a folder of documents starts no engine: what
-/// is asked for is a page for a hover that has settled.
-const OFFICE_RENDER_REST_SECS: u64 = 2;
 /// How long a preview waits for a page before it stops waiting. An engine can be
 /// held by a dialog inside Office, and a spinner that never ends is worse than
 /// the picture the document saved — so past this the preview comes down and the
 /// file is left alone.
 const OFFICE_RENDER_WAIT_SECS: u64 = 25;
-
-/// A page a preview is owed, and when to ask for it.
-struct OfficeRenderDue {
-    path: PathBuf,
-    generation: u64,
-    at: Instant,
-    /// The box the page is asked for in, which is what a slide is exported at.
-    width: u32,
-    height: u32,
-}
 
 /// The file a hover message is about.
 fn show_path(show: &PreviewMessage) -> Option<&PathBuf> {
@@ -1050,27 +1036,29 @@ fn office_render_is_due(path: &Path) -> bool {
         && office_render::cached_render(path).is_none()
 }
 
-/// Arm the render for a preview that has just been installed, or has just found
-/// nothing to draw. It is asked for once the pointer has rested on the file, and
-/// a hover that ends before then is never asked for at all.
-fn arm_office_render(
-    due: &mut Option<OfficeRenderDue>,
+/// Ask the render tier for the page a hover needs, at the moment that hover is
+/// installed, and answer what is now being waited on.
+///
+/// Every other format has something to draw the moment a hover is up, because it
+/// is read or decoded on this side. A document's page is the one thing that does
+/// not exist until Office has drawn it, and none of that work can begin before
+/// it is asked for — so asking late is waiting twice, once for the timer and once
+/// for the render. A hover is only ever raised for the file the pointer is on, so
+/// there is nothing to wait for: the page is asked for as soon as there is a
+/// hover to ask for it, and the engine that request starts is kept warm for the
+/// documents asked for after it.
+fn request_office_render(
     path: &Path,
     generation: u64,
     width: u32,
     height: u32,
-) {
+) -> Option<(PathBuf, u64)> {
     if !office_render_is_due(path) {
-        return;
+        return None;
     }
 
-    *due = Some(OfficeRenderDue {
-        path: path.to_path_buf(),
-        generation,
-        at: Instant::now() + Duration::from_secs(OFFICE_RENDER_REST_SECS),
-        width,
-        height,
-    });
+    office_render::request(path, width, height, generation);
+    Some((path.to_path_buf(), generation))
 }
 
 /// The scale a preview is laid out and rendered with.
@@ -5567,9 +5555,8 @@ pub fn run_preview_window() {
         let mut pending_load: Option<PendingLoad> = None;
         let mut pending_load_cancel: Option<Arc<AtomicBool>> = None;
         let mut last_stream_overlay_repaint = Instant::now();
-        // The page the render tier owes the preview on screen: when to ask for
-        // it, and whether one has been asked for and is being waited on.
-        let mut office_render_due: Option<OfficeRenderDue> = None;
+        // The page the render tier owes the preview on screen, and whether one
+        // has been asked for and is being waited on.
         let mut office_render_pending: Option<(PathBuf, u64)> = None;
         // A page that arrived for the hover already on screen, and is being loaded
         // to replace what is there rather than to open a new preview.
@@ -5711,10 +5698,10 @@ pub fn run_preview_window() {
                                 let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
                             }
 
-                            // A page for this document is one Office start away
-                            // once the pointer has rested.
-                            arm_office_render(
-                                &mut office_render_due,
+                            // A page for this document is one Office start away,
+                            // so it is asked for as soon as the hover is up rather
+                            // than after the pointer has rested on it.
+                            office_render_pending = request_office_render(
                                 &result.path,
                                 result.generation,
                                 render_box.0,
@@ -5736,8 +5723,7 @@ pub fn run_preview_window() {
                                 pl.awaiting_render = true;
                             }
                             let (width, height) = office_formats::default_page_size(&result.path);
-                            arm_office_render(
-                                &mut office_render_due,
+                            office_render_pending = request_office_render(
                                 &result.path,
                                 result.generation,
                                 width,
@@ -6087,7 +6073,6 @@ pub fn run_preview_window() {
                         }
 
                         current_show = None;
-                        office_render_due = None;
                         office_render_pending = None;
                         office_upgrade = None;
                     }
@@ -6288,7 +6273,6 @@ pub fn run_preview_window() {
                     current_video_path = None;
                     video_pos = (0, 0, 0, 0);
                     current_show = None;
-                    office_render_due = None;
                     office_render_pending = None;
                     office_upgrade = None;
                 }
@@ -6304,24 +6288,10 @@ pub fn run_preview_window() {
                 copy_text_preview(hwnd);
             }
 
-            // The page the render tier is owed, asked for once the pointer has
-            // rested on the file — and the cap on waiting for one. Both are read
-            // against the hover on screen rather than remembered: a render that
-            // outlives its hover is dropped here and its page left in the cache.
+            // The cap on waiting for a page is read against the hover on screen
+            // rather than remembered: a render that outlives its hover is dropped
+            // here and its page left in the cache.
             let shown_path = current_show.as_ref().and_then(show_path).cloned();
-
-            if let Some(due) = office_render_due.as_ref() {
-                let hovered = due.generation == current_generation
-                    && shown_path.as_deref() == Some(due.path.as_path());
-
-                if !hovered {
-                    office_render_due = None;
-                } else if Instant::now() >= due.at {
-                    let due = office_render_due.take().expect("the due render");
-                    office_render_pending = Some((due.path.clone(), due.generation));
-                    office_render::request(&due.path, due.width, due.height, due.generation);
-                }
-            }
 
             let render_wait = office_render_pending.as_ref().map(|(path, generation)| {
                 let hovered =
