@@ -32,7 +32,6 @@
 - PowerPoint decks and Excel workbooks on printerless machines now preview.
 - Office engines no longer survive quit, and failed or unresponsive instances are replaced.
 - Workbook clipboard images are released.
-- Excel previews no longer recalculate the workbook: it is opened with calculation set to manual, so what is exported is the page the file was saved as. A sheet of formulas is small to store and expensive to compute, so this is the difference between a workbook of a few kilobytes costing a moment and costing seconds — and the values shown are the ones already in the file.
 - A preview that crossed a display boundary was discarded and stayed gone until the pointer moved; the hover it came from is now replayed, so it is laid out again at the new display's scale and put back.
 - An Office page that landed while another hover message was in hand left the preview waiting with nothing to end the wait; the cap now still applies, so the spinner comes down.
 - The Office render worker makes itself known before initializing its apartment, so the first request after startup can no longer start a second worker beside it.

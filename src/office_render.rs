@@ -145,9 +145,17 @@ const PICTURE_COPY_RETRY_MS: u64 = 120;
 /// `xlScreen` and `xlBitmap`: the appearance and format `CopyPicture` is asked for.
 const XL_SCREEN: i32 = 1;
 const XL_BITMAP: i32 = 2;
-/// `XlCalculation::xlCalculationManual`: a workbook is opened without being
-/// recalculated, so what is exported is the page the file was saved as.
-const XL_CALCULATION_MANUAL: i32 = -4135;
+/// How much of a worksheet a page is exported from: the top-left window of its used
+/// range, in cells.
+///
+/// A printed page holds fewer than a hundred rows and a few dozen columns at any
+/// paper size and scale, so this is several times a page and page 1 is always inside
+/// it. What it is not is a hundred thousand rows, which is what the used range of a
+/// workbook of a few kilobytes can be: formatting that runs down a column makes a
+/// used range out of cells that hold nothing, and `ExportAsFixedFormat` lays out
+/// every one of them to find out where page 1 ends.
+const PAGE_MAX_ROWS: i32 = 128;
+const PAGE_MAX_COLUMNS: i32 = 64;
 /// How long the worker may be inside one piece of work before it is given up on.
 ///
 /// The work that can block is not only the render: quitting an engine is another
@@ -888,8 +896,6 @@ struct Engine {
     /// read fresh for each render rather than once at creation.
     previous_alerts: Option<VARIANT>,
     previous_security: Option<VARIANT>,
-    /// Excel's calculation mode, for the one family that has one.
-    previous_calculation: Option<VARIANT>,
 }
 
 impl Engine {
@@ -932,7 +938,6 @@ impl Engine {
             settings_taken: false,
             previous_alerts: None,
             previous_security: None,
-            previous_calculation: None,
         })
     }
 
@@ -976,28 +981,6 @@ impl Engine {
         );
         let _ = self.app.set("DisplayAlerts", alerts_off(self.app_kind));
 
-        // A workbook is the one document whose page is not read out of the file: it
-        // is laid out for printing out of the values in it, and Excel recalculates a
-        // workbook as it opens it unless it is told not to. What a preview shows is
-        // the page the file was saved as — the values a person sees the moment they
-        // open it in Excel are the same ones, because Excel has nothing but the file
-        // to calculate from until they change something. Paying for the recalculation
-        // is what makes a workbook of a few kilobytes cost more than a deck of
-        // megabytes: a sheet of formulas is small to store and expensive to compute,
-        // and the computation is not what the preview is of.
-        //
-        // It is taken and put back with the rest, so a user's own Excel is not left
-        // in manual calculation — which would show them stale numbers for the rest of
-        // the session. Putting automatic calculation back is itself a recalculation
-        // of whatever the instance has open, which is the state it would have been in
-        // had this app never touched it.
-        if self.app_kind == OfficeApp::Excel {
-            self.previous_calculation = self.app.value("Calculation");
-            let _ = self
-                .app
-                .set("Calculation", VARIANT::from(XL_CALCULATION_MANUAL));
-        }
-
         self.settings_taken = true;
     }
 
@@ -1017,9 +1000,6 @@ impl Engine {
         }
         if let Some(security) = self.previous_security.take() {
             let _ = self.app.set("AutomationSecurity", security);
-        }
-        if let Some(calculation) = self.previous_calculation.take() {
-            let _ = self.app.set("Calculation", calculation);
         }
         self.settings_taken = false;
     }
@@ -1353,6 +1333,16 @@ fn render_excel(app: &Object, source: &Path, target: &RenderTarget) -> bool {
 }
 
 /// The first worksheet's first printed page, as a PDF.
+///
+/// A used range that reaches past a page is exported as the top-left window of
+/// itself rather than as the worksheet. `ExportAsFixedFormat` has to lay a sheet out
+/// for printing to find out what page 1 is, and that walk is over the used range
+/// rather than over the data in it — so a workbook whose formatting runs down a
+/// column pays for a hundred thousand empty cells to draw a page that holds forty of
+/// them. A window is enough for the page that is asked for, because pagination runs
+/// from the top-left: page 1 of the window is page 1 of the sheet. A used range that
+/// already fits the window is left alone, so an ordinary sheet is exported exactly
+/// as it was before there was one.
 fn export_first_page(workbook: &Object, target: &RenderTarget) -> bool {
     let Some(sheet) = workbook
         .member("Worksheets")
@@ -1360,14 +1350,34 @@ fn export_first_page(workbook: &Object, target: &RenderTarget) -> bool {
     else {
         return false;
     };
-
     let output = target.file("pdf");
-    let exported = sheet
+
+    if let Some(window) = used_window(&sheet) {
+        if export_page(&window, &output) {
+            return true;
+        }
+        // Nothing usable came of it, so whatever it left is removed before the
+        // sheet is asked: a file still lying there would answer for the attempt
+        // that comes after it.
+        let _ = std::fs::remove_file(&output);
+    }
+
+    export_page(&sheet, &output)
+}
+
+/// One page of `source` — a worksheet, or the window of one — written to `output`.
+///
+/// The page is asked for by number, and `1` to `1` is the first one. What the page
+/// looks like is the sheet's own print setup either way, so a window is not a
+/// different page from the sheet's; it is the same page, reached without laying out
+/// everything below it.
+fn export_page(source: &Object, output: &Path) -> bool {
+    let exported = source
         .call(
             "ExportAsFixedFormat",
             &[
                 ("Type", VARIANT::from(0i32)), // xlTypePDF
-                ("Filename", path_variant(&output)),
+                ("Filename", path_variant(output)),
                 ("From", VARIANT::from(1i32)),
                 ("To", VARIANT::from(1i32)),
                 ("OpenAfterPublish", VARIANT::from(false)),
@@ -1376,6 +1386,23 @@ fn export_first_page(workbook: &Object, target: &RenderTarget) -> bool {
         .is_some();
 
     exported && output.exists()
+}
+
+/// The top-left window of a worksheet's used range, when the range reaches past it.
+///
+/// `None` when it already fits — there is nothing to bound, and the sheet answers
+/// for itself, print areas and all — and when it cannot be measured at all, which
+/// leaves the sheet to be exported as it is rather than refusing it.
+fn used_window(sheet: &Object) -> Option<Object> {
+    let used = sheet.member("UsedRange")?;
+    let rows = collection_count(used.member("Rows"))?;
+    let columns = collection_count(used.member("Columns"))?;
+
+    if rows <= PAGE_MAX_ROWS && columns <= PAGE_MAX_COLUMNS {
+        return None;
+    }
+
+    resize_range(&used, rows.min(PAGE_MAX_ROWS), columns.min(PAGE_MAX_COLUMNS))
 }
 
 /// Whether the machine has a printer, which is what an export to a page needs.
