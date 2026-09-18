@@ -586,9 +586,21 @@ impl Default for AppConfig {
     }
 }
 
+/// Whether a list holds exactly the entries the built-in list holds, order aside.
+fn same_entries(list: &[String], canonical: &[String]) -> bool {
+    list.len() == canonical.len() && canonical.iter().all(|entry| list.contains(entry))
+}
+
 /// One list as the file has it: the entries its key names, or the built-in list
 /// when the key is gone. The flag says which of the two it was, so the caller knows
 /// the file has to be written out again.
+///
+/// A list that still holds exactly the built-in entries is read as the built-in
+/// list, order and all, which is how a file written before those entries were put
+/// in alphabetical order is brought into line without touching a list anyone has
+/// edited. The order is compared as well as the entries: a file that already agrees
+/// with the built-in list is left alone rather than written out again on every
+/// reload.
 fn configured_list(
     ini: &Ini,
     section: &str,
@@ -596,9 +608,18 @@ fn configured_list(
     defaults: &str,
     sanitize: fn(&str) -> Vec<String>,
 ) -> (Vec<String>, bool) {
+    let canonical = sanitize(defaults);
+
     match ini.get(section, key) {
-        Some(value) => (sanitize(&value), false),
-        None => (sanitize(defaults), true),
+        Some(value) => {
+            let list = sanitize(&value);
+            if list != canonical && same_entries(&list, &canonical) {
+                (canonical, true)
+            } else {
+                (list, false)
+            }
+        }
+        None => (canonical, true),
     }
 }
 
