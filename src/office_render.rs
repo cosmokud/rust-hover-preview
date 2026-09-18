@@ -1405,6 +1405,42 @@ fn used_window(sheet: &Object) -> Option<Object> {
     resize_range(&used, rows.min(PAGE_MAX_ROWS), columns.min(PAGE_MAX_COLUMNS))
 }
 
+/// Ask the application something that only an application with a workbook open will
+/// answer, and put it back as it was found.
+///
+/// Excel refuses `Application.Calculation` while nothing is open — a read answers
+/// nothing at all, and a write raises "Unable to set the Calculation property of the
+/// Application class", which is what the engine's first attempt at it was met with,
+/// made as it was before any document existed. The setting is wanted *before* a
+/// document is opened, because what it decides is whether opening one recalculates
+/// it, so a scratch workbook is opened for the asking and closed straight after.
+///
+/// It is added only when there is nothing open, so an instance the user is working
+/// in is not handed a stray `Book1`, and it is closed rather than kept: what is
+/// wanted is a setting, not a document.
+///
+/// Only the probe below the tests uses it now. The engine used to hold Excel in
+/// manual calculation so that a page would be the one the file was saved as, and it
+/// is not worth doing: a workbook is worked out again as it is opened whatever the
+/// mode says — `excel_calculation_probe` measures exactly that — so the setting buys
+/// nothing and costs a workbook to make.
+#[cfg(test)]
+fn with_a_workbook<T>(app: &Object, ask: impl FnOnce() -> T) -> T {
+    let scratch = (collection_count(app.member("Workbooks")) == Some(0))
+        .then(|| app.member("Workbooks"))
+        .flatten()
+        .and_then(|books| books.call("Add", &[]))
+        .and_then(Object::from_variant);
+
+    let answer = ask();
+
+    if let Some(book) = scratch {
+        let _ = book.call("Close", &[("SaveChanges", VARIANT::from(false))]);
+    }
+
+    answer
+}
+
 /// Whether the machine has a printer, which is what an export to a page needs.
 ///
 /// Excel answers `ActivePrinter` with a name when there is one, and with the
@@ -2178,210 +2214,6 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
-    /// Whether one Excel instance can copy more than one picture, and what the
-    /// clipboard has to do with it: reads 1 and 2 leave the clipboard alone, read 3
-    /// clears it, read 4 shows whether the next copy still works.
-    ///
-    /// `$env:RHP_OFFICE_PROBE = "C:\docs\one.xlsx;C:\docs\two.xls"`
-    /// `cargo test -- --ignored --nocapture copy_picture_repeat_probe`
-    #[test]
-    #[ignore = "starts the installed Excel"]
-    fn copy_picture_repeat_probe() {
-        unsafe {
-            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
-        }
-
-        let Ok(list) = std::env::var("RHP_OFFICE_PROBE") else {
-            println!("set RHP_OFFICE_PROBE to one or more paths, separated by ';'");
-            return;
-        };
-
-        let Some(engine) = Engine::create(OfficeApp::Excel) else {
-            println!("no Excel");
-            return;
-        };
-
-        for (index, path) in list
-            .split(';')
-            .map(str::trim)
-            .filter(|path| !path.is_empty())
-            .enumerate()
-        {
-            println!("\n--- {path} ---");
-            let source = PreparedSource::new(Path::new(path));
-            let Some(workbook) = engine
-                .app
-                .member("Workbooks")
-                .and_then(|workbooks| {
-                    workbooks.call(
-                        "Open",
-                        &[
-                            ("FileName", path_variant(&source.path)),
-                            ("UpdateLinks", VARIANT::from(0i32)),
-                            ("ReadOnly", VARIANT::from(true)),
-                            ("AddToMru", VARIANT::from(false)),
-                            ("IgnoreReadOnlyRecommended", VARIANT::from(true)),
-                        ],
-                    )
-                })
-                .and_then(Object::from_variant)
-            else {
-                println!("open failed");
-                source.cleanup();
-                continue;
-            };
-
-            let range = workbook
-                .member("Worksheets")
-                .and_then(|sheets| sheets.item(1))
-                .and_then(|sheet| sheet.member("UsedRange"))
-                .and_then(|used| resize_range(&used, 10, 8));
-
-            for attempt in 1..=4 {
-                let Some(range) = range.as_ref() else {
-                    break;
-                };
-                let copied = range
-                    .call_args(
-                        "CopyPicture",
-                        &[VARIANT::from(XL_SCREEN), VARIANT::from(XL_BITMAP)],
-                    )
-                    .is_some();
-                // The third read is the one the app's own path does — it clears the
-                // clipboard; the others leave it as Excel left it.
-                let dib = clipboard_dib_inner(attempt == 3);
-                println!(
-                    "  attempt {attempt} (file {}): copied={copied} picture={:?} failure={:?}",
-                    index + 1,
-                    dib.as_deref().and_then(dib_dimensions),
-                    last_failure()
-                );
-            }
-
-            let _ = workbook.call("Close", &[("SaveChanges", VARIANT::from(false))]);
-            source.cleanup();
-        }
-
-        drop(engine);
-    }
-
-    /// What Excel reports for a range's own size, next to what the range's first
-    /// rows and columns report — the two do not agree, which is why the picture's
-    /// window is fitted the way it is.
-    ///
-    /// `$env:RHP_OFFICE_PROBE = "C:\docs\one.xlsx"`
-    /// `cargo test -- --ignored --nocapture worksheet_measurement_probe`
-    #[test]
-    #[ignore = "starts the installed Excel"]
-    fn worksheet_measurement_probe() {
-        unsafe {
-            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
-        }
-
-        let Ok(list) = std::env::var("RHP_OFFICE_PROBE") else {
-            println!("set RHP_OFFICE_PROBE to one or more paths, separated by ';'");
-            return;
-        };
-
-        for path in list
-            .split(';')
-            .map(str::trim)
-            .filter(|path| !path.is_empty())
-        {
-            println!("\n--- {path} ---");
-            let source = PreparedSource::new(Path::new(path));
-
-            // A fresh instance for every file, so a refusal can be told from one the
-            // instance was already in.
-            let Some(engine) = Engine::create(OfficeApp::Excel) else {
-                println!("no Excel");
-                source.cleanup();
-                continue;
-            };
-            let Some(workbooks) = engine.app.member("Workbooks") else {
-                source.cleanup();
-                continue;
-            };
-            let Some(workbook) = workbooks
-                .call(
-                    "Open",
-                    &[
-                        ("FileName", path_variant(&source.path)),
-                        ("UpdateLinks", VARIANT::from(0i32)),
-                        ("ReadOnly", VARIANT::from(true)),
-                        ("AddToMru", VARIANT::from(false)),
-                        ("IgnoreReadOnlyRecommended", VARIANT::from(true)),
-                    ],
-                )
-                .and_then(Object::from_variant)
-            else {
-                println!("open failed");
-                source.cleanup();
-                continue;
-            };
-
-            if let Some(used) = workbook
-                .member("Worksheets")
-                .and_then(|sheets| sheets.item(1))
-                .and_then(|sheet| sheet.member("UsedRange"))
-            {
-                println!(
-                    "used: {}x{} cells, {}x{} points",
-                    collection_count(used.member("Rows")).unwrap_or(0),
-                    collection_count(used.member("Columns")).unwrap_or(0),
-                    point_size(&used, "Width").unwrap_or(f64::NAN),
-                    point_size(&used, "Height").unwrap_or(f64::NAN),
-                );
-                for rows in [40, 20, 10, 5, 4] {
-                    match resize_range(&used, rows, 14) {
-                        Some(range) => println!(
-                            "  resize({rows}, 14): {}x{} points",
-                            point_size(&range, "Width").unwrap_or(f64::NAN),
-                            point_size(&range, "Height").unwrap_or(f64::NAN),
-                        ),
-                        None => println!("  resize({rows}, 14): none"),
-                    }
-
-                    // What that window actually comes out as, which is the only
-                    // answer that matters: the copy is what the picture is.
-                    if let Some(range) = resize_range(&used, rows, 14) {
-                        let copied = range
-                            .call_args(
-                                "CopyPicture",
-                                &[VARIANT::from(XL_SCREEN), VARIANT::from(XL_BITMAP)],
-                            )
-                            .is_some();
-                        match copied.then(clipboard_dib).flatten() {
-                            Some(dib) => println!("    copy: {:?} pixels", dib_dimensions(&dib)),
-                            None => println!(
-                                "    copy: nothing — {}",
-                                last_failure().unwrap_or_else(|| "no failure recorded".to_string())
-                            ),
-                        }
-                    }
-                }
-                for rows in [1, 4, 9, 40] {
-                    let height = used
-                        .call_args("Rows", &[VARIANT::from(rows)])
-                        .and_then(Object::from_variant)
-                        .and_then(|range| point_size(&range, "Height"));
-                    println!("  rows({rows}).Height: {height:?}");
-                }
-                for columns in [1, 3, 14] {
-                    let width = used
-                        .call_args("Columns", &[VARIANT::from(columns)])
-                        .and_then(Object::from_variant)
-                        .and_then(|range| point_size(&range, "Width"));
-                    println!("  columns({columns}).Width: {width:?}");
-                }
-            }
-
-            let _ = workbook.call("Close", &[("SaveChanges", VARIANT::from(false))]);
-            source.cleanup();
-            drop(engine);
-        }
-    }
-
     /// The engine's own lifecycle: one is started for each family, let go, and
     /// nothing is left behind.
     #[test]
@@ -2436,13 +2268,6 @@ mod tests {
         assert!(cached_render(&source).is_none(), "the broken page is gone");
 
         let _ = std::fs::remove_file(&source);
-    }
-
-    /// A DIB's own size, as a picture of it would be.
-    fn dib_dimensions(dib: &[u8]) -> Option<(i32, i32)> {
-        let width = i32::from_le_bytes(dib.get(4..8)?.try_into().ok()?);
-        let height = i32::from_le_bytes(dib.get(8..12)?.try_into().ok()?);
-        Some((width, height))
     }
 
     /// A BMP holding one colour, written the way a workbook's picture is.
@@ -2880,5 +2705,147 @@ mod tests {
         }
 
         engines.drop_all();
+    }
+
+    /// `xlCalculationManual`: the setting that says a workbook is not to be worked
+    /// out again, whose reach the probe below measures.
+    const XL_CALCULATION_MANUAL: i32 = -4135;
+
+    /// Whether a workbook really is opened without being recalculated.
+    ///
+    /// The workbook this measures is saved *stale*: one cell is changed while
+    /// calculation is manual, so the cell beside it keeps the value it had rather
+    /// than being worked out again. What is on disk is then a workbook whose stored
+    /// value and whose computed value differ — which is the only thing that makes a
+    /// recalculation on open visible. A formula of the time would say nothing: a
+    /// volatile one is recalculated whenever a workbook is opened, whatever the
+    /// calculation mode is.
+    ///
+    /// Ignored because it starts the installed Excel and writes a workbook.
+    /// `cargo test -- --ignored --nocapture excel_calculation_probe`
+    #[test]
+    #[ignore = "starts the installed Excel and writes a workbook"]
+    fn excel_calculation_probe() {
+        unsafe {
+            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        }
+
+        let folder = std::env::var_os("COMMANDCODE_SCRATCHPAD")
+            .map(PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir)
+            .join("office-calculation");
+        std::fs::create_dir_all(&folder).expect("a scratch folder");
+        let path = folder.join("stale.xlsx");
+        let _ = std::fs::remove_file(&path);
+
+        {
+            let Some(app) = Object::create(OfficeApp::Excel.prog_id()) else {
+                println!("no Excel");
+                return;
+            };
+            let _ = app.set("DisplayAlerts", alerts_off(OfficeApp::Excel));
+            with_a_workbook(&app, || {
+                let _ = app.set("Calculation", VARIANT::from(XL_CALCULATION_MANUAL));
+                // Saving recalculates a workbook unless it is told not to, which would
+                // leave the file holding the worked-out value rather than the stale one
+                // this needs it to hold.
+                let _ = app.set("CalculateBeforeSave", VARIANT::from(false));
+            });
+
+            let Some(book) = app
+                .member("Workbooks")
+                .and_then(|books| books.call("Add", &[]))
+                .and_then(Object::from_variant)
+            else {
+                println!("no workbook");
+                return;
+            };
+            let Some(sheet) = book
+                .member("Worksheets")
+                .and_then(|sheets| sheets.item(1))
+            else {
+                println!("no worksheet");
+                return;
+            };
+
+            set_cell(&sheet, "A1", VARIANT::from(1i32));
+            set_cell(&sheet, "B1", VARIANT::from("=A1+1"));
+            println!("B1 once entered:        {:?}", read_cell(&sheet, "B1"));
+
+            // The change manual calculation is supposed to hide.
+            set_cell(&sheet, "A1", VARIANT::from(5i32));
+            println!("B1 after A1 became 5:   {:?}", read_cell(&sheet, "B1"));
+
+            let _ = book.call("SaveAs", &[("Filename", path_variant(&path))]);
+            println!("B1 as it was saved:     {:?}", read_cell(&sheet, "B1"));
+
+            let _ = book.call("Close", &[("SaveChanges", VARIANT::from(false))]);
+            let _ = app.call("Quit", &[]);
+        }
+
+        println!(
+            "opened with calculation manual:  B1 = {:?}",
+            read_saved(&path, "B1", true)
+        );
+        println!(
+            "opened with Excel's own setting: B1 = {:?}",
+            read_saved(&path, "B1", false)
+        );
+        println!("(a recalculation is the 6; the saved value is the 2)");
+    }
+
+    /// One cell of a worksheet, by address.
+    fn read_cell(sheet: &Object, address: &str) -> Option<String> {
+        sheet
+            .call_args("Range", &[VARIANT::from(address)])
+            .and_then(Object::from_variant)
+            .and_then(|cell| cell.value("Value2"))
+            .map(|value| value.to_string())
+    }
+
+    fn set_cell(sheet: &Object, address: &str, value: VARIANT) {
+        if let Some(cell) = sheet
+            .call_args("Range", &[VARIANT::from(address)])
+            .and_then(Object::from_variant)
+        {
+            let _ = cell.set("Value2", value);
+        }
+    }
+
+    /// One cell of a workbook on disk, opened with — or without — the setting the
+    /// engine applies first.
+    fn read_saved(path: &Path, address: &str, manual: bool) -> Option<String> {
+        let app = Object::create(OfficeApp::Excel.prog_id())?;
+        let _ = app.set("DisplayAlerts", alerts_off(OfficeApp::Excel));
+
+        if manual {
+            // The engine's own step, through the same helper it uses: Excel answers
+            // for its calculation mode only while a workbook is open.
+            with_a_workbook(&app, || {
+                let _ = app.set("Calculation", VARIANT::from(XL_CALCULATION_MANUAL));
+            });
+        }
+
+        let book = app
+            .member("Workbooks")
+            .and_then(|books| {
+                books.call(
+                    "Open",
+                    &[
+                        ("FileName", path_variant(path)),
+                        ("ReadOnly", VARIANT::from(true)),
+                    ],
+                )
+            })
+            .and_then(Object::from_variant)?;
+
+        let value = book
+            .member("Worksheets")
+            .and_then(|sheets| sheets.item(1))
+            .and_then(|sheet| read_cell(&sheet, address));
+
+        let _ = book.call("Close", &[("SaveChanges", VARIANT::from(false))]);
+        let _ = app.call("Quit", &[]);
+        value
     }
 }
