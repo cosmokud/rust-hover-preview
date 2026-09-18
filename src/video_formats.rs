@@ -14,12 +14,11 @@ const TYPESCRIPT_SHARED_EXTENSIONS: &[&str] = &["ts", "mts"];
 
 /// The extensions written to `config.ini` on first run: every container and raw
 /// video stream FFmpeg is able to demux.
-pub const DEFAULT_VIDEO_EXTENSIONS: &str = "mp4,m4v,mov,qt,3gp,3g2,3gpp,mj2,psp,ismv,f4v,mkv,mk3d,\
-webm,ts,m2t,m2ts,mts,tr,tp,tod,wtv,dvr-ms,ty,ty+,mpg,mpeg,mpe,mpv,m1v,m2v,m2p,vob,vro,\
-h261,h263,h264,h26l,264,avc,h265,hevc,265,h266,vvc,266,vc1,rcv,av1,obu,evc,apv,avs,avs2,avs3,\
-cavs,drc,vc2,y4m,ivf,avi,divx,asf,wmv,rm,rmvb,flv,swf,ogv,ogm,mxf,gxf,dv,dif,nut,nsv,\
-mjpg,mjpeg,bik,bk2,smk,roq,mve,cpk,thp,usm,moflex,xmv,mvi,mxg,rsd,str,cin,c93,cdxl,xl,flm,\
-yop,imx,dav,viv,ivr,vw,cdg,pmp,kux,ifv";
+pub const DEFAULT_VIDEO_EXTENSIONS: &str = "264,265,266,3g2,3gp,3gpp,apv,asf,av1,avc,avi,avs,avs2,avs3,bik,bk2,c93,cavs,cdg,cdxl,cin,cpk,dav,\
+dif,divx,drc,dv,dvr-ms,evc,f4v,flm,flv,gxf,h261,h263,h264,h265,h266,h26l,hevc,ifv,imx,ismv,ivf,\
+ivr,kux,m1v,m2p,m2t,m2ts,m2v,m4v,mj2,mjpeg,mjpg,mk3d,mkv,moflex,mov,mp4,mpe,mpeg,mpg,mpv,mts,mve,\
+mvi,mxf,mxg,nsv,nut,obu,ogm,ogv,pmp,psp,qt,rcv,rm,rmvb,roq,rsd,smk,str,swf,thp,tod,tp,tr,ts,ty,\
+ty+,usm,vc1,vc2,viv,vob,vro,vvc,vw,webm,wmv,wtv,xl,xmv,y4m,yop";
 
 /// Read one entry out of the configured list into the lowercase form the lookups
 /// use.

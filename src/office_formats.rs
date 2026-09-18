@@ -23,7 +23,8 @@ use std::path::Path;
 /// PowerPoint formats a hover is expected to meet, templates and slide shows
 /// included.
 pub const DEFAULT_OFFICE_EXTENSIONS: &str =
-    "doc,docm,docx,dot,dotm,dotx,xls,xlsb,xlsm,xlsx,xlt,xltm,xltx,ppt,pptm,pptx,pps,ppsm,ppsx,pot,potm,potx";
+    "doc,docm,docx,dot,dotm,dotx,pot,potm,potx,pps,ppsm,ppsx,ppt,pptm,pptx,xls,xlsb,xlsm,xlsx,xlt,\
+xltm,xltx";
 
 /// The bytes a container is recognized by: an OOXML package is a zip, so it starts
 /// with the local header of its first part, and a legacy document is an OLE

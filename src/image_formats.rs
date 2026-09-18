@@ -20,7 +20,7 @@ use std::path::Path;
 /// `acTL` chunk rather than by what it is called — and `gif`, `png` and `webp` are
 /// each both an animated format and a still one.
 pub const DEFAULT_IMAGE_EXTENSIONS: &str =
-    "jpg,jpeg,jpe,jfif,png,apng,gif,bmp,ico,tiff,tif,webp,tga,pbm,pgm,ppm,pam,pnm,hdr,exr,qoi,ff";
+    "apng,bmp,exr,ff,gif,hdr,ico,jfif,jpe,jpeg,jpg,pam,pbm,pgm,png,pnm,ppm,qoi,tga,tif,tiff,webp";
 
 /// Read one entry out of the configured list into the lowercase form the lookups
 /// use.
