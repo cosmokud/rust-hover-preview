@@ -12,7 +12,8 @@ use std::path::Path;
 /// transport streams, so the video gate decides those two by content (an MPEG-TS
 /// sync byte) and a TypeScript file falls through to a text preview. Every other
 /// extension here is disjoint from the image, video and PDF gates.
-pub const DEFAULT_TEXT_EXTENSIONS: &str = "adb,adoc,ads,asciidoc,asm,asp,aspx,astro,awk,bash,bat,bib,bzl,c,cc,cfg,cg,cjs,clj,cljc,cljs,\
+pub const DEFAULT_TEXT_EXTENSIONS: &str =
+    "adb,adoc,ads,asciidoc,asm,asp,aspx,astro,awk,bash,bat,bib,bzl,c,cc,cfg,cg,cjs,clj,cljc,cljs,\
 cmake,cmd,comp,conf,cpp,cs,csh,cshtml,css,csv,csx,cts,cxx,d,dart,diff,diz,edn,ejs,el,elm,env,erb,\
 erl,ex,exs,f,f03,f77,f90,f95,fish,for,frag,fs,fsi,fsx,ftn,fx,geom,glsl,go,gql,gradle,graphql,\
 groovy,h,haml,hbs,hcl,hh,hlsl,hpp,hrl,hs,htm,html,hxx,inc,ini,ipynb,java,jl,js,json,json5,jsonc,\

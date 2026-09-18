@@ -48,7 +48,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use windows::core::{GUID, PCWSTR, PWSTR, VARIANT};
-use windows::Win32::Foundation::{BOOL, CloseHandle, HGLOBAL, HWND, LPARAM, WPARAM};
+use windows::Win32::Foundation::{CloseHandle, BOOL, HGLOBAL, HWND, LPARAM, WPARAM};
 use windows::Win32::System::Com::{
     CLSIDFromProgID, CoCreateInstance, CoInitializeEx, IDispatch, CLSCTX_LOCAL_SERVER,
     COINIT_APARTMENTTHREADED, DISPATCH_FLAGS, DISPATCH_METHOD, DISPATCH_PROPERTYGET,
@@ -66,14 +66,12 @@ use windows::Win32::System::Threading::{
     GetCurrentThreadId, GetExitCodeProcess, OpenProcess, QueryFullProcessImageNameW,
     TerminateProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE,
 };
-use windows::Win32::UI::Accessibility::{
-    SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK,
-};
+use windows::Win32::UI::Accessibility::{SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK};
 use windows::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, EnumWindows, GetClassNameW, GetWindowThreadProcessId, IsWindowVisible,
     MsgWaitForMultipleObjectsEx, PeekMessageW, PostThreadMessageW, ShowWindow, TranslateMessage,
-    EVENT_OBJECT_SHOW, MSG, MWMO_INPUTAVAILABLE, PM_REMOVE, QS_ALLINPUT, SW_HIDE, WINEVENT_OUTOFCONTEXT,
-    WM_APP,
+    EVENT_OBJECT_SHOW, MSG, MWMO_INPUTAVAILABLE, PM_REMOVE, QS_ALLINPUT, SW_HIDE,
+    WINEVENT_OUTOFCONTEXT, WM_APP,
 };
 
 /// The message a request is announced with on the worker's own thread queue.
@@ -1603,7 +1601,11 @@ fn used_window(sheet: &Object) -> Option<Object> {
         return None;
     }
 
-    resize_range(&used, rows.min(PAGE_MAX_ROWS), columns.min(PAGE_MAX_COLUMNS))
+    resize_range(
+        &used,
+        rows.min(PAGE_MAX_ROWS),
+        columns.min(PAGE_MAX_COLUMNS),
+    )
 }
 
 /// Ask the application something that only an application with a workbook open will
@@ -2459,7 +2461,11 @@ mod tests {
 
         // A picture that can be read is a page, and its own size is what the layout
         // places the preview by.
-        store_render(&source, RenderedKind::Bmp, bmp_bytes(2, 2, [10, 20, 30, 255]));
+        store_render(
+            &source,
+            RenderedKind::Bmp,
+            bmp_bytes(2, 2, [10, 20, 30, 255]),
+        );
         assert_eq!(measure(&source), Some((2, 2)), "a page that can be read");
         assert_eq!(source_kind(&source), SourceKind::Raster);
 
@@ -3023,10 +3029,7 @@ mod tests {
                 println!("no workbook");
                 return;
             };
-            let Some(sheet) = book
-                .member("Worksheets")
-                .and_then(|sheets| sheets.item(1))
-            else {
+            let Some(sheet) = book.member("Worksheets").and_then(|sheets| sheets.item(1)) else {
                 println!("no worksheet");
                 return;
             };

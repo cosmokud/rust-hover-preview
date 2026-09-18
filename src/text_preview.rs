@@ -16,7 +16,7 @@
 use crate::config::{sanitize_text_cache_mb, MarkdownMode, TextTheme, DEFAULT_TEXT_CACHE_MB};
 use crate::text_paint::{
     blend, fill_rect, plain_style, readable, rgb, scaled, text_style, DibSurface, RunPainter,
-    TextStyle, TextMetrics, BODY_LEVEL, SIZE_LEVELS,
+    TextMetrics, TextStyle, BODY_LEVEL, SIZE_LEVELS,
 };
 use crate::text_theme::{self, LoadedTheme};
 use crate::CONFIG;
@@ -3035,9 +3035,9 @@ mod tests {
                 full_mode,
             };
 
-            let (width, height) = measure(path, 1_920, 1_200, 96, options).expect("a measured page");
-            let frame =
-                render_scrolled(path, 0, width, height, 96, options, None).expect("a page");
+            let (width, height) =
+                measure(path, 1_920, 1_200, 96, options).expect("a measured page");
+            let frame = render_scrolled(path, 0, width, height, 96, options, None).expect("a page");
 
             assert!(frame.width > 0 && frame.height > 0, "{name}");
             assert!(
@@ -3096,8 +3096,14 @@ mod tests {
 
         frame_cache_trim(&mut cache, 64);
 
-        assert!(cache.entries.contains_key(&key("new", 0)), "the newer frame stays");
-        assert!(!cache.entries.contains_key(&key("old", 0)), "the older frame goes");
+        assert!(
+            cache.entries.contains_key(&key("new", 0)),
+            "the newer frame stays"
+        );
+        assert!(
+            !cache.entries.contains_key(&key("old", 0)),
+            "the older frame goes"
+        );
         assert_eq!(cache.bytes, 64, "the budget is what is held");
 
         // A budget of nothing empties it, which is what `0 MB` means.
@@ -3126,14 +3132,26 @@ mod tests {
 
         let first = at(0, 800, 600, options);
         assert_eq!(first, at(0, 800, 600, options));
-        assert_ne!(first, at(4, 800, 600, options), "another position is another frame");
-        assert_ne!(first, at(0, 600, 800, options), "another box is another frame");
+        assert_ne!(
+            first,
+            at(4, 800, 600, options),
+            "another position is another frame"
+        );
+        assert_ne!(
+            first,
+            at(0, 600, 800, options),
+            "another box is another frame"
+        );
 
         let scaled = TextPreviewOptions {
             font_scale_percent: 200,
             ..options
         };
-        assert_ne!(first, at(0, 800, 600, scaled), "another size is another frame");
+        assert_ne!(
+            first,
+            at(0, 800, 600, scaled),
+            "another size is another frame"
+        );
 
         fs::write(&source, b"a rewritten file").expect("a rewritten file");
         assert_ne!(
@@ -3145,4 +3163,3 @@ mod tests {
         let _ = fs::remove_file(&source);
     }
 }
-

@@ -11,13 +11,15 @@ use std::time::SystemTime;
 use windows::core::PCWSTR;
 use windows::Data::Pdf::{PdfDocument, PdfPage, PdfPageRenderOptions};
 use windows::Graphics::Imaging::BitmapEncoder;
-use windows::Storage::Streams::{DataReader, DataWriter, IRandomAccessStream, InMemoryRandomAccessStream};
-use windows::UI::Color;
+use windows::Storage::Streams::{
+    DataReader, DataWriter, IRandomAccessStream, InMemoryRandomAccessStream,
+};
 use windows::Win32::System::Com::{
     CoInitializeEx, IStream, COINIT_MULTITHREADED, STGM_READ, STGM_SHARE_DENY_NONE,
 };
 use windows::Win32::System::WinRT::{CreateRandomAccessStreamOverStream, BSOS_DEFAULT};
 use windows::Win32::UI::Shell::SHCreateStreamOnFileEx;
+use windows::UI::Color;
 
 /// A PDF header may sit behind leading bytes, so the whole first kilobyte is
 /// searched for the signature rather than only its start.
@@ -362,10 +364,13 @@ fn fit_page(width: f32, height: f32, max_width: u32, max_height: u32) -> Option<
         return None;
     }
 
-    let scale =
-        (max_width as f32 / page_width as f32).min(max_height as f32 / page_height as f32);
-    let target_width = (page_width as f32 * scale).round().clamp(1.0, max_width as f32) as u32;
-    let target_height = (page_height as f32 * scale).round().clamp(1.0, max_height as f32) as u32;
+    let scale = (max_width as f32 / page_width as f32).min(max_height as f32 / page_height as f32);
+    let target_width = (page_width as f32 * scale)
+        .round()
+        .clamp(1.0, max_width as f32) as u32;
+    let target_height = (page_height as f32 * scale)
+        .round()
+        .clamp(1.0, max_height as f32) as u32;
 
     Some((target_width, target_height))
 }
@@ -550,8 +555,14 @@ mod tests {
 
         page_cache_trim(&mut cache, 64);
 
-        assert!(cache.entries.contains_key(&key("new")), "the newer page stays");
-        assert!(!cache.entries.contains_key(&key("old")), "the older page goes");
+        assert!(
+            cache.entries.contains_key(&key("new")),
+            "the newer page stays"
+        );
+        assert!(
+            !cache.entries.contains_key(&key("old")),
+            "the older page goes"
+        );
         assert_eq!(cache.bytes, 64, "the budget is what is held");
 
         // A budget of nothing empties it, which is what `0 MB` means.
