@@ -145,6 +145,9 @@ const PICTURE_COPY_RETRY_MS: u64 = 120;
 /// `xlScreen` and `xlBitmap`: the appearance and format `CopyPicture` is asked for.
 const XL_SCREEN: i32 = 1;
 const XL_BITMAP: i32 = 2;
+/// `XlCalculation::xlCalculationManual`: a workbook is opened without being
+/// recalculated, so what is exported is the page the file was saved as.
+const XL_CALCULATION_MANUAL: i32 = -4135;
 /// How long the worker may be inside one piece of work before it is given up on.
 ///
 /// The work that can block is not only the render: quitting an engine is another
@@ -885,6 +888,8 @@ struct Engine {
     /// read fresh for each render rather than once at creation.
     previous_alerts: Option<VARIANT>,
     previous_security: Option<VARIANT>,
+    /// Excel's calculation mode, for the one family that has one.
+    previous_calculation: Option<VARIANT>,
 }
 
 impl Engine {
@@ -927,6 +932,7 @@ impl Engine {
             settings_taken: false,
             previous_alerts: None,
             previous_security: None,
+            previous_calculation: None,
         })
     }
 
@@ -969,6 +975,29 @@ impl Engine {
             VARIANT::from(MSO_AUTOMATION_SECURITY_FORCE_DISABLE),
         );
         let _ = self.app.set("DisplayAlerts", alerts_off(self.app_kind));
+
+        // A workbook is the one document whose page is not read out of the file: it
+        // is laid out for printing out of the values in it, and Excel recalculates a
+        // workbook as it opens it unless it is told not to. What a preview shows is
+        // the page the file was saved as — the values a person sees the moment they
+        // open it in Excel are the same ones, because Excel has nothing but the file
+        // to calculate from until they change something. Paying for the recalculation
+        // is what makes a workbook of a few kilobytes cost more than a deck of
+        // megabytes: a sheet of formulas is small to store and expensive to compute,
+        // and the computation is not what the preview is of.
+        //
+        // It is taken and put back with the rest, so a user's own Excel is not left
+        // in manual calculation — which would show them stale numbers for the rest of
+        // the session. Putting automatic calculation back is itself a recalculation
+        // of whatever the instance has open, which is the state it would have been in
+        // had this app never touched it.
+        if self.app_kind == OfficeApp::Excel {
+            self.previous_calculation = self.app.value("Calculation");
+            let _ = self
+                .app
+                .set("Calculation", VARIANT::from(XL_CALCULATION_MANUAL));
+        }
+
         self.settings_taken = true;
     }
 
@@ -988,6 +1017,9 @@ impl Engine {
         }
         if let Some(security) = self.previous_security.take() {
             let _ = self.app.set("AutomationSecurity", security);
+        }
+        if let Some(calculation) = self.previous_calculation.take() {
+            let _ = self.app.set("Calculation", calculation);
         }
         self.settings_taken = false;
     }
