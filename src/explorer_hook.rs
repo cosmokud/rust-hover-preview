@@ -2623,12 +2623,13 @@ pub fn run_explorer_hook() {
                 c.hover_delay_ms,
                 c.trigger_key_mode,
                 c.same_file_rehover_delay_ms,
+                c.trigger_key_enabled,
             );
             // Resolved once per config change instead of once per tick.
             let vk = off_trigger_key_to_vk(&c.trigger_key);
             (snapshot, vk)
         })
-        .unwrap_or(((true, 0, TriggerKeyMode::Disable, 750), Some(0x12)));
+        .unwrap_or(((true, 0, TriggerKeyMode::Disable, 750, true), Some(0x12)));
     let mut slow_explorer_probe_count = 0u32;
     let mut explorer_probe_backoff_until: Option<Instant> = None;
     let mut last_display_signature = current_display_signature();
@@ -2799,6 +2800,7 @@ pub fn run_explorer_hook() {
                 config.hover_delay_ms,
                 config.trigger_key_mode,
                 config.same_file_rehover_delay_ms,
+                config.trigger_key_enabled,
             );
             trigger_key_vk = off_trigger_key_to_vk(&config.trigger_key);
         }
@@ -2807,12 +2809,15 @@ pub fn run_explorer_hook() {
         let hover_delay_ms = config_snapshot.1;
         let trigger_key_mode = config_snapshot.2;
         let same_file_rehover_delay_ms = config_snapshot.3;
+        let trigger_key_enabled = config_snapshot.4;
 
         // One question, two settings: the key either stops previews while it is
         // held, or is the only thing that lets them happen. Either way, what is left
         // to do when they are not allowed is the same as when they are turned off.
-        let trigger_key_down = trigger_key_vk.is_some_and(key_is_down);
-        let previews_allowed = trigger_key_mode.allows_previews(trigger_key_down);
+        // A key that is switched off is not asked about, and holds nothing back.
+        let trigger_key_down = trigger_key_enabled && trigger_key_vk.is_some_and(key_is_down);
+        let previews_allowed =
+            !trigger_key_enabled || trigger_key_mode.allows_previews(trigger_key_down);
 
         if !previews_allowed || !preview_enabled {
             if last_file.is_some() || keyboard_file.is_some() {
