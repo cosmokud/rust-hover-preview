@@ -52,6 +52,8 @@ Extensionless repository files such as `LICENSE`, `Makefile`, `Dockerfile`, and 
 
 `doc`, `docm`, `docx`, `dot`, `dotm`, `dotx`, `xls`, `xlsb`, `xlsm`, `xlsx`, `xlt`, `xltm`, `xltx`, `ppt`, `pptm`, `pptx`, `pps`, `ppsm`, `ppsx`, `pot`, `potm`, `potx`.
 
+> **Note:** To show previews for these Office document types, the user must have Microsoft Office installed.
+
 ### Themes
 
 Text, code, and archive listings use Atom One Light (default), One Dark Pro, or any `.tmTheme` file placed in `%APPDATA%\rust-hover-preview\theme`. Archive listings follow the tray's **Text Preview → Font Size** setting.
