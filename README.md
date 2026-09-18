@@ -11,7 +11,7 @@ A Windows 11 tray app inspired by QTTabBar that shows instant File Explorer prev
 ## Features
 
 - Mouse-hover and keyboard-navigation previews in Explorer
-- Images, including animated GIF, APNG, and WebP
+- Images, including animated GIF, APNG, and WebP, and SVG drawn at the size it is shown
 - Videos through FFmpeg
 - PDF first pages via the built-in Windows PDF engine
 - Text and code with syntax highlighting, rendered Markdown, and bundled/custom themes
@@ -28,7 +28,9 @@ You can add or remove formats in config.ini. Unsupported formats will not show a
 
 ### Images
 
-`jpg`, `jpeg`, `png`, `apng`, `gif`, `bmp`, `ico`, `tiff`, `webp`, `tga`, `hdr`, `exr`, `qoi`, and more. Animated GIF, APNG, and WebP files play; animation is detected from file content.
+`jpg`, `jpeg`, `png`, `apng`, `gif`, `bmp`, `ico`, `tiff`, `webp`, `tga`, `hdr`, `exr`, `qoi`, `svg`, `svgz`, and more. Animated GIF, APNG, and WebP files play; animation is detected from file content.
+
+An SVG is drawn at the size the preview is shown at rather than decoded and scaled, so it stays sharp when enlarged. One that moves is played: `<animate>`, `<animateTransform>` and `<set>` are read from the document and drawn frame by frame (CSS `@keyframes` animation is not read). Scripts and links to files outside the document are not followed.
 
 ### Videos (FFmpeg required)
 
@@ -179,7 +181,7 @@ text_preview_full_mode=false
 text_font_scale=125
 
 [image]
-extensions=apng,bmp,exr,ff,gif,hdr,ico,jfif,jpe,jpeg,jpg,pam,pbm,pgm,png,pnm,ppm,qoi,tga,tif,tiff,webp
+extensions=apng,bmp,exr,ff,gif,hdr,ico,jfif,jpe,jpeg,jpg,pam,pbm,pgm,png,pnm,ppm,qoi,svg,svgz,tga,tif,tiff,webp
 
 [video]
 extensions=264,265,266,3g2,3gp,3gpp,apv,asf,av1,avc,avi,avs,avs2,avs3,bik,bk2,c93,cavs,cdg,cdxl,cin,cpk,dav,...

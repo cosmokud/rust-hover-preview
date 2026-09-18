@@ -47,6 +47,22 @@ windows = { version = "0.58", features = [
 # Image handling
 image = "0.25"
 
+# SVG previews. A document is rasterized at the size the preview is shown at rather
+# than decoded and resampled, by usvg + tiny-skia through resvg — pure Rust, and no
+# external tool to install. `svgz` is off because a gzipped document is inflated on
+# this side, and `memmap-fonts` is off because the font database is read into memory
+# once.
+resvg = { version = "0.48", default-features = false, features = [
+    "raster-images",
+    "system-fonts",
+    "text",
+] }
+
+# The XML reader the animation pass works from: usvg drops `<animate>` elements, so
+# what a document animates is read from its own text and written back into it per
+# frame. Pinned to the version usvg parses with, so one reader is compiled in.
+roxmltree = "0.21"
+
 # Animated WebP support via Google's libwebp
 webp-animation = "0.10"
 

@@ -14,6 +14,8 @@ mod pdf_preview;
 mod preview_window;
 mod single_instance;
 mod startup;
+mod svg_animation;
+mod svg_preview;
 mod text_formats;
 mod text_paint;
 mod text_preview;
