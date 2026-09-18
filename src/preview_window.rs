@@ -2430,12 +2430,14 @@ fn load_animated_svg(
             return;
         };
 
-        let mut skip = rendered;
+        let repeats = playback.repeats_its_pass();
+        let mut pass: u32 = 0;
 
         loop {
             let mut cancelled = false;
+            let first = if pass == 0 { rendered } else { 0 };
 
-            for index in skip..playback.frames() {
+            for index in first..playback.frames() {
                 if cancel_clone.load(Ordering::Acquire)
                     || !await_frame_queue_room(&shared_clone, &cancel_clone)
                 {
@@ -2443,7 +2445,15 @@ fn load_animated_svg(
                     break;
                 }
 
-                let text = playback.document_at(&document, index);
+                // A pass that holds everything the document does is played again from
+                // its start; one that was cut short takes the next stretch of the
+                // document instead, so its animation keeps going forward.
+                let frame = if repeats {
+                    index
+                } else {
+                    pass * playback.frames() + index
+                };
+                let text = playback.document_at(&document, frame);
                 let Some((pixels, width, height)) =
                     svg_preview::render_text(&text, target_width, target_height)
                 else {
@@ -2461,12 +2471,13 @@ fn load_animated_svg(
             }
 
             // The player gave back the frames it already showed, so the pass is drawn
-            // again to play the animation another time.
-            if cancelled || !streamed_frames_released(&shared_clone) {
+            // again to play the animation another time. A document that is played
+            // forward never stops until the hover does.
+            if cancelled || (repeats && !streamed_frames_released(&shared_clone)) {
                 break;
             }
 
-            skip = 0;
+            pass += 1;
         }
 
         loaded_flag_clone.store(true, Ordering::Release);
@@ -7207,20 +7218,30 @@ mod tests {
         };
 
         let started = Instant::now();
-        let drawn = (0..playback.frames().min(12))
-            .filter(|index| {
-                let text = playback.document_at(&document, *index);
+        let mut drawn = Vec::new();
 
-                svg_preview::render_text(&text, 800, 800).is_some()
-            })
-            .count();
+        for index in 0..playback.frames().min(12) {
+            let text = playback.document_at(&document, index);
 
-        if drawn > 0 {
+            if let Some((pixels, _, _)) = svg_preview::render_text(&text, 800, 800) {
+                drawn.push(pixels);
+            }
+        }
+
+        if let Some(first) = drawn.first() {
             println!(
-                "drew {drawn} frame(s) in {:?} — {:?} each",
+                "drew {} frame(s) in {:?} — {:?} each",
+                drawn.len(),
                 started.elapsed(),
-                started.elapsed() / drawn as u32
+                started.elapsed() / drawn.len() as u32
             );
+
+            // A document that plays but does not move is a document whose declarations
+            // were read and whose frames came out the same, which is the difference
+            // between "nothing played" and "nothing moved".
+            let moved = drawn.last().is_some_and(|last| last != first);
+
+            println!("frames differ: {moved}");
         }
     }
 

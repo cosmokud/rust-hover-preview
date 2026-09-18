@@ -38,6 +38,10 @@ const MAX_FRAMES: u32 = 300;
 pub struct Playback {
     animations: Vec<Animation>,
     frames: u32,
+    /// Whether the document's own pass is longer than the frames a preview plays of
+    /// it: a clock's hour hand takes twelve hours to come round, and what a hover shows
+    /// of that is the first stretch of it rather than the whole turn.
+    truncated: bool,
 }
 
 impl Playback {
@@ -65,15 +69,28 @@ impl Playback {
             .map(Animation::active_end)
             .fold(0.0f32, f32::max)
             .max(FRAME_MS as f32 / 1000.0);
-        let frames =
-            ((cycle_seconds * 1000.0 / FRAME_MS as f32).ceil() as u32).clamp(1, MAX_FRAMES);
+        let pass_frames = (cycle_seconds * 1000.0 / FRAME_MS as f32).ceil() as u32;
+        let frames = pass_frames.clamp(1, MAX_FRAMES);
 
-        Some(Self { animations, frames })
+        Some(Self {
+            animations,
+            frames,
+            truncated: pass_frames > MAX_FRAMES,
+        })
     }
 
     /// How many frames one pass of this document is.
     pub fn frames(&self) -> u32 {
         self.frames
+    }
+
+    /// Whether the pass that is played is the whole of what the document says. A pass
+    /// that was cut short is played forward rather than looped — a clock's second hand
+    /// keeps going instead of jumping back to where the hover found it — while one that
+    /// holds everything the document does is repeated, as an animation of two seconds
+    /// is meant to be.
+    pub fn repeats_its_pass(&self) -> bool {
+        !self.truncated
     }
 
     /// The document as XML, with every animated value at the moment `frame` falls on.
@@ -382,9 +399,38 @@ fn segment(key_times: &[f32], phase: f32, count: usize) -> (usize, usize, f32) {
     (key_times.len() - 1, key_times.len() - 1, 0.0)
 }
 
+/// The element a declaration animates: the one its `href` names, or the one it is
+/// written inside.
+///
+/// A document is free to keep a declaration apart from what it moves — a clock puts
+/// its three hands at the end of the file and the three animations that turn them in
+/// `<defs>`, pointing at each hand by id — so a declaration that names an element is
+/// about that element, and not about the `<defs>` it happens to sit in. Both spellings
+/// of the attribute are read: `href` and the `xlink:href` every older document uses.
+fn target_element<'a, 'input>(node: Node<'a, 'input>) -> Option<Node<'a, 'input>> {
+    let href = node
+        .attribute("href")
+        .or_else(|| node.attribute(("http://www.w3.org/1999/xlink", "href")));
+
+    if let Some(href) = href {
+        if let Some(id) = href.trim().strip_prefix('#') {
+            let named = node
+                .document()
+                .descendants()
+                .find(|element| element.attribute("id") == Some(id));
+
+            if named.is_some() {
+                return named;
+            }
+        }
+    }
+
+    node.parent_element()
+}
+
 /// One animation declaration, or nothing when it asks for something this cannot play.
 fn parse_animation(node: Node) -> Option<Animation> {
-    let target = node.parent_element()?.id();
+    let target = target_element(node)?.id();
     let tag = node.tag_name().name();
 
     let timing = Timing {
@@ -1886,6 +1932,57 @@ mod tests {
         );
 
         assert_eq!(playback.frames(), MAX_FRAMES);
+    }
+
+    /// A declaration kept apart from what it moves names it: a clock's hands are at
+    /// the end of the file and the animations that turn them are in `<defs>`, pointing
+    /// at each hand by id.
+    #[test]
+    fn animates_the_element_a_declaration_names() {
+        for href in [r##"xlink:href="#hand""##, r##"href="#hand""##] {
+            let xml = format!(
+                r##"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="100" height="100"><defs><animateTransform {href} attributeName="transform" type="rotate" from="0 50 50" to="360 50 50" dur="1s" repeatCount="indefinite"/></defs><path id="hand" d="M50 50 L50 10" transform="rotate(90 50 50)"/></svg>"##
+            );
+            let (document, playback) = playback(&xml);
+
+            let first = playback.document_at(&document, 0);
+            assert!(
+                first.contains(r#"transform="rotate(90 50 50) rotate(0 50 50)""#),
+                "{first}"
+            );
+
+            let middle = playback.document_at(&document, 15);
+            assert!(middle.contains("rotate(178.2 50 50)"), "{middle}");
+        }
+    }
+
+    /// A declaration that names an element which is not there is about the element it
+    /// sits in, which is what a document that never says `href` means.
+    #[test]
+    fn falls_back_to_the_element_a_declaration_sits_in() {
+        let (document, playback) = playback(
+            r#"<svg xmlns="http://www.w3.org/2000/svg"><rect width="10" height="10"><animate attributeName="opacity" from="0" to="1" dur="1s" repeatCount="indefinite"/></rect></svg>"#,
+        );
+
+        assert!(playback
+            .document_at(&document, 15)
+            .contains(r#"opacity="0.495""#));
+    }
+
+    /// A pass that holds the whole of what a document says is repeated, and one that
+    /// was cut short is played forward instead: a clock's second hand keeps going.
+    #[test]
+    fn a_pass_that_was_cut_short_is_not_repeated() {
+        let (_, quick) = playback(
+            r#"<svg xmlns="http://www.w3.org/2000/svg"><rect width="10" height="10"><animate attributeName="opacity" from="0" to="1" dur="2s" repeatCount="indefinite"/></rect></svg>"#,
+        );
+        assert!(quick.repeats_its_pass());
+
+        let (_, slow) = playback(
+            r#"<svg xmlns="http://www.w3.org/2000/svg"><rect width="10" height="10"><animateTransform attributeName="transform" type="rotate" from="0" to="360" dur="43200s" repeatCount="indefinite"/></rect></svg>"#,
+        );
+        assert_eq!(slow.frames(), MAX_FRAMES);
+        assert!(!slow.repeats_its_pass());
     }
 
     /// A stylesheet's `@keyframes`, named by a rule, are played the same way a
