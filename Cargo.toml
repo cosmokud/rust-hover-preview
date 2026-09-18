@@ -111,6 +111,7 @@ main = true
 
 [package.metadata.packager.nsis]
 installMode = "currentUser"
+template = "packaging/nsis/installer.nsi"
 installer-icon = "assets/icon.ico"
 appdata-paths = ["$APPDATA/rust-hover-preview"]
 preinstall-section = """

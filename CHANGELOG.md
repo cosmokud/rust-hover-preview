@@ -11,6 +11,7 @@
 - Video previews no longer write `%TEMP%\rust-hover-preview-video.log`; hovered paths are not written to disk.
 - A `%TEMP%\rust-hover-preview-video.log` left by an earlier version is deleted at startup.
 - `cargo build --release` ends a running copy of the app before the crate is linked, so the build replaces `target/release/rust-hover-preview.exe` instead of failing while it is open; debug builds are left alone.
+- The setup no longer asks how to install over an older version: the "Already Installed" page and its choice of uninstalling first are gone, a previous installation is uninstalled by the installer itself before the files are copied, and a running copy of the app is closed rather than prompted for.
 - The source tree is formatted with `rustfmt` and passes `cargo fmt --check`.
 - `cargo clippy --all-targets -- -D warnings` passes again: unneeded casts, needless borrows and `&PathBuf` parameters are gone, and the tray icon's `MAKEINTRESOURCE` ID is no longer written as a pointer cast.
 
