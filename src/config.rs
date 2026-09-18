@@ -7,13 +7,20 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 use crate::archive_formats::{sanitize_archive_extensions, DEFAULT_ARCHIVE_EXTENSIONS};
+use crate::image_formats::{sanitize_image_extensions, DEFAULT_IMAGE_EXTENSIONS};
 use crate::office_formats::{sanitize_office_extensions, DEFAULT_OFFICE_EXTENSIONS};
 use crate::text_formats::{
     sanitize_extensions, sanitize_names, DEFAULT_TEXT_EXTENSIONS, DEFAULT_TEXT_NAMES,
 };
 use crate::theme_files;
+use crate::video_formats::{sanitize_video_extensions, DEFAULT_VIDEO_EXTENSIONS};
 
 const CONFIG_SECTION: &str = "settings";
+/// The image extension list lives in its own section so the one long value stays
+/// easy to find and edit by hand.
+const IMAGE_SECTION: &str = "image";
+/// The video extension list lives in its own section for the same reason.
+const VIDEO_SECTION: &str = "video";
 /// The text-preview extension list lives in its own section so the one long
 /// value stays easy to find and edit by hand.
 const TEXT_SECTION: &str = "text";
@@ -522,6 +529,10 @@ pub struct AppConfig {
     /// logical pixels at the display's DPI, so a hand that overshoots the edge on
     /// its way to the scrollbar does not take the preview down with it.
     pub text_scroll_far_edge_grace_pixels: f32,
+    /// Extensions previewed as images, already normalized for lookup.
+    pub image_extensions: Vec<String>,
+    /// Extensions previewed as videos, already normalized for lookup.
+    pub video_extensions: Vec<String>,
     /// Extensions previewed as text, already normalized for lookup.
     pub text_extensions: Vec<String>,
     /// File names previewed as text — the ones with no extension to match, like
@@ -565,11 +576,29 @@ impl Default for AppConfig {
             text_preview_full_mode: false,
             text_font_scale_percent: DEFAULT_TEXT_FONT_SCALE_PERCENT,
             text_scroll_far_edge_grace_pixels: DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS,
+            image_extensions: sanitize_image_extensions(DEFAULT_IMAGE_EXTENSIONS),
+            video_extensions: sanitize_video_extensions(DEFAULT_VIDEO_EXTENSIONS),
             text_extensions: sanitize_extensions(DEFAULT_TEXT_EXTENSIONS),
             text_names: sanitize_names(DEFAULT_TEXT_NAMES),
             archive_extensions: sanitize_archive_extensions(DEFAULT_ARCHIVE_EXTENSIONS),
             office_extensions: sanitize_office_extensions(DEFAULT_OFFICE_EXTENSIONS),
         }
+    }
+}
+
+/// One list as the file has it: the entries its key names, or the built-in list
+/// when the key is gone. The flag says which of the two it was, so the caller knows
+/// the file has to be written out again.
+fn configured_list(
+    ini: &Ini,
+    section: &str,
+    key: &str,
+    defaults: &str,
+    sanitize: fn(&str) -> Vec<String>,
+) -> (Vec<String>, bool) {
+    match ini.get(section, key) {
+        Some(value) => (sanitize(&value), false),
+        None => (sanitize(defaults), true),
     }
 }
 
@@ -600,6 +629,9 @@ impl AppConfig {
             config.is_first_run = !path.exists();
             let mut ini = Ini::new();
             if ini.load(path.to_string_lossy().as_ref()).is_ok() {
+                // Whatever the file is missing — a list whose key was deleted, a
+                // whole section — comes back with its built-in entries, and the save
+                // below writes them out again.
                 config.apply_ini(&ini);
             }
         }
@@ -613,7 +645,12 @@ impl AppConfig {
         if let Some(path) = Self::config_path() {
             let mut ini = Ini::new();
             if ini.load(path.to_string_lossy().as_ref()).is_ok() {
-                self.apply_ini(&ini);
+                // A list whose key was deleted is written back into the file rather
+                // than only kept in memory: the file is what the user edits, and a
+                // key left missing would be repaired again on every reload.
+                if self.apply_ini(&ini) {
+                    self.save();
+                }
             }
         }
     }
@@ -766,6 +803,16 @@ impl AppConfig {
                 ),
             );
             ini.set(
+                IMAGE_SECTION,
+                "extensions",
+                Some(sanitize_image_extensions(&self.image_extensions.join(",")).join(",")),
+            );
+            ini.set(
+                VIDEO_SECTION,
+                "extensions",
+                Some(sanitize_video_extensions(&self.video_extensions.join(",")).join(",")),
+            );
+            ini.set(
                 TEXT_SECTION,
                 "extensions",
                 Some(sanitize_extensions(&self.text_extensions.join(",")).join(",")),
@@ -789,7 +836,10 @@ impl AppConfig {
         }
     }
 
-    fn apply_ini(&mut self, ini: &Ini) {
+    /// Read the file into the configuration. A list whose key is gone is answered
+    /// with the built-in entries, and the `bool` says whether any of them were, so
+    /// the caller knows the file has to be written out again.
+    fn apply_ini(&mut self, ini: &Ini) -> bool {
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "run_at_startup") {
             self.run_at_startup = value;
         }
@@ -907,19 +957,67 @@ impl AppConfig {
             self.text_scroll_far_edge_grace_pixels =
                 sanitize_text_scroll_far_edge_grace_pixels(value as f32);
         }
-        // An empty list means the user removed every extension, and the built-in
-        // list comes back only when the key itself is gone.
-        if let Some(value) = ini.get(TEXT_SECTION, "extensions") {
-            self.text_extensions = sanitize_extensions(&value);
-        }
-        if let Some(value) = ini.get(TEXT_SECTION, "names") {
-            self.text_names = sanitize_names(&value);
-        }
-        if let Some(value) = ini.get(ARCHIVE_SECTION, "extensions") {
-            self.archive_extensions = sanitize_archive_extensions(&value);
-        }
-        if let Some(value) = ini.get(OFFICE_SECTION, "extensions") {
-            self.office_extensions = sanitize_office_extensions(&value);
-        }
+        // A list is what the file says it is, and a key that is gone is a list the
+        // file no longer has: the built-in entries are put back, and the caller is
+        // told so that it can write them out again. An empty value is not the same
+        // thing — it is a list the user emptied, and it is kept as written.
+        let mut restored = false;
+
+        let (list, defaulted) = configured_list(
+            ini,
+            IMAGE_SECTION,
+            "extensions",
+            DEFAULT_IMAGE_EXTENSIONS,
+            sanitize_image_extensions,
+        );
+        self.image_extensions = list;
+        restored |= defaulted;
+        let (list, defaulted) = configured_list(
+            ini,
+            VIDEO_SECTION,
+            "extensions",
+            DEFAULT_VIDEO_EXTENSIONS,
+            sanitize_video_extensions,
+        );
+        self.video_extensions = list;
+        restored |= defaulted;
+        let (list, defaulted) = configured_list(
+            ini,
+            TEXT_SECTION,
+            "extensions",
+            DEFAULT_TEXT_EXTENSIONS,
+            sanitize_extensions,
+        );
+        self.text_extensions = list;
+        restored |= defaulted;
+        let (list, defaulted) = configured_list(
+            ini,
+            TEXT_SECTION,
+            "names",
+            DEFAULT_TEXT_NAMES,
+            sanitize_names,
+        );
+        self.text_names = list;
+        restored |= defaulted;
+        let (list, defaulted) = configured_list(
+            ini,
+            ARCHIVE_SECTION,
+            "extensions",
+            DEFAULT_ARCHIVE_EXTENSIONS,
+            sanitize_archive_extensions,
+        );
+        self.archive_extensions = list;
+        restored |= defaulted;
+        let (list, defaulted) = configured_list(
+            ini,
+            OFFICE_SECTION,
+            "extensions",
+            DEFAULT_OFFICE_EXTENSIONS,
+            sanitize_office_extensions,
+        );
+        self.office_extensions = list;
+        restored |= defaulted;
+
+        restored
     }
 }

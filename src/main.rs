@@ -6,6 +6,7 @@ mod archive_preview;
 mod cloud_files;
 mod config;
 mod explorer_hook;
+mod image_formats;
 mod office_formats;
 mod office_preview;
 mod office_render;

@@ -17,5 +17,5 @@ target/
 #.idea/
 
 .serena/
-.venv
-/.commandcode
+.venv/
+.commandcode/

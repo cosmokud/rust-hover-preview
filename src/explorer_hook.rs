@@ -1,6 +1,7 @@
 use crate::archive_formats::matches_archive_list;
 use crate::cloud_files;
 use crate::config::{PreviewType, TriggerKeyMode};
+use crate::image_formats::matches_image_list;
 use crate::office_formats::matches_office_list;
 use crate::pdf_preview::is_pdf_file;
 use crate::preview_window::{
@@ -8,7 +9,7 @@ use crate::preview_window::{
     show_preview, show_preview_keyboard, text_scroll_pointer_hold, PreviewCursorHover,
 };
 use crate::text_formats::matches_text_lists;
-use crate::video_formats::is_video_file;
+use crate::video_formats::{is_video_file, matches_video_list};
 use crate::wheel_input;
 use crate::{CONFIG, RUNNING};
 use once_cell::sync::Lazy;
@@ -50,12 +51,6 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WindowFromPoint, GA_ROOT, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
     SM_YVIRTUALSCREEN, SW_SHOWMAXIMIZED, WINDOWPLACEMENT,
 };
-
-// Supported image extensions
-const IMAGE_EXTENSIONS: &[&str] = &[
-    "jpg", "jpeg", "jpe", "jfif", "png", "apng", "gif", "bmp", "ico", "tiff", "tif", "webp", "tga",
-    "pbm", "pgm", "ppm", "pam", "pnm", "hdr", "exr", "qoi", "ff",
-];
 
 struct ExplorerWindowCounts {
     total: usize,
@@ -614,29 +609,24 @@ fn should_probe_preview_hover(
     !pointer_frozen && (mouse_preview_active || suppress_until_cursor_leaves)
 }
 
-fn is_image_file(path: &PathBuf) -> bool {
-    path.extension()
-        .and_then(|ext| ext.to_str())
-        .map(|ext| IMAGE_EXTENSIONS.contains(&ext.to_lowercase().as_str()))
-        .unwrap_or(false)
-}
-
 /// Whether a preview may be shown for `path`: the kind of preview it would get,
 /// and whether that kind is switched on in the tray's `Preview Types`
 /// submenu.
 ///
 /// The kinds are asked the way the renderer asks them — a video first, then a
 /// PDF, then the archive list, then the office list, then the text lists, then
-/// the image extensions — so the two cannot disagree about what a file is. A
-/// video goes first because only its content settles the extensions it shares
-/// with text: a `.ts` carrying MPEG-TS packets is a video however the gates
-/// stand, and one that does not is the TypeScript source the text lists claim.
+/// the image list — so the two cannot disagree about what a file is. A video goes
+/// first because only its content settles the extensions it shares with text: a
+/// `.ts` carrying MPEG-TS packets is a video however the gates stand, and one that
+/// does not is the TypeScript source the text lists claim. The lists come from the
+/// configuration this already holds rather than from the gates' own lookups, which
+/// would take the same lock again.
 fn is_media_file(path: &PathBuf) -> bool {
     let Ok(config) = CONFIG.lock() else {
         return false;
     };
 
-    if is_video_file(path) {
+    if matches_video_list(path, &config.video_extensions) {
         return PreviewType::Videos.enabled_in(&config);
     }
     if is_pdf_file(path) {
@@ -652,7 +642,7 @@ fn is_media_file(path: &PathBuf) -> bool {
         return PreviewType::Text.enabled_in(&config);
     }
 
-    is_image_file(path) && PreviewType::Images.enabled_in(&config)
+    matches_image_list(path, &config.image_extensions) && PreviewType::Images.enabled_in(&config)
 }
 
 /// Whether a preview is placed clear of the name of the file it is about, as the

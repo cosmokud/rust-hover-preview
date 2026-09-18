@@ -1,4 +1,5 @@
 use crate::config::PreviewType;
+use crate::CONFIG;
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
@@ -11,26 +12,57 @@ const MPEGTS_PROBE_BYTES: usize = 2048;
 // TypeScript also uses these two extensions, so they need a content check
 const TYPESCRIPT_SHARED_EXTENSIONS: &[&str] = &["ts", "mts"];
 
-/// Every container and raw video stream FFmpeg is able to demux.
-pub const VIDEO_EXTENSIONS: &[&str] = &[
-    "mp4", "m4v", "mov", "qt", "3gp", "3g2", "3gpp", "mj2", "psp", "ismv", "f4v", "mkv", "mk3d",
-    "webm", "ts", "m2t", "m2ts", "mts", "tr", "tp", "tod", "wtv", "dvr-ms", "ty", "ty+", "mpg",
-    "mpeg", "mpe", "mpv", "m1v", "m2v", "m2p", "vob", "vro", "h261", "h263", "h264", "h26l", "264",
-    "avc", "h265", "hevc", "265", "h266", "vvc", "266", "vc1", "rcv", "av1", "obu", "evc", "apv",
-    "avs", "avs2", "avs3", "cavs", "drc", "vc2", "y4m", "ivf", "avi", "divx", "asf", "wmv", "rm",
-    "rmvb", "flv", "swf", "ogv", "ogm", "mxf", "gxf", "dv", "dif", "nut", "nsv", "mjpg", "mjpeg",
-    "bik", "bk2", "smk", "roq", "mve", "cpk", "thp", "usm", "moflex", "xmv", "mvi", "mxg", "rsd",
-    "str", "cin", "c93", "cdxl", "xl", "flm", "yop", "imx", "dav", "viv", "ivr", "vw", "cdg",
-    "pmp", "kux", "ifv",
-];
+/// The extensions written to `config.ini` on first run: every container and raw
+/// video stream FFmpeg is able to demux.
+pub const DEFAULT_VIDEO_EXTENSIONS: &str = "mp4,m4v,mov,qt,3gp,3g2,3gpp,mj2,psp,ismv,f4v,mkv,mk3d,\
+webm,ts,m2t,m2ts,mts,tr,tp,tod,wtv,dvr-ms,ty,ty+,mpg,mpeg,mpe,mpv,m1v,m2v,m2p,vob,vro,\
+h261,h263,h264,h26l,264,avc,h265,hevc,265,h266,vvc,266,vc1,rcv,av1,obu,evc,apv,avs,avs2,avs3,\
+cavs,drc,vc2,y4m,ivf,avi,divx,asf,wmv,rm,rmvb,flv,swf,ogv,ogm,mxf,gxf,dv,dif,nut,nsv,\
+mjpg,mjpeg,bik,bk2,smk,roq,mve,cpk,thp,usm,moflex,xmv,mvi,mxg,rsd,str,cin,c93,cdxl,xl,flm,\
+yop,imx,dav,viv,ivr,vw,cdg,pmp,kux,ifv";
 
-pub fn is_video_file(path: &Path) -> bool {
-    let extension = match path.extension().and_then(|ext| ext.to_str()) {
-        Some(extension) => extension.to_lowercase(),
-        None => return false,
+/// Read one entry out of the configured list into the lowercase form the lookups
+/// use.
+///
+/// Every name in this list is a bare extension — unlike the archive list, which has
+/// to carry the dotted `tar.gz` — so anything that is not one is dropped rather than
+/// matched against.
+pub fn sanitize_video_extensions(list: &str) -> Vec<String> {
+    let mut extensions: Vec<String> = Vec::new();
+
+    for entry in list.split(',') {
+        let trimmed = entry.trim().trim_start_matches('.').to_lowercase();
+        let is_extension = !trimmed.is_empty()
+            && !trimmed.starts_with('.')
+            && !trimmed.ends_with('.')
+            && trimmed
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '_'));
+
+        if is_extension && !extensions.contains(&trimmed) {
+            extensions.push(trimmed);
+        }
+    }
+
+    extensions
+}
+
+/// Whether the configured list claims `path` as a video.
+///
+/// `.ts` and `.mts` are claimed by the text lists too, so a file of either name is
+/// settled by its content: an MPEG-TS sync byte makes it the transport stream the
+/// list says it is, and a file without one falls through to the text preview of the
+/// TypeScript source it is.
+pub fn matches_video_list(path: &Path, extensions: &[String]) -> bool {
+    let Some(extension) = path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.to_lowercase())
+    else {
+        return false;
     };
 
-    if !VIDEO_EXTENSIONS.contains(&extension.as_str()) {
+    if !extensions.contains(&extension) {
         return false;
     }
 
@@ -41,8 +73,17 @@ pub fn is_video_file(path: &Path) -> bool {
     true
 }
 
-/// Whether a video preview may be shown for `path`: a file FFmpeg can demux, and
-/// the `Videos` gate in the tray's `Preview Types` submenu.
+/// Whether the configured list claims `path`, without asking whether video previews
+/// are switched on.
+pub fn is_video_file(path: &Path) -> bool {
+    CONFIG
+        .lock()
+        .map(|config| matches_video_list(path, &config.video_extensions))
+        .unwrap_or(false)
+}
+
+/// Whether a video preview may be shown for `path`: the file the configured list
+/// claims, and the `Videos` gate in the tray's `Preview Types` submenu.
 ///
 /// [`is_video_file`] is the classification on its own, which is what asks whether
 /// a file is a video rather than whether one may be shown — a `.ts` a video gate
