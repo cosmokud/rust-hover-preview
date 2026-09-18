@@ -60,7 +60,6 @@ encrypted. Nothing bypasses a password, and no password is ever stored.
 | `%APPDATA%\rust-hover-preview\theme\` | `.tmTheme` files you drop in yourself. | Delete the files. |
 | `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` value `RustHoverPreview` | Your exe path, only when **Run at Startup** is on. | Turn **Run at Startup** off. |
 | `%TEMP%\rust-hover-preview\` | Transient Office renders: one scratch copy of a long-path or downloaded document, one page file being read back. Each is deleted the moment it is read; leftovers are deleted on next launch. | Delete the folder; exit the app first. |
-| `%TEMP%\rust-hover-preview-video.log` | Append-only debug log, one line per video preview: file path, preview position/size, measured dimensions, crop, and filter. **This is the only place hovered file paths are written to disk.** It never leaves your PC. | Delete the file. |
 | RAM only (never written to disk) | Decoded image frames (default 32 MB), rendered Office pages (default 64 MB), rendered PDF pages (default 32 MB), painted text frames (default off), archive listings, failure latches. All keyed by path plus file version, evicted when full, gone on exit. | Set a cache to `0 MB` to keep nothing between hovers; quit to drop everything. |
 
 Error messages (hook install failure, mutex failure) go to stderr only and are

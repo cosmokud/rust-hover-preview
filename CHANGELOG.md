@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.7]
+
+### Changed
+
+- Video previews no longer write `%TEMP%\rust-hover-preview-video.log`; hovered paths are not written to disk.
+- A `%TEMP%\rust-hover-preview-video.log` left by an earlier version is deleted at startup.
+
 ## [0.2.6]
 
 ### Added

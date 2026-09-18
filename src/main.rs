@@ -55,6 +55,11 @@ fn main() {
     // the temp folder — is dropped before anything starts writing there again.
     office_render::discard_old_disk_cache();
 
+    // The log an earlier version appended a line to for every video hover is no
+    // longer written; the file it left behind goes the same way, as its own user,
+    // before a video preview could start adding to it again.
+    let _ = fs::remove_file(std::env::temp_dir().join("rust-hover-preview-video.log"));
+
     // Initialize COM
     unsafe {
         let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);

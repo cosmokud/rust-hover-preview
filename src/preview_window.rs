@@ -21,9 +21,8 @@ use image::{AnimationDecoder, GenericImageView};
 use once_cell::sync::Lazy;
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
-use std::env;
-use std::fs::{File, OpenOptions};
-use std::io::{BufReader, Write};
+use std::fs::File;
+use std::io::BufReader;
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -2724,43 +2723,6 @@ fn get_video_geometry(path: &PathBuf) -> Option<VideoGeometry> {
     Some(geometry)
 }
 
-fn log_video_preview(
-    path: &PathBuf,
-    x: i32,
-    y: i32,
-    width: i32,
-    height: i32,
-    vf: Option<&str>,
-    geometry: Option<VideoGeometry>,
-) {
-    let log_path = env::temp_dir().join("rust-hover-preview-video.log");
-    let Ok(mut file) = OpenOptions::new().create(true).append(true).open(log_path) else {
-        return;
-    };
-
-    let crop = geometry
-        .and_then(|g| g.crop)
-        .map(|c| format!("{}:{}:{}:{}", c.width, c.height, c.x, c.y))
-        .unwrap_or_else(|| "none".to_string());
-    let geom = geometry
-        .map(|g| format!("{}x{}", g.width, g.height))
-        .unwrap_or_else(|| "none".to_string());
-    let vf = vf.unwrap_or("none");
-
-    let _ = writeln!(
-        file,
-        "path=\"{}\" pos={}x{} window={}x{} geometry={} crop={} vf=\"{}\"",
-        path.display(),
-        x,
-        y,
-        width,
-        height,
-        geom,
-        crop,
-        vf
-    );
-}
-
 /// Data passed to the EnumWindows callback to find ffplay window
 struct EnumWindowsData {
     target_pid: u32,
@@ -2975,7 +2937,6 @@ fn start_video_playback(path: &PathBuf, x: i32, y: i32, width: i32, height: i32)
             "setsar=1".to_string()
         }
     });
-    log_video_preview(path, x, y, width, height, vf.as_deref(), geometry);
     if let Some(vf) = vf.as_deref() {
         cmd.args(["-vf", &vf]);
     }
