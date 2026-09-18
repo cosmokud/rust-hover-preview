@@ -3,7 +3,7 @@ use directories::BaseDirs;
 use once_cell::sync::Lazy;
 use std::collections::HashSet;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use crate::archive_formats::{sanitize_archive_extensions, DEFAULT_ARCHIVE_EXTENSIONS};
@@ -591,6 +591,51 @@ fn same_entries(list: &[String], canonical: &[String]) -> bool {
     list.len() == canonical.len() && canonical.iter().all(|entry| list.contains(entry))
 }
 
+/// Write the configuration out in the shape a person reads it in: the settings
+/// section first, then the sections that hold the file lists in alphabetical order,
+/// and the keys of every section in alphabetical order as well.
+///
+/// The `Ini` the values are collected in keeps its sections and keys in hash maps,
+/// so what it writes by itself is a different order every time — which is what
+/// shuffled a hand-edited file under the person editing it. What is written here is
+/// the text that writer produces, in an order that does not move.
+fn write_ordered(ini: &Ini, path: &Path) {
+    let map = ini.get_map_ref();
+
+    let mut sections: Vec<&str> = map.keys().map(String::as_str).collect();
+    // Settings first, the rest alphabetically: the flag is false only for the
+    // settings section, and false sorts ahead of true.
+    sections.sort_unstable_by_key(|section| (*section != CONFIG_SECTION, *section));
+
+    let mut out = String::new();
+    for section in sections {
+        let Some(keys) = map.get(section) else {
+            continue;
+        };
+
+        out.push('[');
+        out.push_str(section);
+        out.push_str("]\n");
+
+        let mut keys: Vec<(&str, &Option<String>)> = keys
+            .iter()
+            .map(|(key, value)| (key.as_str(), value))
+            .collect();
+        keys.sort_unstable_by_key(|(key, _)| *key);
+
+        for (key, value) in keys {
+            out.push_str(key);
+            if let Some(value) = value {
+                out.push('=');
+                out.push_str(value);
+            }
+            out.push('\n');
+        }
+    }
+
+    let _ = fs::write(path, out);
+}
+
 /// One list as the file has it: the entries its key names, or the built-in list
 /// when the key is gone. The flag says which of the two it was, so the caller knows
 /// the file has to be written out again.
@@ -853,7 +898,7 @@ impl AppConfig {
                 "extensions",
                 Some(sanitize_office_extensions(&self.office_extensions.join(",")).join(",")),
             );
-            let _ = ini.write(path.to_string_lossy().as_ref());
+            write_ordered(&ini, &path);
         }
     }
 

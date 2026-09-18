@@ -31,6 +31,7 @@
 - Non-document files no longer start an Office engine.
 - The document spinner is correctly sized.
 - Replaced videos are re-measured and re-cropped using file version as well as path.
+- `config.ini` is written in a fixed order — `[settings]` first, then the sections and their keys alphabetically — instead of being reshuffled on every save.
 
 ## [0.2.5] - 2026-09-17
 
