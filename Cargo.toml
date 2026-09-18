@@ -63,6 +63,14 @@ resvg = { version = "0.48", default-features = false, features = [
 # frame. Pinned to the version usvg parses with, so one reader is compiled in.
 roxmltree = "0.21"
 
+# The browser engine that is already on the machine, for a document that moves: usvg
+# plays no animation, and where a document says more than this app's own reader can
+# carry out, Chromium does. Pinned to the release that binds `windows` 0.58 — the
+# version this app is on — because the two must agree on HWND and the COM types
+# around it. The loader is linked in statically (`WebView2LoaderStatic.lib` is this
+# crate's default), so the portable exe stays one file.
+webview2-com = "0.34"
+
 # Animated WebP support via Google's libwebp
 webp-animation = "0.10"
 
