@@ -11,6 +11,8 @@ use crate::office_formats;
 use crate::office_preview;
 use crate::office_render;
 use crate::pdf_preview;
+use crate::svg_animation;
+use crate::svg_preview;
 use crate::text_formats;
 use crate::text_preview::{self, TextPreviewOptions};
 use crate::video_formats::{self, is_video_file};
@@ -318,6 +320,7 @@ enum MediaType {
     AnimatedGif,
     AnimatedApng,
     AnimatedWebP,
+    AnimatedSvg,
     Video,
     Pdf,
     Text,
@@ -330,9 +333,11 @@ impl MediaType {
     /// The kind of preview this media is, as the tray's gates name them.
     fn kind(&self) -> Option<PreviewType> {
         match self {
-            Self::StaticImage | Self::AnimatedGif | Self::AnimatedApng | Self::AnimatedWebP => {
-                Some(PreviewType::Images)
-            }
+            Self::StaticImage
+            | Self::AnimatedGif
+            | Self::AnimatedApng
+            | Self::AnimatedWebP
+            | Self::AnimatedSvg => Some(PreviewType::Images),
             Self::Video => Some(PreviewType::Videos),
             Self::Text => Some(PreviewType::Text),
             Self::Pdf => Some(PreviewType::Pdf),
@@ -595,7 +600,10 @@ impl MediaData {
     fn is_streaming(&self) -> bool {
         matches!(
             self.media_type,
-            MediaType::AnimatedGif | MediaType::AnimatedApng | MediaType::AnimatedWebP
+            MediaType::AnimatedGif
+                | MediaType::AnimatedApng
+                | MediaType::AnimatedWebP
+                | MediaType::AnimatedSvg
         ) && !self.is_fully_loaded()
     }
 
@@ -1094,7 +1102,7 @@ fn request_office_render(
 ///
 /// Every other format keeps the configured scale.
 fn effective_preview_scale(path: &Path, preview_scale: PreviewScale) -> PreviewScale {
-    if pdf_preview::is_pdf_file(path) {
+    if pdf_preview::is_pdf_file(path) || svg_preview::is_svg_file(path) {
         fit_reduced(preview_scale)
     } else if is_text_preview(path) || archive_formats::is_archive_file(path) {
         PreviewScale::Percent(100)
@@ -1125,8 +1133,8 @@ fn effective_preview_scale(path: &Path, preview_scale: PreviewScale) -> PreviewS
 /// The room the display has, reduced to the configured share of it where the
 /// configuration asks for less than the whole of it.
 ///
-/// A source drawn at any size it is asked for — a PDF page, a page Office
-/// rendered — is laid out at fit-to-screen, because the display's room is free
+/// A source drawn at any size it is asked for — a PDF page, an SVG document, a page
+/// Office rendered — is laid out at fit-to-screen, because the display's room is free
 /// quality there. A configured percentage at or above `100%` asks for at least
 /// that room and is answered with it, so those settings are one setting for such
 /// a source; one below `100%` is a size the user picked, and is answered by
@@ -2266,6 +2274,218 @@ fn load_static_image(
     Some(static_image_media(frame))
 }
 
+/// Draw an SVG into the box the layout planned.
+///
+/// The document is measured here and drawn here, because nothing is held between the
+/// two: a vector drawn at the size it is shown at costs no more to draw again than to
+/// keep, and what a cache would hold is a frame as large as the display's room (see
+/// `svg_preview`). The box comes from the layout's own scaling of the measured size,
+/// so the frame and the window it is installed in are the same size.
+///
+/// One that moves is played instead — see `load_animated_svg` — and a document that
+/// only stands still costs the one parse that says so.
+fn load_svg_preview(
+    path: &Path,
+    max_width: u32,
+    max_height: u32,
+    preview_scale: PreviewScale,
+    cancel: &Arc<AtomicBool>,
+) -> Option<MediaData> {
+    if let Some(media) = load_animated_svg(
+        path,
+        max_width,
+        max_height,
+        preview_scale,
+        Arc::clone(cancel),
+    ) {
+        return Some(media);
+    }
+
+    if cancel.load(Ordering::Acquire) {
+        return None;
+    }
+
+    let (document_width, document_height) = svg_preview::measure(path)?;
+    let (target_width, target_height) = scale_dimensions(
+        document_width,
+        document_height,
+        max_width,
+        max_height,
+        preview_scale,
+    );
+
+    let (pixels, width, height) =
+        svg_preview::render(path, target_width, target_height, Some(cancel))?;
+
+    Some(static_image_media(ImageFrame {
+        pixels,
+        width,
+        height,
+        delay_ms: 0,
+    }))
+}
+
+/// Play an SVG that moves, frame by frame, into the queue every animation streams
+/// through.
+///
+/// The renderer cannot play one itself — usvg drops animation, so a document's
+/// declarations are worked out here and written back into it, once per frame, and each
+/// frame is a parse and a rasterization of its own. What keeps that affordable is where
+/// the frames go: the same streaming queue a GIF or an animated WebP fills, whose
+/// playback holds one frame per thirty-third of a second and lets the producer run only
+/// as far ahead as the queue has room for. A pass that fits in the player's window is
+/// drawn once and looped from memory; one that does not is drawn again for each loop,
+/// which is what the other animated formats do too.
+///
+/// Nothing is played for a document that does not move, or whose frame count is one:
+/// the answer is `None` and the caller draws it as the still it is.
+fn load_animated_svg(
+    path: &Path,
+    max_width: u32,
+    max_height: u32,
+    preview_scale: PreviewScale,
+    cancel: Arc<AtomicBool>,
+) -> Option<MediaData> {
+    if cancel.load(Ordering::Acquire) {
+        return None;
+    }
+
+    let source = svg_preview::source(path)?;
+    let document = roxmltree::Document::parse(source.as_ref()).ok()?;
+    let playback = svg_animation::Playback::parse(&document)?;
+
+    if playback.frames() <= 1 {
+        return None;
+    }
+
+    let (document_width, document_height) = svg_preview::measure(path)?;
+    let (target_width, target_height) = scale_dimensions(
+        document_width,
+        document_height,
+        max_width,
+        max_height,
+        preview_scale,
+    );
+    if target_width == 0 || target_height == 0 {
+        return None;
+    }
+
+    // The first frames are drawn before the preview is handed over, so the animation
+    // opens on motion rather than on a spinner — the same head start the other
+    // animated formats take.
+    let mut initial_frames = Vec::new();
+    let mut initial_bytes: usize = 0;
+    let startup_frames = ANIMATION_STARTUP_FRAMES.min(playback.frames() as usize);
+
+    while initial_frames.len() < startup_frames {
+        if cancel.load(Ordering::Acquire) {
+            return None;
+        }
+
+        let text = playback.document_at(&document, initial_frames.len() as u32);
+        let Some((pixels, width, height)) =
+            svg_preview::render_text(&text, target_width, target_height)
+        else {
+            break;
+        };
+
+        initial_bytes = initial_bytes.saturating_add(pixels.len());
+        if initial_bytes > ANIMATION_RETAINED_BYTES {
+            return None;
+        }
+
+        initial_frames.push(ImageFrame {
+            pixels,
+            width,
+            height,
+            delay_ms: svg_animation::FRAME_MS,
+        });
+    }
+
+    if initial_frames.is_empty() {
+        return None;
+    }
+
+    let rendered = initial_frames.len() as u32;
+    let shared = Arc::new(Mutex::new(StreamedFrames {
+        queue: VecDeque::new(),
+        released: false,
+    }));
+    let shared_clone = Arc::clone(&shared);
+    let loaded_flag = Arc::new(AtomicBool::new(false));
+    let loaded_flag_clone = Arc::clone(&loaded_flag);
+    let cancel_clone = Arc::clone(&cancel);
+    let source = Arc::clone(&source);
+
+    std::thread::spawn(move || {
+        // The animation is worked out again here rather than handed over: what a
+        // playback is made of are places in a parsed document, and this thread parses
+        // its own from the text it owns.
+        let Ok(document) = roxmltree::Document::parse(source.as_ref()) else {
+            loaded_flag_clone.store(true, Ordering::Release);
+            return;
+        };
+        let Some(playback) = svg_animation::Playback::parse(&document) else {
+            loaded_flag_clone.store(true, Ordering::Release);
+            return;
+        };
+
+        let mut skip = rendered;
+
+        loop {
+            let mut cancelled = false;
+
+            for index in skip..playback.frames() {
+                if cancel_clone.load(Ordering::Acquire)
+                    || !await_frame_queue_room(&shared_clone, &cancel_clone)
+                {
+                    cancelled = true;
+                    break;
+                }
+
+                let text = playback.document_at(&document, index);
+                let Some((pixels, width, height)) =
+                    svg_preview::render_text(&text, target_width, target_height)
+                else {
+                    continue;
+                };
+
+                if let Ok(mut streamed) = shared_clone.lock() {
+                    streamed.queue.push_back(ImageFrame {
+                        pixels,
+                        width,
+                        height,
+                        delay_ms: svg_animation::FRAME_MS,
+                    });
+                }
+            }
+
+            // The player gave back the frames it already showed, so the pass is drawn
+            // again to play the animation another time.
+            if cancelled || !streamed_frames_released(&shared_clone) {
+                break;
+            }
+
+            skip = 0;
+        }
+
+        loaded_flag_clone.store(true, Ordering::Release);
+    });
+
+    Some(MediaData {
+        frames: initial_frames,
+        shared_frames: Some(shared),
+        all_frames_loaded: Some(loaded_flag),
+        current_frame: 0,
+        last_frame_time: Instant::now(),
+        media_type: MediaType::AnimatedSvg,
+        stream_cancel: Some(cancel),
+        video_process: None,
+        loading_start: Some(Instant::now()),
+        text_state: None,
+    })
+}
+
 /// Render the first page of a PDF through the PDF engine built into Windows.
 fn load_pdf_first_page(
     path: &Path,
@@ -3211,6 +3431,13 @@ fn load_media(
         return load_text_preview(path, max_width, max_height, dpi, current_text_options());
     }
 
+    // An SVG is drawn rather than decoded, and it is asked after the text lists for
+    // the same reason the hook asks them in that order: a file is whichever kind
+    // claims it first, and a name a user has put in the text list is a text file.
+    if svg_preview::is_svg_file(path) {
+        return load_svg_preview(path, max_width, max_height, preview_scale, &cancel);
+    }
+
     let guessed_format = if is_confirm_file_type_enabled() {
         guessed_image_format(path)
     } else {
@@ -3305,6 +3532,14 @@ fn get_media_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
     // layout drops its preview.
     if !PreviewType::Images.enabled() {
         return None;
+    }
+
+    // An SVG is measured from the document rather than from a header: the size it
+    // asks to be drawn at is the size the layout places, and the renderer draws it
+    // at whatever box comes out of that. It is asked here, behind the `Images` gate,
+    // so that switching image previews off takes an SVG preview with them.
+    if svg_preview::is_svg_file(path) {
+        return svg_preview::measure(path);
     }
 
     if is_confirm_file_type_enabled() {
@@ -6920,6 +7155,138 @@ mod tests {
         // 720 is the name's right edge plus the gap, and 720 + 200 leaves the display;
         // 340 is its bottom plus the gap, and 340 + 300 does not.
         assert_eq!((placement.pos_x, placement.pos_y), (690, 340));
+    }
+
+    /// The whole path a document that moves takes: worked out from its declarations,
+    /// opened on drawn frames, and streamed from there. Ignored, and driven by
+    /// `RHP_SVG_PROBE` — `$env:RHP_SVG_PROBE = "C:\art\spinner.svg"; cargo test -- --ignored --nocapture animated_svg_probe`
+    /// — for a document whose animation does not play.
+    #[test]
+    #[ignore = "reads the file named in RHP_SVG_PROBE"]
+    fn animated_svg_probe() {
+        let Ok(path) = std::env::var("RHP_SVG_PROBE") else {
+            println!("set RHP_SVG_PROBE to a path");
+            return;
+        };
+
+        let path = PathBuf::from(path);
+        let cancel = Arc::new(AtomicBool::new(false));
+        let started = Instant::now();
+
+        match load_animated_svg(
+            &path,
+            800,
+            800,
+            PreviewScale::FitToScreen,
+            Arc::clone(&cancel),
+        ) {
+            Some(media) => {
+                println!(
+                    "opened on {} frame(s) of {}x{}, streamed from there, in {:?}",
+                    media.frames.len(),
+                    media.current_width(),
+                    media.current_height(),
+                    started.elapsed()
+                );
+            }
+            None => println!("nothing played, in {:?}", started.elapsed()),
+        }
+
+        cancel.store(true, Ordering::Release);
+
+        // A pass has to keep up with a frame every thirty-three milliseconds, so what
+        // one frame costs is the number worth having here.
+        let Some(source) = svg_preview::source(&path) else {
+            return;
+        };
+        let Ok(document) = roxmltree::Document::parse(source.as_ref()) else {
+            return;
+        };
+        let Some(playback) = svg_animation::Playback::parse(&document) else {
+            return;
+        };
+
+        let started = Instant::now();
+        let drawn = (0..playback.frames().min(12))
+            .filter(|index| {
+                let text = playback.document_at(&document, *index);
+
+                svg_preview::render_text(&text, 800, 800).is_some()
+            })
+            .count();
+
+        if drawn > 0 {
+            println!(
+                "drew {drawn} frame(s) in {:?} — {:?} each",
+                started.elapsed(),
+                started.elapsed() / drawn as u32
+            );
+        }
+    }
+
+    /// A document that moves is played: it opens on frames that were drawn before the
+    /// preview was handed over, and the rest of the pass is streamed. One that stands
+    /// still is not played at all, and is left to the still renderer.
+    #[test]
+    fn plays_a_document_that_moves_and_not_one_that_stands_still() {
+        let folder = std::env::temp_dir()
+            .join("rust-hover-preview-svg-tests")
+            .join("animated");
+        std::fs::create_dir_all(&folder).expect("a test folder");
+
+        let moving = folder.join("spinner.svg");
+        std::fs::write(
+            &moving,
+            br##"<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40"><rect x="16" y="2" width="8" height="14" fill="#2b5fd9"><animateTransform attributeName="transform" type="rotate" from="0 20 20" to="360 20 20" dur="1s" repeatCount="indefinite"/></rect></svg>"##,
+        )
+        .expect("a written document");
+
+        let cancel = Arc::new(AtomicBool::new(false));
+        let media = load_animated_svg(
+            &moving,
+            200,
+            200,
+            PreviewScale::FitToScreen,
+            Arc::clone(&cancel),
+        )
+        .expect("a document that moves");
+
+        assert!(matches!(media.media_type, MediaType::AnimatedSvg));
+        assert!(!media.frames.is_empty(), "the pass opens on drawn frames");
+        assert!(
+            media.frames[0].pixels.iter().any(|byte| *byte != 0),
+            "the first frame was drawn"
+        );
+        assert!(
+            media.shared_frames.is_some(),
+            "the rest of the pass is streamed rather than drawn up front"
+        );
+
+        cancel.store(true, Ordering::Release);
+
+        let still = folder.join("standing.svg");
+        std::fs::write(
+            &still,
+            br##"<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40"><rect width="40" height="40" fill="#2b5fd9"/></svg>"##,
+        )
+        .expect("a written document");
+
+        let cancel = Arc::new(AtomicBool::new(false));
+        assert!(
+            load_animated_svg(
+                &still,
+                200,
+                200,
+                PreviewScale::FitToScreen,
+                Arc::clone(&cancel)
+            )
+            .is_none(),
+            "a document that stands still is not played"
+        );
+        cancel.store(true, Ordering::Release);
+
+        let _ = std::fs::remove_file(&moving);
+        let _ = std::fs::remove_file(&still);
     }
 
     /// A video replaced in place is probed again rather than cropped and sized by

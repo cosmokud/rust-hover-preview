@@ -8,7 +8,9 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use crate::archive_formats::{sanitize_archive_extensions, DEFAULT_ARCHIVE_EXTENSIONS};
-use crate::image_formats::{sanitize_image_extensions, DEFAULT_IMAGE_EXTENSIONS};
+use crate::image_formats::{
+    sanitize_image_extensions, DEFAULT_IMAGE_EXTENSIONS, IMAGE_EXTENSIONS_BEFORE_SVG,
+};
 use crate::office_formats::{sanitize_office_extensions, DEFAULT_OFFICE_EXTENSIONS};
 use crate::text_formats::{
     sanitize_extensions, sanitize_names, DEFAULT_TEXT_EXTENSIONS, DEFAULT_TEXT_NAMES,
@@ -178,10 +180,10 @@ pub enum PreviewScale {
     /// share of it.
     ///
     /// This is a scale the app derives rather than one the configuration holds: a
-    /// source that is drawn at any size it is asked for — a PDF page, a page
-    /// Office rendered — is laid out at fit-to-screen, because the display's room
-    /// is free quality there, and a configured percentage below `100` is answered
-    /// by reducing that size rather than ignored.
+    /// source that is drawn at any size it is asked for — a PDF page, an SVG
+    /// document, a page Office rendered — is laid out at fit-to-screen, because the
+    /// display's room is free quality there, and a configured percentage below `100`
+    /// is answered by reducing that size rather than ignored.
     FitToScreenReduced(u32),
     /// Scale by a percentage of the media's native size.
     Percent(u32),
@@ -729,12 +731,43 @@ fn configured_list(
     defaults: &str,
     sanitize: fn(&str) -> Vec<String>,
 ) -> (Vec<String>, bool) {
+    configured_list_over_history(ini, section, key, defaults, &[], sanitize)
+}
+
+/// The same, for a list whose built-in entries have changed since the file may have
+/// been written.
+///
+/// A value holding exactly one of `previous` is the app's own older list rather than
+/// a user's edit — an installation that has never touched the list — so it is read as
+/// the current built-in list, entries and all, and the file is written out again with
+/// what was added to it. Without that, an entry added to a built-in list would reach
+/// a fresh installation only: every file already written holds the list as it was,
+/// and a list that differs from the built-in one is otherwise the user's own. A list
+/// with any one entry changed — added, removed or spelled differently — matches
+/// neither and is kept exactly as it is.
+fn configured_list_over_history(
+    ini: &Ini,
+    section: &str,
+    key: &str,
+    defaults: &str,
+    previous: &[&str],
+    sanitize: fn(&str) -> Vec<String>,
+) -> (Vec<String>, bool) {
     let canonical = sanitize(defaults);
 
     match ini.get(section, key) {
         Some(value) => {
             let list = sanitize(&value);
-            if list != canonical && same_entries(&list, &canonical) {
+            if list == canonical {
+                return (list, false);
+            }
+
+            let written_by_the_app = same_entries(&list, &canonical)
+                || previous
+                    .iter()
+                    .any(|older| same_entries(&list, &sanitize(older)));
+
+            if written_by_the_app {
                 (canonical, true)
             } else {
                 (list, false)
@@ -1123,11 +1156,15 @@ impl AppConfig {
         // thing — it is a list the user emptied, and it is kept as written.
         let mut restored = false;
 
-        let (list, defaulted) = configured_list(
+        // The image list is the one whose built-in entries have changed since a file
+        // may have been written — `svg` and `svgz` were added to it — so it is read
+        // through the history beside the app's own older list.
+        let (list, defaulted) = configured_list_over_history(
             ini,
             IMAGE_SECTION,
             "extensions",
             DEFAULT_IMAGE_EXTENSIONS,
+            &[IMAGE_EXTENSIONS_BEFORE_SVG],
             sanitize_image_extensions,
         );
         self.image_extensions = list;
@@ -1244,5 +1281,47 @@ mod tests {
             !OfficeEngineIdle::Indefinite.has_expired(Duration::from_secs(365 * 24 * 60 * 60)),
             "an engine kept for the life of the app never goes idle"
         );
+    }
+
+    /// A file holding the built-in list of an earlier version has never been edited,
+    /// so the entries added to the list since then are put into it. Without this, a
+    /// format added to a built-in list would preview on a fresh installation only.
+    #[test]
+    fn a_list_holding_the_apps_own_older_image_entries_takes_the_ones_added_to_it() {
+        let mut ini = Ini::new();
+        ini.set(
+            IMAGE_SECTION,
+            "extensions",
+            Some(IMAGE_EXTENSIONS_BEFORE_SVG.to_string()),
+        );
+
+        let mut config = AppConfig::default();
+        config.apply_ini(&ini);
+
+        assert_eq!(
+            config.image_extensions,
+            sanitize_image_extensions(DEFAULT_IMAGE_EXTENSIONS),
+            "the list the app shipped before is read as the list it ships now"
+        );
+    }
+
+    /// The same list with one entry of the user's own in it is the user's list, not
+    /// the app's: the entries added since are left out of it.
+    #[test]
+    fn an_image_list_anyone_has_edited_is_kept_as_written() {
+        let written = format!("avif,{IMAGE_EXTENSIONS_BEFORE_SVG}");
+
+        let mut ini = Ini::new();
+        ini.set(IMAGE_SECTION, "extensions", Some(written.clone()));
+
+        let mut config = AppConfig::default();
+        config.apply_ini(&ini);
+
+        assert_eq!(
+            config.image_extensions,
+            sanitize_image_extensions(&written),
+            "what the file says is what the list is"
+        );
+        assert!(!config.image_extensions.contains(&"svg".to_string()));
     }
 }
