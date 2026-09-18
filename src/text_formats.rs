@@ -45,8 +45,18 @@ fn sanitized_extension(value: &str) -> Option<String> {
 /// is the start of its *name* — and `LICENSE`, `Makefile` and `Dockerfile` have no
 /// dot in them anywhere. So the gate has a second list, of names, and a file
 /// matches if either list does.
-pub const DEFAULT_TEXT_NAMES: &str = "license,licence,unlicense,copying,copyright,notice,authors,contributors,contributing,code_of_conduct,security,changelog,changes,history,install,readme,makefile,gnumakefile,makefile.am,makefile.in,dockerfile,containerfile,vagrantfile,gemfile,rakefile,procfile,brewfile,jenkinsfile,justfile,caddyfile,cmakelists.txt,\
-.gitignore,.gitattributes,.gitmodules,.gitkeep,.gitconfig,.mailmap,.dockerignore,.editorconfig,.npmignore,.eslintignore,.prettierignore,.babelrc,.eslintrc,.prettierrc,.stylelintrc,.htaccess,.env,.env.local,.env.example,.clang-format,.clang-tidy,.rustfmt.toml,.golangci.yml";
+///
+/// The entries are ordered by the name each one matches, a leading dot aside, since
+/// a dot begins a name rather than changing it: `.gitattributes` sits where
+/// `gitattributes` would, which is also the form this list is written to `config.ini`
+/// in and looked up by.
+pub const DEFAULT_TEXT_NAMES: &str = "authors,.babelrc,brewfile,caddyfile,changelog,changes,.clang-format,.clang-tidy,cmakelists.txt,\
+code_of_conduct,containerfile,contributing,contributors,copying,copyright,dockerfile,\
+.dockerignore,.editorconfig,.env,.env.example,.env.local,.eslintignore,.eslintrc,gemfile,\
+.gitattributes,.gitconfig,.gitignore,.gitkeep,.gitmodules,gnumakefile,.golangci.yml,history,\
+.htaccess,install,jenkinsfile,justfile,licence,license,.mailmap,makefile,makefile.am,makefile.in,\
+notice,.npmignore,.prettierignore,.prettierrc,procfile,rakefile,readme,.rustfmt.toml,security,\
+.stylelintrc,unlicense,vagrantfile";
 
 /// Read one name out of the configured list into the lowercase form the lookups
 /// use. A leading dot is accepted and dropped, because `.gitignore` and
