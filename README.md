@@ -123,7 +123,7 @@ ffprobe -version
   - **Position** — Follow Cursor or Best Position, and whether to keep previews off the hovered item's name
   - **Scaling** — Fit to Screen or 25%–400%
 - **Volume** — Max, High, Medium, Low, Very Low, Mute
-- **Cache** — each of these lists its sizes largest first, `2 GB` at the top down to `0 MB`, with the size that cache starts at marked `(Default)` — `0 MB` for Image, Text and PDF, `64 MB` for Office:
+- **Cache** — each of these lists its sizes largest first, `2 GB` at the top down to `0 MB`, with the size that cache starts at marked `(Default)` — `32 MB` for Image and PDF, `0 MB` for Text, `64 MB` for Office:
   - **Image** — how much memory decoded image frames may be kept in between hovers
   - **Text** — the same for the frames text previews were painted as
   - **PDF** — the same for the pages PDF previews were rendered as
@@ -157,9 +157,9 @@ pdf_preview_enabled=true
 archive_preview_enabled=true
 office_preview_enabled=true
 office_cache_mb=64
-pdf_cache_mb=0
+pdf_cache_mb=32
 text_cache_mb=0
-image_cache_mb=0
+image_cache_mb=32
 trigger_key=alt
 trigger_key_mode=disable
 confirm_file_type=false
@@ -194,10 +194,10 @@ Key settings:
 - `text_font_scale` — percentage from 1 to 1000; default is `125`. Archive listings follow it too.
 - `extensions` / `names` — text-preview gates. Extensions are written without dots; names match extensionless files.
 - `archive_extensions` — the archive-preview gate, under `[archive]`. Entries are written without dots, and an entry with a dot in it (`tar.gz`) is matched against the end of the file name.
-- `image_cache_mb` — how much memory decoded image frames may be kept in, in megabytes, so hovering back over a folder does not decode the same pictures again; `0` (the default) holds nothing, and the value is capped at `2048`.
+- `image_cache_mb` — how much memory decoded image frames may be kept in, in megabytes, so hovering back over a folder does not decode the same pictures again; default is `32` — a hit skips a full-resolution decode — and the value is capped at `2048`. `0` holds nothing.
 - `office_cache_mb` — the same for the pages Office rendered, capped at `2048`; default is `64`, because producing a page costs an Office start and an export, so what has been drawn is worth keeping. `0` holds nothing, but a page is still rendered for the hover that asks for it: this size is only how much is kept between hovers.
-- `pdf_cache_mb` — the same for the pages PDF previews were rendered as, capped at `2048`. A page is stored as the pixels it was drawn as, so the size is per file _and_ per preview size: the same PDF hovered at fit-to-screen and at `25%` is held as two pages.
-- `text_cache_mb` — the same for the frames text previews were painted as, capped at `2048`. A frame is stored as the pixels it was painted into, so the size is per file, per box and per scroll position; a frame a selection is painted into is never held.
+- `pdf_cache_mb` — the same for the pages PDF previews were rendered as, capped at `2048`; default is `32`. A page is stored as the pixels it was drawn as, so the size is per file _and_ per preview size: the same PDF hovered at fit-to-screen and at `25%` is held as two pages.
+- `text_cache_mb` — the same for the frames text previews were painted as, capped at `2048`; default is `0`, since the text behind a frame is already cached as text and only the layout and the painting are what a hit saves. A frame is stored as the pixels it was painted into, so the size is per file, per box and per scroll position; a frame a selection is painted into is never held.
 - `office_extensions` — the Office-preview gate, under `[office]`, written without dots.
 - `trigger_key` / `trigger_key_mode` — key (`alt`, `ctrl`, `shift`, `win`) and mode (`disable` or `enable`).
 - `follow_cursor` — `true` for Follow Cursor, `false` for Best Position.
