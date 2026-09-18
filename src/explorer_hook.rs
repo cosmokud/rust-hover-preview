@@ -16,7 +16,7 @@ use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -663,7 +663,7 @@ fn should_probe_preview_hover(
 /// does not is the TypeScript source the text lists claim. The lists come from the
 /// configuration this already holds rather than from the gates' own lookups, which
 /// would take the same lock again.
-fn is_media_file(path: &PathBuf) -> bool {
+fn is_media_file(path: &Path) -> bool {
     let Ok(config) = CONFIG.lock() else {
         return false;
     };
@@ -1893,8 +1893,10 @@ fn is_foreground_explorer() -> bool {
 /// Check if a window is maximized
 fn is_window_maximized(hwnd: HWND) -> bool {
     unsafe {
-        let mut placement = WINDOWPLACEMENT::default();
-        placement.length = std::mem::size_of::<WINDOWPLACEMENT>() as u32;
+        let mut placement = WINDOWPLACEMENT {
+            length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
+            ..Default::default()
+        };
         if GetWindowPlacement(hwnd, &mut placement).is_ok() {
             return placement.showCmd == SW_SHOWMAXIMIZED.0 as u32;
         }

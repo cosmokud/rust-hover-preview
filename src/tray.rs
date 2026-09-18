@@ -1556,7 +1556,10 @@ unsafe fn add_tray_icon(hwnd: HWND) -> bool {
         let hinstance = HINSTANCE(hmodule.0);
         match LoadImageW(
             hinstance,
-            PCWSTR(1 as *const u16),
+            // `MAKEINTRESOURCEW(1)`: with the high word zero, `LoadImageW`
+            // reads this value as the ID of the resource to load rather than
+            // as the address of a name, so it is an ID here and not a pointer.
+            PCWSTR(std::ptr::without_provenance(1)),
             IMAGE_ICON,
             0,
             0,

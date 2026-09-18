@@ -12,6 +12,7 @@
 - A `%TEMP%\rust-hover-preview-video.log` left by an earlier version is deleted at startup.
 - `cargo build --release` ends a running copy of the app before the crate is linked, so the build replaces `target/release/rust-hover-preview.exe` instead of failing while it is open; debug builds are left alone.
 - The source tree is formatted with `rustfmt` and passes `cargo fmt --check`.
+- `cargo clippy --all-targets -- -D warnings` passes again: unneeded casts, needless borrows and `&PathBuf` parameters are gone, and the tray icon's `MAKEINTRESOURCE` ID is no longer written as a pointer cast.
 
 ## [0.2.6]
 

@@ -636,16 +636,16 @@ impl MediaData {
     }
 }
 
-pub fn show_preview(path: &PathBuf, x: i32, y: i32, avoid: Option<ScreenRegion>) {
+pub fn show_preview(path: &Path, x: i32, y: i32, avoid: Option<ScreenRegion>) {
     if let Ok(sender) = PREVIEW_SENDER.lock() {
         if let Some(ref tx) = *sender {
-            let _ = tx.send(PreviewMessage::Show(path.clone(), x, y, avoid));
+            let _ = tx.send(PreviewMessage::Show(path.to_path_buf(), x, y, avoid));
         }
     }
 }
 
 pub fn show_preview_keyboard(
-    path: &PathBuf,
+    path: &Path,
     item_left: i32,
     item_top: i32,
     item_right: i32,
@@ -656,7 +656,7 @@ pub fn show_preview_keyboard(
     if let Ok(sender) = PREVIEW_SENDER.lock() {
         if let Some(ref tx) = *sender {
             let _ = tx.send(PreviewMessage::ShowKeyboard(
-                path.clone(),
+                path.to_path_buf(),
                 item_left,
                 item_top,
                 item_right,
@@ -827,14 +827,14 @@ pub fn preview_screen_rect() -> Option<(i32, i32, i32, i32)> {
     None
 }
 
-fn is_gif_file(path: &PathBuf) -> bool {
+fn is_gif_file(path: &Path) -> bool {
     path.extension()
         .and_then(|ext| ext.to_str())
         .map(|ext| ext.to_lowercase() == "gif")
         .unwrap_or(false)
 }
 
-fn is_webp_file(path: &PathBuf) -> bool {
+fn is_webp_file(path: &Path) -> bool {
     path.extension()
         .and_then(|ext| ext.to_str())
         .map(|ext| ext.to_lowercase() == "webp")
@@ -1163,7 +1163,7 @@ fn effective_frame_delay_ms(media_type: &MediaType, source_delay_ms: u32) -> u32
 }
 
 fn checkerboard_color(x: u32, y: u32) -> (u8, u8, u8) {
-    if ((x / 16) + (y / 16)) % 2 == 0 {
+    if ((x / 16) + (y / 16)).is_multiple_of(2) {
         (224, 224, 224)
     } else {
         (144, 144, 144)
@@ -2268,7 +2268,7 @@ fn load_static_image(
 
 /// Render the first page of a PDF through the PDF engine built into Windows.
 fn load_pdf_first_page(
-    path: &PathBuf,
+    path: &Path,
     max_width: u32,
     max_height: u32,
     preview_scale: PreviewScale,
@@ -2317,7 +2317,7 @@ fn load_pdf_first_page(
 /// inside the box, so a page that is not the shape the layout assumed is
 /// letterboxed instead of stretched.
 fn load_office_preview(
-    path: &PathBuf,
+    path: &Path,
     max_width: u32,
     max_height: u32,
     preview_scale: PreviewScale,
@@ -2944,7 +2944,7 @@ fn start_video_playback(path: &PathBuf, x: i32, y: i32, width: i32, height: i32)
         }
     });
     if let Some(vf) = vf.as_deref() {
-        cmd.args(["-vf", &vf]);
+        cmd.args(["-vf", vf]);
     }
 
     let child = cmd
