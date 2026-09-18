@@ -43,12 +43,12 @@ use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use windows::core::{GUID, PCWSTR, PWSTR, VARIANT};
-use windows::Win32::Foundation::{CloseHandle, HGLOBAL, LPARAM, WPARAM};
+use windows::Win32::Foundation::{BOOL, CloseHandle, HGLOBAL, HWND, LPARAM, WPARAM};
 use windows::Win32::System::Com::{
     CLSIDFromProgID, CoCreateInstance, CoInitializeEx, IDispatch, CLSCTX_LOCAL_SERVER,
     COINIT_APARTMENTTHREADED, DISPATCH_FLAGS, DISPATCH_METHOD, DISPATCH_PROPERTYGET,
@@ -66,9 +66,14 @@ use windows::Win32::System::Threading::{
     GetCurrentThreadId, GetExitCodeProcess, OpenProcess, QueryFullProcessImageNameW,
     TerminateProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE,
 };
+use windows::Win32::UI::Accessibility::{
+    SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
-    DispatchMessageW, MsgWaitForMultipleObjectsEx, PeekMessageW, PostThreadMessageW,
-    TranslateMessage, MSG, MWMO_INPUTAVAILABLE, PM_REMOVE, QS_ALLINPUT, WM_APP,
+    DispatchMessageW, EnumWindows, GetClassNameW, GetWindowThreadProcessId, IsWindowVisible,
+    MsgWaitForMultipleObjectsEx, PeekMessageW, PostThreadMessageW, ShowWindow, TranslateMessage,
+    EVENT_OBJECT_SHOW, MSG, MWMO_INPUTAVAILABLE, PM_REMOVE, QS_ALLINPUT, SW_HIDE, WINEVENT_OUTOFCONTEXT,
+    WM_APP,
 };
 
 /// The message a request is announced with on the worker's own thread queue.
@@ -178,6 +183,23 @@ const STILL_ACTIVE: u32 = 259;
 const MSO_AUTOMATION_SECURITY_FORCE_DISABLE: i32 = 3;
 /// What a property put is identified by, in the parameter block that carries it.
 const DISPID_PROPERTYPUT: i32 = -3;
+/// The window class Office shows its progress bars in — the wide, short
+/// "Publishing…" window an export puts on the desktop. See
+/// [`ProgressWindowHider`].
+///
+/// It is the class that is matched and not the title: a title is the machine's
+/// language, and this is not.
+const MSO_PROGRESS_WINDOW_CLASS: &str = "CMsoProgressBarWindow";
+/// How long the progress hider waits on its thread's queue between looks at the
+/// render it is watching. It is woken by the events it is hooked to, so this is
+/// only how promptly it notices that the render is over.
+const PROGRESS_WAIT_MS: u32 = 5;
+/// How often the progress hider sweeps the process's windows as well as watching
+/// for them being shown. The event is what makes the bar never part of a frame;
+/// the sweep is what does not depend on an event arriving.
+const PROGRESS_SWEEP_INTERVAL: Duration = Duration::from_millis(100);
+/// The longest class name `GetClassNameW` is given room for.
+const MAX_CLASS_NAME: usize = 256;
 
 /// Which of the files a render can produce.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -966,6 +988,11 @@ impl Engine {
         // for almost the whole of its life.
         self.take_settings();
 
+        // The one part of a render that is on screen is Office's own progress
+        // window, and only for a process this app started — see
+        // `ProgressWindowHider`.
+        let _hider = (self.owned_pid != 0).then(|| ProgressWindowHider::new(self.owned_pid));
+
         let rendered = match self.app_kind {
             OfficeApp::Word => render_word(&self.app, source, target),
             OfficeApp::Excel => render_excel(&self.app, source, target, retrying),
@@ -1292,6 +1319,129 @@ fn processes_named(image_name: &str) -> Vec<u32> {
     }
 
     found
+}
+
+/// Take Office's own progress window off the screen for as long as a render lasts.
+///
+/// Exporting a page is work Office shows a progress bar for — the wide, short
+/// "Publishing…" window in the middle of the desktop — and it shows it whether or
+/// not the application it belongs to is visible, and through every setting this
+/// engine holds: alerts, screen updating and the automation security mode were all
+/// measured against it, and none of them keeps it off the screen. What the window
+/// is, though, is a progress bar — nothing about the export depends on it being
+/// seen — so it is hidden while the render runs. It is hidden only in a process
+/// this app started: an instance the user is working in keeps every window it
+/// owns, the same as it keeps its dialogs and its macros.
+struct ProgressWindowHider {
+    stop: Arc<AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl ProgressWindowHider {
+    fn new(pid: u32) -> Self {
+        let stop = Arc::new(AtomicBool::new(false));
+        let watching = Arc::clone(&stop);
+        let thread = std::thread::spawn(move || {
+            unsafe {
+                // The bar is taken down the moment it is put up, so it is never
+                // part of a frame a display is showing: a sweep of the process's
+                // windows cannot be that prompt — the bar is up for a moment
+                // between the two, and that moment is what a hover used to show —
+                // and the sweep below is only what does not depend on an event
+                // arriving.
+                let hook = SetWinEventHook(
+                    EVENT_OBJECT_SHOW,
+                    EVENT_OBJECT_SHOW,
+                    None,
+                    Some(progress_window_shown),
+                    pid,
+                    0,
+                    WINEVENT_OUTOFCONTEXT,
+                );
+
+                let mut swept = Instant::now();
+                while !watching.load(Ordering::Acquire) {
+                    // The thread has to pump messages for the hook to be called at
+                    // all, and what it pumps is nothing else: no window belongs to
+                    // this thread.
+                    pump_messages();
+                    if swept.elapsed() >= PROGRESS_SWEEP_INTERVAL {
+                        swept = Instant::now();
+                        let _ = EnumWindows(Some(hide_progress_window), LPARAM(pid as isize));
+                    }
+                    wait_for_message(PROGRESS_WAIT_MS);
+                }
+
+                if !hook.0.is_null() {
+                    let _ = UnhookWinEvent(hook);
+                }
+            }
+        });
+
+        Self {
+            stop,
+            thread: Some(thread),
+        }
+    }
+}
+
+impl Drop for ProgressWindowHider {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+/// Hide the window an event is about, when it is Office's progress bar.
+///
+/// The hook this is called by was made for one process's windows, so nothing else
+/// can reach it, and only a window being *shown* is reported.
+unsafe extern "system" fn progress_window_shown(
+    _hook: HWINEVENTHOOK,
+    _event: u32,
+    window: HWND,
+    object: i32,
+    child: i32,
+    _thread: u32,
+    _time: u32,
+) {
+    // `OBJID_WINDOW` and `CHILDID_SELF`: the bar itself, rather than one of the
+    // accessibility objects inside it.
+    if object != 0 || child != 0 {
+        return;
+    }
+
+    hide_when_progress_bar(window);
+}
+
+/// Hide one window, when it is the progress bar of the process being watched.
+/// Every other window is left where it is and the walk goes on: a window that is
+/// not this one says nothing about the windows after it.
+unsafe extern "system" fn hide_progress_window(window: HWND, pid: LPARAM) -> BOOL {
+    let mut owner = 0u32;
+    GetWindowThreadProcessId(window, Some(&mut owner));
+    if owner == pid.0 as u32 {
+        hide_when_progress_bar(window);
+    }
+
+    BOOL(1)
+}
+
+/// Take a window off the screen when it is Office's progress bar and it is on it.
+unsafe fn hide_when_progress_bar(window: HWND) {
+    if !IsWindowVisible(window).as_bool() {
+        return;
+    }
+
+    let mut class = [0u16; MAX_CLASS_NAME];
+    let length = GetClassNameW(window, &mut class);
+    if length > 0
+        && String::from_utf16_lossy(&class[..length as usize]) == MSO_PROGRESS_WINDOW_CLASS
+    {
+        let _ = ShowWindow(window, SW_HIDE);
+    }
 }
 
 /// What suppresses a dialog in each application: Word and PowerPoint take a
