@@ -12,16 +12,15 @@ use std::path::Path;
 /// transport streams, so the video gate decides those two by content (an MPEG-TS
 /// sync byte) and a TypeScript file falls through to a text preview. Every other
 /// extension here is disjoint from the image, video and PDF gates.
-pub const DEFAULT_TEXT_EXTENSIONS: &str = "txt,text,log,nfo,diz,md,markdown,mkd,mdown,rst,adoc,asciidoc,org,tex,latex,bib,man,csv,tsv,srt,vtt,rtf,diff,patch,\
-ini,cfg,conf,properties,env,toml,yaml,yml,json,jsonc,json5,jsonl,xml,xsd,xsl,xslt,plist,\
-html,htm,xhtml,css,scss,sass,less,styl,js,mjs,cjs,jsx,ts,tsx,mts,cts,vue,svelte,astro,\
-php,phtml,asp,aspx,jsp,cshtml,erb,haml,slim,ejs,hbs,mustache,twig,liquid,njk,\
-sh,bash,zsh,fish,ksh,csh,bat,cmd,ps1,psm1,psd1,vbs,awk,tcl,pl,pm,py,pyw,pyi,rb,rake,lua,\
-groovy,gradle,r,rmd,jl,c,h,cc,cpp,cxx,hh,hpp,hxx,cs,csx,java,kt,kts,scala,go,rs,swift,\
-m,mm,dart,zig,nim,d,pas,f,f77,f90,f95,f03,for,ftn,adb,ads,hs,lhs,ml,mli,fs,fsi,fsx,ex,exs,\
-erl,hrl,elm,clj,cljs,cljc,edn,lisp,lsp,el,scm,ss,rkt,v,sv,svh,vhd,vhdl,sol,sql,graphql,gql,\
-proto,cmake,mk,mak,ninja,bzl,tf,tfvars,hcl,nix,asm,s,inc,nasm,wat,ll,glsl,vert,frag,geom,\
-comp,hlsl,fx,cg,wgsl,metal,ipynb,lock";
+pub const DEFAULT_TEXT_EXTENSIONS: &str = "adb,adoc,ads,asciidoc,asm,asp,aspx,astro,awk,bash,bat,bib,bzl,c,cc,cfg,cg,cjs,clj,cljc,cljs,\
+cmake,cmd,comp,conf,cpp,cs,csh,cshtml,css,csv,csx,cts,cxx,d,dart,diff,diz,edn,ejs,el,elm,env,erb,\
+erl,ex,exs,f,f03,f77,f90,f95,fish,for,frag,fs,fsi,fsx,ftn,fx,geom,glsl,go,gql,gradle,graphql,\
+groovy,h,haml,hbs,hcl,hh,hlsl,hpp,hrl,hs,htm,html,hxx,inc,ini,ipynb,java,jl,js,json,json5,jsonc,\
+jsonl,jsp,jsx,ksh,kt,kts,latex,less,lhs,liquid,lisp,ll,lock,log,lsp,lua,m,mak,man,markdown,md,\
+mdown,metal,mjs,mk,mkd,ml,mli,mm,mts,mustache,nasm,nfo,nim,ninja,nix,njk,org,pas,patch,php,phtml,\
+pl,plist,pm,properties,proto,ps1,psd1,psm1,py,pyi,pyw,r,rake,rb,rkt,rmd,rs,rst,rtf,s,sass,scala,\
+scm,scss,sh,slim,sol,sql,srt,ss,styl,sv,svelte,svh,swift,tcl,tex,text,tf,tfvars,toml,ts,tsv,tsx,\
+twig,txt,v,vbs,vert,vhd,vhdl,vtt,vue,wat,wgsl,xhtml,xml,xsd,xsl,xslt,yaml,yml,zig,zsh";
 
 /// Read one extension out of the configured list into the lowercase form the
 /// lookups use. A leading dot is accepted because `py` and `.py` are both what

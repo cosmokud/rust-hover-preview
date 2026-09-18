@@ -24,7 +24,7 @@ use std::path::Path;
 /// `tar.gz` is a name rather than an extension — the last dot of `sources.tar.gz`
 /// is `gz`, which is not an archive on its own — so an entry containing a dot is
 /// matched against the end of the file's name instead.
-pub const DEFAULT_ARCHIVE_EXTENSIONS: &str = "zip,zipx,jar,apk,xpi,cbz,rar,7z,tar,tgz,tar.gz";
+pub const DEFAULT_ARCHIVE_EXTENSIONS: &str = "7z,apk,cbz,jar,rar,tar,tar.gz,tgz,xpi,zip,zipx";
 
 /// Whether either form of the configured list claims `path`: its last extension,
 /// or a dotted tail of its name for the two-part formats.
