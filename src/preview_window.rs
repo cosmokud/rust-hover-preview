@@ -6297,6 +6297,15 @@ pub fn run_preview_window() {
                 latest_preview_msg = current_show.clone();
             }
 
+            // The engine could not be had for the preview that is up — the folder it
+            // keeps its state in is held by a browser that is not this app's — so the
+            // hover is replayed and laid out again, where the document is played by
+            // this app's own reader instead of being left as the still frame the
+            // engine's window was going to land on.
+            if latest_preview_msg.is_none() && webview_preview::take_failure_notice() {
+                latest_preview_msg = current_show.clone();
+            }
+
             if let Some(preview_msg) = latest_preview_msg {
                 // Common variables for Show/ShowKeyboard - set in match, used after
                 let mut show_path: Option<PathBuf> = None;
@@ -7373,6 +7382,64 @@ mod tests {
 
         let _ = std::fs::remove_file(&moving);
         let _ = std::fs::remove_file(&still);
+    }
+
+    /// The whole app path for one file, without Explorer: the preview loop is started,
+    /// the file is shown the way a hover shows it, and what happens next is reported.
+    /// Ignored, and driven by `RHP_APP_PROBE` —
+    /// `$env:RHP_APP_PROBE = "C:\art\clock.svg"; cargo test -- --ignored --nocapture app_hover_probe`
+    /// — for a document whose preview does not appear.
+    #[test]
+    #[ignore = "shows a preview window"]
+    fn app_hover_probe() {
+        let Ok(path) = std::env::var("RHP_APP_PROBE") else {
+            println!("set RHP_APP_PROBE to a path");
+            return;
+        };
+        let path = PathBuf::from(path);
+
+        println!(
+            "engine available: {}",
+            crate::webview_preview::is_available()
+        );
+        println!("document moves: {}", crate::webview_preview::moves(&path));
+
+        std::thread::spawn(run_preview_window);
+        std::thread::sleep(Duration::from_millis(500));
+
+        show_preview(&path, 200, 200, None);
+
+        for step in 0..25 {
+            std::thread::sleep(Duration::from_millis(200));
+
+            let media = CURRENT_MEDIA.lock().ok().and_then(|media| {
+                media.as_ref().map(|media| {
+                    (
+                        media.current_width(),
+                        media.current_height(),
+                        media.frames.len(),
+                    )
+                })
+            });
+
+            println!(
+                "{:>5} ms: engine_showing={} media={:?}",
+                (step + 1) * 200,
+                crate::webview_preview::is_showing(),
+                media
+            );
+
+            if crate::webview_preview::is_showing() {
+                break;
+            }
+        }
+
+        hide_preview();
+        std::thread::sleep(Duration::from_millis(300));
+        println!(
+            "after hide: engine_showing={}",
+            crate::webview_preview::is_showing()
+        );
     }
 
     /// A video replaced in place is probed again rather than cropped and sized by
