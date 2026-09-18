@@ -230,6 +230,10 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full system overview. In short: W
 
 See [TODO.md](TODO.md) for planned work, known bugs, and other issues.
 
+## Privacy
+
+Rust Hover Preview works fully offline — no telemetry, analytics, ads, update checks, or accounts. It reads only the item you hover or focus in Explorer, locally and only for enabled preview types. Cloud-only placeholders are skipped; password-protected files are never bypassed. Settings and themes live under `%APPDATA%\rust-hover-preview`; optional previews use your local FFmpeg, Microsoft Office, and Windows PDF engine. Caches are in-memory and bounded by `config.ini`. See [PRIVACY.md](PRIVACY.md) for full details.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
