@@ -44,6 +44,7 @@
 - A page landing over a waiting spinner no longer flashes the spinner stretched across the page's box: the window is given the page's size and place by the paint itself, in one call, rather than being resized ahead of it.
 - A pointer that drifts onto a waiting spinner no longer dismisses the hover it belongs to — the spinner publishes the box it occupies as one that holds the pointer — so the page being waited for is not thrown away with the hover, and the first hover of a document after a folder change is no longer answered with nothing and then with its page on the second.
 - Explorer crashing or being ended no longer leaves previews dead until the app is restarted.
+- Office's own "Publishing…" progress window no longer flashes over a hover: a render watches for that window in the process it started and hides it, which no setting the engine holds — alerts, screen updating, the automation security mode — was able to do.
 
 ## [0.2.5] - 2026-09-17
 
