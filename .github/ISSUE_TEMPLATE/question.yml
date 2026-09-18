@@ -1,0 +1,16 @@
+name: Question
+description: Not sure about something? Ask here.
+title: "[Question]: "
+labels: ["question"]
+body:
+  - type: markdown
+    attributes:
+      value: No question is too small. Ask away!
+  - type: textarea
+    id: question
+    attributes:
+      label: What is your question?
+      description: What do you want to know? Include what you already tried.
+      placeholder: Example: How do I turn off video previews but keep image previews?
+    validations:
+      required: true

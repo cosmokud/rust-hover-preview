@@ -1,0 +1,53 @@
+name: Bug report
+description: Something isn't working? Tell us what happened.
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug! Please fill in the sections below.
+        If this is a security problem, see SECURITY.md instead of opening a public issue.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What went wrong? What did you expect to happen instead?
+      placeholder: Example: Hovering a .png shows no preview, but I expected a small image next to the cursor.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Tell us how to see the bug. Numbered steps work best.
+      placeholder: |
+        1. Start the app
+        2. Open Explorer to a folder with a .png
+        3. Hover the file
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: App version
+      description: Which release are you using? (See the tray menu Config.ini item, e.g. 0.2.6.)
+      placeholder: Example: 0.2.6
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows version
+      description: Press Win+R, type winver, and paste the version here.
+      placeholder: Example: Windows 11 24H2
+    validations:
+      required: true
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else?
+      description: File type, screenshots, logs, or anything unusual about your setup. Remove private info first.
+      placeholder: Optional. Example: Only happens with files on OneDrive.
+    validations:
+      required: false
