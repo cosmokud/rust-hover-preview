@@ -6,6 +6,7 @@ use crate::config::{
     DEFAULT_PDF_CACHE_MB, DEFAULT_PREVIEW_SCALE_PERCENT, DEFAULT_TEXT_CACHE_MB,
     DEFAULT_TEXT_FONT_SCALE_PERCENT,
 };
+use crate::explorer_hook;
 use crate::office_render;
 use crate::pdf_preview;
 use crate::preview_window::{refresh_preview, refresh_preview_types, trim_image_cache};
@@ -161,6 +162,11 @@ unsafe extern "system" fn tray_window_proc(
             // Explorer (taskbar) restarted; re-add tray icon
             remove_tray_icon(hwnd);
             let _ = add_tray_icon(hwnd);
+            // The Shell objects the Explorer hook resolves items through are served
+            // by explorer.exe, so the ones it holds are proxies into the process
+            // that is gone: it has to build them again, or nothing resolves until
+            // the app itself is restarted.
+            explorer_hook::note_explorer_restart();
             LRESULT(0)
         }
         WM_TRAYICON => {
