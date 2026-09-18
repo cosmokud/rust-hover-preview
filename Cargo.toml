@@ -112,9 +112,24 @@ winres = "0.1"
 # it already depends on: the archive tests build their own fixtures.
 sevenz-rust2 = { version = "0.20", features = ["compress", "util"] }
 
+# What this app is built out of is mostly other people's code — the Windows bindings,
+# the syntax highlighter, the SVG renderer, the browser bindings — and what a change to
+# it costs is mostly those crates and the link at the end. These two settings are what
+# keeps that loop short: a dependency is compiled without debug information, which
+# nothing steps through anyway, and the release link is thin LTO rather than
+# whole-program, which is a few seconds of link instead of most of a minute.
+[profile.dev]
+# Line tables and nothing more, so a backtrace still names a file and a line.
+debug = 1
+
+[profile.dev.package."*"]
+debug = false
+
 [profile.release]
 opt-level = 3
-lto = true
+# Optimization across codegen units rather than as one program: a couple of percent of
+# run time at the very most, in exchange for most of the minute a fat-LTO link takes.
+lto = "thin"
 strip = true
 
 [package.metadata.packager]

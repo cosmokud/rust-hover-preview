@@ -1,72 +1,97 @@
 //! Playing a document in the browser engine that is already on the machine.
 //!
 //! usvg drops animation — its own documentation says "no events and no animations" —
-//! so `svg_animation` plays what it can read, and this is what plays the rest: the
-//! WebView2 runtime that Windows 11 ships with, which is Chromium, and which is the
-//! only complete implementation of SMIL and CSS animation that exists on this machine
-//! without installing anything. It is used for documents that *move* only: a still
-//! document is drawn by `svg_preview`, which costs no browser at all.
+//! so `svg_animation` plays what it can read, and this plays the rest: the WebView2
+//! runtime Windows 11 ships with, which is Chromium, and which is the only complete
+//! implementation of SMIL and CSS animation that is on the machine without installing
+//! anything. It is asked for a document that *moves* only. A still document is drawn by
+//! `svg_preview`, costs no browser at all, and stays sharp at any size.
 //!
-//! What lives here is the engine, not the plumbing: creating the runtime, holding the
-//! controller it draws through, pointing it at a file and taking it down again. The
-//! window it draws into is its own — a layered window cannot host a child, since what
-//! `UpdateLayeredWindow` is given is a surface and not a window tree — so this is the
-//! same shape as the video path, where the player's own window is the preview.
+//! What lives here is the engine and the window it draws in, not the preview loop: the
+//! loop asks whether a document is one for the engine, hands it over with the box the
+//! layout came out with, and this answers with a window of its own. That window is its
+//! own because the preview window is a layered one, and a layered window has no window
+//! tree to put a child in — the same shape as the video path, where the player's own
+//! window is the preview.
 //!
-//! A document's script is not run: the setting this hands the engine is the same
-//! promise the rest of the app makes, that a document is drawn and not executed.
-
-// Nothing calls the engine yet: the dispatcher that sends a document that moves to it,
-// the idle timer that lets it go, and the settings that turn it on are the next piece,
-// and every part of this is exercised by the probe in its tests until then.
-#![allow(dead_code)]
+//! One engine is kept warm between documents and let go after `webview_idle`, ten
+//! minutes by default: beginning one costs a browser start, and pointing a warm one at
+//! another file costs a few milliseconds, so what a hover pays for a second animated
+//! document is nothing worth measuring. The thread that holds it ends with it, so an
+//! app left alone has neither a browser process nor a polling thread — and the settings
+//! it is given are the app's own rules rather than a browser's: a document is drawn and
+//! not run, and nothing about it is a way out of the preview.
 
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+use once_cell::sync::Lazy;
 use webview2_com::Microsoft::Web::WebView2::Win32::{
     CreateCoreWebView2EnvironmentWithOptions, GetAvailableCoreWebView2BrowserVersionString,
-    ICoreWebView2Controller,
+    ICoreWebView2, ICoreWebView2Controller, ICoreWebView2Environment,
+    ICoreWebView2EnvironmentOptions, COREWEBVIEW2_COLOR,
 };
 use webview2_com::{
-    CreateCoreWebView2ControllerCompletedHandler, CreateCoreWebView2EnvironmentCompletedHandler,
-    NavigationCompletedEventHandler,
+    CoreWebView2EnvironmentOptions, CreateCoreWebView2ControllerCompletedHandler,
+    CreateCoreWebView2EnvironmentCompletedHandler, NavigationCompletedEventHandler,
 };
-use windows::core::{w, PCWSTR, PWSTR};
-use windows::Win32::Foundation::{E_POINTER, HWND, RECT};
+use windows::core::{w, Interface, PCWSTR, PWSTR};
+use windows::Win32::Foundation::{E_POINTER, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::System::Com::{CoInitializeEx, CoTaskMemFree, COINIT_APARTMENTTHREADED};
 use windows::Win32::System::WinRT::EventRegistrationToken;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DestroyWindow, SetWindowPos, ShowWindow, HWND_TOPMOST, SWP_NOACTIVATE,
-    SWP_NOSIZE, SWP_SHOWWINDOW, SW_SHOWNOACTIVATE, WS_POPUP,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, PeekMessageW, RegisterClassW,
+    SetWindowPos, ShowWindow, TranslateMessage, HWND_TOPMOST, MSG, PM_REMOVE, SWP_NOACTIVATE,
+    SWP_SHOWWINDOW, SW_HIDE, SW_SHOWNOACTIVATE, WM_MOUSEACTIVATE, WNDCLASSW, WS_EX_NOACTIVATE,
+    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
-/// What one run of the engine cost, which is the number the design turns on.
-pub struct Report {
-    /// The version of the runtime that answered, or nothing when none did.
-    pub runtime_version: Option<String>,
-    /// Where the engine keeps its own state, which is a folder this app owns.
-    pub user_data_folder: PathBuf,
-    /// Beginning the engine: the environment it needs and the controller it draws
-    /// through, in milliseconds.
-    pub environment_ms: u128,
-    pub controller_ms: u128,
-    /// Each document that was pointed at, and how long it took to arrive.
-    pub navigations: Vec<(PathBuf, u128)>,
+use crate::config::{EngineIdle, TransparentBackground, DEFAULT_WEBVIEW_IDLE_SECS};
+use crate::{svg_preview, CONFIG};
+
+/// The window class the engine's window is made from. It exists to refuse activation: a
+/// preview never takes the keyboard away from what the pointer is over, and a browser
+/// hosted in one is no different.
+const WEBVIEW_CLASS: PCWSTR = w!("RustHoverPreviewWebView");
+
+/// The one browser argument this app passes: a resolver rule that answers for no host
+/// at all, so nothing a document links to is fetched from anywhere. See
+/// `create_environment`.
+const NETWORK_BLOCKED: &str = "--host-resolver-rules=MAP * ~NOTFOUND";
+
+/// What one engine cost to begin and to point at a document, in milliseconds. It is
+/// kept for the same reason the other probes exist: "the preview is slow" is answered
+/// by a number, and this is the module the number belongs to.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Timings {
+    pub environment_ms: u64,
+    pub controller_ms: u64,
+    pub navigate_ms: u64,
 }
 
-/// The folder the engine keeps its own state in. It is under the local profile rather
-/// than the roaming one because a browser profile is not something to synchronize
-/// between machines.
-fn user_data_folder() -> PathBuf {
-    directories::BaseDirs::new()
-        .map(|dirs| {
-            dirs.data_local_dir()
-                .join("rust-hover-preview")
-                .join("webview")
-        })
-        .unwrap_or_else(std::env::temp_dir)
+static LAST_TIMINGS: Lazy<Mutex<Timings>> = Lazy::new(|| Mutex::new(Timings::default()));
+
+/// Whether the runtime is on this machine, answered once: the check reads the version
+/// of the installed runtime, and that does not change while the app runs.
+static RUNTIME: Lazy<Option<String>> = Lazy::new(runtime_version);
+
+/// Whether the engine's window is on screen. The preview loop reads this to know when
+/// to take its own window down, so it is an atomic rather than a message.
+static SHOWING: AtomicBool = AtomicBool::new(false);
+
+/// The engine's thread, once one has been started.
+static ENGINE: Lazy<Mutex<Option<Engine>>> = Lazy::new(|| Mutex::new(None));
+
+/// Where the engine is asked to put its window, in screen coordinates.
+#[derive(Clone, Copy)]
+pub struct Area {
+    pub x: i32,
+    pub y: i32,
+    pub width: i32,
+    pub height: i32,
 }
 
 /// The version of the WebView2 runtime on this machine, or nothing when it is not
@@ -84,125 +109,378 @@ pub fn runtime_version() -> Option<String> {
     }
 }
 
-/// Point the engine at each path in turn and report what each step cost.
-///
-/// The engine runs on a thread of its own, with its own window and a message pump,
-/// because that is what WebView2 requires of the thread that creates it: everything it
-/// does is delivered by posted message, and a thread that is not retrieving them never
-/// hears back. The calls below are therefore made there rather than here, and the
-/// answer is handed back through a channel.
-pub fn measure(paths: Vec<PathBuf>, width: i32, height: i32) -> Option<Report> {
-    let (sender, receiver) = mpsc::channel();
-
-    std::thread::spawn(move || {
-        let _ = sender.send(measure_on_its_own_thread(paths, width, height));
-    });
-
-    receiver.recv().ok().flatten()
+/// Whether a document can be handed to the engine at all.
+pub fn is_available() -> bool {
+    RUNTIME.is_some()
 }
 
-fn measure_on_its_own_thread(paths: Vec<PathBuf>, width: i32, height: i32) -> Option<Report> {
-    // An apartment of its own: WebView2 must be created on a thread that is pumping
-    // messages, and the thread this runs on is that thread.
+/// Whether the engine has a window on screen.
+pub fn is_showing() -> bool {
+    SHOWING.load(Ordering::Acquire)
+}
+
+/// What the engine cost last time it was asked for a document. Read by the probe: it
+/// is the number that says whether the engine is worth keeping warm at all.
+#[cfg(test)]
+pub fn last_timings() -> Timings {
+    LAST_TIMINGS
+        .lock()
+        .map(|timings| *timings)
+        .unwrap_or_default()
+}
+
+/// Whether a document is one the engine should play: the runtime is on the machine, and
+/// the document says it moves.
+///
+/// The declaration is what decides it rather than this app's own reader: the engine
+/// plays the whole of SMIL and CSS, so a document that moves in a way `svg_animation`
+/// cannot follow is still one to hand over. The answer is held with the parsed
+/// document, so asking it again costs nothing.
+pub fn moves(path: &Path) -> bool {
+    is_available() && svg_preview::moves(path)
+}
+
+/// Ask the engine to play `path` in a window at `area`.
+///
+/// The answer is immediate and says nothing about whether the document arrived: the
+/// engine works on its own thread, and what it does with this is navigates, waits for
+/// the document, and puts its window up — `is_showing` is what says it got there. A
+/// caller that wants something on screen in the meantime has one: it is the still frame
+/// `svg_preview` drew, which this lands on top of.
+///
+/// A document that does not move is not the engine's: a browser is not started for a
+/// picture, and a hover onto one is drawn by this app as it always was.
+pub fn show(path: &Path, area: Area, background: TransparentBackground) {
+    if !moves(path) {
+        return;
+    }
+
+    let Ok(mut engine) = ENGINE.lock() else {
+        return;
+    };
+
+    let sender = engine.get_or_insert_with(Engine::start).sender.clone();
+
+    let _ = sender.send(Command::Show {
+        path: path.to_path_buf(),
+        area,
+        background,
+    });
+}
+
+/// Take the engine's window down. The engine itself is kept warm: what it costs to
+/// begin is a browser start, and what it costs to point at another document is a few
+/// milliseconds, so a hover that follows another one pays almost nothing.
+pub fn hide() {
+    let Ok(engine) = ENGINE.lock() else {
+        return;
+    };
+
+    if let Some(engine) = engine.as_ref() {
+        let _ = engine.sender.send(Command::Hide);
+    }
+}
+
+/// Let the engine go, window, browser process and thread together. Called when the app
+/// ends.
+pub fn shutdown() {
+    let Ok(mut engine) = ENGINE.lock() else {
+        return;
+    };
+
+    let Some(engine) = engine.take() else {
+        return;
+    };
+
+    let _ = engine.sender.send(Command::Shutdown);
+    let _ = engine.thread.join();
+}
+
+/// What the preview thread asks the engine's thread to do.
+enum Command {
+    Show {
+        path: PathBuf,
+        area: Area,
+        background: TransparentBackground,
+    },
+    Hide,
+    Shutdown,
+}
+
+struct Engine {
+    sender: Sender<Command>,
+    thread: std::thread::JoinHandle<()>,
+}
+
+impl Engine {
+    /// Start the engine's thread. Nothing is created until the first document is asked
+    /// for: a machine that never hovers an animated document never starts a browser.
+    fn start() -> Self {
+        let (sender, receiver) = mpsc::channel();
+        let thread = std::thread::spawn(move || engine_thread(receiver));
+
+        Self { sender, thread }
+    }
+}
+
+/// How long the engine is kept after its last document. It is read from the
+/// configuration each time rather than captured, so an edit applies to the engine that
+/// is already warm.
+fn idle_timeout() -> Option<Duration> {
+    CONFIG
+        .lock()
+        .map(|config| config.webview_idle)
+        .unwrap_or(EngineIdle::Seconds(DEFAULT_WEBVIEW_IDLE_SECS))
+        .as_duration()
+}
+
+fn engine_thread(commands: Receiver<Command>) {
+    // The engine's own apartment, and its own thread: WebView2 must be created on a
+    // thread that is pumping messages, and this is that thread.
     let _ = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
 
-    let report = run(&paths, width, height);
+    let mut host: Option<Host> = None;
+    let mut idle_since = Instant::now();
+
+    loop {
+        // While there is nothing on screen the wait is a poll of the idle clock; while
+        // a document is up it is a poll of the message queue, because a browser needs
+        // the thread that made it to keep retrieving messages.
+        let wait = if SHOWING.load(Ordering::Acquire) {
+            Duration::from_millis(5)
+        } else {
+            Duration::from_millis(250)
+        };
+
+        match commands.recv_timeout(wait) {
+            Ok(Command::Shutdown) => break,
+            Ok(Command::Hide) => {
+                if let Some(host) = host.as_mut() {
+                    host.hide();
+                }
+                idle_since = Instant::now();
+            }
+            Ok(Command::Show {
+                path,
+                area,
+                background,
+            }) => {
+                if host.is_none() {
+                    host = Host::create();
+                }
+
+                if let Some(host) = host.as_mut() {
+                    host.show(&path, area, background);
+                }
+                idle_since = Instant::now();
+            }
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => break,
+        }
+
+        pump_messages();
+
+        // A document that has been off screen for longer than the setting asks for is
+        // one the engine is let go of, browser process and all. The thread ends with
+        // the last engine, so an app left alone has nothing of this running.
+        let expired = match (host.as_ref(), idle_timeout()) {
+            (Some(_), Some(limit)) => {
+                !SHOWING.load(Ordering::Acquire) && idle_since.elapsed() >= limit
+            }
+            _ => false,
+        };
+
+        if expired {
+            if let Some(mut host) = host.take() {
+                host.close();
+            }
+            break;
+        }
+    }
+
+    if let Some(mut host) = host {
+        host.close();
+    }
 
     unsafe {
         windows::Win32::System::Com::CoUninitialize();
     }
-
-    report
 }
 
-fn run(paths: &[PathBuf], width: i32, height: i32) -> Option<Report> {
-    let folder = user_data_folder();
-    std::fs::create_dir_all(&folder).ok()?;
+/// Everything one engine is: the window it draws in, the environment, and the
+/// controller over it.
+struct Host {
+    hwnd: HWND,
+    environment: ICoreWebView2Environment,
+    controller: ICoreWebView2Controller,
+    webview: ICoreWebView2,
+    /// The document the engine is holding, so a second hover on the same file is a
+    /// window that is put back up rather than a navigation.
+    current: Option<PathBuf>,
+}
 
-    let hwnd = create_host_window(width, height)?;
+impl Host {
+    fn create() -> Option<Self> {
+        register_class();
 
-    let started = Instant::now();
-    let environment = create_environment(&folder)?;
-    let environment_ms = started.elapsed().as_millis();
+        let folder = user_data_folder();
+        std::fs::create_dir_all(&folder).ok()?;
 
-    let started = Instant::now();
-    let controller = create_controller(environment, hwnd)?;
-    let controller_ms = started.elapsed().as_millis();
+        let hwnd = create_host_window()?;
 
-    unsafe {
-        let _ = controller.SetBounds(RECT {
-            left: 0,
-            top: 0,
-            right: width,
-            bottom: height,
-        });
-        let _ = controller.SetIsVisible(true);
-    }
-
-    let webview = unsafe { controller.CoreWebView2().ok()? };
-    configure(&webview);
-
-    unsafe {
-        let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
-        let _ = SetWindowPos(
-            hwnd,
-            HWND_TOPMOST,
-            60,
-            60,
-            0,
-            0,
-            SWP_NOACTIVATE | SWP_NOSIZE | SWP_SHOWWINDOW,
-        );
-    }
-
-    let mut navigations = Vec::new();
-    for path in paths {
         let started = Instant::now();
-        let arrived = navigate(&webview, path);
-        navigations.push((path.clone(), started.elapsed().as_millis()));
+        let environment = create_environment(&folder)?;
+        let environment_ms = started.elapsed().as_millis() as u64;
 
-        if !arrived {
-            break;
+        let started = Instant::now();
+        let controller = create_controller(environment.clone(), hwnd)?;
+        let controller_ms = started.elapsed().as_millis() as u64;
+
+        let webview = unsafe { controller.CoreWebView2().ok()? };
+        configure(&webview);
+
+        if let Ok(mut timings) = LAST_TIMINGS.lock() {
+            timings.environment_ms = environment_ms;
+            timings.controller_ms = controller_ms;
         }
 
-        // Long enough for a frame to have been painted and for the engine to settle,
-        // so the next navigation is measured against a warm engine rather than against
-        // one still starting.
-        std::thread::sleep(Duration::from_millis(1500));
+        Some(Self {
+            hwnd,
+            environment,
+            controller,
+            webview,
+            current: None,
+        })
     }
 
-    let report = Report {
-        runtime_version: runtime_version(),
-        user_data_folder: folder,
-        environment_ms,
-        controller_ms,
-        navigations,
-    };
+    fn show(&mut self, path: &Path, area: Area, background: TransparentBackground) {
+        unsafe {
+            // The background is a setting of the controller rather than of the page,
+            // and it belongs to the interface that added it.
+            if let Ok(controller) = self
+                .controller
+                .cast::<webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Controller2>()
+            {
+                let _ = controller.SetDefaultBackgroundColor(background_color(background));
+            }
 
-    unsafe {
-        let _ = controller.Close();
-    }
-    unsafe {
-        let _ = DestroyWindow(hwnd);
+            let _ = self.controller.SetBounds(RECT {
+                left: 0,
+                top: 0,
+                right: area.width,
+                bottom: area.height,
+            });
+        }
+
+        // A document the engine is not already holding is navigated to *before* the
+        // window is put up: a window shown first would be the document before it, and
+        // what is on screen a moment ago is the still frame this lands on top of.
+        if self.current.as_deref() != Some(path) {
+            let started = Instant::now();
+            if !self.navigate(path) {
+                self.hide();
+                return;
+            }
+
+            if let Ok(mut timings) = LAST_TIMINGS.lock() {
+                timings.navigate_ms = started.elapsed().as_millis() as u64;
+            }
+
+            self.current = Some(path.to_path_buf());
+        }
+
+        unsafe {
+            let _ = self.controller.SetIsVisible(true);
+            let _ = SetWindowPos(
+                self.hwnd,
+                HWND_TOPMOST,
+                area.x,
+                area.y,
+                area.width,
+                area.height,
+                SWP_NOACTIVATE | SWP_SHOWWINDOW,
+            );
+            let _ = ShowWindow(self.hwnd, SW_SHOWNOACTIVATE);
+        }
+
+        SHOWING.store(true, Ordering::Release);
     }
 
-    Some(report)
+    fn hide(&mut self) {
+        unsafe {
+            let _ = ShowWindow(self.hwnd, SW_HIDE);
+        }
+        SHOWING.store(false, Ordering::Release);
+    }
+
+    fn close(&mut self) {
+        self.hide();
+        self.current = None;
+
+        unsafe {
+            let _ = self.controller.Close();
+            let _ = DestroyWindow(self.hwnd);
+        }
+
+        // The environment goes with the host when it is dropped, and the browser
+        // process it owns goes with the last controller over it.
+        let _ = &self.environment;
+    }
+
+    /// Point the engine at a file and wait for it to arrive, pumping the thread's
+    /// messages while it does.
+    fn navigate(&self, path: &Path) -> bool {
+        let Some(url) = file_url(path) else {
+            return false;
+        };
+        let url = wide(&url);
+        let (sender, receiver) = mpsc::channel();
+
+        unsafe {
+            let handler =
+                NavigationCompletedEventHandler::create(Box::new(move |_sender, _args| {
+                    let _ = sender.send(());
+                    Ok(())
+                }));
+
+            let mut token = EventRegistrationToken::default();
+            if self
+                .webview
+                .add_NavigationCompleted(&handler, &mut token)
+                .is_err()
+            {
+                return false;
+            }
+
+            let started = self.webview.Navigate(PCWSTR(url.as_ptr()));
+            let arrived = started.is_ok() && webview2_com::wait_with_pump(receiver).is_ok();
+
+            let _ = self.webview.remove_NavigationCompleted(token);
+
+            arrived
+        }
+    }
 }
 
-/// The window the engine draws into. It is a popup of its own rather than a child of
-/// the preview window, because the preview window is a layered one and a layered
-/// window has no window tree to put a child in.
-fn create_host_window(width: i32, height: i32) -> Option<HWND> {
+impl Drop for Host {
+    fn drop(&mut self) {
+        SHOWING.store(false, Ordering::Release);
+    }
+}
+
+/// The window the engine draws into: a popup of its own, topmost, tool-windowed and
+/// never activated.
+fn create_host_window() -> Option<HWND> {
     unsafe {
         CreateWindowExW(
-            Default::default(),
-            w!("STATIC"),
+            WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
+            WEBVIEW_CLASS,
             w!("Rust Hover Preview"),
             WS_POPUP,
-            60,
-            60,
-            width,
-            height,
+            0,
+            0,
+            1,
+            1,
             None,
             None,
             None,
@@ -212,18 +490,86 @@ fn create_host_window(width: i32, height: i32) -> Option<HWND> {
     }
 }
 
-fn create_environment(
-    user_data_folder: &Path,
-) -> Option<webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Environment> {
+fn register_class() {
+    static REGISTERED: AtomicBool = AtomicBool::new(false);
+
+    if REGISTERED.swap(true, Ordering::AcqRel) {
+        return;
+    }
+
+    let class = WNDCLASSW {
+        lpfnWndProc: Some(window_proc),
+        lpszClassName: WEBVIEW_CLASS,
+        ..Default::default()
+    };
+
+    unsafe {
+        RegisterClassW(&class);
+    }
+}
+
+/// A preview never takes the keyboard: the pointer may be over it, but what is being
+/// worked in is Explorer.
+extern "system" fn window_proc(
+    hwnd: HWND,
+    message: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    const MA_NOACTIVATE: LRESULT = LRESULT(3);
+
+    if message == WM_MOUSEACTIVATE {
+        return MA_NOACTIVATE;
+    }
+
+    unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
+}
+
+/// Retrieve and dispatch whatever is waiting, without blocking.
+fn pump_messages() {
+    let mut message = MSG::default();
+
+    unsafe {
+        while PeekMessageW(&mut message, None, 0, 0, PM_REMOVE).as_bool() {
+            let _ = TranslateMessage(&message);
+            DispatchMessageW(&message);
+        }
+    }
+}
+
+/// The folder the engine keeps its own state in — under the local profile, because a
+/// browser profile is not something to synchronize between machines.
+fn user_data_folder() -> PathBuf {
+    directories::BaseDirs::new()
+        .map(|dirs| {
+            dirs.data_local_dir()
+                .join("rust-hover-preview")
+                .join("webview")
+        })
+        .unwrap_or_else(std::env::temp_dir)
+}
+
+fn create_environment(user_data_folder: &Path) -> Option<ICoreWebView2Environment> {
     let folder = wide(&user_data_folder.to_string_lossy());
     let (sender, receiver) = mpsc::channel();
+
+    // What a document names is never fetched: the engine is given a resolver rule that
+    // answers for no host at all, so an `<image href="http://…">` is a picture that
+    // does not arrive rather than a request this app made. That is the promise the rest
+    // of it keeps — a hover reads the file under the pointer and nothing else — and a
+    // browser would otherwise break it without a line of anything being written.
+    let options = CoreWebView2EnvironmentOptions::default();
+    unsafe {
+        options.set_additional_browser_arguments(NETWORK_BLOCKED.to_string());
+    }
+    let options: ICoreWebView2EnvironmentOptions = options.into();
 
     CreateCoreWebView2EnvironmentCompletedHandler::wait_for_async_operation(
         Box::new(move |handler| unsafe {
             CreateCoreWebView2EnvironmentWithOptions(
                 PCWSTR::null(),
                 PCWSTR(folder.as_ptr()),
-                None,
+                Some(&options),
                 &handler,
             )
             .map_err(webview2_com::Error::WindowsError)
@@ -242,7 +588,7 @@ fn create_environment(
 }
 
 fn create_controller(
-    environment: webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Environment,
+    environment: ICoreWebView2Environment,
     hwnd: HWND,
 ) -> Option<ICoreWebView2Controller> {
     let (sender, receiver) = mpsc::channel();
@@ -267,9 +613,9 @@ fn create_controller(
 }
 
 /// What the engine is and is not allowed to do, all of it the app's own rules rather
-/// than a browser's: a document is drawn and not run, and nothing about it is a way
-/// out of the preview.
-fn configure(webview: &webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2) {
+/// than a browser's: a document is drawn and not run, and nothing about it is a way out
+/// of the preview.
+fn configure(webview: &ICoreWebView2) {
     unsafe {
         if let Ok(settings) = webview.Settings() {
             let _ = settings.SetIsScriptEnabled(false);
@@ -279,41 +625,48 @@ fn configure(webview: &webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebVi
             let _ = settings.SetIsStatusBarEnabled(false);
             let _ = settings.SetIsWebMessageEnabled(false);
         }
+
+        // The keys a browser answers for itself — a find bar, a print dialog — belong
+        // to no preview.
+        if let Ok(settings3) = webview.Settings().and_then(|settings| {
+            settings.cast::<webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Settings3>()
+        }) {
+            let _ = settings3.SetAreBrowserAcceleratorKeysEnabled(false);
+        }
     }
 }
 
-/// Point the engine at a file and wait for it to arrive.
-fn navigate(
-    webview: &webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2,
-    path: &Path,
-) -> bool {
-    let Some(url) = file_url(path) else {
-        return false;
-    };
-
-    let url = wide(&url);
-    let (sender, receiver) = mpsc::channel();
-
-    unsafe {
-        let handler = NavigationCompletedEventHandler::create(Box::new(move |_sender, _args| {
-            let _ = sender.send(());
-            Ok(())
-        }));
-
-        let mut token = EventRegistrationToken::default();
-        if webview
-            .add_NavigationCompleted(&handler, &mut token)
-            .is_err()
-        {
-            return false;
-        }
-
-        let started = webview.Navigate(PCWSTR(url.as_ptr()));
-        let arrived = started.is_ok() && webview2_com::wait_with_pump(receiver).is_ok();
-
-        let _ = webview.remove_NavigationCompleted(token);
-
-        arrived
+/// The engine's background, which is what the preview's own backdrop setting means to a
+/// window that composites for itself.
+fn background_color(background: TransparentBackground) -> COREWEBVIEW2_COLOR {
+    match background {
+        TransparentBackground::Transparent => COREWEBVIEW2_COLOR {
+            A: 0,
+            R: 0,
+            G: 0,
+            B: 0,
+        },
+        TransparentBackground::Black => COREWEBVIEW2_COLOR {
+            A: 255,
+            R: 0,
+            G: 0,
+            B: 0,
+        },
+        TransparentBackground::White => COREWEBVIEW2_COLOR {
+            A: 255,
+            R: 255,
+            G: 255,
+            B: 255,
+        },
+        // A checkerboard is the one backdrop the engine cannot be given: it is drawn by
+        // the window that composites the frame, and this window composites its own.
+        // Mid grey is what its squares average to.
+        TransparentBackground::Checkerboard => COREWEBVIEW2_COLOR {
+            A: 255,
+            R: 184,
+            G: 184,
+            B: 184,
+        },
     }
 }
 
@@ -388,18 +741,57 @@ mod tests {
         }
 
         println!("runtime: {:?}", runtime_version());
+        println!("available: {}", is_available());
 
-        match measure(paths, 800, 800) {
-            Some(report) => {
-                println!("user data: {}", report.user_data_folder.display());
-                println!("environment: {} ms", report.environment_ms);
-                println!("controller: {} ms", report.controller_ms);
+        let area = Area {
+            x: 60,
+            y: 60,
+            width: 800,
+            height: 800,
+        };
 
-                for (path, elapsed) in &report.navigations {
-                    println!("navigated {} in {} ms", path.display(), elapsed);
-                }
+        for path in &paths {
+            // Each document is measured from nothing on screen, so what the wait below
+            // measures is this document rather than the window the last one left up.
+            hide();
+            let mut cleared = Duration::ZERO;
+            while is_showing() && cleared < Duration::from_secs(2) {
+                std::thread::sleep(Duration::from_millis(10));
+                cleared += Duration::from_millis(10);
             }
-            None => println!("no engine answered"),
+
+            let moving = moves(path);
+            println!("{}: moves={moving}", path.display());
+
+            let started = Instant::now();
+            show(path, area, TransparentBackground::Transparent);
+
+            // The engine answers on its own thread; this is the wait for it to have
+            // arrived rather than a measurement of the navigation itself.
+            let mut waited = Duration::ZERO;
+            while moving && !is_showing() && waited < Duration::from_secs(5) {
+                std::thread::sleep(Duration::from_millis(20));
+                waited = started.elapsed();
+            }
+
+            let timings = last_timings();
+            println!(
+                "  showing={} after {} ms (environment {} ms, controller {} ms, navigation {} ms)",
+                is_showing(),
+                started.elapsed().as_millis(),
+                timings.environment_ms,
+                timings.controller_ms,
+                timings.navigate_ms
+            );
+
+            std::thread::sleep(Duration::from_millis(1500));
         }
+
+        hide();
+        std::thread::sleep(Duration::from_millis(200));
+        println!("after hide: showing={}", is_showing());
+
+        shutdown();
+        println!("after shutdown: showing={}", is_showing());
     }
 }
