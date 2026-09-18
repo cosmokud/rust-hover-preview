@@ -843,7 +843,7 @@ fn render_request(engines: &mut Engines, request: &RenderRequest) -> RenderOutco
             let source = PreparedSource::new(&request.source);
             let width = request.width.max(1);
             let height = request.height.max(1);
-            let rendered = engine.render(&source.path, &target, width, height);
+            let rendered = engine.render(&source.path, &target, width, height, retried);
             // The engine that was just asked is the one that was just used, so it
             // is that engine's own clock that starts again.
             engine.idle_since = Instant::now();
@@ -865,8 +865,12 @@ fn render_request(engines: &mut Engines, request: &RenderRequest) -> RenderOutco
             return RenderOutcome::Refused;
         }
 
-        // The instance that failed is let go, and the next pass asks a new one.
-        *engines.slot(app_kind) = None;
+        // The instance that failed is let go — ended rather than asked to quit,
+        // which is another call it may not answer, made worse by the wait that
+        // follows an unanswered quit — and the next pass asks a new one.
+        if let Some(engine) = engines.slot(app_kind).take() {
+            engine.abandon();
+        }
         retried = true;
     }
 }
@@ -896,6 +900,11 @@ struct Engine {
     /// read fresh for each render rather than once at creation.
     previous_alerts: Option<VARIANT>,
     previous_security: Option<VARIANT>,
+    /// Whether this engine is being let go because it refused a page rather than
+    /// because it has been idle. A refusal is what an instance that has lost its
+    /// automation state answers with, and it is ended rather than quit — see
+    /// [`Self::abandon`] and the drop below.
+    abandoned: bool,
 }
 
 impl Engine {
@@ -938,10 +947,18 @@ impl Engine {
             settings_taken: false,
             previous_alerts: None,
             previous_security: None,
+            abandoned: false,
         })
     }
 
-    fn render(&mut self, source: &Path, target: &RenderTarget, width: u32, height: u32) -> bool {
+    fn render(
+        &mut self,
+        source: &Path,
+        target: &RenderTarget,
+        width: u32,
+        height: u32,
+        retrying: bool,
+    ) -> bool {
         // What a render needs of the instance it runs in is taken for the render
         // and put back as soon as it is over. Nothing of the user's is therefore
         // held reconfigured while the engine sits warm between documents, which is
@@ -951,7 +968,7 @@ impl Engine {
 
         let rendered = match self.app_kind {
             OfficeApp::Word => render_word(&self.app, source, target),
-            OfficeApp::Excel => render_excel(&self.app, source, target),
+            OfficeApp::Excel => render_excel(&self.app, source, target, retrying),
             OfficeApp::PowerPoint => render_powerpoint(&self.app, source, target, width, height),
         };
 
@@ -1009,10 +1026,34 @@ impl Engine {
     fn is_idle(&self) -> bool {
         engine_idle().has_expired(self.idle_since.elapsed())
     }
+
+    /// Let go of an engine that has just refused a page.
+    ///
+    /// The process this app started is ended rather than asked to quit: a quit is
+    /// another call into the instance that refused — and an unanswered one holds
+    /// the worker for as long as it is waited on — while the instance is one
+    /// nothing is owed to, since it holds no document of the user's. An instance
+    /// the user is working in is never one this app created, and is not ended by
+    /// this: `attached` is what stops it, the same as everywhere else.
+    fn abandon(mut self) {
+        self.abandoned = true;
+    }
 }
 
 impl Drop for Engine {
     fn drop(&mut self) {
+        // An engine that refused a page and is this app's own process is ended
+        // where it stands: asking it to quit costs seconds when it does not
+        // answer — the quit is pumped for a while before the process is ended
+        // anyway — and there is nothing to put back in a process that is about to
+        // go. Everything else, the user's own Office included, is left as it was
+        // found below.
+        if self.abandoned && !self.attached && self.owned_pid != 0 {
+            terminate_process(self.owned_pid, self.app_kind.image_name());
+            forget_owned_engine(self.owned_pid);
+            return;
+        }
+
         // A render puts these back itself, so this is for one that did not: a
         // panic inside it, or a render the abandonment of this worker left applied.
         self.restore_settings();
@@ -1303,7 +1344,7 @@ fn render_word(app: &Object, source: &Path, target: &RenderTarget) -> bool {
     rendered
 }
 
-fn render_excel(app: &Object, source: &Path, target: &RenderTarget) -> bool {
+fn render_excel(app: &Object, source: &Path, target: &RenderTarget, retrying: bool) -> bool {
     let Some(workbooks) = app.member("Workbooks") else {
         return false;
     };
@@ -1325,8 +1366,18 @@ fn render_excel(app: &Object, source: &Path, target: &RenderTarget) -> bool {
     // the print pipeline: Excel needs a printer on the machine for it, and a
     // machine with none — no printer at all, which is not the same as a sheet
     // without a print area — cannot export a page however it is asked.
-    let printed = printer_installed(app) && export_first_page(&workbook, target);
-    let rendered = printed || copy_used_range_picture(&workbook, target);
+    //
+    // The picture is the no-printer answer. On a machine that has a printer an
+    // export that came to nothing is the instance declining — the state a fresh
+    // instance is about to be asked in — rather than the document failing, so the
+    // picture is left to an attempt that is already a retry, where it is the last
+    // thing tried before the document is given up on. Copying a picture from an
+    // instance that has just refused to export is a detour of its own: the copy
+    // is refused by the same instance, after the retries its clipboard needs.
+    let has_printer = printer_installed(app);
+    let printed = has_printer && export_first_page(&workbook, target);
+    let rendered =
+        printed || ((!has_printer || retrying) && copy_used_range_picture(&workbook, target));
 
     let _ = workbook.call("Close", &[("SaveChanges", VARIANT::from(false))]);
     rendered
@@ -2701,6 +2752,68 @@ mod tests {
             assert!(
                 engines.get(*app_kind).is_some(),
                 "{name} left no engine behind"
+            );
+        }
+
+        engines.drop_all();
+    }
+
+    /// Renders several documents one after another on a single warm engine, which
+    /// is what the tier does across hovers, and reports what each render cost.
+    ///
+    /// The list is `RHP_WARM_PROBE`, separated by `;`. Every path must be distinct
+    /// — a page that is already held answers from the cache and never reaches the
+    /// engine — so the same workbook is listed once under two names.
+    ///
+    /// Ignored because it starts the installed Office.
+    /// `cargo test -- --ignored --nocapture excel_warm_render_probe`
+    #[test]
+    #[ignore = "starts the installed Office"]
+    fn excel_warm_render_probe() {
+        unsafe {
+            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        }
+
+        let Ok(list) = std::env::var("RHP_WARM_PROBE") else {
+            println!("set RHP_WARM_PROBE to one or more paths, separated by ';'");
+            return;
+        };
+        let paths: Vec<PathBuf> = list
+            .split(';')
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+            .map(PathBuf::from)
+            .collect();
+
+        let mut engines = Engines::new();
+        for path in &paths {
+            let request = RenderRequest {
+                source: path.clone(),
+                width: 1280,
+                height: 800,
+                generation: 1,
+                requested: Instant::now(),
+            };
+
+            let engine_before = app_for(path)
+                .and_then(|app_kind| engines.get(app_kind))
+                .map(|engine| engine.owned_pid);
+            let started = Instant::now();
+            let outcome = render_request(&mut engines, &request);
+            let took = started.elapsed();
+            let kind = cached_render(path).map(|cached| cached.kind);
+            let engine_after = app_for(path)
+                .and_then(|app_kind| engines.get(app_kind))
+                .map(|engine| engine.owned_pid);
+
+            println!(
+                "{}: rendered {} in {took:?}, page {:?}, engine {:?} -> {:?}, last failure: {}",
+                path.file_name().unwrap_or_default().to_string_lossy(),
+                outcome == RenderOutcome::Rendered,
+                kind,
+                engine_before,
+                engine_after,
+                last_failure().unwrap_or_else(|| "none".to_string())
             );
         }
 
