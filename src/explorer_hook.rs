@@ -17,7 +17,8 @@ use std::collections::HashMap;
 use std::ffi::OsString;
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::path::PathBuf;
-use std::sync::{atomic::Ordering, Mutex};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use windows::core::{w, Interface, IUnknown, VARIANT};
 use windows::Win32::Foundation::{BOOL, HWND, LPARAM, POINT, RECT};
@@ -216,17 +217,29 @@ impl ItemResolver {
             None => (None, None),
         };
 
-        Self {
+        let mut resolver = Self {
             automation,
             cache,
             walker,
             item_index_property,
-            shell_windows: unsafe {
-                CoCreateInstance::<_, IShellWindows>(&ShellWindows, None, CLSCTX_ALL).ok()
-            },
+            shell_windows: None,
             view: None,
             probe: None,
-        }
+        };
+        resolver.rebuild_shell();
+        resolver
+    }
+
+    /// Build the Shell window collection again, and drop the view that answered
+    /// through it. These two are what the resolver holds that another process
+    /// serves: the collection and every view are Explorer's own, so once Explorer
+    /// is not the process it was, both are proxies into one that is gone — and a
+    /// proxy into a gone process fails for good rather than reconnecting.
+    fn rebuild_shell(&mut self) {
+        self.shell_windows = unsafe {
+            CoCreateInstance::<_, IShellWindows>(&ShellWindows, None, CLSCTX_ALL).ok()
+        };
+        self.view = None;
     }
 
     /// Drop what describes the view, because what describes the last one describes
@@ -536,6 +549,36 @@ static EXPLORER_LAST_REAL_FOLDERS: Lazy<Mutex<HashMap<isize, String>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 static EXPLORER_WINDOW_CACHE: Lazy<Mutex<HashMap<isize, (bool, Instant)>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
+
+/// Explorer restarts seen, counted rather than flagged: the hook loop is the one
+/// that has to notice one, since it is the thread holding what a restart
+/// invalidates, and a count cannot be missed by a reset that would have landed
+/// between two of its ticks. Bumped by the tray thread from the `TaskbarCreated`
+/// broadcast the shell sends when its taskbar is built again.
+static EXPLORER_RESTARTS: AtomicU64 = AtomicU64::new(0);
+
+/// How long a Shell collection that could not be built is left alone before it is
+/// built again. Building it fails while the shell is still coming up — at logon,
+/// and in the moment after a restart — and a collection left missing answers every
+/// later lookup the way a dead one does.
+const SHELL_COLLECTION_RETRY_MS: u64 = 1000;
+
+/// How long previews wait after Explorer has restarted: every window the pointer
+/// could be over is the new shell's, and it is still putting them up.
+const EXPLORER_RESTART_BACKOFF_MS: u64 = 1500;
+
+/// Note that Explorer is not the process it was. Every Shell object this app holds
+/// is served by explorer.exe, and the ones taken before a restart are proxies into
+/// the process that is gone. Called on the `TaskbarCreated` broadcast, which
+/// reaches every top-level window when the shell's taskbar is created again.
+pub fn note_explorer_restart() {
+    EXPLORER_RESTARTS.fetch_add(1, Ordering::SeqCst);
+}
+
+/// Explorer restarts seen so far; the tray thread is the only writer.
+fn explorer_restart_count() -> u64 {
+    EXPLORER_RESTARTS.load(Ordering::SeqCst)
+}
 
 /// Drop what describes a view: the folder the last probe remembered for a window,
 /// and whether a window is one of Explorer's. The window the pointer is in is
@@ -2589,8 +2632,64 @@ pub fn run_explorer_hook() {
     let mut slow_explorer_probe_count = 0u32;
     let mut explorer_probe_backoff_until: Option<Instant> = None;
     let mut last_display_signature = current_display_signature();
+    // What the Shell objects in hand were built against, and when they were last
+    // built: a restart is what invalidates them, and a build that came out missing
+    // is tried again rather than left missing for the rest of the run.
+    let mut last_explorer_restarts = explorer_restart_count();
+    let mut last_shell_build = Instant::now();
 
     while RUNNING.load(Ordering::SeqCst) {
+        // Explorer restarting is not something the resolver can recover from by
+        // itself: the window collection it holds and the view that answered through
+        // it are served by explorer.exe, and a proxy into a process that is gone
+        // does not reconnect — its calls fail for good, which is what left every
+        // hover after a restart with no answer at all. So the collection is built
+        // again when a restart has been counted, and a collection that could not be
+        // built when it was first asked for is built again on a slow retry, since
+        // leaving it missing answers exactly as a dead one does.
+        let explorer_restarts = explorer_restart_count();
+        if explorer_restarts != last_explorer_restarts
+            || (resolver.shell_windows.is_none()
+                && last_shell_build.elapsed()
+                    >= Duration::from_millis(SHELL_COLLECTION_RETRY_MS))
+        {
+            last_explorer_restarts = explorer_restarts;
+            last_shell_build = Instant::now();
+            resolver.rebuild_shell();
+            // Both caches are keyed by window handles, and those belonged to the
+            // shell that is gone.
+            clear_shell_view_probe_caches();
+
+            // Nothing on screen is about a shell that exists any more, and the
+            // windows the pointer could be over are the new shell's — which is
+            // still putting them up, so the probes wait a moment before they ask.
+            hide_preview();
+            last_file = None;
+            keyboard_file = None;
+            is_keyboard_hover = false;
+            last_focused_key = None;
+            suppressed.clear();
+            pointer_pause.clear();
+            stationary_search_miss_started_at = None;
+            hover_start = None;
+            video_hover_guard_until = None;
+            stationary_hover_probe_done = false;
+            suspend_preview_until_user_input = true;
+            allow_keyboard_preview_on_first_observation = false;
+            folder_change_user_initiated = false;
+            folder_change_time = Some(Instant::now());
+            suspended_initial_focus = None;
+            keyboard_press_seq_at_suspend = keyboard_navigation_press_seq;
+            keyboard_screen_owner = false;
+            hover_resolver_hints = HoverResolverHints::default();
+            last_cursor_location = None;
+            slow_explorer_probe_count = 0;
+            explorer_probe_backoff_until =
+                Some(Instant::now() + Duration::from_millis(EXPLORER_RESTART_BACKOFF_MS));
+            current_state = get_explorer_state();
+            last_state_check = Instant::now();
+        }
+
         // The pointer's answer belongs to the tick that produced it: the list under
         // a parked pointer can have moved on by the next one.
         resolver.forget_probe();

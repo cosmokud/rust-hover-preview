@@ -43,6 +43,7 @@
 - `config.ini` is written in a fixed order — `[settings]` first, then the sections and their keys alphabetically — instead of being reshuffled on every save.
 - A page landing over a waiting spinner no longer flashes the spinner stretched across the page's box: the window is given the page's size and place by the paint itself, in one call, rather than being resized ahead of it.
 - A pointer that drifts onto a waiting spinner no longer dismisses the hover it belongs to — the spinner publishes the box it occupies as one that holds the pointer — so the page being waited for is not thrown away with the hover, and the first hover of a document after a folder change is no longer answered with nothing and then with its page on the second.
+- Explorer crashing or being ended no longer leaves previews dead until the app is restarted.
 
 ## [0.2.5] - 2026-09-17
 
