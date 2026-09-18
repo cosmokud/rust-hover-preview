@@ -557,8 +557,9 @@ pub(crate) fn fill_rect(surface: &DibSurface, rect: RECT, color: [u8; 3]) {
         return;
     }
 
-    let pixels =
-        unsafe { std::slice::from_raw_parts_mut(surface.bits(), width as usize * height as usize * 4) };
+    let pixels = unsafe {
+        std::slice::from_raw_parts_mut(surface.bits(), width as usize * height as usize * 4)
+    };
 
     for y in top..bottom {
         let row = y as usize * width as usize * 4;

@@ -10,6 +10,8 @@
 
 - Video previews no longer write `%TEMP%\rust-hover-preview-video.log`; hovered paths are not written to disk.
 - A `%TEMP%\rust-hover-preview-video.log` left by an earlier version is deleted at startup.
+- `cargo build --release` ends a running copy of the app before the crate is linked, so the build replaces `target/release/rust-hover-preview.exe` instead of failing while it is open; debug builds are left alone.
+- The source tree is formatted with `rustfmt` and passes `cargo fmt --check`.
 
 ## [0.2.6]
 

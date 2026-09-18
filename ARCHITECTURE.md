@@ -234,4 +234,5 @@ Themes the user adds live in `%APPDATA%\rust-hover-preview\theme`, beside `confi
 
 - The MSVC toolchain uses `rust-lld` via .cargo/config.toml for faster, more consistent linking.
 - Windows resources are set in `build.rs` through `winres`.
+- A release build ends a running copy of the app before the crate is linked, because Windows will not let the linker replace an open binary. `src` is watched so the rebuild an edit asks for is the one that gets it; debug builds are left alone.
 - Release installers are produced by `cargo packager` (NSIS `.exe` setup).

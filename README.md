@@ -227,7 +227,7 @@ cargo build            # debug
 cargo build --release  # release
 ```
 
-The release binary is written to `target/release/rust-hover-preview.exe`.
+The release binary is written to `target/release/rust-hover-preview.exe`. A release build ends a running copy of the app first, since Windows will not let the linker replace a binary that is open; debug builds are left alone.
 
 ## Architecture
 

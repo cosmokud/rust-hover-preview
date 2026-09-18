@@ -2232,7 +2232,13 @@ fn load_static_image(
     let (orig_width, orig_height) = img.dimensions();
     let (target_width, target_height) = match cache_key.as_ref() {
         Some(key) => (key.width, key.height),
-        None => scale_dimensions(orig_width, orig_height, max_width, max_height, preview_scale),
+        None => scale_dimensions(
+            orig_width,
+            orig_height,
+            max_width,
+            max_height,
+            preview_scale,
+        ),
     };
 
     let resized = if target_width != orig_width || target_height != orig_height {
@@ -5248,9 +5254,9 @@ fn compute_keyboard_layout(
     // to the placement below, which anchors it at its middle: there is nowhere
     // beside it to put a preview, and the display's own room is all there is.
     if row_shaped {
-        if let Some(content_right) = content_right.filter(|right| {
-            *right > item_left && bounds.right - *right - gap >= MIN_BESIDE_ROOM_PX
-        }) {
+        if let Some(content_right) = content_right
+            .filter(|right| *right > item_left && bounds.right - *right - gap >= MIN_BESIDE_ROOM_PX)
+        {
             let max_width = (bounds.right - content_right - gap).max(1) as u32;
             let room_below = bounds.bottom - item_bottom - gap;
             let room_above = item_top - bounds.top - gap;
@@ -5688,10 +5694,11 @@ pub fn run_preview_window() {
                             // What this load was planned for: the box the layout
                             // came out with, which is the size a slide is
                             // exported at when a page is asked for later.
-                            let render_box = pending
-                                .as_ref()
-                                .map(|pl| (pl.width, pl.height))
-                                .unwrap_or((media_data.current_width(), media_data.current_height()));
+                            let render_box =
+                                pending.as_ref().map(|pl| (pl.width, pl.height)).unwrap_or((
+                                    media_data.current_width(),
+                                    media_data.current_height(),
+                                ));
 
                             // Move before installing the frame. Crossing between
                             // displays of different scale sends WM_DPICHANGED,
@@ -6358,8 +6365,8 @@ pub fn run_preview_window() {
             let shown_path = current_show.as_ref().and_then(show_path).cloned();
 
             let render_wait = office_render_pending.as_ref().map(|(path, generation)| {
-                let hovered =
-                    *generation == current_generation && shown_path.as_deref() == Some(path.as_path());
+                let hovered = *generation == current_generation
+                    && shown_path.as_deref() == Some(path.as_path());
                 let waited = pending_load
                     .as_ref()
                     .map(|pl| pl.started.elapsed() >= Duration::from_secs(OFFICE_RENDER_WAIT_SECS))
@@ -6467,7 +6474,10 @@ mod tests {
         // A published region with nothing holding the pointer is not a hold: it is
         // what one left behind by a preview that has gone would look like.
         WAITING_PREVIEW_HOLDING.store(false, Ordering::Release);
-        assert!(!preview_pointer_hold(118, 118), "nothing is holding the pointer");
+        assert!(
+            !preview_pointer_hold(118, 118),
+            "nothing is holding the pointer"
+        );
 
         clear_pointer_hold();
     }
@@ -6768,9 +6778,13 @@ mod tests {
 
         let full = compute_mouse_layout(300, 300, page(PreviewScale::FitToScreen), bounds())
             .expect("a placed page");
-        let half =
-            compute_mouse_layout(300, 300, page(PreviewScale::FitToScreenReduced(50)), bounds())
-                .expect("a placed page");
+        let half = compute_mouse_layout(
+            300,
+            300,
+            page(PreviewScale::FitToScreenReduced(50)),
+            bounds(),
+        )
+        .expect("a placed page");
 
         assert_eq!(
             (full.preview_w, full.preview_h),
@@ -6961,7 +6975,11 @@ mod tests {
         let (cursor_x, cursor_y) = (900, 500);
         let dpi = 96;
 
-        for path in list.split(';').map(str::trim).filter(|path| !path.is_empty()) {
+        for path in list
+            .split(';')
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+        {
             let path = PathBuf::from(path);
             println!("\n--- {} ---", path.display());
 

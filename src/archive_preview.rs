@@ -17,7 +17,7 @@
 use crate::archive_listing::{self, ArchiveEntry, Listing};
 use crate::config::TextTheme;
 use crate::text_paint::{
-    blend, fill_rect, plain_style, rgb, scaled, DibSurface, RunPainter, TextStyle, TextMetrics,
+    blend, fill_rect, plain_style, rgb, scaled, DibSurface, RunPainter, TextMetrics, TextStyle,
     BODY_LEVEL,
 };
 use crate::text_theme::{self, LoadedTheme};
@@ -479,7 +479,8 @@ fn build_page(
 
     // How many rows fit under the header and the hairline, with a line kept back
     // for the count of what is not shown when something is not shown.
-    let rule_height = scaled(RULE_PIXELS, metrics.scale) + scaled(RULE_GAP_PIXELS, metrics.scale) * 2;
+    let rule_height =
+        scaled(RULE_PIXELS, metrics.scale) + scaled(RULE_GAP_PIXELS, metrics.scale) * 2;
     let body_top = padding + header_height + rule_height;
     let room = box_height as i32 - body_top - padding;
     if room < body_height {
@@ -492,8 +493,7 @@ fn build_page(
     }
 
     let fits = (room / body_height) as usize;
-    let listing_capped =
-        listing.scan_capped || listing.read_truncated || listing.encrypted_headers;
+    let listing_capped = listing.scan_capped || listing.read_truncated || listing.encrypted_headers;
     let note_needed = rows.len() > fits || listing_capped || listing.entries.is_empty();
     let capacity = if note_needed {
         ((room - body_height) / body_height).max(0) as usize
@@ -654,7 +654,12 @@ fn header_runs(
 
     push(&mut runs, name, true, foreground);
     push(&mut runs, " · ", false, muted);
-    push(&mut runs, &count_label(files, "file", "files"), false, foreground);
+    push(
+        &mut runs,
+        &count_label(files, "file", "files"),
+        false,
+        foreground,
+    );
     push(&mut runs, " · ", false, muted);
     push(
         &mut runs,
@@ -663,7 +668,12 @@ fn header_runs(
         foreground,
     );
     push(&mut runs, " · ", false, muted);
-    push(&mut runs, &format_size(listing.total_size), false, foreground);
+    push(
+        &mut runs,
+        &format_size(listing.total_size),
+        false,
+        foreground,
+    );
 
     if let Some(packed) = listing.packed_total {
         let total = listing.total_size;
@@ -859,8 +869,8 @@ fn icon_glyph(is_dir: bool, name: &str) -> char {
         .unwrap_or_default();
 
     match extension.as_str() {
-        "png" | "jpg" | "jpeg" | "jfif" | "gif" | "bmp" | "webp" | "tif" | "tiff" | "ico" | "svg"
-        | "avif" | "heic" | "psd" | "tga" | "qoi" | "pbm" | "ff" => ICON_IMAGE,
+        "png" | "jpg" | "jpeg" | "jfif" | "gif" | "bmp" | "webp" | "tif" | "tiff" | "ico"
+        | "svg" | "avif" | "heic" | "psd" | "tga" | "qoi" | "pbm" | "ff" => ICON_IMAGE,
         "mp4" | "mkv" | "avi" | "mov" | "wmv" | "webm" | "flv" | "m4v" | "mpg" | "mpeg" | "ts"
         | "mts" | "m2ts" => ICON_VIDEO,
         "mp3" | "wav" | "flac" | "ogg" | "m4a" | "aac" | "wma" | "opus" | "aiff" => ICON_AUDIO,
@@ -995,7 +1005,11 @@ mod tests {
             let encoder = flate2::write::GzEncoder::new(file, flate2::Compression::default());
             let mut builder = tar::Builder::new(encoder);
             append_tar(&mut builder, entries);
-            builder.into_inner().expect("the encoder").finish().expect("gz");
+            builder
+                .into_inner()
+                .expect("the encoder")
+                .finish()
+                .expect("gz");
         } else {
             let mut builder = tar::Builder::new(file);
             append_tar(&mut builder, entries);
@@ -1082,7 +1096,10 @@ mod tests {
         assert!(names.contains(&"docs/report.pdf"));
         assert!(names.contains(&"docs/deep/a/b/c/only.txt"));
         assert!(names.contains(&"музыка/трек.mp3"));
-        assert!(!listing.entries.iter().any(|entry| entry.name.ends_with('/')));
+        assert!(!listing
+            .entries
+            .iter()
+            .any(|entry| entry.name.ends_with('/')));
 
         let explicit = listing
             .entries
@@ -1091,7 +1108,21 @@ mod tests {
             .expect("the explicit folder");
         assert!(explicit.is_dir);
 
-        assert_eq!(listing.total_size, 1_200_000 + 4_096 + 64 + 48_000 + 310_000 + 2_048 + 1_024 + 10 + 20 + 900 + 1_536 + 2_048);
+        assert_eq!(
+            listing.total_size,
+            1_200_000
+                + 4_096
+                + 64
+                + 48_000
+                + 310_000
+                + 2_048
+                + 1_024
+                + 10
+                + 20
+                + 900
+                + 1_536
+                + 2_048
+        );
         assert!(listing.packed_total.is_some());
         assert!(!listing.scan_capped);
     }
@@ -1099,7 +1130,8 @@ mod tests {
     #[test]
     fn reads_tar_with_and_without_a_gzip_around_it() {
         let dir = scratch("tar");
-        let entries: [(&str, usize); 3] = [("one.txt", 128), ("two/deep.txt", 256), ("three.bin", 512)];
+        let entries: [(&str, usize); 3] =
+            [("one.txt", 128), ("two/deep.txt", 256), ("three.bin", 512)];
 
         for (name, gzip) in [("sample.tar", false), ("sample.tar.gz", true)] {
             let path = dir.join(name);
@@ -1132,7 +1164,10 @@ mod tests {
             .iter()
             .map(|entry| entry.name.as_str())
             .collect();
-        assert!(names.iter().any(|name| name.ends_with("hello.txt")), "{names:?}");
+        assert!(
+            names.iter().any(|name| name.ends_with("hello.txt")),
+            "{names:?}"
+        );
         assert!(listing.total_size >= 4_096);
 
         render_fixture(&dir, "sample-7z", &path, TextTheme::Light, 1_920);
@@ -1290,7 +1325,12 @@ mod tests {
         // More rows than a page draws, so the count of what is left is exercised.
         let many = dir.join("many.zip");
         let entries: Vec<(String, usize)> = (0..140)
-            .map(|index| (format!("dir{:02}/entry{index:03}.txt", index % 7), 100 + index))
+            .map(|index| {
+                (
+                    format!("dir{:02}/entry{index:03}.txt", index % 7),
+                    100 + index,
+                )
+            })
             .collect();
         let borrowed: Vec<(&str, usize)> = entries
             .iter()

@@ -42,13 +42,22 @@ pub fn names() -> Vec<String> {
 
     let mut names: Vec<String> = entries
         .flatten()
-        .filter(|entry| entry.file_type().map(|kind| kind.is_file()).unwrap_or(false))
+        .filter(|entry| {
+            entry
+                .file_type()
+                .map(|kind| kind.is_file())
+                .unwrap_or(false)
+        })
         .filter_map(|entry| Some(theme_name(&entry.path())?.to_string()))
         .collect();
 
     // Folded, so that a folder holding `Solarized` and `atom` lists the way it
     // reads rather than with every capitalized name ahead of the rest.
-    names.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()).then_with(|| a.cmp(b)));
+    names.sort_by(|a, b| {
+        a.to_lowercase()
+            .cmp(&b.to_lowercase())
+            .then_with(|| a.cmp(b))
+    });
     names
 }
 
@@ -58,7 +67,9 @@ pub fn names() -> Vec<String> {
 /// that name.
 pub fn find(name: &str) -> Option<String> {
     let wanted = stem(name).to_lowercase();
-    names().into_iter().find(|held| held.to_lowercase() == wanted)
+    names()
+        .into_iter()
+        .find(|held| held.to_lowercase() == wanted)
 }
 
 /// Where a theme's file is, resolved through [`find`] so the path is the file's

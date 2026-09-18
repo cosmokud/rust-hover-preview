@@ -121,7 +121,14 @@ impl Listing {
             || cancel.is_some_and(|cancel| cancel.load(Ordering::Relaxed))
     }
 
-    fn push(&mut self, name: String, size: u64, packed: Option<u64>, is_dir: bool, encrypted: bool) {
+    fn push(
+        &mut self,
+        name: String,
+        size: u64,
+        packed: Option<u64>,
+        is_dir: bool,
+        encrypted: bool,
+    ) {
         self.entries.push(ArchiveEntry {
             name,
             size,
@@ -184,11 +191,7 @@ pub(crate) fn listing_for(path: &Path, cancel: Option<&AtomicBool>) -> Option<Ar
 }
 
 /// The listing as the archive itself states it, read once per file version.
-fn read_listing(
-    path: &Path,
-    file_size: u64,
-    cancel: Option<&AtomicBool>,
-) -> Option<Listing> {
+fn read_listing(path: &Path, file_size: u64, cancel: Option<&AtomicBool>) -> Option<Listing> {
     match kind_of(path)? {
         ArchiveKind::Zip => read_zip(path, file_size, cancel),
         ArchiveKind::SevenZ => read_sevenz(path, file_size, cancel),
@@ -216,7 +219,10 @@ fn kind_of(path: &Path) -> Option<ArchiveKind> {
 }
 
 fn magic_kind(probe: &[u8]) -> Option<ArchiveKind> {
-    if probe.starts_with(b"PK\x03\x04") || probe.starts_with(b"PK\x05\x06") || probe.starts_with(b"PK\x07\x08") {
+    if probe.starts_with(b"PK\x03\x04")
+        || probe.starts_with(b"PK\x05\x06")
+        || probe.starts_with(b"PK\x07\x08")
+    {
         return Some(ArchiveKind::Zip);
     }
     if probe.starts_with(b"7z\xBC\xAF\x27\x1C") {
@@ -405,7 +411,11 @@ fn read_tar(path: &Path, file_size: u64, cancel: Option<&AtomicBool>) -> Option<
     let file = File::open(path).ok()?;
     // A plain tar is seekable, so walking past a member costs a seek rather than
     // a read of everything before the next header.
-    collect_tar(tar::Archive::new(file).entries_with_seek(), file_size, cancel)
+    collect_tar(
+        tar::Archive::new(file).entries_with_seek(),
+        file_size,
+        cancel,
+    )
 }
 
 fn read_targz(path: &Path, file_size: u64, cancel: Option<&AtomicBool>) -> Option<Listing> {
@@ -453,7 +463,13 @@ fn collect_tar<R: Read>(
             continue;
         };
 
-        listing.push(name, entry.header().size().unwrap_or(0), None, is_dir, false);
+        listing.push(
+            name,
+            entry.header().size().unwrap_or(0),
+            None,
+            is_dir,
+            false,
+        );
     }
 
     Some(listing)

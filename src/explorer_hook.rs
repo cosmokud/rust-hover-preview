@@ -20,7 +20,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
-use windows::core::{w, Interface, IUnknown, VARIANT};
+use windows::core::{w, IUnknown, Interface, VARIANT};
 use windows::Win32::Foundation::{BOOL, HWND, LPARAM, POINT, RECT};
 use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, IServiceProvider, CLSCTX_ALL,
@@ -29,13 +29,13 @@ use windows::Win32::System::Com::{
 use windows::Win32::System::Variant::VT_I4;
 use windows::Win32::UI::Accessibility::{
     CUIAutomation, CUIAutomation8, CUIAutomationRegistrar, IUIAutomation, IUIAutomation2,
-    IUIAutomationCacheRequest,
-    IUIAutomationElement, IUIAutomationLegacyIAccessiblePattern, IUIAutomationRegistrar,
-    IUIAutomationSelectionPattern, IUIAutomationTreeWalker, TreeScope_Children, TreeScope_Element,
-    UIAutomationPropertyInfo, UIAutomationType_Int, UIA_BoundingRectanglePropertyId,
-    UIA_CONTROLTYPE_ID, UIA_ControlTypePropertyId, UIA_DataItemControlTypeId, UIA_EditControlTypeId,
+    IUIAutomationCacheRequest, IUIAutomationElement, IUIAutomationLegacyIAccessiblePattern,
+    IUIAutomationRegistrar, IUIAutomationSelectionPattern, IUIAutomationTreeWalker,
+    TreeScope_Children, TreeScope_Element, UIA_BoundingRectanglePropertyId,
+    UIA_ControlTypePropertyId, UIA_DataItemControlTypeId, UIA_EditControlTypeId,
     UIA_LegacyIAccessiblePatternId, UIA_ListItemControlTypeId, UIA_NamePropertyId,
-    UIA_NativeWindowHandlePropertyId, UIA_PROPERTY_ID, UIA_SelectionPatternId, UIA_TextControlTypeId,
+    UIA_NativeWindowHandlePropertyId, UIA_SelectionPatternId, UIA_TextControlTypeId,
+    UIAutomationPropertyInfo, UIAutomationType_Int, UIA_CONTROLTYPE_ID, UIA_PROPERTY_ID,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, VK_DOWN, VK_END, VK_HOME, VK_LBUTTON, VK_LEFT, VK_MBUTTON, VK_NEXT, VK_PRIOR,
@@ -44,7 +44,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::UI::Shell::{
     IFolderView, IFolderView2, IPersistFolder2, IShellBrowser, IShellItem, IShellView,
     IShellWindows, ItemIndex_Property_GUID, SHCreateItemFromIDList, SID_STopLevelBrowser,
-    SIGDN_DESKTOPABSOLUTEPARSING, SIGDN_FILESYSPATH, SIGDN_NORMALDISPLAY, ShellWindows,
+    ShellWindows, SIGDN_DESKTOPABSOLUTEPARSING, SIGDN_FILESYSPATH, SIGDN_NORMALDISPLAY,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetAncestor, GetClassNameW, GetCursorPos, GetForegroundWindow, GetSystemMetrics,
@@ -236,9 +236,8 @@ impl ItemResolver {
     /// is not the process it was, both are proxies into one that is gone — and a
     /// proxy into a gone process fails for good rather than reconnecting.
     fn rebuild_shell(&mut self) {
-        self.shell_windows = unsafe {
-            CoCreateInstance::<_, IShellWindows>(&ShellWindows, None, CLSCTX_ALL).ok()
-        };
+        self.shell_windows =
+            unsafe { CoCreateInstance::<_, IShellWindows>(&ShellWindows, None, CLSCTX_ALL).ok() };
         self.view = None;
     }
 
@@ -2651,8 +2650,7 @@ pub fn run_explorer_hook() {
         let explorer_restarts = explorer_restart_count();
         if explorer_restarts != last_explorer_restarts
             || (resolver.shell_windows.is_none()
-                && last_shell_build.elapsed()
-                    >= Duration::from_millis(SHELL_COLLECTION_RETRY_MS))
+                && last_shell_build.elapsed() >= Duration::from_millis(SHELL_COLLECTION_RETRY_MS))
         {
             last_explorer_restarts = explorer_restarts;
             last_shell_build = Instant::now();
@@ -3254,9 +3252,7 @@ pub fn run_explorer_hook() {
                             >= Duration::from_millis(KEYBOARD_FOCUS_PROBE_MS)
                     {
                         last_keyboard_focus_probe = Instant::now();
-                        if let Some(focused_info) =
-                            get_focused_explorer_item(&resolver)
-                        {
+                        if let Some(focused_info) = get_focused_explorer_item(&resolver) {
                             let focused_key = FocusedItemKey::new(
                                 focused_info.item.name.clone(),
                                 &focused_info.item.bounds,
