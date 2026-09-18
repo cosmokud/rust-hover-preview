@@ -121,11 +121,13 @@ ffprobe -version
   - **Position** — Follow Cursor or Best Position, and whether to keep previews off the hovered item's name
   - **Scaling** — Fit to Screen or 25%–400%
 - **Volume** — Max, High, Medium, Low, Very Low, Mute
-- **Cache** — each of these lists its sizes largest first, `2 GB` at the top down to `0 MB`, with the size that cache starts at marked `(Default)` — `32 MB` for Image and PDF, `0 MB` for Text, `64 MB` for Office:
-  - **Image** — how much memory decoded image frames may be kept in between hovers
-  - **Text** — the same for the frames text previews were painted as
-  - **PDF** — the same for the pages PDF previews were rendered as
-  - **Office** — the same for the pages Office rendered
+- **Performance** — what the app costs to stay fast
+  - **Keep Office Engine** — how long a family's Office app is kept warm after its last page: `Indefinitely`, `1 hour`, `30 minutes`, `10 minutes` (default), `5 minutes`, `1 minute`, `0 seconds`
+  - **Cache** — memory kept between hovers, largest first, each cache's own default marked:
+    - **Image** — decoded image frames
+    - **Text** — frames text previews were painted as
+    - **PDF** — pages PDF previews were drawn as
+    - **Office** — pages Office rendered
 - **Run at Startup** — add or remove the Windows startup entry
 - **Config.ini** — open the configuration file; the item is named for the running version
 - **Exit** — close the app
@@ -155,6 +157,7 @@ pdf_preview_enabled=true
 archive_preview_enabled=true
 office_preview_enabled=true
 office_cache_mb=64
+office_engine_idle=600
 pdf_cache_mb=32
 text_cache_mb=0
 image_cache_mb=32
@@ -204,6 +207,7 @@ Key settings:
 - `office_cache_mb` — the same for the pages Office rendered, capped at `2048`; default is `64`, because producing a page costs an Office start and an export, so what has been drawn is worth keeping. `0` holds nothing, but a page is still rendered for the hover that asks for it: this size is only how much is kept between hovers.
 - `pdf_cache_mb` — the same for the pages PDF previews were rendered as, capped at `2048`; default is `32`. A page is stored as the pixels it was drawn as, so the size is per file _and_ per preview size: the same PDF hovered at fit-to-screen and at `25%` is held as two pages.
 - `text_cache_mb` — the same for the frames text previews were painted as, capped at `2048`; default is `0`, since the text behind a frame is already cached as text and only the layout and the painting are what a hit saves. A frame is stored as the pixels it was painted into, so the size is per file, per box and per scroll position; a frame a selection is painted into is never held.
+- `office_engine_idle` — how long the Office engine a family started is kept after that family's last page: a number of seconds, or `indefinitely` for one kept for as long as the app runs. Default is `600` (ten minutes). A kept engine is an Office application already started and otherwise doing nothing, so what it costs is the memory it holds and a process in the list — the document is closed after every render, and the automation settings a render needs are put back the moment it is over. `0` lets the engine go as soon as it has drawn a page, so every document pays its own Office start.
 - `office_extensions` — the Office-preview gate, under `[office]`, written without dots.
 - A list whose key is deleted — the `extensions=` line, or its whole section — comes back with the built-in entries, and the file is written out again with them. An `extensions=` line left empty is a list you emptied, and stays empty.
 - `trigger_key` / `trigger_key_mode` — key (`alt`, `ctrl`, `shift`, `win`) and mode (`disable` or `enable`).

@@ -31,7 +31,10 @@
 //!   worker is current.
 
 use crate::cloud_files;
-use crate::config::{sanitize_office_cache_mb, PreviewType, DEFAULT_OFFICE_CACHE_MB};
+use crate::config::{
+    sanitize_office_cache_mb, OfficeEngineIdle, PreviewType, DEFAULT_OFFICE_CACHE_MB,
+    DEFAULT_OFFICE_ENGINE_IDLE_SECS,
+};
 use crate::office_formats::{app_for, container_kind, OfficeApp};
 use crate::preview_window;
 use crate::CONFIG;
@@ -71,12 +74,20 @@ use windows::Win32::UI::WindowsAndMessaging::{
 /// The message a request is announced with on the worker's own thread queue.
 const WM_OFFICE_RENDER: u32 = WM_APP + 3;
 
-/// How long the engine is kept alive after its last render, so a folder of
-/// documents costs one Office start rather than one per file. Long enough that a
-/// browsing session — a folder now, another one after a pause — keeps the engine
-/// it started, and still short enough that a tray app left alone is not holding
-/// an Office process for the rest of the day.
-const ENGINE_IDLE_SECS: u64 = 600;
+/// How long the engines are kept after each family's last page, which is the
+/// tray's `Performance → Keep Office Engine` setting.
+///
+/// Read rather than captured, so a change applies to engines that are already
+/// warm: the worker wakes twice a second and asks this of every engine it holds,
+/// so a setting lowered from an hour to nothing drops them within a tick of it
+/// being made.
+fn engine_idle() -> OfficeEngineIdle {
+    CONFIG
+        .lock()
+        .map(|config| config.office_engine_idle)
+        .unwrap_or(OfficeEngineIdle::Seconds(DEFAULT_OFFICE_ENGINE_IDLE_SECS))
+}
+
 /// How long a file that refused a page is left alone. Office refused it for a
 /// reason — a password, a repair dialog, a document in Protected View — and the
 /// answer will not be different a moment later, so the wait is the user's. It is
@@ -853,6 +864,13 @@ struct Engine {
     /// clock, so the family asked for most recently is the one that outlives the
     /// others rather than one idle time standing for all of them.
     idle_since: Instant,
+    /// Whether the automation settings a render needs are on the instance right
+    /// now. They are taken for a render and put back when it is over, so this is
+    /// `false` whenever the engine is sitting idle — which is what an engine kept
+    /// for an hour, or for good, spends almost all of its life doing.
+    settings_taken: bool,
+    /// What the instance said about those settings before the render took them,
+    /// read fresh for each render rather than once at creation.
     previous_alerts: Option<VARIANT>,
     previous_security: Option<VARIANT>,
 }
@@ -884,18 +902,6 @@ impl Engine {
             remember_owned_engine(app_kind, owned_pid);
         }
 
-        let previous_alerts = app.value("DisplayAlerts");
-        let previous_security = app.value("AutomationSecurity");
-
-        // Macros are switched off wholesale and dialogs are suppressed, so a
-        // document cannot put a window in front of the user — an attached
-        // instance's settings are put back when the engine is dropped.
-        let _ = app.set(
-            "AutomationSecurity",
-            VARIANT::from(MSO_AUTOMATION_SECURITY_FORCE_DISABLE),
-        );
-        let _ = app.set("DisplayAlerts", alerts_off(app_kind));
-
         if !attached {
             let _ = app.set("Visible", VARIANT::from(false));
         }
@@ -906,34 +912,86 @@ impl Engine {
             attached,
             owned_pid,
             idle_since: Instant::now(),
-            previous_alerts,
-            previous_security,
+            settings_taken: false,
+            previous_alerts: None,
+            previous_security: None,
         })
     }
 
-    fn render(&self, source: &Path, target: &RenderTarget, width: u32, height: u32) -> bool {
-        match self.app_kind {
+    fn render(&mut self, source: &Path, target: &RenderTarget, width: u32, height: u32) -> bool {
+        // What a render needs of the instance it runs in is taken for the render
+        // and put back as soon as it is over. Nothing of the user's is therefore
+        // held reconfigured while the engine sits warm between documents, which is
+        // what an engine kept for an hour — or for good — would otherwise be doing
+        // for almost the whole of its life.
+        self.take_settings();
+
+        let rendered = match self.app_kind {
             OfficeApp::Word => render_word(&self.app, source, target),
             OfficeApp::Excel => render_excel(&self.app, source, target),
             OfficeApp::PowerPoint => render_powerpoint(&self.app, source, target, width, height),
+        };
+
+        self.restore_settings();
+        rendered
+    }
+
+    /// Suppress dialogs and switch macros off for the render that is about to run,
+    /// keeping what the instance said so it can be put back.
+    ///
+    /// These are read here rather than once at creation because they are not the
+    /// engine's to hold. An instance may be the user's own Word or Excel, which
+    /// they may have changed themselves since the engine was created, and what is
+    /// put back afterwards should be what the instance says now rather than what it
+    /// said an hour ago.
+    fn take_settings(&mut self) {
+        if self.settings_taken {
+            return;
         }
+
+        self.previous_alerts = self.app.value("DisplayAlerts");
+        self.previous_security = self.app.value("AutomationSecurity");
+
+        let _ = self.app.set(
+            "AutomationSecurity",
+            VARIANT::from(MSO_AUTOMATION_SECURITY_FORCE_DISABLE),
+        );
+        let _ = self.app.set("DisplayAlerts", alerts_off(self.app_kind));
+        self.settings_taken = true;
     }
 
-    /// Whether this engine has gone long enough without drawing a page to be let
-    /// go.
-    fn is_idle(&self) -> bool {
-        self.idle_since.elapsed() >= Duration::from_secs(ENGINE_IDLE_SECS)
-    }
-}
+    /// Put back what [`Self::take_settings`] kept, leaving the process warm.
+    ///
+    /// This is the state an engine kept for a long time rests in: the settings
+    /// belong to a render rather than to a process, and an instance that is doing
+    /// nothing this app's business has no business holding another application's
+    /// dialogs off or its macros switched off.
+    fn restore_settings(&mut self) {
+        if !self.settings_taken {
+            return;
+        }
 
-impl Drop for Engine {
-    fn drop(&mut self) {
         if let Some(alerts) = self.previous_alerts.take() {
             let _ = self.app.set("DisplayAlerts", alerts);
         }
         if let Some(security) = self.previous_security.take() {
             let _ = self.app.set("AutomationSecurity", security);
         }
+        self.settings_taken = false;
+    }
+
+    /// Whether this engine has gone long enough without drawing a page to be let
+    /// go. An engine kept indefinitely never has.
+    fn is_idle(&self) -> bool {
+        engine_idle().has_expired(self.idle_since.elapsed())
+    }
+}
+
+impl Drop for Engine {
+    fn drop(&mut self) {
+        // A render puts these back itself, so this is for one that did not: a
+        // panic inside it, or a render the abandonment of this worker left applied.
+        self.restore_settings();
 
         if !self.attached {
             let _ = self.app.call("Quit", &[]);

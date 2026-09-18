@@ -5,6 +5,7 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::time::Duration;
 
 use crate::archive_formats::{sanitize_archive_extensions, DEFAULT_ARCHIVE_EXTENSIONS};
 use crate::image_formats::{sanitize_image_extensions, DEFAULT_IMAGE_EXTENSIONS};
@@ -72,6 +73,14 @@ pub const MAX_PDF_CACHE_MB: u32 = 2048;
 /// makes.
 pub const DEFAULT_TEXT_CACHE_MB: u32 = 0;
 pub const MAX_TEXT_CACHE_MB: u32 = 2048;
+/// How long the Office engine a family started is kept after that family's last
+/// page. Producing a page costs an Office start, and an engine still warm is what
+/// makes the next document of that family cheap, so one is kept for a while by
+/// default.
+pub const DEFAULT_OFFICE_ENGINE_IDLE_SECS: u64 = 600;
+/// The ceiling a hand-edited number of seconds is reduced to. Past a day there is
+/// nothing a number says that `indefinitely` does not say better.
+pub const MAX_OFFICE_ENGINE_IDLE_SECS: u64 = 86_400;
 
 pub fn sanitize_webp_playback_fps(value: u32) -> u32 {
     match value {
@@ -224,6 +233,65 @@ impl PreviewScale {
                 .map(|percent| Self::Percent(sanitize_preview_scale_percent(percent))),
         }
     }
+}
+
+/// How long the Office engine a family started is kept after that family's last
+/// page.
+///
+/// The engine is the Office application itself — the process, not the document,
+/// which is closed after every render — so what is kept is an Office start that
+/// has already been paid for. One is kept per family, and each is let go on its
+/// own clock, so the family asked for most recently is the one that outlives the
+/// others.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OfficeEngineIdle {
+    /// Kept for this many seconds after the family's last page, `0` included: an
+    /// engine let go as soon as it has drawn one.
+    Seconds(u64),
+    /// Kept for as long as the app runs.
+    ///
+    /// An engine that is never let go is never left holding what a render did to
+    /// it either. The automation settings a render needs are taken and put back
+    /// around each render rather than held for the engine's life (see
+    /// `office_render`), so what an indefinite setting keeps is a process that is
+    /// doing nothing this app's business — which is what makes it safe to keep an
+    /// instance that is the user's own Word or Excel.
+    Indefinite,
+}
+
+impl OfficeEngineIdle {
+    pub fn as_str(self) -> String {
+        match self {
+            Self::Seconds(seconds) => sanitize_office_engine_idle_secs(seconds).to_string(),
+            Self::Indefinite => "indefinitely".to_string(),
+        }
+    }
+
+    /// The idle time a `config.ini` value names, or `None` for one that is
+    /// neither a number of seconds nor a word for never letting go.
+    pub(crate) fn from_str(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "indefinite" | "indefinitely" | "forever" | "always" => Some(Self::Indefinite),
+            other => other
+                .parse::<u64>()
+                .ok()
+                .map(|seconds| Self::Seconds(sanitize_office_engine_idle_secs(seconds))),
+        }
+    }
+
+    /// Whether an engine that has gone `idle_for` without drawing a page has been
+    /// idle long enough to be let go. An engine that is kept for the life of the
+    /// app never has.
+    pub fn has_expired(self, idle_for: Duration) -> bool {
+        match self {
+            Self::Seconds(seconds) => idle_for >= Duration::from_secs(seconds),
+            Self::Indefinite => false,
+        }
+    }
+}
+
+fn sanitize_office_engine_idle_secs(seconds: u64) -> u64 {
+    seconds.min(MAX_OFFICE_ENGINE_IDLE_SECS)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -510,6 +578,9 @@ pub struct AppConfig {
     /// still rendered at `0` — a document has no other source for its preview — it
     /// is simply not kept once the hover it was rendered for is over.
     pub office_cache_mb: u32,
+    /// How long the Office engine a family started is kept after that family's
+    /// last page, which is the tray's `Performance → Keep Office Engine` setting.
+    pub office_engine_idle: OfficeEngineIdle,
     /// Memory the pages PDF previews were drawn as may hold, in megabytes, between
     /// hovers. A page is rendered at `0` like at any other size; it is simply not
     /// kept once the hover that asked for it is over.
@@ -571,6 +642,7 @@ impl Default for AppConfig {
             archive_preview_enabled: true,
             office_preview_enabled: true,
             office_cache_mb: DEFAULT_OFFICE_CACHE_MB,
+            office_engine_idle: OfficeEngineIdle::Seconds(DEFAULT_OFFICE_ENGINE_IDLE_SECS),
             pdf_cache_mb: DEFAULT_PDF_CACHE_MB,
             text_cache_mb: DEFAULT_TEXT_CACHE_MB,
             text_preview_full_mode: false,
@@ -840,6 +912,11 @@ impl AppConfig {
             );
             ini.set(
                 CONFIG_SECTION,
+                "office_engine_idle",
+                Some(self.office_engine_idle.as_str()),
+            );
+            ini.set(
+                CONFIG_SECTION,
                 "pdf_cache_mb",
                 Some(sanitize_pdf_cache_mb(self.pdf_cache_mb).to_string()),
             );
@@ -1001,6 +1078,11 @@ impl AppConfig {
                 self.office_cache_mb = sanitize_office_cache_mb(value);
             }
         }
+        if let Some(value) = ini.get(CONFIG_SECTION, "office_engine_idle") {
+            if let Some(idle) = OfficeEngineIdle::from_str(&value) {
+                self.office_engine_idle = idle;
+            }
+        }
         if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "pdf_cache_mb") {
             if let Ok(value) = u32::try_from(value) {
                 self.pdf_cache_mb = sanitize_pdf_cache_mb(value);
@@ -1085,5 +1167,70 @@ impl AppConfig {
         restored |= defaulted;
 
         restored
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn office_engine_idle_reads_back_what_it_writes() {
+        for idle in [
+            OfficeEngineIdle::Seconds(0),
+            OfficeEngineIdle::Seconds(600),
+            OfficeEngineIdle::Seconds(MAX_OFFICE_ENGINE_IDLE_SECS),
+            OfficeEngineIdle::Indefinite,
+        ] {
+            let written = idle.as_str();
+            assert_eq!(
+                OfficeEngineIdle::from_str(&written),
+                Some(idle),
+                "`{written}` read back"
+            );
+        }
+    }
+
+    #[test]
+    fn office_engine_idle_takes_the_words_a_person_would_write() {
+        for written in ["indefinitely", "Indefinite", " forever ", "ALWAYS"] {
+            assert_eq!(
+                OfficeEngineIdle::from_str(written),
+                Some(OfficeEngineIdle::Indefinite),
+                "`{written}`"
+            );
+        }
+
+        assert_eq!(
+            OfficeEngineIdle::from_str(" 900 "),
+            Some(OfficeEngineIdle::Seconds(900))
+        );
+        assert_eq!(
+            OfficeEngineIdle::from_str("999999"),
+            Some(OfficeEngineIdle::Seconds(MAX_OFFICE_ENGINE_IDLE_SECS)),
+            "a number past the ceiling is reduced to it"
+        );
+        assert_eq!(
+            OfficeEngineIdle::from_str("soon"),
+            None,
+            "a value that is neither a time nor a word is not one"
+        );
+    }
+
+    #[test]
+    fn office_engine_idle_expires_on_its_own_clock() {
+        let minute = Duration::from_secs(60);
+
+        assert!(
+            OfficeEngineIdle::Seconds(0).has_expired(Duration::ZERO),
+            "an engine let go as soon as it has drawn a page is idle at once"
+        );
+        assert!(!OfficeEngineIdle::Seconds(60).has_expired(minute - Duration::from_secs(1)));
+        assert!(OfficeEngineIdle::Seconds(60).has_expired(minute));
+        assert!(OfficeEngineIdle::Seconds(60).has_expired(Duration::from_secs(9_999)));
+        assert!(
+            !OfficeEngineIdle::Indefinite.has_expired(Duration::from_secs(365 * 24 * 60 * 60)),
+            "an engine kept for the life of the app never goes idle"
+        );
     }
 }
