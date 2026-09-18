@@ -54,8 +54,6 @@ Extensionless repository files such as `LICENSE`, `Makefile`, `Dockerfile`, and 
 
 > **Note:** To show previews for these Office document types, the user must have Microsoft Office installed.
 
-Excel workbooks are previewed as saved, not recalculated.
-
 Excel needs a print queue to export a page — **Microsoft Print to PDF** is enough — and falls back to the sheet's top-left corner without one.
 
 ### Themes
