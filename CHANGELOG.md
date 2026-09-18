@@ -4,7 +4,8 @@
 
 ### Added
 
-- SVG previews (`svg`, `svgz`), drawn at the size the preview is shown at rather than decoded and scaled, and animated ones played — `<animate>`, `<animateTransform>`, `<set>` and CSS `@keyframes`.
+- SVG previews (`svg`, `svgz`), drawn at the size the preview is shown at rather than decoded and scaled, and animated ones played — by the WebView2 runtime Windows 11 ships with, which plays SMIL and CSS in full, and by this app's own reader where that runtime is not installed.
+- `webview_idle` and a `Performance → Keep Animated SVG Engine` entry, ten minutes by default: the browser that plays an animated document is kept warm between hovers rather than started for each one.
 - `trigger_key_enabled` in `config.ini` and a check in the tray `Trigger Key` submenu, to switch the trigger key off without changing its mode.
 
 ### Changed

@@ -118,6 +118,11 @@ fn main() {
     // cannot be cancelled, and the app's exit must not wait on one.
     office_render::shutdown();
 
+    // The browser engine is this app's own process tree rather than an application a
+    // user may also be working in, so it is ended here: nothing of it should outlive
+    // the app.
+    webview_preview::shutdown();
+
     // Wait for threads to finish (with timeout)
     let _ = preview_handle.join();
     let _ = hook_handle.join();

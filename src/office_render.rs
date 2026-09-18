@@ -32,7 +32,7 @@
 
 use crate::cloud_files;
 use crate::config::{
-    sanitize_office_cache_mb, OfficeEngineIdle, PreviewType, DEFAULT_OFFICE_CACHE_MB,
+    sanitize_office_cache_mb, EngineIdle, PreviewType, DEFAULT_OFFICE_CACHE_MB,
     DEFAULT_OFFICE_ENGINE_IDLE_SECS,
 };
 use crate::office_formats::{app_for, container_kind, OfficeApp};
@@ -84,11 +84,11 @@ const WM_OFFICE_RENDER: u32 = WM_APP + 3;
 /// warm: the worker wakes twice a second and asks this of every engine it holds,
 /// so a setting lowered from an hour to nothing drops them within a tick of it
 /// being made.
-fn engine_idle() -> OfficeEngineIdle {
+fn engine_idle() -> EngineIdle {
     CONFIG
         .lock()
         .map(|config| config.office_engine_idle)
-        .unwrap_or(OfficeEngineIdle::Seconds(DEFAULT_OFFICE_ENGINE_IDLE_SECS))
+        .unwrap_or(EngineIdle::Seconds(DEFAULT_OFFICE_ENGINE_IDLE_SECS))
 }
 
 /// How long a file that refused a page is left alone. Office refused it for a

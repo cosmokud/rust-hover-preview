@@ -16,6 +16,7 @@ use crate::svg_preview;
 use crate::text_formats;
 use crate::text_preview::{self, TextPreviewOptions};
 use crate::video_formats::{self, is_video_file};
+use crate::webview_preview;
 use crate::wheel_input;
 use crate::{CONFIG, RUNNING};
 use gif::DecodeOptions;
@@ -2276,14 +2277,15 @@ fn load_static_image(
 
 /// Draw an SVG into the box the layout planned.
 ///
-/// The document is measured here and drawn here, because nothing is held between the
-/// two: a vector drawn at the size it is shown at costs no more to draw again than to
-/// keep, and what a cache would hold is a frame as large as the display's room (see
-/// `svg_preview`). The box comes from the layout's own scaling of the measured size,
-/// so the frame and the window it is installed in are the same size.
+/// Three things can end up playing a document that moves, in this order: the engine,
+/// which is Chromium and plays the whole of SMIL and CSS; this app's own reader, for a
+/// machine with no engine on it; and the still first frame, for a document whose
+/// animation is outside what the reader can follow. A document that does not move is
+/// drawn here and costs none of that.
 ///
-/// One that moves is played instead — see `load_animated_svg` — and a document that
-/// only stands still costs the one parse that says so.
+/// Where the engine is going to play it, what is drawn here is the still frame the
+/// engine's window lands on top of: a hover shows the document rather than a gap while
+/// a browser starts, and a document whose page never arrives simply stays still.
 fn load_svg_preview(
     path: &Path,
     max_width: u32,
@@ -2291,6 +2293,29 @@ fn load_svg_preview(
     preview_scale: PreviewScale,
     cancel: &Arc<AtomicBool>,
 ) -> Option<MediaData> {
+    let (document_width, document_height) = svg_preview::measure(path)?;
+    let (target_width, target_height) = scale_dimensions(
+        document_width,
+        document_height,
+        max_width,
+        max_height,
+        preview_scale,
+    );
+
+    if webview_preview::moves(path) {
+        // The engine's window is put up by the preview loop, which is what knows where
+        // the preview belongs and when it is on screen.
+        let (pixels, width, height) =
+            svg_preview::render(path, target_width, target_height, Some(cancel))?;
+
+        return Some(static_image_media(ImageFrame {
+            pixels,
+            width,
+            height,
+            delay_ms: 0,
+        }));
+    }
+
     if let Some(media) = load_animated_svg(
         path,
         max_width,
@@ -2304,15 +2329,6 @@ fn load_svg_preview(
     if cancel.load(Ordering::Acquire) {
         return None;
     }
-
-    let (document_width, document_height) = svg_preview::measure(path)?;
-    let (target_width, target_height) = scale_dimensions(
-        document_width,
-        document_height,
-        max_width,
-        max_height,
-        preview_scale,
-    );
 
     let (pixels, width, height) =
         svg_preview::render(path, target_width, target_height, Some(cancel))?;
@@ -3968,6 +3984,9 @@ struct HoverPlacement {
 /// Tracks a pending background load so we can show the spinner while it runs.
 struct PendingLoad {
     generation: u64,
+    /// The file this load is for, which is what decides whether the engine plays it
+    /// and what the engine is pointed at.
+    path: PathBuf,
     started: Instant,
     pos_x: i32,
     pos_y: i32,
@@ -5871,6 +5890,11 @@ pub fn run_preview_window() {
                 current_video_path = None;
                 video_pos = (0, 0, 0, 0);
 
+                // A browser engine is a process that does not survive a suspend in any
+                // state worth keeping, so it is let go with everything else and begun
+                // again when the next document asks for it.
+                webview_preview::shutdown();
+
                 // Re-assert layered window style after DWM restart.
                 // DWM is reinitialized during resume and the layered window's
                 // per-pixel alpha composition surface may need a fresh anchor.
@@ -5903,6 +5927,15 @@ pub fn run_preview_window() {
 
             // Advance animation frames if needed
             let mut needs_repaint = false;
+
+            // The engine plays a document in a window of its own, and that window is
+            // put up only once the page has arrived: what is underneath it — the still
+            // frame this app drew — comes down then, and is put back by whatever
+            // preview is shown next.
+            if webview_preview::is_showing() && IsWindowVisible(hwnd).as_bool() {
+                let _ = ShowWindow(hwnd, SW_HIDE);
+            }
+
             if let Ok(mut media_guard) = CURRENT_MEDIA.lock() {
                 if let Some(ref mut media) = *media_guard {
                     if media.advance_frame() {
@@ -5995,6 +6028,23 @@ pub fn run_preview_window() {
                                     SWP_NOACTIVATE | SWP_SHOWWINDOW,
                                 );
                                 let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+
+                                // A document the engine plays is handed over once its
+                                // still frame is up: the engine's window lands on top
+                                // of that when the page has arrived, and until then
+                                // what is on screen is the document itself.
+                                if webview_preview::moves(&pl.path) {
+                                    webview_preview::show(
+                                        &pl.path,
+                                        webview_preview::Area {
+                                            x: pl.pos_x,
+                                            y: pl.pos_y,
+                                            width: mw,
+                                            height: mh,
+                                        },
+                                        current_transparent_background(),
+                                    );
+                                }
                             }
 
                             // A page for this document is one Office start away,
@@ -6368,6 +6418,10 @@ pub fn run_preview_window() {
                         let _ = ShowWindow(hwnd, SW_HIDE);
                         clear_pointer_hold();
 
+                        // A document the engine is playing goes with the preview: its
+                        // window is its own, so nothing else here takes it down.
+                        webview_preview::hide();
+
                         // Stop video playback if any
                         if let Ok(mut current) = CURRENT_MEDIA.lock() {
                             if let Some(ref mut media) = *current {
@@ -6521,6 +6575,13 @@ pub fn run_preview_window() {
                             video_pos = (0, 0, 0, 0);
                         }
 
+                        // A preview that is not the engine's is drawn here, so the
+                        // engine's window — if one is still up — comes down as this
+                        // one goes up.
+                        if !webview_preview::moves(&path) {
+                            webview_preview::hide();
+                        }
+
                         if let Some(cancel) = pending_load_cancel.take() {
                             cancel.store(true, Ordering::Release);
                         }
@@ -6544,6 +6605,7 @@ pub fn run_preview_window() {
                         pending_load_cancel = Some(Arc::clone(&load_cancel));
                         pending_load = Some(PendingLoad {
                             generation: gen,
+                            path: path.clone(),
                             started: Instant::now(),
                             pos_x,
                             pos_y,
@@ -6579,6 +6641,7 @@ pub fn run_preview_window() {
                     }
 
                     let _ = ShowWindow(hwnd, SW_HIDE);
+                    webview_preview::hide();
 
                     if let Ok(mut current) = CURRENT_MEDIA.lock() {
                         if let Some(ref mut media) = *current {
@@ -6911,6 +6974,7 @@ mod tests {
     fn puts_the_spinner_up_at_once_only_for_a_wait_that_is_known() {
         let load = |awaiting_render: bool, age: Duration, upgrade: bool| PendingLoad {
             generation: 1,
+            path: PathBuf::new(),
             started: Instant::now() - age,
             pos_x: 0,
             pos_y: 0,
@@ -6947,6 +7011,7 @@ mod tests {
     fn a_pending_preview_follows_the_pointer() {
         let pending = |placement: Option<HoverPlacement>| PendingLoad {
             generation: 1,
+            path: PathBuf::new(),
             started: Instant::now(),
             pos_x: 0,
             pos_y: 0,

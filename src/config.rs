@@ -80,6 +80,9 @@ pub const MAX_TEXT_CACHE_MB: u32 = 2048;
 /// makes the next document of that family cheap, so one is kept for a while by
 /// default.
 pub const DEFAULT_OFFICE_ENGINE_IDLE_SECS: u64 = 600;
+/// How long the WebView2 engine is kept warm by default: ten minutes, the same as the
+/// Office engine, because both are a process this app would rather not start twice.
+pub const DEFAULT_WEBVIEW_IDLE_SECS: u64 = 600;
 /// The ceiling a hand-edited number of seconds is reduced to. Past a day there is
 /// nothing a number says that `indefinitely` does not say better.
 pub const MAX_OFFICE_ENGINE_IDLE_SECS: u64 = 86_400;
@@ -237,16 +240,15 @@ impl PreviewScale {
     }
 }
 
-/// How long the Office engine a family started is kept after that family's last
-/// page.
+/// How long an engine that is kept warm between documents is kept.
 ///
-/// The engine is the Office application itself — the process, not the document,
-/// which is closed after every render — so what is kept is an Office start that
-/// has already been paid for. One is kept per family, and each is let go on its
-/// own clock, so the family asked for most recently is the one that outlives the
-/// others.
+/// Two settings are one shape: the Office engine, which is the application this app
+/// started and would rather not start again, and the WebView2 engine that plays an
+/// animated document, which is a browser process. Both are kept for a while after the
+/// last document and then let go, both may be kept for the life of the app, and both
+/// take the same words in `config.ini`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum OfficeEngineIdle {
+pub enum EngineIdle {
     /// Kept for this many seconds after the family's last page, `0` included: an
     /// engine let go as soon as it has drawn one.
     Seconds(u64),
@@ -261,10 +263,10 @@ pub enum OfficeEngineIdle {
     Indefinite,
 }
 
-impl OfficeEngineIdle {
+impl EngineIdle {
     pub fn as_str(self) -> String {
         match self {
-            Self::Seconds(seconds) => sanitize_office_engine_idle_secs(seconds).to_string(),
+            Self::Seconds(seconds) => sanitize_engine_idle_secs(seconds).to_string(),
             Self::Indefinite => "indefinitely".to_string(),
         }
     }
@@ -277,7 +279,7 @@ impl OfficeEngineIdle {
             other => other
                 .parse::<u64>()
                 .ok()
-                .map(|seconds| Self::Seconds(sanitize_office_engine_idle_secs(seconds))),
+                .map(|seconds| Self::Seconds(sanitize_engine_idle_secs(seconds))),
         }
     }
 
@@ -290,9 +292,17 @@ impl OfficeEngineIdle {
             Self::Indefinite => false,
         }
     }
+
+    /// The same, as the wait it is: `None` for an engine that is never let go.
+    pub fn as_duration(self) -> Option<Duration> {
+        match self {
+            Self::Seconds(seconds) => Some(Duration::from_secs(seconds)),
+            Self::Indefinite => None,
+        }
+    }
 }
 
-fn sanitize_office_engine_idle_secs(seconds: u64) -> u64 {
+fn sanitize_engine_idle_secs(seconds: u64) -> u64 {
     seconds.min(MAX_OFFICE_ENGINE_IDLE_SECS)
 }
 
@@ -585,7 +595,12 @@ pub struct AppConfig {
     pub office_cache_mb: u32,
     /// How long the Office engine a family started is kept after that family's
     /// last page, which is the tray's `Performance → Keep Office Engine` setting.
-    pub office_engine_idle: OfficeEngineIdle,
+    pub office_engine_idle: EngineIdle,
+    /// How long the WebView2 engine is kept after the last animated document it
+    /// played. Beginning one is a browser start, and pointing a warm one at another
+    /// document is a few milliseconds, so what this buys is every hover after the
+    /// first.
+    pub webview_idle: EngineIdle,
     /// Memory the pages PDF previews were drawn as may hold, in megabytes, between
     /// hovers. A page is rendered at `0` like at any other size; it is simply not
     /// kept once the hover that asked for it is over.
@@ -648,7 +663,8 @@ impl Default for AppConfig {
             archive_preview_enabled: true,
             office_preview_enabled: true,
             office_cache_mb: DEFAULT_OFFICE_CACHE_MB,
-            office_engine_idle: OfficeEngineIdle::Seconds(DEFAULT_OFFICE_ENGINE_IDLE_SECS),
+            office_engine_idle: EngineIdle::Seconds(DEFAULT_OFFICE_ENGINE_IDLE_SECS),
+            webview_idle: EngineIdle::Seconds(DEFAULT_WEBVIEW_IDLE_SECS),
             pdf_cache_mb: DEFAULT_PDF_CACHE_MB,
             text_cache_mb: DEFAULT_TEXT_CACHE_MB,
             text_preview_full_mode: false,
@@ -959,6 +975,11 @@ impl AppConfig {
             );
             ini.set(
                 CONFIG_SECTION,
+                "webview_idle",
+                Some(self.webview_idle.as_str()),
+            );
+            ini.set(
+                CONFIG_SECTION,
                 "pdf_cache_mb",
                 Some(sanitize_pdf_cache_mb(self.pdf_cache_mb).to_string()),
             );
@@ -1124,8 +1145,13 @@ impl AppConfig {
             }
         }
         if let Some(value) = ini.get(CONFIG_SECTION, "office_engine_idle") {
-            if let Some(idle) = OfficeEngineIdle::from_str(&value) {
+            if let Some(idle) = EngineIdle::from_str(&value) {
                 self.office_engine_idle = idle;
+            }
+        }
+        if let Some(value) = ini.get(CONFIG_SECTION, "webview_idle") {
+            if let Some(idle) = EngineIdle::from_str(&value) {
+                self.webview_idle = idle;
             }
         }
         if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "pdf_cache_mb") {
@@ -1226,14 +1252,14 @@ mod tests {
     #[test]
     fn office_engine_idle_reads_back_what_it_writes() {
         for idle in [
-            OfficeEngineIdle::Seconds(0),
-            OfficeEngineIdle::Seconds(600),
-            OfficeEngineIdle::Seconds(MAX_OFFICE_ENGINE_IDLE_SECS),
-            OfficeEngineIdle::Indefinite,
+            EngineIdle::Seconds(0),
+            EngineIdle::Seconds(600),
+            EngineIdle::Seconds(MAX_OFFICE_ENGINE_IDLE_SECS),
+            EngineIdle::Indefinite,
         ] {
             let written = idle.as_str();
             assert_eq!(
-                OfficeEngineIdle::from_str(&written),
+                EngineIdle::from_str(&written),
                 Some(idle),
                 "`{written}` read back"
             );
@@ -1244,23 +1270,23 @@ mod tests {
     fn office_engine_idle_takes_the_words_a_person_would_write() {
         for written in ["indefinitely", "Indefinite", " forever ", "ALWAYS"] {
             assert_eq!(
-                OfficeEngineIdle::from_str(written),
-                Some(OfficeEngineIdle::Indefinite),
+                EngineIdle::from_str(written),
+                Some(EngineIdle::Indefinite),
                 "`{written}`"
             );
         }
 
         assert_eq!(
-            OfficeEngineIdle::from_str(" 900 "),
-            Some(OfficeEngineIdle::Seconds(900))
+            EngineIdle::from_str(" 900 "),
+            Some(EngineIdle::Seconds(900))
         );
         assert_eq!(
-            OfficeEngineIdle::from_str("999999"),
-            Some(OfficeEngineIdle::Seconds(MAX_OFFICE_ENGINE_IDLE_SECS)),
+            EngineIdle::from_str("999999"),
+            Some(EngineIdle::Seconds(MAX_OFFICE_ENGINE_IDLE_SECS)),
             "a number past the ceiling is reduced to it"
         );
         assert_eq!(
-            OfficeEngineIdle::from_str("soon"),
+            EngineIdle::from_str("soon"),
             None,
             "a value that is neither a time nor a word is not one"
         );
@@ -1271,14 +1297,14 @@ mod tests {
         let minute = Duration::from_secs(60);
 
         assert!(
-            OfficeEngineIdle::Seconds(0).has_expired(Duration::ZERO),
+            EngineIdle::Seconds(0).has_expired(Duration::ZERO),
             "an engine let go as soon as it has drawn a page is idle at once"
         );
-        assert!(!OfficeEngineIdle::Seconds(60).has_expired(minute - Duration::from_secs(1)));
-        assert!(OfficeEngineIdle::Seconds(60).has_expired(minute));
-        assert!(OfficeEngineIdle::Seconds(60).has_expired(Duration::from_secs(9_999)));
+        assert!(!EngineIdle::Seconds(60).has_expired(minute - Duration::from_secs(1)));
+        assert!(EngineIdle::Seconds(60).has_expired(minute));
+        assert!(EngineIdle::Seconds(60).has_expired(Duration::from_secs(9_999)));
         assert!(
-            !OfficeEngineIdle::Indefinite.has_expired(Duration::from_secs(365 * 24 * 60 * 60)),
+            !EngineIdle::Indefinite.has_expired(Duration::from_secs(365 * 24 * 60 * 60)),
             "an engine kept for the life of the app never goes idle"
         );
     }
