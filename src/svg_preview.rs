@@ -185,11 +185,14 @@ struct DocumentKey {
     version: FileVersion,
 }
 
-/// A parsed document: the tree the renderer draws, and the text it was parsed from,
-/// which is what the animation pass writes out again with a moment's values in it.
+/// A parsed document: the tree the renderer draws, the text it was parsed from — which
+/// is what the animation pass writes out again with a moment's values in it — and
+/// whether it says it moves at all, which is what decides between the engine and this
+/// app's own reader.
 struct Parsed {
     tree: Arc<usvg::Tree>,
     source: Arc<str>,
+    moves: bool,
 }
 
 /// A held parse: the document, or the fact that this version of the file is not one.
@@ -246,6 +249,14 @@ pub fn source(path: &Path) -> Option<Arc<str>> {
     parsed(path).map(|parsed| parsed.source)
 }
 
+/// Whether the document says it moves at all, which is asked of every hover: is this
+/// a document for the engine, or one to draw here? It is answered once per version of
+/// the file rather than per hover, because it costs a parse of the document's own XML
+/// and the answer cannot change while the file does not.
+pub fn moves(path: &Path) -> bool {
+    parsed(path).map(|parsed| parsed.moves).unwrap_or(false)
+}
+
 /// The held parse of `path`, reading and parsing the file when it is not held.
 fn parsed(path: &Path) -> Option<Parsed> {
     let key = DocumentKey {
@@ -265,8 +276,15 @@ fn parsed(path: &Path) -> Option<Parsed> {
         let tree = usvg::Tree::from_data_nested(source.as_bytes(), &parse_options())
             .ok()
             .map(Arc::new)?;
+        let moves = roxmltree::Document::parse(source.as_ref())
+            .map(|document| crate::svg_animation::declares_animation(&document))
+            .unwrap_or(false);
 
-        Some(Parsed { tree, source })
+        Some(Parsed {
+            tree,
+            source,
+            moves,
+        })
     });
 
     document_cache_put(&key, &parsed);
@@ -287,6 +305,7 @@ fn document_cache_get(key: &DocumentKey) -> Option<Held> {
         Held::Parsed(parsed) => Held::Parsed(Parsed {
             tree: Arc::clone(&parsed.tree),
             source: Arc::clone(&parsed.source),
+            moves: parsed.moves,
         }),
         Held::NotADocument => Held::NotADocument,
     })
@@ -309,6 +328,7 @@ fn document_cache_put(key: &DocumentKey, parsed: &Option<Parsed>) {
                 Some(parsed) => Held::Parsed(Parsed {
                     tree: Arc::clone(&parsed.tree),
                     source: Arc::clone(&parsed.source),
+                    moves: parsed.moves,
                 }),
                 None => Held::NotADocument,
             },

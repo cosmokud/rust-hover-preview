@@ -34,6 +34,24 @@ pub const FRAME_MS: u32 = 33;
 /// going to show.
 const MAX_FRAMES: u32 = 300;
 
+/// Whether a document says it moves at all.
+///
+/// This is a question about the document rather than about this module: what a
+/// document declares is reason enough to hand it to an engine that plays the whole of
+/// SMIL and CSS, and this reader's own subset is what draws it when there is no such
+/// engine on the machine. A declaration outside the subset is one the engine can still
+/// play, which is why the check is for any declaration at all rather than for one this
+/// can carry out.
+pub fn declares_animation(document: &Document) -> bool {
+    document.descendants().filter(Node::is_element).any(|node| {
+        matches!(
+            node.tag_name().name(),
+            "animate" | "animateTransform" | "animateMotion" | "set"
+        ) || (node.tag_name().name() == "style"
+            && node.text().is_some_and(|text| text.contains("@keyframes")))
+    })
+}
+
 /// The animations a document declares, and how long one pass of them is.
 pub struct Playback {
     animations: Vec<Animation>,

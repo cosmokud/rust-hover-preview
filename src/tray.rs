@@ -1,10 +1,10 @@
 use crate::config::{
     sanitize_image_cache_mb, sanitize_office_cache_mb, sanitize_pdf_cache_mb,
-    sanitize_text_cache_mb, sanitize_text_font_scale_percent, MarkdownMode, OfficeEngineIdle,
+    sanitize_text_cache_mb, sanitize_text_font_scale_percent, EngineIdle, MarkdownMode,
     PreviewScale, PreviewType, TextTheme, TransparentBackground, TriggerKeyMode,
     DEFAULT_IMAGE_CACHE_MB, DEFAULT_OFFICE_CACHE_MB, DEFAULT_OFFICE_ENGINE_IDLE_SECS,
     DEFAULT_PDF_CACHE_MB, DEFAULT_PREVIEW_SCALE_PERCENT, DEFAULT_TEXT_CACHE_MB,
-    DEFAULT_TEXT_FONT_SCALE_PERCENT,
+    DEFAULT_TEXT_FONT_SCALE_PERCENT, DEFAULT_WEBVIEW_IDLE_SECS,
 };
 use crate::explorer_hook;
 use crate::office_render;
@@ -13,6 +13,7 @@ use crate::preview_window::{refresh_preview, refresh_preview_types, trim_image_c
 use crate::text_preview;
 use crate::text_theme;
 use crate::theme_files;
+use crate::webview_preview;
 use crate::{startup, CONFIG, RUNNING};
 use once_cell::sync::Lazy;
 use std::os::windows::ffi::OsStrExt;
@@ -29,10 +30,11 @@ use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CheckMenuRadioItem, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu,
     DispatchMessageW, GetCursorPos, LoadImageW, PeekMessageW, PostQuitMessage, RegisterClassExW,
     RegisterWindowMessageW, SetForegroundWindow, TrackPopupMenu, TranslateMessage, CS_HREDRAW,
-    CS_VREDRAW, HICON, IMAGE_ICON, LR_DEFAULTSIZE, LR_SHARED, MF_BYCOMMAND, MF_CHECKED, MF_POPUP,
-    MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MSG, PBT_APMRESUMEAUTOMATIC, PBT_APMRESUMESUSPEND,
-    PM_REMOVE, SW_SHOWNORMAL, TPM_BOTTOMALIGN, TPM_LEFTALIGN, WM_COMMAND, WM_DESTROY, WM_LBUTTONUP,
-    WM_POWERBROADCAST, WM_RBUTTONUP, WM_USER, WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_POPUP,
+    CS_VREDRAW, HICON, HMENU, IMAGE_ICON, LR_DEFAULTSIZE, LR_SHARED, MF_BYCOMMAND, MF_CHECKED,
+    MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MSG, PBT_APMRESUMEAUTOMATIC,
+    PBT_APMRESUMESUSPEND, PM_REMOVE, SW_SHOWNORMAL, TPM_BOTTOMALIGN, TPM_LEFTALIGN, WM_COMMAND,
+    WM_DESTROY, WM_LBUTTONUP, WM_POWERBROADCAST, WM_RBUTTONUP, WM_USER, WNDCLASSEXW,
+    WS_EX_TOOLWINDOW, WS_POPUP,
 };
 
 const WM_TRAYICON: u32 = WM_USER + 1;
@@ -115,19 +117,22 @@ const ID_TRAY_FONT_70: u16 = 1082;
 /// 1082 and the `theme` folder's items start at 1100, so this range is the slack
 /// between the two.
 const ID_TRAY_ENGINE_IDLE_BASE: u16 = 1083;
+/// The `Performance → Keep Animated SVG Engine` submenu, the same shape as the Office
+/// one and in the range after it.
+const ID_TRAY_WEBVIEW_IDLE_BASE: u16 = 1090;
 /// The idle times the `Keep Office Engine` submenu offers, longest first — the
 /// order the menu lists them in, so an engine that is never let go is the topmost
 /// item and one that is let go as soon as it has drawn a page is the bottom one. A
 /// value a hand-edited `config.ini` asks for that is not one of these is shown with
 /// nothing marked rather than rounded to the nearest.
-const ENGINE_IDLE_CHOICES: [OfficeEngineIdle; 7] = [
-    OfficeEngineIdle::Indefinite,
-    OfficeEngineIdle::Seconds(3600),
-    OfficeEngineIdle::Seconds(1800),
-    OfficeEngineIdle::Seconds(600),
-    OfficeEngineIdle::Seconds(300),
-    OfficeEngineIdle::Seconds(60),
-    OfficeEngineIdle::Seconds(0),
+const ENGINE_IDLE_CHOICES: [EngineIdle; 7] = [
+    EngineIdle::Indefinite,
+    EngineIdle::Seconds(3600),
+    EngineIdle::Seconds(1800),
+    EngineIdle::Seconds(600),
+    EngineIdle::Seconds(300),
+    EngineIdle::Seconds(60),
+    EngineIdle::Seconds(0),
 ];
 
 /// Where the `theme` folder's own items start: one command ID each, in the order
@@ -253,6 +258,13 @@ unsafe extern "system" fn tray_window_proc(
                     .contains(&cmd) =>
                 {
                     set_office_engine_idle(cmd - ID_TRAY_ENGINE_IDLE_BASE)
+                }
+                // The browser engine's idle time, the same way.
+                cmd if (ID_TRAY_WEBVIEW_IDLE_BASE
+                    ..ID_TRAY_WEBVIEW_IDLE_BASE + ENGINE_IDLE_CHOICES.len() as u16)
+                    .contains(&cmd) =>
+                {
+                    set_webview_idle(cmd - ID_TRAY_WEBVIEW_IDLE_BASE)
                 }
                 // A cache size, by the position it was listed at.
                 cmd if (ID_TRAY_IMAGE_CACHE_BASE..ID_TRAY_OFFICE_CACHE_BASE).contains(&cmd) => {
@@ -1000,55 +1012,35 @@ unsafe fn show_context_menu(hwnd: HWND) {
     // family not paying for an Office start, and what it costs is an Office
     // application in the process list. It is listed longest first, with the engine
     // that is never let go at the top.
-    let engine_idle = CONFIG
+    let office_idle = CONFIG
         .lock()
         .map(|c| c.office_engine_idle)
-        .unwrap_or(OfficeEngineIdle::Seconds(DEFAULT_OFFICE_ENGINE_IDLE_SECS));
+        .unwrap_or(EngineIdle::Seconds(DEFAULT_OFFICE_ENGINE_IDLE_SECS));
 
-    let engine_menu = CreatePopupMenu().unwrap();
-
-    // The labels are kept for as long as the menu is being filled out, for the same
-    // reason the cache labels are: `AppendMenuW` is handed a pointer, so the wide
-    // strings have to outlive the call that lists them.
-    let engine_labels: Vec<Vec<u16>> = ENGINE_IDLE_CHOICES
-        .iter()
-        .map(|idle| {
-            engine_idle_label(*idle)
-                .encode_utf16()
-                .chain(std::iter::once(0))
-                .collect()
-        })
-        .collect();
-
-    for (index, _) in ENGINE_IDLE_CHOICES.iter().enumerate() {
-        let _ = AppendMenuW(
-            engine_menu,
-            MF_STRING,
-            (ID_TRAY_ENGINE_IDLE_BASE + index as u16) as usize,
-            PCWSTR(engine_labels[index].as_ptr()),
-        );
-    }
-
-    // A time the menu does not offer — one a hand-edited `config.ini` asked for —
-    // leaves every item unmarked rather than marking the nearest one.
-    if let Some(index) = ENGINE_IDLE_CHOICES
-        .iter()
-        .position(|idle| *idle == engine_idle)
-    {
-        let _ = CheckMenuRadioItem(
-            engine_menu,
-            ID_TRAY_ENGINE_IDLE_BASE as u32,
-            (ID_TRAY_ENGINE_IDLE_BASE + ENGINE_IDLE_CHOICES.len() as u16 - 1) as u32,
-            (ID_TRAY_ENGINE_IDLE_BASE + index as u16) as u32,
-            MF_BYCOMMAND.0,
-        );
-    }
-
-    let _ = AppendMenuW(
+    append_engine_idle_menu(
         performance_menu,
-        MF_STRING | MF_POPUP,
-        engine_menu.0 as usize,
         w!("Keep Office Engine"),
+        ID_TRAY_ENGINE_IDLE_BASE,
+        office_idle,
+        DEFAULT_OFFICE_ENGINE_IDLE_SECS,
+        true,
+    );
+
+    // Keep Animated SVG Engine: the same question about the browser this app starts to
+    // play a document that moves. It is greyed out on a machine with no WebView2
+    // runtime, since there is nothing there to keep.
+    let webview_idle = CONFIG
+        .lock()
+        .map(|c| c.webview_idle)
+        .unwrap_or(EngineIdle::Seconds(DEFAULT_WEBVIEW_IDLE_SECS));
+
+    append_engine_idle_menu(
+        performance_menu,
+        w!("Keep Animated SVG Engine"),
+        ID_TRAY_WEBVIEW_IDLE_BASE,
+        webview_idle,
+        DEFAULT_WEBVIEW_IDLE_SECS,
+        webview_preview::is_available(),
     );
 
     // Add the "Cache" submenu: how much memory a preview's own data may be held in
@@ -1323,30 +1315,92 @@ fn cache_size_label(megabytes: u32, default_mb: u32) -> String {
     }
 }
 
-/// What an idle time is called in the `Keep Office Engine` submenu: the time, with
-/// the one an engine is kept for by default marked. The shortest is the only one
-/// that is not a whole minute, and the longest is the only one that is not a whole
-/// number of minutes.
-fn engine_idle_label(idle: OfficeEngineIdle) -> String {
-    let label = match idle {
-        OfficeEngineIdle::Indefinite => "Indefinitely".to_string(),
-        OfficeEngineIdle::Seconds(0) => "0 seconds".to_string(),
-        OfficeEngineIdle::Seconds(60) => "1 minute".to_string(),
-        OfficeEngineIdle::Seconds(3600) => "1 hour".to_string(),
-        OfficeEngineIdle::Seconds(seconds) => format!("{} minutes", seconds / 60),
+/// One `Keep … Engine` submenu: the idle times every engine this app keeps warm
+/// offers, with the one that engine is on marked, and nothing marked for a time the
+/// menu does not offer — which is what a hand-edited `config.ini` can ask for. An
+/// engine that is not on the machine at all is greyed out, since there is nothing
+/// there to keep.
+fn append_engine_idle_menu(
+    parent: HMENU,
+    label: PCWSTR,
+    base: u16,
+    idle: EngineIdle,
+    default_seconds: u64,
+    enabled: bool,
+) {
+    let menu = unsafe { CreatePopupMenu().unwrap() };
+
+    // The labels are kept for as long as the menu is being filled out, for the same
+    // reason the cache labels are: `AppendMenuW` is handed a pointer, so the wide
+    // strings have to outlive the call that lists them.
+    let labels: Vec<Vec<u16>> = ENGINE_IDLE_CHOICES
+        .iter()
+        .map(|choice| {
+            engine_idle_label(*choice, default_seconds)
+                .encode_utf16()
+                .chain(std::iter::once(0))
+                .collect()
+        })
+        .collect();
+
+    for (index, label) in labels.iter().enumerate() {
+        let _ = unsafe {
+            AppendMenuW(
+                menu,
+                MF_STRING,
+                (base + index as u16) as usize,
+                PCWSTR(label.as_ptr()),
+            )
+        };
+    }
+
+    if let Some(index) = ENGINE_IDLE_CHOICES
+        .iter()
+        .position(|choice| *choice == idle)
+    {
+        let _ = unsafe {
+            CheckMenuRadioItem(
+                menu,
+                base as u32,
+                (base + ENGINE_IDLE_CHOICES.len() as u16 - 1) as u32,
+                (base + index as u16) as u32,
+                MF_BYCOMMAND.0,
+            )
+        };
+    }
+
+    let flags = if enabled {
+        MF_STRING | MF_POPUP
+    } else {
+        MF_STRING | MF_POPUP | MF_GRAYED
     };
 
-    if idle == OfficeEngineIdle::Seconds(DEFAULT_OFFICE_ENGINE_IDLE_SECS) {
+    let _ = unsafe { AppendMenuW(parent, flags, menu.0 as usize, label) };
+}
+
+/// What an idle time is called in a `Keep … Engine` submenu: the time, with the one an
+/// engine is kept for by default marked. The shortest is the only one that is not a
+/// whole minute, and the longest is the only one that is not a whole number of
+/// minutes.
+fn engine_idle_label(idle: EngineIdle, default_seconds: u64) -> String {
+    let label = match idle {
+        EngineIdle::Indefinite => "Indefinitely".to_string(),
+        EngineIdle::Seconds(0) => "0 seconds".to_string(),
+        EngineIdle::Seconds(60) => "1 minute".to_string(),
+        EngineIdle::Seconds(3600) => "1 hour".to_string(),
+        EngineIdle::Seconds(seconds) => format!("{} minutes", seconds / 60),
+    };
+
+    if idle == EngineIdle::Seconds(default_seconds) {
         format!("{label} (Default)")
     } else {
         label
     }
 }
 
-/// The idle time an item of the `Keep Office Engine` submenu stands for, by the
-/// position it was listed at. An id past the last time the menu offered is one that
-/// is not there.
-fn engine_idle_at(index: u16) -> Option<OfficeEngineIdle> {
+/// The idle time an item of a `Keep … Engine` submenu stands for, by the position it
+/// was listed at. An id past the last time the menu offered is one that is not there.
+fn engine_idle_at(index: u16) -> Option<EngineIdle> {
     ENGINE_IDLE_CHOICES.get(index as usize).copied()
 }
 
@@ -1363,6 +1417,20 @@ fn set_office_engine_idle(index: u16) {
 
     if let Ok(mut config) = CONFIG.lock() {
         config.office_engine_idle = idle;
+        config.save();
+    }
+}
+
+/// How long the browser engine is kept after the last document it played. Nothing is
+/// rebuilt here either: the engine reads the setting every time it decides whether to
+/// let itself go, so a shorter time applies to the engine that is already warm.
+fn set_webview_idle(index: u16) {
+    let Some(idle) = engine_idle_at(index) else {
+        return;
+    };
+
+    if let Ok(mut config) = CONFIG.lock() {
+        config.webview_idle = idle;
         config.save();
     }
 }
@@ -1711,7 +1779,8 @@ mod tests {
     #[test]
     fn engine_idle_is_offered_longest_first() {
         assert_eq!(
-            ENGINE_IDLE_CHOICES.map(engine_idle_label),
+            ENGINE_IDLE_CHOICES
+                .map(|idle| engine_idle_label(idle, DEFAULT_OFFICE_ENGINE_IDLE_SECS)),
             [
                 "Indefinitely".to_string(),
                 "1 hour".to_string(),
@@ -1729,11 +1798,7 @@ mod tests {
     #[test]
     fn every_offered_idle_time_is_one_the_setting_keeps() {
         for idle in ENGINE_IDLE_CHOICES {
-            assert_eq!(
-                OfficeEngineIdle::from_str(&idle.as_str()),
-                Some(idle),
-                "{idle:?}"
-            );
+            assert_eq!(EngineIdle::from_str(&idle.as_str()), Some(idle), "{idle:?}");
         }
 
         assert_eq!(
@@ -1741,6 +1806,6 @@ mod tests {
             None,
             "an id past the last item is not one the menu offered"
         );
-        assert_eq!(engine_idle_at(0), Some(OfficeEngineIdle::Indefinite));
+        assert_eq!(engine_idle_at(0), Some(EngineIdle::Indefinite));
     }
 }
