@@ -23,6 +23,7 @@ mod text_theme;
 mod theme_files;
 mod tray;
 mod video_formats;
+mod webview_preview;
 mod wheel_input;
 
 use once_cell::sync::Lazy;
