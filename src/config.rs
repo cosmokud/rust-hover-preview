@@ -35,10 +35,10 @@ pub const MAX_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS: f32 = 1000.0;
 /// layout asked for, so this is a ceiling on retained pixels rather than on
 /// files: how many images fit depends entirely on how large they are shown.
 ///
-/// Nothing is held by default: a picture is decoded for the hover that asked for
-/// it, and keeping frames for the folders that are hovered most is a choice the
-/// user makes.
-pub const DEFAULT_IMAGE_CACHE_MB: u32 = 0;
+/// A small budget is kept by default: a hit skips a full-resolution decode and its
+/// resample, which is the most expensive thing a hover does, and what is held is
+/// the preview-sized frame rather than the pixels it was decoded from.
+pub const DEFAULT_IMAGE_CACHE_MB: u32 = 32;
 pub const MAX_IMAGE_CACHE_MB: u32 = 2048;
 /// Memory the rendered Office pages may hold. A render is what the preview shows
 /// for a document, and producing one costs an Office start and an export, so what
@@ -50,10 +50,10 @@ pub const MAX_OFFICE_CACHE_MB: u32 = 2048;
 /// pixels it was rendered into, so the size the layout asked for is part of what
 /// is kept rather than only the file it came from.
 ///
-/// Nothing is held by default: a page is rendered for the hover that asks for it,
-/// and keeping the pages of the files that are hovered most is a choice the user
-/// makes.
-pub const DEFAULT_PDF_CACHE_MB: u32 = 0;
+/// A small budget is kept by default — a hit skips the document load, the raster
+/// and the renderer's own encode — and a page's own pixels are what it costs, so a
+/// budget holds fewer pages than it would frames of anything smaller.
+pub const DEFAULT_PDF_CACHE_MB: u32 = 32;
 pub const MAX_PDF_CACHE_MB: u32 = 2048;
 /// Memory the frames a text preview was painted as may hold. A frame is stored as
 /// the pixels it was painted into, so the box it was painted in and the scroll

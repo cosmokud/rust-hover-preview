@@ -4,40 +4,30 @@
 
 ### Added
 
-- Office previews: hovering a Word, Excel or PowerPoint document shows a page of it, rendered by the installed Office. No engine starts until the pointer has rested on the file for two seconds.
-- `office_preview_enabled` and `office_cache_mb` in `config.ini`, an editable `[office] extensions` list, and an `Office` entry in the tray's `Preview Types` submenu.
-- `pdf_cache_mb` in `config.ini` and a `PDF` entry in the tray's `Cache` submenu: the page a PDF preview was drawn as is held in memory between hovers, so hovering back over a file does not render it again. Nothing is held by default, and the value is capped at `2048`.
-- `text_cache_mb` in `config.ini` and a `Text` entry in the tray's `Cache` submenu: the frame a text preview was painted as is held in memory between hovers, so hovering back over a file does not paint it again. Nothing is held by default, and the value is capped at `2048`. A frame a selection is painted into is never held.
+- Office previews for Word, Excel and PowerPoint, rendered by the installed Office after a two-second hover.
+- `office_preview_enabled`, `office_cache_mb`, an editable `[office] extensions` list, and an `Office` entry under `Preview Types`.
+- `pdf_cache_mb` and `text_cache_mb`, with `PDF` and `Text` entries in the new tray `Cache` submenu; memory-only, capped at `2048`, default `32` for PDF and `0` for text.
+- Tray `Cache` submenu for image, text, PDF and Office caches (`0 MB`–`2 GB`), plus `90%`, `80%` and `70%` font sizes.
 
 ### Changed
 
-- Office previews are drawn from the rendered page, not from the thumbnail a document saves inside itself.
-- A rendered Office page is held in memory rather than written to disk: `office_cache_mb` is how much is kept between hovers, and `64 MB` of it is kept by default.
-- A page is asked for in the box its family's pages have, and while it is on its way the preview is the spinner alone.
-- A PDF page and a rendered Office page are still sized from fit-to-screen, but a preview scale below `100%` now reduces that size instead of being ignored. `100%` and above are the fit-to-screen size they have always been, and image previews are unchanged.
-- The spinner a preview shows while it waits is the arc alone: its frame is transparent, so what is behind it is the desktop rather than a dark square. The arc carries a soft halo, which is what keeps it visible over a light background.
-- A document whose page still has to be rendered shows that spinner as soon as the hover finds there is nothing to draw, instead of two seconds later: the wait for the pointer to rest no longer passes with nothing on screen. Loads that may be about to finish keep the moment the spinner is given before it goes up.
-- A preview that is still on its way follows the pointer: the spinner is placed again as the cursor moves along the item it belongs to, and the page or frame that arrives replaces it where the pointer is rather than back where the hover started.
-- The spinner a document shows while its page is rendered is placed flush at the pointer's own corner — a pixel off it, so the pointer keeps its clicks — in whichever of the four the display has room for it, instead of a margin away from it and stepped clear of the name it covers, and its frame is the spinner's own size rather than a box the arc floated in the middle of.
-- A page arriving for a preview that is already on screen replaces it without the preview being taken down first.
-- A worksheet's picture is copied out only as far as a preview can show it, and a large one is shrunk with the fast filter.
-- A worksheet's picture is asked for again if Excel refuses the first ask, and a page that cannot be read is rendered again rather than trusted.
-- A document that refuses a page is left alone for two minutes rather than ten.
-- New `Cache` submenu in the tray: the image, text, PDF and Office caches are sized from `0 MB` to `2 GB`, and none of them writes anything to disk.
-- The `Cache` submenu lists its sizes largest first — `2 GB` at the top down to `0 MB` at the bottom, with the size each cache starts at marked `(Default)` — and `Text Preview → Font Size` lists its steps the same way, with `90%`, `80%` and `70%` added below `100%`.
-- `image_cache_mb` defaults to `0` rather than `64`, and the image, text and PDF caches hold nothing at all until a size is chosen. `office_cache_mb` defaults to `64`: producing a page costs an Office start and an export, so a document that has been drawn comes back without another render.
-- Removed the `Office Preview` submenu with it: Office previews are switched by the `Office` entry under `Preview Types`, and `office_render_enabled` is no longer read.
+- Office previews render pages instead of using saved thumbnails; rendered pages stay in memory (`office_cache_mb`, default `64 MB`).
+- PDF and Office pages use fit-to-screen sizing, but preview scales below `100%` now reduce it; `100%`+ and image previews are unchanged.
+- The waiting spinner is now a transparent haloed arc, appears immediately, follows the pointer, and is placed flush at the pointer's corner.
+- A page arriving over an existing preview replaces it without taking the preview down first.
+- Worksheet images are copied only as far as needed and fast-shrunk; refused renders are retried, and unreadable pages are re-rendered.
+- A document that refuses a page is ignored for two minutes instead of ten.
+- `image_cache_mb` defaults to `32` rather than `64`, and `pdf_cache_mb` to `32`, so the decodes and rasters a folder is swept back over are already done; the text cache still starts at `0`.
+- Removed the `Office Preview` submenu; `office_render_enabled` is no longer read.
 
 ### Fixed
 
-- PowerPoint decks preview.
-- Excel workbooks preview on a machine with no printer.
-- An Office engine no longer survives its own quit, and a render that never returns no longer costs the documents after it.
-- An Office instance that gives no page — one whose license has run out, say — is dropped and the render is asked of a fresh one, so an instance that has stopped answering no longer costs every document hovered after it.
-- The picture a workbook is copied out as is taken off the clipboard.
-- A file that is not a document no longer starts an Office engine.
-- The spinner a document shows while its page is being rendered is the small box it was meant to be, instead of a square the size of the display.
-- A video replaced in place is measured and cropped again, instead of being previewed by the answer about the file it used to be: the geometry cache is keyed by the file's version as well as its path.
+- PowerPoint decks and Excel workbooks on printerless machines now preview.
+- Office engines no longer survive quit, and failed or unresponsive instances are replaced.
+- Workbook clipboard images are released.
+- Non-document files no longer start an Office engine.
+- The document spinner is correctly sized.
+- Replaced videos are re-measured and re-cropped using file version as well as path.
 
 ## [0.2.5] - 2026-09-17
 
