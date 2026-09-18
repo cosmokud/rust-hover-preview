@@ -100,7 +100,7 @@ publisher = "Rust Hover Preview Contributors"
 description = "Windows 11 system tray app that shows image, video, PDF, and text previews on hover in Explorer"
 license-file = "LICENSE"
 icons = ["assets/icon.ico"]
-formats = ["nsis", "wix"]
+formats = ["nsis"]
 out-dir = "target/packager"
 binaries-dir = "target/release"
 before-packaging-command = "cargo build --release"
@@ -162,8 +162,3 @@ Section PreInstall
   RMDir "$LOCALAPPDATA\\Rust Hover Preview"
 SectionEnd
 """
-
-[package.metadata.packager.wix]
-template = "packaging/wix/per-user-localappdata.wxs"
-languages = ["en-US"]
-

@@ -5,7 +5,7 @@ Set-Location $repoRoot
 
 if (-not (Get-Command cargo-packager -ErrorAction SilentlyContinue)) {
     Write-Host "cargo-packager not found. Installing with cargo..."
-    cargo install cargo-packager --locked
+    cargo install cargo-packager --locked --version 0.11.8
     if ($LASTEXITCODE -ne 0) {
         exit $LASTEXITCODE
     }

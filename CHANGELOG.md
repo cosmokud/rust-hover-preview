@@ -4,16 +4,15 @@
 
 ### Added
 
-- A check in the tray `Trigger Key` submenu, and `trigger_key_enabled` in `config.ini`, to switch the trigger key off without changing its mode.
+- `trigger_key_enabled` in `config.ini` and a check in the tray `Trigger Key` submenu, to switch the trigger key off without changing its mode.
 
 ### Changed
 
-- Video previews no longer write `%TEMP%\rust-hover-preview-video.log`; hovered paths are not written to disk.
-- A `%TEMP%\rust-hover-preview-video.log` left by an earlier version is deleted at startup.
-- `cargo build --release` ends a running copy of the app before the crate is linked, so the build replaces `target/release/rust-hover-preview.exe` instead of failing while it is open; debug builds are left alone.
-- The setup no longer asks how to install over an older version: the "Already Installed" page and its choice of uninstalling first are gone, a previous installation is uninstalled by the installer itself before the files are copied, and a running copy of the app is closed rather than prompted for.
-- The source tree is formatted with `rustfmt` and passes `cargo fmt --check`.
-- `cargo clippy --all-targets -- -D warnings` passes again: unneeded casts, needless borrows and `&PathBuf` parameters are gone, and the tray icon's `MAKEINTRESOURCE` ID is no longer written as a pointer cast.
+- Installing over an older version no longer asks: the "Already Installed" page is gone, the previous version is uninstalled first, and a running copy of the app is closed instead of prompted for.
+- The NSIS setup is built from `packaging/nsis/installer.nsi` on a pinned `cargo-packager` version, and the dead `wix` format is gone.
+- `cargo build --release` closes a running copy of the app before linking, so the release binary can be replaced; debug builds are untouched.
+- Video previews no longer write `%TEMP%\rust-hover-preview-video.log`, and one left by an earlier version is deleted at startup.
+- `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings` pass again.
 
 ## [0.2.6]
 
