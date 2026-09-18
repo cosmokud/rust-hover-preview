@@ -1103,11 +1103,9 @@ fn request_office_render(
 ///
 /// An SVG keeps the configured scale as a picture does, and `100%` means the size
 /// the document asks for. It is drawn at whatever size it is asked for either way —
-/// that is what a vector is — but a document says how large it wants to be, and a
-/// hover that filled the display with an icon and left the rest of the window empty
-/// behind it was answering a question nobody asked. What the configured scale does to
-/// the document rather than to the window is the engine's business: see
-/// `webview_preview::zoom_for`.
+/// that is what a vector is — and the engine is given a page that makes the document
+/// the size of the window, so the setting means the document rather than the window
+/// wherever the document is played: see `webview_preview::frame_page`.
 ///
 /// Every other format keeps the configured scale.
 fn effective_preview_scale(path: &Path, preview_scale: PreviewScale) -> PreviewScale {
@@ -6048,13 +6046,10 @@ pub fn run_preview_window() {
                                         width: mw,
                                         height: mh,
                                     };
-                                    let zoom = webview_preview::zoom_for(&pl.path, area);
-
                                     webview_preview::show(
                                         &pl.path,
                                         area,
                                         current_transparent_background(),
-                                        zoom,
                                     );
                                 }
                             }
@@ -7469,6 +7464,16 @@ mod tests {
             if crate::webview_preview::is_showing() {
                 break;
             }
+        }
+
+        // Kept up long enough for the screen to be looked at, for the probes that
+        // measure what is on it rather than how long it took to get there.
+        let hold = std::env::var("RHP_APP_PROBE_HOLD_MS")
+            .ok()
+            .and_then(|ms| ms.trim().parse().ok())
+            .unwrap_or(0);
+        if hold > 0 {
+            std::thread::sleep(Duration::from_millis(hold));
         }
 
         hide_preview();
