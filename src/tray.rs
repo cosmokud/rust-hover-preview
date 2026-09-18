@@ -31,9 +31,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     RegisterWindowMessageW, SetForegroundWindow, TrackPopupMenu, TranslateMessage, CS_HREDRAW,
     CS_VREDRAW, HICON, IMAGE_ICON, LR_DEFAULTSIZE, LR_SHARED, MF_BYCOMMAND, MF_CHECKED, MF_POPUP,
     MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MSG, PBT_APMRESUMEAUTOMATIC, PBT_APMRESUMESUSPEND,
-    PM_REMOVE, SW_SHOWNORMAL, TPM_BOTTOMALIGN, TPM_LEFTALIGN, WM_COMMAND, WM_DESTROY,
-    WM_LBUTTONUP, WM_POWERBROADCAST, WM_RBUTTONUP, WM_USER, WNDCLASSEXW, WS_EX_TOOLWINDOW,
-    WS_POPUP,
+    PM_REMOVE, SW_SHOWNORMAL, TPM_BOTTOMALIGN, TPM_LEFTALIGN, WM_COMMAND, WM_DESTROY, WM_LBUTTONUP,
+    WM_POWERBROADCAST, WM_RBUTTONUP, WM_USER, WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_POPUP,
 };
 
 const WM_TRAYICON: u32 = WM_USER + 1;
@@ -332,11 +331,7 @@ unsafe fn show_context_menu(hwnd: HWND) {
         (PreviewType::Videos, ID_TRAY_TYPE_VIDEOS, w!("Videos")),
         (PreviewType::Text, ID_TRAY_TYPE_TEXT, w!("Text")),
         (PreviewType::Pdf, ID_TRAY_TYPE_PDF, w!("PDF")),
-        (
-            PreviewType::Archives,
-            ID_TRAY_TYPE_ARCHIVES,
-            w!("Archives"),
-        ),
+        (PreviewType::Archives, ID_TRAY_TYPE_ARCHIVES, w!("Archives")),
         (PreviewType::Office, ID_TRAY_TYPE_OFFICE, w!("Office")),
     ];
     let types_menu = CreatePopupMenu().unwrap();
@@ -1086,10 +1081,30 @@ unsafe fn show_context_menu(hwnd: HWND) {
     // to outlive the call that lists them. Which size is the default is the one
     // thing they say that differs between the caches.
     for (name, base, held, default_mb) in [
-        (w!("Image"), ID_TRAY_IMAGE_CACHE_BASE, image_cache_mb, DEFAULT_IMAGE_CACHE_MB),
-        (w!("Text"), ID_TRAY_TEXT_CACHE_BASE, text_cache_mb, DEFAULT_TEXT_CACHE_MB),
-        (w!("PDF"), ID_TRAY_PDF_CACHE_BASE, pdf_cache_mb, DEFAULT_PDF_CACHE_MB),
-        (w!("Office"), ID_TRAY_OFFICE_CACHE_BASE, office_cache_mb, DEFAULT_OFFICE_CACHE_MB),
+        (
+            w!("Image"),
+            ID_TRAY_IMAGE_CACHE_BASE,
+            image_cache_mb,
+            DEFAULT_IMAGE_CACHE_MB,
+        ),
+        (
+            w!("Text"),
+            ID_TRAY_TEXT_CACHE_BASE,
+            text_cache_mb,
+            DEFAULT_TEXT_CACHE_MB,
+        ),
+        (
+            w!("PDF"),
+            ID_TRAY_PDF_CACHE_BASE,
+            pdf_cache_mb,
+            DEFAULT_PDF_CACHE_MB,
+        ),
+        (
+            w!("Office"),
+            ID_TRAY_OFFICE_CACHE_BASE,
+            office_cache_mb,
+            DEFAULT_OFFICE_CACHE_MB,
+        ),
     ] {
         let sizes_menu = CreatePopupMenu().unwrap();
 
