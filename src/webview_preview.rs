@@ -60,7 +60,10 @@ const WEBVIEW_CLASS: PCWSTR = w!("RustHoverPreviewWebView");
 /// The one browser argument this app passes: a resolver rule that answers for no host
 /// at all, so nothing a document links to is fetched from anywhere. See
 /// `create_environment`.
-const NETWORK_BLOCKED: &str = "--host-resolver-rules=MAP * ~NOTFOUND";
+///
+/// It is quoted because the browser's command line is a command line: unquoted, the
+/// rule was handed over as three words and the browser read only the first of them.
+const NETWORK_BLOCKED: &str = "--host-resolver-rules=\"MAP * ~NOTFOUND\"";
 
 /// What one engine cost to begin and to point at a document, in milliseconds. It is
 /// kept for the same reason the other probes exist: "the preview is slow" is answered
@@ -129,15 +132,60 @@ pub fn last_timings() -> Timings {
         .unwrap_or_default()
 }
 
-/// Whether a document is one the engine should play: the runtime is on the machine, and
-/// the document says it moves.
+/// Whether a document is one the engine should play: the runtime is on the machine, the
+/// document says it moves, and the engine is not in one of its own bad spells.
 ///
 /// The declaration is what decides it rather than this app's own reader: the engine
 /// plays the whole of SMIL and CSS, so a document that moves in a way `svg_animation`
 /// cannot follow is still one to hand over. The answer is held with the parsed
 /// document, so asking it again costs nothing.
 pub fn moves(path: &Path) -> bool {
-    is_available() && svg_preview::moves(path)
+    is_available() && !is_failing() && svg_preview::moves(path)
+}
+
+/// How long a document that moves is played by this app rather than by the engine after
+/// the engine has failed to come up.
+///
+/// The reason it can fail is a folder, not the document: one user data folder is one
+/// browser at a time, and a browser left behind by an earlier run — one whose app was
+/// ended before it could take its browser with it — holds it until it goes. What that
+/// must not cost is the preview: for this long afterwards the reader plays what it can,
+/// which is a picture that always plays, and the engine is asked again once the window
+/// has passed.
+const ENGINE_RETRY_AFTER: Duration = Duration::from_secs(300);
+
+/// When the engine last failed to come up.
+static ENGINE_FAILED_AT: Lazy<Mutex<Option<Instant>>> = Lazy::new(|| Mutex::new(None));
+
+/// Whether the preview loop has not yet been told about the failure above.
+static FAILURE_NOTICE: AtomicBool = AtomicBool::new(false);
+
+/// Whether the engine has failed since this was last asked, which is what the preview
+/// loop reads to lay the document out again for this app's own reader.
+pub fn take_failure_notice() -> bool {
+    FAILURE_NOTICE.swap(false, Ordering::AcqRel)
+}
+
+fn is_failing() -> bool {
+    ENGINE_FAILED_AT
+        .lock()
+        .ok()
+        .and_then(|failed| *failed)
+        .is_some_and(|failed| failed.elapsed() < ENGINE_RETRY_AFTER)
+}
+
+fn note_failure() {
+    if let Ok(mut failed) = ENGINE_FAILED_AT.lock() {
+        *failed = Some(Instant::now());
+    }
+
+    FAILURE_NOTICE.store(true, Ordering::Release);
+}
+
+fn note_engine_up() {
+    if let Ok(mut failed) = ENGINE_FAILED_AT.lock() {
+        *failed = None;
+    }
 }
 
 /// Ask the engine to play `path` in a window at `area`.
@@ -152,20 +200,27 @@ pub fn moves(path: &Path) -> bool {
 /// picture, and a hover onto one is drawn by this app as it always was.
 pub fn show(path: &Path, area: Area, background: TransparentBackground) {
     if !moves(path) {
+        trace(&format!("show({}): not the engine's", path.display()));
         return;
     }
 
     let Ok(mut engine) = ENGINE.lock() else {
+        trace("show: the engine's lock is poisoned");
         return;
     };
 
     let sender = engine.get_or_insert_with(Engine::start).sender.clone();
 
-    let _ = sender.send(Command::Show {
+    if let Err(error) = sender.send(Command::Show {
         path: path.to_path_buf(),
         area,
         background,
-    });
+    }) {
+        trace(&format!(
+            "show({}): the engine's thread is gone: {error}",
+            path.display()
+        ));
+    }
 }
 
 /// Take the engine's window down. The engine itself is kept warm: what it costs to
@@ -234,6 +289,25 @@ fn idle_timeout() -> Option<Duration> {
         .as_duration()
 }
 
+/// Write one line to the trace file when `RHP_WEBVIEW_TRACE` is set, for the same
+/// reason the probes exist: an engine that does not come up says nothing on its own,
+/// and this is what it says. Nothing is written when the variable is not set, so an
+/// ordinary run leaves no file anywhere.
+fn trace(message: &str) {
+    if std::env::var_os("RHP_WEBVIEW_TRACE").is_none() {
+        return;
+    }
+
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(std::env::temp_dir().join("rhp-webview-trace.log"))
+    {
+        use std::io::Write;
+        let _ = writeln!(file, "{message}");
+    }
+}
+
 fn engine_thread(commands: Receiver<Command>) {
     // The engine's own apartment, and its own thread: WebView2 must be created on a
     // thread that is pumping messages, and this is that thread.
@@ -265,12 +339,25 @@ fn engine_thread(commands: Receiver<Command>) {
                 area,
                 background,
             }) => {
+                trace(&format!("engine: show {}", path.display()));
+
                 if host.is_none() {
                     host = Host::create();
+
+                    // An engine that could not be had is noted, so that a document that
+                    // moves is played by this app's own reader rather than left as a
+                    // still frame until the folder it could not have is free again.
+                    if host.is_some() {
+                        note_engine_up();
+                    } else {
+                        note_failure();
+                    }
+                    trace(&format!("engine: host created: {}", host.is_some()));
                 }
 
                 if let Some(host) = host.as_mut() {
                     host.show(&path, area, background);
+                    trace(&format!("engine: shown: {}", is_showing()));
                 }
                 idle_since = Instant::now();
             }
@@ -326,14 +413,49 @@ impl Host {
         let folder = user_data_folder();
         std::fs::create_dir_all(&folder).ok()?;
 
-        let hwnd = create_host_window()?;
+        let window = create_host_window();
+        trace(&format!(
+            "host: window {:?} (last error {})",
+            window.is_some(),
+            windows::core::Error::from_win32().code().0
+        ));
+        let hwnd = window?;
 
         let started = Instant::now();
-        let environment = create_environment(&folder)?;
+        let environment = create_environment(&folder);
+        trace(&format!(
+            "host: environment {:?} in {} ms",
+            environment.is_some(),
+            started.elapsed().as_millis()
+        ));
+        let environment = environment?;
         let environment_ms = started.elapsed().as_millis() as u64;
 
         let started = Instant::now();
-        let controller = create_controller(environment.clone(), hwnd)?;
+        // A controller is refused while the folder this engine keeps its state in is
+        // held by another browser — which is what a browser left behind by an earlier
+        // run looks like, and it is usually gone within a moment. Asking again a few
+        // times is worth more than the wait it costs the engine's own thread, and the
+        // caller falls back to this app's reader if even that comes to nothing.
+        let mut controller = None;
+        for attempt in 0..4 {
+            controller = create_controller(environment.clone(), hwnd);
+
+            if controller.is_some() {
+                break;
+            }
+
+            if attempt < 3 {
+                std::thread::sleep(Duration::from_millis(250 * (attempt + 1)));
+            }
+        }
+
+        trace(&format!(
+            "host: controller {:?} in {} ms",
+            controller.is_some(),
+            started.elapsed().as_millis()
+        ));
+        let controller = controller?;
         let controller_ms = started.elapsed().as_millis() as u64;
 
         let webview = unsafe { controller.CoreWebView2().ok()? };
@@ -377,7 +499,14 @@ impl Host {
         // what is on screen a moment ago is the still frame this lands on top of.
         if self.current.as_deref() != Some(path) {
             let started = Instant::now();
-            if !self.navigate(path) {
+            let arrived = self.navigate(path);
+            trace(&format!(
+                "engine: navigate {} arrived={arrived} in {} ms",
+                path.display(),
+                started.elapsed().as_millis()
+            ));
+
+            if !arrived {
                 self.hide();
                 return;
             }
@@ -539,7 +668,17 @@ fn pump_messages() {
 
 /// The folder the engine keeps its own state in — under the local profile, because a
 /// browser profile is not something to synchronize between machines.
+///
+/// One folder is one browser at a time: a second environment pointed at a folder that
+/// is already in use is answered with `ERROR_INVALID_STATE` when it asks for its
+/// controller, which is what a probe or a second run of this app meets while the first
+/// is up. `RHP_WEBVIEW_PROFILE` names a folder of its own for that case, which is what
+/// the probes use so that they can run beside a running app.
 fn user_data_folder() -> PathBuf {
+    if let Some(folder) = std::env::var_os("RHP_WEBVIEW_PROFILE") {
+        return PathBuf::from(folder);
+    }
+
     directories::BaseDirs::new()
         .map(|dirs| {
             dirs.data_local_dir()
@@ -600,6 +739,10 @@ fn create_controller(
                 .map_err(webview2_com::Error::WindowsError)
         }),
         Box::new(move |error_code, controller| {
+            trace(&format!(
+                "controller callback: error={error_code:?} controller={}",
+                controller.is_some()
+            ));
             error_code?;
             sender
                 .send(controller.ok_or_else(|| windows::core::Error::from(E_POINTER)))

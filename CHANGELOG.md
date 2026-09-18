@@ -6,6 +6,7 @@
 
 - SVG previews (`svg`, `svgz`), drawn at the size the preview is shown at rather than decoded and scaled, and animated ones played — by the WebView2 runtime Windows 11 ships with, which plays SMIL and CSS in full, and by this app's own reader where that runtime is not installed.
 - `webview_idle` and a `Performance → Keep Animated SVG Engine` entry, ten minutes by default: the browser that plays an animated document is kept warm between hovers rather than started for each one.
+- An engine that cannot be had does not cost the animation: its controller is asked for again over a couple of seconds, a failure is remembered for five minutes so this app's own reader plays the document, and the hover that was up is laid out again so even the first one recovers rather than sitting on a still frame. `RHP_WEBVIEW_TRACE` and `RHP_WEBVIEW_PROFILE` are the diagnostics for it.
 - `trigger_key_enabled` in `config.ini` and a check in the tray `Trigger Key` submenu, to switch the trigger key off without changing its mode.
 
 ### Changed
