@@ -4,7 +4,7 @@
 
 ### Added
 
-- SVG previews (`svg`, `svgz`), drawn at the size the preview is shown at rather than decoded and scaled, and animated ones played (`<animate>`, `<animateTransform>`, `<set>`).
+- SVG previews (`svg`, `svgz`), drawn at the size the preview is shown at rather than decoded and scaled, and animated ones played — `<animate>`, `<animateTransform>`, `<set>` and CSS `@keyframes`.
 - `trigger_key_enabled` in `config.ini` and a check in the tray `Trigger Key` submenu, to switch the trigger key off without changing its mode.
 
 ### Changed
