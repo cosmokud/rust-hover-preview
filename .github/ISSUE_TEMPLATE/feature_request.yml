@@ -1,0 +1,40 @@
+name: Feature request
+description: Have an idea for a new feature or improvement? Suggest it here.
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: Thanks for the idea! Please fill in the sections below.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: What is hard, slow, or missing today?
+      placeholder: Example: I can't preview .svg files, so I have to open each one.
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: What would you like to happen?
+      description: Describe your idea. Screenshots or examples help.
+      placeholder: Example: Show a small preview when I hover an .svg file.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you considered
+      description: Is there another way to solve this? What did you try?
+      placeholder: Optional. Example: I tried adding svg to config.ini, but nothing showed.
+    validations:
+      required: false
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else?
+      description: Any other details that might help.
+      placeholder: Optional.
+    validations:
+      required: false
