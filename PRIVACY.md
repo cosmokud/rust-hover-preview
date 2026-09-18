@@ -76,12 +76,9 @@ run during normal use.
   scroll under a parked cursor refreshes the preview. It records counts, not
   positions or applications. Wheel motion over a scrollable text preview is
   given to the preview instead of Explorer.
-- **Clipboard, two cases:** (1) copying from a text preview writes to the
-  clipboard only when you choose Copy / Select All / Ctrl+C with a selection.
-  (2) On printerless machines, an Excel sheet preview copies a corner of the
-  sheet via `CopyPicture`, reads that bitmap, then clears the clipboard so
-  Excel can quit cleanly. That means hovering a spreadsheet can replace
-  whatever you had copied — expected side effect, local only.
+- **Clipboard:** writing only, and only when you choose Copy / Select All /
+  Ctrl+C in a text preview that has a selection. Nothing else in the app reads
+  from or writes to the clipboard.
 - **External processes:** only `ffplay`/`ffprobe`/`ffmpeg` (your install) and
   your Office apps (`WINWORD`/`EXCEL`/`POWERPNT`), the latter started hidden
   unless you already had that app open — your open instance is never hidden,

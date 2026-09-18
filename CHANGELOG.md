@@ -16,6 +16,7 @@
 
 - The built-in extension and file-name lists are written in alphabetical order, and a list still holding them is rewritten in that order on upgrade.
 - Office previews render pages instead of using saved thumbnails; rendered pages stay in memory (`office_cache_mb`, default `64 MB`).
+- An Excel preview is the exported page or nothing: the corner picture that used to be taken off the clipboard where a machine had no print queue is gone, because it drew the top-left of a sheet rather than a page of it, its cost grew with what the sheet held, and it made a preview of a workbook a different thing depending on what a machine had installed. A machine with no print queue now shows no workbook preview, and nothing in the app touches the clipboard.
 - A document's page is asked for as soon as it is hovered rather than after a two-second rest, so a preview waits for the render instead of for a timer in front of it.
 - Each family keeps its own Office engine, so a folder holding a document, a workbook and a deck starts each application once rather than quitting one and starting another every time the pointer crosses between them; an engine is let go ten minutes after its family was last asked for a page.
 - The settings a render needs of an Office instance — dialogs suppressed, macros switched off — are taken for that render and put back when it is over, instead of being held for as long as the engine lives. Nothing of the instance's own is therefore held reconfigured while an engine sits warm between documents, which is what makes `Indefinitely` safe for an instance that is the user's own Word or Excel.
@@ -29,10 +30,8 @@
 
 ### Fixed
 
-- PowerPoint decks and Excel workbooks on printerless machines now preview.
+- PowerPoint decks on printerless machines now preview.
 - Office engines no longer survive quit, and failed or unresponsive instances are replaced.
-- Workbook clipboard images are released.
-- Excel previews no longer recalculate the workbook: it is opened with calculation set to manual, so what is exported is the page the file was saved as. A sheet of formulas is small to store and expensive to compute, so this is the difference between a workbook of a few kilobytes costing a moment and costing seconds — and the values shown are the ones already in the file.
 - A preview that crossed a display boundary was discarded and stayed gone until the pointer moved; the hover it came from is now replayed, so it is laid out again at the new display's scale and put back.
 - An Office page that landed while another hover message was in hand left the preview waiting with nothing to end the wait; the cap now still applies, so the spinner comes down.
 - The Office render worker makes itself known before initializing its apartment, so the first request after startup can no longer start a second worker beside it.
