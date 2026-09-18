@@ -1101,9 +1101,17 @@ fn request_office_render(
 /// when the space beside the cursor cannot hold it — and the text renderer reads
 /// the size it is given as "as many lines and columns as fit".
 ///
+/// An SVG keeps the configured scale as a picture does, and `100%` means the size
+/// the document asks for. It is drawn at whatever size it is asked for either way —
+/// that is what a vector is — but a document says how large it wants to be, and a
+/// hover that filled the display with an icon and left the rest of the window empty
+/// behind it was answering a question nobody asked. What the configured scale does to
+/// the document rather than to the window is the engine's business: see
+/// `webview_preview::zoom_for`.
+///
 /// Every other format keeps the configured scale.
 fn effective_preview_scale(path: &Path, preview_scale: PreviewScale) -> PreviewScale {
-    if pdf_preview::is_pdf_file(path) || svg_preview::is_svg_file(path) {
+    if pdf_preview::is_pdf_file(path) {
         fit_reduced(preview_scale)
     } else if is_text_preview(path) || archive_formats::is_archive_file(path) {
         PreviewScale::Percent(100)
@@ -6034,15 +6042,19 @@ pub fn run_preview_window() {
                                 // of that when the page has arrived, and until then
                                 // what is on screen is the document itself.
                                 if webview_preview::moves(&pl.path) {
+                                    let area = webview_preview::Area {
+                                        x: pl.pos_x,
+                                        y: pl.pos_y,
+                                        width: mw,
+                                        height: mh,
+                                    };
+                                    let zoom = webview_preview::zoom_for(&pl.path, area);
+
                                     webview_preview::show(
                                         &pl.path,
-                                        webview_preview::Area {
-                                            x: pl.pos_x,
-                                            y: pl.pos_y,
-                                            width: mw,
-                                            height: mh,
-                                        },
+                                        area,
                                         current_transparent_background(),
+                                        zoom,
                                     );
                                 }
                             }
@@ -6857,6 +6869,31 @@ mod tests {
         assert_eq!(
             effective_preview_scale(&pdf, PreviewScale::Percent(25)),
             PreviewScale::FitToScreenReduced(25)
+        );
+    }
+
+    /// A document is laid out at the size it asks for at `100%`, half that at `50%`, and
+    /// the room the display has when the setting asks for that — the rule a picture
+    /// follows, since a document is one that happens to be drawn rather than decoded.
+    #[test]
+    fn a_document_keeps_the_size_its_setting_asks_for() {
+        let svg = PathBuf::from(r"C:\art\clock.svg");
+
+        assert_eq!(
+            effective_preview_scale(&svg, PreviewScale::Percent(100)),
+            PreviewScale::Percent(100)
+        );
+        assert_eq!(
+            effective_preview_scale(&svg, PreviewScale::Percent(50)),
+            PreviewScale::Percent(50)
+        );
+        assert_eq!(
+            effective_preview_scale(&svg, PreviewScale::Percent(400)),
+            PreviewScale::Percent(400)
+        );
+        assert_eq!(
+            effective_preview_scale(&svg, PreviewScale::FitToScreen),
+            PreviewScale::FitToScreen
         );
     }
 
