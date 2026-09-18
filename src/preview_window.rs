@@ -162,10 +162,10 @@ fn configured_far_edge_grace_pixels() -> f32 {
 /// A region on screen: left, top, right, bottom.
 type ScreenRegion = (i32, i32, i32, i32);
 
-/// The regions that keep a text preview on screen, in screen coordinates, or
-/// `None` when the preview on screen is not one: the journey to the preview and
-/// the preview itself.
-static TEXT_SCROLL_KEEP_ALIVE: Lazy<Mutex<Option<[ScreenRegion; 2]>>> =
+/// The regions that keep a preview on screen, in screen coordinates, or `None`
+/// when the preview on screen is not one that holds the pointer: the journey to a
+/// text preview and the preview itself, or the box a waiting spinner occupies.
+static POINTER_HOLD_REGIONS: Lazy<Mutex<Option<Vec<ScreenRegion>>>> =
     Lazy::new(|| Mutex::new(None));
 
 /// Where the preview that is on screen was opened from: the cursor that hovered
@@ -181,6 +181,19 @@ static TEXT_PREVIEW_SCROLLABLE: AtomicBool = AtomicBool::new(false);
 /// mode, which the pointer can rest on to select from. Published beside the region
 /// so the check for it stays an atomic read.
 static TEXT_PREVIEW_HOLDING: AtomicBool = AtomicBool::new(false);
+
+/// Whether what is on screen is a wait rather than a preview: the spinner a
+/// document's page is being rendered behind.
+///
+/// The pointer is held by this the way it is held by a text preview, and for a
+/// reason of its own: there is nothing under the spinner to hand the pointer back
+/// to, and a hover that is dismissed while its page is on the way loses the page
+/// it was waiting for — the render finishes, but the hover it was for is gone. The
+/// spinner is placed a pixel off the pointer and follows it, which is what keeps
+/// the pointer on the file it is waiting on; a pointer that moves into the box
+/// anyway — a hand settling, or a move the box has not caught up with — is a
+/// pointer still waiting for that file, not one leaving it.
+static WAITING_PREVIEW_HOLDING: AtomicBool = AtomicBool::new(false);
 
 /// The regions that keep a preview alive: the journey to it, and the preview.
 ///
@@ -3917,6 +3930,24 @@ fn ensure_layered_surface(width: u32, height: u32) -> Option<*mut u8> {
 }
 
 unsafe fn render_layered_preview(hwnd: HWND) {
+    let mut rect = RECT::default();
+    if GetWindowRect(hwnd, &mut rect).is_err() {
+        return;
+    }
+
+    render_layered_preview_at(hwnd, rect.left, rect.top);
+}
+
+/// Paint the frame the window is holding at a given place on screen, sizing the
+/// window to the frame.
+///
+/// `UpdateLayeredWindow` applies the place, the size and the surface in one call,
+/// which is what lets a window that is already on screen take a frame of another
+/// size — the spinner's box first, the page's after it — without a moment of the
+/// frame it is holding stretched into the new box: between one call and the next, a
+/// layered window shows the surface it already has, at whatever size the window
+/// has.
+unsafe fn render_layered_preview_at(hwnd: HWND, x: i32, y: i32) {
     let Some((width, height)) = (|| {
         let media_guard = CURRENT_MEDIA.lock().ok()?;
         let media = media_guard.as_ref()?;
@@ -3966,21 +3997,13 @@ unsafe fn render_layered_preview(hwnd: HWND) {
         return;
     };
 
-    let mut rect = RECT::default();
-    if GetWindowRect(hwnd, &mut rect).is_err() {
-        return;
-    }
-
     let Some(mem_dc) =
         LAYERED_SURFACE.with(|cell| cell.borrow().as_ref().map(|surface| surface.mem_dc))
     else {
         return;
     };
 
-    let dst_point = POINT {
-        x: rect.left,
-        y: rect.top,
-    };
+    let dst_point = POINT { x, y };
     let size = SIZE {
         cx: width as i32,
         cy: height as i32,
@@ -4005,33 +4028,46 @@ unsafe fn render_layered_preview(hwnd: HWND) {
         ULW_ALPHA,
     );
 
-    publish_text_scroll_keep_alive(hwnd);
+    publish_pointer_hold(hwnd);
 }
 
 /// Put the loading spinner on screen for a pending load, at the box that load is
 /// planned for.
 ///
-/// The window is moved before the spinner is installed, so a `WM_DPICHANGED`
-/// reset from crossing displays cannot discard it, and the spinner is painted
-/// before the window is revealed, so the previous preview cannot flash at the new
-/// place. It is also what moves a spinner whose box has changed size while it was
-/// up: the frame is drawn at the size of the box it goes into.
+/// A window that is not on screen is moved before the spinner is installed, so a
+/// `WM_DPICHANGED` reset from crossing displays cannot discard it, and the spinner
+/// is painted before the window is revealed, so the previous preview cannot flash
+/// at the new place. It is also what moves a spinner whose box has changed size
+/// while it was up: the frame is drawn at the size of the box it goes into.
 unsafe fn show_loading_spinner(hwnd: HWND, pl: &PendingLoad) {
-    let _ = MoveWindow(
-        hwnd,
-        pl.pos_x,
-        pl.pos_y,
-        pl.width as i32,
-        pl.height as i32,
-        false,
-    );
+    // A window that is already on screen is not moved ahead of its frame, for the
+    // reason the page's install gives: what a layered window shows between one
+    // paint and the next is the surface it already has, stretched into whatever
+    // box the window has, so a spinner whose box changed under it would be drawn
+    // as a bar until the new frame lands. `UpdateLayeredWindow` applies the place
+    // and the size with the frame, which is where the move below happens instead.
+    let visible = IsWindowVisible(hwnd).as_bool();
+    if !visible {
+        let _ = MoveWindow(
+            hwnd,
+            pl.pos_x,
+            pl.pos_y,
+            pl.width as i32,
+            pl.height as i32,
+            false,
+        );
+    }
 
     let loading = create_loading_media(pl.width, pl.height);
     if let Ok(mut current) = CURRENT_MEDIA.lock() {
         *current = Some(loading);
     }
 
-    render_layered_preview(hwnd);
+    if visible {
+        render_layered_preview_at(hwnd, pl.pos_x, pl.pos_y);
+    } else {
+        render_layered_preview(hwnd);
+    }
     let _ = SetWindowPos(
         hwnd,
         HWND_TOPMOST,
@@ -4044,56 +4080,80 @@ unsafe fn show_loading_spinner(hwnd: HWND, pl: &PendingLoad) {
     let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
 }
 
-/// Publish — or withdraw — the region in which the pointer keeps a scrollable
-/// text preview alive.
+/// Publish — or withdraw — the regions in which the pointer keeps what is on
+/// screen alive.
 ///
 /// The Explorer hook polls this to decide whether the pointer over the preview
 /// means "the user is reading this" or "dismiss it and show what is underneath",
 /// and the wheel hook asks the same question before it decides whether the wheel
-/// belongs to Explorer or to the preview.
-unsafe fn publish_text_scroll_keep_alive(hwnd: HWND) {
-    let state = CURRENT_MEDIA.lock().ok().and_then(|media| {
-        let media = media.as_ref()?;
-        if !matches!(media.media_type, MediaType::Text) {
-            return None;
-        }
-        let state = media.text_state.as_ref()?;
-        Some((state.dpi, state.can_scroll()))
-    });
+/// belongs to Explorer or to the preview. Two things hold the pointer: a text
+/// preview in full mode, which the pointer can rest on to select from and scroll,
+/// and the spinner a page is being rendered behind, which has nothing under it to
+/// hand the pointer back to and no page yet to be shown in its place.
+unsafe fn publish_pointer_hold(hwnd: HWND) {
+    let (text, waiting) = CURRENT_MEDIA
+        .lock()
+        .ok()
+        .and_then(|media| {
+            let media = media.as_ref()?;
+            Some((
+                media
+                    .text_state
+                    .as_ref()
+                    .map(|state| (state.dpi, state.can_scroll())),
+                media.media_type.is_loading(),
+            ))
+        })
+        .unwrap_or((None, false));
 
     // The wheel only belongs to a preview that can move under it, but the pointer
     // is held by any text preview in full mode: selecting and copying needs a
     // pointer that can rest on the preview whether or not it scrolls.
     TEXT_PREVIEW_SCROLLABLE.store(
-        state.map(|(_, can_scroll)| can_scroll).unwrap_or(false),
+        text.map(|(_, can_scroll)| can_scroll).unwrap_or(false),
         Ordering::Release,
     );
-    TEXT_PREVIEW_HOLDING.store(state.is_some(), Ordering::Release);
+    TEXT_PREVIEW_HOLDING.store(text.is_some(), Ordering::Release);
+    WAITING_PREVIEW_HOLDING.store(waiting, Ordering::Release);
 
-    let keep_alive = state.and_then(|(dpi, _)| {
+    let keep_alive = if let Some((dpi, _)) = text {
         let mut rect = RECT::default();
-        if GetWindowRect(hwnd, &mut rect).is_err() {
-            return None;
-        }
-
-        let preview = (rect.left, rect.top, rect.right, rect.bottom);
-        let anchor = TEXT_SCROLL_ANCHOR
-            .lock()
+        GetWindowRect(hwnd, &mut rect)
             .ok()
-            .and_then(|anchor| *anchor)
-            // Without an anchor — a preview that was already on screen when this
-            // started, say — the preview's own corner stands in for it, which
-            // leaves the region as the preview alone.
-            .unwrap_or((preview.0, preview.1));
+            .map(|_| (rect.left, rect.top, rect.right, rect.bottom))
+            .map(|preview| {
+                let anchor = TEXT_SCROLL_ANCHOR
+                    .lock()
+                    .ok()
+                    .and_then(|anchor| *anchor)
+                    // Without an anchor — a preview that was already on screen when this
+                    // started, say — the preview's own corner stands in for it, which
+                    // leaves the region as the preview alone.
+                    .unwrap_or((preview.0, preview.1));
 
-        Some(text_scroll_hold_regions(
-            preview,
-            anchor,
-            far_edge_grace(dpi, configured_far_edge_grace_pixels()),
-        ))
-    });
+                text_scroll_hold_regions(
+                    preview,
+                    anchor,
+                    far_edge_grace(dpi, configured_far_edge_grace_pixels()),
+                )
+                .to_vec()
+            })
+    } else if waiting {
+        // The box the spinner itself occupies: the one place on screen where the
+        // pointer is over this app's own window rather than over the file, and so
+        // the one place where what is under the pointer cannot say whether the
+        // pointer is still on the file it is waiting for. It is placed a pixel off
+        // the pointer, so a pointer that ends up inside this box has not gone
+        // anywhere.
+        let mut rect = RECT::default();
+        GetWindowRect(hwnd, &mut rect)
+            .ok()
+            .map(|_| vec![(rect.left, rect.top, rect.right, rect.bottom)])
+    } else {
+        None
+    };
 
-    if let Ok(mut published) = TEXT_SCROLL_KEEP_ALIVE.lock() {
+    if let Ok(mut published) = POINTER_HOLD_REGIONS.lock() {
         *published = keep_alive;
     }
 }
@@ -4106,10 +4166,11 @@ fn set_text_scroll_anchor(x: i32, y: i32) {
     }
 }
 
-fn clear_text_scroll_keep_alive() {
+fn clear_pointer_hold() {
     TEXT_PREVIEW_SCROLLABLE.store(false, Ordering::Release);
     TEXT_PREVIEW_HOLDING.store(false, Ordering::Release);
-    if let Ok(mut published) = TEXT_SCROLL_KEEP_ALIVE.lock() {
+    WAITING_PREVIEW_HOLDING.store(false, Ordering::Release);
+    if let Ok(mut published) = POINTER_HOLD_REGIONS.lock() {
         *published = None;
     }
     if let Ok(mut anchor) = TEXT_SCROLL_ANCHOR.lock() {
@@ -4123,19 +4184,22 @@ pub fn text_preview_scrollable() -> bool {
     TEXT_PREVIEW_SCROLLABLE.load(Ordering::Acquire)
 }
 
-/// Whether the pointer is inside the region that keeps a text preview alive.
+/// Whether the pointer is inside a region that keeps what is on screen alive.
 /// Answered from a published rectangle, so the Explorer hook can ask on every poll
 /// tick.
-pub fn text_scroll_pointer_hold(x: i32, y: i32) -> bool {
-    if !TEXT_PREVIEW_HOLDING.load(Ordering::Acquire) {
+pub fn preview_pointer_hold(x: i32, y: i32) -> bool {
+    if !TEXT_PREVIEW_HOLDING.load(Ordering::Acquire)
+        && !WAITING_PREVIEW_HOLDING.load(Ordering::Acquire)
+    {
         return false;
     }
 
-    let Ok(published) = TEXT_SCROLL_KEEP_ALIVE.lock() else {
+    let Ok(published) = POINTER_HOLD_REGIONS.lock() else {
         return false;
     };
 
     (*published)
+        .as_ref()
         .map(|regions| {
             regions.iter().any(|(left, top, right, bottom)| {
                 x >= *left && x < *right && y >= *top && y < *bottom
@@ -4157,10 +4221,10 @@ pub fn text_scroll_keep_alive_try() -> Option<(i32, i32, i32, i32)> {
         return None;
     }
 
-    TEXT_SCROLL_KEEP_ALIVE
+    POINTER_HOLD_REGIONS
         .try_lock()
         .ok()
-        .and_then(|held| (*held).map(|regions| regions[1]))
+        .and_then(|held| held.as_ref().and_then(|regions| regions.last().copied()))
 }
 
 /// Where a scroll of `lines` from the preview's current position lands.
@@ -4613,7 +4677,7 @@ unsafe fn show_text_preview_menu(hwnd: HWND, x: i32, y: i32) {
 
 unsafe fn reset_preview_after_display_change(hwnd: HWND) {
     let _ = ShowWindow(hwnd, SW_HIDE);
-    clear_text_scroll_keep_alive();
+    clear_pointer_hold();
 
     if let Ok(mut current) = CURRENT_MEDIA.lock() {
         if let Some(ref mut media) = *current {
@@ -5673,8 +5737,21 @@ pub fn run_preview_window() {
                             // which resets the preview and would otherwise
                             // discard the frame we are about to show, leaving the
                             // other display's image stranded on screen.
+                            //
+                            // A window that is already on screen is not moved
+                            // ahead of the frame, though: a layered window shows
+                            // the surface it has at whatever size the window has,
+                            // so resizing this one to the page's box before there
+                            // is a page to fill it draws the frame it is holding —
+                            // the spinner — stretched across that box for as long
+                            // as the paint takes. It is moved and resized by the
+                            // paint itself, while a hidden window is moved here,
+                            // where nothing can show.
+                            let visible = IsWindowVisible(hwnd).as_bool();
                             if let Some(ref pl) = pending {
-                                let _ = MoveWindow(hwnd, pl.pos_x, pl.pos_y, mw, mh, false);
+                                if !visible {
+                                    let _ = MoveWindow(hwnd, pl.pos_x, pl.pos_y, mw, mh, false);
+                                }
                             }
 
                             if let Ok(mut current) = CURRENT_MEDIA.lock() {
@@ -5688,7 +5765,10 @@ pub fn run_preview_window() {
                             // paint the new frame before revealing the window.
                             // Showing first would flash the previous preview at
                             // the new position and size.
-                            render_layered_preview(hwnd);
+                            match pending.as_ref().filter(|_| visible) {
+                                Some(pl) => render_layered_preview_at(hwnd, pl.pos_x, pl.pos_y),
+                                None => render_layered_preview(hwnd),
+                            }
 
                             if let Some(pl) = pending {
                                 let _ = SetWindowPos(
@@ -5738,6 +5818,7 @@ pub fn run_preview_window() {
                         None => {
                             // Loading failed, hide window
                             let _ = ShowWindow(hwnd, SW_HIDE);
+                            clear_pointer_hold();
                             if let Ok(mut current) = CURRENT_MEDIA.lock() {
                                 if let Some(ref mut existing) = *current {
                                     existing.cancel_background_work();
@@ -6071,7 +6152,7 @@ pub fn run_preview_window() {
                         }
 
                         let _ = ShowWindow(hwnd, SW_HIDE);
-                        clear_text_scroll_keep_alive();
+                        clear_pointer_hold();
 
                         // Stop video playback if any
                         if let Ok(mut current) = CURRENT_MEDIA.lock() {
@@ -6358,7 +6439,7 @@ pub fn run_preview_window() {
             // Keep the pointer region in step with the window rather than only
             // with the paints: the window is moved when a frame is installed, and
             // the Explorer hook reads this on every one of its own ticks.
-            publish_text_scroll_keep_alive(hwnd);
+            publish_pointer_hold(hwnd);
 
             if current_show.is_none() && pending_load.is_none() {
                 // Nothing is on screen, which is where this thread used to spend
@@ -6407,6 +6488,27 @@ mod tests {
             right: 1000,
             bottom: 800,
         }
+    }
+
+    /// A waiting spinner holds the pointer the way a scrollable text preview does:
+    /// inside the box it published, and only while it says it is holding — which is
+    /// what keeps a pointer that drifts onto the spinner from dismissing the hover
+    /// whose page is on its way.
+    #[test]
+    fn holds_the_pointer_over_a_waiting_spinner() {
+        let spinner = (100, 100, 136, 136);
+        *POINTER_HOLD_REGIONS.lock().expect("the published regions") = Some(vec![spinner]);
+
+        WAITING_PREVIEW_HOLDING.store(true, Ordering::Release);
+        assert!(preview_pointer_hold(118, 118), "inside the spinner's box");
+        assert!(!preview_pointer_hold(99, 99), "outside it");
+
+        // A published region with nothing holding the pointer is not a hold: it is
+        // what one left behind by a preview that has gone would look like.
+        WAITING_PREVIEW_HOLDING.store(false, Ordering::Release);
+        assert!(!preview_pointer_hold(118, 118), "nothing is holding the pointer");
+
+        clear_pointer_hold();
     }
 
     fn layout(pos_x: i32, pos_y: i32, width: u32, height: u32) -> PreviewLayout {
