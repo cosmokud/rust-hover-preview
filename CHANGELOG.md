@@ -10,6 +10,7 @@
 - A deleted `extensions=` key comes back with its built-in list, in the file as well as in memory.
 - `pdf_cache_mb` and `text_cache_mb`, with `PDF` and `Text` entries in the new tray `Cache` submenu; memory-only, capped at `2048`, default `32` for PDF and `0` for text.
 - Tray `Cache` submenu for image, text, PDF and Office caches (`0 MB`–`2 GB`), plus `90%`, `80%` and `70%` font sizes.
+- A `Performance` submenu holding the caches and a new `Keep Office Engine` setting: `0 seconds`, `1 minute`, `5 minutes`, `10 minutes` (default), `30 minutes`, `1 hour` or `Indefinitely`, with `office_engine_idle` in `config.ini` behind it.
 
 ### Changed
 
@@ -17,6 +18,7 @@
 - Office previews render pages instead of using saved thumbnails; rendered pages stay in memory (`office_cache_mb`, default `64 MB`).
 - A document's page is asked for as soon as it is hovered rather than after a two-second rest, so a preview waits for the render instead of for a timer in front of it.
 - Each family keeps its own Office engine, so a folder holding a document, a workbook and a deck starts each application once rather than quitting one and starting another every time the pointer crosses between them; an engine is let go ten minutes after its family was last asked for a page.
+- The settings a render needs of an Office instance — dialogs suppressed, macros switched off — are taken for that render and put back when it is over, instead of being held for as long as the engine lives. Nothing of the instance's own is therefore held reconfigured while an engine sits warm between documents, which is what makes `Indefinitely` safe for an instance that is the user's own Word or Excel.
 - PDF and Office pages use fit-to-screen sizing, but preview scales below `100%` now reduce it; `100%`+ and image previews are unchanged.
 - The waiting spinner is now a transparent haloed arc, appears immediately, follows the pointer, and is placed flush at the pointer's corner.
 - A page arriving over an existing preview replaces it without taking the preview down first.
