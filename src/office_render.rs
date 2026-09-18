@@ -2479,7 +2479,7 @@ mod tests {
 
     /// A BMP holding one colour, written the way a workbook's picture is.
     fn bmp_bytes(width: u32, height: u32, color: [u8; 4]) -> Vec<u8> {
-        let pixel_bytes = (width * height * 4) as u32;
+        let pixel_bytes = width * height * 4;
         let mut dib = Vec::new();
         dib.extend_from_slice(&40u32.to_le_bytes());
         dib.extend_from_slice(&(width as i32).to_le_bytes());

@@ -24,7 +24,7 @@ pub fn enable_startup() {
                     APP_NAME,
                     0,
                     REG_SZ,
-                    Some(&exe_path_wide.align_to::<u8>().1),
+                    Some(exe_path_wide.align_to::<u8>().1),
                 );
             }
             let _ = RegCloseKey(hkey);
