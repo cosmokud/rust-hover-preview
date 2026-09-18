@@ -57,13 +57,12 @@ use crate::{svg_preview, CONFIG};
 /// hosted in one is no different.
 const WEBVIEW_CLASS: PCWSTR = w!("RustHoverPreviewWebView");
 
-/// The one browser argument this app passes: a resolver rule that answers for no host
-/// at all, so nothing a document links to is fetched from anywhere. See
-/// `create_environment`.
-///
-/// It is quoted because the browser's command line is a command line: unquoted, the
-/// rule was handed over as three words and the browser read only the first of them.
-const NETWORK_BLOCKED: &str = "--host-resolver-rules=\"MAP * ~NOTFOUND\"";
+/// The browser arguments this app passes. The first answers for no host at all, so
+/// nothing a document links to is fetched from anywhere (see `create_environment`); the
+/// second keeps a scrollbar out of a preview if a document is ever a pixel larger than
+/// the window it was given. Both are quoted because the browser's command line is a
+/// command line: unquoted, an argument with a space in it arrives as several.
+const BROWSER_ARGUMENTS: &str = "--host-resolver-rules=\"MAP * ~NOTFOUND\" --hide-scrollbars";
 
 /// What one engine cost to begin and to point at a document, in milliseconds. It is
 /// kept for the same reason the other probes exist: "the preview is slow" is answered
@@ -188,7 +187,36 @@ fn note_engine_up() {
     }
 }
 
-/// Ask the engine to play `path` in a window at `area`.
+/// How large a document is drawn inside a window of `area`.
+///
+/// The engine lays a document out at the size the document asks for and does not shrink
+/// it to the window it was given: a window smaller than that size would show the
+/// document's top-left corner and nothing else, and one larger would show it in a corner
+/// of empty background. What makes the configured scale mean the document rather than
+/// the window is this factor — the window is the size the layout planned, and the
+/// document is scaled to fill it — so `50%` is the whole document at half size, `100%`
+/// is the document at the size it asks for, and fit-to-screen is the whole of it as
+/// large as the display allows.
+///
+/// It is the smaller of the two ratios, so a window whose shape is not quite the
+/// document's — which rounding can leave a pixel out — shows all of it rather than
+/// cutting an edge off.
+pub fn zoom_for(path: &Path, area: Area) -> f64 {
+    let Some((width, height)) = svg_preview::measure(path) else {
+        return 1.0;
+    };
+
+    let scale = (area.width as f64 / width as f64).min(area.height as f64 / height as f64);
+
+    if scale.is_finite() && scale > 0.0 {
+        scale
+    } else {
+        1.0
+    }
+}
+
+/// Ask the engine to play `path` in a window at `area`, with the document drawn `zoom`
+/// times its own size (see `zoom_for`).
 ///
 /// The answer is immediate and says nothing about whether the document arrived: the
 /// engine works on its own thread, and what it does with this is navigates, waits for
@@ -198,7 +226,7 @@ fn note_engine_up() {
 ///
 /// A document that does not move is not the engine's: a browser is not started for a
 /// picture, and a hover onto one is drawn by this app as it always was.
-pub fn show(path: &Path, area: Area, background: TransparentBackground) {
+pub fn show(path: &Path, area: Area, background: TransparentBackground, zoom: f64) {
     if !moves(path) {
         trace(&format!("show({}): not the engine's", path.display()));
         return;
@@ -215,6 +243,7 @@ pub fn show(path: &Path, area: Area, background: TransparentBackground) {
         path: path.to_path_buf(),
         area,
         background,
+        zoom,
     }) {
         trace(&format!(
             "show({}): the engine's thread is gone: {error}",
@@ -257,6 +286,7 @@ enum Command {
         path: PathBuf,
         area: Area,
         background: TransparentBackground,
+        zoom: f64,
     },
     Hide,
     Shutdown,
@@ -338,6 +368,7 @@ fn engine_thread(commands: Receiver<Command>) {
                 path,
                 area,
                 background,
+                zoom,
             }) => {
                 trace(&format!("engine: show {}", path.display()));
 
@@ -356,7 +387,7 @@ fn engine_thread(commands: Receiver<Command>) {
                 }
 
                 if let Some(host) = host.as_mut() {
-                    host.show(&path, area, background);
+                    host.show(&path, area, background, zoom);
                     trace(&format!("engine: shown: {}", is_showing()));
                 }
                 idle_since = Instant::now();
@@ -475,8 +506,13 @@ impl Host {
         })
     }
 
-    fn show(&mut self, path: &Path, area: Area, background: TransparentBackground) {
+    fn show(&mut self, path: &Path, area: Area, background: TransparentBackground, zoom: f64) {
         unsafe {
+            // The document is drawn at its own size by the engine, so the window's is
+            // not the size it comes out as: this is what makes the two agree, and what
+            // makes the configured scale mean the document rather than the window.
+            let _ = self.controller.SetZoomFactor(zoom);
+
             // The background is a setting of the controller rather than of the page,
             // and it belongs to the interface that added it.
             if let Ok(controller) = self
@@ -735,7 +771,7 @@ fn create_environment(user_data_folder: &Path) -> Option<ICoreWebView2Environmen
     // browser would otherwise break it without a line of anything being written.
     let options = CoreWebView2EnvironmentOptions::default();
     unsafe {
-        options.set_additional_browser_arguments(NETWORK_BLOCKED.to_string());
+        options.set_additional_browser_arguments(BROWSER_ARGUMENTS.to_string());
     }
     let options: ICoreWebView2EnvironmentOptions = options.into();
 
@@ -916,6 +952,37 @@ fn pwstr_to_string(value: PWSTR) -> Option<String> {
 mod tests {
     use super::*;
 
+    /// The document is drawn to fill the window the layout gave it, whatever size that
+    /// is: a window of the document's own size is drawn at its own size, half the size
+    /// is drawn at half rather than showing a corner of it, and a window larger than the
+    /// document — fit-to-screen on a small one — is drawn up into it.
+    #[test]
+    fn a_document_is_drawn_to_fill_the_window_it_is_given() {
+        let folder = std::env::temp_dir().join("rust-hover-preview-zoom-tests");
+        std::fs::create_dir_all(&folder).expect("a test folder");
+        let path = folder.join("wide.svg");
+        std::fs::write(
+            &path,
+            br#"<svg xmlns="http://www.w3.org/2000/svg" width="800" height="400"></svg>"#,
+        )
+        .expect("a written file");
+
+        let area = |width, height| Area {
+            x: 0,
+            y: 0,
+            width,
+            height,
+        };
+
+        assert_eq!(zoom_for(&path, area(800, 400)), 1.0);
+        assert_eq!(zoom_for(&path, area(400, 200)), 0.5);
+        assert_eq!(zoom_for(&path, area(1600, 800)), 2.0);
+
+        // A window whose shape is not the document's shows all of it rather than
+        // cutting an edge off.
+        assert_eq!(zoom_for(&path, area(400, 400)), 0.5);
+    }
+
     /// What a hover's path becomes when it is handed to the engine: the Shell's
     /// verbatim form is not a URL, and a document reached through it was a document the
     /// engine never opened.
@@ -986,10 +1053,11 @@ mod tests {
             }
 
             let moving = moves(path);
-            println!("{}: moves={moving}", path.display());
+            let zoom = zoom_for(path, area);
+            println!("{}: moves={moving} zoom={zoom:.3}", path.display());
 
             let started = Instant::now();
-            show(path, area, TransparentBackground::Transparent);
+            show(path, area, TransparentBackground::Transparent, zoom);
 
             // The engine answers on its own thread; this is the wait for it to have
             // arrived rather than a measurement of the navigation itself.
