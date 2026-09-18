@@ -110,7 +110,7 @@ ffprobe -version
 - **Preview Types** — Images, Videos, Text, PDF, Archives, Office: switch a kind of preview off without touching its file list
 - **Background** — Transparent, Black, White, or Checkerboard
 - **Confirm File Type** — validate file content against extension
-- **Trigger Key (Alt)** — hold to disable or enable previews
+- **Trigger Key (Alt)** — hold to disable or enable previews; a check inside switches the key off entirely
 - **Text Preview**
   - **Full Mode** — adds scrolling, selection, and copy; off by default
   - **Theme** — Atom One Light, One Dark Pro, or custom `.tmTheme`
@@ -165,6 +165,7 @@ text_cache_mb=0
 image_cache_mb=32
 trigger_key=alt
 trigger_key_mode=disable
+trigger_key_enabled=true
 confirm_file_type=false
 follow_cursor=false
 avoid_filename=true
@@ -212,7 +213,7 @@ Key settings:
 - `office_engine_idle` — how long the Office engine a family started is kept after that family's last page: a number of seconds, or `indefinitely` for one kept for as long as the app runs. Default is `600` (ten minutes). A kept engine is an Office application already started and otherwise doing nothing, so what it costs is the memory it holds and a process in the list — the document is closed after every render, and the automation settings a render needs are put back the moment it is over. `0` lets the engine go as soon as it has drawn a page, so every document pays its own Office start.
 - `office_extensions` — the Office-preview gate, under `[office]`, written without dots.
 - A list whose key is deleted — the `extensions=` line, or its whole section — comes back with the built-in entries, and the file is written out again with them. An `extensions=` line left empty is a list you emptied, and stays empty.
-- `trigger_key` / `trigger_key_mode` — key (`alt`, `ctrl`, `shift`, `win`) and mode (`disable` or `enable`).
+- `trigger_key` / `trigger_key_mode` / `trigger_key_enabled` — key (`alt`, `ctrl`, `shift`, `win`), mode (`disable` or `enable`), and whether the key is watched at all; `true` by default.
 - `follow_cursor` — `true` for Follow Cursor, `false` for Best Position.
 - `avoid_filename` — `true` (the default) keeps a preview off the name of the file it is about, moving it — and, where the display leaves no room beside the name, resizing it — so the item under the pointer or the keyboard stays readable while its preview is up. Applies to both positions.
 - `preview_scale` — percentage or `fit`.

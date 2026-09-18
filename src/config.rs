@@ -543,6 +543,9 @@ pub struct AppConfig {
     pub trigger_key: String,
     /// What holding it does: stop previews, or allow them.
     pub trigger_key_mode: TriggerKeyMode,
+    /// Whether the trigger key is watched at all. Off means previews behave as if
+    /// no key were held, whatever the mode says.
+    pub trigger_key_enabled: bool,
     pub confirm_file_type: bool,
     pub follow_cursor: bool,
     /// Whether a preview is placed clear of the name of the file it is about, so the
@@ -624,6 +627,7 @@ impl Default for AppConfig {
             preview_enabled: true,
             trigger_key: "alt".to_string(),
             trigger_key_mode: TriggerKeyMode::Disable,
+            trigger_key_enabled: true,
             confirm_file_type: false,
             follow_cursor: false,
             avoid_filename: true,
@@ -826,6 +830,11 @@ impl AppConfig {
             );
             ini.set(
                 CONFIG_SECTION,
+                "trigger_key_enabled",
+                Some(self.trigger_key_enabled.to_string()),
+            );
+            ini.set(
+                CONFIG_SECTION,
                 "confirm_file_type",
                 Some(self.confirm_file_type.to_string()),
             );
@@ -1007,6 +1016,9 @@ impl AppConfig {
             if let Some(mode) = TriggerKeyMode::from_str(&value) {
                 self.trigger_key_mode = mode;
             }
+        }
+        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "trigger_key_enabled") {
+            self.trigger_key_enabled = value;
         }
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "confirm_file_type") {
             self.confirm_file_type = value;
