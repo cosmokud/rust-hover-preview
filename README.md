@@ -30,7 +30,7 @@ You can add or remove formats in config.ini. Unsupported formats will not show a
 
 `jpg`, `jpeg`, `png`, `apng`, `gif`, `bmp`, `ico`, `tiff`, `webp`, `tga`, `hdr`, `exr`, `qoi`, `svg`, `svgz`, and more. Animated GIF, APNG, and WebP files play; animation is detected from file content.
 
-An SVG is drawn at the size the preview is shown at rather than decoded and scaled, so it stays sharp when enlarged. One that moves is played: `<animate>`, `<animateTransform>` and `<set>` are read from the document and drawn frame by frame (CSS `@keyframes` animation is not read). Scripts and links to files outside the document are not followed.
+An SVG is drawn at the size the preview is shown at rather than decoded and scaled, so it stays sharp when enlarged. One that moves is played — `<animate>`, `<animateTransform>`, `<set>`, and CSS `@keyframes` named by type, class or id, `transform-origin` included — drawn frame by frame. Scripts and links to files outside the document are not followed.
 
 ### Videos (FFmpeg required)
 
