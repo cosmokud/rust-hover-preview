@@ -240,6 +240,10 @@ static VIDEO_PID: AtomicU32 = AtomicU32::new(0);
 static NOACTIVATE_MONITOR_STARTED: AtomicBool = AtomicBool::new(false);
 // Flag set when the system resumes from sleep, so the main loop can reset state.
 static RESUME_FROM_SLEEP: AtomicBool = AtomicBool::new(false);
+// Flag set when the display under the preview changed — a monitor's scale, or the
+// desktop rearranged — a frame the window proc can only discard. What was on screen
+// is put back by the loop, which is the side that holds the hover it came from.
+static DISPLAY_RESET: AtomicBool = AtomicBool::new(false);
 
 static CURRENT_MEDIA: Lazy<Mutex<Option<MediaData>>> = Lazy::new(|| Mutex::new(None));
 /// What a probed geometry is only valid for: the file and the version of it that
@@ -4636,6 +4640,7 @@ unsafe extern "system" fn window_proc(
     match msg {
         WM_DISPLAYCHANGE | WM_DPICHANGED => {
             reset_preview_after_display_change(hwnd);
+            DISPLAY_RESET.store(true, Ordering::Release);
             LRESULT(0)
         }
         WM_LBUTTONDOWN => {
@@ -5872,14 +5877,15 @@ pub fn run_preview_window() {
             // older hover is dropped here — the page it wrote is kept as far as the
             // cache budget allows, and no further.
             if let Some((ready_path, ready_generation, ready_ok)) = office_render_ready {
-                office_render_pending = None;
-
                 let shown = current_show.as_ref().and_then(show_path);
                 let hovered = ready_generation == current_generation
                     && shown.map(|path| path.as_path()) == Some(ready_path.as_path());
 
                 if hovered && ready_ok {
                     if latest_preview_msg.is_none() {
+                        // The wait is over, so the request stops being the pending
+                        // one here — where the page is actually taken up.
+                        office_render_pending = None;
                         // The page is there, so the hover is replayed: that measures
                         // the page itself, moves the window to its size and loads it.
                         // It is an upgrade rather than a new preview, though, and what
@@ -5900,7 +5906,13 @@ pub fn run_preview_window() {
                             (show, _) => show,
                         };
                     }
+                    // A newer message was in hand, so the page is not shown now. The
+                    // wait it was rendered for is left standing rather than cleared
+                    // with it: what is being waited on is still that page, so the cap
+                    // on waiting keeps something to measure and the spinner comes down
+                    // when its time is up instead of hanging there for good.
                 } else if hovered {
+                    office_render_pending = None;
                     // Nothing was drawn and nothing is coming. A preview that is
                     // not a spinner is kept — it is a preview like any other —
                     // while a spinner has nothing left to stand in for.
@@ -5921,6 +5933,7 @@ pub fn run_preview_window() {
                         }
                     }
                 } else {
+                    office_render_pending = None;
                     // The hover this page was rendered for is over: it landed after
                     // the pointer had moved on, so nothing is waiting for it. What was
                     // rendered is kept as far as the budget allows and no further — at
@@ -5928,6 +5941,15 @@ pub fn run_preview_window() {
                     // hover that has already gone.
                     office_render::hover_ended(&ready_path);
                 }
+            }
+
+            // The display under the preview changed and the frame that was on screen
+            // went with it. The window proc could only discard what was drawn; the
+            // hover it came from is what knows how to draw it again, at the scale of
+            // the display the pointer is on now. A newer message in hand is left to
+            // speak for itself, and the flag waits for a tick where none does.
+            if latest_preview_msg.is_none() && DISPLAY_RESET.swap(false, Ordering::AcqRel) {
+                latest_preview_msg = current_show.clone();
             }
 
             if let Some(preview_msg) = latest_preview_msg {

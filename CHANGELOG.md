@@ -32,6 +32,9 @@
 - PowerPoint decks and Excel workbooks on printerless machines now preview.
 - Office engines no longer survive quit, and failed or unresponsive instances are replaced.
 - Workbook clipboard images are released.
+- A preview that crossed a display boundary was discarded and stayed gone until the pointer moved; the hover it came from is now replayed, so it is laid out again at the new display's scale and put back.
+- An Office page that landed while another hover message was in hand left the preview waiting with nothing to end the wait; the cap now still applies, so the spinner comes down.
+- The Office render worker makes itself known before initializing its apartment, so the first request after startup can no longer start a second worker beside it.
 - Non-document files no longer start an Office engine.
 - The document spinner is correctly sized.
 - Replaced videos are re-measured and re-cropped using file version as well as path.

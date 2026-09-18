@@ -616,14 +616,26 @@ fn worker_main() {
     // current generation, so it cannot take the place of its replacement.
     let generation = WORKER_GENERATION.fetch_add(1, Ordering::AcqRel) + 1;
 
+    // The thread makes itself known before anything expensive happens in it. What
+    // the id is for is answering whether there is a worker to post to, and a worker
+    // that is still initializing is one: publishing it after the apartment had been
+    // initialized left a window — the whole of `CoInitializeEx`, which loads DLLs —
+    // in which this thread existed but reported itself absent, so a request arriving
+    // in it started a second worker beside this one. Two workers are not a lost
+    // render either way, because the request is in the slot and whichever worker is
+    // there takes it on its next wake; what they do cost is the race to store their
+    // own ids, where the loser can leave a dead thread's id in the slot for every
+    // request after it.
     unsafe {
+        WORKER_THREAD.store(GetCurrentThreadId(), Ordering::Release);
+
         let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
         // The thread's message queue has to exist before another thread can post
-        // to it, and it only exists once something has asked for it.
+        // to it, and it only exists once something has asked for it. A post that
+        // arrives before this is refused by the system and costs nothing: the
+        // request it announced is already in the slot, waiting to be taken.
         let mut message = MSG::default();
         let _ = PeekMessageW(&mut message, None, 0, 0, PM_REMOVE);
-
-        WORKER_THREAD.store(GetCurrentThreadId(), Ordering::Release);
     }
 
     // The thread id is handed back however this thread ends, a panic included:
