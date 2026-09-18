@@ -13,7 +13,7 @@
 
 ### Changed
 
-- The built-in extension lists are written in alphabetical order.
+- The built-in extension lists are written in alphabetical order, and a list still holding them is rewritten in that order on upgrade.
 - Office previews render pages instead of using saved thumbnails; rendered pages stay in memory (`office_cache_mb`, default `64 MB`).
 - PDF and Office pages use fit-to-screen sizing, but preview scales below `100%` now reduce it; `100%`+ and image previews are unchanged.
 - The waiting spinner is now a transparent haloed arc, appears immediately, follows the pointer, and is placed flush at the pointer's corner.
