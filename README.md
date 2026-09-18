@@ -24,7 +24,7 @@ A Windows 11 tray app inspired by QTTabBar that shows instant File Explorer prev
 
 ## Supported Formats
 
-You can add or remove formats through `config.ini`.
+You can add or remove formats in config.ini. Unsupported formats will not show a preview except text, which the app will try to force-read.
 
 ### Images
 
@@ -51,8 +51,6 @@ Extensionless repository files such as `LICENSE`, `Makefile`, `Dockerfile`, and 
 ### Office documents
 
 `doc`, `docm`, `docx`, `dot`, `dotm`, `dotx`, `xls`, `xlsb`, `xlsm`, `xlsx`, `xlt`, `xltm`, `xltx`, `ppt`, `pptm`, `pptx`, `pps`, `ppsm`, `ppsx`, `pot`, `potm`, `potx`.
-
-Add or remove formats through `config.ini`
 
 ### Themes
 
@@ -173,20 +171,20 @@ text_preview_full_mode=false
 text_font_scale=125
 
 [image]
-extensions=jpg,jpeg,jpe,jfif,png,apng,gif,bmp,ico,tiff,tif,webp,tga,pbm,pgm,ppm,pam,pnm,hdr,exr,qoi,ff
+extensions=apng,bmp,exr,ff,gif,hdr,ico,jfif,jpe,jpeg,jpg,pam,pbm,pgm,png,pnm,ppm,qoi,tga,tif,tiff,webp
 
 [video]
-extensions=mp4,m4v,mov,qt,3gp,3g2,mkv,mk3d,webm,ts,m2t,m2ts,mts,mpg,mpeg,vob,avi,divx,asf,wmv,rmvb,flv,ogv,mxf,dv,...
+extensions=264,265,266,3g2,3gp,3gpp,apv,asf,av1,avc,avi,avs,avs2,avs3,bik,bk2,c93,cavs,cdg,cdxl,cin,cpk,dav,...
 
 [text]
 extensions=txt,text,log,nfo,md,markdown,json,toml,yaml,py,js,ts,rs,...
 names=license,notice,makefile,dockerfile,gitignore,.gitattributes,...
 
 [archive]
-extensions=zip,zipx,jar,apk,xpi,cbz,rar,7z,tar,tgz,tar.gz
+extensions=7z,apk,cbz,jar,rar,tar,tar.gz,tgz,xpi,zip,zipx
 
 [office]
-extensions=doc,docm,docx,dot,dotm,dotx,xls,xlsb,xlsm,xlsx,xlt,xltm,xltx,ppt,pptm,pptx,pps,ppsm,ppsx,pot,potm,potx
+extensions=doc,docm,docx,dot,dotm,dotx,pot,potm,potx,pps,ppsm,ppsx,ppt,pptm,pptx,xls,xlsb,xlsm,xlsx,xlt,xltm,xltx
 ```
 
 Key settings:
