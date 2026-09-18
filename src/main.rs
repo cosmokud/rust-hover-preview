@@ -63,6 +63,11 @@ fn main() {
     // before a video preview could start adding to it again.
     let _ = fs::remove_file(std::env::temp_dir().join("rust-hover-preview-video.log"));
 
+    // The browser that plays an animated document keeps its state in a folder of its
+    // own, one per run; what earlier runs left behind is cleared away here, before this
+    // run has a folder for something to hold.
+    webview_preview::clear_stale_profiles();
+
     // Initialize COM
     unsafe {
         let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);

@@ -669,16 +669,27 @@ fn pump_messages() {
 /// The folder the engine keeps its own state in — under the local profile, because a
 /// browser profile is not something to synchronize between machines.
 ///
-/// One folder is one browser at a time: a second environment pointed at a folder that
-/// is already in use is answered with `ERROR_INVALID_STATE` when it asks for its
-/// controller, which is what a probe or a second run of this app meets while the first
-/// is up. `RHP_WEBVIEW_PROFILE` names a folder of its own for that case, which is what
-/// the probes use so that they can run beside a running app.
+/// One folder is one browser at a time, and that is the whole reason this is a folder
+/// *per run* rather than one folder for the app. An environment pointed at a folder
+/// another browser is already holding is answered with `ERROR_INVALID_STATE` when it
+/// asks for its controller, and the browser that holds it may be one left behind by a
+/// run that ended badly — a zombie whose app is gone and which holds the folder for as
+/// long as it lives, which can be indefinitely. A run that keeps its state in a folder
+/// of its own cannot be blocked by any of that: the worst a leftover can do is take up
+/// space, and the next start clears it away.
+///
+/// `RHP_WEBVIEW_PROFILE` names a folder for one run of the probes, so that a probe can
+/// run beside a running app without either of them noticing the other.
 fn user_data_folder() -> PathBuf {
     if let Some(folder) = std::env::var_os("RHP_WEBVIEW_PROFILE") {
         return PathBuf::from(folder);
     }
 
+    profile_root().join(std::process::id().to_string())
+}
+
+/// The folder the per-run folders live in.
+fn profile_root() -> PathBuf {
     directories::BaseDirs::new()
         .map(|dirs| {
             dirs.data_local_dir()
@@ -686,6 +697,31 @@ fn user_data_folder() -> PathBuf {
                 .join("webview")
         })
         .unwrap_or_else(std::env::temp_dir)
+}
+
+/// Clear away the folders earlier runs left, which nothing is using any more.
+///
+/// A folder a browser is still holding is left where it is: it cannot be removed while
+/// it is open, and it is not this run's to insist on. What is left is taken by the next
+/// start, once whatever held it is gone. Called once, before anything can create a
+/// folder of this run's own.
+pub fn clear_stale_profiles() {
+    let root = profile_root();
+    let ours = std::process::id().to_string();
+
+    let Ok(entries) = std::fs::read_dir(&root) else {
+        return;
+    };
+
+    for entry in entries.flatten() {
+        if entry.file_name() == std::ffi::OsStr::new(&ours) {
+            continue;
+        }
+
+        if entry.path().is_dir() {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
+    }
 }
 
 fn create_environment(user_data_folder: &Path) -> Option<ICoreWebView2Environment> {
@@ -813,17 +849,35 @@ fn background_color(background: TransparentBackground) -> COREWEBVIEW2_COLOR {
     }
 }
 
-/// A local file as a URL, which is what the engine is pointed at. The characters that
-/// would end the path early — a space, a hash, a question mark, a percent — are the
-/// ones escaped; anything else is left as it is written.
+/// A local file as a URL, which is what the engine is pointed at.
+///
+/// The path a hover carries is the Shell's, and the Shell canonicalizes paths to the
+/// verbatim form — `\\?\G:\…`, with `\\?\UNC\` in front of a share — which is not
+/// something a URL may contain: a browser pointed at it fails at once, silently, and
+/// what a hover shows is nothing. So the prefix comes off first, and a share keeps its
+/// server: `\\?\UNC\server\share` becomes `file://server/share`, a drive becomes
+/// `file:///C:/…`. The characters that would end the path early — a space, a hash, a
+/// question mark, a percent — are escaped; anything else is left as it is written.
 fn file_url(path: &Path) -> Option<String> {
     if !path.is_absolute() {
         return None;
     }
 
-    let mut url = String::from("file:///");
+    let text = path.to_string_lossy();
+    let local = match text.strip_prefix(r"\\?\UNC\") {
+        Some(share) => format!(r"\\{share}"),
+        None => text
+            .strip_prefix(r"\\?\")
+            .map(str::to_string)
+            .unwrap_or_else(|| text.to_string()),
+    };
 
-    for character in path.to_string_lossy().chars() {
+    let (mut url, rest) = match local.strip_prefix(r"\\") {
+        Some(share) => (String::from("file://"), share.to_string()),
+        None => (String::from("file:///"), local),
+    };
+
+    for character in rest.chars() {
         match character {
             '\\' => url.push('/'),
             ' ' => url.push_str("%20"),
@@ -861,6 +915,34 @@ fn pwstr_to_string(value: PWSTR) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What a hover's path becomes when it is handed to the engine: the Shell's
+    /// verbatim form is not a URL, and a document reached through it was a document the
+    /// engine never opened.
+    #[test]
+    fn turns_a_verbatim_path_into_a_url_a_browser_opens() {
+        for (path, expected) in [
+            (
+                r"G:\Downloads\Stash\Animated_clock.svg",
+                "file:///G:/Downloads/Stash/Animated_clock.svg",
+            ),
+            (
+                r"\\?\G:\Downloads\Stash\Animated_clock.svg",
+                "file:///G:/Downloads/Stash/Animated_clock.svg",
+            ),
+            (r"\\?\C:\a b\c#d.svg", "file:///C:/a%20b/c%23d.svg"),
+            (r"\\?\UNC\server\share\a.svg", "file://server/share/a.svg"),
+            (r"\\server\share\a.svg", "file://server/share/a.svg"),
+        ] {
+            assert_eq!(
+                file_url(Path::new(path)).as_deref(),
+                Some(expected),
+                "{path}"
+            );
+        }
+
+        assert_eq!(file_url(Path::new(r"relative\a.svg")), None);
+    }
 
     /// What the engine costs on this machine: beginning it, pointing it at a document,
     /// and pointing it at another one once it is warm. Ignored, and driven by
