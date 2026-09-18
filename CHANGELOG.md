@@ -26,6 +26,8 @@
 - A document that refuses a page is ignored for two minutes instead of ten.
 - `image_cache_mb` defaults to `32` rather than `64`, and `pdf_cache_mb` to `32`, so the decodes and rasters a folder is swept back over are already done; the text cache still starts at `0`.
 - Removed the `Office Preview` submenu; `office_render_enabled` is no longer read.
+- A workbook's picture — the no-printer answer — is asked for on a machine that has a printer only when an attempt is already a retry: an export that came to nothing there is the instance declining rather than the document failing, and a copy would be refused by the same instance, after the retries the clipboard needs.
+- An Office engine let go because it refused a page is ended where it stands rather than asked to quit and pumped for the seconds an unanswered quit takes, so the retry reaches the fresh instance, which is what the retry is for, without the wait in front of it.
 
 ### Fixed
 
