@@ -24,8 +24,9 @@ use std::time::{Duration, Instant};
 use windows::core::{w, IUnknown, Interface, VARIANT};
 use windows::Win32::Foundation::{BOOL, HWND, LPARAM, POINT, RECT, SIZE};
 use windows::Win32::Graphics::Gdi::{
-    CreateCompatibleDC, CreateFontIndirectW, DeleteDC, DeleteObject, GetTextExtentPoint32W,
-    SelectObject, LOGFONTW,
+    CreateCompatibleDC, CreateFontIndirectW, DeleteDC, DeleteObject, GetMonitorInfoW,
+    GetTextExtentPoint32W, MonitorFromWindow, SelectObject, LOGFONTW, MONITORINFO,
+    MONITOR_DEFAULTTONEAREST,
 };
 use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, IServiceProvider, CLSCTX_ALL,
@@ -2050,27 +2051,45 @@ fn is_window_maximized(hwnd: HWND) -> bool {
     false
 }
 
-/// Check if a window is fullscreen (covers entire screen)
+/// Check if a window is fullscreen (covers the display it is on)
+///
+/// The display is the one the window is on, not the primary one that `SM_CXSCREEN`
+/// reports: on a 4K display beside a 1080p primary, every window larger than 1920 by
+/// 1080 used to read as fullscreen although most of that display was still showing,
+/// and a game covering a 1080p display beside a 4K one was missed although it covered
+/// the display it was on completely. Both answers are wrong in the way that matters
+/// here — Explorer is read as hidden behind a window that does not reach it, or as
+/// reachable behind one that covers the display it is on.
 fn is_window_fullscreen(hwnd: HWND) -> bool {
+    // How far past its display a window may reach and still be that display's
+    // fullscreen window. A window that covers a display is that display to the pixel
+    // or within a border drawn outside it.
+    const FULLSCREEN_TOLERANCE_PX: i32 = 2;
+
     unsafe {
         let mut window_rect = RECT::default();
         if GetWindowRect(hwnd, &mut window_rect).is_err() {
             return false;
         }
 
-        // Get screen dimensions
-        let screen_width = windows::Win32::UI::WindowsAndMessaging::GetSystemMetrics(
-            windows::Win32::UI::WindowsAndMessaging::SM_CXSCREEN,
-        );
-        let screen_height = windows::Win32::UI::WindowsAndMessaging::GetSystemMetrics(
-            windows::Win32::UI::WindowsAndMessaging::SM_CYSCREEN,
-        );
+        let monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+        if monitor.is_invalid() {
+            return false;
+        }
 
-        // Check if window covers entire screen (with small tolerance for borders)
-        let width = window_rect.right - window_rect.left;
-        let height = window_rect.bottom - window_rect.top;
+        let mut info = MONITORINFO {
+            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+            ..Default::default()
+        };
+        if !GetMonitorInfoW(monitor, &mut info).as_bool() {
+            return false;
+        }
 
-        width >= screen_width && height >= screen_height
+        let display = info.rcMonitor;
+        window_rect.left <= display.left + FULLSCREEN_TOLERANCE_PX
+            && window_rect.top <= display.top + FULLSCREEN_TOLERANCE_PX
+            && window_rect.right >= display.right - FULLSCREEN_TOLERANCE_PX
+            && window_rect.bottom >= display.bottom - FULLSCREEN_TOLERANCE_PX
     }
 }
 
