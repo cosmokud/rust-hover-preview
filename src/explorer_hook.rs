@@ -44,9 +44,7 @@ use windows::Win32::UI::Accessibility::{
     UIA_NativeWindowHandlePropertyId, UIA_SelectionPatternId, UIA_TextControlTypeId,
     UIAutomationPropertyInfo, UIAutomationType_Int, UIA_CONTROLTYPE_ID, UIA_PROPERTY_ID,
 };
-use windows::Win32::UI::HiDpi::{
-    GetDpiForMonitor, GetDpiForSystem, GetDpiForWindow, MDT_EFFECTIVE_DPI,
-};
+use windows::Win32::UI::HiDpi::{GetDpiForMonitor, GetDpiForSystem, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, VK_DOWN, VK_END, VK_HOME, VK_LBUTTON, VK_LEFT, VK_MBUTTON, VK_NEXT, VK_PRIOR,
     VK_RBUTTON, VK_RETURN, VK_RIGHT, VK_UP, VK_XBUTTON1, VK_XBUTTON2,
@@ -242,7 +240,7 @@ impl HoveredItem {
     fn name_box(&self) -> Option<RECT> {
         let text = self.text?;
 
-        let Some(width) = drawn_name_width(&self.name, self.native_window) else {
+        let Some(width) = drawn_name_width(&self.name, region_display_dpi(&text.name)) else {
             return Some(text.name);
         };
 
@@ -251,6 +249,20 @@ impl HoveredItem {
             ..text.name
         })
     }
+}
+
+/// The display a region is drawn on, as the DPI its pixels are in.
+///
+/// The window an item is reported through is not a display that can always be asked:
+/// the shell's own item provider answers with no window at all, and a display taken
+/// from the system's instead is the wrong one for an item on a scaled display — a name
+/// drawn at 200% would be measured half its width. Where the region is, is what says
+/// which display it is drawn on, so the middle of it is what is looked up.
+fn region_display_dpi(region: &RECT) -> u32 {
+    monitor_dpi_from_point(
+        (region.left + region.right) / 2,
+        (region.top + region.bottom) / 2,
+    )
 }
 
 /// The share of the icon font the shell draws an item's name at in the views that give
@@ -273,10 +285,16 @@ const NAME_FONT_SCALE: (i64, i64) = (5, 4);
 /// measured with: a font and a memory DC are made for the one call and let go again. It
 /// is asked beside the walk that read the item — once per preview, not once per probe —
 /// and the font is the shell's own, written for the display the system is at, so it is
-/// scaled here to the display the item is drawn on, which is the one the region is in.
-fn drawn_name_width(name: &str, window: isize) -> Option<i32> {
+/// scaled here to the display the item is drawn on — `dpi`, the one the region is in
+/// (see [`region_display_dpi`]) — which is the scale the drawn name is in.
+///
+/// A display that is not known is not measured at another one's scale: the name is left
+/// as the view reported it, the answer a name with nothing in it gets, because a region
+/// that clears too much room is one a preview is placed too far away, while a region cut
+/// at the wrong scale is one that covers the name it was cut from.
+fn drawn_name_width(name: &str, dpi: u32) -> Option<i32> {
     let wide: Vec<u16> = name.encode_utf16().collect();
-    if wide.is_empty() {
+    if wide.is_empty() || dpi == 0 {
         return None;
     }
 
@@ -291,9 +309,8 @@ fn drawn_name_width(name: &str, window: isize) -> Option<i32> {
         .ok()?;
 
         let system_dpi = GetDpiForSystem();
-        let item_dpi = GetDpiForWindow(HWND(window as *mut core::ffi::c_void));
-        if system_dpi != 0 && item_dpi != 0 && item_dpi != system_dpi {
-            let height = logfont.lfHeight as i64 * item_dpi as i64;
+        if system_dpi != 0 && dpi != system_dpi {
+            let height = logfont.lfHeight as i64 * dpi as i64;
             logfont.lfHeight = (height / system_dpi as i64) as i32;
         }
 
@@ -3987,10 +4004,10 @@ mod tests {
     /// rather than the column it sits in.
     #[test]
     fn a_name_is_measured_by_what_it_takes() {
-        let short = drawn_name_width("aa.txt", 0).expect("a short name measures");
-        let middle = drawn_name_width("mid-length-name.txt", 0).expect("a middle name measures");
+        let short = drawn_name_width("aa.txt", 96).expect("a short name measures");
+        let middle = drawn_name_width("mid-length-name.txt", 96).expect("a middle name measures");
         let long =
-            drawn_name_width("a-very-long-file-name-here.txt", 0).expect("a long name measures");
+            drawn_name_width("a-very-long-file-name-here.txt", 96).expect("a long name measures");
 
         assert!(short > 0, "a name takes some room: {short}");
         assert!(
@@ -3999,19 +4016,44 @@ mod tests {
         );
     }
 
+    /// A name is measured in the pixels of the display it is drawn on, which is what a
+    /// scaled display draws it twice as wide in. Measuring one at the system's scale on
+    /// another display's is what covered the name: a provider that hands out no window
+    /// left the display unknown, and the region came out at half the name on a display
+    /// at 200% — see `region_display_dpi`.
+    #[test]
+    fn a_name_is_measured_at_the_scale_of_its_display() {
+        let plain = drawn_name_width("mid-length-name.txt", 96).expect("a name measures");
+        let scaled = drawn_name_width("mid-length-name.txt", 192).expect("a name measures");
+
+        let ratio = scaled as f32 / plain as f32;
+        assert!(
+            (ratio - 2.0).abs() < 0.05,
+            "twice the display draws twice the name: {plain} vs {scaled}"
+        );
+    }
+
+    /// A display that cannot be told apart from another is no display to measure
+    /// against, so a name without one is left as the view reported it rather than
+    /// measured at a scale that is not its own — see `drawn_name_width`.
+    #[test]
+    fn a_name_without_a_display_is_not_measured() {
+        assert_eq!(drawn_name_width("report.txt", 0), None);
+    }
+
     /// A name with nothing in it has no width to be kept off, so the box the view
     /// reported is left as it is — see `HoveredItem::name_box`.
     #[test]
     fn a_name_with_nothing_in_it_is_not_measured() {
-        assert_eq!(drawn_name_width("", 0), None);
+        assert_eq!(drawn_name_width("", 96), None);
     }
 
     /// The name measured is the name the view shows, extension and all: what a
     /// preview is kept off is the whole of what is drawn, not the stem it starts with.
     #[test]
     fn a_name_is_measured_with_its_extension() {
-        let listed = drawn_name_width("report.txt", 0).expect("a listed name measures");
-        let stem = drawn_name_width("report", 0).expect("a stem measures");
+        let listed = drawn_name_width("report.txt", 96).expect("a listed name measures");
+        let stem = drawn_name_width("report", 96).expect("a stem measures");
 
         assert!(
             listed > stem,

@@ -13,6 +13,7 @@
 
 ### Fixed
 
+- `Avoid Filename` now measures names using the item’s own display zoom, fixing half-covered names on scaled screens.
 - Preview spacing and mouse-move distances now scale correctly with screen zoom at 100%, 150%, and 200%.
 - Previews now use the screen your active window is on, fixing multi-monitor fullscreen and missing-preview problems.
 - If a preview can’t attach to its screen, it now goes to the main screen instead of spanning two monitors.
