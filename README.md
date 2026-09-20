@@ -125,7 +125,7 @@ ffprobe -version
   - **Rehover Delay** — the same steps, before the same file can preview again.
 - **Placement**
   - **Position** — Follow Cursor or Best Position.
-  - **Avoid** — Don't Avoid, Avoid Filename, or Avoid Details (the default): what a preview is kept off instead of covering the item it is about. Avoid Details keeps it off the hovered name and the columns a row writes beside it, Avoid Filename off the name alone, and Don't Avoid places it by the position alone.
+  - **Avoid** — Don't Avoid, Avoid Filename (the default), or Avoid Details: what a preview is kept off instead of covering the item it is about. Avoid Filename keeps it off the hovered name alone, so the columns a row writes beside the name may still be covered; Avoid Details keeps it off those as well, and Don't Avoid places it by the position alone.
   - **Scaling** — Fit to Screen or 25%–400%.
   - **SVG Scaling** — Fit to Screen, or 75%, 50% (default), 25%, 10% of the display.
 - **Background**
@@ -231,7 +231,7 @@ Key settings:
 - A deleted `extensions=` line — or its whole section — comes back with the built-in entries; an `extensions=` line left empty stays empty.
 - `trigger_key` / `trigger_key_mode` / `trigger_key_enabled` — the key (`alt`, `ctrl`, `shift`, `win`), what it does (`disable` or `enable`), and whether it is watched at all; `true` by default.
 - `follow_cursor` — `true` for Follow Cursor, `false` for Best Position.
-- `avoid_mode` — `details` (the default), `filename`, or `off`: what a preview is kept off, moving it and resizing it where there is no room beside that region, so the item it is about stays readable; applies to both positions. `details` keeps it off everything a row draws, the name and the columns beside it, while `filename` keeps it off the name alone — which is the `Name` column of `Details` and the name above the path of `Content` — and leaves the columns free to be covered. A file written with the old `avoid_filename` key reads as `details` for `true` and `off` for `false`.
+- `avoid_mode` — `filename` (the default), `details`, or `off`: what a preview is kept off, moving it and resizing it where there is no room beside that region, so the item it is about stays readable; applies to both positions. `filename` keeps it off the name alone — the `Name` column of `Details` and the name above the path of `Content` — and leaves the columns beside it free to be covered, while `details` keeps it off everything a row draws. A file written with the old `avoid_filename` key reads as `details` for `true` and `off` for `false`.
 - `preview_scale` — percentage or `fit`.
 - `svg_scale` — how much of the screen an SVG is drawn over: a percentage or `fit`, read against the screen rather than the size the document asks for, so `50` (the default) is half of it, `fit` all of it, and `100` or more read as `fit`. Both readers follow it — the still frame this app draws and the engine that plays an animated document.
 
