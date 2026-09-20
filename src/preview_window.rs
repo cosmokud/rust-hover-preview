@@ -340,11 +340,10 @@ impl MediaType {
     fn kind(&self) -> Option<PreviewType> {
         match self {
             Self::StaticImage
-            | Self::StaticSvg
             | Self::AnimatedGif
             | Self::AnimatedApng
-            | Self::AnimatedWebP
-            | Self::AnimatedSvg => Some(PreviewType::Images),
+            | Self::AnimatedWebP => Some(PreviewType::Images),
+            Self::StaticSvg | Self::AnimatedSvg => Some(PreviewType::Svg),
             Self::Video => Some(PreviewType::Videos),
             Self::Text => Some(PreviewType::Text),
             Self::Pdf => Some(PreviewType::Pdf),
@@ -3615,19 +3614,24 @@ fn get_media_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
         return office_preview::measure(path);
     }
 
-    // Whatever is left is an image, so the `Images` gate is what decides it. A
-    // file of a kind that is switched off reports no size, which is how the
-    // layout drops its preview.
-    if !PreviewType::Images.enabled() {
-        return None;
-    }
-
     // An SVG is measured from the document rather than from a header: the size it
     // asks to be drawn at is the size the layout places, and the renderer draws it
-    // at whatever box comes out of that. It is asked here, behind the `Images` gate,
-    // so that switching image previews off takes an SVG preview with them.
+    // at whatever box comes out of that. It is asked ahead of the `Images` gate —
+    // which is what gets a document here, its name being an entry of the image list
+    // — because a document is its own kind: what draws one is not a decoder, and
+    // the switch for it is not the switch for pictures. A file of a kind that is
+    // switched off reports no size, which is how the layout drops its preview.
     if svg_preview::is_svg_file(path) {
+        if !PreviewType::Svg.enabled() {
+            return None;
+        }
+
         return svg_preview::measure(path);
+    }
+
+    // Whatever is left is a picture, so the `Images` gate is what decides it.
+    if !PreviewType::Images.enabled() {
+        return None;
     }
 
     if is_confirm_file_type_enabled() {

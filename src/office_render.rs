@@ -540,6 +540,26 @@ pub(crate) fn shutdown() {
     }
 }
 
+/// Let go of every engine at once, for a preview kind that has been switched off.
+///
+/// The processes are ended from here rather than waited for on the worker: what the
+/// worker is asked for is the tidy half — its slots cleared, the COM objects released
+/// on the apartment that made them — and a worker that is inside a call it cannot cut
+/// short would hold a process nothing can be previewed from for good. So it is told
+/// to look at the gate now, and the processes go whether it looks or not.
+///
+/// Called from the tray, which may not wait on anything: every call here is a request.
+pub(crate) fn stop_engines() {
+    engine_processes::terminate_all_owned();
+
+    let thread = WORKER_THREAD.load(Ordering::Acquire);
+    if thread != 0 {
+        unsafe {
+            let _ = PostThreadMessageW(thread, WM_OFFICE_RENDER, WPARAM(0), LPARAM(0));
+        }
+    }
+}
+
 fn work_in_flight() -> bool {
     WORKER_BUSY
         .lock()
@@ -690,8 +710,15 @@ fn worker_main() {
                 // A refusal is the document's, and is remembered against it so the
                 // next hover does not ask again straight away. An engine that would
                 // not start is not: that is the machine's business, and the file is
-                // worth asking about again.
-                RenderOutcome::Refused => remember_failure(&request.source),
+                // worth asking about again — and neither is a refusal met while the
+                // tier was switched off, where it was the engines being ended under
+                // the render that refused it, which would otherwise leave the file
+                // unprompted for minutes over a switch.
+                RenderOutcome::Refused => {
+                    if enabled() {
+                        remember_failure(&request.source);
+                    }
+                }
                 RenderOutcome::NoEngine => {}
             }
 
@@ -709,9 +736,20 @@ fn worker_main() {
         // them: an app left alone should end up with no Office process and no
         // polling thread. Letting an engine go is a COM call of its own, so it
         // happens inside the marker like the rest.
-        if engines.has_idle() {
+        //
+        // Every engine goes at once when the tier is switched off, which is what
+        // clears these slots: a process ended from outside — which is what the tray
+        // does, for a worker too stuck to look — leaves this side holding COM objects
+        // over a process that is gone, and the hover that would have been answered
+        // from one is never even asked for, since the gate is what asks.
+        let switched_off = !enabled();
+        if engines.has_idle() || switched_off {
             begin_work(generation);
-            engines.drop_idle();
+            if switched_off {
+                engines.drop_all();
+            } else {
+                engines.drop_idle();
+            }
             end_work(generation);
         }
         if engines.is_empty() {

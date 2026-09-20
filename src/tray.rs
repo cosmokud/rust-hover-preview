@@ -118,6 +118,7 @@ const ID_TRAY_TYPE_TEXT: u16 = 1064;
 const ID_TRAY_TYPE_PDF: u16 = 1065;
 const ID_TRAY_TYPE_ARCHIVES: u16 = 1066;
 const ID_TRAY_TYPE_OFFICE: u16 = 1067;
+const ID_TRAY_TYPE_SVG: u16 = 1069; // 1068 is the trigger key's own switch
 /// The `Cache` submenu: one command per size it offers, in the order it lists
 /// them, for each of the caches it sizes. They start past the range the `theme`
 /// folder's own items occupy (see `ID_TRAY_THEME_CUSTOM_BASE`).
@@ -287,6 +288,7 @@ unsafe extern "system" fn tray_window_proc(
                 ID_TRAY_TYPE_PDF => toggle_preview_type(PreviewType::Pdf),
                 ID_TRAY_TYPE_ARCHIVES => toggle_preview_type(PreviewType::Archives),
                 ID_TRAY_TYPE_OFFICE => toggle_preview_type(PreviewType::Office),
+                ID_TRAY_TYPE_SVG => toggle_preview_type(PreviewType::Svg),
                 // An Office engine's idle time, by the position it was listed at.
                 cmd if (ID_TRAY_ENGINE_IDLE_BASE
                     ..ID_TRAY_ENGINE_IDLE_BASE + ENGINE_IDLE_CHOICES.len() as u16)
@@ -394,6 +396,7 @@ unsafe fn show_context_menu(hwnd: HWND) {
         (PreviewType::Pdf, ID_TRAY_TYPE_PDF, w!("PDF")),
         (PreviewType::Archives, ID_TRAY_TYPE_ARCHIVES, w!("Archives")),
         (PreviewType::Office, ID_TRAY_TYPE_OFFICE, w!("Office")),
+        (PreviewType::Svg, ID_TRAY_TYPE_SVG, w!("SVG")),
     ];
     let types_menu = CreatePopupMenu().unwrap();
 
@@ -1364,12 +1367,29 @@ fn set_theme_from_menu(index: usize) {
 /// on leaves the preview that is up alone, since a preview of another kind has
 /// nothing to do with the gate that changed. The Explorer hook reads the gates
 /// fresh on every tick, so a change needs no restart and no cache to clear.
+///
+/// A kind switched off also takes the engine behind it: what an engine is for is
+/// previews of its own kind, and one kept warm for a kind nobody can be shown is a
+/// process — and a licence, and a few hundred megabytes — held for nothing.
 fn toggle_preview_type(kind: PreviewType) {
     if let Ok(mut config) = CONFIG.lock() {
         let enabled = kind.enabled_in(&config);
         kind.set_enabled_in(&mut config, !enabled);
         config.save();
     }
+
+    if !kind.enabled() {
+        // An engine only one kind of preview is ever started for goes with that
+        // kind's gate. The Office processes are ended from here rather than through
+        // the worker — a worker inside a call it cannot cut short would hold one of
+        // them for good, and this thread may not wait on one — while the browser
+        // needs nothing said to it at all: its own thread reads this gate and lets
+        // the engine go.
+        if let PreviewType::Office = kind {
+            office_render::stop_engines();
+        }
+    }
+
     refresh_preview_types();
 }
 

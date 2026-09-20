@@ -163,6 +163,7 @@ text_preview_enabled=true
 pdf_preview_enabled=true
 archive_preview_enabled=true
 office_preview_enabled=true
+svg_preview_enabled=true
 office_cache_mb=64
 office_engine_idle=600
 pdf_cache_mb=32
@@ -206,7 +207,7 @@ Key settings:
 
 - `theme` — `light` (default), `dark`, or a custom theme as `custom:<name>`.
 - `markdown_mode` — `rendered` or `source`.
-- `image_preview_enabled` / `video_preview_enabled` / `text_preview_enabled` / `pdf_preview_enabled` / `archive_preview_enabled` / `office_preview_enabled` — whether previews of that kind may be shown at all, without changing the lists of files it covers.
+- `image_preview_enabled` / `video_preview_enabled` / `text_preview_enabled` / `pdf_preview_enabled` / `archive_preview_enabled` / `office_preview_enabled` / `svg_preview_enabled` — whether previews of that kind may be shown at all, without changing the lists of files it covers.
 - `text_preview_full_mode` — `true` adds scrolling, selection, and copy.
 - `text_font_scale` — percentage from 1 to 1000; default is `125`. Archive listings follow it too.
 - `extensions` / `names` — text-preview gates. Extensions are written without dots; names match extensionless files.

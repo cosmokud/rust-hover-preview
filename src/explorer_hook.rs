@@ -8,6 +8,7 @@ use crate::preview_window::{
     cursor_preview_hover, hide_preview, kill_stray_video_process, preview_pointer_hold,
     preview_screen_rect, show_preview, show_preview_keyboard, PreviewCursorHover,
 };
+use crate::svg_preview;
 use crate::text_formats::matches_text_lists;
 use crate::video_formats::{is_video_file, matches_video_list};
 use crate::wheel_input;
@@ -684,7 +685,19 @@ fn is_media_file(path: &Path) -> bool {
         return PreviewType::Text.enabled_in(&config);
     }
 
-    matches_image_list(path, &config.image_extensions) && PreviewType::Images.enabled_in(&config)
+    if !matches_image_list(path, &config.image_extensions) {
+        return false;
+    }
+
+    // A document is its own kind even though its name is an entry of the image list:
+    // what draws one is not a decoder, and the switch for it is not the switch for
+    // pictures. Asked here the way the renderer asks it — the list first, then the
+    // document — so the two cannot disagree about which gate a file is under.
+    if svg_preview::is_svg_file(path) {
+        return PreviewType::Svg.enabled_in(&config);
+    }
+
+    PreviewType::Images.enabled_in(&config)
 }
 
 /// Whether a preview is placed clear of the name of the file it is about, as the

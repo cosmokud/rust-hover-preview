@@ -475,6 +475,11 @@ pub enum PreviewType {
     Pdf,
     Archives,
     Office,
+    /// SVG documents, which are their own kind despite being entries of the image
+    /// list: what draws one is the SVG reader rather than a decoder, and what plays
+    /// one that moves is a browser, so a user who wants neither has a switch for them
+    /// that is not the switch for pictures.
+    Svg,
 }
 
 impl PreviewType {
@@ -495,6 +500,7 @@ impl PreviewType {
             Self::Pdf => config.pdf_preview_enabled,
             Self::Archives => config.archive_preview_enabled,
             Self::Office => config.office_preview_enabled,
+            Self::Svg => config.svg_preview_enabled,
         }
     }
 
@@ -507,6 +513,7 @@ impl PreviewType {
             Self::Pdf => config.pdf_preview_enabled = enabled,
             Self::Archives => config.archive_preview_enabled = enabled,
             Self::Office => config.office_preview_enabled = enabled,
+            Self::Svg => config.svg_preview_enabled = enabled,
         }
     }
 }
@@ -620,6 +627,9 @@ pub struct AppConfig {
     pub archive_preview_enabled: bool,
     /// Whether Office documents are previewed at all, ahead of the extension list.
     pub office_preview_enabled: bool,
+    /// Whether SVG documents are previewed at all, ahead of the image list their
+    /// names are entries of.
+    pub svg_preview_enabled: bool,
     /// Memory the rendered pages may hold, in megabytes, between hovers. A page is
     /// still rendered at `0` — a document has no other source for its preview — it
     /// is simply not kept once the hover it was rendered for is over.
@@ -695,6 +705,7 @@ impl Default for AppConfig {
             pdf_preview_enabled: true,
             archive_preview_enabled: true,
             office_preview_enabled: true,
+            svg_preview_enabled: true,
             office_cache_mb: DEFAULT_OFFICE_CACHE_MB,
             office_engine_idle: EngineIdle::Seconds(DEFAULT_OFFICE_ENGINE_IDLE_SECS),
             webview_idle: EngineIdle::Seconds(DEFAULT_WEBVIEW_IDLE_SECS),
@@ -1004,6 +1015,11 @@ impl AppConfig {
             );
             ini.set(
                 CONFIG_SECTION,
+                "svg_preview_enabled",
+                Some(self.svg_preview_enabled.to_string()),
+            );
+            ini.set(
+                CONFIG_SECTION,
                 "office_cache_mb",
                 Some(sanitize_office_cache_mb(self.office_cache_mb).to_string()),
             );
@@ -1200,6 +1216,9 @@ impl AppConfig {
         }
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "office_preview_enabled") {
             self.office_preview_enabled = value;
+        }
+        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "svg_preview_enabled") {
+            self.svg_preview_enabled = value;
         }
         if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "office_cache_mb") {
             if let Ok(value) = u32::try_from(value) {
