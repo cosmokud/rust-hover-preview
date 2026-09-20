@@ -11,7 +11,8 @@ A Windows 11 tray app inspired by QTTabBar that shows instant File Explorer prev
 ## Features
 
 - Mouse-hover and keyboard-navigation previews in Explorer
-- Images, including animated GIF, APNG, and WebP, and SVG drawn at the size it is shown
+- Images, including animated GIF, APNG, and WebP
+- SVG vectors drawn at the size they are shown, animated or still
 - Videos through FFmpeg
 - PDF first pages via the built-in Windows PDF engine
 - Text and code with syntax highlighting, rendered Markdown, and bundled/custom themes
@@ -28,9 +29,11 @@ You can add or remove formats in config.ini. Unsupported formats will not show a
 
 ### Images
 
-`jpg`, `jpeg`, `png`, `apng`, `gif`, `bmp`, `ico`, `tiff`, `webp`, `tga`, `hdr`, `exr`, `qoi`, `svg`, `svgz`, and more. Animated GIF, APNG, and WebP files play; animation is detected from file content.
+`jpg`, `jpeg`, `png`, `apng`, `gif`, `bmp`, `ico`, `tiff`, `webp`, `tga`, `hdr`, `exr`, `qoi`, and more. Animated GIF, APNG, and WebP files play; animation is detected from file content.
 
-An SVG is drawn at the size the preview is shown at rather than decoded and scaled, so it stays sharp when enlarged. A document is sized by the screen rather than by its own pixels — a vector is drawn at any size it is asked for, so the display's room is free quality: `50%` (the default) is half the screen, `Fit to Screen` is all of it, and `Placement → SVG Scaling` or `svg_scale` picks between them. A document that moves is played in full — SMIL (`<animate>`, `<animateTransform>`, `<set>`) and CSS `@keyframes` alike — by the WebView2 runtime Windows 11 includes; on a machine without it, this app plays what it can itself. Scripts are never run and nothing a document links to is fetched from anywhere.
+### Vectors
+
+`svg`, `svgz` — drawn at the size they are shown rather than decoded and scaled, so they stay sharp when enlarged, and animated documents play too. In `config.ini` they are entries of the image list, but their switch under **Preview Types** (`svg_preview_enabled`) is their own.
 
 ### Videos (FFmpeg required)
 
@@ -108,37 +111,40 @@ ffprobe -version
 
 ## System Tray Menu
 
-- **Enable Preview** — turn previews on or off
-- **Preview Types** — Images, Videos, Text, PDF, Archives, Office: switch a kind of preview off without touching its file list
-- **Confirm File Type** — validate file content against extension
-- **Trigger Key (Alt)** — hold to disable or enable previews; a check inside switches the key off entirely
+- **Enable Preview** — turn previews on or off.
+- **Preview Types** — Images, Videos, Text, PDF, Archives, Office, SVG: gate a kind without touching its file list.
+- **Confirm File Type** — validate file content against the extension.
+- **Trigger Key (Alt)** — the key is named in the item itself.
+  - **Enable Trigger Key** — whether the key is watched at all.
+  - **Hold to Disable Preview** / **Hold to Enable Preview** — what holding it does.
 - **Text Preview**
-  - **Full Mode** — adds scrolling, selection, and copy; off by default
-  - **Theme** — Atom One Light, One Dark Pro, or custom `.tmTheme`
-  - **Font Size** — 400% at the top down to 70% at the bottom
-  - **Markdown** — Rendered or Source
+  - **Full Mode** — adds scrolling, selection, and copy; off by default.
+  - **Theme** — Atom One Light, One Dark Pro, or any `.tmTheme` in the theme folder.
+  - **Font Size** — 400% at the top down to 70% at the bottom.
+  - **Markdown** — Rendered or Source.
 - **Timing**
-  - **Delay** — Instant, Fast, Medium, Relaxed, Slow
-  - **Rehover Delay** — delay before the same file can preview again
+  - **Delay** — Instant, Fast, Medium, Relaxed, Slow: 0 ms to 1000 ms.
+  - **Rehover Delay** — the same steps, before the same file can preview again.
 - **Placement**
-  - **Position** — Follow Cursor or Best Position, and whether to keep previews off the hovered item's name
-  - **Scaling** — Fit to Screen or 25%–400%
-  - **SVG Scaling** — how much of the screen an SVG is drawn over: Fit to Screen, or 75%, 50% (default), 25%, 10% of it
+  - **Position** — Follow Cursor or Best Position, plus **Avoid Filename**, which keeps a preview off the hovered name.
+  - **Scaling** — Fit to Screen or 25%–400%.
+  - **SVG Scaling** — Fit to Screen, or 75%, 50% (default), 25%, 10% of the display.
 - **Background**
-  - **Image Background** — Transparent, Black, White, or Checkerboard
-  - **SVG Background** — Transparent, Black, White, or Checkerboard
-- **Volume** — Max, High, Medium, Low, Very Low, Mute
-- **Performance** — what the app costs to stay fast
-  - **Keep Office Engine** — how long a family's Office app is kept warm after its last page: `Indefinitely`, `1 hour`, `30 minutes`, `10 minutes` (default), `5 minutes`, `1 minute`, `0 seconds`
-  - **Cache** — memory kept between hovers, largest first, each cache's own default marked:
-    - **Image** — decoded image frames
-    - **Text** — frames text previews were painted as
-    - **PDF** — pages PDF previews were drawn as
-    - **Office** — pages Office rendered
-  - **Decode Budget** — the most one hover may decode or read for, from `16 GB` down to `512 MB`, `1 GB` (default): a file past it gets no preview rather than the app asking for memory it may not get
-- **Run at Startup** — add or remove the Windows startup entry
-- **Config.ini** — open the configuration file; the item is named for the running version
-- **Exit** — close the app
+  - **Image Background** — Transparent, Black, White, or Checkerboard.
+  - **SVG Background** — the same backdrops for documents.
+- **Volume** — Max, High, Medium, Low, Very Low, Mute: 100% down to 0%.
+- **Performance** — what the app costs to stay fast.
+  - **Keep Office Engine** — how long a family's Office app is kept warm: Indefinitely, 1 hour, 30 minutes, 10 minutes (default), 5 minutes, 1 minute, 0 seconds.
+  - **Keep Animated SVG Engine** — how long the browser that plays an animated document is kept warm; greyed out where WebView2 is missing.
+  - **Cache** — memory held between hovers, 2 GB down to 0 MB, each cache's own default marked:
+    - **Image** — decoded image frames.
+    - **Text** — frames text previews were painted as.
+    - **PDF** — pages PDF previews were drawn as.
+    - **Office** — pages Office rendered.
+  - **Decode Budget** — 16 GB down to 512 MB, 1 GB (default): a file past it gets no preview.
+- **Run at Startup** — add or remove the Windows startup entry.
+- **Config.ini** — open the configuration file; the item is named for the running version.
+- **Exit** — close the app.
 
 ## Configuration
 
@@ -207,28 +213,28 @@ extensions=doc,docm,docx,dot,dotm,dotx,pot,potm,potx,pps,ppsm,ppsx,ppt,pptm,pptx
 
 Key settings:
 
-- `theme` — `light` (default), `dark`, or a custom theme as `custom:<name>`.
+- `theme` — `light` (default), `dark`, or `custom:<name>`.
 - `markdown_mode` — `rendered` or `source`.
-- `image_preview_enabled` / `video_preview_enabled` / `text_preview_enabled` / `pdf_preview_enabled` / `archive_preview_enabled` / `office_preview_enabled` / `svg_preview_enabled` — whether previews of that kind may be shown at all, without changing the lists of files it covers.
+- `image_preview_enabled` / `video_preview_enabled` / `text_preview_enabled` / `pdf_preview_enabled` / `archive_preview_enabled` / `office_preview_enabled` / `svg_preview_enabled` — whether previews of that kind may be shown at all; the lists of files it covers stay as they are.
 - `text_preview_full_mode` — `true` adds scrolling, selection, and copy.
-- `text_font_scale` — percentage from 1 to 1000; default is `125`. Archive listings follow it too.
-- `extensions` / `names` — text-preview gates. Extensions are written without dots; names match extensionless files.
+- `text_font_scale` — a percentage from 1 to 1000, default `125`; archive listings follow it too.
+- `extensions` / `names` — the text-preview gates: extensions are written without dots, and a name matches an extensionless file.
 - `image_extensions` — the image-preview gate, under `[image]`, written without dots.
 - `video_extensions` — the video-preview gate, under `[video]`, written without dots.
-- `archive_extensions` — the archive-preview gate, under `[archive]`. Entries are written without dots, and an entry with a dot in it (`tar.gz`) is matched against the end of the file name.
-- `image_cache_mb` — how much memory decoded image frames may be kept in, in megabytes, so hovering back over a folder does not decode the same pictures again; default is `32` — a hit skips a full-resolution decode — and the value is capped at `2048`. `0` holds nothing.
-- `office_cache_mb` — the same for the pages Office rendered, capped at `2048`; default is `64`, because producing a page costs an Office start and an export, so what has been drawn is worth keeping. `0` holds nothing, but a page is still rendered for the hover that asks for it: this size is only how much is kept between hovers.
-- `pdf_cache_mb` — the same for the pages PDF previews were rendered as, capped at `2048`; default is `32`. A page is stored as the pixels it was drawn as, so the size is per file _and_ per preview size: the same PDF hovered at fit-to-screen and at `25%` is held as two pages.
-- `text_cache_mb` — the same for the frames text previews were painted as, capped at `2048`; default is `0`, since the text behind a frame is already cached as text and only the layout and the painting are what a hit saves. A frame is stored as the pixels it was painted into, so the size is per file, per box and per scroll position; a frame a selection is painted into is never held.
-- `decode_budget_gb` — the most memory one hover may decode or read for, in gigabytes: a picture's decode, an SVG's bytes (and what a `.svgz` inflates to), an animation's frames, the page Office exported, a theme file. Default is `1`, smallest `0.25`, largest `64`. It is a ceiling on the file rather than on what is kept, and a file past it shows no preview instead of the app asking for memory the allocator may refuse — which is why there is no value that means "no limit".
-- `office_engine_idle` — how long the Office engine a family started is kept after that family's last page: a number of seconds, or `indefinitely` for one kept for as long as the app runs. Default is `600` (ten minutes). A kept engine is an Office application already started and otherwise doing nothing, so what it costs is the memory it holds and a process in the list — the document is closed after every render, and the automation settings a render needs are put back the moment it is over. `0` lets the engine go as soon as it has drawn a page, so every document pays its own Office start.
+- `archive_extensions` — the archive-preview gate, under `[archive]`, written without dots; an entry with a dot in it (`tar.gz`) is matched against the end of the file name.
+- `image_cache_mb` — the memory decoded image frames are kept in: default `32`, at most `2048`; a hit skips a full-resolution decode, and `0` holds nothing.
+- `office_cache_mb` — the same for the pages Office rendered: default `64`, at most `2048`; a page costs an Office start and an export, so keeping one is worth it. `0` holds nothing between hovers, but a page is still rendered for the hover that asks for it.
+- `pdf_cache_mb` — the same for the pages PDF previews were rendered as: default `32`, at most `2048`; a page is kept as the pixels it was drawn as, so the same file at two preview sizes is held as two pages.
+- `text_cache_mb` — the same for the frames text previews were painted as: default `0`, at most `2048`; the text itself is already cached, and a frame is per file, per box and per scroll position — never one a selection was painted into.
+- `decode_budget_gb` — the most memory one hover may decode or read for (a picture, an SVG and what `.svgz` inflates to, an animation's frames, the page Office exported, a theme file): default `1`, smallest `0.25`, largest `64`. It caps the file rather than what is kept, and a file past it shows no preview instead of the app asking for memory the allocator may refuse — which is why no value means "no limit".
+- `office_engine_idle` — how long a family's Office engine is kept after that family's last page: seconds, or `indefinitely` for one kept as long as the app runs; default `600`. `0` lets it go as soon as it has drawn a page, so every document pays its own Office start.
 - `office_extensions` — the Office-preview gate, under `[office]`, written without dots.
-- A list whose key is deleted — the `extensions=` line, or its whole section — comes back with the built-in entries, and the file is written out again with them. An `extensions=` line left empty is a list you emptied, and stays empty.
-- `trigger_key` / `trigger_key_mode` / `trigger_key_enabled` — key (`alt`, `ctrl`, `shift`, `win`), mode (`disable` or `enable`), and whether the key is watched at all; `true` by default.
+- A deleted `extensions=` line — or its whole section — comes back with the built-in entries; an `extensions=` line left empty stays empty.
+- `trigger_key` / `trigger_key_mode` / `trigger_key_enabled` — the key (`alt`, `ctrl`, `shift`, `win`), what it does (`disable` or `enable`), and whether it is watched at all; `true` by default.
 - `follow_cursor` — `true` for Follow Cursor, `false` for Best Position.
-- `avoid_filename` — `true` (the default) keeps a preview off the name of the file it is about, moving it — and, where the display leaves no room beside the name, resizing it — so the item under the pointer or the keyboard stays readable while its preview is up. Applies to both positions.
+- `avoid_filename` — `true` (the default) keeps a preview off the name of the file it is about, moving it, and resizing it where there is no room beside the name, so the hovered item stays readable; applies to both positions.
 - `preview_scale` — percentage or `fit`.
-- `svg_scale` — how large an SVG is drawn: a share of the screen, as a percentage or `fit`. A vector is drawn at any size it is asked for, so the display's room is free quality there and the setting is read against that room rather than against the size the document asks for: `50` (the default) is half the screen, `fit` is all of it, and a value at or above `100` is read as `fit`. Both readers follow it — the still frame this app draws, and the engine that plays an animated document.
+- `svg_scale` — how much of the screen an SVG is drawn over: a percentage or `fit`, read against the screen rather than the size the document asks for, so `50` (the default) is half of it, `fit` all of it, and `100` or more read as `fit`. Both readers follow it — the still frame this app draws and the engine that plays an animated document.
 
 ## Build from Source
 
