@@ -10,6 +10,10 @@
 
 - The tray's `Placement` gains an `Avoid` submenu between `Position` and `Scaling` — `Don't Avoid`, `Avoid Filename` (the default), `Avoid Filename Column` and `Avoid Details` — and `avoid_filename` in `config.ini` becomes `avoid_mode`: `filename`, `filename_column`, `details` (what the old checkmark asked for: a preview kept off the name and every column a row draws beside it), or `off`. A file written with `avoid_filename` is read as `details` for `true` and `off` for `false`. A keyboard preview follows the setting the same way a hovered one does: a row's placement is measured from the edge of the region kept off, so `Avoid Filename` leaves the columns after the name to be covered, and `Don't Avoid` places a keyboard preview by the position mode alone.
 
+### Fixed
+
+- A page the Windows PDF engine draws — a PDF's first page, and the page Word and Excel export — is drawn into the box the layout planned for it rather than at the size the engine hands back, so a document preview no longer runs off the display it was fitted into. The destination a page is rendered to is in device-independent pixels, so the engine converts it with the display's own scale: on a display that is the one the system is scaled by — a 4K monitor at 150% or 200% with no other attached, where with a second display the system's scale is that one's and the page came back at the size it was asked for — the page is half again as large as the box it was given, or twice it. The preview window is sized to the frame it is given, and the frame is what the page is drawn from, so that page was shown at the engine's size instead of the fitted one and hung past the screen's edge. A page the engine drew at the size it was asked for — every render on a display at 100% — is handed on untouched rather than resampled.
+
 ## [0.2.7]
 
 ### Added

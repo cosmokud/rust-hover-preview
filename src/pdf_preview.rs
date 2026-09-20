@@ -320,7 +320,8 @@ fn render_opened_first_page(
         .with_guessed_format()
         .ok()?;
     reader.limits(image_decode_limits());
-    let image = reader.decode().ok()?.to_rgba8();
+
+    let image = fit_drawn_page(reader.decode().ok()?, render_width, render_height).to_rgba8();
     let (width, height) = (image.width(), image.height());
     if width == 0 || height == 0 {
         return None;
@@ -382,6 +383,36 @@ fn fit_page(width: f32, height: f32, max_width: u32, max_height: u32) -> Option<
         .clamp(1.0, max_height as f32) as u32;
 
     Some((target_width, target_height))
+}
+
+/// A page the engine drew, drawn into the box it was asked for.
+///
+/// The destination a page is rendered to is in device-independent pixels, so the
+/// engine converts it with the display's own scale instead of taking it as pixels:
+/// where the display a hover is on is the one the system is scaled by — a 4K monitor
+/// at 150% with no other attached, say — the page comes back half again as large as
+/// the box it was given, and twice it at 200%. What comes back is the frame this
+/// module hands on, and the preview window is sized to the frame it is given (see
+/// `render_layered_preview_at`), so a page left at that size is drawn past the edge of
+/// the display the layout fitted it into.
+///
+/// Fitting it into the box it was asked for is a no-op where the two sizes are already
+/// the same thing — a display at 100%, and a page the engine drew at the size it was
+/// given — and it keeps the page inside the display at every scale. The page's own
+/// shape is kept rather than being stretched into the box, and a page that is already
+/// inside it is handed on untouched rather than resampled.
+fn fit_drawn_page(
+    image: image::DynamicImage,
+    max_width: u32,
+    max_height: u32,
+) -> image::DynamicImage {
+    let (max_width, max_height) = (max_width.max(1), max_height.max(1));
+
+    if image.width() <= max_width && image.height() <= max_height {
+        return image;
+    }
+
+    image.thumbnail(max_width, max_height)
 }
 
 /// Open the document from a stream over the file itself.
@@ -609,5 +640,119 @@ mod tests {
         );
 
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// A page that came back from the engine larger than it was asked for — which is
+    /// what a display that is the one the system is scaled by produces, the destination
+    /// being in DIPs — is drawn into the box it was asked for. The window is sized to
+    /// the page, so a page left at the size the engine drew it at is drawn past the edge
+    /// of the display it was fitted into.
+    #[test]
+    fn draws_a_page_the_engine_overscaled_into_the_box_it_was_given() {
+        // A page fitted into a box of 1000 by 1400, drawn by an engine that took the
+        // destination as DIPs at 150% of it, and at 200%.
+        for (drawn_at, given) in [((1500, 2100), (1000, 1400)), ((2000, 2800), (1000, 1400))] {
+            let page = image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
+                drawn_at.0,
+                drawn_at.1,
+                image::Rgba([10, 20, 30, 255]),
+            ));
+
+            let drawn = fit_drawn_page(page, given.0, given.1);
+            let (width, height) = (drawn.width(), drawn.height());
+
+            assert!(
+                width <= given.0 && height <= given.1,
+                "a page drawn at {drawn_at:?} is drawn inside the box it was given, not {width} by {height}"
+            );
+            assert!(
+                width.abs_diff(given.0) <= 1 && height.abs_diff(given.1) <= 1,
+                "and it takes the size of that box rather than less of it: {width} by {height} for {given:?}"
+            );
+        }
+    }
+
+    /// The page's own shape is what survives the fit: a page that is over on one axis
+    /// is drawn down by that axis rather than stretched into the box's shape.
+    #[test]
+    fn keeps_the_pages_own_shape_when_fitting_it_into_the_box() {
+        let page = image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
+            2000,
+            500,
+            image::Rgba([10, 20, 30, 255]),
+        ));
+
+        let drawn = fit_drawn_page(page, 1000, 1000);
+
+        assert_eq!((drawn.width(), drawn.height()), (1000, 250));
+    }
+
+    /// A page the engine drew at the size it was asked for — every render on a display
+    /// at 100% — is handed on untouched: what a page costs is the pixels the engine
+    /// drew, and nothing is resampled that does not have to be.
+    #[test]
+    fn hands_a_page_that_is_already_inside_the_box_on_untouched() {
+        let page = image::RgbaImage::from_fn(4, 3, |x, y| image::Rgba([x as u8, y as u8, 0, 255]));
+
+        let drawn = fit_drawn_page(image::DynamicImage::ImageRgba8(page.clone()), 800, 600);
+
+        assert_eq!((drawn.width(), drawn.height()), (4, 3));
+        assert_eq!(
+            drawn.to_rgba8().as_raw(),
+            page.as_raw(),
+            "the pixels the engine drew are the pixels that are shown"
+        );
+    }
+
+    /// Page 1 of the PDFs named in `RHP_PDF_PROBE` (separated by `;`), drawn into a 1000
+    /// by 1400 box through the real engine, reporting both sizes.
+    ///
+    /// Ignored because it needs files, and because the size the engine draws a page at
+    /// is the one thing about it that depends on the display the machine is on: a display
+    /// that is the one the system is scaled by is handed a page larger than the box it
+    /// was given, which the fit above is what answers. This is the way to ask a machine
+    /// that shows a document too large what its pages really come back at:
+    /// `$env:RHP_PDF_PROBE = "C:\docs\report.pdf"`
+    /// `cargo test -- --ignored --nocapture pdf_engine_probe`
+    #[test]
+    #[ignore = "reads the files named in RHP_PDF_PROBE"]
+    fn pdf_engine_probe() {
+        let Ok(list) = std::env::var("RHP_PDF_PROBE") else {
+            println!("set RHP_PDF_PROBE to one or more paths, separated by ';'");
+            return;
+        };
+
+        initialize_apartment();
+
+        let (max_width, max_height) = (1000, 1400);
+        for path in list
+            .split(';')
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+            .map(PathBuf::from)
+        {
+            println!(
+                "\n--- {} ---\npage: {:?} dips\ndrawn into: {max_width} by {max_height}",
+                path.display(),
+                page_dimensions(&path)
+            );
+
+            let drawn = render_first_page(&path, max_width, max_height);
+            let Some((pixels, width, height)) = drawn else {
+                println!("nothing was drawn");
+                continue;
+            };
+
+            println!("drawn: {width} by {height}");
+            assert_eq!(
+                pixels.len(),
+                width as usize * height as usize * 4,
+                "the pixels are the size the page reports"
+            );
+            assert!(
+                width <= max_width && height <= max_height,
+                "the page is drawn inside the box it was given, not {width} by {height}"
+            );
+        }
     }
 }
