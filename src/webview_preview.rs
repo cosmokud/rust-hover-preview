@@ -17,10 +17,14 @@
 //! One engine is kept warm between documents and let go after `webview_idle`, ten
 //! minutes by default: beginning one costs a browser start, and pointing a warm one at
 //! another file costs a few milliseconds, so what a hover pays for a second animated
-//! document is nothing worth measuring. The thread that holds it ends with it, so an
-//! app left alone has neither a browser process nor a polling thread — and the settings
-//! it is given are the app's own rules rather than a browser's: a document is drawn and
-//! not run, and nothing about it is a way out of the preview.
+//! document is nothing worth measuring. What is let go of is the engine and not the
+//! thread that holds it, which stays parked on its channel for the run and begins a new
+//! engine for the next document: a thread that ended with its browser would leave every
+//! document after the first idle timeout with nobody to play it, which is a still frame
+//! for the rest of the run. An app left alone has no browser process and one thread
+//! asleep — and the settings it is given are the app's own rules rather than a
+//! browser's: a document is drawn and not run, and nothing about it is a way out of the
+//! preview.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -367,11 +371,15 @@ fn engine_thread(commands: Receiver<Command>) {
     loop {
         // While there is nothing on screen the wait is a poll of the idle clock; while
         // a document is up it is a poll of the message queue, because a browser needs
-        // the thread that made it to keep retrieving messages.
+        // the thread that made it to keep retrieving messages. With no engine at all
+        // there is nothing to watch for, so the wait is long enough that only a document
+        // wakes the thread, and an app left alone is one thread asleep on a channel.
         let wait = if SHOWING.load(Ordering::Acquire) {
             Duration::from_millis(5)
-        } else {
+        } else if host.is_some() {
             Duration::from_millis(250)
+        } else {
+            Duration::from_secs(60 * 60)
         };
 
         match commands.recv_timeout(wait) {
@@ -416,8 +424,13 @@ fn engine_thread(commands: Receiver<Command>) {
         pump_messages();
 
         // A document that has been off screen for longer than the setting asks for is
-        // one the engine is let go of, browser process and all. The thread ends with
-        // the last engine, so an app left alone has nothing of this running.
+        // one the engine is let go of, browser process and all.
+        //
+        // The thread is not let go of with it, and that is the whole of it: the channel
+        // it holds is the one a hover sends into, and a thread that ended here would
+        // leave every document after the first idle timeout with a message nobody reads.
+        // What the app would show is the still frame — the engine's window is what the
+        // animation was — for the rest of the run.
         let expired = match (host.as_ref(), idle_timeout()) {
             (Some(_), Some(limit)) => {
                 !SHOWING.load(Ordering::Acquire) && idle_since.elapsed() >= limit
@@ -426,10 +439,11 @@ fn engine_thread(commands: Receiver<Command>) {
         };
 
         if expired {
+            trace("engine: let go after idle");
+
             if let Some(mut host) = host.take() {
                 host.close();
             }
-            break;
         }
     }
 
