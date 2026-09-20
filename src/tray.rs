@@ -891,7 +891,7 @@ unsafe fn show_context_menu(hwnd: HWND) {
     let avoid_mode = CONFIG
         .lock()
         .map(|c| c.avoid_mode)
-        .unwrap_or(AvoidMode::Details);
+        .unwrap_or(AvoidMode::Filename);
 
     append_avoid_menu(placement_menu, w!("Avoid"), ID_TRAY_AVOID_BASE, avoid_mode);
 
