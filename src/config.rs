@@ -36,6 +36,12 @@ pub const MAX_WEBP_PLAYBACK_FPS: u32 = 90;
 pub const DEFAULT_PREVIEW_SCALE_PERCENT: u32 = 100;
 pub const MIN_PREVIEW_SCALE_PERCENT: u32 = 1;
 pub const MAX_PREVIEW_SCALE_PERCENT: u32 = 1000;
+/// The share of the display an SVG document is drawn at unless asked otherwise.
+///
+/// A document is drawn at whatever size it is asked for, so what it is asked for is
+/// a share of the room the display has rather than a share of the size the file asks
+/// for: half of the room is where a document starts.
+pub const DEFAULT_SVG_SCALE_PERCENT: u32 = 50;
 pub const DEFAULT_TEXT_FONT_SCALE_PERCENT: u32 = 125;
 pub const MIN_TEXT_FONT_SCALE_PERCENT: u32 = 1;
 pub const MAX_TEXT_FONT_SCALE_PERCENT: u32 = 1000;
@@ -224,7 +230,9 @@ impl PreviewScale {
         }
     }
 
-    fn from_str(value: &str) -> Option<Self> {
+    /// The scale a `config.ini` value names, or `None` for one that is neither a
+    /// percentage nor a word for the fit.
+    pub(crate) fn from_str(value: &str) -> Option<Self> {
         let normalized = value.trim().to_ascii_lowercase();
         let normalized = normalized.trim_end_matches('%').trim();
 
@@ -584,6 +592,20 @@ pub struct AppConfig {
     pub svg_background: TransparentBackground,
     pub video_volume: u32,
     pub preview_scale: PreviewScale,
+    /// How large an SVG document is drawn, as a share of the room the display has
+    /// for it.
+    ///
+    /// A document is drawn at whatever size it is asked for, so its scale means
+    /// something else than a picture's does: a picture at `50%` is half of its own
+    /// size, while a document at `50%` is half of the display. `Fit to Screen` is the
+    /// whole of that room, and the setting is written the same way as the picture
+    /// scale because it is the same kind of value — a fit, or a percentage — read
+    /// against a different whole.
+    ///
+    /// It is a setting of its own because the two answer different questions: a
+    /// picture's scale is how much of its own detail to show, while a document's is
+    /// how much of the screen to cover.
+    pub svg_scale: PreviewScale,
     pub theme: TextTheme,
     pub markdown_mode: MarkdownMode,
     /// Whether image previews may be shown at all.
@@ -664,6 +686,7 @@ impl Default for AppConfig {
             svg_background: TransparentBackground::Black,
             video_volume: 0, // Mute by default
             preview_scale: PreviewScale::Percent(DEFAULT_PREVIEW_SCALE_PERCENT),
+            svg_scale: PreviewScale::Percent(DEFAULT_SVG_SCALE_PERCENT),
             theme: TextTheme::Light,
             markdown_mode: MarkdownMode::Rendered,
             image_preview_enabled: true,
@@ -942,6 +965,7 @@ impl AppConfig {
                 "preview_scale",
                 Some(self.preview_scale.as_str()),
             );
+            ini.set(CONFIG_SECTION, "svg_scale", Some(self.svg_scale.as_str()));
             ini.set(CONFIG_SECTION, "theme", Some(self.theme.as_str()));
             ini.set(
                 CONFIG_SECTION,
@@ -1139,6 +1163,14 @@ impl AppConfig {
         if let Some(value) = ini.get(CONFIG_SECTION, "preview_scale") {
             if let Some(scale) = PreviewScale::from_str(&value) {
                 self.preview_scale = scale;
+            }
+        }
+        // A document's scale is written the way a picture's is, but it is read apart
+        // from it: what the number is a percentage of is the room the display has
+        // rather than the size the file asks for.
+        if let Some(value) = ini.get(CONFIG_SECTION, "svg_scale") {
+            if let Some(scale) = PreviewScale::from_str(&value) {
+                self.svg_scale = scale;
             }
         }
         if let Some(value) = ini.get(CONFIG_SECTION, "theme") {
@@ -1381,6 +1413,55 @@ mod tests {
 
         assert_eq!(config.image_background, TransparentBackground::Black);
         assert_eq!(config.svg_background, TransparentBackground::White);
+    }
+
+    /// A document's scale is a setting of its own, read from its own key: what it is
+    /// a percentage of is the room the display has, so reading it as the picture scale
+    /// would make a hover's size depend on a setting about another kind of preview.
+    #[test]
+    fn a_documents_scale_is_read_from_its_own_key() {
+        let mut ini = Ini::new();
+        ini.set(CONFIG_SECTION, "preview_scale", Some("400".to_string()));
+        ini.set(CONFIG_SECTION, "svg_scale", Some("75".to_string()));
+
+        let mut config = AppConfig::default();
+        config.apply_ini(&ini);
+
+        assert_eq!(config.svg_scale, PreviewScale::Percent(75));
+        assert_eq!(config.preview_scale, PreviewScale::Percent(400));
+    }
+
+    /// A document is drawn at half the room the display has unless the file says
+    /// otherwise — which is what the setting starts at, and what a fresh install
+    /// writes.
+    #[test]
+    fn a_documents_scale_starts_at_half_the_room() {
+        let config = AppConfig::default();
+
+        assert_eq!(config.svg_scale, PreviewScale::Percent(50));
+        assert_eq!(config.svg_scale.as_str(), "50");
+    }
+
+    /// The scale is written the way the picture scale is, so the words a person
+    /// would write by hand are the words it reads: `fit`, a number, either with a
+    /// percent sign or without.
+    #[test]
+    fn a_document_scale_takes_the_words_a_person_would_write() {
+        for (written, expected) in [
+            ("fit", PreviewScale::FitToScreen),
+            ("Fit to Screen", PreviewScale::FitToScreen),
+            (" 75 ", PreviewScale::Percent(75)),
+            ("25%", PreviewScale::Percent(25)),
+            ("10", PreviewScale::Percent(10)),
+        ] {
+            let mut ini = Ini::new();
+            ini.set(CONFIG_SECTION, "svg_scale", Some(written.to_string()));
+
+            let mut config = AppConfig::default();
+            config.apply_ini(&ini);
+
+            assert_eq!(config.svg_scale, expected, "`{written}` read back");
+        }
     }
 
     /// A file holding the built-in list of an earlier version has never been edited,

@@ -30,7 +30,7 @@ You can add or remove formats in config.ini. Unsupported formats will not show a
 
 `jpg`, `jpeg`, `png`, `apng`, `gif`, `bmp`, `ico`, `tiff`, `webp`, `tga`, `hdr`, `exr`, `qoi`, `svg`, `svgz`, and more. Animated GIF, APNG, and WebP files play; animation is detected from file content.
 
-An SVG is drawn at the size the preview is shown at rather than decoded and scaled, so it stays sharp when enlarged. It is also sized like a picture rather than like a page: `100%` is the size the document asks for, `50%` is that at half, and the preview box around it is exactly that size. A document that moves is played in full — SMIL (`<animate>`, `<animateTransform>`, `<set>`) and CSS `@keyframes` alike — by the WebView2 runtime Windows 11 includes; on a machine without it, this app plays what it can itself. Scripts are never run and nothing a document links to is fetched from anywhere.
+An SVG is drawn at the size the preview is shown at rather than decoded and scaled, so it stays sharp when enlarged. A document is sized by the screen rather than by its own pixels — a vector is drawn at any size it is asked for, so the display's room is free quality: `50%` (the default) is half the screen, `Fit to Screen` is all of it, and `Placement → SVG Scaling` or `svg_scale` picks between them. A document that moves is played in full — SMIL (`<animate>`, `<animateTransform>`, `<set>`) and CSS `@keyframes` alike — by the WebView2 runtime Windows 11 includes; on a machine without it, this app plays what it can itself. Scripts are never run and nothing a document links to is fetched from anywhere.
 
 ### Videos (FFmpeg required)
 
@@ -123,6 +123,7 @@ ffprobe -version
 - **Placement**
   - **Position** — Follow Cursor or Best Position, and whether to keep previews off the hovered item's name
   - **Scaling** — Fit to Screen or 25%–400%
+  - **SVG Scaling** — how much of the screen an SVG is drawn over: Fit to Screen, or 75%, 50% (default), 25%, 10% of it
 - **Background**
   - **Image Background** — Transparent, Black, White, or Checkerboard
   - **SVG Background** — Transparent, Black, White, or Checkerboard
@@ -177,6 +178,7 @@ image_background=black
 svg_background=black
 video_volume=0
 preview_scale=100
+svg_scale=50
 theme=light
 markdown_mode=rendered
 text_preview_enabled=true
@@ -222,6 +224,7 @@ Key settings:
 - `follow_cursor` — `true` for Follow Cursor, `false` for Best Position.
 - `avoid_filename` — `true` (the default) keeps a preview off the name of the file it is about, moving it — and, where the display leaves no room beside the name, resizing it — so the item under the pointer or the keyboard stays readable while its preview is up. Applies to both positions.
 - `preview_scale` — percentage or `fit`.
+- `svg_scale` — how large an SVG is drawn: a share of the screen, as a percentage or `fit`. A vector is drawn at any size it is asked for, so the display's room is free quality there and the setting is read against that room rather than against the size the document asks for: `50` (the default) is half the screen, `fit` is all of it, and a value at or above `100` is read as `fit`. Both readers follow it — the still frame this app draws, and the engine that plays an animated document.
 
 ## Build from Source
 
