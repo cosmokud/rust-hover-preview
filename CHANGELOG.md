@@ -8,7 +8,7 @@
 
 ### Changed
 
-- The tray's `Placement` gains an `Avoid` submenu between `Position` and `Scaling` — `Don't Avoid`, `Avoid Filename` (the default), `Avoid Filename Column` and `Avoid Details` — and `avoid_filename` in `config.ini` becomes `avoid_mode`: `filename`, `filename_column`, `details` (what the old checkmark asked for: a preview kept off the name and every column a row draws beside it), or `off`. A file written with `avoid_filename` is read as `details` for `true` and `off` for `false`.
+- The tray's `Placement` gains an `Avoid` submenu between `Position` and `Scaling` — `Don't Avoid`, `Avoid Filename` (the default), `Avoid Filename Column` and `Avoid Details` — and `avoid_filename` in `config.ini` becomes `avoid_mode`: `filename`, `filename_column`, `details` (what the old checkmark asked for: a preview kept off the name and every column a row draws beside it), or `off`. A file written with `avoid_filename` is read as `details` for `true` and `off` for `false`. A keyboard preview follows the setting the same way a hovered one does: a row's placement is measured from the edge of the region kept off, so `Avoid Filename` leaves the columns after the name to be covered, and `Don't Avoid` places a keyboard preview by the position mode alone.
 
 ## [0.2.7]
 
