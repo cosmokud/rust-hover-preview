@@ -703,9 +703,10 @@ pub struct AppConfig {
     /// up. `Filename` by default, and it is the name that makes it so: the name of the
     /// file being previewed is part of what the preview is about, and a preview that
     /// covers it hides the one thing the pointer's item says, while the columns a row
-    /// writes beside the name are not the file's own. `Details` keeps previews off
-    /// those columns as well, and `Off` puts them back where the position modes alone
-    /// would have them.
+    /// writes beside the name are not the file's own. What is kept off is the name
+    /// where it is drawn rather than the column it sits in, so a short name leaves the
+    /// rest of its column to be covered. `Details` keeps previews off those columns as
+    /// well, and `Off` puts them back where the position modes alone would have them.
     pub avoid_mode: AvoidMode,
     pub same_file_rehover_delay_ms: u64,
     pub webp_playback_fps: u32,

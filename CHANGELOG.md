@@ -4,7 +4,7 @@
 
 ### Added
 
-- `Avoid Filename`, the name-only way of keeping a preview off the item it is about: it is kept off the `Name` column of a `Details` row and the name above the path of a `Content` row, so the columns a row draws beside the name may still be covered. It is what the app does unless another way is chosen.
+- `Avoid Filename`, the name-only way of keeping a preview off the item it is about: the name is measured as it is drawn — with the icon font the shell draws folder names in, at the scale of the display the item is on — so what a preview is kept off is the name itself and not the `Name` column it sits in, and the rest of the row may still be covered. It is what the app does unless another way is chosen.
 
 ### Changed
 

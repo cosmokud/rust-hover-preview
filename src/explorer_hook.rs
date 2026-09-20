@@ -22,7 +22,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use windows::core::{w, IUnknown, Interface, VARIANT};
-use windows::Win32::Foundation::{BOOL, HWND, LPARAM, POINT, RECT};
+use windows::Win32::Foundation::{BOOL, HWND, LPARAM, POINT, RECT, SIZE};
+use windows::Win32::Graphics::Gdi::{
+    CreateCompatibleDC, CreateFontIndirectW, DeleteDC, DeleteObject, GetTextExtentPoint32W,
+    SelectObject, LOGFONTW,
+};
 use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, IServiceProvider, CLSCTX_ALL,
     CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED,
@@ -38,6 +42,7 @@ use windows::Win32::UI::Accessibility::{
     UIA_NativeWindowHandlePropertyId, UIA_SelectionPatternId, UIA_TextControlTypeId,
     UIAutomationPropertyInfo, UIAutomationType_Int, UIA_CONTROLTYPE_ID, UIA_PROPERTY_ID,
 };
+use windows::Win32::UI::HiDpi::{GetDpiForSystem, GetDpiForWindow};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, VK_DOWN, VK_END, VK_HOME, VK_LBUTTON, VK_LEFT, VK_MBUTTON, VK_NEXT, VK_PRIOR,
     VK_RBUTTON, VK_RETURN, VK_RIGHT, VK_UP, VK_XBUTTON1, VK_XBUTTON2,
@@ -50,8 +55,9 @@ use windows::Win32::UI::Shell::{
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetAncestor, GetClassNameW, GetCursorPos, GetForegroundWindow, GetSystemMetrics,
     GetWindowPlacement, GetWindowRect, GetWindowThreadProcessId, IsIconic, IsWindowVisible,
-    WindowFromPoint, GA_ROOT, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
-    SM_YVIRTUALSCREEN, SW_SHOWMAXIMIZED, WINDOWPLACEMENT,
+    SystemParametersInfoW, WindowFromPoint, GA_ROOT, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN,
+    SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SPI_GETICONTITLELOGFONT, SW_SHOWMAXIMIZED,
+    SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, WINDOWPLACEMENT,
 };
 
 struct ExplorerWindowCounts {
@@ -143,8 +149,10 @@ struct ItemText {
     all: RECT,
     /// The piece the name is drawn in: the leftmost of them, which in the views that
     /// draw their items as rows is the `Name` column of `Details` — the name above the
-    /// path of `Content` — and the label itself under an icon. It is the region
-    /// `Avoid Filename` keeps a preview off.
+    /// path of `Content` — and the label itself under an icon. It is the room the name
+    /// is *given*, which is what `Avoid Filename` starts from: the region it keeps a
+    /// preview off is narrowed to the width the name itself is drawn at — see
+    /// [`HoveredItem::name_box`].
     name: RECT,
 }
 
@@ -195,20 +203,94 @@ impl HoveredItem {
     }
 
     /// The region a preview of this item is kept off, as the `Avoid` setting has it:
-    /// the box the item draws its name in at `Filename`, that box with the columns a
-    /// row writes beside it at `Details`, and nothing at all at `Off` — or the item's
-    /// own box at either of the first two for a view that reports no text, the name
-    /// being drawn inside that box whatever the view says about it, so an item whose
-    /// text cannot be measured is avoided as the whole of itself.
+    /// the name the item draws at `Filename`, that name with the columns a row writes
+    /// beside it at `Details`, and nothing at all at `Off` — or the item's own box at
+    /// either of the first two for a view that reports no text, the name being drawn
+    /// inside that box whatever the view says about it, so an item whose text cannot
+    /// be measured is avoided as the whole of itself.
     fn avoid_box(&self) -> Option<(i32, i32, i32, i32)> {
         let region = match avoid_mode() {
             AvoidMode::Off => return None,
-            AvoidMode::Filename => self.text.map(|text| text.name),
+            AvoidMode::Filename => self.name_box(),
             AvoidMode::Details => self.text.map(|text| text.all),
         }
         .unwrap_or(self.bounds);
 
         Some((region.left, region.top, region.right, region.bottom))
+    }
+
+    /// The box the item's name is drawn in, cut to the width the name itself takes.
+    ///
+    /// A view reports the room an item's name is *given* — the `Name` column of a
+    /// `Details` row is one width for every file in it, a long name and a short one
+    /// alike — so the width the name is drawn at is measured and the box is narrowed
+    /// to it. It is only ever narrowed: a name that fills the room it was given, or is
+    /// drawn truncated to it, is left as the view reported it.
+    fn name_box(&self) -> Option<RECT> {
+        let text = self.text?;
+
+        let Some(width) = drawn_name_width(&self.name, self.native_window) else {
+            return Some(text.name);
+        };
+
+        Some(RECT {
+            right: (text.name.left + width).min(text.name.right),
+            ..text.name
+        })
+    }
+}
+
+/// The width a name is drawn at, in the pixels of the display the item is on, or
+/// `None` when it cannot be measured — which leaves the name as the view reported it.
+///
+/// The shell draws an item's name in the icon font, the one folder views are given, so
+/// that is what a name is measured with: a font and a memory DC are made for the one
+/// call and let go again. It is asked beside the walk that read the item — once per
+/// preview, not once per probe — and the font is the shell's own, written for the
+/// display the system is at, so it is scaled here to the display the item is drawn on,
+/// which is the one the region is in.
+fn drawn_name_width(name: &str, window: isize) -> Option<i32> {
+    let wide: Vec<u16> = name.encode_utf16().collect();
+    if wide.is_empty() {
+        return None;
+    }
+
+    unsafe {
+        let mut logfont = LOGFONTW::default();
+        SystemParametersInfoW(
+            SPI_GETICONTITLELOGFONT,
+            0,
+            Some(&mut logfont as *mut LOGFONTW as *mut core::ffi::c_void),
+            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+        )
+        .ok()?;
+
+        let system_dpi = GetDpiForSystem();
+        let item_dpi = GetDpiForWindow(HWND(window as *mut core::ffi::c_void));
+        if system_dpi != 0 && item_dpi != 0 && item_dpi != system_dpi {
+            let height = logfont.lfHeight as i64 * item_dpi as i64;
+            logfont.lfHeight = (height / system_dpi as i64) as i32;
+        }
+
+        let font = CreateFontIndirectW(&logfont);
+        if font.0.is_null() {
+            return None;
+        }
+
+        let dc = CreateCompatibleDC(None);
+        if dc.0.is_null() {
+            let _ = DeleteObject(font);
+            return None;
+        }
+
+        let previous = SelectObject(dc, font);
+        let mut extent = SIZE::default();
+        let measured = GetTextExtentPoint32W(dc, &wide, &mut extent).as_bool();
+        let _ = SelectObject(dc, previous);
+        let _ = DeleteObject(font);
+        let _ = DeleteDC(dc);
+
+        (measured && extent.cx > 0).then_some(extent.cx)
     }
 }
 
@@ -3743,5 +3825,34 @@ pub fn run_explorer_hook() {
 
     unsafe {
         CoUninitialize();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The width a name is drawn at is the name's own: a longer name measures wider
+    /// than a short one, which is what makes the region a preview is kept off the name
+    /// rather than the column it sits in.
+    #[test]
+    fn a_name_is_measured_by_what_it_takes() {
+        let short = drawn_name_width("aa.txt", 0).expect("a short name measures");
+        let middle = drawn_name_width("mid-length-name.txt", 0).expect("a middle name measures");
+        let long =
+            drawn_name_width("a-very-long-file-name-here.txt", 0).expect("a long name measures");
+
+        assert!(short > 0, "a name takes some room: {short}");
+        assert!(
+            short < middle && middle < long,
+            "a longer name takes more room: {short} < {middle} < {long}"
+        );
+    }
+
+    /// A name with nothing in it has no width to be kept off, so the box the view
+    /// reported is left as it is — see `HoveredItem::name_box`.
+    #[test]
+    fn a_name_with_nothing_in_it_is_not_measured() {
+        assert_eq!(drawn_name_width("", 0), None);
     }
 }
