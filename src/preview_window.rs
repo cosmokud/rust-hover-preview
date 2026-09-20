@@ -7,6 +7,7 @@ use crate::config::{
     DEFAULT_TEXT_FONT_SCALE_PERCENT, DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS,
     DEFAULT_WEBP_PLAYBACK_FPS,
 };
+use crate::engine_processes;
 use crate::office_formats;
 use crate::office_preview;
 use crate::office_render;
@@ -3265,6 +3266,11 @@ fn start_video_playback(path: &PathBuf, x: i32, y: i32, width: i32, height: i32)
     // to prevent it from stealing focus
     if let Some(ref child_process) = child {
         set_noactivate_for_process(child_process.id());
+
+        // The player is this app's own child, so it goes in the job with the engines:
+        // a video preview that is up when the app is killed, or crashes, is not left
+        // playing with nothing to close it.
+        engine_processes::adopt(child_process.id());
     }
 
     child

@@ -23,6 +23,9 @@
 ### Fixed
 
 - An animated SVG stopped moving once the engine had been let go for idle — ten minutes after the last one, on the default `webview_idle`: the thread that played it ended with its browser while the app still held its handle, so every document after that was left on its still frame for the rest of the run. The thread now outlives the engine and begins another one for the next document.
+- The WebView2 browser no longer outlives the app when the app is killed, and one left behind by an earlier run is ended by the next launch instead of being left holding its profile folder.
+- Every process the app starts — an Office engine, the WebView2 browser, an `ffplay` — is put in a Windows job object, so a crash, a kill from Task Manager or a logoff ends them with the app, and is recorded under `%LOCALAPPDATA%\rust-hover-preview\engines` so that the next launch ends whatever the job could not take. Nothing is ever acted on by id alone: a record is used only when the process still carries the image *and* the start time it was recorded with.
+- One engine per Office family is enforced rather than assumed: a family's engine is started only when nothing this app began for it is still running, and a replacement waits for the process it replaces to be gone. Exiting while a document is mid-render no longer leaves the engine behind either.
 
 ## [0.2.6]
 

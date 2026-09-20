@@ -5,6 +5,7 @@ mod archive_listing;
 mod archive_preview;
 mod cloud_files;
 mod config;
+mod engine_processes;
 mod explorer_hook;
 mod image_formats;
 mod office_formats;
@@ -62,6 +63,23 @@ fn main() {
     // longer written; the file it left behind goes the same way, as its own user,
     // before a video preview could start adding to it again.
     let _ = fs::remove_file(std::env::temp_dir().join("rust-hover-preview-video.log"));
+
+    // The Office engines and browsers earlier runs started are ended here, before
+    // this run can start one of its own: a run that was killed, or crashed, never
+    // ends what it started, and a leftover engine is both a process nobody is using
+    // and the thing a new engine would be a duplicate of. Only what a run that is
+    // gone was holding is ended — a run that is still alive is another session, and
+    // its engines are its own.
+    engine_processes::reap_leftovers();
+
+    // And the browsers of the runs that left no record: every profile folder under
+    // the engine's own folder is named for the run that made it, so a folder whose
+    // browser is still holding it names a browser to end. What the record above
+    // catches for the runs that wrote one, this catches for the versions of this app
+    // that did not.
+    for pid in webview_preview::stale_profile_pids() {
+        engine_processes::end_browsers_started_by(pid);
+    }
 
     // The browser that plays an animated document keeps its state in a folder of its
     // own, one per run; what earlier runs left behind is cleared away here, before this
