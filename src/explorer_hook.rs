@@ -227,9 +227,10 @@ impl HoveredItem {
     ///
     /// A view reports the room an item's name is *given* — the `Name` column of a
     /// `Details` row is one width for every file in it, a long name and a short one
-    /// alike — so the width the name is drawn at is measured and the box is narrowed
-    /// to it. It is only ever narrowed: a name that fills the room it was given, or is
-    /// drawn truncated to it, is left as the view reported it.
+    /// alike — so the width the name is drawn at, at the larger of the two sizes a view
+    /// may draw it at, is measured and the box is narrowed to it. It is only ever
+    /// narrowed: a name that fills the room it was given, or is drawn truncated to it,
+    /// is left as the view reported it.
     fn name_box(&self) -> Option<RECT> {
         let text = self.text?;
 
@@ -244,15 +245,27 @@ impl HoveredItem {
     }
 }
 
+/// The share of the icon font the shell draws an item's name at in the views that give
+/// the name a line of its own: `Content` draws the name at 125% of the icon font, where
+/// a `Details` row is drawn at the font itself. A name is measured at the larger of the
+/// two so that one region clears the name in either view — which costs a `Details` row
+/// a quarter more room than its name takes, and is what keeps a `Content` row's name,
+/// extension and all, from being covered.
+///
+/// The share was read off the pixels: at 100% scaling, `aa.txt`,
+/// `mid-length-name.txt` and `a-very-long-file-name-here.txt` are drawn 36, 136 and 202
+/// pixels wide in `Content` against 28, 110 and 162 in `Details`.
+const NAME_FONT_SCALE: (i64, i64) = (5, 4);
+
 /// The width a name is drawn at, in the pixels of the display the item is on, or
 /// `None` when it cannot be measured — which leaves the name as the view reported it.
 ///
-/// The shell draws an item's name in the icon font, the one folder views are given, so
-/// that is what a name is measured with: a font and a memory DC are made for the one
-/// call and let go again. It is asked beside the walk that read the item — once per
-/// preview, not once per probe — and the font is the shell's own, written for the
-/// display the system is at, so it is scaled here to the display the item is drawn on,
-/// which is the one the region is in.
+/// The shell draws an item's name in the icon font, the one folder views are given, at
+/// the size the view gives it — see `NAME_FONT_SCALE` — so that is what a name is
+/// measured with: a font and a memory DC are made for the one call and let go again. It
+/// is asked beside the walk that read the item — once per preview, not once per probe —
+/// and the font is the shell's own, written for the display the system is at, so it is
+/// scaled here to the display the item is drawn on, which is the one the region is in.
 fn drawn_name_width(name: &str, window: isize) -> Option<i32> {
     let wide: Vec<u16> = name.encode_utf16().collect();
     if wide.is_empty() {
@@ -275,6 +288,11 @@ fn drawn_name_width(name: &str, window: isize) -> Option<i32> {
             let height = logfont.lfHeight as i64 * item_dpi as i64;
             logfont.lfHeight = (height / system_dpi as i64) as i32;
         }
+
+        // The name is drawn at one of two sizes and the region has to clear whichever
+        // it is, so the larger is what is measured — see `NAME_FONT_SCALE`.
+        let height = logfont.lfHeight as i64 * NAME_FONT_SCALE.0;
+        logfont.lfHeight = (height / NAME_FONT_SCALE.1) as i32;
 
         let font = CreateFontIndirectW(&logfont);
         if font.0.is_null() {
