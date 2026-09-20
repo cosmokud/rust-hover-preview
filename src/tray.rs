@@ -72,12 +72,19 @@ const ID_TRAY_VOLUME_MUTE: u16 = 1015; // 0%
 const ID_TRAY_POSITION_FOLLOW: u16 = 1020; // Follow cursor
 const ID_TRAY_POSITION_BEST: u16 = 1021; // Best position
 /// The `Placement → Avoid` submenu: one command per way a preview is kept off the
-/// item it is about, in the order it lists them. The slots are the ones the position
-/// choices leave between them and the first delay.
-const ID_TRAY_AVOID_BASE: u16 = 1027;
+/// item it is about, in the order it lists them. The ids sit above every range the
+/// app's own items hand out, because the `Placement` choices have no room for four
+/// beside them — so a way of avoiding is never read as another setting.
+const ID_TRAY_AVOID_BASE: u16 = 1410;
 /// The ways the `Avoid` submenu offers, in the order it lists them: nothing avoided,
-/// the item's name alone, and every column a view draws beside the name.
-const AVOID_CHOICES: [AvoidMode; 3] = [AvoidMode::Off, AvoidMode::Filename, AvoidMode::Details];
+/// the name where it is drawn, the column the name is drawn in, and every column the
+/// item draws.
+const AVOID_CHOICES: [AvoidMode; 4] = [
+    AvoidMode::Off,
+    AvoidMode::Filename,
+    AvoidMode::FilenameColumn,
+    AvoidMode::Details,
+];
 const ID_TRAY_DELAY_INSTANT: u16 = 1030; // 0ms
 const ID_TRAY_DELAY_VERY_FAST: u16 = 1031; // 200ms
 const ID_TRAY_DELAY_MEDIUM: u16 = 1032; // 500ms
@@ -1554,6 +1561,7 @@ fn avoid_label(mode: AvoidMode) -> &'static str {
     match mode {
         AvoidMode::Off => "Don't Avoid",
         AvoidMode::Filename => "Avoid Filename",
+        AvoidMode::FilenameColumn => "Avoid Filename Column",
         AvoidMode::Details => "Avoid Details",
     }
 }
@@ -2249,7 +2257,12 @@ mod tests {
     fn every_offered_avoid_mode_is_one_the_setting_keeps() {
         assert_eq!(
             AVOID_CHOICES.map(avoid_label),
-            ["Don't Avoid", "Avoid Filename", "Avoid Details"]
+            [
+                "Don't Avoid",
+                "Avoid Filename",
+                "Avoid Filename Column",
+                "Avoid Details"
+            ]
         );
 
         for (index, mode) in AVOID_CHOICES.iter().enumerate() {
@@ -2263,24 +2276,21 @@ mod tests {
         );
     }
 
-    /// The `Avoid` items sit between the position choices and the first delay, apart
-    /// from the ranges the `Background` halves hand out, so no click is ever read as
-    /// two settings at once.
+    /// The `Avoid` items are the app's own and sit above every range the other
+    /// submenus hand out — the `Placement` choices have no room for four beside them —
+    /// so a click on one is never read as another setting.
     #[test]
     fn the_avoid_submenu_carries_ids_of_its_own() {
         let avoid = ID_TRAY_AVOID_BASE..ID_TRAY_AVOID_BASE + AVOID_CHOICES.len() as u16;
-        let backgrounds = ID_TRAY_IMAGE_BACKGROUND_BASE
-            ..ID_TRAY_IMAGE_BACKGROUND_BASE + BACKGROUND_CHOICES.len() as u16;
+        let top_of_the_others = ID_TRAY_SVG_SCALE_BASE + SVG_SCALE_CHOICES.len() as u16;
 
+        assert!(
+            avoid.start >= top_of_the_others,
+            "the avoid items sit above the ranges the other submenus hand out: {avoid:?}"
+        );
         assert!(
             avoid.start > ID_TRAY_POSITION_BEST,
             "the avoid items are listed after the position choices"
-        );
-        assert!(
-            !avoid.contains(&ID_TRAY_IMAGE_BACKGROUND_BASE)
-                && !backgrounds.contains(&ID_TRAY_AVOID_BASE)
-                && !avoid.contains(&ID_TRAY_DELAY_INSTANT),
-            "the ranges {avoid:?} and {backgrounds:?} overlap"
         );
     }
 

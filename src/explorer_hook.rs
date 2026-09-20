@@ -150,8 +150,8 @@ struct ItemText {
     /// The piece the name is drawn in: the leftmost of them, which in the views that
     /// draw their items as rows is the `Name` column of `Details` — the name above the
     /// path of `Content` — and the label itself under an icon. It is the room the name
-    /// is *given*, which is what `Avoid Filename` starts from: the region it keeps a
-    /// preview off is narrowed to the width the name itself is drawn at — see
+    /// is *given*: the region `Avoid Filename Column` keeps a preview off, and the box
+    /// `Avoid Filename` narrows to the width the name itself is drawn at — see
     /// [`HoveredItem::name_box`].
     name: RECT,
 }
@@ -203,15 +203,17 @@ impl HoveredItem {
     }
 
     /// The region a preview of this item is kept off, as the `Avoid` setting has it:
-    /// the name the item draws at `Filename`, that name with the columns a row writes
-    /// beside it at `Details`, and nothing at all at `Off` — or the item's own box at
-    /// either of the first two for a view that reports no text, the name being drawn
-    /// inside that box whatever the view says about it, so an item whose text cannot
-    /// be measured is avoided as the whole of itself.
+    /// the name where it is drawn at `Filename`, the box the view gives the name at
+    /// `FilenameColumn`, that box with the columns a row writes beside it at `Details`,
+    /// and nothing at all at `Off` — or the item's own box at any of the first three
+    /// for a view that reports no text, the name being drawn inside that box whatever
+    /// the view says about it, so an item whose text cannot be measured is avoided as
+    /// the whole of itself.
     fn avoid_box(&self) -> Option<(i32, i32, i32, i32)> {
         let region = match avoid_mode() {
             AvoidMode::Off => return None,
             AvoidMode::Filename => self.name_box(),
+            AvoidMode::FilenameColumn => self.text.map(|text| text.name),
             AvoidMode::Details => self.text.map(|text| text.all),
         }
         .unwrap_or(self.bounds);
@@ -219,7 +221,9 @@ impl HoveredItem {
         Some((region.left, region.top, region.right, region.bottom))
     }
 
-    /// The box the item's name is drawn in, cut to the width the name itself takes.
+    /// The box the item's name is drawn in, cut to the width the name itself takes:
+    /// the region `Avoid Filename` keeps a preview off, where the box as the view
+    /// reported it is the one `Avoid Filename Column` keeps it off.
     ///
     /// A view reports the room an item's name is *given* — the `Name` column of a
     /// `Details` row is one width for every file in it, a long name and a short one
@@ -3854,5 +3858,18 @@ mod tests {
     #[test]
     fn a_name_with_nothing_in_it_is_not_measured() {
         assert_eq!(drawn_name_width("", 0), None);
+    }
+
+    /// The name measured is the name the view shows, extension and all: what a
+    /// preview is kept off is the whole of what is drawn, not the stem it starts with.
+    #[test]
+    fn a_name_is_measured_with_its_extension() {
+        let listed = drawn_name_width("report.txt", 0).expect("a listed name measures");
+        let stem = drawn_name_width("report", 0).expect("a stem measures");
+
+        assert!(
+            listed > stem,
+            "the extension takes room of its own: {stem} vs {listed}"
+        );
     }
 }
