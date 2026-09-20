@@ -572,7 +572,16 @@ pub struct AppConfig {
     /// Memory the decoded-image cache may hold, in megabytes. `0` switches the
     /// cache off, so every preview is decoded again.
     pub image_cache_mb: u32,
-    pub transparent_background: TransparentBackground,
+    /// The backdrop a picture is drawn over — and every other preview that is not a
+    /// document: a PDF page, a painted text frame, a page Office rendered.
+    pub image_background: TransparentBackground,
+    /// The backdrop an SVG document is drawn over.
+    ///
+    /// It is a setting of its own rather than the one beside it, because what the
+    /// question means is different: the transparency of a picture is the picture's,
+    /// while a document is drawn on a page, and a document's own opacity is not a
+    /// photograph's.
+    pub svg_background: TransparentBackground,
     pub video_volume: u32,
     pub preview_scale: PreviewScale,
     pub theme: TextTheme,
@@ -651,7 +660,8 @@ impl Default for AppConfig {
             same_file_rehover_delay_ms: 750,
             webp_playback_fps: DEFAULT_WEBP_PLAYBACK_FPS,
             image_cache_mb: DEFAULT_IMAGE_CACHE_MB,
-            transparent_background: TransparentBackground::Black,
+            image_background: TransparentBackground::Black,
+            svg_background: TransparentBackground::Black,
             video_volume: 0, // Mute by default
             preview_scale: PreviewScale::Percent(DEFAULT_PREVIEW_SCALE_PERCENT),
             theme: TextTheme::Light,
@@ -914,8 +924,13 @@ impl AppConfig {
             );
             ini.set(
                 CONFIG_SECTION,
-                "transparent_background",
-                Some(self.transparent_background.as_str().to_string()),
+                "image_background",
+                Some(self.image_background.as_str().to_string()),
+            );
+            ini.set(
+                CONFIG_SECTION,
+                "svg_background",
+                Some(self.svg_background.as_str().to_string()),
             );
             ini.set(
                 CONFIG_SECTION,
@@ -1096,9 +1111,24 @@ impl AppConfig {
                 self.image_cache_mb = sanitize_image_cache_mb(value);
             }
         }
-        if let Some(value) = ini.get(CONFIG_SECTION, "transparent_background") {
+        // `transparent_background` is what the backdrop a preview is drawn over was
+        // called when every preview had the one of them: a file written then names
+        // both with it, and is written out again under their own names.
+        let legacy_background = ini.get(CONFIG_SECTION, "transparent_background");
+        if let Some(value) = ini
+            .get(CONFIG_SECTION, "image_background")
+            .or_else(|| legacy_background.clone())
+        {
             if let Some(background) = TransparentBackground::from_str(&value) {
-                self.transparent_background = background;
+                self.image_background = background;
+            }
+        }
+        if let Some(value) = ini
+            .get(CONFIG_SECTION, "svg_background")
+            .or(legacy_background)
+        {
+            if let Some(background) = TransparentBackground::from_str(&value) {
+                self.svg_background = background;
             }
         }
         if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "video_volume") {
@@ -1307,6 +1337,50 @@ mod tests {
             !EngineIdle::Indefinite.has_expired(Duration::from_secs(365 * 24 * 60 * 60)),
             "an engine kept for the life of the app never goes idle"
         );
+    }
+
+    /// The backdrop a preview is drawn over was one setting before a document had one
+    /// of its own naming it apart from a picture's, so a file that still names the one
+    /// is read as both rather than falling back to the default for the new one.
+    #[test]
+    fn a_backdrop_named_the_old_way_is_read_as_both_of_the_two() {
+        let mut ini = Ini::new();
+        ini.set(
+            CONFIG_SECTION,
+            "transparent_background",
+            Some("white".to_string()),
+        );
+
+        let mut config = AppConfig::default();
+        config.apply_ini(&ini);
+
+        assert_eq!(config.image_background, TransparentBackground::White);
+        assert_eq!(config.svg_background, TransparentBackground::White);
+    }
+
+    /// A file that names the two for itself is what the two settings are, whatever
+    /// the name the old one carried says — a key left in the file by hand edits it
+    /// no longer governs.
+    #[test]
+    fn the_two_backdrops_are_read_from_their_own_keys() {
+        let mut ini = Ini::new();
+        ini.set(
+            CONFIG_SECTION,
+            "transparent_background",
+            Some("checkerboard".to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
+            "image_background",
+            Some("black".to_string()),
+        );
+        ini.set(CONFIG_SECTION, "svg_background", Some("white".to_string()));
+
+        let mut config = AppConfig::default();
+        config.apply_ini(&ini);
+
+        assert_eq!(config.image_background, TransparentBackground::Black);
+        assert_eq!(config.svg_background, TransparentBackground::White);
     }
 
     /// A file holding the built-in list of an earlier version has never been edited,

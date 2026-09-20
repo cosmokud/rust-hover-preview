@@ -45,10 +45,23 @@ const ID_TRAY_CONFIRM_FILE_TYPE: u16 = 1004;
 const ID_TRAY_TRIGGER_DISABLE: u16 = 1005; // Hold the trigger key to stop previews
 const ID_TRAY_TRIGGER_ENABLE: u16 = 1006; // Hold the trigger key to allow previews
 const ID_TRAY_TRIGGER_ENABLED: u16 = 1068; // Whether the trigger key is watched at all
-const ID_TRAY_BG_TRANSPARENT: u16 = 1007;
-const ID_TRAY_BG_BLACK: u16 = 1008;
-const ID_TRAY_BG_WHITE: u16 = 1009;
-const ID_TRAY_BG_CHECKERBOARD: u16 = 1016;
+/// The `Background` submenu: one command per backdrop it offers, in the order it
+/// lists them, for each of the two kinds of preview it keeps apart — a picture's
+/// backdrop and a document's. Each half is a base plus the position the choice was
+/// listed at, so one table and one builder serve both, and the two ranges are four
+/// wide and apart, which is what keeps an item of one from being read as a choice
+/// of the other.
+const ID_TRAY_IMAGE_BACKGROUND_BASE: u16 = 1023;
+const ID_TRAY_SVG_BACKGROUND_BASE: u16 = 1054;
+/// The backdrops a half of the `Background` submenu offers, in the order it lists
+/// them, with `Transparent` at the top: the whole range the setting holds, so nothing
+/// a hand-edited `config.ini` can ask for is left unmarked.
+const BACKGROUND_CHOICES: [TransparentBackground; 4] = [
+    TransparentBackground::Transparent,
+    TransparentBackground::Black,
+    TransparentBackground::White,
+    TransparentBackground::Checkerboard,
+];
 const ID_TRAY_VOLUME_MAX: u16 = 1010; // 100%
 const ID_TRAY_VOLUME_HIGH: u16 = 1011; // 80%
 const ID_TRAY_VOLUME_MEDIUM: u16 = 1012; // 50%
@@ -200,13 +213,19 @@ unsafe extern "system" fn tray_window_proc(
                 ID_TRAY_TRIGGER_DISABLE => set_trigger_key_mode(TriggerKeyMode::Disable),
                 ID_TRAY_TRIGGER_ENABLE => set_trigger_key_mode(TriggerKeyMode::Enable),
                 ID_TRAY_TRIGGER_ENABLED => toggle_trigger_key_enabled(),
-                ID_TRAY_BG_TRANSPARENT => {
-                    set_transparent_background(TransparentBackground::Transparent)
+                // A backdrop, by the position it was listed at: an image's or a
+                // document's, whichever half of the `Background` submenu it was in.
+                cmd if (ID_TRAY_IMAGE_BACKGROUND_BASE
+                    ..ID_TRAY_IMAGE_BACKGROUND_BASE + BACKGROUND_CHOICES.len() as u16)
+                    .contains(&cmd) =>
+                {
+                    set_image_background(cmd - ID_TRAY_IMAGE_BACKGROUND_BASE)
                 }
-                ID_TRAY_BG_BLACK => set_transparent_background(TransparentBackground::Black),
-                ID_TRAY_BG_WHITE => set_transparent_background(TransparentBackground::White),
-                ID_TRAY_BG_CHECKERBOARD => {
-                    set_transparent_background(TransparentBackground::Checkerboard)
+                cmd if (ID_TRAY_SVG_BACKGROUND_BASE
+                    ..ID_TRAY_SVG_BACKGROUND_BASE + BACKGROUND_CHOICES.len() as u16)
+                    .contains(&cmd) =>
+                {
+                    set_svg_background(cmd - ID_TRAY_SVG_BACKGROUND_BASE)
                 }
                 ID_TRAY_VOLUME_MAX => set_volume(100),
                 ID_TRAY_VOLUME_HIGH => set_volume(80),
@@ -363,52 +382,6 @@ unsafe fn show_context_menu(hwnd: HWND) {
         MF_STRING | MF_POPUP,
         types_menu.0 as usize,
         w!("Preview Types"),
-    );
-
-    // Add the "Background" submenu
-    let transparent_background = CONFIG
-        .lock()
-        .map(|c| c.transparent_background)
-        .unwrap_or(TransparentBackground::Transparent);
-    let background_menu = CreatePopupMenu().unwrap();
-
-    let bg_flag = |background: TransparentBackground| {
-        MF_STRING
-            | if transparent_background == background {
-                MF_CHECKED
-            } else {
-                MF_UNCHECKED
-            }
-    };
-    let _ = AppendMenuW(
-        background_menu,
-        bg_flag(TransparentBackground::Transparent),
-        ID_TRAY_BG_TRANSPARENT as usize,
-        w!("Transparent"),
-    );
-    let _ = AppendMenuW(
-        background_menu,
-        bg_flag(TransparentBackground::Black),
-        ID_TRAY_BG_BLACK as usize,
-        w!("Black"),
-    );
-    let _ = AppendMenuW(
-        background_menu,
-        bg_flag(TransparentBackground::White),
-        ID_TRAY_BG_WHITE as usize,
-        w!("White"),
-    );
-    let _ = AppendMenuW(
-        background_menu,
-        bg_flag(TransparentBackground::Checkerboard),
-        ID_TRAY_BG_CHECKERBOARD as usize,
-        w!("Checkerboard"),
-    );
-    let _ = AppendMenuW(
-        menu,
-        MF_STRING | MF_POPUP,
-        background_menu.0 as usize,
-        w!("Background"),
     );
 
     let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
@@ -944,6 +917,39 @@ unsafe fn show_context_menu(hwnd: HWND) {
         w!("Placement"),
     );
 
+    // Add the "Background" submenu: what a preview is drawn over, which is a question
+    // a picture and a document answer differently — a picture's transparency is the
+    // picture's, while a document is drawn on a page — so each of the two has a half
+    // of its own, listing the same backdrops.
+    let (image_background, svg_background) = CONFIG
+        .lock()
+        .map(|c| (c.image_background, c.svg_background))
+        .unwrap_or((
+            TransparentBackground::Transparent,
+            TransparentBackground::Transparent,
+        ));
+    let background_menu = CreatePopupMenu().unwrap();
+
+    append_background_menu(
+        background_menu,
+        w!("Image Background"),
+        ID_TRAY_IMAGE_BACKGROUND_BASE,
+        image_background,
+    );
+    append_background_menu(
+        background_menu,
+        w!("SVG Background"),
+        ID_TRAY_SVG_BACKGROUND_BASE,
+        svg_background,
+    );
+
+    let _ = AppendMenuW(
+        menu,
+        MF_STRING | MF_POPUP,
+        background_menu.0 as usize,
+        w!("Background"),
+    );
+
     // Add the Volume submenu
     let current_volume = CONFIG.lock().map(|c| c.video_volume).unwrap_or(0);
     let volume_menu = CreatePopupMenu().unwrap();
@@ -1251,9 +1257,32 @@ fn toggle_confirm_file_type() {
     }
 }
 
-fn set_transparent_background(background: TransparentBackground) {
+/// What a picture is drawn over — and every preview that is not a document: a page,
+/// a painted frame, a page Office rendered.
+///
+/// The backdrop is part of the frame a preview was composited into rather than of
+/// the file it was drawn from, so the preview on screen is given its frame again
+/// rather than left holding the one it has.
+fn set_image_background(index: u16) {
+    let Some(background) = background_at(index) else {
+        return;
+    };
+
     if let Ok(mut config) = CONFIG.lock() {
-        config.transparent_background = background;
+        config.image_background = background;
+        config.save();
+    }
+    refresh_preview();
+}
+
+/// The same for an SVG document, which is drawn over a backdrop of its own.
+fn set_svg_background(index: u16) {
+    let Some(background) = background_at(index) else {
+        return;
+    };
+
+    if let Ok(mut config) = CONFIG.lock() {
+        config.svg_background = background;
         config.save();
     }
     refresh_preview();
@@ -1313,6 +1342,68 @@ fn cache_size_label(megabytes: u32, default_mb: u32) -> String {
     } else {
         label
     }
+}
+
+/// One half of the `Background` submenu: the backdrops a preview can be drawn over,
+/// with the one that half is on marked. The two halves a picture and a document get
+/// list the same choices, which is why one builder is handed the base of the ids and
+/// the backdrop to mark rather than the items themselves.
+fn append_background_menu(
+    parent: HMENU,
+    label: PCWSTR,
+    base: u16,
+    background: TransparentBackground,
+) {
+    let menu = unsafe { CreatePopupMenu().unwrap() };
+
+    // The labels are kept for as long as the menu is being filled out, for the same
+    // reason the cache labels are: `AppendMenuW` is handed a pointer, so the wide
+    // strings have to outlive the call that lists them.
+    let labels: Vec<Vec<u16>> = BACKGROUND_CHOICES
+        .iter()
+        .map(|choice| {
+            background_label(*choice)
+                .encode_utf16()
+                .chain(std::iter::once(0))
+                .collect()
+        })
+        .collect();
+
+    for (index, choice) in BACKGROUND_CHOICES.iter().enumerate() {
+        let flags = MF_STRING
+            | if *choice == background {
+                MF_CHECKED
+            } else {
+                MF_UNCHECKED
+            };
+        let _ = unsafe {
+            AppendMenuW(
+                menu,
+                flags,
+                (base + index as u16) as usize,
+                PCWSTR(labels[index].as_ptr()),
+            )
+        };
+    }
+
+    let _ = unsafe { AppendMenuW(parent, MF_STRING | MF_POPUP, menu.0 as usize, label) };
+}
+
+/// What a backdrop is called in the menu: the spelling `config.ini` uses, capitalized.
+fn background_label(background: TransparentBackground) -> &'static str {
+    match background {
+        TransparentBackground::Transparent => "Transparent",
+        TransparentBackground::Black => "Black",
+        TransparentBackground::White => "White",
+        TransparentBackground::Checkerboard => "Checkerboard",
+    }
+}
+
+/// The backdrop an item of the `Background` submenu stands for, by the position it
+/// was listed at. An id past the last choice the menu offered is one that is not
+/// there.
+fn background_at(index: u16) -> Option<TransparentBackground> {
+    BACKGROUND_CHOICES.get(index as usize).copied()
 }
 
 /// One `Keep … Engine` submenu: the idle times every engine this app keeps warm
@@ -1790,6 +1881,42 @@ mod tests {
                 "1 minute".to_string(),
                 "0 seconds".to_string(),
             ]
+        );
+    }
+
+    /// Both halves of the `Background` submenu list the same four choices, in the
+    /// order the ids are handed out in, and each id resolves back to the backdrop its
+    /// item was listed for — which is what makes a click select what it named.
+    #[test]
+    fn every_offered_background_is_one_the_setting_keeps() {
+        assert_eq!(
+            BACKGROUND_CHOICES.map(background_label),
+            ["Transparent", "Black", "White", "Checkerboard"]
+        );
+
+        for (index, background) in BACKGROUND_CHOICES.iter().enumerate() {
+            assert_eq!(background_at(index as u16), Some(*background));
+        }
+
+        assert_eq!(
+            background_at(BACKGROUND_CHOICES.len() as u16),
+            None,
+            "an id past the last item is not one the menu offered"
+        );
+    }
+
+    /// An item of one half of the submenu is never an item of the other, whatever it
+    /// was listed at: the two ranges of ids are apart.
+    #[test]
+    fn the_two_halves_of_the_background_submenu_carry_different_ids() {
+        let width = BACKGROUND_CHOICES.len() as u16;
+        let images = ID_TRAY_IMAGE_BACKGROUND_BASE..ID_TRAY_IMAGE_BACKGROUND_BASE + width;
+        let documents = ID_TRAY_SVG_BACKGROUND_BASE..ID_TRAY_SVG_BACKGROUND_BASE + width;
+
+        assert!(
+            !images.contains(&ID_TRAY_SVG_BACKGROUND_BASE)
+                && !documents.contains(&ID_TRAY_IMAGE_BACKGROUND_BASE),
+            "the ranges {images:?} and {documents:?} overlap"
         );
     }
 

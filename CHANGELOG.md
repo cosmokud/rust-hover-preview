@@ -5,10 +5,11 @@
 ### Added
 
 - SVG previews (`svg`, `svgz`), drawn at the size the preview is shown at and sized like a picture: `100%` is the size the document asks for, `50%` that at half.
-- Animated SVGs are played by the WebView2 runtime Windows 11 ships with, and by this app's own reader where it is not installed. The engine is pointed at a page that draws the document as an image, so the document fills the preview box at every scale, and at a URL built from the Shell's verbatim path, which a browser refuses silently. [`\\?\` handling is a fix detail — hmm]
+- Animated SVGs are played by the WebView2 runtime Windows 11 ships with, and by this app's own reader where it is not installed. The engine is pointed at a page of this app's own that draws the document as an image, so it fills the preview box at every scale.
 - `webview_idle` and a `Performance → Keep Animated SVG Engine` entry, ten minutes by default: the browser is kept warm between hovers rather than started for each one.
 - The engine keeps its state in a folder per run, cleared at startup; one that fails is retried, then stood down for five minutes so this app's reader plays the document, and the hover that was up is laid out again. `RHP_WEBVIEW_TRACE` and `RHP_WEBVIEW_PROFILE` are the diagnostics for it.
 - `trigger_key_enabled` in `config.ini` and a check in the tray `Trigger Key` submenu, to switch the trigger key off without changing its mode.
+- `svg_background`, the backdrop an SVG document is drawn over, in `config.ini` and as `Background → SVG Background` in the tray: Transparent, Black, White or Checkerboard, the same four a picture is offered.
 
 ### Changed
 
@@ -17,6 +18,7 @@
 - `cargo build --release` closes a running copy of the app before linking; debug builds are untouched.
 - Video previews no longer write `%TEMP%\rust-hover-preview-video.log`, and one left by an earlier version is deleted at startup.
 - `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings` pass again.
+- The tray's `Background` submenu is above `Volume` and holds an `Image Background` and an `SVG Background` half, each listing Transparent, Black, White and Checkerboard; `transparent_background` is read as both `image_background` and `svg_background`, and written out under the two names.
 
 ### Fixed
 
