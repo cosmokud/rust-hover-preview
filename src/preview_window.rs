@@ -287,20 +287,12 @@ pub enum PreviewMessage {
     /// `None` when the setting is off, when the view reported
     /// no text for the item, or when the walk found no item at the cursor.
     Show(PathBuf, i32, i32, Option<ScreenRegion>),
-    /// A preview of the focused item, whose box comes with it and — for an item
-    /// that draws less than that box holds — where the item's own text stops, which
-    /// is the edge its preview is placed from. See `compute_keyboard_layout`. The
-    /// last region is the item's text itself, which the preview is kept off the same
-    /// way a hovered item's is.
-    ShowKeyboard(
-        PathBuf,
-        i32,
-        i32,
-        i32,
-        i32,
-        Option<i32>,
-        Option<ScreenRegion>,
-    ),
+    /// A preview of the focused item, whose box comes with it, and the region the
+    /// `Avoid` setting keeps it off — the item's own text, or the name alone, or the
+    /// column the name sits in, depending on the way the setting is on. That region is
+    /// where its preview is placed from as well as what it is kept off, the way a
+    /// hovered item's is. See `compute_keyboard_layout`.
+    ShowKeyboard(PathBuf, i32, i32, i32, i32, Option<ScreenRegion>),
     Hide,
     Refresh,
     /// A preview type was switched on or off. Only a preview whose own kind is
@@ -672,7 +664,6 @@ pub fn show_preview_keyboard(
     item_top: i32,
     item_right: i32,
     item_bottom: i32,
-    content_right: Option<i32>,
     avoid: Option<ScreenRegion>,
 ) {
     if let Ok(sender) = PREVIEW_SENDER.lock() {
@@ -683,7 +674,6 @@ pub fn show_preview_keyboard(
                 item_top,
                 item_right,
                 item_bottom,
-                content_right,
                 avoid,
             ));
         }
@@ -5557,23 +5547,21 @@ fn compute_mouse_layout(
 
 /// The least room beside an item a keyboard preview will squeeze into before it
 /// stops treating the item as something to sit beside. Below this the free space
-/// past the item's edge — or past a row's own content — is a sliver, and the
+/// past the item's edge — or past the region a row is kept off — is a sliver, and the
 /// preview is placed from the item's middle instead — see `compute_keyboard_layout`.
 const MIN_BESIDE_ROOM_PX: i32 = 64;
 
 /// Compute preview layout for keyboard hover (relative to item bounding rect)
 /// Positions the preview so it doesn't block the selected file item
 ///
-/// `content_right` is where the item's own text stops, for an item that draws less
-/// than the box it is given — Content view draws every row that way, and the hook
-/// reads the edge off the row's text (see `explorer_hook::item_text_box`).
-/// Every other item draws what its box says and passes `None`.
-///
-/// `avoid` is that same text as a region — the box the item's name is drawn in —
-/// which the placement is kept off. See `avoiding_text`.
+/// `avoid` is the region the `Avoid` setting keeps a preview off — the boxes each
+/// piece of the item's own text is drawn in, which the hook reads off the item's
+/// children in one batched call (see `explorer_hook::item_text_box`). It is what the
+/// placement is kept clear of *and* where a row's placement is measured from, so a row
+/// is only cleared as far as the setting asks; with nothing kept off, an item is
+/// placed by the position mode alone. See `avoiding_text`.
 fn compute_keyboard_layout(
     item_rect: (i32, i32, i32, i32),
-    content_right: Option<i32>,
     orig_dims: (u32, u32),
     follow_cursor: bool,
     avoid: Option<ScreenRegion>,
@@ -5595,21 +5583,25 @@ fn compute_keyboard_layout(
     // What is *beside* a row is not what its edges leave: the room past the row's
     // right edge is the space the view itself is not using — a sliver at the
     // window's edge, which is where a preview squeezed beside a row used to land.
-    // The room a row really offers is the empty tail past its own content, and a
-    // keyboard preview is placed in it: just past where the row's text stops, at
-    // the row's own line, sized by the tail and the display's height. That is the
-    // placement a box item gets past its right edge, with the row's content edge
-    // standing in for the box's — which is also what makes it the same placement
-    // Details rows get, since a Details row's box is the width of its columns.
+    // The room a row really offers is the empty tail past the region the `Avoid`
+    // setting keeps a preview off, and a keyboard preview is placed in it: just past
+    // that region's edge, at the row's own line, sized by the tail and the display's
+    // height. That is the placement a box item gets past its right edge, with the
+    // region's edge standing in for the box's — so at `Avoid Details` it is the
+    // placement a `Details` row has always had, past all of its columns, while at
+    // `Avoid Filename` the preview is only taken past the name: the columns drawn
+    // after it are within what the setting allows a preview to cover.
     //
-    // A row with no tail — a narrow view, a name long enough to fill it — is left
-    // to the placement below, which anchors it at its middle: there is nowhere
-    // beside it to put a preview, and the display's own room is all there is.
+    // A row with no tail — a narrow view, a name long enough to fill it — and a row
+    // with nothing kept off at all are both left to the placement below, which anchors
+    // them at their middle: there is nowhere beside such a row to put a preview, and
+    // the display's own room is all there is.
     if row_shaped {
-        if let Some(content_right) = content_right
+        if let Some(tail_right) = avoid
+            .map(|(_, _, right, _)| right)
             .filter(|right| *right > item_left && bounds.right - *right - gap >= MIN_BESIDE_ROOM_PX)
         {
-            let max_width = (bounds.right - content_right - gap).max(1) as u32;
+            let max_width = (bounds.right - tail_right - gap).max(1) as u32;
             let room_below = bounds.bottom - item_bottom - gap;
             let room_above = item_top - bounds.top - gap;
             // Follow Cursor grows the preview away from the row — from below it
@@ -5633,7 +5625,7 @@ fn compute_keyboard_layout(
                 return None;
             }
 
-            let pos_x = content_right + gap;
+            let pos_x = tail_right + gap;
             let pos_y = if !follow_cursor {
                 centered_top((item_top + item_bottom) / 2, preview_h as i32, bounds)
             } else if room_below >= room_above {
@@ -6462,7 +6454,7 @@ pub fn run_preview_window() {
                             }
                         }
                     }
-                    PreviewMessage::ShowKeyboard(path, il, it, ir, ib, content_right, avoid) => {
+                    PreviewMessage::ShowKeyboard(path, il, it, ir, ib, avoid) => {
                         show_requested = true;
                         // The focused item lives inside the Explorer window, so
                         // its center resolves to that window's monitor.
@@ -6479,7 +6471,6 @@ pub fn run_preview_window() {
                             let is_video = is_video_file(&path);
                             if let Some(layout) = compute_keyboard_layout(
                                 (il, it, ir, ib),
-                                content_right,
                                 orig_dims,
                                 follow_cursor,
                                 avoid,
@@ -6489,7 +6480,6 @@ pub fn run_preview_window() {
                                 let layout = text_preview_layout(&path, layout, dpi, |size| {
                                     compute_keyboard_layout(
                                         (il, it, ir, ib),
-                                        content_right,
                                         size,
                                         follow_cursor,
                                         avoid,
@@ -6916,6 +6906,61 @@ mod tests {
             20,
             bounds,
         )
+    }
+
+    /// A keyboard preview of a row is placed in the room past the region the `Avoid`
+    /// setting keeps it off, so a row is cleared only as far as the setting asks: past
+    /// every column at `Avoid Details`, and only past the name at `Avoid Filename`,
+    /// where the columns drawn after the name are the room the preview takes.
+    #[test]
+    fn a_keyboard_rows_tail_begins_at_the_region_it_is_kept_off() {
+        let row = (0, 100, 1000, 140);
+        let media = (400, 300);
+
+        let past_the_name = compute_keyboard_layout(
+            row,
+            media,
+            false,
+            Some((20, 104, 120, 136)),
+            PreviewScale::Percent(100),
+            bounds(),
+        )
+        .expect("a placement past the name");
+
+        let past_every_column = compute_keyboard_layout(
+            row,
+            media,
+            false,
+            Some((20, 104, 900, 136)),
+            PreviewScale::Percent(100),
+            bounds(),
+        )
+        .expect("a placement past the row's columns");
+
+        assert_eq!(past_the_name.pos_x, 130, "just past the name");
+        assert_eq!(past_every_column.pos_x, 910, "just past the columns");
+        assert!(
+            past_the_name.pos_x < past_every_column.pos_x,
+            "a narrower region leaves more of the row to be covered"
+        );
+    }
+
+    /// With nothing kept off — `Don't Avoid` — a row is placed by the position mode
+    /// alone: it is anchored at its middle, the way a hover over it is read, and the
+    /// preview is allowed to cover it.
+    #[test]
+    fn a_keyboard_row_with_nothing_kept_off_is_placed_by_position_alone() {
+        let layout = compute_keyboard_layout(
+            (0, 100, 1000, 140),
+            (400, 300),
+            false,
+            None,
+            PreviewScale::Percent(100),
+            bounds(),
+        )
+        .expect("a placement");
+
+        assert_eq!(layout.pos_x, 510, "half the row's width, and the gap");
     }
 
     /// A page — a PDF's, or one Office rendered — is drawn at the room the display

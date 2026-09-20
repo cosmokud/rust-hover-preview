@@ -137,10 +137,9 @@ struct ProbeMemo {
 
 /// The text an item draws inside its own box, as the item's own children report it.
 ///
-/// One walk reads the pieces of an item's text for both of the questions asked of it,
-/// so it answers with both boxes rather than being asked twice: where the text stops,
-/// which is the edge a keyboard preview is placed from, and where the name is, which
-/// the `Avoid` setting measures a preview from.
+/// One walk reads the pieces of it for every way of avoiding that asks for one, so it
+/// answers with both boxes rather than being asked twice: the whole of what the item
+/// draws, and the piece its name is drawn in.
 #[derive(Clone, Copy)]
 struct ItemText {
     /// Every piece of the item's text taken as one box — a row's name with the columns
@@ -176,9 +175,9 @@ struct HoveredItem {
     bounds: RECT,
     /// The text the item draws — its name, and the columns a view that draws its
     /// items as rows writes beside it — or `None` when the view reported no text, or
-    /// the walk that would have read one was not asked for it. One walk answers two
-    /// questions: where the text stops, which is the edge a keyboard preview is placed
-    /// from, and where the name is, which the `Avoid` setting keeps a preview off.
+    /// the walk that would have read one was not asked for it, which is what a walk
+    /// with nothing to keep a preview off asks. What it holds is the region the
+    /// `Avoid` setting places a preview from, the keyboard's as much as the pointer's.
     text: Option<ItemText>,
     /// The window the item is drawn in, whose frame is the window the item's view
     /// belongs to.
@@ -191,15 +190,6 @@ impl HoveredItem {
     /// answer is only taken when both looks agree.
     fn same_item(&self, other: &HoveredItem) -> bool {
         self.index == other.index && self.name == other.name
-    }
-
-    /// Where the item's own text stops, or `None` when it draws text to the end of
-    /// its box — which is also what an item whose text the view does not place
-    /// answers.
-    fn content_right(&self) -> Option<i32> {
-        self.text
-            .filter(|text| text.all.right < self.bounds.right)
-            .map(|text| text.all.right)
     }
 
     /// The region a preview of this item is kept off, as the `Avoid` setting has it:
@@ -1387,8 +1377,8 @@ fn uia_item_from_focus(resolver: &ItemResolver) -> Option<HoveredItem> {
         selected_item_of_focused_list(&focused)?
     };
 
-    // A keyboard preview is placed from the item alone, so where the item's own
-    // text stops is read with it — see `item_text_box`.
+    // A keyboard preview is placed from the item alone, so the text the region is made
+    // of is read with it — see `item_text_box`.
     walk_to_item(resolver, &start, None, true)
 }
 
@@ -1456,14 +1446,10 @@ fn item_from_element(
     }
 
     // The item's own text is read only where it can answer, and only when the caller
-    // wants it: a row of the view can be drawing less than its box holds, which is the
-    // one case where measuring *where* the text stops says anything, and the box the
-    // text is drawn in is what the `Avoid` setting places a preview from — so a row is
-    // measured for the first reason, and an item of any shape for the second. See
+    // wants it: what the view draws is what a way of avoiding is measured from, and a
+    // walk with nothing to keep a preview off has no region to read. See
     // `item_text_box`.
-    let wide = bounds.right - bounds.left >= (bounds.bottom - bounds.top).max(1) * 4;
-    let read_text = measure_content && (wide || avoid_mode() != AvoidMode::Off);
-    let text = read_text
+    let text = (measure_content && avoid_mode() != AvoidMode::Off)
         .then(|| item_text_box(resolver, element, &bounds))
         .flatten();
 
@@ -1483,12 +1469,11 @@ fn item_from_element(
 /// is reported the way a view reports everything: each piece of an item's text — a
 /// Content row's name and path, a Details row's name, type, modified date and size,
 /// the label under an icon — is an element of its own carrying the box it is drawn
-/// in, child of the item. Reading them answers both questions an item cannot answer
-/// by its box: where its text stops, which is the only room a row drawing less than
-/// its box holds leaves for a preview beside it, and where its name is — the leftmost
-/// piece, which in the views that draw their items as rows is the `Name` column of
-/// `Details` or the name above the path of `Content` — which the `Avoid` setting
-/// measures a preview from.
+/// in, child of the item. Reading them answers two things a box cannot: the whole of
+/// what the item draws, whose right edge is where a row's content stops — the room a
+/// keyboard preview is placed in — and the leftmost piece, which in the views that
+/// draw their items as rows is the `Name` column of `Details` or the name above the
+/// path of `Content`, and which is the region a way of avoiding is measured from.
 ///
 /// It is measured from the item's own children for the same reason: a view reports
 /// what it draws as children, and the rightmost of them is the edge the row's content
@@ -3613,7 +3598,6 @@ pub fn run_explorer_hook() {
                                         focused_info.item.bounds.top,
                                         focused_info.item.bounds.right,
                                         focused_info.item.bounds.bottom,
-                                        focused_info.item.content_right(),
                                         focused_info.item.avoid_box(),
                                     );
                                 }
@@ -3673,7 +3657,6 @@ pub fn run_explorer_hook() {
                                     focused_info.item.bounds.top,
                                     focused_info.item.bounds.right,
                                     focused_info.item.bounds.bottom,
-                                    focused_info.item.content_right(),
                                     focused_info.item.avoid_box(),
                                 );
                             }
