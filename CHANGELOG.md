@@ -30,6 +30,7 @@
 - The WebView2 browser no longer outlives the app when the app is killed, and one left behind by an earlier run is ended by the next launch instead of being left holding its profile folder.
 - Every process the app starts — an Office engine, the WebView2 browser, an `ffplay` — is put in a Windows job object, so a crash, a kill from Task Manager or a logoff ends them with the app, and is recorded under `%LOCALAPPDATA%\rust-hover-preview\engines` so that the next launch ends whatever the job could not take. Nothing is ever acted on by id alone: a record is used only when the process still carries the image _and_ the start time it was recorded with.
 - One engine per Office family is enforced rather than assumed: a family's engine is started only when nothing this app began for it is still running, and a replacement waits for the process it replaces to be gone. Exiting while a document is mid-render no longer leaves the engine behind either.
+- Pictures over 40 megapixels preview again: the pixel cap is gone, and what bounds a decode is a 1 GB memory budget every reader — still images, GIF, APNG and animated WebP — is handed before it allocates.
 
 ## [0.2.6]
 

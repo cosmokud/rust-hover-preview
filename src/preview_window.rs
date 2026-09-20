@@ -936,12 +936,23 @@ fn guessed_image_format(path: &PathBuf) -> Option<image::ImageFormat> {
 
 /// Decode an image by sniffing magic bytes instead of trusting the extension.
 fn decode_image_with_header_check(path: &PathBuf) -> Option<image::DynamicImage> {
-    image::ImageReader::open(path)
+    let mut reader = image::ImageReader::open(path)
         .ok()?
         .with_guessed_format()
-        .ok()?
-        .decode()
-        .ok()
+        .ok()?;
+    reader.limits(image_decode_limits());
+
+    reader.decode().ok()
+}
+
+/// Decode an image by the extension it is named with, for the files whose own
+/// bytes are not asked what they are. Read under the same budget as every other
+/// decoder, so the path is chosen by the setting and not by what it costs.
+fn decode_image_by_extension(path: &PathBuf) -> Option<image::DynamicImage> {
+    let mut reader = image::ImageReader::open(path).ok()?;
+    reader.limits(image_decode_limits());
+
+    reader.decode().ok()
 }
 
 /// Read image dimensions by sniffing magic bytes instead of trusting the extension.
@@ -1503,7 +1514,15 @@ fn load_animated_gif(
     let (target_width, target_height) =
         scale_dimensions(gif_width, gif_height, max_width, max_height, preview_scale);
 
-    let mut canvas = vec![0u8; (gif_width * gif_height * 4) as usize];
+    // The canvas every frame is composited into is the size of the GIF itself, so
+    // it is the one allocation here that a file chooses, and it is asked for under
+    // the same budget as a decoded picture's.
+    let canvas_bytes = gif_width as u64 * gif_height as u64 * 4;
+    if canvas_bytes > MAX_IMAGE_DECODE_BYTES {
+        return None;
+    }
+
+    let mut canvas = vec![0u8; canvas_bytes as usize];
     let mut initial_frames = Vec::new();
     let mut initial_bytes: usize = 0;
     let mut reached_end = false;
@@ -1646,7 +1665,12 @@ fn load_animated_gif(
 /// Open an animated PNG frame iterator for the given path.
 fn apng_frames(path: &PathBuf) -> Option<image::Frames<'static>> {
     let file = File::open(path).ok()?;
-    let decoder = image::codecs::png::PngDecoder::new(BufReader::new(file)).ok()?;
+    // Limits are taken at construction rather than set afterwards: a PNG reader
+    // holds the ones it was built with, and every frame of the animation is read
+    // through it.
+    let decoder =
+        image::codecs::png::PngDecoder::with_limits(BufReader::new(file), image_decode_limits())
+            .ok()?;
     Some(decoder.apng().ok()?.into_frames())
 }
 
@@ -1895,8 +1919,14 @@ fn load_animated_webp(
     };
     let decoder = webp_animation::Decoder::new_with_options(buffer.as_slice(), options).ok()?;
 
+    // Frames are decoded at the animation's own size, and this reader is libwebp's
+    // rather than the `image` crate's, so the budget is asked for by hand where
+    // every decoder above is handed it.
     let (orig_width, orig_height) = decoder.dimensions();
-    if orig_width == 0 || orig_height == 0 || orig_width > 16384 || orig_height > 16384 {
+    if orig_width == 0
+        || orig_height == 0
+        || !frame_within_decode_budget(orig_width, orig_height, 4)
+    {
         return None;
     }
 
@@ -2051,23 +2081,35 @@ fn load_animated_webp(
     })
 }
 
-/// The largest image a preview will decode: a side length, and the pixel count
-/// that bounds the memory it asks for (four bytes each, so the pixel cap is a
-/// 160 MB decode). A preview is at most a screen, so an image past this is one
-/// nobody was going to see at its own size anyway.
-const MAX_IMAGE_SIDE: u32 = 20_000;
-const MAX_IMAGE_PIXELS: u64 = 40_000_000;
-
-/// Whether an image of this size can be decoded for the price of a preview.
+/// What one picture may be decoded for: a gigabyte, counted over everything the
+/// decode asks the allocator for — the frame at the file's own color depth, and
+/// whatever the decoder needs on the way to it.
 ///
-/// The size comes from the header, so nothing is decoded to ask the question —
-/// which is the point: an allocation as large as a huge image asks for is the one
-/// failure `catch_unwind` cannot turn into a missing preview, because the
-/// allocator aborts rather than unwinds.
-fn image_within_decode_limits(width: u32, height: u32) -> bool {
-    width <= MAX_IMAGE_SIDE
-        && height <= MAX_IMAGE_SIDE
-        && width as u64 * height as u64 <= MAX_IMAGE_PIXELS
+/// A picture's shape is not bounded at all. A seven-thousand by ten-thousand
+/// illustration is an ordinary thing to hover and is decoded at the size it is,
+/// so what is bounded here is not how large an image may be but what a file may
+/// ask for, since the failure that cannot be survived is not a decoder returning
+/// an error — `catch_unwind` turns that into a missing preview — but an
+/// allocation that fails: the allocator aborts rather than unwinds, and an abort
+/// takes the tray icon with it. Every reader is therefore handed this budget
+/// before it allocates, and the file that asks for more is answered with no
+/// preview rather than with a dead app.
+const MAX_IMAGE_DECODE_BYTES: u64 = 1024 * 1024 * 1024;
+
+/// The budget above as the limits an `image` decoder is read under: no limit on
+/// a picture's dimensions, a gigabyte on the memory it may ask for.
+fn image_decode_limits() -> image::Limits {
+    let mut limits = image::Limits::no_limits();
+    limits.max_alloc = Some(MAX_IMAGE_DECODE_BYTES);
+    limits
+}
+
+/// Whether a frame of this shape fits the budget, for the readers that allocate
+/// a canvas of their own instead of going through a decoder's limits. The product
+/// is taken in `u64`, so a shape whose frame overflows a `u32` cannot wrap into a
+/// size that would pass.
+fn frame_within_decode_budget(width: u32, height: u32, bytes_per_pixel: u64) -> bool {
+    width as u64 * height as u64 * bytes_per_pixel <= MAX_IMAGE_DECODE_BYTES
 }
 
 /// A frame's place in the cache, and when it was last asked for. The stamp is a
@@ -2255,16 +2297,9 @@ fn load_static_image(
     preview_scale: PreviewScale,
 ) -> Option<MediaData> {
     // The header carries the image's own size, which is what the layout and the
-    // resample are computed from, so it is read first: it answers the decode
-    // limits without a decode, and it names the box the frame would be decoded
-    // into.
+    // resample are computed from, so it is read first: it names the box the frame
+    // would be decoded into, and so the key that frame is held under.
     let dimensions = image_dimensions_with_header_check(path);
-
-    if let Some((width, height)) = dimensions {
-        if !image_within_decode_limits(width, height) {
-            return None;
-        }
-    }
 
     let cache_key = dimensions.map(|(width, height)| {
         let (target_width, target_height) =
@@ -2290,7 +2325,7 @@ fn load_static_image(
     let img = if is_confirm_file_type_enabled() {
         decode_image_with_header_check(path)?
     } else {
-        image::open(path).ok()?
+        decode_image_by_extension(path)?
     };
 
     let (orig_width, orig_height) = img.dimensions();
