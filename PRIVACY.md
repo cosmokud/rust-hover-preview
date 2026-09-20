@@ -81,11 +81,18 @@ run during normal use.
   sheet via `CopyPicture`, reads that bitmap, then clears the clipboard so
   Excel can quit cleanly. That means hovering a spreadsheet can replace
   whatever you had copied — expected side effect, local only.
-- **External processes:** only `ffplay`/`ffprobe`/`ffmpeg` (your install) and
-  your Office apps (`WINWORD`/`EXCEL`/`POWERPNT`), the latter started hidden
-  unless you already had that app open — your open instance is never hidden,
-  quit, or killed. A process the app started that outlives its use is ended by
-  verified PID plus executable-name check.
+- **External processes:** only `ffplay`/`ffprobe`/`ffmpeg` (your install), your
+  Office apps (`WINWORD`/`EXCEL`/`POWERPNT`), and the WebView2 browser Windows
+  ships with (`msedgewebview2.exe`) for animated SVG previews. Office is started
+  hidden unless you already had that app open — your open instance is never
+  hidden, quit, or killed, and neither is a browser another application owns.
+  Everything this app starts is put in a Windows job object and written to a
+  small file under `%LOCALAPPDATA%\rust-hover-preview\engines`, so that a crash,
+  a kill from Task Manager, or a logoff cannot leave a process running: the job
+  ends them along with the app, and the next launch ends whatever the job could
+  not take. A recorded process is acted on only when its id still carries both
+  the executable name and the start time it was recorded with, so a recycled id
+  cannot hit something else.
 - **Downloaded files:** files carrying a `Zone.Identifier` stream are opened
   in Office as a temporary copy without the mark, so Office's Protected View
   path works and your original file is never modified.
@@ -94,8 +101,9 @@ run during normal use.
 
 Your file content is handed to these local programs only, never over a
 network: your Microsoft Office (Office previews), your FFmpeg binaries (video
-previews), and the Windows PDF engine (PDF previews). Their own vendor privacy
-statements apply to them; this app adds no reporting on top.
+previews), the Windows PDF engine (PDF previews), and the WebView2 runtime
+(animated SVG previews, which it is given with all network access denied). Their
+own vendor privacy statements apply to them; this app adds no reporting on top.
 
 ## If you report a bug
 

@@ -35,6 +35,7 @@ use crate::config::{
     sanitize_office_cache_mb, EngineIdle, PreviewType, DEFAULT_OFFICE_CACHE_MB,
     DEFAULT_OFFICE_ENGINE_IDLE_SECS,
 };
+use crate::engine_processes;
 use crate::office_formats::{app_for, container_kind, OfficeApp};
 use crate::preview_window;
 use crate::CONFIG;
@@ -47,8 +48,8 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use windows::core::{GUID, PCWSTR, PWSTR, VARIANT};
-use windows::Win32::Foundation::{CloseHandle, BOOL, HGLOBAL, HWND, LPARAM, WPARAM};
+use windows::core::{GUID, PCWSTR, VARIANT};
+use windows::Win32::Foundation::{BOOL, HGLOBAL, HWND, LPARAM, WPARAM};
 use windows::Win32::System::Com::{
     CLSIDFromProgID, CoCreateInstance, CoInitializeEx, IDispatch, CLSCTX_LOCAL_SERVER,
     COINIT_APARTMENTTHREADED, DISPATCH_FLAGS, DISPATCH_METHOD, DISPATCH_PROPERTYGET,
@@ -57,15 +58,9 @@ use windows::Win32::System::Com::{
 use windows::Win32::System::DataExchange::{
     CloseClipboard, EmptyClipboard, GetClipboardData, OpenClipboard,
 };
-use windows::Win32::System::Diagnostics::ToolHelp::{
-    CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
-};
 use windows::Win32::System::Memory::{GlobalLock, GlobalSize, GlobalUnlock};
 use windows::Win32::System::Ole::CF_DIB;
-use windows::Win32::System::Threading::{
-    GetCurrentThreadId, GetExitCodeProcess, OpenProcess, QueryFullProcessImageNameW,
-    TerminateProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE,
-};
+use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::Accessibility::{SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK};
 use windows::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, EnumWindows, GetClassNameW, GetWindowThreadProcessId, IsWindowVisible,
@@ -173,10 +168,6 @@ const WORKER_GIVE_UP: Duration = Duration::from_secs(120);
 /// is full, the way the app's other memories are: what a refusal costs is a wait,
 /// so a few of them are worth remembering and a list of them is not.
 const FAILURE_CACHE_MAX_ENTRIES: usize = 64;
-/// The longest image path `QueryFullProcessImageNameW` is given room for.
-const MAX_IMAGE_PATH: usize = 260;
-/// What `GetExitCodeProcess` reports for a process that is still running.
-const STILL_ACTIVE: u32 = 259;
 /// The value that switches macro execution off entirely.
 const MSO_AUTOMATION_SECURITY_FORCE_DISABLE: i32 = 3;
 /// What a property put is identified by, in the parameter block that carries it.
@@ -296,13 +287,6 @@ static WORKER_THREAD: AtomicU32 = AtomicU32::new(0);
 /// being ended — so "the worker is stuck" is a question about the whole thread
 /// rather than about one call in it.
 static WORKER_BUSY: Lazy<Mutex<Option<(u64, Instant)>>> = Lazy::new(|| Mutex::new(None));
-/// The Office processes this app started, each with the family it belongs to.
-///
-/// An instance the user already had open is never recorded here, and never ended:
-/// what a stuck render costs is the render, not the user's work. Every family the
-/// tier has started one for is held, because a worker that has to be given up on
-/// is holding all of its engines at once.
-static OWNED_ENGINES: Lazy<Mutex<Vec<(OfficeApp, u32)>>> = Lazy::new(|| Mutex::new(Vec::new()));
 
 /// Whether the render tier may run at all: the `Office` gate in the tray's
 /// `Preview Types` submenu.
@@ -537,8 +521,15 @@ pub(crate) fn remember_failure(source: &Path) {
 /// Stop the worker, joining it only when it is not inside anything that can block:
 /// a COM call into Office cannot be cancelled, and waiting on one would hold the
 /// app's exit for as long as Office takes.
+///
+/// A worker that cannot be joined is one whose engines are never let go of itself —
+/// the thread ends when the process does, and nothing of it runs again — so what it
+/// started is ended here instead. Those are this app's own Office processes and
+/// nobody else's: an instance the user is working in is not one this app created,
+/// and is never one of these.
 pub(crate) fn shutdown() {
     if work_in_flight() {
+        engine_processes::terminate_all_owned();
         return;
     }
 
@@ -577,7 +568,7 @@ fn work_is_stuck() -> bool {
 /// clearing the thread id, ending an engine — is conditional on it still being the
 /// current worker, which it no longer is.
 fn abandon_worker() {
-    terminate_owned_engines();
+    engine_processes::terminate_all_owned();
     WORKER_GENERATION.fetch_add(1, Ordering::AcqRel);
     WORKER_THREAD.store(0, Ordering::Release);
     if let Ok(mut busy) = WORKER_BUSY.lock() {
@@ -688,7 +679,7 @@ fn worker_main() {
             // A panic inside one document's render is that document's failure, not
             // the tier's: the thread goes on to the next hover.
             let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                render_request(&mut engines, &request)
+                render_request(&mut engines, &request, generation)
             }))
             .unwrap_or(RenderOutcome::Refused);
             end_work(generation);
@@ -808,7 +799,7 @@ fn wait_for_message(milliseconds: u32) {
     }
 }
 
-fn render_request(engines: &mut Engines, request: &RenderRequest) -> RenderOutcome {
+fn render_request(engines: &mut Engines, request: &RenderRequest, generation: u64) -> RenderOutcome {
     let Some(app_kind) = app_for(&request.source) else {
         return RenderOutcome::NoEngine;
     };
@@ -848,7 +839,25 @@ fn render_request(engines: &mut Engines, request: &RenderRequest) -> RenderOutco
     // not asked for twice on every hover.
     let mut retried = false;
     loop {
+        // A worker that has been given up on starts nothing. Its own engines have
+        // already been ended, and a process started here would be a second engine
+        // for this family beside the one the worker that replaced it is starting —
+        // which is the one thing the tier does not do. What is given up for it is
+        // one document's render, which is not worth a duplicate Office.
+        if !is_current_worker(generation) {
+            return RenderOutcome::NoEngine;
+        }
+
         if engines.get(app_kind).is_none() {
+            // One engine per family, and never a second beside one that is still
+            // going: whatever this app started for this family and has not seen end
+            // is ended here and waited out. A process that will not end is a preview
+            // that does not render this time, which is nothing next to two Office
+            // processes on the machine.
+            if !engine_processes::end_recorded(app_kind.image_name()) {
+                return RenderOutcome::NoEngine;
+            }
+
             let Some(created) = Engine::create(app_kind) else {
                 return RenderOutcome::NoEngine;
             };
@@ -889,7 +898,14 @@ fn render_request(engines: &mut Engines, request: &RenderRequest) -> RenderOutco
         // which is another call it may not answer, made worse by the wait that
         // follows an unanswered quit — and the next pass asks a new one.
         if let Some(engine) = engines.slot(app_kind).take() {
+            let (pid, owned) = (engine.owned_pid, !engine.attached);
             engine.abandon();
+
+            // What is started next is not started beside it: the process is waited
+            // out, and one that outlasts the wait is not replaced at all.
+            if owned && !wait_for_exit(pid) {
+                return RenderOutcome::NoEngine;
+            }
         }
         retried = true;
     }
@@ -931,7 +947,7 @@ impl Engine {
     fn create(app_kind: OfficeApp) -> Option<Self> {
         // What is running before the instance is created, so the process this app
         // starts can be told from one the user already had open.
-        let before = processes_named(app_kind.image_name());
+        let before = engine_processes::processes_named(app_kind.image_name());
 
         let app = Object::create(app_kind.prog_id())?;
 
@@ -945,13 +961,16 @@ impl Engine {
         let owned_pid = if attached {
             0
         } else {
-            processes_named(app_kind.image_name())
+            engine_processes::processes_named(app_kind.image_name())
                 .into_iter()
                 .find(|pid| !before.contains(pid))
                 .unwrap_or(0)
         };
         if owned_pid != 0 {
-            remember_owned_engine(app_kind, owned_pid);
+            // From here on the process is this app's: it is put in the job, so that
+            // whatever ends this app ends it, and written down, so that a run which
+            // never gets to end it can be answered for by the next one.
+            engine_processes::record(app_kind.image_name(), owned_pid);
         }
 
         if !attached {
@@ -1074,8 +1093,7 @@ impl Drop for Engine {
         // go. Everything else, the user's own Office included, is left as it was
         // found below.
         if self.abandoned && !self.attached && self.owned_pid != 0 {
-            terminate_process(self.owned_pid, self.app_kind.image_name());
-            forget_owned_engine(self.owned_pid);
+            engine_processes::terminate_owned(self.owned_pid);
             return;
         }
 
@@ -1094,10 +1112,15 @@ impl Drop for Engine {
             // looks like. So the quit is given a moment of pumping, and a process
             // that is still there after it — one this app started, and verified as
             // still being that application — is ended rather than left running.
-            if !wait_for_exit(self.owned_pid) {
-                terminate_process(self.owned_pid, self.app_kind.image_name());
+            if wait_for_exit(self.owned_pid) {
+                engine_processes::forget(self.owned_pid);
+            } else {
+                // Still there after being asked to quit, so it is ended rather than
+                // left running. What it costs if it outlasts that too is a record
+                // kept until something sees it gone, which is what stops the next
+                // engine of this family from being started beside it.
+                engine_processes::terminate_owned(self.owned_pid);
             }
-            forget_owned_engine(self.owned_pid);
         }
     }
 }
@@ -1192,131 +1215,13 @@ fn wait_for_exit(pid: u32) -> bool {
     let deadline = Instant::now() + Duration::from_secs(2);
 
     while Instant::now() < deadline {
-        if !process_is_running(pid) {
+        if !engine_processes::is_running(pid) {
             return true;
         }
         wait_for_message(50);
     }
 
-    !process_is_running(pid)
-}
-
-/// Whether a process is still running, by id. A process that cannot be opened is
-/// one that is gone.
-fn process_is_running(pid: u32) -> bool {
-    unsafe {
-        let Ok(handle) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) else {
-            return false;
-        };
-
-        let mut code = 0u32;
-        let running = GetExitCodeProcess(handle, &mut code).is_ok() && code == STILL_ACTIVE;
-        let _ = CloseHandle(handle);
-        running
-    }
-}
-
-/// Record the Office process this app started, so a render that never returns can
-/// end it — and only it. One record per family, which is one per engine: a family's
-/// previous engine has been dropped by the time its replacement is created.
-fn remember_owned_engine(app_kind: OfficeApp, pid: u32) {
-    if let Ok(mut owned) = OWNED_ENGINES.lock() {
-        owned.retain(|(kind, _)| *kind != app_kind);
-        owned.push((app_kind, pid));
-    }
-}
-
-fn forget_owned_engine(pid: u32) {
-    if let Ok(mut owned) = OWNED_ENGINES.lock() {
-        owned.retain(|(_, owned_pid)| *owned_pid != pid);
-    }
-}
-
-/// End the Office processes this app started, if they are still there and still
-/// that application.
-///
-/// Requested and never waited on, the way a stuck `ffplay` is: a process inside
-/// kernel I/O cannot be ended by anyone in user mode, and what it costs is the
-/// render in flight rather than the app. Only an instance this app started is
-/// ended — the user's own Office is never touched — and only after the record of
-/// it has been taken, so two callers cannot both end it. Every family goes, since
-/// the worker being given up on was holding all of the engines at once and none of
-/// them can be reached again.
-fn terminate_owned_engines() {
-    let owned = {
-        let Ok(mut owned) = OWNED_ENGINES.lock() else {
-            return;
-        };
-        std::mem::take(&mut *owned)
-    };
-
-    for (app_kind, pid) in owned {
-        terminate_process(pid, app_kind.image_name());
-    }
-}
-
-fn terminate_process(pid: u32, image_name: &str) {
-    unsafe {
-        let Ok(handle) = OpenProcess(
-            PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION,
-            false,
-            pid,
-        ) else {
-            return;
-        };
-
-        // Only a process that is still the application it was: a recycled id must
-        // never hit something else.
-        let mut name = [0u16; MAX_IMAGE_PATH];
-        let mut length = name.len() as u32;
-        let named = QueryFullProcessImageNameW(
-            handle,
-            PROCESS_NAME_WIN32,
-            PWSTR(name.as_mut_ptr()),
-            &mut length,
-        )
-        .is_ok()
-            && String::from_utf16_lossy(&name[..length as usize])
-                .to_ascii_uppercase()
-                .ends_with(image_name);
-
-        if named {
-            let _ = TerminateProcess(handle, 1);
-        }
-        let _ = CloseHandle(handle);
-    }
-}
-
-/// The processes running an image of this name, by executable name.
-fn processes_named(image_name: &str) -> Vec<u32> {
-    let mut found = Vec::new();
-
-    unsafe {
-        let Ok(snapshot) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) else {
-            return found;
-        };
-
-        let mut entry = PROCESSENTRY32W {
-            dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
-            ..Default::default()
-        };
-
-        if Process32FirstW(snapshot, &mut entry).is_ok() {
-            loop {
-                let name = String::from_utf16_lossy(&entry.szExeFile);
-                if name.trim_end_matches('\0').eq_ignore_ascii_case(image_name) {
-                    found.push(entry.th32ProcessID);
-                }
-                if Process32NextW(snapshot, &mut entry).is_err() {
-                    break;
-                }
-            }
-        }
-
-        let _ = CloseHandle(snapshot);
-    }
-
-    found
+    !engine_processes::is_running(pid)
 }
 
 /// Take Office's own progress window off the screen for as long as a render lasts.
@@ -2381,6 +2286,15 @@ pub(crate) fn last_failure() -> Option<String> {
 mod tests {
     use super::*;
 
+    /// A request rendered where no worker is running, which is where these tests are.
+    ///
+    /// The generation is the one the counter holds, so the check that a worker which
+    /// has been given up on starts nothing is satisfied: what these tests are asking
+    /// about is a render, not the worker that would normally make it.
+    fn render_here(engines: &mut Engines, request: &RenderRequest) -> RenderOutcome {
+        render_request(engines, request, WORKER_GENERATION.load(Ordering::Acquire))
+    }
+
     #[test]
     fn reads_the_plain_form_of_a_verbatim_path() {
         assert_eq!(
@@ -2428,7 +2342,10 @@ mod tests {
 
         for app_kind in [OfficeApp::Word, OfficeApp::Excel, OfficeApp::PowerPoint] {
             println!("\n--- {app_kind:?} ---");
-            println!("before: {:?}", processes_named(app_kind.image_name()));
+            println!(
+                "before: {:?}",
+                engine_processes::processes_named(app_kind.image_name())
+            );
 
             let Some(engine) = Engine::create(app_kind) else {
                 println!("created: no");
@@ -2441,7 +2358,10 @@ mod tests {
 
             drop(engine);
             std::thread::sleep(Duration::from_secs(3));
-            println!("after: {:?}", processes_named(app_kind.image_name()));
+            println!(
+                "after: {:?}",
+                engine_processes::processes_named(app_kind.image_name())
+            );
         }
     }
 
@@ -2578,7 +2498,7 @@ mod tests {
             };
 
             let started = Instant::now();
-            let outcome = render_request(&mut engines, &request);
+            let outcome = render_here(&mut engines, &request);
             println!(
                 "rendered: {} in {:?}",
                 outcome == RenderOutcome::Rendered,
@@ -2763,7 +2683,7 @@ mod tests {
                 requested: Instant::now(),
             };
             let started = Instant::now();
-            let outcome = render_request(&mut engines, &request);
+            let outcome = render_here(&mut engines, &request);
             println!(
                 "rendered: {} in {:?}",
                 outcome == RenderOutcome::Rendered,
@@ -2878,7 +2798,7 @@ mod tests {
                 requested: Instant::now(),
             };
             let started = Instant::now();
-            let outcome = render_request(engines, &request);
+            let outcome = render_here(engines, &request);
             (outcome, started.elapsed())
         };
 
@@ -2955,7 +2875,7 @@ mod tests {
                 .and_then(|app_kind| engines.get(app_kind))
                 .map(|engine| engine.owned_pid);
             let started = Instant::now();
-            let outcome = render_request(&mut engines, &request);
+            let outcome = render_here(&mut engines, &request);
             let took = started.elapsed();
             let kind = cached_render(path).map(|cached| cached.kind);
             let engine_after = app_for(path)
