@@ -4,11 +4,11 @@
 
 ### Added
 
-- `Avoid Filename`, the name-only way of keeping a preview off the item it is about: the name is measured as it is drawn — with the icon font the shell draws folder names in, at the scale of the display the item is on — so what a preview is kept off is the name itself and not the `Name` column it sits in, and the rest of the row may still be covered. It is what the app does unless another way is chosen.
+- `Avoid Filename`, the name-only way of keeping a preview off the item it is about: the name is measured as it is drawn — with the icon font the shell draws folder names in, at the scale of the display the item is on, extension and all — so what a preview is kept off is the name itself and not the `Name` column it sits in, and the rest of the row may still be covered. `Avoid Filename Column` keeps it off that whole column instead, as the view reports it. `Avoid Filename` is what the app does unless another way is chosen.
 
 ### Changed
 
-- The tray's `Placement` gains an `Avoid` submenu between `Position` and `Scaling` — `Don't Avoid`, `Avoid Filename` (the default) and `Avoid Details` — and `avoid_filename` in `config.ini` becomes `avoid_mode`: `filename`, `details` (what the old checkmark asked for: a preview kept off the name and every column a row draws beside it), or `off`. A file written with `avoid_filename` is read as `details` for `true` and `off` for `false`.
+- The tray's `Placement` gains an `Avoid` submenu between `Position` and `Scaling` — `Don't Avoid`, `Avoid Filename` (the default), `Avoid Filename Column` and `Avoid Details` — and `avoid_filename` in `config.ini` becomes `avoid_mode`: `filename`, `filename_column`, `details` (what the old checkmark asked for: a preview kept off the name and every column a row draws beside it), or `off`. A file written with `avoid_filename` is read as `details` for `true` and `off` for `false`.
 
 ## [0.2.7]
 

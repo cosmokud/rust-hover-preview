@@ -649,14 +649,19 @@ impl TriggerKeyMode {
 /// A view draws an item's name, and the views that draw their items as rows draw the
 /// columns beside it as well — when the row was modified, its type, its size. What a
 /// preview has to clear to stay off the name is therefore a choice: nothing, the name
-/// alone, or everything the item draws.
+/// where it is drawn, the whole column the name is drawn in, or everything the item
+/// draws.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AvoidMode {
     /// A preview is placed where the position alone puts it.
     Off,
-    /// A preview is kept clear of the name alone, so the columns a row writes beside
-    /// the name may be covered.
+    /// A preview is kept clear of the name and nothing else — as far as the name is
+    /// drawn, so the rest of the column it sits in may be covered.
     Filename,
+    /// A preview is kept clear of the whole column the name is drawn in, as the view
+    /// reports it — the `Name` column of a `Details` row, whatever the name takes of
+    /// it — so the columns beside it may be covered.
+    FilenameColumn,
     /// A preview is kept clear of everything the item draws: its name, and the
     /// columns beside it.
     Details,
@@ -667,6 +672,7 @@ impl AvoidMode {
         match self {
             Self::Off => "off",
             Self::Filename => "filename",
+            Self::FilenameColumn => "filename_column",
             Self::Details => "details",
         }
     }
@@ -677,6 +683,9 @@ impl AvoidMode {
         match value.trim().to_ascii_lowercase().as_str() {
             "off" | "none" | "don't avoid" | "dont avoid" => Some(Self::Off),
             "filename" | "name" | "avoid filename" => Some(Self::Filename),
+            "filename_column" | "filename column" | "name column" | "avoid filename column" => {
+                Some(Self::FilenameColumn)
+            }
             "details" | "all" | "avoid details" => Some(Self::Details),
             _ => None,
         }
@@ -705,8 +714,9 @@ pub struct AppConfig {
     /// covers it hides the one thing the pointer's item says, while the columns a row
     /// writes beside the name are not the file's own. What is kept off is the name
     /// where it is drawn rather than the column it sits in, so a short name leaves the
-    /// rest of its column to be covered. `Details` keeps previews off those columns as
-    /// well, and `Off` puts them back where the position modes alone would have them.
+    /// rest of its column to be covered; `FilenameColumn` keeps previews off the whole
+    /// of that column, `Details` off the columns beside it as well, and `Off` puts them
+    /// back where the position modes alone would have them.
     pub avoid_mode: AvoidMode,
     pub same_file_rehover_delay_ms: u64,
     pub webp_playback_fps: u32,
@@ -1487,7 +1497,12 @@ mod tests {
 
     #[test]
     fn avoid_mode_reads_back_what_it_writes() {
-        for mode in [AvoidMode::Off, AvoidMode::Filename, AvoidMode::Details] {
+        for mode in [
+            AvoidMode::Off,
+            AvoidMode::Filename,
+            AvoidMode::FilenameColumn,
+            AvoidMode::Details,
+        ] {
             let written = mode.as_str();
             assert_eq!(
                 AvoidMode::from_str(written),
