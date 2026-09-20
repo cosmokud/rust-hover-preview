@@ -32,7 +32,7 @@
 
 use crate::cloud_files;
 use crate::config::{
-    sanitize_office_cache_mb, EngineIdle, PreviewType, DEFAULT_OFFICE_CACHE_MB,
+    read_within_budget, sanitize_office_cache_mb, EngineIdle, PreviewType, DEFAULT_OFFICE_CACHE_MB,
     DEFAULT_OFFICE_ENGINE_IDLE_SECS,
 };
 use crate::engine_processes;
@@ -2071,11 +2071,14 @@ fn take_render(target: &RenderTarget) -> Option<(RenderedKind, Vec<u8>)> {
             continue;
         }
 
-        let bytes = std::fs::read(&path);
+        // The export is read under the budget every other file read is under: a page
+        // this app asked for is a page-sized file, and a document whose export came out
+        // many times that is answered as a render that produced nothing.
+        let bytes = read_within_budget(&path);
         let _ = std::fs::remove_file(&path);
 
         if taken.is_none() {
-            if let Ok(bytes) = bytes {
+            if let Some(bytes) = bytes {
                 if !bytes.is_empty() {
                     taken = Some((kind, bytes));
                 }

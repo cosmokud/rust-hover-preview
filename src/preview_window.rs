@@ -2,8 +2,9 @@ use crate::archive_formats;
 use crate::archive_preview::{self, ArchivePreviewOptions};
 use crate::cloud_files;
 use crate::config::{
-    sanitize_image_cache_mb, sanitize_webp_playback_fps, MarkdownMode, PreviewScale, PreviewType,
-    TextTheme, TransparentBackground, DEFAULT_IMAGE_CACHE_MB, DEFAULT_PREVIEW_SCALE_PERCENT,
+    decode_budget_bytes, image_decode_limits, read_within_budget, sanitize_image_cache_mb,
+    sanitize_webp_playback_fps, MarkdownMode, PreviewScale, PreviewType, TextTheme,
+    TransparentBackground, DEFAULT_IMAGE_CACHE_MB, DEFAULT_PREVIEW_SCALE_PERCENT,
     DEFAULT_SVG_SCALE_PERCENT, DEFAULT_TEXT_FONT_SCALE_PERCENT,
     DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS, DEFAULT_WEBP_PLAYBACK_FPS,
 };
@@ -1517,12 +1518,9 @@ fn load_animated_gif(
     // The canvas every frame is composited into is the size of the GIF itself, so
     // it is the one allocation here that a file chooses, and it is asked for under
     // the same budget as a decoded picture's.
-    let canvas_bytes = gif_width as u64 * gif_height as u64 * 4;
-    if canvas_bytes > MAX_IMAGE_DECODE_BYTES {
-        return None;
-    }
+    let canvas_bytes = frame_bytes_within_budget(gif_width, gif_height, 4)?;
 
-    let mut canvas = vec![0u8; canvas_bytes as usize];
+    let mut canvas = vec![0u8; canvas_bytes];
     let mut initial_frames = Vec::new();
     let mut initial_bytes: usize = 0;
     let mut reached_end = false;
@@ -1902,7 +1900,7 @@ fn decode_webp_animation_frame_to_image(
 }
 
 fn load_animated_webp(
-    path: &PathBuf,
+    path: &Path,
     max_width: u32,
     max_height: u32,
     preview_scale: PreviewScale,
@@ -1912,7 +1910,9 @@ fn load_animated_webp(
         return None;
     }
 
-    let buffer = Arc::new(std::fs::read(path).ok()?);
+    // The file is read whole — libwebp decodes from bytes rather than from a reader
+    // of ours — so it is read under the budget like every other file a hover opens.
+    let buffer = Arc::new(read_within_budget(path)?);
     let options = webp_animation::DecoderOptions {
         use_threads: true,
         color_mode: webp_animation::ColorMode::Bgra,
@@ -1920,15 +1920,14 @@ fn load_animated_webp(
     let decoder = webp_animation::Decoder::new_with_options(buffer.as_slice(), options).ok()?;
 
     // Frames are decoded at the animation's own size, and this reader is libwebp's
-    // rather than the `image` crate's, so the budget is asked for by hand where
-    // every decoder above is handed it.
+    // rather than the `image` crate's, so the budget is asked for by hand where every
+    // decoder above is handed it.
     let (orig_width, orig_height) = decoder.dimensions();
-    if orig_width == 0
-        || orig_height == 0
-        || !frame_within_decode_budget(orig_width, orig_height, 4)
-    {
+    if orig_width == 0 || orig_height == 0 {
         return None;
     }
+
+    frame_bytes_within_budget(orig_width, orig_height, 4)?;
 
     let (target_width, target_height) = scale_dimensions(
         orig_width,
@@ -2081,35 +2080,18 @@ fn load_animated_webp(
     })
 }
 
-/// What one picture may be decoded for: a gigabyte, counted over everything the
-/// decode asks the allocator for — the frame at the file's own color depth, and
-/// whatever the decoder needs on the way to it.
+/// The bytes a frame of this shape is, when they fit what one hover may decode for
+/// — the question for the readers that allocate a canvas of their own rather than
+/// going through a decoder's limits.
 ///
-/// A picture's shape is not bounded at all. A seven-thousand by ten-thousand
-/// illustration is an ordinary thing to hover and is decoded at the size it is,
-/// so what is bounded here is not how large an image may be but what a file may
-/// ask for, since the failure that cannot be survived is not a decoder returning
-/// an error — `catch_unwind` turns that into a missing preview — but an
-/// allocation that fails: the allocator aborts rather than unwinds, and an abort
-/// takes the tray icon with it. Every reader is therefore handed this budget
-/// before it allocates, and the file that asks for more is answered with no
-/// preview rather than with a dead app.
-const MAX_IMAGE_DECODE_BYTES: u64 = 1024 * 1024 * 1024;
-
-/// The budget above as the limits an `image` decoder is read under: no limit on
-/// a picture's dimensions, a gigabyte on the memory it may ask for.
-fn image_decode_limits() -> image::Limits {
-    let mut limits = image::Limits::no_limits();
-    limits.max_alloc = Some(MAX_IMAGE_DECODE_BYTES);
-    limits
-}
-
-/// Whether a frame of this shape fits the budget, for the readers that allocate
-/// a canvas of their own instead of going through a decoder's limits. The product
-/// is taken in `u64`, so a shape whose frame overflows a `u32` cannot wrap into a
-/// size that would pass.
-fn frame_within_decode_budget(width: u32, height: u32, bytes_per_pixel: u64) -> bool {
-    width as u64 * height as u64 * bytes_per_pixel <= MAX_IMAGE_DECODE_BYTES
+/// A picture's shape is itself unbounded: a seven-thousand by ten-thousand
+/// illustration is an ordinary thing to hover and is decoded at the size it is, so
+/// what a file may ask for is the budget rather than a cap on its dimensions (see
+/// `config::decode_budget_bytes`). The product is taken in `u64`, so a shape whose
+/// frame overflows a `u32` cannot wrap into a size that would pass.
+fn frame_bytes_within_budget(width: u32, height: u32, bytes_per_pixel: u64) -> Option<usize> {
+    let bytes = width as u64 * height as u64 * bytes_per_pixel;
+    (bytes <= decode_budget_bytes()).then_some(bytes as usize)
 }
 
 /// A frame's place in the cache, and when it was last asked for. The stamp is a

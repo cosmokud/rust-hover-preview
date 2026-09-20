@@ -20,6 +20,7 @@
 //! frame has no business in the budget `image_cache_mb` counts for photos. Nothing is
 //! written to disk either — what is held lives in this process and goes when it does.
 
+use crate::config::{decode_budget_bytes, read_within_budget};
 use once_cell::sync::Lazy;
 use resvg::tiny_skia;
 use resvg::usvg;
@@ -147,14 +148,26 @@ fn draw(tree: &usvg::Tree, max_width: u32, max_height: u32) -> Option<(Vec<u8>, 
 ///
 /// The nested parse that is handed these bytes ignores an `<image>` element linking to
 /// an external file; see `document`.
+///
+/// A document is read and parsed whole rather than capped at a size of its own — it is
+/// a document, and what it costs is a parse proportional to it — so the budget every
+/// other file is read under is what keeps "whole" from meaning any size at all. The
+/// inflated document counts against it too, which is what a gzipped document needs: a
+/// `.svgz` is a few kilobytes that can inflate to a great many.
 fn read_document(path: &Path) -> Option<Vec<u8>> {
-    let bytes = std::fs::read(path).ok()?;
+    let bytes = read_within_budget(path)?;
 
     if bytes.starts_with(&GZIP_MAGIC) {
+        let budget = decode_budget_bytes();
         let mut document = Vec::new();
         flate2::read::GzDecoder::new(bytes.as_slice())
+            .take(budget + 1)
             .read_to_end(&mut document)
             .ok()?;
+
+        if document.len() as u64 > budget {
+            return None;
+        }
 
         return Some(document);
     }

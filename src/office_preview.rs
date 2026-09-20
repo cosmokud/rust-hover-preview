@@ -14,6 +14,7 @@
 //! parse to measure and one raster to draw — and the size it reads is kept on the
 //! page itself, so it cannot outlive the page it was read from.
 
+use crate::config::image_decode_limits;
 use crate::office_render::{self, CachedRender, RenderedKind};
 use crate::pdf_preview;
 use std::io::Cursor;
@@ -163,7 +164,14 @@ fn render_cached(
             pdf_preview::render_first_page_of_bytes(&cached.bytes, target_width, target_height)
         }
         RenderedKind::Png | RenderedKind::Bmp => {
-            let image = image::load_from_memory(&cached.bytes[..]).ok()?;
+            // Read under the same limits as every other decode: the bytes are this
+            // app's own render's, but the decoder asking is the same decoder, and this
+            // is a decode like any other.
+            let mut reader = image::ImageReader::new(Cursor::new(&cached.bytes[..]))
+                .with_guessed_format()
+                .ok()?;
+            reader.limits(image_decode_limits());
+            let image = reader.decode().ok()?;
             // A picture can be far larger than the box it is shown in — a
             // worksheet's corner at screen resolution is millions of pixels — so
             // shrinking uses the box filter, which is the fast one, and enlarging
