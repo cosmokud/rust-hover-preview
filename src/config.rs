@@ -700,11 +700,12 @@ pub struct AppConfig {
     pub follow_cursor: bool,
     /// How far a preview is placed clear of the item it is about, so the file the
     /// pointer is on or the keyboard is focused on stays readable while its preview is
-    /// up. `Details` by default: the name of the file being previewed is part of what
-    /// the preview is about, and a preview that covers it hides the one thing the
-    /// pointer's item says, while the columns a row writes beside the name are not.
-    /// `Filename` keeps previews off the name alone, and `Off` puts them back where the
-    /// position modes alone would have them.
+    /// up. `Filename` by default, and it is the name that makes it so: the name of the
+    /// file being previewed is part of what the preview is about, and a preview that
+    /// covers it hides the one thing the pointer's item says, while the columns a row
+    /// writes beside the name are not the file's own. `Details` keeps previews off
+    /// those columns as well, and `Off` puts them back where the position modes alone
+    /// would have them.
     pub avoid_mode: AvoidMode,
     pub same_file_rehover_delay_ms: u64,
     pub webp_playback_fps: u32,
@@ -818,7 +819,7 @@ impl Default for AppConfig {
             trigger_key_enabled: true,
             confirm_file_type: false,
             follow_cursor: false,
-            avoid_mode: AvoidMode::Details,
+            avoid_mode: AvoidMode::Filename,
             same_file_rehover_delay_ms: 750,
             webp_playback_fps: DEFAULT_WEBP_PLAYBACK_FPS,
             image_cache_mb: DEFAULT_IMAGE_CACHE_MB,
@@ -1500,6 +1501,13 @@ mod tests {
             None,
             "a value that names no way of avoiding is not one"
         );
+    }
+
+    /// The name-only way of avoiding is what the app does unless it is told otherwise,
+    /// so a configuration that says nothing about it keeps a preview off the name.
+    #[test]
+    fn a_fresh_configuration_avoids_the_name_alone() {
+        assert_eq!(AppConfig::default().avoid_mode, AvoidMode::Filename);
     }
 
     #[test]
