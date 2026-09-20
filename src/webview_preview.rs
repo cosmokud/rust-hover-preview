@@ -197,12 +197,12 @@ fn note_engine_up() {
 /// The document is not the page. A browser draws a standalone SVG at the size it asks
 /// for — it does not stretch one to the window it was given — so a document given to the
 /// engine as the page is drawn small in a large window, and the window this app lays out
-/// is whatever the configured scale asked for: a document asking for 120 pixels is a
-/// 120-pixel picture in an 800-pixel window at `100%`, and at fit-to-screen it is a
-/// 120-pixel picture in a display-sized window. What is given to the engine instead is
-/// this page: an image of the document, in a box that is the whole page. An image *is*
-/// scaled to the box it is given, whatever its own size is, which is the one thing that
-/// makes the window and the document the same size at every scale.
+/// is the share of the display `svg_scale` asked for: a document asking for 120 pixels is
+/// a 120-pixel picture in a window half a display wide, or in a display-sized one at
+/// fit-to-screen. What is given to the engine instead is this page: an image of the
+/// document, in a box that is the whole page. An image *is* scaled to the box it is
+/// given, whatever its own size is, which is the one thing that makes the window and the
+/// document the same size at every scale.
 ///
 /// Nothing is given up for that. An SVG drawn as an image is animated and not scripted,
 /// which is the rule this engine runs under anyway: in an image a document cannot run

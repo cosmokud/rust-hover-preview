@@ -3,8 +3,8 @@ use crate::config::{
     sanitize_text_cache_mb, sanitize_text_font_scale_percent, EngineIdle, MarkdownMode,
     PreviewScale, PreviewType, TextTheme, TransparentBackground, TriggerKeyMode,
     DEFAULT_IMAGE_CACHE_MB, DEFAULT_OFFICE_CACHE_MB, DEFAULT_OFFICE_ENGINE_IDLE_SECS,
-    DEFAULT_PDF_CACHE_MB, DEFAULT_PREVIEW_SCALE_PERCENT, DEFAULT_TEXT_CACHE_MB,
-    DEFAULT_TEXT_FONT_SCALE_PERCENT, DEFAULT_WEBVIEW_IDLE_SECS,
+    DEFAULT_PDF_CACHE_MB, DEFAULT_PREVIEW_SCALE_PERCENT, DEFAULT_SVG_SCALE_PERCENT,
+    DEFAULT_TEXT_CACHE_MB, DEFAULT_TEXT_FONT_SCALE_PERCENT, DEFAULT_WEBVIEW_IDLE_SECS,
 };
 use crate::explorer_hook;
 use crate::office_render;
@@ -90,6 +90,22 @@ const ID_TRAY_SCALE_150: u16 = 1045; // 150%
 const ID_TRAY_SCALE_100: u16 = 1046; // 100%
 const ID_TRAY_SCALE_50: u16 = 1047; // 50%
 const ID_TRAY_SCALE_25: u16 = 1048; // 25%
+/// The `Placement → SVG Scaling` submenu: one command per share of the display a
+/// document is drawn at, in the order it lists them. The ids start past the last
+/// range the app's own items occupy — the caches, which end below this — so a share
+/// of the display and a cache size are never read as each other.
+const ID_TRAY_SVG_SCALE_BASE: u16 = 1400;
+/// The shares of the display the `SVG Scaling` submenu offers, in the order it lists
+/// them: the whole room a document can be given at the top, then the shares of it a
+/// document is asked for below. `50` — half the display — is where the setting
+/// starts.
+const SVG_SCALE_CHOICES: [PreviewScale; 5] = [
+    PreviewScale::FitToScreen,
+    PreviewScale::Percent(75),
+    PreviewScale::Percent(50),
+    PreviewScale::Percent(25),
+    PreviewScale::Percent(10),
+];
 const ID_TRAY_THEME_LIGHT: u16 = 1050; // Atom One Light
 const ID_TRAY_THEME_DARK: u16 = 1051; // One Dark Pro
 const ID_TRAY_MARKDOWN_RENDERED: u16 = 1052; // Rendered document
@@ -295,8 +311,22 @@ unsafe extern "system" fn tray_window_proc(
                 cmd if (ID_TRAY_PDF_CACHE_BASE..ID_TRAY_TEXT_CACHE_BASE).contains(&cmd) => {
                     set_pdf_cache_mb(cmd - ID_TRAY_PDF_CACHE_BASE)
                 }
-                cmd if cmd >= ID_TRAY_TEXT_CACHE_BASE => {
+                // The text cache is the last of the four, so its range is bounded by
+                // the sizes it offers rather than by the next base: an item of a
+                // submenu added past it is not a cache size.
+                cmd if (ID_TRAY_TEXT_CACHE_BASE
+                    ..ID_TRAY_TEXT_CACHE_BASE + CACHE_SIZE_CHOICES_MB.len() as u16)
+                    .contains(&cmd) =>
+                {
                     set_text_cache_mb(cmd - ID_TRAY_TEXT_CACHE_BASE)
+                }
+                // A share of the display a document is drawn at, by the position it
+                // was listed at.
+                cmd if (ID_TRAY_SVG_SCALE_BASE
+                    ..ID_TRAY_SVG_SCALE_BASE + SVG_SCALE_CHOICES.len() as u16)
+                    .contains(&cmd) =>
+                {
+                    set_svg_scale(cmd - ID_TRAY_SVG_SCALE_BASE)
                 }
                 ID_TRAY_FONT_400 => set_text_font_scale(400),
                 ID_TRAY_FONT_300 => set_text_font_scale(300),
@@ -910,6 +940,23 @@ unsafe fn show_context_menu(hwnd: HWND) {
         w!("Scaling"),
     );
 
+    // Add the SVG Scaling submenu: how much of the display a document is drawn over.
+    // It sits beside the picture scale because it is the same question about another
+    // kind of preview, and it is a submenu of its own because the answers are not the
+    // same answers: a picture's percentage is of its own size, a document's is of the
+    // display.
+    let svg_scale = CONFIG
+        .lock()
+        .map(|c| c.svg_scale)
+        .unwrap_or(PreviewScale::Percent(DEFAULT_SVG_SCALE_PERCENT));
+
+    append_svg_scale_menu(
+        placement_menu,
+        w!("SVG Scaling"),
+        ID_TRAY_SVG_SCALE_BASE,
+        svg_scale,
+    );
+
     let _ = AppendMenuW(
         menu,
         MF_STRING | MF_POPUP,
@@ -1406,6 +1453,68 @@ fn background_at(index: u16) -> Option<TransparentBackground> {
     BACKGROUND_CHOICES.get(index as usize).copied()
 }
 
+/// The `SVG Scaling` submenu: the shares of the display a document is drawn at, with
+/// the one the setting is on marked, and nothing marked for a share the menu does not
+/// offer — which is what a hand-edited `config.ini` can ask for.
+fn append_svg_scale_menu(parent: HMENU, label: PCWSTR, base: u16, scale: PreviewScale) {
+    let menu = unsafe { CreatePopupMenu().unwrap() };
+
+    // The labels are kept for as long as the menu is being filled out, for the same
+    // reason the cache labels are: `AppendMenuW` is handed a pointer, so the wide
+    // strings have to outlive the call that lists them.
+    let labels: Vec<Vec<u16>> = SVG_SCALE_CHOICES
+        .iter()
+        .map(|choice| {
+            svg_scale_label(*choice, DEFAULT_SVG_SCALE_PERCENT)
+                .encode_utf16()
+                .chain(std::iter::once(0))
+                .collect()
+        })
+        .collect();
+
+    for (index, choice) in SVG_SCALE_CHOICES.iter().enumerate() {
+        let flags = MF_STRING
+            | if *choice == scale {
+                MF_CHECKED
+            } else {
+                MF_UNCHECKED
+            };
+        let _ = unsafe {
+            AppendMenuW(
+                menu,
+                flags,
+                (base + index as u16) as usize,
+                PCWSTR(labels[index].as_ptr()),
+            )
+        };
+    }
+
+    let _ = unsafe { AppendMenuW(parent, MF_STRING | MF_POPUP, menu.0 as usize, label) };
+}
+
+/// What a share of the display is called in the menu: the percentage itself, with the
+/// one the setting starts at marked as the default. The whole room is not a percentage
+/// of it, so it is named for what it is.
+fn svg_scale_label(scale: PreviewScale, default_percent: u32) -> String {
+    let label = match scale {
+        PreviewScale::Percent(percent) => format!("{percent}%"),
+        _ => "Fit to Screen".to_string(),
+    };
+
+    if scale == PreviewScale::Percent(default_percent) {
+        format!("{label} (Default)")
+    } else {
+        label
+    }
+}
+
+/// The share of the display an item of the `SVG Scaling` submenu stands for, by the
+/// position it was listed at. An id past the last choice the menu offered is one that
+/// is not there.
+fn svg_scale_at(index: u16) -> Option<PreviewScale> {
+    SVG_SCALE_CHOICES.get(index as usize).copied()
+}
+
 /// One `Keep … Engine` submenu: the idle times every engine this app keeps warm
 /// offers, with the one that engine is on marked, and nothing marked for a time the
 /// menu does not offer — which is what a hand-edited `config.ini` can ask for. An
@@ -1670,6 +1779,24 @@ fn set_preview_scale(scale: PreviewScale) {
     }
 }
 
+/// How much of the display a document is drawn over, by the position the item was
+/// listed at.
+///
+/// The size a document is drawn at is part of the placement that was made when the
+/// preview was opened — the box is sized, and the document is drawn into it — so,
+/// like the position and the picture scale beside it, this applies to the next hover
+/// rather than resizing the preview that is already up.
+fn set_svg_scale(index: u16) {
+    let Some(scale) = svg_scale_at(index) else {
+        return;
+    };
+
+    if let Ok(mut config) = CONFIG.lock() {
+        config.svg_scale = scale;
+        config.save();
+    }
+}
+
 fn set_hover_delay(hover_delay_ms: u64) {
     if let Ok(mut config) = CONFIG.lock() {
         config.hover_delay_ms = hover_delay_ms;
@@ -1918,6 +2045,67 @@ mod tests {
                 && !documents.contains(&ID_TRAY_IMAGE_BACKGROUND_BASE),
             "the ranges {images:?} and {documents:?} overlap"
         );
+    }
+
+    /// The `SVG Scaling` submenu offers the whole room a document can be given and
+    /// then the shares of it, in that order, and each id resolves back to the share
+    /// its item was listed for — which is what makes a click select what it named.
+    /// The share a document starts at is marked as the default.
+    #[test]
+    fn every_offered_svg_scale_is_one_the_setting_keeps() {
+        assert_eq!(
+            SVG_SCALE_CHOICES.map(|scale| svg_scale_label(scale, DEFAULT_SVG_SCALE_PERCENT)),
+            [
+                "Fit to Screen".to_string(),
+                "75%".to_string(),
+                "50% (Default)".to_string(),
+                "25%".to_string(),
+                "10%".to_string(),
+            ]
+        );
+
+        for (index, scale) in SVG_SCALE_CHOICES.iter().enumerate() {
+            assert_eq!(svg_scale_at(index as u16), Some(*scale));
+        }
+
+        assert_eq!(
+            svg_scale_at(SVG_SCALE_CHOICES.len() as u16),
+            None,
+            "an id past the last item is not one the menu offered"
+        );
+    }
+
+    /// What the menu writes is what the file reads back: every share it offers is one
+    /// the setting holds, so a choice made here is still the choice after a restart.
+    #[test]
+    fn every_offered_svg_scale_round_trips_through_the_file() {
+        for scale in SVG_SCALE_CHOICES {
+            let written = scale.as_str();
+
+            assert_eq!(
+                PreviewScale::from_str(&written),
+                Some(scale),
+                "`{written}` read back"
+            );
+        }
+    }
+
+    /// A share of the display is never read as a cache size: the text cache is the
+    /// last of the four, and the items added past it are a range of their own.
+    #[test]
+    fn the_svg_scale_range_is_not_another_submenus_range() {
+        let scales =
+            ID_TRAY_SVG_SCALE_BASE..ID_TRAY_SVG_SCALE_BASE + SVG_SCALE_CHOICES.len() as u16;
+        let text_cache =
+            ID_TRAY_TEXT_CACHE_BASE..ID_TRAY_TEXT_CACHE_BASE + CACHE_SIZE_CHOICES_MB.len() as u16;
+        let themes = ID_TRAY_THEME_CUSTOM_BASE..ID_TRAY_IMAGE_CACHE_BASE;
+
+        for other in [text_cache, themes] {
+            assert!(
+                !other.contains(&ID_TRAY_SVG_SCALE_BASE) && !scales.contains(&other.start),
+                "the ranges {scales:?} and {other:?} overlap"
+            );
+        }
     }
 
     /// Every item a person can pick is one the setting can hold, so what the menu

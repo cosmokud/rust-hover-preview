@@ -4,8 +4,8 @@ use crate::cloud_files;
 use crate::config::{
     sanitize_image_cache_mb, sanitize_webp_playback_fps, MarkdownMode, PreviewScale, PreviewType,
     TextTheme, TransparentBackground, DEFAULT_IMAGE_CACHE_MB, DEFAULT_PREVIEW_SCALE_PERCENT,
-    DEFAULT_TEXT_FONT_SCALE_PERCENT, DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS,
-    DEFAULT_WEBP_PLAYBACK_FPS,
+    DEFAULT_SVG_SCALE_PERCENT, DEFAULT_TEXT_FONT_SCALE_PERCENT,
+    DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS, DEFAULT_WEBP_PLAYBACK_FPS,
 };
 use crate::engine_processes;
 use crate::office_formats;
@@ -1001,6 +1001,15 @@ fn current_preview_scale() -> PreviewScale {
         .unwrap_or(PreviewScale::Percent(DEFAULT_PREVIEW_SCALE_PERCENT))
 }
 
+/// The share of the display an SVG document is drawn at, read from the configuration
+/// the way the picture scale beside it is.
+fn current_svg_scale() -> PreviewScale {
+    CONFIG
+        .lock()
+        .map(|cfg| cfg.svg_scale)
+        .unwrap_or(PreviewScale::Percent(DEFAULT_SVG_SCALE_PERCENT))
+}
+
 /// The theme, Markdown rendering and font size the configuration currently
 /// selects, read once per hover so a measure and the render that follows agree.
 fn current_text_options() -> TextPreviewOptions {
@@ -1124,14 +1133,21 @@ fn request_office_render(
 /// when the space beside the cursor cannot hold it — and the text renderer reads
 /// the size it is given as "as many lines and columns as fit".
 ///
-/// An SVG keeps the configured scale as a picture does, and `100%` means the size
-/// the document asks for. It is drawn at whatever size it is asked for either way —
-/// that is what a vector is — and the engine is given a page that makes the document
-/// the size of the window, so the setting means the document rather than the window
-/// wherever the document is played: see `webview_preview::frame_page`.
+/// An SVG is the same case as a page: it is drawn at whatever size it is asked for,
+/// so the room the display has is free quality and the whole of it is what a document
+/// is drawn at. What it is asked for is a share of that room rather than a share of
+/// the size the file asks for, which is the one thing a document and a picture do not
+/// agree on: a picture at `50%` is half of its own size, a document at `50%` is half
+/// of the screen. Where a document is played by the engine rather than drawn here, the
+/// window is the size that came out of this and the page fills it, so the setting means
+/// the same thing in both readers: see `webview_preview::frame_page`.
 ///
 /// Every other format keeps the configured scale.
-fn effective_preview_scale(path: &Path, preview_scale: PreviewScale) -> PreviewScale {
+fn effective_preview_scale(
+    path: &Path,
+    preview_scale: PreviewScale,
+    svg_scale: PreviewScale,
+) -> PreviewScale {
     if pdf_preview::is_pdf_file(path) {
         fit_reduced(preview_scale)
     } else if is_text_preview(path) || archive_formats::is_archive_file(path) {
@@ -1155,6 +1171,8 @@ fn effective_preview_scale(path: &Path, preview_scale: PreviewScale) -> PreviewS
                 }
             }
         }
+    } else if svg_preview::is_svg_file(path) {
+        fit_reduced(svg_scale)
     } else {
         preview_scale
     }
@@ -6379,7 +6397,8 @@ pub fn run_preview_window() {
                         let bounds = monitor_bounds_from_point(x, y);
                         let dpi = monitor_dpi_from_point(x, y);
                         let follow_cursor = CONFIG.lock().map(|c| c.follow_cursor).unwrap_or(true);
-                        preview_scale = effective_preview_scale(&path, preview_scale);
+                        preview_scale =
+                            effective_preview_scale(&path, preview_scale, current_svg_scale());
 
                         // A document with no page rendered for it yet is answered with
                         // the waiting spinner, and that spinner is placed flush at the
@@ -6430,7 +6449,8 @@ pub fn run_preview_window() {
                         let bounds = monitor_bounds_from_point(center.0, center.1);
                         let dpi = monitor_dpi_from_point(center.0, center.1);
                         let follow_cursor = CONFIG.lock().map(|c| c.follow_cursor).unwrap_or(true);
-                        preview_scale = effective_preview_scale(&path, preview_scale);
+                        preview_scale =
+                            effective_preview_scale(&path, preview_scale, current_svg_scale());
 
                         if let Some(orig_dims) = media_dimensions(&path, bounds, dpi) {
                             let is_video = is_video_file(&path);
@@ -6883,6 +6903,7 @@ mod tests {
     #[test]
     fn a_page_takes_the_room_the_display_has() {
         let pdf = PathBuf::from(r"C:\docs\report.pdf");
+        let svg_scale = PreviewScale::Percent(DEFAULT_SVG_SCALE_PERCENT);
 
         for configured in [
             PreviewScale::FitToScreen,
@@ -6891,43 +6912,85 @@ mod tests {
             PreviewScale::Percent(400),
         ] {
             assert_eq!(
-                effective_preview_scale(&pdf, configured),
+                effective_preview_scale(&pdf, configured, svg_scale),
                 PreviewScale::FitToScreen
             );
         }
 
         assert_eq!(
-            effective_preview_scale(&pdf, PreviewScale::Percent(50)),
+            effective_preview_scale(&pdf, PreviewScale::Percent(50), svg_scale),
             PreviewScale::FitToScreenReduced(50)
         );
         assert_eq!(
-            effective_preview_scale(&pdf, PreviewScale::Percent(25)),
+            effective_preview_scale(&pdf, PreviewScale::Percent(25), svg_scale),
             PreviewScale::FitToScreenReduced(25)
         );
     }
 
-    /// A document is laid out at the size it asks for at `100%`, half that at `50%`, and
-    /// the room the display has when the setting asks for that — the rule a picture
-    /// follows, since a document is one that happens to be drawn rather than decoded.
+    /// A document's scale means the room the display has rather than the size the file
+    /// asks for, so `Fit to Screen` is the whole of that room and a percentage is a
+    /// share of it — half the display at `50%`, a tenth at `10%` — whatever scale the
+    /// pictures beside it are drawn at. A share the configuration can hold but the menu
+    /// does not offer is honored rather than rounded to a menu entry.
     #[test]
-    fn a_document_keeps_the_size_its_setting_asks_for() {
+    fn a_document_is_drawn_at_its_share_of_the_room() {
         let svg = PathBuf::from(r"C:\art\clock.svg");
+        let configured = PreviewScale::Percent(100);
 
         assert_eq!(
-            effective_preview_scale(&svg, PreviewScale::Percent(100)),
-            PreviewScale::Percent(100)
-        );
-        assert_eq!(
-            effective_preview_scale(&svg, PreviewScale::Percent(50)),
-            PreviewScale::Percent(50)
-        );
-        assert_eq!(
-            effective_preview_scale(&svg, PreviewScale::Percent(400)),
-            PreviewScale::Percent(400)
-        );
-        assert_eq!(
-            effective_preview_scale(&svg, PreviewScale::FitToScreen),
+            effective_preview_scale(&svg, configured, PreviewScale::FitToScreen),
             PreviewScale::FitToScreen
+        );
+        for percent in [75, 50, 25, 10] {
+            assert_eq!(
+                effective_preview_scale(&svg, configured, PreviewScale::Percent(percent)),
+                PreviewScale::FitToScreenReduced(percent),
+                "{percent}% of the room"
+            );
+        }
+
+        assert_eq!(
+            effective_preview_scale(&svg, configured, PreviewScale::Percent(60)),
+            PreviewScale::FitToScreenReduced(60),
+            "a share the menu does not offer is the share it is"
+        );
+
+        for configured in [
+            PreviewScale::FitToScreen,
+            PreviewScale::Percent(100),
+            PreviewScale::Percent(400),
+        ] {
+            assert_eq!(
+                effective_preview_scale(&svg, configured, PreviewScale::Percent(100)),
+                PreviewScale::FitToScreen,
+                "asking for the whole room or more is the whole room"
+            );
+        }
+    }
+
+    /// The picture scale is about another kind of preview, so a document's size does
+    /// not move when it does: the two settings are read one each rather than one for
+    /// both.
+    #[test]
+    fn a_documents_size_is_not_the_pictures_setting() {
+        let svg = PathBuf::from(r"C:\art\clock.svg");
+        let picture = PreviewScale::Percent(100);
+
+        assert_eq!(
+            effective_preview_scale(
+                &svg,
+                picture,
+                PreviewScale::Percent(DEFAULT_SVG_SCALE_PERCENT)
+            ),
+            PreviewScale::FitToScreenReduced(DEFAULT_SVG_SCALE_PERCENT)
+        );
+
+        // And a picture is still drawn at the picture scale, whatever the document
+        // setting says.
+        let png = PathBuf::from(r"C:\art\photo.png");
+        assert_eq!(
+            effective_preview_scale(&png, PreviewScale::Percent(200), PreviewScale::FitToScreen),
+            PreviewScale::Percent(200)
         );
     }
 
@@ -6970,7 +7033,11 @@ mod tests {
     #[test]
     fn a_document_with_no_page_yet_waits_in_the_spinners_own_box() {
         let waiting = PathBuf::from(r"C:\docs\not-rendered-yet.docx");
-        let scale = effective_preview_scale(&waiting, PreviewScale::Percent(400));
+        let scale = effective_preview_scale(
+            &waiting,
+            PreviewScale::Percent(400),
+            PreviewScale::Percent(DEFAULT_SVG_SCALE_PERCENT),
+        );
 
         assert_eq!(scale, PreviewScale::Percent(100));
         assert_eq!(
@@ -7585,7 +7652,7 @@ mod tests {
             println!("\n--- {} ---", path.display());
 
             let configured = current_preview_scale();
-            let scale = effective_preview_scale(&path, configured);
+            let scale = effective_preview_scale(&path, configured, current_svg_scale());
             println!("scale: configured {configured:?}, effective {scale:?}");
 
             let Some(dimensions) = media_dimensions(&path, bounds, dpi) else {
