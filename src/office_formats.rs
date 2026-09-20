@@ -142,14 +142,15 @@ pub fn app_for(path: &Path) -> Option<OfficeApp> {
     None
 }
 
-/// The box a document's page is asked for in, by the shape that family's pages
-/// have: a Word page is a portrait sheet, a workbook's first printed page is
-/// usually a landscape one, and a slide is a slide.
+/// The box a document's page is measured by when nothing else can measure it, by
+/// the shape that family's pages have: a Word page is a portrait sheet, a workbook's
+/// first printed page is usually a landscape one, and a slide is a slide.
 ///
-/// It is what a render is asked for — a slide is exported at that width — and what
-/// a preview is placed by while the page is on its way. A spinner is drawn in a box
-/// of its own (`office_preview::WAITING_BOX`), so what this really decides is the
-/// size a render comes back at.
+/// What a render is asked for is the room the preview may take rather than this, so
+/// that a slide is exported at the width the display can show (see
+/// `preview_window::request_office_render`). This is the answer for a document whose
+/// page cannot be read — a file whose export was cut short, say — where a page-shaped
+/// box still says more than a spinner's own.
 pub fn default_page_size(path: &Path) -> (u32, u32) {
     match app_for(path) {
         Some(OfficeApp::Excel) => (1123, 794),

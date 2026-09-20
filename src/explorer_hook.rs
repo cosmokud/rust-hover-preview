@@ -5,8 +5,9 @@ use crate::image_formats::matches_image_list;
 use crate::office_formats::matches_office_list;
 use crate::pdf_preview::is_pdf_file;
 use crate::preview_window::{
-    cursor_preview_hover, hide_preview, kill_stray_video_process, preview_pointer_hold,
-    preview_screen_rect, show_preview, show_preview_keyboard, PreviewCursorHover,
+    cursor_preview_hover, hide_preview, kill_stray_video_process, monitor_dpi_from_point,
+    preview_pointer_hold, preview_screen_rect, show_preview, show_preview_keyboard,
+    PreviewCursorHover,
 };
 use crate::svg_preview;
 use crate::text_formats::matches_text_lists;
@@ -24,9 +25,9 @@ use std::time::{Duration, Instant};
 use windows::core::{w, IUnknown, Interface, VARIANT};
 use windows::Win32::Foundation::{BOOL, HWND, LPARAM, POINT, RECT, SIZE};
 use windows::Win32::Graphics::Gdi::{
-    CreateCompatibleDC, CreateFontIndirectW, DeleteDC, DeleteObject, GetMonitorInfoW,
-    GetTextExtentPoint32W, MonitorFromWindow, SelectObject, LOGFONTW, MONITORINFO,
-    MONITOR_DEFAULTTONEAREST,
+    CreateCompatibleDC, CreateFontIndirectW, DeleteDC, DeleteObject, EnumDisplayMonitors,
+    GetMonitorInfoW, GetTextExtentPoint32W, MonitorFromWindow, SelectObject, HDC, HMONITOR,
+    LOGFONTW, MONITORINFO, MONITOR_DEFAULTTONEAREST,
 };
 use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, IServiceProvider, CLSCTX_ALL,
@@ -43,7 +44,9 @@ use windows::Win32::UI::Accessibility::{
     UIA_NativeWindowHandlePropertyId, UIA_SelectionPatternId, UIA_TextControlTypeId,
     UIAutomationPropertyInfo, UIAutomationType_Int, UIA_CONTROLTYPE_ID, UIA_PROPERTY_ID,
 };
-use windows::Win32::UI::HiDpi::{GetDpiForSystem, GetDpiForWindow};
+use windows::Win32::UI::HiDpi::{
+    GetDpiForMonitor, GetDpiForSystem, GetDpiForWindow, MDT_EFFECTIVE_DPI,
+};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, VK_DOWN, VK_END, VK_HOME, VK_LBUTTON, VK_LEFT, VK_MBUTTON, VK_NEXT, VK_PRIOR,
     VK_RBUTTON, VK_RETURN, VK_RIGHT, VK_UP, VK_XBUTTON1, VK_XBUTTON2,
@@ -54,10 +57,9 @@ use windows::Win32::UI::Shell::{
     ShellWindows, SIGDN_DESKTOPABSOLUTEPARSING, SIGDN_FILESYSPATH, SIGDN_NORMALDISPLAY,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GetAncestor, GetClassNameW, GetCursorPos, GetForegroundWindow, GetSystemMetrics,
-    GetWindowPlacement, GetWindowRect, GetWindowThreadProcessId, IsIconic, IsWindowVisible,
-    SystemParametersInfoW, WindowFromPoint, GA_ROOT, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN,
-    SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SPI_GETICONTITLELOGFONT, SW_SHOWMAXIMIZED,
+    EnumWindows, GetAncestor, GetClassNameW, GetCursorPos, GetForegroundWindow, GetWindowPlacement,
+    GetWindowRect, GetWindowThreadProcessId, IsIconic, IsWindowVisible, SystemParametersInfoW,
+    WindowFromPoint, GA_ROOT, SPI_GETICONTITLELOGFONT, SW_SHOWMAXIMIZED,
     SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, WINDOWPLACEMENT,
 };
 
@@ -66,12 +68,27 @@ struct ExplorerWindowCounts {
     visible: usize,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// What the desktop looks like from here, which is what decides whether everything
+/// the hook remembers about a view — the window the pointer is in, the folder it has
+/// open, the item an observation was made of — still describes anything.
+///
+/// Each display is in it, rather than the union of them: a display rescaled from 100%
+/// to 150% rearranges everything drawn on that display and leaves the union exactly
+/// where it was, and a display becoming the primary one moves where new windows open
+/// and what the system's own metrics are measured against, without moving the union
+/// either.
+#[derive(Clone, Debug, Eq, PartialEq)]
 struct DisplaySignature {
-    left: i32,
-    top: i32,
-    width: i32,
-    height: i32,
+    displays: Vec<DisplayEntry>,
+}
+
+/// One display as the signature sees it: where it is, what it is scaled to, and
+/// whether it is the primary one.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct DisplayEntry {
+    rect: (i32, i32, i32, i32),
+    dpi: u32,
+    primary: bool,
 }
 
 /// The view under a point, as the shell describes it: the window it is drawn in,
@@ -547,12 +564,14 @@ impl KeyboardPointerPause {
     /// ignored on purpose so a parked mouse cannot cancel a keyboard preview — and
     /// the wider tolerance holds for the whole of the keyboard's turn, not only
     /// while the preview's box happens to cover the cursor.
-    fn move_threshold_px(&self, keyboard_owns_screen: bool) -> i32 {
-        if keyboard_owns_screen || self.freezes_pointer() {
-            KEYBOARD_POINTER_MOVE_TOLERANCE_PX
+    fn move_threshold_px(&self, keyboard_owns_screen: bool, dpi: u32) -> i32 {
+        let logical_pixels = if keyboard_owns_screen || self.freezes_pointer() {
+            KEYBOARD_POINTER_MOVE_TOLERANCE_PIXELS
         } else {
-            MOUSE_MOVE_PX
-        }
+            MOUSE_MOVE_PIXELS
+        };
+
+        (logical_pixels * dpi as f32 / 96.0).round() as i32
     }
 
     /// Decide the freeze from the preview's on-screen box. A box only counts
@@ -645,8 +664,13 @@ const DISPLAY_CHANGE_BACKOFF_MS: u64 = 1500;
 const KEYBOARD_FOCUS_INPUT_GRACE_MS: u64 = 500;
 const HOVER_RESOLVER_INPUT_GRACE_MS: u64 = 1500;
 const WHEEL_SCROLL_SETTLE_MS: u64 = 150;
-const MOUSE_MOVE_PX: i32 = 5;
-const KEYBOARD_POINTER_MOVE_TOLERANCE_PX: i32 = 20;
+/// How far the pointer has to move before it counts as moved at all, in logical
+/// pixels — and the wider distance that counts while the keyboard owns the screen, so
+/// a pointer resting on a desk cannot cancel a keyboard preview. Logical distances,
+/// scaled by the display the pointer is on: a hand moves the same distance whatever
+/// the display it is over is scaled to.
+const MOUSE_MOVE_PIXELS: f32 = 5.0;
+const KEYBOARD_POINTER_MOVE_TOLERANCE_PIXELS: f32 = 20.0;
 const KEYBOARD_PREVIEW_BOX_WATCH_MS: u64 = 2500;
 const VK_BACK_CODE: i32 = 0x08;
 const VK_CONTROL_CODE: i32 = 0x11;
@@ -708,26 +732,62 @@ fn clear_shell_view_probe_caches() {
     }
 }
 
+/// `MONITORINFOF_PRIMARY`, which the Windows bindings do not name: the flag
+/// `GetMonitorInfo` sets on the display new windows open on.
+const MONITORINFOF_PRIMARY_FLAG: u32 = 0x1;
+
+/// One display, as `EnumDisplayMonitors` walks them, added to the list the signature
+/// is being built from. The list is what the caller's `LPARAM` points at.
+unsafe extern "system" fn collect_display(
+    monitor: HMONITOR,
+    _dc: HDC,
+    _rect: *mut RECT,
+    data: LPARAM,
+) -> BOOL {
+    let displays = &mut *(data.0 as *mut Vec<DisplayEntry>);
+
+    let mut info = MONITORINFO {
+        cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+        ..Default::default()
+    };
+    if !GetMonitorInfoW(monitor, &mut info).as_bool() {
+        return BOOL(1);
+    }
+
+    let mut dpi_x = 0u32;
+    let mut dpi_y = 0u32;
+    let dpi = if GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y).is_ok() {
+        dpi_x
+    } else {
+        0
+    };
+    let display = info.rcMonitor;
+
+    displays.push(DisplayEntry {
+        rect: (display.left, display.top, display.right, display.bottom),
+        dpi,
+        primary: info.dwFlags & MONITORINFOF_PRIMARY_FLAG != 0,
+    });
+
+    BOOL(1)
+}
+
 fn current_display_signature() -> Option<DisplaySignature> {
+    let mut displays: Vec<DisplayEntry> = Vec::new();
+
     unsafe {
-        let width = GetSystemMetrics(SM_CXVIRTUALSCREEN);
-        let height = GetSystemMetrics(SM_CYVIRTUALSCREEN);
-        if width <= 0 || height <= 0 {
+        let data = LPARAM(&mut displays as *mut Vec<DisplayEntry> as isize);
+        if !EnumDisplayMonitors(None, None, Some(collect_display), data).as_bool() {
             return None;
         }
-
-        Some(DisplaySignature {
-            left: GetSystemMetrics(SM_XVIRTUALSCREEN),
-            top: GetSystemMetrics(SM_YVIRTUALSCREEN),
-            width,
-            height,
-        })
     }
+
+    (!displays.is_empty()).then_some(DisplaySignature { displays })
 }
 
 fn display_signature_changed(
-    previous: Option<DisplaySignature>,
-    current: DisplaySignature,
+    previous: Option<&DisplaySignature>,
+    current: &DisplaySignature,
 ) -> bool {
     previous
         .map(|signature| signature != current)
@@ -2872,7 +2932,7 @@ pub fn run_explorer_hook() {
         }
 
         if let Some(display_signature) = current_display_signature() {
-            if display_signature_changed(last_display_signature, display_signature) {
+            if display_signature_changed(last_display_signature.as_ref(), &display_signature) {
                 last_display_signature = Some(display_signature);
                 clear_shell_view_probe_caches();
                 resolver.forget_view();
@@ -2930,17 +2990,21 @@ pub fn run_explorer_hook() {
                 // pointer that stays is answered with what it already has.
                 unsafe {
                     let mut cursor_pos = POINT::default();
-                    if GetCursorPos(&mut cursor_pos).is_ok()
-                        && ((cursor_pos.x - last_cursor_pos.x).abs() > MOUSE_MOVE_PX
-                            || (cursor_pos.y - last_cursor_pos.y).abs() > MOUSE_MOVE_PX)
-                    {
-                        last_cursor_pos = cursor_pos;
+                    if GetCursorPos(&mut cursor_pos).is_ok() {
+                        let dpi = monitor_dpi_from_point(cursor_pos.x, cursor_pos.y);
+                        let threshold = pointer_pause.move_threshold_px(false, dpi);
 
-                        if last_file.is_some() {
-                            hide_preview();
-                            last_file = None;
-                            hover_start = None;
-                            video_hover_guard_until = None;
+                        if (cursor_pos.x - last_cursor_pos.x).abs() > threshold
+                            || (cursor_pos.y - last_cursor_pos.y).abs() > threshold
+                        {
+                            last_cursor_pos = cursor_pos;
+
+                            if last_file.is_some() {
+                                hide_preview();
+                                last_file = None;
+                                hover_start = None;
+                                video_hover_guard_until = None;
+                            }
                         }
                     }
                 }
@@ -3114,8 +3178,10 @@ pub fn run_explorer_hook() {
             // treated the way it was before the pointer ever touched it.
             let pointer_hold = preview_pointer_hold(cursor_pos.x, cursor_pos.y);
 
-            let move_threshold =
-                pointer_pause.move_threshold_px(is_keyboard_hover || keyboard_screen_owner);
+            let move_threshold = pointer_pause.move_threshold_px(
+                is_keyboard_hover || keyboard_screen_owner,
+                monitor_dpi_from_point(cursor_pos.x, cursor_pos.y),
+            );
             let moved = (cursor_pos.x - last_cursor_pos.x).abs() > move_threshold
                 || (cursor_pos.y - last_cursor_pos.y).abs() > move_threshold;
             // Read the navigation keys first: GetAsyncKeyState's "pressed since
@@ -3855,6 +3921,51 @@ pub fn run_explorer_hook() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A signature of one display, which is all the tests here need: what is compared
+    /// is a display's own place and scale, not what the desktop adds up to.
+    fn signed(displays: &[(u32, bool)]) -> DisplaySignature {
+        DisplaySignature {
+            displays: displays
+                .iter()
+                .map(|(dpi, primary)| DisplayEntry {
+                    rect: (0, 0, 1920, 1080),
+                    dpi: *dpi,
+                    primary: *primary,
+                })
+                .collect(),
+        }
+    }
+
+    /// What the signature is for: a display rescaled, or another one made the primary,
+    /// rearranges everything Explorer is drawing without moving the desktop's own
+    /// bounds — so both are changes, and a desktop that did not change is not.
+    #[test]
+    fn a_display_change_is_a_rescale_or_another_primary_display() {
+        let before = signed(&[(96, true), (96, false)]);
+
+        assert!(
+            !display_signature_changed(Some(&before), &signed(&[(96, true), (96, false)])),
+            "the same desktop is not a change"
+        );
+        assert!(
+            display_signature_changed(Some(&before), &signed(&[(144, true), (96, false)])),
+            "the primary display rescaled to 150% is one"
+        );
+        assert!(
+            display_signature_changed(Some(&before), &signed(&[(96, true), (144, false)])),
+            "and so is the second display rescaled, which the desktop's bounds do not show"
+        );
+        assert!(
+            display_signature_changed(Some(&before), &signed(&[(96, false), (96, true)])),
+            "and another display becoming the primary one"
+        );
+
+        assert!(
+            !display_signature_changed(None, &before),
+            "the first look at a desktop is not a change"
+        );
+    }
 
     /// The width a name is drawn at is the name's own: a longer name measures wider
     /// than a short one, which is what makes the region a preview is kept off the name

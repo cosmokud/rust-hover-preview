@@ -34,9 +34,19 @@ const PAGE_DIMENSION_CACHE_MAX_ENTRIES: usize = 512;
 pub const DEFAULT_PAGE_WIDTH: u32 = 794;
 pub const DEFAULT_PAGE_HEIGHT: u32 = 1123;
 
-/// Page size in DIPs, keyed by path. `None` records a file that could not be
-/// opened as a PDF, so a broken file is not re-parsed on every hover.
-type PageDimensionCache = HashMap<PathBuf, Option<(u32, u32)>>;
+/// What a page's size is only valid for: the file, and the version of it the size was
+/// read from. A file saved again is another document — one exported at another page
+/// size is the case that matters — and its first page can be another shape.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+struct PageDimensionKey {
+    path: PathBuf,
+    modified: Option<SystemTime>,
+    len: u64,
+}
+
+/// Page size in DIPs, keyed by the file and its version. `None` records a file that
+/// could not be opened as a PDF, so a broken file is not re-parsed on every hover.
+type PageDimensionCache = HashMap<PageDimensionKey, Option<(u32, u32)>>;
 
 static PAGE_DIMENSIONS: Lazy<Mutex<PageDimensionCache>> = Lazy::new(|| Mutex::new(HashMap::new()));
 
@@ -66,16 +76,32 @@ pub fn is_pdf_preview(path: &Path) -> bool {
 /// `None` means the file could not be read as a PDF, which is treated as "not
 /// previewable" rather than as "use a guessed size".
 pub fn page_dimensions(path: &Path) -> Option<(u32, u32)> {
+    let key = page_dimension_key(path);
     if let Ok(cache) = PAGE_DIMENSIONS.lock() {
-        if let Some(cached) = cache.get(path) {
+        if let Some(cached) = cache.get(&key) {
             return *cached;
         }
     }
 
     let dimensions = probe_page_dimensions(path);
-    remember_page_dimensions(path, dimensions);
+    remember_page_dimensions(key, dimensions);
 
     dimensions
+}
+
+/// The file and the version of it a page size is read from, read the way every other
+/// held value in this app is: what a file is, is its name as it is now, what it
+/// weighed, and when it was last written.
+fn page_dimension_key(path: &Path) -> PageDimensionKey {
+    let metadata = std::fs::metadata(path).ok();
+
+    PageDimensionKey {
+        path: path.to_path_buf(),
+        modified: metadata
+            .as_ref()
+            .and_then(|metadata| metadata.modified().ok()),
+        len: metadata.map(|metadata| metadata.len()).unwrap_or(0),
+    }
 }
 
 /// Record a page size that has been read, so it never has to be read again.
@@ -84,12 +110,12 @@ pub fn page_dimensions(path: &Path) -> Option<(u32, u32)> {
 /// `Windows.Data.Pdf` is handed a stream, means reading the whole file — so what
 /// one of them read is handed to the other's cache rather than left for it to
 /// find a second time.
-fn remember_page_dimensions(path: &Path, dimensions: Option<(u32, u32)>) {
+fn remember_page_dimensions(key: PageDimensionKey, dimensions: Option<(u32, u32)>) {
     if let Ok(mut cache) = PAGE_DIMENSIONS.lock() {
-        if !cache.contains_key(path) && cache.len() >= PAGE_DIMENSION_CACHE_MAX_ENTRIES {
+        if !cache.contains_key(&key) && cache.len() >= PAGE_DIMENSION_CACHE_MAX_ENTRIES {
             cache.clear();
         }
-        cache.insert(path.to_path_buf(), dimensions);
+        cache.insert(key, dimensions);
     }
 }
 
@@ -342,7 +368,7 @@ fn remember_opened_dimensions(path: &Path, document: &PdfDocument) {
         .and_then(|page| page.Size().ok())
         .and_then(|size| page_size_in_dips(size.Width, size.Height));
 
-    remember_page_dimensions(path, dimensions);
+    remember_page_dimensions(page_dimension_key(path), dimensions);
 }
 
 fn probe_page_dimensions(path: &Path) -> Option<(u32, u32)> {
@@ -609,6 +635,31 @@ mod tests {
         page_cache_trim(&mut cache, 0);
         assert!(cache.entries.is_empty());
         assert_eq!(cache.bytes, 0);
+    }
+
+    /// The file and its version are what a page's size is read for: a file saved
+    /// again — exported at another page size, say — is measured again rather than
+    /// placed by the shape of the document it used to be.
+    #[test]
+    fn measures_a_page_again_when_the_file_is_saved_again() {
+        let folder = std::env::temp_dir()
+            .join("rust-hover-preview-pdf-tests")
+            .join("dimensions");
+        std::fs::create_dir_all(&folder).expect("a test folder");
+        let path = folder.join("measured.pdf");
+        std::fs::write(&path, b"one page").expect("a written file");
+
+        let first = page_dimension_key(&path);
+        assert_eq!(first, page_dimension_key(&path));
+
+        std::fs::write(&path, b"another page, and a longer one").expect("a rewritten file");
+        assert_ne!(
+            first,
+            page_dimension_key(&path),
+            "a rewritten file is measured again"
+        );
+
+        let _ = std::fs::remove_file(&path);
     }
 
     /// The file, its version and the box it was drawn into are what a page is held
