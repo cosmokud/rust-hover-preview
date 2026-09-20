@@ -65,14 +65,15 @@ use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetCursorPos, GetSystemMetrics, GetWindow, GetWindowLongPtrW, GetWindowRect,
     GetWindowThreadProcessId, IsWindow, IsWindowVisible, LoadCursorW, MoveWindow, PeekMessageW,
     RegisterClassExW, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow,
-    TrackPopupMenu, TranslateMessage, UpdateLayeredWindow, CS_HREDRAW, CS_VREDRAW, GWL_EXSTYLE,
-    GW_OWNER, HWND_TOPMOST, IDC_ARROW, MF_STRING, MSG, PBT_APMRESUMEAUTOMATIC,
-    PBT_APMRESUMESUSPEND, PBT_APMSTANDBY, PBT_APMSUSPEND, PM_REMOVE, SM_CXVIRTUALSCREEN,
-    SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SWP_FRAMECHANGED, SWP_NOACTIVATE,
-    SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SW_HIDE, SW_SHOWNOACTIVATE, TPM_LEFTALIGN,
-    TPM_NONOTIFY, TPM_RETURNCMD, TPM_TOPALIGN, ULW_ALPHA, WM_DISPLAYCHANGE, WM_DPICHANGED,
-    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_POWERBROADCAST, WM_RBUTTONUP, WNDCLASSEXW,
-    WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    SystemParametersInfoW, TrackPopupMenu, TranslateMessage, UpdateLayeredWindow, CS_HREDRAW,
+    CS_VREDRAW, GWL_EXSTYLE, GW_OWNER, HWND_TOPMOST, IDC_ARROW, MF_STRING, MSG,
+    PBT_APMRESUMEAUTOMATIC, PBT_APMRESUMESUSPEND, PBT_APMSTANDBY, PBT_APMSUSPEND, PM_REMOVE,
+    SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SPI_GETWORKAREA,
+    SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SW_HIDE,
+    SW_SHOWNOACTIVATE, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, TPM_LEFTALIGN, TPM_NONOTIFY,
+    TPM_RETURNCMD, TPM_TOPALIGN, ULW_ALPHA, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_LBUTTONDOWN,
+    WM_LBUTTONUP, WM_MOUSEMOVE, WM_POWERBROADCAST, WM_RBUTTONUP, WNDCLASSEXW, WS_EX_LAYERED,
+    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
 const PREVIEW_CLASS: PCWSTR = w!("RustHoverPreviewWindow");
@@ -3479,6 +3480,16 @@ fn ensure_video_window_topmost(x: i32, y: i32, width: i32, height: i32) -> bool 
 }
 
 /// Load media (image, animated image, text, or video) with appropriate loader
+///
+/// `max_width` x `max_height` is the box the loader may draw in, and every loader
+/// draws its frame inside it — resized, clamped or rasterized at that size. That is
+/// the rule rather than a convenience: the preview window is sized to the frame that
+/// comes back from here rather than to the box the layout planned (see
+/// `render_layered_preview_at`), and the box is what was fitted to the display, so a
+/// frame larger than the box is a preview hanging off the edge of the display. A
+/// source that draws at whatever size it is asked for — the Windows PDF engine, whose
+/// destination is in DIPs and comes back scaled by the display — has to be drawn back
+/// into the box it was given; see `pdf_preview::fit_drawn_page`.
 fn load_media(
     path: &PathBuf,
     max_width: u32,
@@ -4246,6 +4257,11 @@ unsafe fn render_layered_preview(hwnd: HWND) {
 /// Paint the frame the window is holding at a given place on screen, sizing the
 /// window to the frame.
 ///
+/// The window is the frame's size, which is what makes drawing a frame into the box
+/// the layout planned a rule every loader follows rather than a detail of one of them
+/// (see `load_media`): the box is what was fitted to the display, so a frame that grew
+/// past it takes the preview past the display's edge with it.
+///
 /// `UpdateLayeredWindow` applies the place, the size and the surface in one call,
 /// which is what lets a window that is already on screen take a frame of another
 /// size — the spinner's box first, the page's after it — without a moment of the
@@ -4994,6 +5010,12 @@ unsafe fn reset_preview_after_display_change(hwnd: HWND) {
         }
         *current = None;
     }
+
+    // A document the engine is playing is a window of its own, the way a video is, so
+    // it comes down with the rest of the preview rather than being left where the
+    // display it was placed for used to be. The hover is replayed and it is put up
+    // again at the new one.
+    webview_preview::hide();
 }
 
 /// The point a mouse message was delivered at, in window coordinates.
@@ -5111,6 +5133,40 @@ impl ScreenBounds {
     }
 }
 
+/// The work area of the primary display, for a layout that could not be anchored to
+/// the display it belongs to.
+///
+/// What this stands in for is one display's room, so one display is what it answers
+/// with: the whole virtual screen — `SM_XVIRTUALSCREEN` and its width — is the union
+/// of every display, and a preview sized to that is a preview that straddles the seam
+/// between two of them, which is the thing anchoring a layout to a display is for. A
+/// preview asked for on a display that cannot be named is therefore placed on the
+/// primary one: somewhere it is wholly visible, rather than somewhere it is not.
+fn primary_display_bounds() -> ScreenBounds {
+    unsafe {
+        let mut work = RECT::default();
+        if SystemParametersInfoW(
+            SPI_GETWORKAREA,
+            0,
+            Some(&mut work as *mut RECT as *mut core::ffi::c_void),
+            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+        )
+        .is_ok()
+        {
+            return ScreenBounds {
+                left: work.left,
+                top: work.top,
+                right: work.right,
+                bottom: work.bottom,
+            };
+        }
+    }
+
+    virtual_screen_bounds()
+}
+
+/// Every display in one rectangle, for the fallback that cannot do better than the
+/// primary display and find it missing.
 fn virtual_screen_bounds() -> ScreenBounds {
     unsafe {
         let left = GetSystemMetrics(SM_XVIRTUALSCREEN);
@@ -5136,8 +5192,9 @@ fn cursor_position() -> Option<POINT> {
 
 /// Usable bounds of the display nearest to `(x, y)`. Anchoring layout to a
 /// single monitor keeps the preview from spilling onto a neighboring display
-/// when more than one is attached. Falls back to the whole virtual screen if
-/// the monitor query fails.
+/// when more than one is attached. Falls back to the primary display if the
+/// monitor query fails — a display, rather than the union of them, since a
+/// preview sized to the union is one that spills onto a neighbor.
 fn monitor_bounds_from_point(x: i32, y: i32) -> ScreenBounds {
     unsafe {
         let monitor = MonitorFromPoint(POINT { x, y }, MONITOR_DEFAULTTONEAREST);
@@ -5158,7 +5215,7 @@ fn monitor_bounds_from_point(x: i32, y: i32) -> ScreenBounds {
         }
     }
 
-    virtual_screen_bounds()
+    primary_display_bounds()
 }
 
 /// The top edge that centers a `height`-tall preview on `center`, kept inside the
@@ -7446,6 +7503,236 @@ mod tests {
         // 720 is the name's right edge plus the gap, and 720 + 200 leaves the display;
         // 340 is its bottom plus the gap, and 340 + 300 does not.
         assert_eq!((placement.pos_x, placement.pos_y), (690, 340));
+    }
+
+    /// A planned preview is inside the display it was planned for: the box it takes is
+    /// within the room it was given, and the whole of it — place and size, both axes —
+    /// is within that display's work area.
+    fn assert_inside_the_display(layout: PreviewLayout, bounds: ScreenBounds) {
+        assert!(
+            layout.preview_w <= layout.max_width && layout.preview_h <= layout.max_height,
+            "the preview takes {} by {} of the {} by {} it was given",
+            layout.preview_w,
+            layout.preview_h,
+            layout.max_width,
+            layout.max_height
+        );
+
+        assert!(
+            layout.pos_x >= bounds.left
+                && layout.pos_y >= bounds.top
+                && layout.pos_x + layout.preview_w as i32 <= bounds.right
+                && layout.pos_y + layout.preview_h as i32 <= bounds.bottom,
+            "the preview at {},{} is {} by {}, which leaves the display of {} by {} at {},{}",
+            layout.pos_x,
+            layout.pos_y,
+            layout.preview_w,
+            layout.preview_h,
+            bounds.right - bounds.left,
+            bounds.bottom - bounds.top,
+            bounds.left,
+            bounds.top
+        );
+    }
+
+    /// The displays and the media every placement test is run over: a 1080p one, a 4K
+    /// one, a 4K one that is the second display rather than the first, and a portrait
+    /// one, against the shapes media comes in — pages both ways up, a slide, the
+    /// waiting spinner, a picture, and things far wider and far taller than any display.
+    fn displays_and_media() -> ([ScreenBounds; 4], [(u32, u32); 7], [PreviewScale; 4]) {
+        let displays = [
+            ScreenBounds {
+                left: 0,
+                top: 0,
+                right: 1920,
+                bottom: 1040,
+            },
+            ScreenBounds {
+                left: 0,
+                top: 0,
+                right: 3840,
+                bottom: 2090,
+            },
+            ScreenBounds {
+                left: 1920,
+                top: 0,
+                right: 5760,
+                bottom: 2090,
+            },
+            ScreenBounds {
+                left: 0,
+                top: 0,
+                right: 1440,
+                bottom: 2500,
+            },
+        ];
+        let media = [
+            (794, 1123),
+            (1123, 794),
+            (1920, 1080),
+            (36, 36),
+            (100, 100),
+            (8000, 120),
+            (120, 8000),
+        ];
+        let scales = [
+            PreviewScale::FitToScreen,
+            PreviewScale::FitToScreenReduced(50),
+            PreviewScale::Percent(100),
+            PreviewScale::Percent(400),
+        ];
+
+        (displays, media, scales)
+    }
+
+    /// The one thing a hovered preview may never do: leave the display it was planned
+    /// for. Every position mode, every scale, every shape of media, anchored at each
+    /// corner of the display and at its middle, with a name under the pointer and with a
+    /// row across the display's top to be kept off — because a preview that grows past
+    /// its display takes an edge and a room that disagree to find, and the ones that
+    /// disagree are not the ones anyone hovers over on purpose.
+    #[test]
+    fn places_every_hover_inside_its_display() {
+        let (displays, media, scales) = displays_and_media();
+        let mut placed = 0usize;
+
+        for bounds in displays {
+            let points = [
+                (bounds.left, bounds.top),
+                (bounds.right - 1, bounds.top),
+                (bounds.left, bounds.bottom - 1),
+                (bounds.right - 1, bounds.bottom - 1),
+                (
+                    (bounds.left + bounds.right) / 2,
+                    (bounds.top + bounds.bottom) / 2,
+                ),
+            ];
+
+            for (orig_width, orig_height) in media {
+                for preview_scale in scales {
+                    for follow_cursor in [true, false] {
+                        for (cursor_x, cursor_y) in points {
+                            let names = [
+                                None,
+                                // The name of the item the pointer is on.
+                                Some((cursor_x - 100, cursor_y - 8, cursor_x + 100, cursor_y + 8)),
+                                // A row's text across the whole display's top, which a
+                                // preview above the middle of the display covers.
+                                Some((bounds.left, bounds.top, bounds.right, bounds.top + 40)),
+                            ];
+
+                            for avoid in names {
+                                let placement = HoverPlacement {
+                                    orig_dims: (orig_width, orig_height),
+                                    avoid,
+                                    follow_cursor,
+                                    preview_scale,
+                                    // Only the waiting spinner is placed flush at the
+                                    // pointer, and only it is ever that size.
+                                    flush_at_cursor: (orig_width, orig_height) == (36, 36),
+                                };
+
+                                let Some(layout) =
+                                    compute_mouse_layout(cursor_x, cursor_y, placement, bounds)
+                                else {
+                                    continue;
+                                };
+
+                                assert_inside_the_display(layout, bounds);
+                                placed += 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // A matrix that answers nothing checks nothing: nearly every combination of
+        // point, media, scale and setting has a layout to check.
+        assert!(
+            placed >= 3000,
+            "{placed} of the matrix's layouts were placed, which is too few to have checked the rest"
+        );
+    }
+
+    /// The same promise for the preview a keyboard hover raises, which is placed from
+    /// the item rather than from the pointer: a row of a list, a box item, and an item
+    /// the display has scrolled half off its top and half off its bottom — the cases
+    /// where the room beside an item and the item's own edges disagree.
+    #[test]
+    fn places_every_keyboard_hover_inside_its_display() {
+        let (displays, media, scales) = displays_and_media();
+        let mut placed = 0usize;
+
+        for bounds in displays {
+            let items = [
+                // A row of a list, drawn across the view at its middle.
+                (
+                    bounds.left,
+                    (bounds.top + bounds.bottom) / 2,
+                    bounds.right,
+                    (bounds.top + bounds.bottom) / 2 + 40,
+                ),
+                // A box item, the way Content view draws one.
+                (
+                    bounds.left + 100,
+                    bounds.top + 100,
+                    bounds.left + 220,
+                    bounds.top + 220,
+                ),
+                // The first row of a scrolled list, half off the display's top.
+                (bounds.left, bounds.top - 20, bounds.right, bounds.top + 20),
+                // And the last one, half off its bottom.
+                (
+                    bounds.left,
+                    bounds.bottom - 20,
+                    bounds.right,
+                    bounds.bottom + 20,
+                ),
+            ];
+
+            for (item_left, item_top, item_right, item_bottom) in items {
+                for (orig_width, orig_height) in media {
+                    for preview_scale in scales {
+                        for follow_cursor in [true, false] {
+                            let avoids = [
+                                None,
+                                // The name the row is listed under, at its left end.
+                                Some((
+                                    item_left + 8,
+                                    item_top + 8,
+                                    item_left + 220,
+                                    item_bottom - 8,
+                                )),
+                                // And the row's whole width, as `Avoid Details` reads it.
+                                Some((item_left, item_top, item_right, item_bottom)),
+                            ];
+
+                            for avoid in avoids {
+                                let Some(layout) = compute_keyboard_layout(
+                                    (item_left, item_top, item_right, item_bottom),
+                                    (orig_width, orig_height),
+                                    follow_cursor,
+                                    avoid,
+                                    preview_scale,
+                                    bounds,
+                                ) else {
+                                    continue;
+                                };
+
+                                assert_inside_the_display(layout, bounds);
+                                placed += 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        assert!(
+            placed >= 2000,
+            "{placed} of the matrix's layouts were placed, which is too few to have checked the rest"
+        );
     }
 
     /// The whole path a document that moves takes: worked out from its declarations,
