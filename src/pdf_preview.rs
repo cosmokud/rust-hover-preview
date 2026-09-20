@@ -1,4 +1,6 @@
-use crate::config::{sanitize_pdf_cache_mb, PreviewType, DEFAULT_PDF_CACHE_MB};
+use crate::config::{
+    image_decode_limits, sanitize_pdf_cache_mb, PreviewType, DEFAULT_PDF_CACHE_MB,
+};
 use crate::CONFIG;
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
@@ -311,7 +313,14 @@ fn render_opened_first_page(
     let (render_width, render_height) = fit_page(size.Width, size.Height, max_width, max_height)?;
 
     let bytes = render_page(&page, render_width, render_height)?;
-    let image = image::load_from_memory(&bytes).ok()?.to_rgba8();
+    // The page the engine encoded is read under the same limits as every other decode,
+    // so what a hover can ask an allocator for is one question with one answer whatever
+    // the file was.
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(&bytes[..]))
+        .with_guessed_format()
+        .ok()?;
+    reader.limits(image_decode_limits());
+    let image = reader.decode().ok()?.to_rgba8();
     let (width, height) = (image.width(), image.height());
     if width == 0 || height == 0 {
         return None;
