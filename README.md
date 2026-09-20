@@ -110,7 +110,6 @@ ffprobe -version
 
 - **Enable Preview** — turn previews on or off
 - **Preview Types** — Images, Videos, Text, PDF, Archives, Office: switch a kind of preview off without touching its file list
-- **Background** — Transparent, Black, White, or Checkerboard
 - **Confirm File Type** — validate file content against extension
 - **Trigger Key (Alt)** — hold to disable or enable previews; a check inside switches the key off entirely
 - **Text Preview**
@@ -124,6 +123,9 @@ ffprobe -version
 - **Placement**
   - **Position** — Follow Cursor or Best Position, and whether to keep previews off the hovered item's name
   - **Scaling** — Fit to Screen or 25%–400%
+- **Background**
+  - **Image Background** — Transparent, Black, White, or Checkerboard
+  - **SVG Background** — Transparent, Black, White, or Checkerboard
 - **Volume** — Max, High, Medium, Low, Very Low, Mute
 - **Performance** — what the app costs to stay fast
   - **Keep Office Engine** — how long a family's Office app is kept warm after its last page: `Indefinitely`, `1 hour`, `30 minutes`, `10 minutes` (default), `5 minutes`, `1 minute`, `0 seconds`
@@ -171,7 +173,8 @@ trigger_key_enabled=true
 confirm_file_type=false
 follow_cursor=false
 avoid_filename=true
-transparent_background=black
+image_background=black
+svg_background=black
 video_volume=0
 preview_scale=100
 theme=light

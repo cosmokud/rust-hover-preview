@@ -183,9 +183,12 @@ Section PreInstall
   ReadINIStr $0 "$APPDATA\\rust-hover-preview\\config.ini" "settings" "same_file_rehover_delay_ms"
   StrCmp $0 "" 0 +2
     WriteINIStr "$APPDATA\\rust-hover-preview\\config.ini" "settings" "same_file_rehover_delay_ms" "750"
-  ReadINIStr $0 "$APPDATA\\rust-hover-preview\\config.ini" "settings" "transparent_background"
+  ReadINIStr $0 "$APPDATA\\rust-hover-preview\\config.ini" "settings" "image_background"
   StrCmp $0 "" 0 +2
-    WriteINIStr "$APPDATA\\rust-hover-preview\\config.ini" "settings" "transparent_background" "black"
+    WriteINIStr "$APPDATA\\rust-hover-preview\\config.ini" "settings" "image_background" "black"
+  ReadINIStr $0 "$APPDATA\\rust-hover-preview\\config.ini" "settings" "svg_background"
+  StrCmp $0 "" 0 +2
+    WriteINIStr "$APPDATA\\rust-hover-preview\\config.ini" "settings" "svg_background" "black"
   ReadINIStr $0 "$APPDATA\\rust-hover-preview\\config.ini" "settings" "video_volume"
   StrCmp $0 "" 0 +2
     WriteINIStr "$APPDATA\\rust-hover-preview\\config.ini" "settings" "video_volume" "0"

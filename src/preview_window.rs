@@ -318,6 +318,10 @@ pub enum PreviewMessage {
 /// Represents different types of media we can display
 enum MediaType {
     StaticImage,
+    /// A still SVG document, drawn rather than decoded. It is a kind of its own
+    /// rather than a static image because a document is composited over a backdrop
+    /// of its own (see the tray's `Background` submenu).
+    StaticSvg,
     AnimatedGif,
     AnimatedApng,
     AnimatedWebP,
@@ -335,6 +339,7 @@ impl MediaType {
     fn kind(&self) -> Option<PreviewType> {
         match self {
             Self::StaticImage
+            | Self::StaticSvg
             | Self::AnimatedGif
             | Self::AnimatedApng
             | Self::AnimatedWebP
@@ -351,6 +356,12 @@ impl MediaType {
     /// Whether this is the spinner standing in for a preview that is not ready.
     fn is_loading(&self) -> bool {
         matches!(self, Self::Loading)
+    }
+
+    /// Whether this is an SVG document rather than a picture. A document is drawn
+    /// over a backdrop of its own, which is why the renderer asks.
+    fn is_svg(&self) -> bool {
+        matches!(self, Self::StaticSvg | Self::AnimatedSvg)
     }
 
     /// Whether this preview's appearance is painted into its own frame rather
@@ -957,10 +968,21 @@ fn rgba_to_bgra(rgba: &[u8]) -> Vec<u8> {
     bgra
 }
 
-fn current_transparent_background() -> TransparentBackground {
+/// The backdrop a picture is drawn over — and every other preview that is not a
+/// document: a PDF page, a painted frame, a page Office rendered.
+fn current_image_background() -> TransparentBackground {
     CONFIG
         .lock()
-        .map(|cfg| cfg.transparent_background)
+        .map(|cfg| cfg.image_background)
+        .unwrap_or(TransparentBackground::Transparent)
+}
+
+/// The backdrop an SVG document is drawn over, which the tray keeps apart from a
+/// picture's.
+fn current_svg_background() -> TransparentBackground {
+    CONFIG
+        .lock()
+        .map(|cfg| cfg.svg_background)
         .unwrap_or(TransparentBackground::Transparent)
 }
 
@@ -2178,6 +2200,15 @@ fn image_cache_put(key: ImageCacheKey, frame: ImageFrame) {
     image_cache_trim(&mut cache, limit);
 }
 
+/// A still SVG document as `MediaData`: one frame, nothing streaming, and the kind
+/// its backdrop is chosen by.
+fn static_svg_media(frame: ImageFrame) -> MediaData {
+    MediaData {
+        media_type: MediaType::StaticSvg,
+        ..static_image_media(frame)
+    }
+}
+
 /// A still image as `MediaData`: one frame, nothing streaming.
 fn static_image_media(frame: ImageFrame) -> MediaData {
     MediaData {
@@ -2314,7 +2345,7 @@ fn load_svg_preview(
         let (pixels, width, height) =
             svg_preview::render(path, target_width, target_height, Some(cancel))?;
 
-        return Some(static_image_media(ImageFrame {
+        return Some(static_svg_media(ImageFrame {
             pixels,
             width,
             height,
@@ -2339,7 +2370,7 @@ fn load_svg_preview(
     let (pixels, width, height) =
         svg_preview::render(path, target_width, target_height, Some(cancel))?;
 
-    Some(static_image_media(ImageFrame {
+    Some(static_svg_media(ImageFrame {
         pixels,
         width,
         height,
@@ -4204,11 +4235,14 @@ unsafe fn render_layered_preview_at(hwnd: HWND, x: i32, y: i32) {
         // The spinner is nothing but an arc, and what is behind it is the desktop:
         // a backdrop of the configured kind would put back the square its frame is
         // transparent to avoid. Every other preview is composited over that
-        // backdrop as it always was.
+        // backdrop as it always was — a document over the one of its own, and
+        // everything else over the picture's.
         let background = if media.media_type.is_loading() {
             TransparentBackground::Transparent
+        } else if media.media_type.is_svg() {
+            current_svg_background()
         } else {
-            current_transparent_background()
+            current_image_background()
         };
         let bits = ensure_layered_surface(width, height)?;
         let out = unsafe { std::slice::from_raw_parts_mut(bits, expected_size) };
@@ -6046,11 +6080,10 @@ pub fn run_preview_window() {
                                         width: mw,
                                         height: mh,
                                     };
-                                    webview_preview::show(
-                                        &pl.path,
-                                        area,
-                                        current_transparent_background(),
-                                    );
+                                    // The document is an SVG — that is what the engine
+                                    // plays — so the backdrop is the one the tray keeps
+                                    // for documents rather than the picture's.
+                                    webview_preview::show(&pl.path, area, current_svg_background());
                                 }
                             }
 
