@@ -4,24 +4,23 @@
 
 ### Added
 
-- `Avoid Filename`, the name-only way of keeping a preview off the item it is about: the name is measured as it is drawn — with the icon font the shell draws folder names in, at the scale of the display the item is on and at the larger of the two sizes a view draws a name at, the font itself in `Details` and 125% of it in `Content`, extension and all — so what a preview is kept off is the name itself and not the `Name` column it sits in, and the rest of the row may still be covered. `Avoid Filename Column` keeps it off that whole column instead, as the view reports it. `Avoid Filename` is what the app does unless another way is chosen.
+- New default “Avoid Filename” keeps previews from covering the file name itself.
 
 ### Changed
 
-- The tray's `Placement` gains an `Avoid` submenu between `Position` and `Scaling` — `Don't Avoid`, `Avoid Filename` (the default), `Avoid Filename Column` and `Avoid Details` — and `avoid_filename` in `config.ini` becomes `avoid_mode`: `filename`, `filename_column`, `details` (what the old checkmark asked for: a preview kept off the name and every column a row draws beside it), or `off`. A file written with `avoid_filename` is read as `details` for `true` and `off` for `false`. A keyboard preview follows the setting the same way a hovered one does: a row's placement is measured from the edge of the region kept off, so `Avoid Filename` leaves the columns after the name to be covered, and `Don't Avoid` places a keyboard preview by the position mode alone.
-
-- A slide is exported at the width the display can show rather than at a fixed 1280 pixels: the render is asked for the room the preview may take — bounded as before, 640 to 1920 — so a slide previewed on a large display is drawn from a page that display can fill, and a deck first previewed on a smaller one is rendered again when a larger display asks for it. A page Word or Excel exported is unaffected: what a render is asked for does not make a document's own page any size.
+- Tray menu gets an **Avoid** submenu, and `avoid_filename` is replaced by `avoid_mode`.
+- Slide previews now use your screen width (640–1920) instead of fixed 1280, while Word/Excel pages stay the same.
 
 ### Fixed
 
-- Every margin a preview is placed by is now a logical distance scaled by the display it is on, as the text and the scrollbar already were: how far off the pointer a preview sits, how far off the item a keyboard preview sits, the least room a step off a name is worth taking, the distance the pointer may wander on its way to a text preview, and the distance the pointer must move before it counts as moved at all — which is what Windows scales its own drag metrics by. At 150% the standoff was 13 logical pixels instead of 20 and the sliver thresholds 43 instead of 64, so previews sat closer to the hand than the design asks and were moved into rooms the design rejects. Every placement is also checked at 100%, 150% and 200% now — four display sizes, seven media shapes and four scales — by the `places_every_*_inside_its_display` tests.
-- Whether a preview is raised at all is asked of the display the foreground window is on rather than of the primary one: with a 4K display beside a 1080p one, any window larger than 1920 by 1080 used to count as fullscreen — including one covering half of it — and Explorer was read as hidden behind a window that never reached it, so hovering a file produced nothing. A fullscreen window on a smaller second display was missed in the same way, and previews were raised over it.
-- A layout that cannot be anchored to the display it belongs to is placed on the primary display rather than in the whole virtual screen: the union of every display is a room no display has, and a preview placed in the whole of it straddles the seam between two.
-- A display change, a scale change, or a resume takes a document that is being played by the browser engine down with the rest of the preview, instead of leaving its window where the display it was placed for used to be. A hover replayed afterwards is anchored where the pointer is rather than where it opened, so a preview cannot come back on the display that is gone.
-- A display being rescaled, or another display being made the primary one, is a change the hook notices: what it compares is each display's own rectangle and scale and which of them is the primary one, rather than the union of them — which a rescale does not move, so the hook kept what it had remembered about a view that had been rearranged under it.
-- A page's size is remembered for the version of the file it was read from, so a PDF exported again at another page size is measured again instead of being placed by the shape of the document it used to be.
-- The scale a point is drawn at is asked of the window it is over, which is the call a per-monitor-aware process is supposed to make for a point, with the monitor query as the fallback for a point no window is over.
-- A page the Windows PDF engine draws — a PDF's first page, and the page Word and Excel export — is drawn into the box the layout planned for it rather than at the size the engine hands back, so a document preview no longer runs off the display it was fitted into. The destination a page is rendered to is in device-independent pixels, so the engine converts it with the display's own scale: on a display that is the one the system is scaled by — a 4K monitor at 150% or 200% with no other attached, where with a second display the system's scale is that one's and the page came back at the size it was asked for — the page is half again as large as the box it was given, or twice it. The preview window is sized to the frame it is given, and the frame is what the page is drawn from, so that page was shown at the engine's size instead of the fitted one and hung past the screen's edge. A page the engine drew at the size it was asked for — every render on a display at 100% — is handed on untouched rather than resampled.
+- Preview spacing and mouse-move distances now scale correctly with screen zoom at 100%, 150%, and 200%.
+- Previews now use the screen your active window is on, fixing multi-monitor fullscreen and missing-preview problems.
+- If a preview can’t attach to its screen, it now goes to the main screen instead of spanning two monitors.
+- Screen/zoom changes or wake-from-sleep now close and reopen browser document previews at the mouse, not on a missing screen.
+- The app now notices monitor rescaling or primary-monitor changes, so preview positions update correctly.
+- PDF page size is remembered per file version, so a re-exported PDF is measured fresh.
+- Screen zoom is now read from the window under the point, with the monitor as backup.
+- PDF and Office-exported pages now fit inside the preview box instead of running off-screen.
 
 ## [0.2.7]
 

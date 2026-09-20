@@ -56,7 +56,7 @@ use windows::Win32::System::Threading::{
     OpenProcess, QueryFullProcessImageNameW, TerminateProcess, PROCESS_NAME_WIN32,
     PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE,
 };
-use windows::Win32::UI::HiDpi::{GetDpiForMonitor, GetDpiForWindow, MDT_EFFECTIVE_DPI};
+use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, ReleaseCapture, SetCapture, VK_C, VK_CONTROL,
 };
@@ -65,8 +65,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetCursorPos, GetSystemMetrics, GetWindow, GetWindowLongPtrW, GetWindowRect,
     GetWindowThreadProcessId, IsWindow, IsWindowVisible, LoadCursorW, MoveWindow, PeekMessageW,
     RegisterClassExW, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow,
-    SystemParametersInfoW, TrackPopupMenu, TranslateMessage, UpdateLayeredWindow, WindowFromPoint,
-    CS_HREDRAW, CS_VREDRAW, GWL_EXSTYLE, GW_OWNER, HWND_TOPMOST, IDC_ARROW, MF_STRING, MSG,
+    SystemParametersInfoW, TrackPopupMenu, TranslateMessage, UpdateLayeredWindow, CS_HREDRAW,
+    CS_VREDRAW, GWL_EXSTYLE, GW_OWNER, HWND_TOPMOST, IDC_ARROW, MF_STRING, MSG,
     PBT_APMRESUMEAUTOMATIC, PBT_APMRESUMESUSPEND, PBT_APMSTANDBY, PBT_APMSUSPEND, PM_REMOVE,
     SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SPI_GETWORKAREA,
     SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SW_HIDE,
@@ -3763,20 +3763,12 @@ fn text_preview_layout(
 /// scaled by (see `logical_px`). Falls back to the 96 DPI baseline when no display
 /// can be named, the same way the placement falls back to the primary display.
 ///
-/// The window the point is over is asked first: this process is per-monitor DPI
-/// aware, so `GetDpiForWindow` is the call that answers what scale a point is drawn
-/// at, and `GetDpiForMonitor` — which is documented as one a per-monitor-aware caller
-/// should not be making — is the fallback for a point no window is over.
+/// The display is what is asked, not the window the point happens to be over: a
+/// window carries the scale its own process was told about — a UWP one can answer a
+/// scale that is not the display's at all — while the display under the point is one
+/// question with one answer, whatever is drawn on it.
 pub(crate) fn monitor_dpi_from_point(x: i32, y: i32) -> u32 {
     unsafe {
-        let window = WindowFromPoint(POINT { x, y });
-        if !window.is_invalid() {
-            let dpi = GetDpiForWindow(window);
-            if dpi > 0 {
-                return dpi;
-            }
-        }
-
         let monitor = MonitorFromPoint(POINT { x, y }, MONITOR_DEFAULTTONEAREST);
         if !monitor.is_invalid() {
             let mut dpi_x = 0u32;
@@ -4164,12 +4156,12 @@ impl PendingLoad {
 
     /// Place this load's preview again for `cursor`, when it is one that follows
     /// the pointer: the size the hover measured, its `Avoid` region and
-    /// its scale, and the display the pointer is on now — the room it has and the
-    /// scale its margins are drawn at. Answers whether the place it came out at is a
-    /// new one, so the window is only moved when it is.
+    /// its scale, and the display the pointer is on now — the room it has (`dpi` is
+    /// that display's scale, and `cursor` is where it is). Answers whether the place
+    /// it came out at is a new one, so the window is only moved when it is.
     ///
     /// A load that answered nothing, or a keyboard hover, is left where it is.
-    fn follow_pointer(&mut self, cursor: POINT) -> bool {
+    fn follow_pointer(&mut self, cursor: POINT, dpi: u32) -> bool {
         let Some(placement) = self.placement else {
             return false;
         };
@@ -4179,7 +4171,7 @@ impl PendingLoad {
             cursor.y,
             placement,
             monitor_bounds_from_point(cursor.x, cursor.y),
-            monitor_dpi_from_point(cursor.x, cursor.y),
+            dpi,
         ) else {
             return false;
         };
@@ -6335,7 +6327,8 @@ pub fn run_preview_window() {
             if let Some(ref mut pl) = pending_load {
                 if let Some(cursor) = cursor_position() {
                     let box_before = (pl.width, pl.height);
-                    if pl.follow_pointer(cursor) && pl.spinner_shown {
+                    let dpi = monitor_dpi_from_point(cursor.x, cursor.y);
+                    if pl.follow_pointer(cursor, dpi) && pl.spinner_shown {
                         if (pl.width, pl.height) == box_before {
                             let _ = MoveWindow(
                                 hwnd,
@@ -7407,17 +7400,17 @@ mod tests {
 
         let mut pl = pending(Some(placement));
         assert!(
-            pl.follow_pointer(POINT { x: 300, y: 300 }),
+            pl.follow_pointer(POINT { x: 300, y: 300 }, TEST_DPI),
             "placed for the cursor"
         );
         let placed = (pl.pos_x, pl.pos_y, pl.width, pl.height);
 
         // The cursor has not moved, so the place has not changed: nothing to move.
-        assert!(!pl.follow_pointer(POINT { x: 300, y: 300 }));
+        assert!(!pl.follow_pointer(POINT { x: 300, y: 300 }, TEST_DPI));
         assert_eq!((pl.pos_x, pl.pos_y, pl.width, pl.height), placed);
 
         // The cursor has moved: the preview is placed again, somewhere else.
-        assert!(pl.follow_pointer(POINT { x: 200, y: 300 }));
+        assert!(pl.follow_pointer(POINT { x: 200, y: 300 }, TEST_DPI));
         assert_ne!((pl.pos_x, pl.pos_y, pl.width, pl.height), placed);
 
         // A spinner box is the size the hover measured and stays that size while
@@ -7430,13 +7423,13 @@ mod tests {
             flush_at_cursor: true,
             ..placement
         }));
-        assert!(waiting.follow_pointer(POINT { x: 300, y: 300 }));
+        assert!(waiting.follow_pointer(POINT { x: 300, y: 300 }, TEST_DPI));
         assert_eq!(
             (waiting.pos_x, waiting.pos_y),
             (301, 301),
             "the spinner's own corner is at the cursor"
         );
-        assert!(waiting.follow_pointer(POINT { x: 500, y: 300 }));
+        assert!(waiting.follow_pointer(POINT { x: 500, y: 300 }, TEST_DPI));
         assert_eq!(
             (waiting.width, waiting.height),
             (office_preview::WAITING_BOX, office_preview::WAITING_BOX)
@@ -7444,7 +7437,7 @@ mod tests {
 
         // A keyboard hover's placement is the item's own: it follows nothing.
         let mut keyboard = pending(None);
-        assert!(!keyboard.follow_pointer(POINT { x: 640, y: 400 }));
+        assert!(!keyboard.follow_pointer(POINT { x: 640, y: 400 }, TEST_DPI));
         assert_eq!((keyboard.pos_x, keyboard.pos_y), (0, 0));
     }
 

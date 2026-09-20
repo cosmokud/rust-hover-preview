@@ -661,6 +661,13 @@ const FOLDER_PROBE_MS: u64 = 200;
 const IDLE_FOLDER_PROBE_MS: u64 = 750;
 const FOLDER_PROBE_TRIGGER_MS: u64 = 400;
 const DISPLAY_CHANGE_BACKOFF_MS: u64 = 1500;
+/// How often the desktop is walked and compared with what it was: the displays a
+/// machine has, each one's scale, and which of them is the primary one (see
+/// `current_display_signature`). A display change is acted on within this of it
+/// happening, which is a fifth of a second against the backoff the rebuild waits out
+/// anyway — and walking every display on every tick would be the most expensive thing
+/// in a loop that runs two or three dozen times a second.
+const DISPLAY_CHECK_MS: u64 = 200;
 const KEYBOARD_FOCUS_INPUT_GRACE_MS: u64 = 500;
 const HOVER_RESOLVER_INPUT_GRACE_MS: u64 = 1500;
 const WHEEL_SCROLL_SETTLE_MS: u64 = 150;
@@ -2859,6 +2866,7 @@ pub fn run_explorer_hook() {
     let mut slow_explorer_probe_count = 0u32;
     let mut explorer_probe_backoff_until: Option<Instant> = None;
     let mut last_display_signature = current_display_signature();
+    let mut last_display_check = Instant::now();
     // What the Shell objects in hand were built against, and when they were last
     // built: a restart is what invalidates them, and a build that came out missing
     // is tried again rather than left missing for the rest of the run.
@@ -2931,35 +2939,42 @@ pub fn run_explorer_hook() {
             kill_stray_video_process();
         }
 
-        if let Some(display_signature) = current_display_signature() {
-            if display_signature_changed(last_display_signature.as_ref(), &display_signature) {
-                last_display_signature = Some(display_signature);
-                clear_shell_view_probe_caches();
-                resolver.forget_view();
-                hide_preview();
-                last_file = None;
-                keyboard_file = None;
-                is_keyboard_hover = false;
-                suppressed.clear();
-                pointer_pause.clear();
-                stationary_search_miss_started_at = None;
-                hover_start = None;
-                video_hover_guard_until = None;
-                stationary_hover_probe_done = false;
-                suspend_preview_until_user_input = true;
-                allow_keyboard_preview_on_first_observation = false;
-                folder_change_user_initiated = false;
-                folder_change_time = Some(Instant::now());
-                suspended_initial_focus = None;
-                keyboard_press_seq_at_suspend = keyboard_navigation_press_seq;
-                keyboard_screen_owner = false;
-                hover_resolver_hints = HoverResolverHints::default();
-                last_cursor_location = None;
-                slow_explorer_probe_count = 0;
-                explorer_probe_backoff_until =
-                    Some(Instant::now() + Duration::from_millis(DISPLAY_CHANGE_BACKOFF_MS));
-            } else {
-                last_display_signature = Some(display_signature);
+        // Walking every display is not something to do on every tick for a change that
+        // is noticed within this of happening anyway, and rebuilding what it
+        // invalidates already waits out `DISPLAY_CHANGE_BACKOFF_MS`.
+        if last_display_check.elapsed() >= Duration::from_millis(DISPLAY_CHECK_MS) {
+            last_display_check = Instant::now();
+
+            if let Some(display_signature) = current_display_signature() {
+                if display_signature_changed(last_display_signature.as_ref(), &display_signature) {
+                    last_display_signature = Some(display_signature);
+                    clear_shell_view_probe_caches();
+                    resolver.forget_view();
+                    hide_preview();
+                    last_file = None;
+                    keyboard_file = None;
+                    is_keyboard_hover = false;
+                    suppressed.clear();
+                    pointer_pause.clear();
+                    stationary_search_miss_started_at = None;
+                    hover_start = None;
+                    video_hover_guard_until = None;
+                    stationary_hover_probe_done = false;
+                    suspend_preview_until_user_input = true;
+                    allow_keyboard_preview_on_first_observation = false;
+                    folder_change_user_initiated = false;
+                    folder_change_time = Some(Instant::now());
+                    suspended_initial_focus = None;
+                    keyboard_press_seq_at_suspend = keyboard_navigation_press_seq;
+                    keyboard_screen_owner = false;
+                    hover_resolver_hints = HoverResolverHints::default();
+                    last_cursor_location = None;
+                    slow_explorer_probe_count = 0;
+                    explorer_probe_backoff_until =
+                        Some(Instant::now() + Duration::from_millis(DISPLAY_CHANGE_BACKOFF_MS));
+                } else {
+                    last_display_signature = Some(display_signature);
+                }
             }
         }
 
