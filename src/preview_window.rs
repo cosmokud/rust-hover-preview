@@ -281,9 +281,10 @@ pub enum PreviewMessage {
     /// A preview of the file the pointer hovers, opened from the cursor it was
     /// hovered at.
     ///
-    /// The region that comes with it is the text the hovered item draws — its name
-    /// above all — which the placement is kept off while `Avoid Filename` is on. See
-    /// `avoiding_text`. It is `None` when the setting is off, when the view reported
+    /// The region that comes with it is what the `Avoid` setting measured off the
+    /// hovered item — its name, and the columns beside it at `Avoid Details` — which
+    /// the placement is kept off at either way of avoiding. See `avoiding_text`. It is
+    /// `None` when the setting is off, when the view reported
     /// no text for the item, or when the walk found no item at the cursor.
     Show(PathBuf, i32, i32, Option<ScreenRegion>),
     /// A preview of the focused item, whose box comes with it and — for an item
@@ -4107,7 +4108,7 @@ impl PendingLoad {
     }
 
     /// Place this load's preview again for `cursor`, when it is one that follows
-    /// the pointer: the size the hover measured, its `Avoid Filename` region and
+    /// the pointer: the size the hover measured, its `Avoid` region and
     /// its scale, and the display the pointer is on now. Answers whether the place
     /// it came out at is a new one, so the window is only moved when it is.
     ///
@@ -5188,13 +5189,14 @@ fn centered_top(center: i32, height: i32, bounds: ScreenBounds) -> i32 {
 /// says less than the one left over the name would have.
 const MIN_AVOID_ROOM_PX: i32 = 64;
 
-/// A layout moved off the text the item it describes draws — the name the file is
-/// listed under, with the columns a row writes beside it.
+/// A layout moved off the region the item it describes draws, as the `Avoid` setting
+/// measured it: the name the file is listed under at `Avoid Filename`, and that name
+/// with the columns a row writes beside it at `Avoid Details`.
 ///
 /// A preview is placed beside what it belongs to rather than over it, and the text of
 /// the item it came from is part of what it belongs to: that item stays readable while
-/// its preview is up, which is what `Avoid Filename` asks for. The placement the
-/// position mode chose is therefore moved by the shortest step that clears the text —
+/// its preview is up, which is what the `Avoid` setting asks for. The placement the
+/// position mode chose is therefore moved by the shortest step that clears that region —
 /// past its right edge, past its left, under it or over it, whichever asks the least
 /// of the preview — and only a step the display has room for is taken, so a preview
 /// moved off one edge is never pushed off another.
@@ -5352,7 +5354,7 @@ fn avoiding_text(
 /// a spinner waiting on the page of the file under the hand says what it is by being
 /// at the hand, and one placed a row away from it says nothing about what is being
 /// waited on. Every other preview keeps the margin its position mode leaves and the
-/// room `Avoid Filename` asks for.
+/// room the `Avoid` setting asks for.
 fn compute_mouse_layout(
     cursor_x: i32,
     cursor_y: i32,
@@ -6185,7 +6187,7 @@ pub fn run_preview_window() {
             // load runs the spinner is the only thing on screen, and a cursor
             // that moves along the item the preview belongs to would otherwise
             // leave it behind. Nothing is measured again — the hover's own size
-            // and `Avoid Filename` region are what it is placed with — so this
+            // and `Avoid` region are what it is placed with — so this
             // costs a cursor read and a placement per tick, and the window is
             // moved only when the place it comes out at has changed.
             if let Some(ref mut pl) = pending_load {
