@@ -10,6 +10,7 @@
 - The engine keeps its state in a folder per run, cleared at startup; one that fails is retried, then stood down for five minutes so this app's reader plays the document, and the hover that was up is laid out again. `RHP_WEBVIEW_TRACE` and `RHP_WEBVIEW_PROFILE` are the diagnostics for it.
 - `trigger_key_enabled` in `config.ini` and a check in the tray `Trigger Key` submenu, to switch the trigger key off without changing its mode.
 - `svg_background`, the backdrop an SVG document is drawn over, in `config.ini` and as `Background → SVG Background` in the tray: Transparent, Black, White or Checkerboard, the same four a picture is offered.
+- `svg_scale`, how much of the screen an SVG document is drawn over, in `config.ini` and as `Placement → SVG Scaling` in the tray: `Fit to Screen`, or `75`, `50` (default), `25` and `10` percent of the display. A vector is drawn at whatever size it is asked for, so a document's percentage is of the room the display has rather than of the size the file asks for — half the screen at `50%`, where a picture at `50%` is half of its own size. Both readers follow it: the still frame this app draws, and the engine that plays an animated document.
 
 ### Changed
 
@@ -19,6 +20,7 @@
 - Video previews no longer write `%TEMP%\rust-hover-preview-video.log`, and one left by an earlier version is deleted at startup.
 - `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings` pass again.
 - The tray's `Background` submenu is above `Volume` and holds an `Image Background` and an `SVG Background` half, each listing Transparent, Black, White and Checkerboard; `transparent_background` is read as both `image_background` and `svg_background`, and written out under the two names.
+- An SVG is no longer sized by `preview_scale`: it is drawn at `svg_scale`, half the screen by default, and a picture's scale leaves it alone.
 
 ### Fixed
 
