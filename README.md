@@ -135,6 +135,7 @@ ffprobe -version
     - **Text** — frames text previews were painted as
     - **PDF** — pages PDF previews were drawn as
     - **Office** — pages Office rendered
+  - **Decode Budget** — the most one hover may decode or read for, from `16 GB` down to `512 MB`, `1 GB` (default): a file past it gets no preview rather than the app asking for memory it may not get
 - **Run at Startup** — add or remove the Windows startup entry
 - **Config.ini** — open the configuration file; the item is named for the running version
 - **Exit** — close the app
@@ -169,6 +170,7 @@ office_engine_idle=600
 pdf_cache_mb=32
 text_cache_mb=0
 image_cache_mb=32
+decode_budget_gb=1
 trigger_key=alt
 trigger_key_mode=disable
 trigger_key_enabled=true
@@ -218,6 +220,7 @@ Key settings:
 - `office_cache_mb` — the same for the pages Office rendered, capped at `2048`; default is `64`, because producing a page costs an Office start and an export, so what has been drawn is worth keeping. `0` holds nothing, but a page is still rendered for the hover that asks for it: this size is only how much is kept between hovers.
 - `pdf_cache_mb` — the same for the pages PDF previews were rendered as, capped at `2048`; default is `32`. A page is stored as the pixels it was drawn as, so the size is per file _and_ per preview size: the same PDF hovered at fit-to-screen and at `25%` is held as two pages.
 - `text_cache_mb` — the same for the frames text previews were painted as, capped at `2048`; default is `0`, since the text behind a frame is already cached as text and only the layout and the painting are what a hit saves. A frame is stored as the pixels it was painted into, so the size is per file, per box and per scroll position; a frame a selection is painted into is never held.
+- `decode_budget_gb` — the most memory one hover may decode or read for, in gigabytes: a picture's decode, an SVG's bytes (and what a `.svgz` inflates to), an animation's frames, the page Office exported, a theme file. Default is `1`, smallest `0.25`, largest `64`. It is a ceiling on the file rather than on what is kept, and a file past it shows no preview instead of the app asking for memory the allocator may refuse — which is why there is no value that means "no limit".
 - `office_engine_idle` — how long the Office engine a family started is kept after that family's last page: a number of seconds, or `indefinitely` for one kept for as long as the app runs. Default is `600` (ten minutes). A kept engine is an Office application already started and otherwise doing nothing, so what it costs is the memory it holds and a process in the list — the document is closed after every render, and the automation settings a render needs are put back the moment it is over. `0` lets the engine go as soon as it has drawn a page, so every document pays its own Office start.
 - `office_extensions` — the Office-preview gate, under `[office]`, written without dots.
 - A list whose key is deleted — the `extensions=` line, or its whole section — comes back with the built-in entries, and the file is written out again with them. An `extensions=` line left empty is a list you emptied, and stays empty.

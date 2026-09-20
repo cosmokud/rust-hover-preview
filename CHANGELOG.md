@@ -12,6 +12,7 @@
 - `svg_background`, the backdrop an SVG document is drawn over, in `config.ini` and as `Background → SVG Background` in the tray: Transparent, Black, White or Checkerboard, the same four a picture is offered.
 - `svg_scale`, how much of the screen an SVG document is drawn over, in `config.ini` and as `Placement → SVG Scaling` in the tray: `Fit to Screen`, or `75`, `50` (default), `25` and `10` percent of the display. A vector is drawn at whatever size it is asked for, so a document's percentage is of the room the display has rather than of the size the file asks for — half the screen at `50%`, where a picture at `50%` is half of its own size. Both readers follow it: the still frame this app draws, and the engine that plays an animated document.
 - `svg_preview_enabled` and an `SVG` entry under `Preview Types`, below `Office`: a document is its own kind even though `svg` and `svgz` are entries of the image list, so the two are switched independently — `Images` off leaves a document previewing, and `SVG` off leaves pictures alone.
+- `decode_budget_gb`, what one hover may decode or read for in gigabytes (default `1`), in `config.ini` and as `Performance → Decode Budget` in the tray: a file past it gets no preview instead of memory the app may not get.
 
 ### Changed
 
@@ -30,7 +31,7 @@
 - The WebView2 browser no longer outlives the app when the app is killed, and one left behind by an earlier run is ended by the next launch instead of being left holding its profile folder.
 - Every process the app starts — an Office engine, the WebView2 browser, an `ffplay` — is put in a Windows job object, so a crash, a kill from Task Manager or a logoff ends them with the app, and is recorded under `%LOCALAPPDATA%\rust-hover-preview\engines` so that the next launch ends whatever the job could not take. Nothing is ever acted on by id alone: a record is used only when the process still carries the image _and_ the start time it was recorded with.
 - One engine per Office family is enforced rather than assumed: a family's engine is started only when nothing this app began for it is still running, and a replacement waits for the process it replaces to be gone. Exiting while a document is mid-render no longer leaves the engine behind either.
-- Pictures over 40 megapixels preview again: the pixel cap is gone, and what bounds a decode is a 1 GB memory budget every reader — still images, GIF, APNG and animated WebP — is handed before it allocates.
+- Pictures over 40 megapixels preview again: the pixel cap is gone, and every reader — pictures, animated GIF/APNG/WebP, SVG documents, Office exports, themes — now asks the decode budget above before it allocates.
 
 ## [0.2.6]
 

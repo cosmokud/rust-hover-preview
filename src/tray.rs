@@ -1,10 +1,11 @@
 use crate::config::{
-    sanitize_image_cache_mb, sanitize_office_cache_mb, sanitize_pdf_cache_mb,
-    sanitize_text_cache_mb, sanitize_text_font_scale_percent, EngineIdle, MarkdownMode,
-    PreviewScale, PreviewType, TextTheme, TransparentBackground, TriggerKeyMode,
-    DEFAULT_IMAGE_CACHE_MB, DEFAULT_OFFICE_CACHE_MB, DEFAULT_OFFICE_ENGINE_IDLE_SECS,
-    DEFAULT_PDF_CACHE_MB, DEFAULT_PREVIEW_SCALE_PERCENT, DEFAULT_SVG_SCALE_PERCENT,
-    DEFAULT_TEXT_CACHE_MB, DEFAULT_TEXT_FONT_SCALE_PERCENT, DEFAULT_WEBVIEW_IDLE_SECS,
+    sanitize_decode_budget_gb, sanitize_image_cache_mb, sanitize_office_cache_mb,
+    sanitize_pdf_cache_mb, sanitize_text_cache_mb, sanitize_text_font_scale_percent, EngineIdle,
+    MarkdownMode, PreviewScale, PreviewType, TextTheme, TransparentBackground, TriggerKeyMode,
+    DEFAULT_DECODE_BUDGET_GB, DEFAULT_IMAGE_CACHE_MB, DEFAULT_OFFICE_CACHE_MB,
+    DEFAULT_OFFICE_ENGINE_IDLE_SECS, DEFAULT_PDF_CACHE_MB, DEFAULT_PREVIEW_SCALE_PERCENT,
+    DEFAULT_SVG_SCALE_PERCENT, DEFAULT_TEXT_CACHE_MB, DEFAULT_TEXT_FONT_SCALE_PERCENT,
+    DEFAULT_WEBVIEW_IDLE_SECS,
 };
 use crate::explorer_hook;
 use crate::office_render;
@@ -126,11 +127,21 @@ const ID_TRAY_IMAGE_CACHE_BASE: u16 = 1300;
 const ID_TRAY_OFFICE_CACHE_BASE: u16 = 1320;
 const ID_TRAY_PDF_CACHE_BASE: u16 = 1340;
 const ID_TRAY_TEXT_CACHE_BASE: u16 = 1360;
+/// The `Performance → Decode Budget` submenu: one command per ceiling it offers, in
+/// the order it lists them. It sits in the slack between the `Cache` sizes and the
+/// document scale's own range.
+const ID_TRAY_DECODE_BUDGET_BASE: u16 = 1380;
 /// The sizes the `Cache` submenu offers, in megabytes, largest first — `2 GB` at
 /// the top and a cache that holds nothing at the bottom — and the whole range the
 /// settings allow, so a size a hand-edited `config.ini` asks for that is not one of
 /// these is shown with nothing checked rather than rounded to one of them.
 const CACHE_SIZE_CHOICES_MB: [u32; 9] = [2048, 1024, 512, 256, 128, 64, 32, 16, 0];
+/// The ceilings the `Decode Budget` submenu offers, in gigabytes, largest first. It is
+/// what one hover may decode or read for rather than what is kept, so the range starts
+/// far above any file someone meant to hover and ends at the smallest ceiling a large
+/// picture still fits in. A value a hand-edited `config.ini` asks for that is not one of
+/// these is shown with nothing marked rather than rounded to one of them.
+const DECODE_BUDGET_CHOICES_GB: [f32; 6] = [16.0, 8.0, 4.0, 2.0, 1.0, 0.5];
 const ID_TRAY_FONT_100: u16 = 1072;
 const ID_TRAY_FONT_125: u16 = 1073;
 const ID_TRAY_FONT_150: u16 = 1074;
@@ -321,6 +332,14 @@ unsafe extern "system" fn tray_window_proc(
                     .contains(&cmd) =>
                 {
                     set_text_cache_mb(cmd - ID_TRAY_TEXT_CACHE_BASE)
+                }
+                // The ceiling one hover is answered under, by the position it was
+                // listed at.
+                cmd if (ID_TRAY_DECODE_BUDGET_BASE
+                    ..ID_TRAY_DECODE_BUDGET_BASE + DECODE_BUDGET_CHOICES_GB.len() as u16)
+                    .contains(&cmd) =>
+                {
+                    set_decode_budget_gb(cmd - ID_TRAY_DECODE_BUDGET_BASE)
                 }
                 // A share of the display a document is drawn at, by the position it
                 // was listed at.
@@ -1205,6 +1224,58 @@ unsafe fn show_context_menu(hwnd: HWND) {
         w!("Cache"),
     );
 
+    // Add the "Decode Budget" submenu: the ceiling on what one hover may decode or read
+    // for rather than on what is kept — a picture's decode, a document's bytes, the page
+    // Office exported. It is the one setting that bounds a file rather than a cache, and
+    // the only one whose smaller sizes are for a machine with less memory to spare.
+    let decode_budget_gb = CONFIG
+        .lock()
+        .map(|c| sanitize_decode_budget_gb(c.decode_budget_gb))
+        .unwrap_or(DEFAULT_DECODE_BUDGET_GB);
+
+    let budget_menu = CreatePopupMenu().unwrap();
+
+    let budget_labels: Vec<Vec<u16>> = DECODE_BUDGET_CHOICES_GB
+        .iter()
+        .map(|gigabytes| {
+            decode_budget_label(*gigabytes)
+                .encode_utf16()
+                .chain(std::iter::once(0))
+                .collect()
+        })
+        .collect();
+
+    for (index, _) in DECODE_BUDGET_CHOICES_GB.iter().enumerate() {
+        let _ = AppendMenuW(
+            budget_menu,
+            MF_STRING,
+            (ID_TRAY_DECODE_BUDGET_BASE + index as u16) as usize,
+            PCWSTR(budget_labels[index].as_ptr()),
+        );
+    }
+
+    // A ceiling the menu does not offer — one a hand-edited `config.ini` asked for —
+    // leaves every item unmarked rather than marking the nearest one.
+    if let Some(index) = DECODE_BUDGET_CHOICES_GB
+        .iter()
+        .position(|gigabytes| *gigabytes == decode_budget_gb)
+    {
+        let _ = CheckMenuRadioItem(
+            budget_menu,
+            ID_TRAY_DECODE_BUDGET_BASE as u32,
+            (ID_TRAY_DECODE_BUDGET_BASE + DECODE_BUDGET_CHOICES_GB.len() as u16 - 1) as u32,
+            (ID_TRAY_DECODE_BUDGET_BASE + index as u16) as u32,
+            MF_BYCOMMAND.0,
+        );
+    }
+
+    let _ = AppendMenuW(
+        performance_menu,
+        MF_STRING | MF_POPUP,
+        budget_menu.0 as usize,
+        w!("Decode Budget"),
+    );
+
     let _ = AppendMenuW(
         menu,
         MF_STRING | MF_POPUP,
@@ -1405,6 +1476,22 @@ fn cache_size_label(megabytes: u32, default_mb: u32) -> String {
     };
 
     if megabytes == default_mb {
+        format!("{label} (Default)")
+    } else {
+        label
+    }
+}
+
+/// The label a `Decode Budget` item carries: the ceiling it stands for, in the unit
+/// that reads best for it, with the one the app starts at marked.
+fn decode_budget_label(gigabytes: f32) -> String {
+    let label = if gigabytes < 1.0 {
+        format!("{} MB", (gigabytes * 1024.0).round() as u32)
+    } else {
+        format!("{gigabytes} GB")
+    };
+
+    if gigabytes == DEFAULT_DECODE_BUDGET_GB {
         format!("{label} (Default)")
     } else {
         label
@@ -1738,6 +1825,22 @@ fn set_text_cache_mb(index: u16) {
     }
 
     text_preview::trim_now();
+}
+
+/// What one hover may decode or read for, in gigabytes.
+///
+/// Nothing is rebuilt here, and nothing already on screen changes: every reader asks
+/// for the budget as it runs, so the next hover is answered under the new ceiling
+/// whatever it is — a smaller one simply refuses more files than a larger one did.
+fn set_decode_budget_gb(index: u16) {
+    let Some(gigabytes) = DECODE_BUDGET_CHOICES_GB.get(index as usize).copied() else {
+        return;
+    };
+
+    if let Ok(mut config) = CONFIG.lock() {
+        config.decode_budget_gb = sanitize_decode_budget_gb(gigabytes);
+        config.save();
+    }
 }
 
 /// Full mode changes what a text preview *is* rather than what it shows — it

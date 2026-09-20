@@ -15,7 +15,7 @@
 //! again whenever the tray menu is built, which is how a theme that was edited or
 //! repaired since it was chosen is the one the next preview shows.
 
-use crate::config::TextTheme;
+use crate::config::{read_within_budget, TextTheme};
 use crate::theme_files;
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
@@ -125,7 +125,9 @@ pub fn loaded(kind: TextTheme) -> Option<&'static LoadedTheme> {
 
 /// The theme a file in the `theme` folder holds, or `None` when the folder has no
 /// theme by that name, when the file cannot be read, or when what it holds is not
-/// a theme.
+/// a theme. A file is read whole for the parse, so it is read under the budget every
+/// other file is read under; one past it is answered with the default rather than
+/// with memory it has no business asking for.
 pub fn custom(name: &str) -> Option<&'static LoadedTheme> {
     let mut themes = match CUSTOM.lock() {
         Ok(themes) => themes,
@@ -136,7 +138,7 @@ pub fn custom(name: &str) -> Option<&'static LoadedTheme> {
     }
 
     let loaded = theme_files::path_of(name)
-        .and_then(|path| std::fs::read(path).ok())
+        .and_then(|path| read_within_budget(&path))
         .and_then(|source| parse(&source))
         .map(|theme| &*Box::leak(Box::new(theme)));
 

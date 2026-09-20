@@ -3,6 +3,8 @@ use directories::BaseDirs;
 use once_cell::sync::Lazy;
 use std::collections::HashSet;
 use std::fs;
+use std::fs::File;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Duration;
@@ -81,6 +83,20 @@ pub const MAX_PDF_CACHE_MB: u32 = 2048;
 /// makes.
 pub const DEFAULT_TEXT_CACHE_MB: u32 = 0;
 pub const MAX_TEXT_CACHE_MB: u32 = 2048;
+/// What one hover may decode or read for, in gigabytes: the ceiling every reader is
+/// handed before it allocates — a picture's decode, a document's bytes, the page
+/// Office exported, a theme a preview is painted with.
+///
+/// A gigabyte by default. A seventy-megapixel illustration decodes in about a quarter
+/// of that, so a file someone meant to hover never reaches it, while a file that asks
+/// for more memory than a preview could justify — a decompression bomb is the whole of
+/// that idea — is answered with no preview instead of with an allocation the allocator
+/// could abort on. For that reason there is no value that means *no limit*: a ceiling
+/// that is not a positive number falls back to the default rather than opening the app
+/// to what this exists to refuse.
+pub const DEFAULT_DECODE_BUDGET_GB: f32 = 1.0;
+pub const MIN_DECODE_BUDGET_GB: f32 = 0.25;
+pub const MAX_DECODE_BUDGET_GB: f32 = 64.0;
 /// How long the Office engine a family started is kept after that family's last
 /// page. Producing a page costs an Office start, and an engine still warm is what
 /// makes the next document of that family cheap, so one is kept for a while by
@@ -161,6 +177,74 @@ pub fn sanitize_text_scroll_far_edge_grace_pixels(value: f32) -> f32 {
     } else {
         DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS
     }
+}
+
+/// The decode budget in gigabytes.
+///
+/// A value that is not a number at all, or one that is not positive, falls back to
+/// the default rather than being read as "no limit" — the failure this guards against
+/// takes the app with it, so it is not a setting that can be switched off. Anything
+/// past the ceiling is clamped to it.
+pub fn sanitize_decode_budget_gb(value: f32) -> f32 {
+    if !value.is_finite() || value <= 0.0 {
+        DEFAULT_DECODE_BUDGET_GB
+    } else {
+        value.clamp(MIN_DECODE_BUDGET_GB, MAX_DECODE_BUDGET_GB)
+    }
+}
+
+/// What a reader may ask the allocator for, in bytes.
+///
+/// Read from the configuration each time it is asked for rather than captured, like
+/// the cache sizes, so an edit applies to the next hover without a restart.
+pub fn decode_budget_bytes() -> u64 {
+    let gigabytes = crate::CONFIG
+        .lock()
+        .map(|config| sanitize_decode_budget_gb(config.decode_budget_gb))
+        .unwrap_or(DEFAULT_DECODE_BUDGET_GB);
+
+    (f64::from(gigabytes) * 1024.0 * 1024.0 * 1024.0) as u64
+}
+
+/// The budget above as the limits an `image` decoder is read under: no limit on a
+/// picture's own dimensions, the budget on the memory the decode may ask for.
+///
+/// Every decoder in the app is handed these — the readers a hover opens a file with,
+/// and the ones that draw what a render produced — so no decode reaches an allocator
+/// without having asked.
+pub fn image_decode_limits() -> image::Limits {
+    let mut limits = image::Limits::no_limits();
+    limits.max_alloc = Some(decode_budget_bytes());
+    limits
+}
+
+/// A file's bytes, read whole, when the file is small enough to be read under the
+/// budget. `None` is a file that is larger than a hover may ask for, which is answered
+/// with no preview.
+///
+/// The size is asked of the directory entry first, so a file past the budget costs no
+/// read at all, and the read itself is bounded as well, because a file can grow between
+/// the two questions.
+pub fn read_within_budget(path: &Path) -> Option<Vec<u8>> {
+    let budget = decode_budget_bytes();
+
+    let size = fs::metadata(path).map_or(u64::MAX, |meta| meta.len());
+    if size > budget {
+        return None;
+    }
+
+    let mut bytes = Vec::new();
+    File::open(path)
+        .ok()?
+        .take(budget + 1)
+        .read_to_end(&mut bytes)
+        .ok()?;
+
+    if bytes.len() as u64 > budget {
+        return None;
+    }
+
+    Some(bytes)
 }
 
 fn parse_text_font_scale(value: &str) -> Option<u32> {
@@ -650,6 +734,12 @@ pub struct AppConfig {
     /// between hovers. A frame is painted at `0` like at any other size; it is
     /// simply not kept once the hover that asked for it is over.
     pub text_cache_mb: u32,
+    /// What one hover may decode or read for, in gigabytes.
+    ///
+    /// The one setting here that bounds a file rather than a cache: a reader is
+    /// handed it before it allocates, so a file larger than the budget is answered
+    /// with no preview instead of with memory the app may not get.
+    pub decode_budget_gb: f32,
     /// Whether a text preview is more than something to look at: a preview that
     /// scrolls, that can be selected and copied from, and that a pointer can rest
     /// on without closing it. Off by default, because it changes what a preview
@@ -711,6 +801,7 @@ impl Default for AppConfig {
             webview_idle: EngineIdle::Seconds(DEFAULT_WEBVIEW_IDLE_SECS),
             pdf_cache_mb: DEFAULT_PDF_CACHE_MB,
             text_cache_mb: DEFAULT_TEXT_CACHE_MB,
+            decode_budget_gb: DEFAULT_DECODE_BUDGET_GB,
             text_preview_full_mode: false,
             text_font_scale_percent: DEFAULT_TEXT_FONT_SCALE_PERCENT,
             text_scroll_far_edge_grace_pixels: DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS,
@@ -1045,6 +1136,11 @@ impl AppConfig {
             );
             ini.set(
                 CONFIG_SECTION,
+                "decode_budget_gb",
+                Some(sanitize_decode_budget_gb(self.decode_budget_gb).to_string()),
+            );
+            ini.set(
+                CONFIG_SECTION,
                 "text_preview_full_mode",
                 Some(self.text_preview_full_mode.to_string()),
             );
@@ -1244,6 +1340,12 @@ impl AppConfig {
             if let Ok(value) = u32::try_from(value) {
                 self.text_cache_mb = sanitize_text_cache_mb(value);
             }
+        }
+        // A budget is written in gigabytes and may be fractional — `0.5` is a small
+        // machine's ceiling — so it is read as the number it is rather than as a
+        // count of them.
+        if let Ok(Some(value)) = ini.getfloat(CONFIG_SECTION, "decode_budget_gb") {
+            self.decode_budget_gb = sanitize_decode_budget_gb(value as f32);
         }
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "text_preview_full_mode") {
             self.text_preview_full_mode = value;
