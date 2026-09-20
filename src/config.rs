@@ -644,6 +644,45 @@ impl TriggerKeyMode {
     }
 }
 
+/// How far a preview is placed clear of the item it is about.
+///
+/// A view draws an item's name, and the views that draw their items as rows draw the
+/// columns beside it as well — when the row was modified, its type, its size. What a
+/// preview has to clear to stay off the name is therefore a choice: nothing, the name
+/// alone, or everything the item draws.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AvoidMode {
+    /// A preview is placed where the position alone puts it.
+    Off,
+    /// A preview is kept clear of the name alone, so the columns a row writes beside
+    /// the name may be covered.
+    Filename,
+    /// A preview is kept clear of everything the item draws: its name, and the
+    /// columns beside it.
+    Details,
+}
+
+impl AvoidMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Filename => "filename",
+            Self::Details => "details",
+        }
+    }
+
+    /// The way a `config.ini` value names, or `None` for one that names no way of
+    /// keeping a preview off an item.
+    fn from_str(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "off" | "none" | "don't avoid" | "dont avoid" => Some(Self::Off),
+            "filename" | "name" | "avoid filename" => Some(Self::Filename),
+            "details" | "all" | "avoid details" => Some(Self::Details),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct AppConfig {
     pub is_first_run: bool,
@@ -659,13 +698,14 @@ pub struct AppConfig {
     pub trigger_key_enabled: bool,
     pub confirm_file_type: bool,
     pub follow_cursor: bool,
-    /// Whether a preview is placed clear of the name of the file it is about, so the
-    /// item the pointer is on or the keyboard is focused on stays readable while its
-    /// preview is up. On by default: the name of the file being previewed is part of
-    /// what the preview is about, and a preview that covers it hides the one thing the
-    /// pointer's item says. Turning it off puts previews back where the position modes
-    /// alone would have them.
-    pub avoid_filename: bool,
+    /// How far a preview is placed clear of the item it is about, so the file the
+    /// pointer is on or the keyboard is focused on stays readable while its preview is
+    /// up. `Details` by default: the name of the file being previewed is part of what
+    /// the preview is about, and a preview that covers it hides the one thing the
+    /// pointer's item says, while the columns a row writes beside the name are not.
+    /// `Filename` keeps previews off the name alone, and `Off` puts them back where the
+    /// position modes alone would have them.
+    pub avoid_mode: AvoidMode,
     pub same_file_rehover_delay_ms: u64,
     pub webp_playback_fps: u32,
     /// Memory the decoded-image cache may hold, in megabytes. `0` switches the
@@ -778,7 +818,7 @@ impl Default for AppConfig {
             trigger_key_enabled: true,
             confirm_file_type: false,
             follow_cursor: false,
-            avoid_filename: true,
+            avoid_mode: AvoidMode::Details,
             same_file_rehover_delay_ms: 750,
             webp_playback_fps: DEFAULT_WEBP_PLAYBACK_FPS,
             image_cache_mb: DEFAULT_IMAGE_CACHE_MB,
@@ -1029,8 +1069,8 @@ impl AppConfig {
             );
             ini.set(
                 CONFIG_SECTION,
-                "avoid_filename",
-                Some(self.avoid_filename.to_string()),
+                "avoid_mode",
+                Some(self.avoid_mode.as_str().to_string()),
             );
             ini.set(
                 CONFIG_SECTION,
@@ -1231,8 +1271,19 @@ impl AppConfig {
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "follow_cursor") {
             self.follow_cursor = value;
         }
-        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "avoid_filename") {
-            self.avoid_filename = value;
+        // `avoid_filename` is what this setting was called when it was a yes or no
+        // question; a file written then names it, and the `true` it holds asks for what
+        // `details` asks for now.
+        if let Some(value) = ini.get(CONFIG_SECTION, "avoid_mode") {
+            if let Some(mode) = AvoidMode::from_str(&value) {
+                self.avoid_mode = mode;
+            }
+        } else if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "avoid_filename") {
+            self.avoid_mode = if value {
+                AvoidMode::Details
+            } else {
+                AvoidMode::Off
+            };
         }
         if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "same_file_rehover_delay_ms") {
             self.same_file_rehover_delay_ms = value;
@@ -1433,6 +1484,25 @@ mod tests {
     use super::*;
 
     #[test]
+    fn avoid_mode_reads_back_what_it_writes() {
+        for mode in [AvoidMode::Off, AvoidMode::Filename, AvoidMode::Details] {
+            let written = mode.as_str();
+            assert_eq!(
+                AvoidMode::from_str(written),
+                Some(mode),
+                "`{written}` read back"
+            );
+        }
+
+        assert_eq!(AvoidMode::from_str("  DETAILS "), Some(AvoidMode::Details));
+        assert_eq!(
+            AvoidMode::from_str("every column"),
+            None,
+            "a value that names no way of avoiding is not one"
+        );
+    }
+
+    #[test]
     fn office_engine_idle_reads_back_what_it_writes() {
         for idle in [
             EngineIdle::Seconds(0),
@@ -1490,6 +1560,39 @@ mod tests {
             !EngineIdle::Indefinite.has_expired(Duration::from_secs(365 * 24 * 60 * 60)),
             "an engine kept for the life of the app never goes idle"
         );
+    }
+
+    /// How far a preview is kept off its item was a yes or no question before it had
+    /// three answers, so a file that still names the old key is read as the answer it
+    /// was: `true` for the details it used to avoid, `false` for no avoiding at all.
+    #[test]
+    fn an_avoid_named_the_old_way_is_read_as_the_answer_it_was() {
+        let mut ini = Ini::new();
+        ini.set(CONFIG_SECTION, "avoid_filename", Some("true".to_string()));
+
+        let mut config = AppConfig::default();
+        config.apply_ini(&ini);
+        assert_eq!(config.avoid_mode, AvoidMode::Details);
+
+        let mut ini = Ini::new();
+        ini.set(CONFIG_SECTION, "avoid_filename", Some("false".to_string()));
+
+        let mut config = AppConfig::default();
+        config.apply_ini(&ini);
+        assert_eq!(config.avoid_mode, AvoidMode::Off);
+    }
+
+    /// A file that names the setting for itself is what the setting is, whatever the
+    /// name the old key carries says.
+    #[test]
+    fn the_avoid_mode_is_read_from_its_own_key() {
+        let mut ini = Ini::new();
+        ini.set(CONFIG_SECTION, "avoid_filename", Some("true".to_string()));
+        ini.set(CONFIG_SECTION, "avoid_mode", Some("filename".to_string()));
+
+        let mut config = AppConfig::default();
+        config.apply_ini(&ini);
+        assert_eq!(config.avoid_mode, AvoidMode::Filename);
     }
 
     /// The backdrop a preview is drawn over was one setting before a document had one

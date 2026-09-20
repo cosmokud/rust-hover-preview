@@ -24,6 +24,7 @@
 - The tray's `Background` submenu is above `Volume` and holds an `Image Background` and an `SVG Background` half, each listing Transparent, Black, White and Checkerboard; `transparent_background` is read as both `image_background` and `svg_background`, and written out under the two names.
 - An SVG is no longer sized by `preview_scale`: it is drawn at `svg_scale`, half the screen by default, and a picture's scale leaves it alone.
 - Disabling Office/SVG now kills its engine immediately (Office at once, browser within a tick), whether toggled in UI or config.ini. Renders refused because the tier was off no longer count against the document, so re-enabling Office previews it without waiting out backoff.
+- `Avoid Filename`'s checkmark is a `Placement → Avoid` submenu of three radio entries — `Don't Avoid`, `Avoid Filename` and `Avoid Details` — and `avoid_filename` in `config.ini` is `avoid_mode`: `details` (the default) is the old behavior, keeping a preview off the name and every column a row draws beside it, and `filename` keeps it off the name alone, which in `Details` and `Content` is the `Name` column. A file written with `avoid_filename` is read as `details` for `true` and `off` for `false`.
 
 ### Fixed
 

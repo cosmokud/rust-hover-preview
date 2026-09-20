@@ -1,6 +1,6 @@
 use crate::archive_formats::matches_archive_list;
 use crate::cloud_files;
-use crate::config::{PreviewType, TriggerKeyMode};
+use crate::config::{AvoidMode, PreviewType, TriggerKeyMode};
 use crate::image_formats::matches_image_list;
 use crate::office_formats::matches_office_list;
 use crate::pdf_preview::is_pdf_file;
@@ -129,6 +129,25 @@ struct ProbeMemo {
     answer: Option<PathBuf>,
 }
 
+/// The text an item draws inside its own box, as the item's own children report it.
+///
+/// One walk reads the pieces of an item's text for both of the questions asked of it,
+/// so it answers with both boxes rather than being asked twice: where the text stops,
+/// which is the edge a keyboard preview is placed from, and where the name is, which
+/// the `Avoid` setting measures a preview from.
+#[derive(Clone, Copy)]
+struct ItemText {
+    /// Every piece of the item's text taken as one box — a row's name with the columns
+    /// beside it, the label under an icon — which is the region `Avoid Details` keeps a
+    /// preview off. Its right edge is where the item's content stops.
+    all: RECT,
+    /// The piece the name is drawn in: the leftmost of them, which in the views that
+    /// draw their items as rows is the `Name` column of `Details` — the name above the
+    /// path of `Content` — and the label itself under an icon. It is the region
+    /// `Avoid Filename` keeps a preview off.
+    name: RECT,
+}
+
 /// The item a file is resolved from, as the view's accessibility provider reports
 /// it — read at the cursor for the pointer and at the focused item for the
 /// keyboard, so both paths get their answer from the same facts.
@@ -147,13 +166,12 @@ struct HoveredItem {
     /// The box the item occupies on screen, which is what says the pointer is
     /// inside it and where a keyboard preview is placed.
     bounds: RECT,
-    /// The box the item draws its own text in — its name, and the columns a view
-    /// that draws its items as rows writes beside it — or `None` when the view
-    /// reported no text, or the walk that would have read one was not asked for it.
-    /// One region answers two questions: where the text stops, which is the edge a
-    /// keyboard preview is placed from, and the box the name is drawn in, which is
-    /// what `Avoid Filename` keeps a preview off.
-    text_box: Option<RECT>,
+    /// The text the item draws — its name, and the columns a view that draws its
+    /// items as rows writes beside it — or `None` when the view reported no text, or
+    /// the walk that would have read one was not asked for it. One walk answers two
+    /// questions: where the text stops, which is the edge a keyboard preview is placed
+    /// from, and where the name is, which the `Avoid` setting keeps a preview off.
+    text: Option<ItemText>,
     /// The window the item is drawn in, whose frame is the window the item's view
     /// belongs to.
     native_window: isize,
@@ -171,23 +189,26 @@ impl HoveredItem {
     /// its box — which is also what an item whose text the view does not place
     /// answers.
     fn content_right(&self) -> Option<i32> {
-        self.text_box
-            .filter(|text| text.right < self.bounds.right)
-            .map(|text| text.right)
+        self.text
+            .filter(|text| text.all.right < self.bounds.right)
+            .map(|text| text.all.right)
     }
 
-    /// The region a preview of this item is kept off while `Avoid Filename` is on:
-    /// the box the item draws its own text in, which is where its name is, or the
-    /// item's own box for a view that reports no text — the name is drawn inside that
-    /// box whatever the view says about it, so an item whose text cannot be measured
-    /// is avoided as the whole of itself.
+    /// The region a preview of this item is kept off, as the `Avoid` setting has it:
+    /// the box the item draws its name in at `Filename`, that box with the columns a
+    /// row writes beside it at `Details`, and nothing at all at `Off` — or the item's
+    /// own box at either of the first two for a view that reports no text, the name
+    /// being drawn inside that box whatever the view says about it, so an item whose
+    /// text cannot be measured is avoided as the whole of itself.
     fn avoid_box(&self) -> Option<(i32, i32, i32, i32)> {
-        if !avoid_filename_enabled() {
-            return None;
+        let region = match avoid_mode() {
+            AvoidMode::Off => return None,
+            AvoidMode::Filename => self.text.map(|text| text.name),
+            AvoidMode::Details => self.text.map(|text| text.all),
         }
+        .unwrap_or(self.bounds);
 
-        let text = self.text_box.unwrap_or(self.bounds);
-        Some((text.left, text.top, text.right, text.bottom))
+        Some((region.left, region.top, region.right, region.bottom))
     }
 }
 
@@ -700,13 +721,13 @@ fn is_media_file(path: &Path) -> bool {
     PreviewType::Images.enabled_in(&config)
 }
 
-/// Whether a preview is placed clear of the name of the file it is about, as the
-/// tray's `Position` submenu and `config.ini` have it.
-fn avoid_filename_enabled() -> bool {
+/// How far a preview is placed clear of the item it is about, as the tray's `Avoid`
+/// submenu and `config.ini` have it.
+fn avoid_mode() -> AvoidMode {
     CONFIG
         .lock()
-        .map(|config| config.avoid_filename)
-        .unwrap_or(false)
+        .map(|config| config.avoid_mode)
+        .unwrap_or(AvoidMode::Off)
 }
 
 fn same_path(a: &PathBuf, b: &PathBuf) -> bool {
@@ -1231,8 +1252,8 @@ fn is_valid_file_path(s: &str) -> bool {
 ///
 /// `measure_content` asks the walk for the item's own text as well, which a preview
 /// is placed from. A plain probe passes `false`: it answers which file the pointer is
-/// on, and a preview that keeps off the name of that file asks for the text when it
-/// is about to be shown — see `avoid_box_under_cursor`.
+/// on, and a preview that keeps off that file's item asks for the text when it is
+/// about to be shown — see `avoid_box_under_cursor`.
 fn uia_item_from_point(
     resolver: &ItemResolver,
     point: POINT,
@@ -1333,12 +1354,12 @@ fn item_from_element(
     // The item's own text is read only where it can answer, and only when the caller
     // wants it: a row of the view can be drawing less than its box holds, which is the
     // one case where measuring *where* the text stops says anything, and the box the
-    // text is drawn in is what `Avoid Filename` places a preview from — so a row is
+    // text is drawn in is what the `Avoid` setting places a preview from — so a row is
     // measured for the first reason, and an item of any shape for the second. See
     // `item_text_box`.
     let wide = bounds.right - bounds.left >= (bounds.bottom - bounds.top).max(1) * 4;
-    let read_text = measure_content && (wide || avoid_filename_enabled());
-    let text_box = read_text
+    let read_text = measure_content && (wide || avoid_mode() != AvoidMode::Off);
+    let text = read_text
         .then(|| item_text_box(resolver, element, &bounds))
         .flatten();
 
@@ -1347,12 +1368,12 @@ fn item_from_element(
         name: element_name(element).unwrap_or_default().trim().to_string(),
         value: element_value(element),
         bounds,
-        text_box,
+        text,
         native_window: element_native_window(element),
     })
 }
 
-/// The box the item draws its own text in, or `None` when it draws none.
+/// The text an item draws inside its own box, or `None` when it draws none.
 ///
 /// A view gives every item the box it occupies, and what it draws inside that box
 /// is reported the way a view reports everything: each piece of an item's text — a
@@ -1360,8 +1381,10 @@ fn item_from_element(
 /// the label under an icon — is an element of its own carrying the box it is drawn
 /// in, child of the item. Reading them answers both questions an item cannot answer
 /// by its box: where its text stops, which is the only room a row drawing less than
-/// its box holds leaves for a preview beside it, and where its name is, which
-/// `Avoid Filename` keeps a preview off.
+/// its box holds leaves for a preview beside it, and where its name is — the leftmost
+/// piece, which in the views that draw their items as rows is the `Name` column of
+/// `Details` or the name above the path of `Content` — which the `Avoid` setting
+/// measures a preview from.
 ///
 /// It is measured from the item's own children for the same reason: a view reports
 /// what it draws as children, and the rightmost of them is the edge the row's content
@@ -1373,7 +1396,7 @@ fn item_text_box(
     resolver: &ItemResolver,
     element: &IUIAutomationElement,
     bounds: &RECT,
-) -> Option<RECT> {
+) -> Option<ItemText> {
     let automation = resolver.automation.as_ref()?;
     let cache = resolver.cache.as_ref()?;
 
@@ -1384,7 +1407,8 @@ fn item_text_box(
             .ok()?;
         let count = children.Length().ok()?;
 
-        let mut text_box: Option<RECT> = None;
+        let mut all: Option<RECT> = None;
+        let mut name: Option<RECT> = None;
         for index in 0..count {
             let Ok(child) = children.GetElement(index) else {
                 continue;
@@ -1398,7 +1422,20 @@ fn item_text_box(
             if rect.right <= rect.left {
                 continue;
             }
-            text_box = Some(match text_box {
+            // The name is the leftmost piece, which is the one the views that draw
+            // their items as rows put first; two pieces drawn from the same edge — the
+            // name above the path of `Content` — are told apart by taking the higher.
+            let is_name = match name {
+                None => true,
+                Some(current) => {
+                    rect.left < current.left
+                        || (rect.left == current.left && rect.top < current.top)
+                }
+            };
+            if is_name {
+                name = Some(rect);
+            }
+            all = Some(match all {
                 Some(union) => RECT {
                     left: union.left.min(rect.left),
                     top: union.top.min(rect.top),
@@ -1411,7 +1448,13 @@ fn item_text_box(
 
         // Text reported outside the item's box is reported wrong, and the box is what
         // answers for an item whose text the view does not place.
-        text_box.filter(|text| text.right > bounds.left && text.left < bounds.right)
+        let inside = |rect: &RECT| rect.right > bounds.left && rect.left < bounds.right;
+        let all = all.filter(inside)?;
+
+        Some(ItemText {
+            all,
+            name: name.filter(inside).unwrap_or(all),
+        })
     }
 }
 
@@ -1872,9 +1915,10 @@ fn get_file_under_cursor_checked(
     result
 }
 
-/// The region a preview of the file under the pointer is kept off while `Avoid
-/// Filename` is on: the box the item's own text is drawn in, which is where its name
-/// is, or the item's own box when the view reports no text for it.
+/// The region a preview of the file under the pointer is kept off, as the `Avoid`
+/// setting has it for the item that file is: the name the item draws at `Filename`,
+/// that name with the columns beside it at `Details`, or the item's own box at either
+/// setting when the view reports no text for it.
 ///
 /// Asked when a preview is about to be shown rather than with every probe. A probe
 /// answers which file the pointer is on, and that answer is what the rest of the loop
@@ -1884,7 +1928,7 @@ fn get_file_under_cursor_checked(
 fn avoid_box_under_cursor(resolver: &ItemResolver, point: POINT) -> Option<(i32, i32, i32, i32)> {
     // Read before the walk as well as inside `avoid_box`: with the setting off there
     // is no region to be had, so the item is never asked for one.
-    if !avoid_filename_enabled() {
+    if avoid_mode() == AvoidMode::Off {
         return None;
     }
 

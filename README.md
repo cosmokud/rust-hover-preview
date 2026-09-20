@@ -33,7 +33,7 @@ You can add or remove formats in config.ini. Unsupported formats will not show a
 
 ### Vectors
 
-`svg`, `svgz` — drawn at the size they are shown rather than decoded and scaled, so they stay sharp when enlarged, and animated documents play too. In `config.ini` they are entries of the image list, but their switch under **Preview Types** (`svg_preview_enabled`) is their own.
+`svg`, `svgz` — drawn at the size they are shown rather than decoded and scaled, so they stay sharp when enlarged, and animated documents play too.
 
 ### Videos (FFmpeg required)
 
@@ -57,9 +57,7 @@ Extensionless repository files such as `LICENSE`, `Makefile`, `Dockerfile`, and 
 
 `doc`, `docm`, `docx`, `dot`, `dotm`, `dotx`, `xls`, `xlsb`, `xlsm`, `xlsx`, `xlt`, `xltm`, `xltx`, `ppt`, `pptm`, `pptx`, `pps`, `ppsm`, `ppsx`, `pot`, `potm`, `potx`.
 
-> **Note:** To show previews for these Office document types, the user must have Microsoft Office installed.
-
-Excel needs a print queue to export a page — **Microsoft Print to PDF** is enough — and falls back to the sheet's top-left corner without one.
+To show previews for these Office document types, the user must have **Microsoft Office** installed. Excel needs a print queue to export a page — **Microsoft Print to PDF** is enough (make sure that the Print Spooler service is enabled) — and falls back to the sheet's top-left corner without one.
 
 ### Themes
 
@@ -126,7 +124,8 @@ ffprobe -version
   - **Delay** — Instant, Fast, Medium, Relaxed, Slow: 0 ms to 1000 ms.
   - **Rehover Delay** — the same steps, before the same file can preview again.
 - **Placement**
-  - **Position** — Follow Cursor or Best Position, plus **Avoid Filename**, which keeps a preview off the hovered name.
+  - **Position** — Follow Cursor or Best Position.
+  - **Avoid** — Don't Avoid, Avoid Filename, or Avoid Details (the default): what a preview is kept off instead of covering the item it is about. Avoid Details keeps it off the hovered name and the columns a row writes beside it, Avoid Filename off the name alone, and Don't Avoid places it by the position alone.
   - **Scaling** — Fit to Screen or 25%–400%.
   - **SVG Scaling** — Fit to Screen, or 75%, 50% (default), 25%, 10% of the display.
 - **Background**
@@ -182,7 +181,7 @@ trigger_key_mode=disable
 trigger_key_enabled=true
 confirm_file_type=false
 follow_cursor=false
-avoid_filename=true
+avoid_mode=details
 image_background=black
 svg_background=black
 video_volume=0
@@ -232,7 +231,7 @@ Key settings:
 - A deleted `extensions=` line — or its whole section — comes back with the built-in entries; an `extensions=` line left empty stays empty.
 - `trigger_key` / `trigger_key_mode` / `trigger_key_enabled` — the key (`alt`, `ctrl`, `shift`, `win`), what it does (`disable` or `enable`), and whether it is watched at all; `true` by default.
 - `follow_cursor` — `true` for Follow Cursor, `false` for Best Position.
-- `avoid_filename` — `true` (the default) keeps a preview off the name of the file it is about, moving it, and resizing it where there is no room beside the name, so the hovered item stays readable; applies to both positions.
+- `avoid_mode` — `details` (the default), `filename`, or `off`: what a preview is kept off, moving it and resizing it where there is no room beside that region, so the item it is about stays readable; applies to both positions. `details` keeps it off everything a row draws, the name and the columns beside it, while `filename` keeps it off the name alone — which is the `Name` column of `Details` and the name above the path of `Content` — and leaves the columns free to be covered. A file written with the old `avoid_filename` key reads as `details` for `true` and `off` for `false`.
 - `preview_scale` — percentage or `fit`.
 - `svg_scale` — how much of the screen an SVG is drawn over: a percentage or `fit`, read against the screen rather than the size the document asks for, so `50` (the default) is half of it, `fit` all of it, and `100` or more read as `fit`. Both readers follow it — the still frame this app draws and the engine that plays an animated document.
 

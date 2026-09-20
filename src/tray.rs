@@ -1,8 +1,8 @@
 use crate::config::{
     sanitize_decode_budget_gb, sanitize_image_cache_mb, sanitize_office_cache_mb,
-    sanitize_pdf_cache_mb, sanitize_text_cache_mb, sanitize_text_font_scale_percent, EngineIdle,
-    MarkdownMode, PreviewScale, PreviewType, TextTheme, TransparentBackground, TriggerKeyMode,
-    DEFAULT_DECODE_BUDGET_GB, DEFAULT_IMAGE_CACHE_MB, DEFAULT_OFFICE_CACHE_MB,
+    sanitize_pdf_cache_mb, sanitize_text_cache_mb, sanitize_text_font_scale_percent, AvoidMode,
+    EngineIdle, MarkdownMode, PreviewScale, PreviewType, TextTheme, TransparentBackground,
+    TriggerKeyMode, DEFAULT_DECODE_BUDGET_GB, DEFAULT_IMAGE_CACHE_MB, DEFAULT_OFFICE_CACHE_MB,
     DEFAULT_OFFICE_ENGINE_IDLE_SECS, DEFAULT_PDF_CACHE_MB, DEFAULT_PREVIEW_SCALE_PERCENT,
     DEFAULT_SVG_SCALE_PERCENT, DEFAULT_TEXT_CACHE_MB, DEFAULT_TEXT_FONT_SCALE_PERCENT,
     DEFAULT_WEBVIEW_IDLE_SECS,
@@ -71,7 +71,13 @@ const ID_TRAY_VOLUME_VERY_LOW: u16 = 1014; // 10%
 const ID_TRAY_VOLUME_MUTE: u16 = 1015; // 0%
 const ID_TRAY_POSITION_FOLLOW: u16 = 1020; // Follow cursor
 const ID_TRAY_POSITION_BEST: u16 = 1021; // Best position
-const ID_TRAY_POSITION_AVOID_NAME: u16 = 1022; // Keep previews off the hovered item's name
+/// The `Placement → Avoid` submenu: one command per way a preview is kept off the
+/// item it is about, in the order it lists them. The slots are the ones the position
+/// choices leave between them and the first delay.
+const ID_TRAY_AVOID_BASE: u16 = 1027;
+/// The ways the `Avoid` submenu offers, in the order it lists them: nothing avoided,
+/// the item's name alone, and every column a view draws beside the name.
+const AVOID_CHOICES: [AvoidMode; 3] = [AvoidMode::Off, AvoidMode::Filename, AvoidMode::Details];
 const ID_TRAY_DELAY_INSTANT: u16 = 1030; // 0ms
 const ID_TRAY_DELAY_VERY_FAST: u16 = 1031; // 200ms
 const ID_TRAY_DELAY_MEDIUM: u16 = 1032; // 500ms
@@ -263,7 +269,13 @@ unsafe extern "system" fn tray_window_proc(
                 ID_TRAY_VOLUME_MUTE => set_volume(0),
                 ID_TRAY_POSITION_FOLLOW => set_follow_cursor(true),
                 ID_TRAY_POSITION_BEST => set_follow_cursor(false),
-                ID_TRAY_POSITION_AVOID_NAME => toggle_avoid_filename(),
+                // A way of keeping a preview off the hovered item, by the position it
+                // was listed at.
+                cmd if (ID_TRAY_AVOID_BASE..ID_TRAY_AVOID_BASE + AVOID_CHOICES.len() as u16)
+                    .contains(&cmd) =>
+                {
+                    set_avoid_mode(cmd - ID_TRAY_AVOID_BASE)
+                }
                 ID_TRAY_DELAY_INSTANT => set_hover_delay(0),
                 ID_TRAY_DELAY_VERY_FAST => set_hover_delay(200),
                 ID_TRAY_DELAY_MEDIUM => set_hover_delay(500),
@@ -837,14 +849,9 @@ unsafe fn show_context_menu(hwnd: HWND) {
     // the focused item, and how large it is.
     let placement_menu = CreatePopupMenu().unwrap();
 
-    // Add the Position submenu: which side a preview takes, and whether it is kept
-    // off the name of the item it is about. The two placements are one setting shown
-    // two ways, so they carry a radio mark each; avoiding the name is a setting of
-    // its own and carries a checkmark.
-    let (follow_cursor, avoid_filename) = CONFIG
-        .lock()
-        .map(|c| (c.follow_cursor, c.avoid_filename))
-        .unwrap_or((false, true));
+    // Add the Position submenu: which side a preview takes. The two placements are one
+    // setting shown two ways, so they carry a radio mark each.
+    let follow_cursor = CONFIG.lock().map(|c| c.follow_cursor).unwrap_or(false);
     let position_menu = CreatePopupMenu().unwrap();
 
     let _ = AppendMenuW(
@@ -871,25 +878,22 @@ unsafe fn show_context_menu(hwnd: HWND) {
         MF_BYCOMMAND.0,
     );
 
-    let _ = AppendMenuW(position_menu, MF_SEPARATOR, 0, PCWSTR::null());
-    let _ = AppendMenuW(
-        position_menu,
-        MF_STRING
-            | if avoid_filename {
-                MF_CHECKED
-            } else {
-                MF_UNCHECKED
-            },
-        ID_TRAY_POSITION_AVOID_NAME as usize,
-        w!("Avoid Filename"),
-    );
-
     let _ = AppendMenuW(
         placement_menu,
         MF_STRING | MF_POPUP,
         position_menu.0 as usize,
         w!("Position"),
     );
+
+    // Add the Avoid submenu: how far a preview is kept off the item it is about —
+    // nothing, the item's name alone, or the name with the columns a row draws beside
+    // it. The three are one setting, so they carry a radio mark each.
+    let avoid_mode = CONFIG
+        .lock()
+        .map(|c| c.avoid_mode)
+        .unwrap_or(AvoidMode::Details);
+
+    append_avoid_menu(placement_menu, w!("Avoid"), ID_TRAY_AVOID_BASE, avoid_mode);
 
     // Add the Scaling submenu
     let preview_scale = CONFIG
@@ -1498,6 +1502,62 @@ fn decode_budget_label(gigabytes: f32) -> String {
     }
 }
 
+/// The `Avoid` submenu: how far a preview is kept off the item it is about, with the
+/// way the setting is on marked.
+fn append_avoid_menu(parent: HMENU, label: PCWSTR, base: u16, avoid_mode: AvoidMode) {
+    let menu = unsafe { CreatePopupMenu().unwrap() };
+
+    // The labels are kept for as long as the menu is being filled out, for the same
+    // reason the backdrop labels are: `AppendMenuW` is handed a pointer, so the wide
+    // strings have to outlive the call that lists them.
+    let labels: Vec<Vec<u16>> = AVOID_CHOICES
+        .iter()
+        .map(|mode| {
+            avoid_label(*mode)
+                .encode_utf16()
+                .chain(std::iter::once(0))
+                .collect()
+        })
+        .collect();
+
+    for (index, label) in labels.iter().enumerate() {
+        let _ = unsafe {
+            AppendMenuW(
+                menu,
+                MF_STRING,
+                (base + index as u16) as usize,
+                PCWSTR(label.as_ptr()),
+            )
+        };
+    }
+
+    // One of the ways is the setting, so one of them carries the radio mark; a way the
+    // menu does not list is marked by nothing rather than by the wrong one.
+    if let Some(index) = AVOID_CHOICES.iter().position(|mode| *mode == avoid_mode) {
+        let _ = unsafe {
+            CheckMenuRadioItem(
+                menu,
+                base as u32,
+                (base + AVOID_CHOICES.len() as u16 - 1) as u32,
+                (base + index as u16) as u32,
+                MF_BYCOMMAND.0,
+            )
+        };
+    }
+
+    let _ = unsafe { AppendMenuW(parent, MF_STRING | MF_POPUP, menu.0 as usize, label) };
+}
+
+/// What a way of keeping a preview off an item is called in the menu: the words the
+/// tray lists it under.
+fn avoid_label(mode: AvoidMode) -> &'static str {
+    match mode {
+        AvoidMode::Off => "Don't Avoid",
+        AvoidMode::Filename => "Avoid Filename",
+        AvoidMode::Details => "Avoid Details",
+    }
+}
+
 /// One half of the `Background` submenu: the backdrops a preview can be drawn over,
 /// with the one that half is on marked. The two halves a picture and a document get
 /// list the same choices, which is why one builder is handed the base of the ids and
@@ -1884,13 +1944,25 @@ fn set_follow_cursor(follow: bool) {
     }
 }
 
-/// Whether a preview keeps off the name of the file it is about is a question the
-/// placement asks, and a placement is made when a preview is opened — so, like the
-/// position setting beside it, this applies to the next hover rather than moving the
-/// preview that is already up.
-fn toggle_avoid_filename() {
+/// The way an item of the `Avoid` submenu stands for, by the position it was listed
+/// at. An id past the last way the menu offered is one that is not there.
+fn avoid_mode_at(index: u16) -> Option<AvoidMode> {
+    AVOID_CHOICES.get(index as usize).copied()
+}
+
+/// How far a preview is kept off the item it is about.
+///
+/// Where that item's name is drawn is read with the hover, so the region is part of
+/// the placement that was made when the preview was opened — and, like the position
+/// setting beside it, this applies to the next hover rather than moving the preview
+/// that is already up.
+fn set_avoid_mode(index: u16) {
+    let Some(mode) = avoid_mode_at(index) else {
+        return;
+    };
+
     if let Ok(mut config) = CONFIG.lock() {
-        config.avoid_filename = !config.avoid_filename;
+        config.avoid_mode = mode;
         config.save();
     }
 }
@@ -2167,6 +2239,48 @@ mod tests {
             !images.contains(&ID_TRAY_SVG_BACKGROUND_BASE)
                 && !documents.contains(&ID_TRAY_IMAGE_BACKGROUND_BASE),
             "the ranges {images:?} and {documents:?} overlap"
+        );
+    }
+
+    /// The `Avoid` submenu lists every way the setting can be in, in the order the ids
+    /// are handed out in, and each id resolves back to the way its item was listed for
+    /// — which is what makes a click select what it named.
+    #[test]
+    fn every_offered_avoid_mode_is_one_the_setting_keeps() {
+        assert_eq!(
+            AVOID_CHOICES.map(avoid_label),
+            ["Don't Avoid", "Avoid Filename", "Avoid Details"]
+        );
+
+        for (index, mode) in AVOID_CHOICES.iter().enumerate() {
+            assert_eq!(avoid_mode_at(index as u16), Some(*mode));
+        }
+
+        assert_eq!(
+            avoid_mode_at(AVOID_CHOICES.len() as u16),
+            None,
+            "an id past the last item is not one the menu offered"
+        );
+    }
+
+    /// The `Avoid` items sit between the position choices and the first delay, apart
+    /// from the ranges the `Background` halves hand out, so no click is ever read as
+    /// two settings at once.
+    #[test]
+    fn the_avoid_submenu_carries_ids_of_its_own() {
+        let avoid = ID_TRAY_AVOID_BASE..ID_TRAY_AVOID_BASE + AVOID_CHOICES.len() as u16;
+        let backgrounds = ID_TRAY_IMAGE_BACKGROUND_BASE
+            ..ID_TRAY_IMAGE_BACKGROUND_BASE + BACKGROUND_CHOICES.len() as u16;
+
+        assert!(
+            avoid.start > ID_TRAY_POSITION_BEST,
+            "the avoid items are listed after the position choices"
+        );
+        assert!(
+            !avoid.contains(&ID_TRAY_IMAGE_BACKGROUND_BASE)
+                && !backgrounds.contains(&ID_TRAY_AVOID_BASE)
+                && !avoid.contains(&ID_TRAY_DELAY_INSTANT),
+            "the ranges {avoid:?} and {backgrounds:?} overlap"
         );
     }
 
