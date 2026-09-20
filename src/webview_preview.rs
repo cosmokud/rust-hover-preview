@@ -54,6 +54,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use crate::config::{EngineIdle, TransparentBackground, DEFAULT_WEBVIEW_IDLE_SECS};
+use crate::engine_processes;
 use crate::{svg_preview, CONFIG};
 
 /// The window class the engine's window is made from. It exists to refuse activation: a
@@ -291,16 +292,20 @@ pub fn hide() {
 /// Let the engine go, window, browser process and thread together. Called when the app
 /// ends.
 pub fn shutdown() {
-    let Ok(mut engine) = ENGINE.lock() else {
-        return;
-    };
+    let engine = ENGINE.lock().ok().and_then(|mut engine| engine.take());
 
-    let Some(engine) = engine.take() else {
-        return;
-    };
+    if let Some(engine) = engine {
+        let _ = engine.sender.send(Command::Shutdown);
+        let _ = engine.thread.join();
+    }
 
-    let _ = engine.sender.send(Command::Shutdown);
-    let _ = engine.thread.join();
+    // The engine thread ends its browser as it goes. What this is for is the browser
+    // that is still there anyway — the runtime's process is not one this app gets to
+    // assume about — and the one this run started that could not be told apart from
+    // an earlier engine's, and so was never recorded. A browser started by anything
+    // else is not a child of this process, which is what keeps this from reaching
+    // past this app's own.
+    engine_processes::end_our_browsers();
 }
 
 /// What the preview thread asks the engine's thread to do.
@@ -466,11 +471,25 @@ struct Host {
     /// The document the engine is holding, so a second hover on the same file is a
     /// window that is put back up rather than a navigation.
     current: Option<PathBuf>,
+    /// The browser process this engine started, when it could be told which one it
+    /// was. The runtime owns the browser, but the process is this app's own child —
+    /// started by the loader in this process — and it is what is ended if it is
+    /// somehow still there when the engine goes.
+    browser_pid: u32,
 }
 
 impl Host {
     fn create() -> Option<Self> {
         register_class();
+
+        // What the browser is running as before this engine is begun, so the one it
+        // starts can be told from one an earlier engine of this same run left
+        // closing: both are children of this process, and only the one that was not
+        // there a moment ago is this engine's.
+        let before = engine_processes::processes_named_by_parent(
+            engine_processes::BROWSER_IMAGE,
+            std::process::id(),
+        );
 
         let folder = user_data_folder();
         std::fs::create_dir_all(&folder).ok()?;
@@ -523,6 +542,24 @@ impl Host {
         let webview = unsafe { controller.CoreWebView2().ok()? };
         configure(&webview);
 
+        // The browser is the runtime's, but the process is this app's: the loader
+        // started it here, which is what makes it findable by its parent, and what it
+        // is put in the job and written down for is the same thing the Office engines
+        // are — a process that must not outlive the app that started it, however the
+        // app ends.
+        let browser_pid = engine_processes::processes_named_by_parent(
+            engine_processes::BROWSER_IMAGE,
+            std::process::id(),
+        )
+        .into_iter()
+        .find(|pid| !before.contains(pid))
+        .unwrap_or(0);
+
+        if browser_pid != 0 {
+            engine_processes::record(engine_processes::BROWSER_IMAGE, browser_pid);
+        }
+        trace(&format!("host: browser {browser_pid}"));
+
         if let Ok(mut timings) = LAST_TIMINGS.lock() {
             timings.environment_ms = environment_ms;
             timings.controller_ms = controller_ms;
@@ -534,6 +571,7 @@ impl Host {
             controller,
             webview,
             current: None,
+            browser_pid,
         })
     }
 
@@ -666,6 +704,20 @@ impl Host {
 impl Drop for Host {
     fn drop(&mut self) {
         SHOWING.store(false, Ordering::Release);
+
+        // Closing the engine drops the environment, and the browser goes with the
+        // last controller over it — usually. A browser that does not is the leftover
+        // the profile folders are named for, still holding the folder of a run whose
+        // app is gone, so the process is asked about here and ended if it is still
+        // there: it is one this app started, and nothing of it should outlive the
+        // app. Its own children are its business — ending it ends them.
+        if self.browser_pid != 0 {
+            if engine_processes::is_running(self.browser_pid) {
+                engine_processes::terminate_owned(self.browser_pid);
+            } else {
+                engine_processes::forget(self.browser_pid);
+            }
+        }
     }
 }
 
@@ -758,6 +810,16 @@ fn user_data_folder() -> PathBuf {
     }
 
     profile_root().join(std::process::id().to_string())
+}
+
+/// The runs that left a profile folder behind.
+///
+/// Every folder under the browser's profile root is named for the run that made it,
+/// so a folder that is not this run's names a run whose browser may still be holding
+/// it — which is what reaches a browser left by a version of this app that wrote no
+/// record of it. Read at startup, before this run has a folder of its own.
+pub fn stale_profile_pids() -> Vec<u32> {
+    engine_processes::stale_run_pids(&profile_root())
 }
 
 /// The folder the per-run folders live in.
