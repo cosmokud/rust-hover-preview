@@ -53,7 +53,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
-use crate::config::{EngineIdle, TransparentBackground, DEFAULT_WEBVIEW_IDLE_SECS};
+use crate::config::{
+    EngineIdle, PreviewType, TransparentBackground, DEFAULT_WEBVIEW_IDLE_SECS,
+};
 use crate::engine_processes;
 use crate::{svg_preview, CONFIG};
 
@@ -427,6 +429,21 @@ fn engine_thread(commands: Receiver<Command>) {
         }
 
         pump_messages();
+
+        // A document's kind switched off is a browser held for nothing: while that gate
+        // is off no hover can be answered with an animation at all, so there is nothing
+        // warm to keep. It is read here rather than being told because the gate can be
+        // closed either way — in the tray, or in `config.ini` for the watcher to reload
+        // — and because the thread that would be told is this one, parked on its
+        // channel. The browser's own children are its business: ending it ends them.
+        if host.is_some() && !PreviewType::Svg.enabled() {
+            trace("engine: let go, the kind is switched off");
+
+            if let Some(mut host) = host.take() {
+                host.close();
+            }
+            idle_since = Instant::now();
+        }
 
         // A document that has been off screen for longer than the setting asks for is
         // one the engine is let go of, browser process and all.
