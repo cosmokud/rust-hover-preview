@@ -4,18 +4,23 @@
 
 ### Added
 
-- SVG previews (`svg`, `svgz`), drawn at the size the preview is shown at rather than decoded and scaled, and sized like a picture rather than like a page: `100%` is the size the document asks for, `50%` that at half, and the preview box is exactly that size. Animated ones are played — by the WebView2 runtime Windows 11 ships with, which plays SMIL and CSS in full, and by this app's own reader where that runtime is not installed — and played in a page that draws the document as an image, because a browser draws a standalone document at the size the document asks for and leaves the rest of the window empty: an icon asking for 78 pixels was a 78-pixel picture in a display-sized window at fit-to-screen, and one with no size of its own was magnified out of its window at any scale above `100%`. The engine is pointed at the file through a URL built from the Shell's own path, whose verbatim `\\?\` form a browser refuses silently.
-- `webview_idle` and a `Performance → Keep Animated SVG Engine` entry, ten minutes by default: the browser that plays an animated document is kept warm between hovers rather than started for each one.
-- The browser that plays an animated document keeps its state in a folder of its own, one per run, and folders earlier runs left are cleared at startup: a browser left behind by a run that ended badly holds the folder it was given, and one folder is one browser at a time, so a profile shared between runs could leave a hover with no animation at all. An engine that fails for any other reason is asked for again over a couple of seconds, is stood down for five minutes so this app's own reader plays the document, and the hover that was up is laid out again so even the first one recovers rather than sitting on a still frame. `RHP_WEBVIEW_TRACE` and `RHP_WEBVIEW_PROFILE` are the diagnostics for it.
+- SVG previews (`svg`, `svgz`), drawn at the size the preview is shown at and sized like a picture: `100%` is the size the document asks for, `50%` that at half.
+- Animated SVGs are played by the WebView2 runtime Windows 11 ships with, and by this app's own reader where it is not installed. The engine is pointed at a page that draws the document as an image, so the document fills the preview box at every scale, and at a URL built from the Shell's verbatim path, which a browser refuses silently. [`\\?\` handling is a fix detail — hmm]
+- `webview_idle` and a `Performance → Keep Animated SVG Engine` entry, ten minutes by default: the browser is kept warm between hovers rather than started for each one.
+- The engine keeps its state in a folder per run, cleared at startup; one that fails is retried, then stood down for five minutes so this app's reader plays the document, and the hover that was up is laid out again. `RHP_WEBVIEW_TRACE` and `RHP_WEBVIEW_PROFILE` are the diagnostics for it.
 - `trigger_key_enabled` in `config.ini` and a check in the tray `Trigger Key` submenu, to switch the trigger key off without changing its mode.
 
 ### Changed
 
-- Installing over an older version no longer asks: the "Already Installed" page is gone, the previous version is uninstalled first, and a running copy of the app is closed instead of prompted for.
+- Installing over an older version no longer asks: the previous version is uninstalled first and a running copy of the app is closed instead of prompted for.
 - The NSIS setup is built from `packaging/nsis/installer.nsi` on a pinned `cargo-packager` version, and the dead `wix` format is gone.
-- `cargo build --release` closes a running copy of the app before linking, so the release binary can be replaced; debug builds are untouched.
+- `cargo build --release` closes a running copy of the app before linking; debug builds are untouched.
 - Video previews no longer write `%TEMP%\rust-hover-preview-video.log`, and one left by an earlier version is deleted at startup.
 - `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings` pass again.
+
+### Fixed
+
+- An animated SVG stopped moving once the engine had been let go for idle — ten minutes after the last one, on the default `webview_idle`: the thread that played it ended with its browser while the app still held its handle, so every document after that was left on its still frame for the rest of the run. The thread now outlives the engine and begins another one for the next document.
 
 ## [0.2.6]
 
