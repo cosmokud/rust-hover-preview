@@ -217,6 +217,9 @@ pub(crate) struct CachedRender {
     pub(crate) kind: RenderedKind,
     /// What Office exported, read back out of the scratch file it was written to.
     pub(crate) bytes: Arc<Vec<u8>>,
+    /// The width the render was asked for, which is what a slide's export — and so
+    /// the sharpness of the page held — is decided by.
+    pub(crate) export_width: u32,
     /// The page's own size, filled in the first time a layout asks for it.
     ///
     /// It is read from the bytes by the side that may talk to the PDF engine, and
@@ -230,6 +233,7 @@ pub(crate) struct CachedRender {
 struct CacheEntry {
     kind: RenderedKind,
     bytes: Arc<Vec<u8>>,
+    export_width: u32,
     dimensions: Arc<OnceLock<Option<(u32, u32)>>>,
     size: usize,
     last_used: u64,
@@ -329,12 +333,25 @@ pub(crate) fn cached_render(source: &Path) -> Option<CachedRender> {
     Some(CachedRender {
         kind: entry.kind,
         bytes: entry.bytes.clone(),
+        export_width: entry.export_width,
         dimensions: entry.dimensions.clone(),
     })
 }
 
+/// Whether the page held for this document is narrower than one rendered for a box
+/// `width` wide would be.
+///
+/// A slide is exported at the width it is asked for, so a deck that was first
+/// previewed on a smaller display holds a page that a larger one would draw softer
+/// than it could — worth replacing, which is what this answers. Every other family's
+/// page is the size its document makes it, whatever box the render was asked for, so
+/// nothing about one of those is narrower than anything.
+pub(crate) fn page_is_narrower_than(cached: &CachedRender, width: u32) -> bool {
+    cached.kind == RenderedKind::Png && cached.export_width < slide_export_width(width)
+}
+
 /// Hold the page a render just produced, dropping whatever no longer fits beside it.
-fn store_render(source: &Path, kind: RenderedKind, bytes: Vec<u8>) {
+fn store_render(source: &Path, kind: RenderedKind, bytes: Vec<u8>, export_width: u32) {
     let key = cache_key(source);
     let limit = cache_limit_bytes();
     let Ok(mut cache) = RENDERS.lock() else {
@@ -350,6 +367,7 @@ fn store_render(source: &Path, kind: RenderedKind, bytes: Vec<u8>) {
         CacheEntry {
             kind,
             bytes: Arc::new(bytes),
+            export_width,
             dimensions: Arc::new(OnceLock::new()),
             size,
             last_used: tick,
@@ -925,7 +943,7 @@ fn render_request(engines: &mut Engines, request: &RenderRequest, generation: u6
         // next attempt is allowed to find.
         let page = take_render(&target);
         if let Some((kind, bytes)) = page.filter(|_| rendered) {
-            store_render(&request.source, kind, bytes);
+            store_render(&request.source, kind, bytes, request.width);
             return RenderOutcome::Rendered;
         }
         if retried {
@@ -1879,10 +1897,18 @@ fn single_of(value: &VARIANT) -> Option<f32> {
     f64::try_from(value).ok().map(|value| value as f32)
 }
 
+/// The width a slide is exported at for a preview that asked for `width`: what the
+/// box the preview may fill leaves, bounded so that a display far larger than any
+/// slide is still shown a page rather than a poster — and so that the export never
+/// grows with the display past this, whatever the room is.
+fn slide_export_width(width: u32) -> u32 {
+    width.clamp(MIN_SLIDE_EXPORT_WIDTH, MAX_SLIDE_EXPORT_WIDTH)
+}
+
 /// The size slide 1 is exported at: the width the preview asked for, bounded,
 /// and the height that keeps the slide's own aspect ratio.
 fn slide_export_size(presentation: &Object, width: u32, height: u32) -> (i32, i32) {
-    let export_width = width.clamp(MIN_SLIDE_EXPORT_WIDTH, MAX_SLIDE_EXPORT_WIDTH) as i32;
+    let export_width = slide_export_width(width) as i32;
 
     let slide_width = presentation
         .member("PageSetup")
@@ -2372,6 +2398,50 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
+    /// A page as the render tier holds one, at the width the render was asked for.
+    fn held(kind: RenderedKind, export_width: u32) -> CachedRender {
+        CachedRender {
+            kind,
+            bytes: Arc::new(Vec::new()),
+            export_width,
+            dimensions: Arc::new(OnceLock::new()),
+        }
+    }
+
+    /// A slide is exported at the width the render was asked for, so a deck that was
+    /// first previewed on a smaller display holds a page a larger one is right to ask
+    /// for again — and one exported at the cap is not, which is what keeps asking for
+    /// it from being a loop. A page a document made for itself is its own size
+    /// whatever box the render was asked for.
+    #[test]
+    fn asks_for_a_slide_again_when_a_wider_display_wants_one() {
+        let deck = held(RenderedKind::Png, 1280);
+        assert!(
+            page_is_narrower_than(&deck, 1920),
+            "a wider box replaces the page"
+        );
+        assert!(
+            page_is_narrower_than(&deck, 3840),
+            "and a display larger than a slide is ever exported for asks for the widest one"
+        );
+        assert!(
+            !page_is_narrower_than(&deck, 1200),
+            "a box the page already fills does not"
+        );
+
+        let at_the_cap = held(RenderedKind::Png, MAX_SLIDE_EXPORT_WIDTH);
+        assert!(
+            !page_is_narrower_than(&at_the_cap, 3840),
+            "a page already at the cap is not asked for again"
+        );
+
+        let page = held(RenderedKind::Pdf, 800);
+        assert!(
+            !page_is_narrower_than(&page, 3840),
+            "a page a document made is the size its document makes it"
+        );
+    }
+
     /// The engine's own lifecycle: one is started for each family, let go, and
     /// nothing is left behind.
     #[test]
@@ -2426,12 +2496,18 @@ mod tests {
             &source,
             RenderedKind::Bmp,
             bmp_bytes(2, 2, [10, 20, 30, 255]),
+            1280,
         );
         assert_eq!(measure(&source), Some((2, 2)), "a page that can be read");
         assert_eq!(source_kind(&source), SourceKind::Raster);
 
         // One that cannot is dropped, and the answer is that nothing is rendered yet.
-        store_render(&source, RenderedKind::Bmp, b"not a picture at all".to_vec());
+        store_render(
+            &source,
+            RenderedKind::Bmp,
+            b"not a picture at all".to_vec(),
+            1280,
+        );
         assert_eq!(source_kind(&source), SourceKind::None, "nothing to draw");
         assert!(cached_render(&source).is_none(), "the broken page is gone");
 

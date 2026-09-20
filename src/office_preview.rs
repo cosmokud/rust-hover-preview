@@ -235,6 +235,9 @@ mod tests {
         CachedRender {
             kind,
             bytes: std::sync::Arc::new(bytes),
+            // A page a document drew is the size its document makes it, whatever
+            // width the render was asked for.
+            export_width: 0,
             dimensions: std::sync::Arc::new(std::sync::OnceLock::new()),
         }
     }

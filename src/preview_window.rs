@@ -56,7 +56,7 @@ use windows::Win32::System::Threading::{
     OpenProcess, QueryFullProcessImageNameW, TerminateProcess, PROCESS_NAME_WIN32,
     PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE,
 };
-use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
+use windows::Win32::UI::HiDpi::{GetDpiForMonitor, GetDpiForWindow, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, ReleaseCapture, SetCapture, VK_C, VK_CONTROL,
 };
@@ -65,8 +65,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetCursorPos, GetSystemMetrics, GetWindow, GetWindowLongPtrW, GetWindowRect,
     GetWindowThreadProcessId, IsWindow, IsWindowVisible, LoadCursorW, MoveWindow, PeekMessageW,
     RegisterClassExW, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow,
-    SystemParametersInfoW, TrackPopupMenu, TranslateMessage, UpdateLayeredWindow, CS_HREDRAW,
-    CS_VREDRAW, GWL_EXSTYLE, GW_OWNER, HWND_TOPMOST, IDC_ARROW, MF_STRING, MSG,
+    SystemParametersInfoW, TrackPopupMenu, TranslateMessage, UpdateLayeredWindow, WindowFromPoint,
+    CS_HREDRAW, CS_VREDRAW, GWL_EXSTYLE, GW_OWNER, HWND_TOPMOST, IDC_ARROW, MF_STRING, MSG,
     PBT_APMRESUMEAUTOMATIC, PBT_APMRESUMESUSPEND, PBT_APMSTANDBY, PBT_APMSUSPEND, PM_REMOVE,
     SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SPI_GETWORKAREA,
     SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SW_HIDE,
@@ -125,17 +125,29 @@ const WHEEL_DELTA: i32 = 120;
 /// How far behind the point a preview was opened from the region reaches, in
 /// logical pixels. The pointer travels forwards from there, so this is only there
 /// to keep the pixel under a hand at rest inside the region.
-const TEXT_SCROLL_ANCHOR_SLACK_PIXELS: i32 = 1;
+const TEXT_SCROLL_ANCHOR_SLACK_PIXELS: f32 = 1.0;
 /// How far above and below the row the pointer is on the journey to a preview may
 /// wander before it is out of it. The journey is made across a row of the list, so
 /// the band is the hand's, not the preview's.
-const TEXT_SCROLL_CORRIDOR_SLACK_PIXELS: i32 = 12;
+const TEXT_SCROLL_CORRIDOR_SLACK_PIXELS: f32 = 12.0;
 
 /// How far either side of the scrollbar's column a press still counts as a press
 /// on the bar, in logical pixels. It is deliberately small: the bar is thin, so a
 /// hand aiming at it needs some slack, but everything further left is text, and a
 /// press in the text is the start of a selection rather than a scroll.
 const TEXT_SCROLL_BAR_PRESS_SLACK_PIXELS: f32 = 8.0;
+
+/// A distance written in logical pixels — the pixels of a display at 100% — in the
+/// pixels of the display it is drawn on.
+///
+/// Every margin this app's placement is written around is a distance under a hand
+/// rather than a count of pixels, so all of them are scaled this way: a standoff that
+/// is comfortable at 100% is a sliver at 200%, and a room worth taking at 100% is a
+/// room a preview is squeezed into at 200%. The text, the scrollbar and the grace
+/// below are scaled for the same reason.
+fn logical_px(dpi: u32, logical_pixels: f32) -> i32 {
+    (logical_pixels * dpi as f32 / 96.0).round() as i32
+}
 
 /// The grace `text_scroll_far_edge_grace_pixels` asks for past the far edge of a
 /// text preview, at the display the preview is on.
@@ -147,12 +159,8 @@ const TEXT_SCROLL_BAR_PRESS_SLACK_PIXELS: f32 = 8.0;
 /// A few pixels past it would otherwise take the preview down with it, which is
 /// what this is for. It goes on the far side whichever side that is: the preview to
 /// the right of the cursor is the common case, and then it is the right edge.
-///
-/// The configured distance is in logical pixels, so it is the same distance under a
-/// hand on any display: a margin that is comfortable at 100% is a sliver at 200%,
-/// and the scrollbar it is there for scales with the text.
 fn far_edge_grace(dpi: u32, configured_pixels: f32) -> i32 {
-    (configured_pixels * dpi as f32 / 96.0).round() as i32
+    logical_px(dpi, configured_pixels)
 }
 
 /// The grace as `config.ini` has it, so a hand-edited distance is used as written
@@ -219,6 +227,7 @@ fn text_scroll_hold_regions(
     preview: ScreenRegion,
     anchor: (i32, i32),
     far_edge_grace: i32,
+    dpi: u32,
 ) -> [ScreenRegion; 2] {
     let (left, top, right, bottom) = preview;
 
@@ -240,11 +249,14 @@ fn text_scroll_hold_regions(
     let near_x = anchor.0.clamp(left, right);
     let near_y = anchor.1.clamp(top, bottom);
 
+    let anchor_slack = logical_px(dpi, TEXT_SCROLL_ANCHOR_SLACK_PIXELS);
+    let corridor_slack = logical_px(dpi, TEXT_SCROLL_CORRIDOR_SLACK_PIXELS);
+
     let corridor = (
-        anchor.0.min(near_x) - TEXT_SCROLL_ANCHOR_SLACK_PIXELS,
-        anchor.1.min(near_y) - TEXT_SCROLL_CORRIDOR_SLACK_PIXELS,
-        anchor.0.max(near_x) + TEXT_SCROLL_ANCHOR_SLACK_PIXELS,
-        anchor.1.max(near_y) + TEXT_SCROLL_CORRIDOR_SLACK_PIXELS,
+        anchor.0.min(near_x) - anchor_slack,
+        anchor.1.min(near_y) - corridor_slack,
+        anchor.0.max(near_x) + anchor_slack,
+        anchor.1.max(near_y) + corridor_slack,
     );
 
     [corridor, preview_region]
@@ -1088,12 +1100,35 @@ fn show_path(show: &PreviewMessage) -> Option<&PathBuf> {
     }
 }
 
+/// A hover about to be replayed, anchored where it belongs now.
+///
+/// A mouse hover is replayed where the pointer is rather than where the hover opened:
+/// what is being put back is the preview of the file under the hand, and the display
+/// it is being put back on is the one the pointer is on now — the point it opened from
+/// resolves the display it came from, which is the one that is gone. A keyboard hover
+/// is the item's own place and is replayed as it came.
+fn replay_where_the_pointer_is(show: Option<PreviewMessage>) -> Option<PreviewMessage> {
+    match (show, cursor_position()) {
+        (Some(PreviewMessage::Show(path, _, _, avoid)), Some(cursor)) => {
+            Some(PreviewMessage::Show(path, cursor.x, cursor.y, avoid))
+        }
+        (show, _) => show,
+    }
+}
+
 /// Whether this hover is owed a render: an Office document with no page in the
-/// cache yet, with the render tier switched on.
-fn office_render_is_due(path: &Path) -> bool {
-    office_formats::is_office_preview(path)
-        && office_render::enabled()
-        && office_render::cached_render(path).is_none()
+/// cache yet — or one whose page was exported narrower than a render asked for this
+/// hover's room would be, which is a deck that was first previewed on a smaller
+/// display — with the render tier switched on.
+fn office_render_is_due(path: &Path, width: u32) -> bool {
+    if !office_formats::is_office_preview(path) || !office_render::enabled() {
+        return false;
+    }
+
+    match office_render::cached_render(path) {
+        Some(cached) => office_render::page_is_narrower_than(&cached, width),
+        None => true,
+    }
 }
 
 /// Ask the render tier for the page a hover needs, at the moment that hover is
@@ -1113,7 +1148,7 @@ fn request_office_render(
     width: u32,
     height: u32,
 ) -> Option<(PathBuf, u64)> {
-    if !office_render_is_due(path) {
+    if !office_render_is_due(path, width) {
         return None;
     }
 
@@ -3724,10 +3759,24 @@ fn text_preview_layout(
 }
 
 /// Effective DPI of the display nearest `(x, y)`, which is what a text preview's
-/// font size is scaled by. Falls back to the 96 DPI baseline when the monitor
-/// query fails, the same way the placement falls back to the virtual screen.
-fn monitor_dpi_from_point(x: i32, y: i32) -> u32 {
+/// font size is scaled by — and what every margin a layout is written around is
+/// scaled by (see `logical_px`). Falls back to the 96 DPI baseline when no display
+/// can be named, the same way the placement falls back to the primary display.
+///
+/// The window the point is over is asked first: this process is per-monitor DPI
+/// aware, so `GetDpiForWindow` is the call that answers what scale a point is drawn
+/// at, and `GetDpiForMonitor` — which is documented as one a per-monitor-aware caller
+/// should not be making — is the fallback for a point no window is over.
+pub(crate) fn monitor_dpi_from_point(x: i32, y: i32) -> u32 {
     unsafe {
+        let window = WindowFromPoint(POINT { x, y });
+        if !window.is_invalid() {
+            let dpi = GetDpiForWindow(window);
+            if dpi > 0 {
+                return dpi;
+            }
+        }
+
         let monitor = MonitorFromPoint(POINT { x, y }, MONITOR_DEFAULTTONEAREST);
         if !monitor.is_invalid() {
             let mut dpi_x = 0u32;
@@ -4025,7 +4074,8 @@ fn spawn_load_worker(
             }))
             .unwrap_or(None);
 
-            let awaiting_render = media.is_none() && office_render_is_due(&request.path);
+            let awaiting_render =
+                media.is_none() && office_render_is_due(&request.path, request.max_width);
 
             let _ = result_tx.send(LoadResult {
                 generation: request.generation,
@@ -4076,6 +4126,10 @@ struct PendingLoad {
     pos_y: i32,
     width: u32,
     height: u32,
+    /// The room the layout allowed this preview, which is the box a page on its way
+    /// is asked for in: a slide is exported at the width the render is asked for, so
+    /// the room the display has is the sharpest page that display can show.
+    room: (u32, u32),
     spinner_shown: bool,
     /// The mouse hover this load came from, if it was one. A preview that is still
     /// on its way follows the pointer, so it is placed again for a cursor that has
@@ -4110,8 +4164,9 @@ impl PendingLoad {
 
     /// Place this load's preview again for `cursor`, when it is one that follows
     /// the pointer: the size the hover measured, its `Avoid` region and
-    /// its scale, and the display the pointer is on now. Answers whether the place
-    /// it came out at is a new one, so the window is only moved when it is.
+    /// its scale, and the display the pointer is on now — the room it has and the
+    /// scale its margins are drawn at. Answers whether the place it came out at is a
+    /// new one, so the window is only moved when it is.
     ///
     /// A load that answered nothing, or a keyboard hover, is left where it is.
     fn follow_pointer(&mut self, cursor: POINT) -> bool {
@@ -4124,6 +4179,7 @@ impl PendingLoad {
             cursor.y,
             placement,
             monitor_bounds_from_point(cursor.x, cursor.y),
+            monitor_dpi_from_point(cursor.x, cursor.y),
         ) else {
             return false;
         };
@@ -4459,6 +4515,7 @@ unsafe fn publish_pointer_hold(hwnd: HWND) {
                     preview,
                     anchor,
                     far_edge_grace(dpi, configured_far_edge_grace_pixels()),
+                    dpi,
                 )
                 .to_vec()
             })
@@ -5234,7 +5291,7 @@ fn centered_top(center: i32, height: i32, bounds: ScreenBounds) -> i32 {
 /// it. Below this the room is a sliver — the tail past a name that fills its row, the
 /// last strip of a display under a row at the bottom — and a preview squeezed into it
 /// says less than the one left over the name would have.
-const MIN_AVOID_ROOM_PX: i32 = 64;
+const MIN_AVOID_ROOM_PIXELS: f32 = 64.0;
 
 /// A layout moved off the region the item it describes draws, as the `Avoid` setting
 /// measured it: the name the file is listed under at `Avoid Filename`, and that name
@@ -5258,7 +5315,9 @@ const MIN_AVOID_ROOM_PX: i32 = 64;
 /// to get off a name that a usable preview would have covered anyway.
 ///
 /// `gap` is the distance the placement keeps from what it is beside, so the text is
-/// cleared by that much rather than touched at its edge.
+/// cleared by that much rather than touched at its edge. It is already in the pixels
+/// of the display this placement is for, like the least room a way out is worth
+/// taking, which is scaled here from the logical distance it is written as.
 fn avoiding_text(
     layout: PreviewLayout,
     orig_dims: (u32, u32),
@@ -5266,6 +5325,7 @@ fn avoiding_text(
     avoid: Option<ScreenRegion>,
     gap: i32,
     bounds: ScreenBounds,
+    dpi: u32,
 ) -> PreviewLayout {
     let Some((text_left, text_top, text_right, text_bottom)) = avoid else {
         return layout;
@@ -5273,6 +5333,7 @@ fn avoiding_text(
 
     let (left, top) = (layout.pos_x, layout.pos_y);
     let (width, height) = (layout.preview_w as i32, layout.preview_h as i32);
+    let min_room = logical_px(dpi, MIN_AVOID_ROOM_PIXELS);
 
     let covers_text = left < text_right
         && left + width > text_left
@@ -5337,7 +5398,7 @@ fn avoiding_text(
         } else {
             preview_h as i32
         };
-        if size_there < natural_size && room < MIN_AVOID_ROOM_PX {
+        if size_there < natural_size && room < min_room {
             continue;
         }
 
@@ -5387,26 +5448,38 @@ fn avoiding_text(
     }
 }
 
+/// How far off the pointer a preview is placed, in logical pixels: the margin the
+/// position modes are written around.
+const POINTER_STANDOFF_PIXELS: f32 = 20.0;
+
+/// How far off the pointer the waiting spinner is placed, in logical pixels: a
+/// single pixel, because the preview window is what a mouse message at the pointer
+/// lands on, and the pointer has to keep clicking and probing the file it is waiting
+/// on rather than the spinner that is waiting on it.
+const SPINNER_STANDOFF_PIXELS: f32 = 1.0;
+
 /// Compute preview layout for mouse hover (relative to cursor position)
 ///
 /// `placement` is what the hover asks for — the size the preview was measured at,
 /// the text to keep it off, the position mode it follows and the scale it is drawn
 /// with — the same reading a pending load keeps to place its preview again as the
-/// pointer moves (see `HoverPlacement`).
+/// pointer moves (see `HoverPlacement`). `dpi` is the display the pointer is on,
+/// which is what the margins the placement is written around are scaled by.
 ///
 /// A placement that is the waiting spinner (`flush_at_cursor`) is placed by its own
-/// rule: the corner nearest the pointer is put at the pointer — a single pixel off
-/// it, which is what `offset` below is — in whichever of the four quadrants the
-/// display has room for the spinner, and the name it covers is not stepped around:
-/// a spinner waiting on the page of the file under the hand says what it is by being
-/// at the hand, and one placed a row away from it says nothing about what is being
-/// waited on. Every other preview keeps the margin its position mode leaves and the
-/// room the `Avoid` setting asks for.
+/// rule: the corner nearest the pointer is put at the pointer — a single logical
+/// pixel off it, which is what `offset` below is — in whichever of the four
+/// quadrants the display has room for the spinner, and the name it covers is not
+/// stepped around: a spinner waiting on the page of the file under the hand says
+/// what it is by being at the hand, and one placed a row away from it says nothing
+/// about what is being waited on. Every other preview keeps the margin its position
+/// mode leaves and the room the `Avoid` setting asks for.
 fn compute_mouse_layout(
     cursor_x: i32,
     cursor_y: i32,
     placement: HoverPlacement,
     bounds: ScreenBounds,
+    dpi: u32,
 ) -> Option<PreviewLayout> {
     let HoverPlacement {
         orig_dims,
@@ -5416,12 +5489,11 @@ fn compute_mouse_layout(
         flush_at_cursor,
     } = placement;
 
-    // How far off the pointer a preview is placed. The spinner touches the pointer —
-    // one pixel of standoff, because the preview window is what a mouse message at
-    // the pointer lands on, and the pointer has to keep clicking and probing the file
-    // it is waiting on rather than the spinner that is waiting on it. Every other
-    // preview keeps the margin the position modes are written around.
-    let offset = if flush_at_cursor { 1 } else { 20 };
+    let offset = if flush_at_cursor {
+        logical_px(dpi, SPINNER_STANDOFF_PIXELS)
+    } else {
+        logical_px(dpi, POINTER_STANDOFF_PIXELS)
+    };
     let (orig_w, orig_h) = (orig_dims.0 as i32, orig_dims.1 as i32);
 
     if follow_cursor || flush_at_cursor {
@@ -5527,6 +5599,7 @@ fn compute_mouse_layout(
             avoid,
             offset,
             bounds,
+            dpi,
         ))
     } else {
         let left_width = cursor_x - bounds.left - offset;
@@ -5598,15 +5671,20 @@ fn compute_mouse_layout(
             avoid,
             offset,
             bounds,
+            dpi,
         ))
     }
 }
 
+/// How far off the item a keyboard preview is placed, in logical pixels.
+const KEYBOARD_GAP_PIXELS: f32 = 10.0;
+
 /// The least room beside an item a keyboard preview will squeeze into before it
-/// stops treating the item as something to sit beside. Below this the free space
-/// past the item's edge — or past the region a row is kept off — is a sliver, and the
-/// preview is placed from the item's middle instead — see `compute_keyboard_layout`.
-const MIN_BESIDE_ROOM_PX: i32 = 64;
+/// stops treating the item as something to sit beside, in logical pixels. Below this
+/// the free space past the item's edge — or past the region a row is kept off — is a
+/// sliver, and the preview is placed from the item's middle instead — see
+/// `compute_keyboard_layout`.
+const MIN_BESIDE_ROOM_PIXELS: f32 = 64.0;
 
 /// Compute preview layout for keyboard hover (relative to item bounding rect)
 /// Positions the preview so it doesn't block the selected file item
@@ -5617,6 +5695,10 @@ const MIN_BESIDE_ROOM_PX: i32 = 64;
 /// placement is kept clear of *and* where a row's placement is measured from, so a row
 /// is only cleared as far as the setting asks; with nothing kept off, an item is
 /// placed by the position mode alone. See `avoiding_text`.
+///
+/// `dpi` is the display the item is on, which is what the margins this is written
+/// around — the gap it keeps off the item and the least room beside one that is worth
+/// sitting in — are scaled by.
 fn compute_keyboard_layout(
     item_rect: (i32, i32, i32, i32),
     orig_dims: (u32, u32),
@@ -5624,9 +5706,11 @@ fn compute_keyboard_layout(
     avoid: Option<ScreenRegion>,
     preview_scale: PreviewScale,
     bounds: ScreenBounds,
+    dpi: u32,
 ) -> Option<PreviewLayout> {
     let (item_left, item_top, item_right, item_bottom) = item_rect;
-    let gap = 10;
+    let gap = logical_px(dpi, KEYBOARD_GAP_PIXELS);
+    let min_beside_room = logical_px(dpi, MIN_BESIDE_ROOM_PIXELS);
     let (orig_w, orig_h) = (orig_dims.0 as i32, orig_dims.1 as i32);
 
     // An item far wider than it is tall and at least half the display across is a
@@ -5656,7 +5740,7 @@ fn compute_keyboard_layout(
     if row_shaped {
         if let Some(tail_right) = avoid
             .map(|(_, _, right, _)| right)
-            .filter(|right| *right > item_left && bounds.right - *right - gap >= MIN_BESIDE_ROOM_PX)
+            .filter(|right| *right > item_left && bounds.right - *right - gap >= min_beside_room)
         {
             let max_width = (bounds.right - tail_right - gap).max(1) as u32;
             let room_below = bounds.bottom - item_bottom - gap;
@@ -5707,6 +5791,7 @@ fn compute_keyboard_layout(
                 avoid,
                 gap,
                 bounds,
+                dpi,
             ));
         }
     }
@@ -5826,6 +5911,7 @@ fn compute_keyboard_layout(
             avoid,
             gap,
             bounds,
+            dpi,
         ))
     } else {
         // Best spot mode: choose the left or right side of what the item is anchored
@@ -5842,7 +5928,7 @@ fn compute_keyboard_layout(
         let edge_right_width = bounds.right - anchor_right - gap;
 
         let (left_anchor_x, right_anchor_x, left_width, right_width) =
-            if edge_left_width < MIN_BESIDE_ROOM_PX && edge_right_width < MIN_BESIDE_ROOM_PX {
+            if edge_left_width < min_beside_room && edge_right_width < min_beside_room {
                 let center = ((anchor_left + anchor_right) / 2).clamp(bounds.left, bounds.right);
                 (
                     center,
@@ -5918,6 +6004,7 @@ fn compute_keyboard_layout(
             avoid,
             gap,
             bounds,
+            dpi,
         ))
     }
 }
@@ -6200,14 +6287,20 @@ pub fn run_preview_window() {
                             // is told what it is waiting on, which is what puts
                             // the spinner up at once rather than after the delay
                             // a load that may be about to finish is given. The
-                            // page is asked for in the box its family's pages
-                            // have: the spinner's own box is a spinner's, and
-                            // says nothing about how large the page will be
-                            // drawn.
+                            // page is asked for in the room this preview may take,
+                            // which is what the page is drawn at the size of: the
+                            // spinner's own box is a spinner's and says nothing
+                            // about how large the page will be drawn, while a
+                            // slide is exported at the width the render is asked
+                            // for — so the room the display has is the sharpest
+                            // page that display can show.
                             if let Some(pl) = pending_load.as_mut() {
                                 pl.awaiting_render = true;
                             }
-                            let (width, height) = office_formats::default_page_size(&result.path);
+                            let (width, height) = pending_load
+                                .as_ref()
+                                .map(|pl| pl.room)
+                                .unwrap_or_else(|| office_formats::default_page_size(&result.path));
                             office_render_pending = request_office_render(
                                 &result.path,
                                 result.generation,
@@ -6378,14 +6471,8 @@ pub fn run_preview_window() {
                         // spinner it replaces was kept with the pointer while the
                         // render ran, and a page that jumped back to where the
                         // hover started would jump away from where it was waited
-                        // for. A keyboard hover is the item's own place and is
-                        // replayed as it came.
-                        latest_preview_msg = match (current_show.clone(), cursor_position()) {
-                            (Some(PreviewMessage::Show(path, _, _, avoid)), Some(cursor)) => {
-                                Some(PreviewMessage::Show(path, cursor.x, cursor.y, avoid))
-                            }
-                            (show, _) => show,
-                        };
+                        // for.
+                        latest_preview_msg = replay_where_the_pointer_is(current_show.clone());
                     }
                     // A newer message was in hand, so the page is not shown now. The
                     // wait it was rendered for is left standing rather than cleared
@@ -6430,7 +6517,7 @@ pub fn run_preview_window() {
             // the display the pointer is on now. A newer message in hand is left to
             // speak for itself, and the flag waits for a tick where none does.
             if latest_preview_msg.is_none() && DISPLAY_RESET.swap(false, Ordering::AcqRel) {
-                latest_preview_msg = current_show.clone();
+                latest_preview_msg = replay_where_the_pointer_is(current_show.clone());
             }
 
             // The engine could not be had for the preview that is up — the folder it
@@ -6439,7 +6526,7 @@ pub fn run_preview_window() {
             // this app's own reader instead of being left as the still frame the
             // engine's window was going to land on.
             if latest_preview_msg.is_none() && webview_preview::take_failure_notice() {
-                latest_preview_msg = current_show.clone();
+                latest_preview_msg = replay_where_the_pointer_is(current_show.clone());
             }
 
             if let Some(preview_msg) = latest_preview_msg {
@@ -6491,7 +6578,8 @@ pub fn run_preview_window() {
                                 preview_scale,
                                 flush_at_cursor: waiting_spinner,
                             };
-                            if let Some(layout) = compute_mouse_layout(x, y, placement, bounds) {
+                            let placed = compute_mouse_layout(x, y, placement, bounds, dpi);
+                            if let Some(layout) = placed {
                                 let layout = text_preview_layout(&path, layout, dpi, |size| {
                                     compute_mouse_layout(
                                         x,
@@ -6501,6 +6589,7 @@ pub fn run_preview_window() {
                                             ..placement
                                         },
                                         bounds,
+                                        dpi,
                                     )
                                 });
                                 show_is_video = is_video;
@@ -6533,6 +6622,7 @@ pub fn run_preview_window() {
                                 avoid,
                                 preview_scale,
                                 bounds,
+                                dpi,
                             ) {
                                 let layout = text_preview_layout(&path, layout, dpi, |size| {
                                     compute_keyboard_layout(
@@ -6542,6 +6632,7 @@ pub fn run_preview_window() {
                                         avoid,
                                         preview_scale,
                                         bounds,
+                                        dpi,
                                     )
                                 });
                                 show_is_video = is_video;
@@ -6756,6 +6847,7 @@ pub fn run_preview_window() {
                             pos_y,
                             width: preview_w,
                             height: preview_h,
+                            room: (max_width, max_height),
                             spinner_shown: false,
                             placement: show_placement,
                             awaiting_render: false,
@@ -6947,8 +7039,13 @@ mod tests {
         }
     }
 
+    /// The display the placement figures are worked out for: 100%, which is what
+    /// distances written in logical pixels are the same as the pixels of.
+    const TEST_DPI: u32 = 96;
+
     /// A placement kept off `name`, at the size the media's own scale allows — the
-    /// arrangement the figures are easy to read in.
+    /// arrangement the figures are easy to read in. It is the step a hover makes, so
+    /// the gap is the pointer's standoff at this display's scale.
     fn placed(
         placement: PreviewLayout,
         media: (u32, u32),
@@ -6960,8 +7057,9 @@ mod tests {
             media,
             PreviewScale::Percent(100),
             Some(name),
-            20,
+            logical_px(TEST_DPI, POINTER_STANDOFF_PIXELS),
             bounds,
+            TEST_DPI,
         )
     }
 
@@ -6981,6 +7079,7 @@ mod tests {
             Some((20, 104, 120, 136)),
             PreviewScale::Percent(100),
             bounds(),
+            TEST_DPI,
         )
         .expect("a placement past the name");
 
@@ -6991,6 +7090,7 @@ mod tests {
             Some((20, 104, 900, 136)),
             PreviewScale::Percent(100),
             bounds(),
+            TEST_DPI,
         )
         .expect("a placement past the row's columns");
 
@@ -7014,6 +7114,7 @@ mod tests {
             None,
             PreviewScale::Percent(100),
             bounds(),
+            TEST_DPI,
         )
         .expect("a placement");
 
@@ -7252,6 +7353,7 @@ mod tests {
             pos_y: 0,
             width: 64,
             height: 64,
+            room: (1920, 1040),
             spinner_shown: false,
             placement: None,
             awaiting_render,
@@ -7289,6 +7391,7 @@ mod tests {
             pos_y: 0,
             width: 0,
             height: 0,
+            room: (1920, 1040),
             spinner_shown: true,
             placement,
             awaiting_render: false,
@@ -7359,13 +7462,20 @@ mod tests {
             flush_at_cursor: false,
         };
 
-        let full = compute_mouse_layout(300, 300, page(PreviewScale::FitToScreen), bounds())
-            .expect("a placed page");
+        let full = compute_mouse_layout(
+            300,
+            300,
+            page(PreviewScale::FitToScreen),
+            bounds(),
+            TEST_DPI,
+        )
+        .expect("a placed page");
         let half = compute_mouse_layout(
             300,
             300,
             page(PreviewScale::FitToScreenReduced(50)),
             bounds(),
+            TEST_DPI,
         )
         .expect("a placed page");
 
@@ -7396,6 +7506,7 @@ mod tests {
                     flush_at_cursor: true,
                 },
                 bounds(),
+                TEST_DPI,
             )
             .expect("a placed spinner")
         };
@@ -7535,12 +7646,25 @@ mod tests {
         );
     }
 
-    /// The displays and the media every placement test is run over: a 1080p one, a 4K
-    /// one, a 4K one that is the second display rather than the first, and a portrait
-    /// one, against the shapes media comes in — pages both ways up, a slide, the
-    /// waiting spinner, a picture, and things far wider and far taller than any display.
-    fn displays_and_media() -> ([ScreenBounds; 4], [(u32, u32); 7], [PreviewScale; 4]) {
-        let displays = [
+    /// A display and the scale it is drawn at, which is one case for a placement test.
+    type ScaledDisplay = (ScreenBounds, u32);
+
+    /// What the placement matrices are made of.
+    struct PlacementCases {
+        displays: Vec<ScaledDisplay>,
+        media: [(u32, u32); 7],
+        scales: [PreviewScale; 4],
+    }
+
+    /// The displays, the display scales and the media every placement test is run
+    /// over: a 1080p display, a 4K one, a 4K one that is the second display rather than
+    /// the first, and a portrait one — each at 100%, 150% and 200%, because the margins
+    /// a placement is written around are scaled by the display it is on and the ones
+    /// that came apart at a scale are what the scaling is for — against the shapes media
+    /// comes in: pages both ways up, a slide, the waiting spinner, a picture, and things
+    /// far wider and far taller than any display.
+    fn placement_cases() -> PlacementCases {
+        let geometries = [
             ScreenBounds {
                 left: 0,
                 top: 0,
@@ -7581,8 +7705,19 @@ mod tests {
             PreviewScale::Percent(100),
             PreviewScale::Percent(400),
         ];
+        // Every display at every scale, as one list: the margins a placement is
+        // written around are scaled by the display it is on, so a display at 150% is
+        // not the display at 100%, and the pair is what a case is.
+        let displays = geometries
+            .iter()
+            .flat_map(|bounds| [TEST_DPI, 144, 192].map(|dpi| (*bounds, dpi)))
+            .collect();
 
-        (displays, media, scales)
+        PlacementCases {
+            displays,
+            media,
+            scales,
+        }
     }
 
     /// The one thing a hovered preview may never do: leave the display it was planned
@@ -7593,10 +7728,14 @@ mod tests {
     /// disagree are not the ones anyone hovers over on purpose.
     #[test]
     fn places_every_hover_inside_its_display() {
-        let (displays, media, scales) = displays_and_media();
+        let PlacementCases {
+            displays,
+            media,
+            scales,
+        } = placement_cases();
         let mut placed = 0usize;
 
-        for bounds in displays {
+        for (bounds, dpi) in displays {
             let points = [
                 (bounds.left, bounds.top),
                 (bounds.right - 1, bounds.top),
@@ -7632,9 +7771,10 @@ mod tests {
                                     flush_at_cursor: (orig_width, orig_height) == (36, 36),
                                 };
 
-                                let Some(layout) =
-                                    compute_mouse_layout(cursor_x, cursor_y, placement, bounds)
-                                else {
+                                let layout = compute_mouse_layout(
+                                    cursor_x, cursor_y, placement, bounds, dpi,
+                                );
+                                let Some(layout) = layout else {
                                     continue;
                                 };
 
@@ -7661,10 +7801,14 @@ mod tests {
     /// where the room beside an item and the item's own edges disagree.
     #[test]
     fn places_every_keyboard_hover_inside_its_display() {
-        let (displays, media, scales) = displays_and_media();
+        let PlacementCases {
+            displays,
+            media,
+            scales,
+        } = placement_cases();
         let mut placed = 0usize;
 
-        for bounds in displays {
+        for (bounds, dpi) in displays {
             let items = [
                 // A row of a list, drawn across the view at its middle.
                 (
@@ -7716,6 +7860,7 @@ mod tests {
                                     avoid,
                                     preview_scale,
                                     bounds,
+                                    dpi,
                                 ) else {
                                     continue;
                                 };
@@ -8027,6 +8172,7 @@ mod tests {
                     flush_at_cursor: false,
                 },
                 bounds,
+                dpi,
             ) else {
                 println!("layout: none — the hover shows no preview");
                 continue;
