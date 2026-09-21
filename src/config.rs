@@ -10,6 +10,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use crate::archive_formats::{sanitize_archive_extensions, DEFAULT_ARCHIVE_EXTENSIONS};
+use crate::font_formats::{sanitize_font_extensions, DEFAULT_FONT_EXTENSIONS};
 use crate::image_formats::{
     sanitize_image_extensions, DEFAULT_IMAGE_EXTENSIONS, IMAGE_EXTENSIONS_BEFORE_CODEC_FORMATS,
     IMAGE_EXTENSIONS_BEFORE_SVG,
@@ -34,6 +35,8 @@ const TEXT_SECTION: &str = "text";
 const ARCHIVE_SECTION: &str = "archive";
 /// The office extension list lives in its own section for the same reason.
 const OFFICE_SECTION: &str = "office";
+/// The font extension list lives in its own section for the same reason.
+const FONT_SECTION: &str = "font";
 pub const DEFAULT_WEBP_PLAYBACK_FPS: u32 = 90;
 pub const MAX_WEBP_PLAYBACK_FPS: u32 = 90;
 pub const DEFAULT_PREVIEW_SCALE_PERCENT: u32 = 100;
@@ -45,6 +48,13 @@ pub const MAX_PREVIEW_SCALE_PERCENT: u32 = 1000;
 /// a share of the room the display has rather than a share of the size the file asks
 /// for: half of the room is where a document starts.
 pub const DEFAULT_SVG_SCALE_PERCENT: u32 = 50;
+/// The share of the display a font specimen is drawn at unless asked otherwise.
+///
+/// A font has no size it asks to be drawn at — a file holds outlines, and the text they are
+/// drawn as is whatever size a caller asks for — so what the preview is sized by is the box
+/// `font_preview` measures it at, narrowed to this share of the room the display has: half
+/// of the room is where a specimen starts, the same starting point an SVG document has.
+pub const DEFAULT_FONT_SCALE_PERCENT: u32 = 50;
 pub const DEFAULT_TEXT_FONT_SCALE_PERCENT: u32 = 125;
 pub const MIN_TEXT_FONT_SCALE_PERCENT: u32 = 1;
 pub const MAX_TEXT_FONT_SCALE_PERCENT: u32 = 1000;
@@ -357,6 +367,10 @@ impl PreviewScale {
 pub const DEFAULT_PDF_SCALE: PreviewScale = PreviewScale::FitToScreen;
 /// The same for the page an Office document is drawn as.
 pub const DEFAULT_OFFICE_SCALE: PreviewScale = PreviewScale::FitToScreen;
+/// The same for a font specimen, at the share rather than the whole of the room: a specimen
+/// is a page of text rather than a document to be studied, and half the display holds the
+/// pangram at a size that can be read at a glance.
+pub const DEFAULT_FONT_SCALE: PreviewScale = PreviewScale::Percent(DEFAULT_FONT_SCALE_PERCENT);
 
 /// How long an engine that is kept warm between documents is kept.
 ///
@@ -589,6 +603,10 @@ pub enum PreviewType {
     /// list: what draws one is a browser rather than a decoder, so a user who wants
     /// none of them has a switch for them that is not the switch for pictures.
     Svg,
+    /// Font files, the second kind the browser draws rather than a decoder: a specimen is
+    /// a page of this app's own with the font in it, so a machine without the engine has no
+    /// font preview either, and a user who wants none of them has this switch.
+    Fonts,
 }
 
 impl PreviewType {
@@ -610,6 +628,7 @@ impl PreviewType {
             Self::Archives => config.archive_preview_enabled,
             Self::Office => config.office_preview_enabled,
             Self::Svg => config.svg_preview_enabled,
+            Self::Fonts => config.font_preview_enabled,
         }
     }
 
@@ -623,6 +642,7 @@ impl PreviewType {
             Self::Archives => config.archive_preview_enabled = enabled,
             Self::Office => config.office_preview_enabled = enabled,
             Self::Svg => config.svg_preview_enabled = enabled,
+            Self::Fonts => config.font_preview_enabled = enabled,
         }
     }
 }
@@ -762,6 +782,15 @@ pub struct AppConfig {
     /// colour and nothing else, and the squares are painted by the page it draws the
     /// document in rather than by the window around it (see `webview_preview::frame_page`).
     pub svg_background: TransparentBackground,
+    /// The backdrop a font specimen is drawn over.
+    ///
+    /// A setting of its own for the reason the one above is: a specimen is a page with text
+    /// on it rather than a picture that carries transparency of its own, and what stands
+    /// behind the glyphs is the page's business. The transparent one is the case with a rule
+    /// of its own — there is no colour of text that reads over whatever the desktop happens
+    /// to be — so the glyphs there are drawn light with a soft dark shadow behind them (see
+    /// `webview_preview::font_page`).
+    pub font_background: TransparentBackground,
     pub video_volume: u32,
     pub preview_scale: PreviewScale,
     /// How large an SVG document is drawn, as a share of the room the display has
@@ -798,6 +827,14 @@ pub struct AppConfig {
     /// where no page can be exported: it is only as good as the pixels it holds, so it
     /// follows the share as a share of its own size and is never enlarged.
     pub office_scale: PreviewScale,
+    /// How large a font specimen is drawn, as a share of the room the display has — the same
+    /// question, and the same answers, as the document scales above.
+    ///
+    /// What the share is applied to is the nominal specimen box `font_preview` measures a
+    /// font at, because a font has no size of its own to be a percentage of: a file holds
+    /// outlines, and `50%` is half the room the display would give the specimen at its
+    /// largest.
+    pub font_scale: PreviewScale,
     pub theme: TextTheme,
     pub markdown_mode: MarkdownMode,
     /// Whether image previews may be shown at all.
@@ -815,6 +852,9 @@ pub struct AppConfig {
     /// Whether SVG documents are previewed at all, ahead of the image list their
     /// names are entries of.
     pub svg_preview_enabled: bool,
+    /// Whether font files are previewed at all, ahead of the font list their names are
+    /// entries of.
+    pub font_preview_enabled: bool,
     /// Memory the rendered pages may hold, in megabytes, between hovers. A page is
     /// still rendered at `0` — a document has no other source for its preview — it
     /// is simply not kept once the hover it was rendered for is over.
@@ -864,6 +904,8 @@ pub struct AppConfig {
     pub archive_extensions: Vec<String>,
     /// Extensions previewed as Office documents, already normalized for lookup.
     pub office_extensions: Vec<String>,
+    /// Extensions previewed as fonts, already normalized for lookup.
+    pub font_extensions: Vec<String>,
 }
 
 impl Default for AppConfig {
@@ -884,11 +926,13 @@ impl Default for AppConfig {
             image_cache_mb: DEFAULT_IMAGE_CACHE_MB,
             image_background: TransparentBackground::Black,
             svg_background: TransparentBackground::Black,
+            font_background: TransparentBackground::Black,
             video_volume: 0, // Mute by default
             preview_scale: PreviewScale::Percent(DEFAULT_PREVIEW_SCALE_PERCENT),
             svg_scale: PreviewScale::Percent(DEFAULT_SVG_SCALE_PERCENT),
             pdf_scale: DEFAULT_PDF_SCALE,
             office_scale: DEFAULT_OFFICE_SCALE,
+            font_scale: DEFAULT_FONT_SCALE,
             theme: TextTheme::Light,
             markdown_mode: MarkdownMode::Rendered,
             image_preview_enabled: true,
@@ -898,6 +942,7 @@ impl Default for AppConfig {
             archive_preview_enabled: true,
             office_preview_enabled: true,
             svg_preview_enabled: true,
+            font_preview_enabled: true,
             office_cache_mb: DEFAULT_OFFICE_CACHE_MB,
             office_engine_idle: EngineIdle::Seconds(DEFAULT_OFFICE_ENGINE_IDLE_SECS),
             webview_idle: EngineIdle::Seconds(DEFAULT_WEBVIEW_IDLE_SECS),
@@ -913,6 +958,7 @@ impl Default for AppConfig {
             text_names: sanitize_names(DEFAULT_TEXT_NAMES),
             archive_extensions: sanitize_archive_extensions(DEFAULT_ARCHIVE_EXTENSIONS),
             office_extensions: sanitize_office_extensions(DEFAULT_OFFICE_EXTENSIONS),
+            font_extensions: sanitize_font_extensions(DEFAULT_FONT_EXTENSIONS),
         }
     }
 }
@@ -1161,6 +1207,11 @@ impl AppConfig {
             );
             ini.set(
                 CONFIG_SECTION,
+                "font_background",
+                Some(self.font_background.as_str().to_string()),
+            );
+            ini.set(
+                CONFIG_SECTION,
                 "video_volume",
                 Some(self.video_volume.to_string()),
             );
@@ -1176,6 +1227,7 @@ impl AppConfig {
                 "office_scale",
                 Some(self.office_scale.as_str()),
             );
+            ini.set(CONFIG_SECTION, "font_scale", Some(self.font_scale.as_str()));
             ini.set(CONFIG_SECTION, "theme", Some(self.theme.as_str()));
             ini.set(
                 CONFIG_SECTION,
@@ -1216,6 +1268,11 @@ impl AppConfig {
                 CONFIG_SECTION,
                 "svg_preview_enabled",
                 Some(self.svg_preview_enabled.to_string()),
+            );
+            ini.set(
+                CONFIG_SECTION,
+                "font_preview_enabled",
+                Some(self.font_preview_enabled.to_string()),
             );
             ini.set(
                 CONFIG_SECTION,
@@ -1296,6 +1353,11 @@ impl AppConfig {
                 OFFICE_SECTION,
                 "extensions",
                 Some(sanitize_office_extensions(&self.office_extensions.join(",")).join(",")),
+            );
+            ini.set(
+                FONT_SECTION,
+                "extensions",
+                Some(sanitize_font_extensions(&self.font_extensions.join(",")).join(",")),
             );
             write_ordered(&ini, &path);
         }
@@ -1386,6 +1448,14 @@ impl AppConfig {
                 self.svg_background = background;
             }
         }
+        // A font's backdrop is read apart from the legacy key above rather than through it:
+        // fonts are a kind of their own and always were, so there is no earlier spelling of
+        // this one to answer.
+        if let Some(value) = ini.get(CONFIG_SECTION, "font_background") {
+            if let Some(background) = TransparentBackground::from_str(&value) {
+                self.font_background = background;
+            }
+        }
         if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "video_volume") {
             if let Ok(value) = u32::try_from(value) {
                 self.video_volume = value;
@@ -1415,6 +1485,13 @@ impl AppConfig {
         if let Some(value) = ini.get(CONFIG_SECTION, "office_scale") {
             if let Some(scale) = PreviewScale::from_str(&value) {
                 self.office_scale = scale;
+            }
+        }
+        // A specimen's scale is read the same way again, against the share of the display
+        // the box `font_preview` measures a font at takes.
+        if let Some(value) = ini.get(CONFIG_SECTION, "font_scale") {
+            if let Some(scale) = PreviewScale::from_str(&value) {
+                self.font_scale = scale;
             }
         }
         if let Some(value) = ini.get(CONFIG_SECTION, "theme") {
@@ -1447,6 +1524,9 @@ impl AppConfig {
         }
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "svg_preview_enabled") {
             self.svg_preview_enabled = value;
+        }
+        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "font_preview_enabled") {
+            self.font_preview_enabled = value;
         }
         if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "office_cache_mb") {
             if let Ok(value) = u32::try_from(value) {
@@ -1558,6 +1638,18 @@ impl AppConfig {
             sanitize_office_extensions,
         );
         self.office_extensions = list;
+        restored |= defaulted;
+        // The font list is one whose built-in entries are new with the kind itself, so an
+        // older file simply has no section: the key is gone, the built-in entries come back
+        // with it, and the file is written out again with them.
+        let (list, defaulted) = configured_list(
+            ini,
+            FONT_SECTION,
+            "extensions",
+            DEFAULT_FONT_EXTENSIONS,
+            sanitize_font_extensions,
+        );
+        self.font_extensions = list;
         restored |= defaulted;
 
         restored
@@ -1832,6 +1924,128 @@ mod tests {
 
             assert_eq!(config.svg_scale, expected, "`{written}` read back");
         }
+    }
+
+    /// A specimen's scale is the fourth of them and a setting of its own like the three:
+    /// one key changing leaves the others where they were.
+    #[test]
+    fn a_specimens_scale_is_read_from_its_own_key() {
+        let mut ini = Ini::new();
+        ini.set(CONFIG_SECTION, "preview_scale", Some("400".to_string()));
+        ini.set(CONFIG_SECTION, "svg_scale", Some("75".to_string()));
+        ini.set(CONFIG_SECTION, "pdf_scale", Some("25".to_string()));
+        ini.set(CONFIG_SECTION, "office_scale", Some("10".to_string()));
+        ini.set(
+            CONFIG_SECTION,
+            "font_scale",
+            Some(" Fit to Screen ".to_string()),
+        );
+
+        let mut config = AppConfig::default();
+        config.apply_ini(&ini);
+
+        assert_eq!(config.font_scale, PreviewScale::FitToScreen);
+        assert_eq!(config.svg_scale, PreviewScale::Percent(75));
+        assert_eq!(config.pdf_scale, PreviewScale::Percent(25));
+        assert_eq!(config.office_scale, PreviewScale::Percent(10));
+        assert_eq!(config.preview_scale, PreviewScale::Percent(400));
+    }
+
+    /// A specimen is drawn at half the room the display has unless the file says otherwise:
+    /// the share an SVG document starts at, which is what a fresh install writes and what
+    /// the menu marks as the default.
+    #[test]
+    fn a_specimens_scale_starts_at_half_the_room() {
+        let config = AppConfig::default();
+
+        assert_eq!(config.font_scale, PreviewScale::Percent(50));
+        assert_eq!(config.font_scale.as_str(), "50");
+        assert_eq!(config.font_scale, DEFAULT_FONT_SCALE);
+    }
+
+    /// A specimen's backdrop is a key of its own, and it is not read through the key the
+    /// other backdrops were once written with: fonts are a kind of their own, so a file that
+    /// predates them says nothing about one, and a file that names one is what it is.
+    #[test]
+    fn a_specimens_backdrop_is_read_from_its_own_key() {
+        let mut ini = Ini::new();
+        ini.set(
+            CONFIG_SECTION,
+            "transparent_background",
+            Some("white".to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
+            "font_background",
+            Some("checkerboard".to_string()),
+        );
+
+        let mut config = AppConfig::default();
+        config.apply_ini(&ini);
+        assert_eq!(config.font_background, TransparentBackground::Checkerboard);
+
+        // The legacy key reaches the two backdrops it was written for and leaves the
+        // specimen's at its default.
+        let mut ini = Ini::new();
+        ini.set(
+            CONFIG_SECTION,
+            "transparent_background",
+            Some("white".to_string()),
+        );
+
+        let mut config = AppConfig::default();
+        config.apply_ini(&ini);
+        assert_eq!(config.image_background, TransparentBackground::White);
+        assert_eq!(config.svg_background, TransparentBackground::White);
+        assert_eq!(config.font_background, TransparentBackground::Black);
+    }
+
+    /// The font list is the fifth of them and behaves like the rest: a file that has never
+    /// named it is written out with the built-in entries, and one that has been edited keeps
+    /// what the user wrote.
+    #[test]
+    fn the_font_list_is_written_out_and_read_back() {
+        let config = AppConfig::default();
+        assert_eq!(
+            config.font_extensions,
+            sanitize_font_extensions(DEFAULT_FONT_EXTENSIONS)
+        );
+
+        let mut ini = Ini::new();
+        ini.set(FONT_SECTION, "extensions", Some(".OTF,ttf".to_string()));
+
+        let mut config = AppConfig::default();
+        config.apply_ini(&ini);
+        assert_eq!(config.font_extensions, vec!["otf", "ttf"]);
+
+        // A file with no section at all is answered with the built-in list, and told so, so
+        // the file is written out again with it.
+        let mut ini = Ini::new();
+        ini.set(CONFIG_SECTION, "run_at_startup", Some("true".to_string()));
+
+        let mut config = AppConfig::default();
+        config.font_extensions.clear();
+        assert!(config.apply_ini(&ini), "a list that was put back");
+        assert_eq!(
+            config.font_extensions,
+            sanitize_font_extensions(DEFAULT_FONT_EXTENSIONS)
+        );
+    }
+
+    /// Fonts are their own kind under `Preview Types`: the gate is a switch of its own, and
+    /// switching it leaves the list and every other kind where they were.
+    #[test]
+    fn the_fonts_gate_is_a_switch_of_its_own() {
+        let mut config = AppConfig::default();
+        assert!(PreviewType::Fonts.enabled_in(&config));
+
+        PreviewType::Fonts.set_enabled_in(&mut config, false);
+        assert!(!PreviewType::Fonts.enabled_in(&config));
+        assert!(PreviewType::Svg.enabled_in(&config));
+        assert!(PreviewType::Images.enabled_in(&config));
+
+        PreviewType::Fonts.set_enabled_in(&mut config, true);
+        assert!(PreviewType::Fonts.enabled_in(&config));
     }
 
     /// A file holding the built-in list of an earlier version has never been edited,

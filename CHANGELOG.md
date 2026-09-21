@@ -2,6 +2,15 @@
 
 ## [0.2.10]
 
+### Added
+
+- Font previews for `ttf`, `otf`, `ttc`, `woff` and `woff2`, drawn by the WebView2 engine the SVG previews already use: the name the font calls itself, the pangram *The quick brown fox jumps over the lazy dog.*, and a line each for Japanese, Chinese, Korean, Cyrillic and Greek that the font's own character map covers. A line is drawn only where every character of it is in the font — a browser falls back per glyph and says nothing about it — so nothing is ever shown in a system font and passed off as the font; a font of a script there is no line for is shown by the characters its own map holds instead.
+- `Font Scaling` under the tray's **Placement** menu, with `font_scale` in `config.ini`: how much of the screen a specimen is drawn over — `Fit to Screen`, or 75%, 50% (the default), 25%, 10%.
+- `Fonts` under **Preview Types**, and a `[font]` extension list in `config.ini`; both are written on first run.
+- `Font Background` under the tray's **Background** menu, with `font_background` in `config.ini`: a specimen is a page of text, so its ink follows the backdrop — light on black, dark on the light ones, and light with a shadow where there is none to be read against.
+- A `.ttc` previews its first face, which is written out as a font of its own beside the browser's profile folder: a page has no syntax for naming a face inside a collection.
+- `brotli-decompressor`, for a WOFF2's tables: a specimen is described by two of them — the character map and the name — parsed out of an sfnt, a WOFF, a WOFF2 or a collection's first face on this side, with nothing rasterized.
+
 ### Changed
 
 - Build deploy artifacts with a `github` profile (fat LTO, one codegen unit), which with the three changes below takes the released exe from 7,544,320 to 6,676,992 bytes (867 KB, 11.5%); `cargo build --release` keeps thin LTO for the local loop.
