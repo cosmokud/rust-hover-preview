@@ -4,11 +4,11 @@ use crate::cloud_files;
 use crate::codecs;
 use crate::config::{
     frame_bytes_within_budget, image_decode_limits, read_within_budget, sanitize_image_cache_mb,
-    sanitize_webp_playback_fps, MarkdownMode, PreviewScale, PreviewType, TextTheme,
-    TransparentBackground, DEFAULT_FONT_SCALE, DEFAULT_IMAGE_CACHE_MB, DEFAULT_OFFICE_SCALE,
-    DEFAULT_PDF_SCALE, DEFAULT_PREVIEW_SCALE_PERCENT, DEFAULT_SVG_SCALE_PERCENT,
-    DEFAULT_TEXT_FONT_SCALE_PERCENT, DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS,
-    DEFAULT_WEBP_PLAYBACK_FPS,
+    sanitize_spinner_delay_ms, sanitize_webp_playback_fps, MarkdownMode, PreviewScale, PreviewType,
+    TextTheme, TransparentBackground, DEFAULT_FONT_SCALE, DEFAULT_IMAGE_CACHE_MB,
+    DEFAULT_OFFICE_SCALE, DEFAULT_PDF_SCALE, DEFAULT_PREVIEW_SCALE_PERCENT,
+    DEFAULT_SPINNER_DELAY_MS, DEFAULT_SVG_SCALE_PERCENT, DEFAULT_TEXT_FONT_SCALE_PERCENT,
+    DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS, DEFAULT_WEBP_PLAYBACK_FPS,
 };
 use crate::dds_image;
 use crate::engine_processes;
@@ -4262,14 +4262,21 @@ fn spawn_load_worker(
     })
 }
 
-/// How long a background load may run before the spinner is put up for it.
+/// How long a hover's load may run before the spinner is put up for it, as
+/// `spinner_delay_ms` in `config.ini` names it.
 ///
-/// The window is hidden while a load runs, so one that finishes inside this has
-/// gone straight from nothing to the preview: the delay is what keeps a decode
-/// that takes a few milliseconds from flashing a spinner on the way past. A load
-/// that came back waiting on the render tier is not given it — it has nothing to
-/// show and seconds of work ahead of it — which is what `spinner_due` decides.
-const LOAD_SPINNER_DELAY_SECS: u64 = 2;
+/// Read when a load starts rather than captured once, so an edit applies to the next
+/// hover without a restart. The window is hidden while a load runs, so a load that
+/// finishes inside the delay has gone straight from nothing to the preview — what the
+/// delay is for — and `0` is a spinner that goes up with the load; see `spinner_due`.
+fn load_spinner_delay() -> Duration {
+    let millis = CONFIG
+        .lock()
+        .map(|config| sanitize_spinner_delay_ms(config.spinner_delay_ms))
+        .unwrap_or(DEFAULT_SPINNER_DELAY_MS);
+
+    Duration::from_millis(millis)
+}
 
 /// What placing a hover's preview again needs, kept on a pending load.
 ///
@@ -4306,16 +4313,15 @@ struct PendingLoad {
     /// the room the display has is the sharpest page that display can show.
     room: (u32, u32),
     spinner_shown: bool,
+    /// How long this load may run before the spinner is put up for it, read from
+    /// `spinner_delay_ms` when the load started. Every kind of wait is given the same
+    /// one — a decode, a page Office is rendering, a browser that has to start.
+    spinner_delay: Duration,
     /// The mouse hover this load came from, if it was one. A preview that is still
     /// on its way follows the pointer, so it is placed again for a cursor that has
     /// moved along the item since; a keyboard hover's placement belongs to the
     /// item and carries none.
     placement: Option<HoverPlacement>,
-    /// Whether the load came back with nothing to draw and a page on the way.
-    /// Nothing can be shown until that page lands, and asking for it is seconds
-    /// of work, so the spinner goes up at once rather than after the delay a load
-    /// that might finish in milliseconds is given.
-    awaiting_render: bool,
     /// Whether this load is replacing what is already on screen — the page that
     /// arrived for the hover that is up — rather than opening a new preview. An
     /// upgrade never shows the spinner: what is there stays where it is, at its own
@@ -4324,17 +4330,15 @@ struct PendingLoad {
 }
 
 impl PendingLoad {
-    /// Whether the spinner is due for this load: at once where the wait is a
-    /// render's, and once it has run for `LOAD_SPINNER_DELAY_SECS` otherwise.
+    /// Whether the spinner is due for this load: once it has run for the delay
+    /// `spinner_delay_ms` names, which is the same moment for every kind of wait — a
+    /// decode, a page Office is rendering, a browser that has to start.
     ///
     /// An upgrade is never due — what is on screen stays where it is, at its own
     /// size, until the page replaces it — and a load that already has its spinner
     /// up is not due again.
     fn spinner_due(&self) -> bool {
-        !self.spinner_shown
-            && !self.upgrade
-            && (self.awaiting_render
-                || self.started.elapsed() >= Duration::from_secs(LOAD_SPINNER_DELAY_SECS))
+        !self.spinner_shown && !self.upgrade && self.started.elapsed() >= self.spinner_delay
     }
 
     /// Place this load's preview again for `cursor`, when it is one that follows
@@ -6418,14 +6422,12 @@ pub fn run_preview_window() {
                                 *current = None;
                             }
 
-                            // An engine with a browser already up draws the document in
-                            // a few milliseconds, which is no wait to show; one that has
-                            // to start a browser is, and the spinner goes up at once for
-                            // it rather than after the delay a load might finish inside.
-                            if let Some(mut pl) = pending {
-                                pl.awaiting_render = !webview_preview::is_warm();
-                                pending_load = Some(pl);
-                            }
+                            // The wait stays armed for the document to land on: an
+                            // engine that has to start a browser is a wait like any
+                            // other, shown as one once the delay has run, while one
+                            // that draws the document in a few milliseconds is over
+                            // before there is anything to show (see `spinner_due`).
+                            pending_load = pending;
                         }
                         Some(media_data) => {
                             // A video the media engine plays is started here, before its
@@ -6553,20 +6555,16 @@ pub fn run_preview_window() {
                         None if result.awaiting_render => {
                             // Nothing to draw yet and a page on the way: the
                             // pending load stays armed, so the preview is not
-                            // dropped and the page has somewhere to land — and it
-                            // is told what it is waiting on, which is what puts
-                            // the spinner up at once rather than after the delay
-                            // a load that may be about to finish is given. The
-                            // page is asked for in the room this preview may take,
-                            // which is what the page is drawn at the size of: the
-                            // spinner's own box is a spinner's and says nothing
-                            // about how large the page will be drawn, while a
-                            // slide is exported at the width the render is asked
-                            // for — so the room the display has is the sharpest
-                            // page that display can show.
-                            if let Some(pl) = pending_load.as_mut() {
-                                pl.awaiting_render = true;
-                            }
+                            // dropped and the page has somewhere to land — and the
+                            // wait it is given is the one every other kind of wait
+                            // gets, so the spinner goes up once the delay has run
+                            // (see `spinner_due`). The page is asked for in the room
+                            // this preview may take, which is what the page is drawn
+                            // at the size of: the spinner's own box is a spinner's
+                            // and says nothing about how large the page will be
+                            // drawn, while a slide is exported at the width the
+                            // render is asked for — so the room the display has is
+                            // the sharpest page that display can show.
                             let (width, height) = pending_load
                                 .as_ref()
                                 .map(|pl| pl.room)
@@ -6644,10 +6642,9 @@ pub fn run_preview_window() {
                 }
             }
 
-            // Show the loading spinner while a background load runs, once the
-            // wait is worth showing — at once for one that is waiting on a page
-            // to be rendered, and after a moment for one that may be about to
-            // finish (see `spinner_due`).
+            // Show the loading spinner while a background load runs, once the wait
+            // is worth showing: a load that may be about to finish is given the
+            // delay `spinner_delay_ms` names (see `spinner_due`).
             if let Some(ref mut pl) = pending_load {
                 if pl.spinner_due() {
                     pl.spinner_shown = true;
@@ -7181,8 +7178,8 @@ pub fn run_preview_window() {
                             height: preview_h,
                             room: (max_width, max_height),
                             spinner_shown: false,
+                            spinner_delay: load_spinner_delay(),
                             placement: show_placement,
-                            awaiting_render: false,
                             upgrade: upgrading,
                         });
 
@@ -7836,12 +7833,12 @@ mod tests {
         );
     }
 
-    /// A load that may be about to finish is given a moment before the spinner
-    /// goes up, while one that came back waiting on a render is not: it has
-    /// nothing to show, and the wait ahead of it is seconds of Office's time.
+    /// A load that may be about to finish is given the delay `spinner_delay_ms` names
+    /// before the spinner goes up — the same one for every kind of wait — while a delay
+    /// of nothing is a spinner that goes up with the load.
     #[test]
-    fn puts_the_spinner_up_at_once_only_for_a_wait_that_is_known() {
-        let load = |awaiting_render: bool, age: Duration, upgrade: bool| PendingLoad {
+    fn puts_the_spinner_up_once_the_load_has_run_for_the_delay() {
+        let load = |age: Duration, delay: Duration, upgrade: bool| PendingLoad {
             generation: 1,
             path: PathBuf::new(),
             started: Instant::now() - age,
@@ -7851,24 +7848,27 @@ mod tests {
             height: 64,
             room: (1920, 1040),
             spinner_shown: false,
+            spinner_delay: delay,
             placement: None,
-            awaiting_render,
             upgrade,
         };
+        let default_delay = Duration::from_millis(DEFAULT_SPINNER_DELAY_MS);
 
-        // A page on the way, a moment into the wait: the spinner is due already.
-        assert!(load(true, Duration::from_millis(20), false).spinner_due());
+        // A load that may be about to finish: not yet, and due once it has run for
+        // the delay.
+        assert!(!load(Duration::from_millis(20), default_delay, false).spinner_due());
+        assert!(load(default_delay, default_delay, false).spinner_due());
 
-        // A load that may be about to finish: not yet, and due once it has run
-        // for the delay.
-        assert!(!load(false, Duration::from_millis(20), false).spinner_due());
-        assert!(load(false, Duration::from_secs(LOAD_SPINNER_DELAY_SECS), false).spinner_due());
+        // A delay of nothing puts the spinner up with the load, and a load given a
+        // longer one than it has run for is not due yet.
+        assert!(load(Duration::ZERO, Duration::ZERO, false).spinner_due());
+        assert!(!load(Duration::from_secs(1), Duration::from_secs(5), false).spinner_due());
 
         // An upgrade never: what is on screen stays until the page replaces it.
-        assert!(!load(true, Duration::from_secs(10), true).spinner_due());
+        assert!(!load(Duration::from_secs(10), default_delay, true).spinner_due());
 
         // And a spinner that is already up is not put up a second time.
-        let mut showing = load(false, Duration::from_secs(10), false);
+        let mut showing = load(Duration::from_secs(10), default_delay, false);
         showing.spinner_shown = true;
         assert!(!showing.spinner_due());
     }
@@ -7889,8 +7889,8 @@ mod tests {
             height: 0,
             room: (1920, 1040),
             spinner_shown: true,
+            spinner_delay: Duration::from_millis(DEFAULT_SPINNER_DELAY_MS),
             placement,
-            awaiting_render: false,
             upgrade: false,
         };
         let placement = HoverPlacement {
@@ -8394,11 +8394,7 @@ mod tests {
             "engine available: {}",
             crate::webview_preview::is_available()
         );
-        println!(
-            "document: {} (engine warm: {})",
-            crate::webview_preview::draws(&path),
-            crate::webview_preview::is_warm()
-        );
+        println!("document: {}", crate::webview_preview::draws(&path));
         // Which engine would play a video here, which is the whole of the fallback's
         // routing: `ffplay` when it is installed, and the media engine Windows has when it
         // is not. Reported for every file rather than only for a video, because a probe is
