@@ -1,30 +1,30 @@
-//! Playing a document in the browser engine that is already on the machine.
+//! Drawing a document in the browser engine that is already on the machine.
 //!
-//! usvg drops animation — its own documentation says "no events and no animations" —
-//! so `svg_animation` plays what it can read, and this plays the rest: the WebView2
-//! runtime Windows 11 ships with, which is Chromium, and which is the only complete
-//! implementation of SMIL and CSS animation that is on the machine without installing
-//! anything. It is asked for a document that *moves* only. A still document is drawn by
-//! `svg_preview`, costs no browser at all, and stays sharp at any size.
+//! Every document this app previews is drawn here — still, gzipped or animated: this app
+//! rasterizes none of them, so what a document needs is the WebView2 runtime Windows 11
+//! ships with, which is Chromium, and which is the only complete implementation of SVG
+//! that is on the machine without installing anything. A machine without the runtime has
+//! no SVG preview at all, which is the answer a file that will not decode gets.
 //!
 //! What lives here is the engine and the window it draws in, not the preview loop: the
-//! loop asks whether a document is one for the engine, hands it over with the box the
-//! layout came out with, and this answers with a window of its own. That window is its
-//! own because the preview window is a layered one, and a layered window has no window
-//! tree to put a child in — the same shape as the video path, where the player's own
-//! window is the preview.
+//! loop measures the document for the layout, hands it over with the box the layout came
+//! out with, and this answers with a window of its own. That window is its own because
+//! the preview window is a layered one, and a layered window has no window tree to put a
+//! child in — the same shape as the video path, where the player's own window is the
+//! preview.
 //!
 //! One engine is kept warm between documents and let go after `webview_idle`, ten
 //! minutes by default: beginning one costs a browser start, and pointing a warm one at
-//! another file costs a few milliseconds, so what a hover pays for a second animated
-//! document is nothing worth measuring. What is let go of is the engine and not the
-//! thread that holds it, which stays parked on its channel for the run and begins a new
-//! engine for the next document: a thread that ended with its browser would leave every
-//! document after the first idle timeout with nobody to play it, which is a still frame
-//! for the rest of the run. An app left alone has no browser process and one thread
-//! asleep — and the settings it is given are the app's own rules rather than a
-//! browser's: a document is drawn and not run, and nothing about it is a way out of the
-//! preview.
+//! another file costs a few milliseconds, so what a hover pays for a second document is
+//! nothing worth measuring — and what a hover pays for the *first* one is a browser
+//! start, which is what the waiting spinner is shown for. What is let go of is the
+//! engine and not the thread that holds it, which stays parked on its channel for the
+//! run and begins a new engine for the next document: a thread that ended with its
+//! browser would leave every document after the first idle timeout with nobody to draw
+//! it, which is no preview for the rest of the run. An app left alone has no browser
+//! process and one thread asleep — and the settings it is given are the app's own rules
+//! rather than a browser's: a document is drawn and not run, and nothing about it is a
+//! way out of the preview.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -91,6 +91,19 @@ static RUNTIME: Lazy<Option<String>> = Lazy::new(runtime_version);
 /// to take its own window down, so it is an atomic rather than a message.
 static SHOWING: AtomicBool = AtomicBool::new(false);
 
+/// Whether the engine is holding a browser that a document could be pointed at now.
+/// Beginning one is a browser start and pointing a warm one at a document is a few
+/// milliseconds, so this is what decides whether a hover is worth a spinner.
+static HOST_READY: AtomicBool = AtomicBool::new(false);
+
+/// Where the engine's window is while it is on screen, in screen coordinates: the box
+/// the document was last handed over in. Kept as a rectangle rather than as the window
+/// handle, because a rectangle is what the preview loop asks about a preview.
+static SHOWING_RECT: Lazy<Mutex<Option<ScreenRect>>> = Lazy::new(|| Mutex::new(None));
+
+/// A rectangle in screen coordinates, as the preview loop asks about one.
+type ScreenRect = (i32, i32, i32, i32);
+
 /// The engine's thread, once one has been started.
 static ENGINE: Lazy<Mutex<Option<Engine>>> = Lazy::new(|| Mutex::new(None));
 
@@ -104,8 +117,7 @@ pub struct Area {
 }
 
 /// The version of the WebView2 runtime on this machine, or nothing when it is not
-/// installed — which is what decides whether a document that moves is played by the
-/// engine or by this app's own reader.
+/// installed — which is what decides whether an SVG document can be previewed at all.
 pub fn runtime_version() -> Option<String> {
     unsafe {
         let mut version = PWSTR::null();
@@ -128,6 +140,38 @@ pub fn is_showing() -> bool {
     SHOWING.load(Ordering::Acquire)
 }
 
+/// Whether the engine has a browser of its own already up, which is what a hover asks
+/// before it decides to put a spinner on screen for one: a warm engine has drawn the
+/// document by the time a spinner would have been worth drawing.
+pub fn is_warm() -> bool {
+    HOST_READY.load(Ordering::Acquire)
+}
+
+/// Where the engine's window is, when it has one on screen: the box the document was
+/// last handed over in, in screen coordinates.
+///
+/// The preview loop reads it for the reason it reads its own window's rectangle: a
+/// preview that is under the parked pointer is one a keyboard hover placed there, and a
+/// document the engine draws is a preview of this app's even though the window is not.
+pub fn screen_rect() -> Option<ScreenRect> {
+    SHOWING_RECT.lock().ok().and_then(|rect| *rect)
+}
+
+/// Say where the engine's window is — or that it is nowhere — for `screen_rect` to
+/// answer with.
+fn publish_rect(area: Option<Area>) {
+    if let Ok(mut rect) = SHOWING_RECT.lock() {
+        *rect = area.map(|area| {
+            (
+                area.x,
+                area.y,
+                area.x + area.width,
+                area.y + area.height,
+            )
+        });
+    }
+}
+
 /// What the engine cost last time it was asked for a document. Read by the probe: it
 /// is the number that says whether the engine is worth keeping warm at all.
 #[cfg(test)]
@@ -138,36 +182,46 @@ pub fn last_timings() -> Timings {
         .unwrap_or_default()
 }
 
-/// Whether a document is one the engine should play: the runtime is on the machine, the
-/// document says it moves, and the engine is not in one of its own bad spells.
-///
-/// The declaration is what decides it rather than this app's own reader: the engine
-/// plays the whole of SMIL and CSS, so a document that moves in a way `svg_animation`
-/// cannot follow is still one to hand over. The answer is held with the parsed
-/// document, so asking it again costs nothing.
-pub fn moves(path: &Path) -> bool {
-    is_available() && !is_failing() && svg_preview::moves(path)
+/// Whether a document is one the engine draws: the runtime is on the machine, the file
+/// is a document, and the engine is not in one of its own bad spells.
+pub fn draws(path: &Path) -> bool {
+    can_draw() && svg_preview::is_svg_file(path)
 }
 
-/// How long a document that moves is played by this app rather than by the engine after
-/// the engine has failed to come up.
+/// Whether the engine can draw anything at all.
+///
+/// The runtime is what draws a document, so a machine without it — or one the engine has
+/// stood down on — has no SVG preview: this is the question the layout asks before it
+/// measures one, and answering no is what keeps a hover from opening a box that nothing
+/// would be drawn into.
+pub fn can_draw() -> bool {
+    is_available() && !is_failing()
+}
+
+/// How long the engine is left alone after it has failed to come up.
 ///
 /// The reason it can fail is a folder, not the document: one user data folder is one
 /// browser at a time, and a browser left behind by an earlier run — one whose app was
 /// ended before it could take its browser with it — holds it until it goes. What that
-/// must not cost is the preview: for this long afterwards the reader plays what it can,
-/// which is a picture that always plays, and the engine is asked again once the window
-/// has passed.
-const ENGINE_RETRY_AFTER: Duration = Duration::from_secs(300);
+/// must not cost is more than it has to: an engine that cannot be had draws no document
+/// at all, so for this long afterwards an SVG hover opens nothing, and the engine is
+/// asked again once the window has passed.
+const ENGINE_RETRY_AFTER: Duration = Duration::from_secs(60);
 
 /// When the engine last failed to come up.
 static ENGINE_FAILED_AT: Lazy<Mutex<Option<Instant>>> = Lazy::new(|| Mutex::new(None));
 
-/// Whether the preview loop has not yet been told about the failure above.
+/// Whether the preview loop has not yet been told that the engine has something to
+/// answer for.
 static FAILURE_NOTICE: AtomicBool = AtomicBool::new(false);
 
-/// Whether the engine has failed since this was last asked, which is what the preview
-/// loop reads to lay the document out again for this app's own reader.
+/// Whether the engine has failed since this was last asked.
+///
+/// One signal for the two ways it can: an engine that could not be started at all, which
+/// stands it down for a while, and one that could not put a document up, which costs
+/// that hover and nothing else. What the preview loop does with either is the same,
+/// because this app draws no document itself: the wait a hover was given goes, rather
+/// than staying a spinner over nothing.
 pub fn take_failure_notice() -> bool {
     FAILURE_NOTICE.swap(false, Ordering::AcqRel)
 }
@@ -180,11 +234,28 @@ fn is_failing() -> bool {
         .is_some_and(|failed| failed.elapsed() < ENGINE_RETRY_AFTER)
 }
 
+/// The engine could not be started at all: the runtime is on the machine, but no browser
+/// could be had for it, which is the profile folder being held by one that is not this
+/// app's.
+///
+/// It stands the engine down for `ENGINE_RETRY_AFTER` — no document is handed over in
+/// that window, because every one of them would fail the same way — and tells the
+/// preview loop, whose hover has nothing left to wait for.
 fn note_failure() {
     if let Ok(mut failed) = ENGINE_FAILED_AT.lock() {
         *failed = Some(Instant::now());
     }
 
+    FAILURE_NOTICE.store(true, Ordering::Release);
+}
+
+/// One document could not be put up: its page could not be written, or the engine did
+/// not arrive at it.
+///
+/// The engine itself is fine, so this is not a failure to stand down for — the next
+/// document is drawn as this one was meant to be. What it costs is the hover that was
+/// waiting on it, and the notice is what takes that wait down.
+fn note_document_failed() {
     FAILURE_NOTICE.store(true, Ordering::Release);
 }
 
@@ -216,9 +287,28 @@ fn note_engine_up() {
 /// The version is the document's own modification time, which is what keeps an edited
 /// file from being answered out of the browser's image cache: the URL changes when the
 /// file does, and the same file at the same version is drawn again from memory.
-fn frame_page(path: &Path, version: u64) -> Option<(PathBuf, String)> {
+///
+/// The backdrop is the page's business for one of the four kinds: a checkerboard is
+/// drawn by whatever composites the frame, and this engine composites its own — it can be
+/// given a colour and nothing else — so the page paints the same squares this app's own
+/// compositing draws, and the controller's colour stands behind them for the moment
+/// before the page is up.
+fn frame_page(
+    path: &Path,
+    version: u64,
+    background: TransparentBackground,
+) -> Option<(PathBuf, String)> {
     let document = file_url(path)?;
     let page = user_data_folder().join("frame.html");
+
+    let checkerboard = match background {
+        TransparentBackground::Checkerboard => {
+            "<style>html{background:#e0e0e0;background-image:\
+             conic-gradient(#909090 25%,transparent 0 50%,#909090 0 75%,transparent 0);\
+             background-size:32px 32px}</style>"
+        }
+        _ => "",
+    };
 
     // The version is in the image's URL and in the page's, so neither is answered out
     // of the browser's cache with a document that has been written since it was read.
@@ -226,6 +316,7 @@ fn frame_page(path: &Path, version: u64) -> Option<(PathBuf, String)> {
         "<!doctype html><meta charset=\"utf-8\"><title>preview</title>\
          <style>html,body{{margin:0;padding:0;height:100%;overflow:hidden}}\
          img{{display:block;width:100%;height:100%;object-fit:contain}}</style>\
+         {checkerboard}\
          <img src=\"{}?v={version}\" alt=\"\">",
         escape_attribute(&document)
     );
@@ -243,19 +334,23 @@ fn escape_attribute(url: &str) -> String {
     url.replace('&', "&amp;").replace('"', "&quot;")
 }
 
-/// Ask the engine to play `path` in a window at `area`.
+/// Ask the engine to draw `path` in a window at `area`.
 ///
 /// The answer is immediate and says nothing about whether the document arrived: the
 /// engine works on its own thread, and what it does with this is navigates, waits for
-/// the document, and puts its window up — `is_showing` is what says it got there. A
-/// caller that wants something on screen in the meantime has one: it is the still frame
-/// `svg_preview` drew, which this lands on top of.
+/// the document, and puts its window up — `is_showing` is what says it got there. What a
+/// caller puts on screen while it waits is the waiting spinner and nothing else: this app
+/// draws no document, so there is no still frame to hold the place.
 ///
-/// A document that does not move is not the engine's: a browser is not started for a
-/// picture, and a hover onto one is drawn by this app as it always was.
+/// The same document asked for a second time — which is what a wait that follows the
+/// pointer does — is that window moved rather than the document navigated to again, and
+/// a file that is not a document at all is not the engine's to draw.
 pub fn show(path: &Path, area: Area, background: TransparentBackground) {
-    if !moves(path) {
-        trace(&format!("show({}): not the engine's", path.display()));
+    if !draws(path) {
+        trace(&format!(
+            "show({}): not a document the engine draws",
+            path.display()
+        ));
         return;
     }
 
@@ -328,7 +423,7 @@ struct Engine {
 
 impl Engine {
     /// Start the engine's thread. Nothing is created until the first document is asked
-    /// for: a machine that never hovers an animated document never starts a browser.
+    /// for: a machine that never hovers one never starts a browser.
     fn start() -> Self {
         let (sender, receiver) = mpsc::channel();
         let thread = std::thread::spawn(move || engine_thread(receiver));
@@ -407,9 +502,9 @@ fn engine_thread(commands: Receiver<Command>) {
                 if host.is_none() {
                     host = Host::create();
 
-                    // An engine that could not be had is noted, so that a document that
-                    // moves is played by this app's own reader rather than left as a
-                    // still frame until the folder it could not have is free again.
+                    // An engine that could not be had is noted, so that hovers stop
+                    // opening a box nothing will be drawn into until the folder it
+                    // could not have is free again.
                     if host.is_some() {
                         note_engine_up();
                     } else {
@@ -451,8 +546,8 @@ fn engine_thread(commands: Receiver<Command>) {
         // The thread is not let go of with it, and that is the whole of it: the channel
         // it holds is the one a hover sends into, and a thread that ended here would
         // leave every document after the first idle timeout with a message nobody reads.
-        // What the app would show is the still frame — the engine's window is what the
-        // animation was — for the rest of the run.
+        // What the app would show is no document at all — the engine's window is the
+        // whole of an SVG preview — for the rest of the run.
         let expired = match (host.as_ref(), idle_timeout()) {
             (Some(_), Some(limit)) => {
                 !SHOWING.load(Ordering::Acquire) && idle_since.elapsed() >= limit
@@ -582,14 +677,20 @@ impl Host {
             timings.controller_ms = controller_ms;
         }
 
-        Some(Self {
+        let host = Self {
             hwnd,
             environment,
             controller,
             webview,
             current: None,
             browser_pid,
-        })
+        };
+
+        // A browser up and a document drawn in it is what a hover asks about before it
+        // decides to wait on screen for one; see `is_warm`.
+        HOST_READY.store(true, Ordering::Release);
+
+        Some(host)
     }
 
     fn show(&mut self, path: &Path, area: Area, background: TransparentBackground) {
@@ -613,10 +714,10 @@ impl Host {
 
         // A document the engine is not already holding is navigated to *before* the
         // window is put up: a window shown first would be the document before it, and
-        // what is on screen a moment ago is the still frame this lands on top of.
+        // what is on screen a moment ago belongs to another hover.
         if self.current.as_deref() != Some(path) {
             let started = Instant::now();
-            let arrived = self.navigate(path);
+            let arrived = self.navigate(path, background);
             trace(&format!(
                 "engine: navigate {} arrived={arrived} in {} ms",
                 path.display(),
@@ -624,7 +725,11 @@ impl Host {
             ));
 
             if !arrived {
+                // The document was not put up. The engine is fine — the next document
+                // is drawn as this one was meant to be — but the hover waiting on this
+                // one has nothing left to wait for.
                 self.hide();
+                note_document_failed();
                 return;
             }
 
@@ -650,6 +755,7 @@ impl Host {
         }
 
         SHOWING.store(true, Ordering::Release);
+        publish_rect(Some(area));
     }
 
     fn hide(&mut self) {
@@ -657,6 +763,7 @@ impl Host {
             let _ = ShowWindow(self.hwnd, SW_HIDE);
         }
         SHOWING.store(false, Ordering::Release);
+        publish_rect(None);
     }
 
     fn close(&mut self) {
@@ -678,9 +785,9 @@ impl Host {
     ///
     /// What it is pointed at is the page `frame_page` writes rather than the document
     /// itself, which is what makes the document the size of the window: see there.
-    fn navigate(&self, path: &Path) -> bool {
+    fn navigate(&self, path: &Path, background: TransparentBackground) -> bool {
         let version = file_version(path);
-        let Some((page, url)) = frame_page(path, version) else {
+        let Some((page, url)) = frame_page(path, version, background) else {
             return false;
         };
 
@@ -721,6 +828,8 @@ impl Host {
 impl Drop for Host {
     fn drop(&mut self) {
         SHOWING.store(false, Ordering::Release);
+        HOST_READY.store(false, Ordering::Release);
+        publish_rect(None);
 
         // Closing the engine drops the environment, and the browser goes with the
         // last controller over it — usually. A browser that does not is the leftover
@@ -1006,8 +1115,10 @@ fn background_color(background: TransparentBackground) -> COREWEBVIEW2_COLOR {
             B: 255,
         },
         // A checkerboard is the one backdrop the engine cannot be given: it is drawn by
-        // the window that composites the frame, and this window composites its own.
-        // Mid grey is what its squares average to.
+        // whatever composites the frame, and this window composites its own. The page
+        // paints it instead — see `frame_page` — so what this colour is is what stands
+        // behind the page until it has been drawn: mid grey, which is what the squares
+        // average to.
         TransparentBackground::Checkerboard => COREWEBVIEW2_COLOR {
             A: 255,
             R: 184,
@@ -1104,15 +1215,30 @@ mod tests {
         )
         .expect("a written file");
 
-        let (page, url) = frame_page(&document, 42).expect("a page for a document");
+        let (page, url) = frame_page(&document, 42, TransparentBackground::Black)
+            .expect("a page for a document");
         let html = std::fs::read_to_string(&page).expect("a written page");
 
         assert!(html.contains("width:100%;height:100%;object-fit:contain"));
         assert!(html.contains("file:///"));
         assert!(html.contains("a%20document%20&amp;%20one.svg"));
         assert!(html.contains("?v=42"));
+        assert!(
+            !html.contains("conic-gradient"),
+            "a backdrop the controller can be given is the controller's"
+        );
         assert!(url.ends_with("?v=42"));
         assert!(url.starts_with("file:///"));
+
+        // A checkerboard is the one backdrop it cannot be given, because it is drawn by
+        // whatever composites the frame and the page is what composites this one.
+        let (page, _) = frame_page(&document, 42, TransparentBackground::Checkerboard)
+            .expect("a page for a document");
+        let html = std::fs::read_to_string(&page).expect("a written page");
+
+        assert!(html.contains("conic-gradient"));
+        assert!(html.contains("#e0e0e0"));
+        assert!(html.contains("background-size:32px 32px"));
     }
 
     /// What a hover's path becomes when it is handed to the engine: the Shell's
@@ -1195,8 +1321,8 @@ mod tests {
                 cleared += Duration::from_millis(10);
             }
 
-            let moving = moves(path);
-            println!("{}: moves={moving}", path.display());
+            let drawn = draws(path);
+            println!("{}: drawn={drawn}", path.display());
 
             let started = Instant::now();
             // Black by default, because a probe that measures what a document is drawn
@@ -1212,7 +1338,7 @@ mod tests {
             // The engine answers on its own thread; this is the wait for it to have
             // arrived rather than a measurement of the navigation itself.
             let mut waited = Duration::ZERO;
-            while moving && !is_showing() && waited < Duration::from_secs(5) {
+            while drawn && !is_showing() && waited < Duration::from_secs(5) {
                 std::thread::sleep(Duration::from_millis(20));
                 waited = started.elapsed();
             }

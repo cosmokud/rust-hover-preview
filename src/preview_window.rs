@@ -13,7 +13,6 @@ use crate::office_formats;
 use crate::office_preview;
 use crate::office_render;
 use crate::pdf_preview;
-use crate::svg_animation;
 use crate::svg_preview;
 use crate::text_formats;
 use crate::text_preview::{self, TextPreviewOptions};
@@ -327,14 +326,16 @@ pub enum PreviewMessage {
 /// Represents different types of media we can display
 enum MediaType {
     StaticImage,
-    /// A still SVG document, drawn rather than decoded. It is a kind of its own
-    /// rather than a static image because a document is composited over a backdrop
-    /// of its own (see the tray's `Background` submenu).
-    StaticSvg,
+    /// An SVG document the engine draws in a window of its own. This side holds no
+    /// frame for one: the kind is what the preview loop reads to hand the hover over,
+    /// and the media it comes in arrives with nothing in it. It is a kind of its own
+    /// rather than a static image because a document is composited over a backdrop of
+    /// its own (see the tray's `Background` submenu) — a backdrop the engine is given
+    /// rather than one this app composes.
+    EngineSvg,
     AnimatedGif,
     AnimatedApng,
     AnimatedWebP,
-    AnimatedSvg,
     Video,
     Pdf,
     Text,
@@ -351,7 +352,7 @@ impl MediaType {
             | Self::AnimatedGif
             | Self::AnimatedApng
             | Self::AnimatedWebP => Some(PreviewType::Images),
-            Self::StaticSvg | Self::AnimatedSvg => Some(PreviewType::Svg),
+            Self::EngineSvg => Some(PreviewType::Svg),
             Self::Video => Some(PreviewType::Videos),
             Self::Text => Some(PreviewType::Text),
             Self::Pdf => Some(PreviewType::Pdf),
@@ -366,10 +367,10 @@ impl MediaType {
         matches!(self, Self::Loading)
     }
 
-    /// Whether this is an SVG document rather than a picture. A document is drawn
-    /// over a backdrop of its own, which is why the renderer asks.
-    fn is_svg(&self) -> bool {
-        matches!(self, Self::StaticSvg | Self::AnimatedSvg)
+    /// Whether this is a document the engine draws rather than a frame this app holds.
+    /// The preview loop asks before it reaches for a frame, because there is none.
+    fn is_engine(&self) -> bool {
+        matches!(self, Self::EngineSvg)
     }
 
     /// Whether this preview's appearance is painted into its own frame rather
@@ -480,16 +481,23 @@ struct VideoGeometry {
 }
 
 impl MediaData {
+    /// The frame on screen, which a document the engine draws does not have.
+    fn current_frame(&self) -> Option<&ImageFrame> {
+        self.frames.get(self.current_frame)
+    }
+
     fn current_pixels(&self) -> &[u8] {
-        &self.frames[self.current_frame].pixels
+        self.current_frame()
+            .map(|frame| frame.pixels.as_slice())
+            .unwrap_or(&[])
     }
 
     fn current_width(&self) -> u32 {
-        self.frames[self.current_frame].width
+        self.current_frame().map(|frame| frame.width).unwrap_or(0)
     }
 
     fn current_height(&self) -> u32 {
-        self.frames[self.current_frame].height
+        self.current_frame().map(|frame| frame.height).unwrap_or(0)
     }
 
     /// Check if all frames have finished streaming
@@ -620,10 +628,7 @@ impl MediaData {
     fn is_streaming(&self) -> bool {
         matches!(
             self.media_type,
-            MediaType::AnimatedGif
-                | MediaType::AnimatedApng
-                | MediaType::AnimatedWebP
-                | MediaType::AnimatedSvg
+            MediaType::AnimatedGif | MediaType::AnimatedApng | MediaType::AnimatedWebP
         ) && !self.is_fully_loaded()
     }
 
@@ -823,7 +828,15 @@ pub fn cursor_preview_hover() -> PreviewCursorHover {
 /// The Explorer hook uses it to decide whether a keyboard preview was placed
 /// over the parked pointer, so a pointer sitting under the preview cannot drive
 /// previews or dismiss them.
+///
+/// An SVG document's preview is the engine's window rather than this app's, so its box
+/// is asked for as well — a document is a preview of this app's in every way but the
+/// window it is drawn in.
 pub fn preview_screen_rect() -> Option<(i32, i32, i32, i32)> {
+    if let Some(rect) = webview_preview::screen_rect() {
+        return Some(rect);
+    }
+
     unsafe {
         let candidates = [
             PREVIEW_HWND.load(Ordering::SeqCst),
@@ -1201,9 +1214,9 @@ fn request_office_render(
 /// is drawn at. What it is asked for is a share of that room rather than a share of
 /// the size the file asks for, which is the one thing a document and a picture do not
 /// agree on: a picture at `50%` is half of its own size, a document at `50%` is half
-/// of the screen. Where a document is played by the engine rather than drawn here, the
-/// window is the size that came out of this and the page fills it, so the setting means
-/// the same thing in both readers: see `webview_preview::frame_page`.
+/// of the screen. The engine's window is the size that comes out of this and its page
+/// fills it, so the setting is the document's size and nothing else: see
+/// `webview_preview::frame_page`.
 ///
 /// A page Office rendered is the PDF rule again: it is drawn at whatever size it is
 /// asked for, at the share of the room `office_scale` names. The one source that is not
@@ -2301,12 +2314,24 @@ fn image_cache_put(key: ImageCacheKey, frame: ImageFrame) {
     image_cache_trim(&mut cache, limit);
 }
 
-/// A still SVG document as `MediaData`: one frame, nothing streaming, and the kind
-/// its backdrop is chosen by.
-fn static_svg_media(frame: ImageFrame) -> MediaData {
+/// An SVG document as `MediaData`: a kind, and no frame at all, because the engine draws
+/// it in a window of its own.
+///
+/// This is what the loader answers with for a document, and the install path reads it as
+/// the signal to hand the hover over: nothing of this app's goes on screen for one, so
+/// there is no frame to install and no size to place it by.
+fn engine_svg_media() -> MediaData {
     MediaData {
-        media_type: MediaType::StaticSvg,
-        ..static_image_media(frame)
+        frames: Vec::new(),
+        shared_frames: None,
+        all_frames_loaded: None,
+        current_frame: 0,
+        last_frame_time: Instant::now(),
+        media_type: MediaType::EngineSvg,
+        stream_cancel: None,
+        video_process: None,
+        loading_start: None,
+        text_state: None,
     }
 }
 
@@ -2420,244 +2445,6 @@ fn load_static_image(
     }
 
     Some(static_image_media(frame))
-}
-
-/// Draw an SVG into the box the layout planned.
-///
-/// Three things can end up playing a document that moves, in this order: the engine,
-/// which is Chromium and plays the whole of SMIL and CSS; this app's own reader, for a
-/// machine with no engine on it; and the still first frame, for a document whose
-/// animation is outside what the reader can follow. A document that does not move is
-/// drawn here and costs none of that.
-///
-/// Where the engine is going to play it, what is drawn here is the still frame the
-/// engine's window lands on top of: a hover shows the document rather than a gap while
-/// a browser starts, and a document whose page never arrives simply stays still.
-fn load_svg_preview(
-    path: &Path,
-    max_width: u32,
-    max_height: u32,
-    preview_scale: PreviewScale,
-    cancel: &Arc<AtomicBool>,
-) -> Option<MediaData> {
-    let (document_width, document_height) = svg_preview::measure(path)?;
-    let (target_width, target_height) = scale_dimensions(
-        document_width,
-        document_height,
-        max_width,
-        max_height,
-        preview_scale,
-    );
-
-    if webview_preview::moves(path) {
-        // The engine's window is put up by the preview loop, which is what knows where
-        // the preview belongs and when it is on screen.
-        let (pixels, width, height) =
-            svg_preview::render(path, target_width, target_height, Some(cancel))?;
-
-        return Some(static_svg_media(ImageFrame {
-            pixels,
-            width,
-            height,
-            delay_ms: 0,
-        }));
-    }
-
-    if let Some(media) = load_animated_svg(
-        path,
-        max_width,
-        max_height,
-        preview_scale,
-        Arc::clone(cancel),
-    ) {
-        return Some(media);
-    }
-
-    if cancel.load(Ordering::Acquire) {
-        return None;
-    }
-
-    let (pixels, width, height) =
-        svg_preview::render(path, target_width, target_height, Some(cancel))?;
-
-    Some(static_svg_media(ImageFrame {
-        pixels,
-        width,
-        height,
-        delay_ms: 0,
-    }))
-}
-
-/// Play an SVG that moves, frame by frame, into the queue every animation streams
-/// through.
-///
-/// The renderer cannot play one itself — usvg drops animation, so a document's
-/// declarations are worked out here and written back into it, once per frame, and each
-/// frame is a parse and a rasterization of its own. What keeps that affordable is where
-/// the frames go: the same streaming queue a GIF or an animated WebP fills, whose
-/// playback holds one frame per thirty-third of a second and lets the producer run only
-/// as far ahead as the queue has room for. A pass that fits in the player's window is
-/// drawn once and looped from memory; one that does not is drawn again for each loop,
-/// which is what the other animated formats do too.
-///
-/// Nothing is played for a document that does not move, or whose frame count is one:
-/// the answer is `None` and the caller draws it as the still it is.
-fn load_animated_svg(
-    path: &Path,
-    max_width: u32,
-    max_height: u32,
-    preview_scale: PreviewScale,
-    cancel: Arc<AtomicBool>,
-) -> Option<MediaData> {
-    if cancel.load(Ordering::Acquire) {
-        return None;
-    }
-
-    let source = svg_preview::source(path)?;
-    let document = roxmltree::Document::parse(source.as_ref()).ok()?;
-    let playback = svg_animation::Playback::parse(&document)?;
-
-    if playback.frames() <= 1 {
-        return None;
-    }
-
-    let (document_width, document_height) = svg_preview::measure(path)?;
-    let (target_width, target_height) = scale_dimensions(
-        document_width,
-        document_height,
-        max_width,
-        max_height,
-        preview_scale,
-    );
-    if target_width == 0 || target_height == 0 {
-        return None;
-    }
-
-    // The first frames are drawn before the preview is handed over, so the animation
-    // opens on motion rather than on a spinner — the same head start the other
-    // animated formats take.
-    let mut initial_frames = Vec::new();
-    let mut initial_bytes: usize = 0;
-    let startup_frames = ANIMATION_STARTUP_FRAMES.min(playback.frames() as usize);
-
-    while initial_frames.len() < startup_frames {
-        if cancel.load(Ordering::Acquire) {
-            return None;
-        }
-
-        let text = playback.document_at(&document, initial_frames.len() as u32);
-        let Some((pixels, width, height)) =
-            svg_preview::render_text(&text, target_width, target_height)
-        else {
-            break;
-        };
-
-        initial_bytes = initial_bytes.saturating_add(pixels.len());
-        if initial_bytes > ANIMATION_RETAINED_BYTES {
-            return None;
-        }
-
-        initial_frames.push(ImageFrame {
-            pixels,
-            width,
-            height,
-            delay_ms: svg_animation::FRAME_MS,
-        });
-    }
-
-    if initial_frames.is_empty() {
-        return None;
-    }
-
-    let rendered = initial_frames.len() as u32;
-    let shared = Arc::new(Mutex::new(StreamedFrames {
-        queue: VecDeque::new(),
-        released: false,
-    }));
-    let shared_clone = Arc::clone(&shared);
-    let loaded_flag = Arc::new(AtomicBool::new(false));
-    let loaded_flag_clone = Arc::clone(&loaded_flag);
-    let cancel_clone = Arc::clone(&cancel);
-    let source = Arc::clone(&source);
-
-    std::thread::spawn(move || {
-        // The animation is worked out again here rather than handed over: what a
-        // playback is made of are places in a parsed document, and this thread parses
-        // its own from the text it owns.
-        let Ok(document) = roxmltree::Document::parse(source.as_ref()) else {
-            loaded_flag_clone.store(true, Ordering::Release);
-            return;
-        };
-        let Some(playback) = svg_animation::Playback::parse(&document) else {
-            loaded_flag_clone.store(true, Ordering::Release);
-            return;
-        };
-
-        let repeats = playback.repeats_its_pass();
-        let mut pass: u32 = 0;
-
-        loop {
-            let mut cancelled = false;
-            let first = if pass == 0 { rendered } else { 0 };
-
-            for index in first..playback.frames() {
-                if cancel_clone.load(Ordering::Acquire)
-                    || !await_frame_queue_room(&shared_clone, &cancel_clone)
-                {
-                    cancelled = true;
-                    break;
-                }
-
-                // A pass that holds everything the document does is played again from
-                // its start; one that was cut short takes the next stretch of the
-                // document instead, so its animation keeps going forward.
-                let frame = if repeats {
-                    index
-                } else {
-                    pass * playback.frames() + index
-                };
-                let text = playback.document_at(&document, frame);
-                let Some((pixels, width, height)) =
-                    svg_preview::render_text(&text, target_width, target_height)
-                else {
-                    continue;
-                };
-
-                if let Ok(mut streamed) = shared_clone.lock() {
-                    streamed.queue.push_back(ImageFrame {
-                        pixels,
-                        width,
-                        height,
-                        delay_ms: svg_animation::FRAME_MS,
-                    });
-                }
-            }
-
-            // The player gave back the frames it already showed, so the pass is drawn
-            // again to play the animation another time. A document that is played
-            // forward never stops until the hover does.
-            if cancelled || (repeats && !streamed_frames_released(&shared_clone)) {
-                break;
-            }
-
-            pass += 1;
-        }
-
-        loaded_flag_clone.store(true, Ordering::Release);
-    });
-
-    Some(MediaData {
-        frames: initial_frames,
-        shared_frames: Some(shared),
-        all_frames_loaded: Some(loaded_flag),
-        current_frame: 0,
-        last_frame_time: Instant::now(),
-        media_type: MediaType::AnimatedSvg,
-        stream_cancel: Some(cancel),
-        video_process: None,
-        loading_start: Some(Instant::now()),
-        text_state: None,
-    })
 }
 
 /// Render the first page of a PDF through the PDF engine built into Windows.
@@ -3573,6 +3360,10 @@ fn ensure_video_window_topmost(x: i32, y: i32, width: i32, height: i32) -> bool 
 /// source that draws at whatever size it is asked for — the Windows PDF engine, whose
 /// destination is in DIPs and comes back scaled by the display — has to be drawn back
 /// into the box it was given; see `pdf_preview::fit_drawn_page`.
+///
+/// The one source with no frame to draw is an SVG document, which is the engine's: what
+/// comes back for one is the kind alone, and the install path hands the hover over
+/// rather than putting anything of this app's up (see `MediaType::EngineSvg`).
 fn load_media(
     path: &PathBuf,
     max_width: u32,
@@ -3623,8 +3414,13 @@ fn load_media(
     // An SVG is drawn rather than decoded, and it is asked after the text lists for
     // the same reason the hook asks them in that order: a file is whichever kind
     // claims it first, and a name a user has put in the text list is a text file.
+    //
+    // A document is the engine's to draw — this app rasterizes none of them — so there
+    // is nothing to make here: what comes back is the kind alone, and the install path
+    // reads it as the hover to hand over. An engine that cannot draw it is no preview,
+    // which is the answer a file that will not decode gets.
     if svg_preview::is_svg_file(path) {
-        return load_svg_preview(path, max_width, max_height, preview_scale, &cancel);
+        return webview_preview::draws(path).then(engine_svg_media);
     }
 
     let guessed_format = if is_confirm_file_type_enabled() {
@@ -3716,15 +3512,23 @@ fn get_media_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
         return office_preview::measure(path);
     }
 
-    // An SVG is measured from the document rather than from a header: the size it
-    // asks to be drawn at is the size the layout places, and the renderer draws it
-    // at whatever box comes out of that. It is asked ahead of the `Images` gate —
-    // which is what gets a document here, its name being an entry of the image list
-    // — because a document is its own kind: what draws one is not a decoder, and
-    // the switch for it is not the switch for pictures. A file of a kind that is
-    // switched off reports no size, which is how the layout drops its preview.
+    // An SVG is measured from the document rather than from a header: the size it asks
+    // to be drawn at is the size the layout places, and the engine draws it at whatever
+    // box comes out of that. It is asked ahead of the `Images` gate — which is what gets
+    // a document here, its name being an entry of the image list — because a document is
+    // its own kind: what draws one is not a decoder, and the switch for it is not the
+    // switch for pictures. A file of a kind that is switched off reports no size, which
+    // is how the layout drops its preview.
     if svg_preview::is_svg_file(path) {
         if !PreviewType::Svg.enabled() {
+            return None;
+        }
+
+        // The engine is what draws a document, so a machine without one — or a spell
+        // the engine has stood down for — has no document preview at all. Reporting no
+        // size is what keeps a hover from opening a box nothing would be drawn into,
+        // and it costs no read of the file.
+        if !webview_preview::can_draw() {
             return None;
         }
 
@@ -4378,7 +4182,9 @@ unsafe fn render_layered_preview_at(hwnd: HWND, x: i32, y: i32) {
         let media_guard = CURRENT_MEDIA.lock().ok()?;
         let media = media_guard.as_ref()?;
 
-        if matches!(media.media_type, MediaType::Video) {
+        // Two kinds are not this window's to draw: a video is played by the player's own
+        // window, and a document is drawn by the engine's.
+        if matches!(media.media_type, MediaType::Video | MediaType::EngineSvg) {
             return None;
         }
 
@@ -4391,13 +4197,11 @@ unsafe fn render_layered_preview_at(hwnd: HWND, x: i32, y: i32) {
 
         // The spinner is nothing but an arc, and what is behind it is the desktop:
         // a backdrop of the configured kind would put back the square its frame is
-        // transparent to avoid. Every other preview is composited over that
-        // backdrop as it always was — a document over the one of its own, and
-        // everything else over the picture's.
+        // transparent to avoid. Everything else this window draws is composited over
+        // the picture's backdrop: a document is composited by the engine, over the
+        // backdrop of its own, and none of them reaches here.
         let background = if media.media_type.is_loading() {
             TransparentBackground::Transparent
-        } else if media.media_type.is_svg() {
-            current_svg_background()
         } else {
             current_image_background()
         };
@@ -6201,12 +6005,21 @@ pub fn run_preview_window() {
             // Advance animation frames if needed
             let mut needs_repaint = false;
 
-            // The engine plays a document in a window of its own, and that window is
-            // put up only once the page has arrived: what is underneath it — the still
-            // frame this app drew — comes down then, and is put back by whatever
-            // preview is shown next.
-            if webview_preview::is_showing() && IsWindowVisible(hwnd).as_bool() {
-                let _ = ShowWindow(hwnd, SW_HIDE);
+            // The engine draws a document in a window of its own, and that window is put
+            // up only once the page has arrived: what is underneath it — the spinner the
+            // wait was shown as — comes down then, and the wait comes down with it. What
+            // is on screen is the document, and what is shown next is another hover's.
+            if webview_preview::is_showing() {
+                if IsWindowVisible(hwnd).as_bool() {
+                    let _ = ShowWindow(hwnd, SW_HIDE);
+                }
+
+                if pending_load.take().is_some() {
+                    if let Some(cancel) = pending_load_cancel.take() {
+                        cancel.store(true, Ordering::Release);
+                    }
+                    clear_pointer_hold();
+                }
             }
 
             if let Ok(mut media_guard) = CURRENT_MEDIA.lock() {
@@ -6234,6 +6047,49 @@ pub fn run_preview_window() {
             while let Ok(result) = load_rx.try_recv() {
                 if result.generation == current_generation {
                     match result.media {
+                        // A document the engine draws. There is no frame of this app's to
+                        // install and no window of this app's to put up, so what happens
+                        // here is the handover: the engine is told where the wait has
+                        // ended up, and the wait stays armed for the document to land on.
+                        Some(media) if media.media_type.is_engine() => {
+                            let pending = pending_load.take();
+                            pending_load_cancel = None;
+
+                            if let Some(pl) = pending.as_ref() {
+                                webview_preview::show(
+                                    &pl.path,
+                                    webview_preview::Area {
+                                        x: pl.pos_x,
+                                        y: pl.pos_y,
+                                        width: pl.width as i32,
+                                        height: pl.height as i32,
+                                    },
+                                    // The document is an SVG — that is what the engine
+                                    // draws — so the backdrop is the one the tray keeps
+                                    // for documents rather than the picture's.
+                                    current_svg_background(),
+                                );
+                            }
+
+                            if let Ok(mut current) = CURRENT_MEDIA.lock() {
+                                if let Some(ref mut existing) = *current {
+                                    existing.cancel_background_work();
+                                }
+                                // Nothing of this app's goes on screen for a document:
+                                // what is up is the engine's window, and what stands in
+                                // for it until that arrives is the spinner.
+                                *current = None;
+                            }
+
+                            // An engine with a browser already up draws the document in
+                            // a few milliseconds, which is no wait to show; one that has
+                            // to start a browser is, and the spinner goes up at once for
+                            // it rather than after the delay a load might finish inside.
+                            if let Some(mut pl) = pending {
+                                pl.awaiting_render = !webview_preview::is_warm();
+                                pending_load = Some(pl);
+                            }
+                        }
                         Some(media_data) => {
                             let mw = media_data.current_width() as i32;
                             let mh = media_data.current_height() as i32;
@@ -6301,23 +6157,6 @@ pub fn run_preview_window() {
                                     SWP_NOACTIVATE | SWP_SHOWWINDOW,
                                 );
                                 let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
-
-                                // A document the engine plays is handed over once its
-                                // still frame is up: the engine's window lands on top
-                                // of that when the page has arrived, and until then
-                                // what is on screen is the document itself.
-                                if webview_preview::moves(&pl.path) {
-                                    let area = webview_preview::Area {
-                                        x: pl.pos_x,
-                                        y: pl.pos_y,
-                                        width: mw,
-                                        height: mh,
-                                    };
-                                    // The document is an SVG — that is what the engine
-                                    // plays — so the backdrop is the one the tray keeps
-                                    // for documents rather than the picture's.
-                                    webview_preview::show(&pl.path, area, current_svg_background());
-                                }
                             }
 
                             // A page for this document is one Office start away,
@@ -6401,6 +6240,25 @@ pub fn run_preview_window() {
                             // drawn again at the size it now goes into.
                             show_loading_spinner(hwnd, pl);
                         }
+
+                        // A wait for a document takes the engine's window with it: the
+                        // same document asked for again is that window moved rather than
+                        // the document navigated to again, so what it is about to draw
+                        // in is where the wait ended up. Nothing is asked of an engine
+                        // that already has the document up — that is the document
+                        // itself, and it follows nothing.
+                        if svg_preview::is_svg_file(&pl.path) && !webview_preview::is_showing() {
+                            webview_preview::show(
+                                &pl.path,
+                                webview_preview::Area {
+                                    x: pl.pos_x,
+                                    y: pl.pos_y,
+                                    width: pl.width as i32,
+                                    height: pl.height as i32,
+                                },
+                                current_svg_background(),
+                            );
+                        }
                     }
                 }
             }
@@ -6471,6 +6329,17 @@ pub fn run_preview_window() {
                         if latest_preview_msg.is_none() {
                             match (current_media_kind(), current_show.clone()) {
                                 (Some(kind), Some(show)) if !kind.enabled() => {
+                                    latest_preview_msg = Some(show)
+                                }
+                                // A document has no media of its own — it is the
+                                // engine that draws one — so its kind is read from
+                                // the file the hover is about rather than from what
+                                // is on screen.
+                                (None, Some(show))
+                                    if !PreviewType::Svg.enabled()
+                                        && show_path(&show)
+                                            .is_some_and(|path| svg_preview::is_svg_file(path)) =>
+                                {
                                     latest_preview_msg = Some(show)
                                 }
                                 _ => {}
@@ -6571,13 +6440,26 @@ pub fn run_preview_window() {
                 latest_preview_msg = replay_where_the_pointer_is(current_show.clone());
             }
 
-            // The engine could not be had for the preview that is up — the folder it
-            // keeps its state in is held by a browser that is not this app's — so the
-            // hover is replayed and laid out again, where the document is played by
-            // this app's own reader instead of being left as the still frame the
-            // engine's window was going to land on.
+            // The engine has something to answer for: it could not be had at all, or it
+            // could not put the document of the hover that is up into its window. Either
+            // way this app draws no document itself, so there is nothing to fall back to
+            // and nothing left to wait for — the wait goes rather than standing as a
+            // spinner over nothing.
             if latest_preview_msg.is_none() && webview_preview::take_failure_notice() {
-                latest_preview_msg = replay_where_the_pointer_is(current_show.clone());
+                let waiting_on_a_document = pending_load
+                    .as_ref()
+                    .is_some_and(|pl| svg_preview::is_svg_file(&pl.path));
+
+                if waiting_on_a_document && !webview_preview::is_showing() {
+                    pending_load = None;
+                    pending_load_cancel = None;
+                    let _ = ShowWindow(hwnd, SW_HIDE);
+                    clear_pointer_hold();
+
+                    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+                        *current = None;
+                    }
+                }
             }
 
             if let Some(preview_msg) = latest_preview_msg {
@@ -6872,10 +6754,10 @@ pub fn run_preview_window() {
                             video_pos = (0, 0, 0, 0);
                         }
 
-                        // A preview that is not the engine's is drawn here, so the
-                        // engine's window — if one is still up — comes down as this
-                        // one goes up.
-                        if !webview_preview::moves(&path) {
+                        // Any preview that is not a document is drawn here, so the
+                        // engine's window — if one is still up — comes down as this one
+                        // goes up.
+                        if !svg_preview::is_svg_file(&path) {
                             webview_preview::hide();
                         }
 
@@ -8010,148 +7892,6 @@ mod tests {
         );
     }
 
-    /// The whole path a document that moves takes: worked out from its declarations,
-    /// opened on drawn frames, and streamed from there. Ignored, and driven by
-    /// `RHP_SVG_PROBE` — `$env:RHP_SVG_PROBE = "C:\art\spinner.svg"; cargo test -- --ignored --nocapture animated_svg_probe`
-    /// — for a document whose animation does not play.
-    #[test]
-    #[ignore = "reads the file named in RHP_SVG_PROBE"]
-    fn animated_svg_probe() {
-        let Ok(path) = std::env::var("RHP_SVG_PROBE") else {
-            println!("set RHP_SVG_PROBE to a path");
-            return;
-        };
-
-        let path = PathBuf::from(path);
-        let cancel = Arc::new(AtomicBool::new(false));
-        let started = Instant::now();
-
-        match load_animated_svg(
-            &path,
-            800,
-            800,
-            PreviewScale::FitToScreen,
-            Arc::clone(&cancel),
-        ) {
-            Some(media) => {
-                println!(
-                    "opened on {} frame(s) of {}x{}, streamed from there, in {:?}",
-                    media.frames.len(),
-                    media.current_width(),
-                    media.current_height(),
-                    started.elapsed()
-                );
-            }
-            None => println!("nothing played, in {:?}", started.elapsed()),
-        }
-
-        cancel.store(true, Ordering::Release);
-
-        // A pass has to keep up with a frame every thirty-three milliseconds, so what
-        // one frame costs is the number worth having here.
-        let Some(source) = svg_preview::source(&path) else {
-            return;
-        };
-        let Ok(document) = roxmltree::Document::parse(source.as_ref()) else {
-            return;
-        };
-        let Some(playback) = svg_animation::Playback::parse(&document) else {
-            return;
-        };
-
-        let started = Instant::now();
-        let mut drawn = Vec::new();
-
-        for index in 0..playback.frames().min(12) {
-            let text = playback.document_at(&document, index);
-
-            if let Some((pixels, _, _)) = svg_preview::render_text(&text, 800, 800) {
-                drawn.push(pixels);
-            }
-        }
-
-        if let Some(first) = drawn.first() {
-            println!(
-                "drew {} frame(s) in {:?} — {:?} each",
-                drawn.len(),
-                started.elapsed(),
-                started.elapsed() / drawn.len() as u32
-            );
-
-            // A document that plays but does not move is a document whose declarations
-            // were read and whose frames came out the same, which is the difference
-            // between "nothing played" and "nothing moved".
-            let moved = drawn.last().is_some_and(|last| last != first);
-
-            println!("frames differ: {moved}");
-        }
-    }
-
-    /// A document that moves is played: it opens on frames that were drawn before the
-    /// preview was handed over, and the rest of the pass is streamed. One that stands
-    /// still is not played at all, and is left to the still renderer.
-    #[test]
-    fn plays_a_document_that_moves_and_not_one_that_stands_still() {
-        let folder = std::env::temp_dir()
-            .join("rust-hover-preview-svg-tests")
-            .join("animated");
-        std::fs::create_dir_all(&folder).expect("a test folder");
-
-        let moving = folder.join("spinner.svg");
-        std::fs::write(
-            &moving,
-            br##"<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40"><rect x="16" y="2" width="8" height="14" fill="#2b5fd9"><animateTransform attributeName="transform" type="rotate" from="0 20 20" to="360 20 20" dur="1s" repeatCount="indefinite"/></rect></svg>"##,
-        )
-        .expect("a written document");
-
-        let cancel = Arc::new(AtomicBool::new(false));
-        let media = load_animated_svg(
-            &moving,
-            200,
-            200,
-            PreviewScale::FitToScreen,
-            Arc::clone(&cancel),
-        )
-        .expect("a document that moves");
-
-        assert!(matches!(media.media_type, MediaType::AnimatedSvg));
-        assert!(!media.frames.is_empty(), "the pass opens on drawn frames");
-        assert!(
-            media.frames[0].pixels.iter().any(|byte| *byte != 0),
-            "the first frame was drawn"
-        );
-        assert!(
-            media.shared_frames.is_some(),
-            "the rest of the pass is streamed rather than drawn up front"
-        );
-
-        cancel.store(true, Ordering::Release);
-
-        let still = folder.join("standing.svg");
-        std::fs::write(
-            &still,
-            br##"<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40"><rect width="40" height="40" fill="#2b5fd9"/></svg>"##,
-        )
-        .expect("a written document");
-
-        let cancel = Arc::new(AtomicBool::new(false));
-        assert!(
-            load_animated_svg(
-                &still,
-                200,
-                200,
-                PreviewScale::FitToScreen,
-                Arc::clone(&cancel)
-            )
-            .is_none(),
-            "a document that stands still is not played"
-        );
-        cancel.store(true, Ordering::Release);
-
-        let _ = std::fs::remove_file(&moving);
-        let _ = std::fs::remove_file(&still);
-    }
-
     /// The whole app path for one file, without Explorer: the preview loop is started,
     /// the file is shown the way a hover shows it, and what happens next is reported.
     /// Ignored, and driven by `RHP_APP_PROBE` —
@@ -8170,7 +7910,11 @@ mod tests {
             "engine available: {}",
             crate::webview_preview::is_available()
         );
-        println!("document moves: {}", crate::webview_preview::moves(&path));
+        println!(
+            "document: {} (engine warm: {})",
+            crate::webview_preview::draws(&path),
+            crate::webview_preview::is_warm()
+        );
 
         std::thread::spawn(run_preview_window);
         std::thread::sleep(Duration::from_millis(500));

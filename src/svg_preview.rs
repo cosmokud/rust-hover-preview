@@ -1,34 +1,39 @@
-//! SVG previews: a vector document, drawn at the size the preview is shown at.
+//! SVG previews: whether a file is a document, and the size it asks to be drawn at.
 //!
-//! An SVG is not a picture to a decoder — it is a document of shapes, gradients,
-//! texts and images — so this is the PDF path's shape rather than the image path's.
-//! The document's own size is read from it for the layout to place the preview from,
-//! and the frame is then drawn at the box that comes out, at the display's scale,
-//! rather than decoded at some native size and resampled into it: a vector has no
-//! native size, and drawing one at the size it is shown is also what keeps an enlarged
-//! preview sharp (see PDF Previews, whose measure-then-render this follows).
+//! An SVG is not a picture to a decoder — it is a document of shapes, gradients, texts
+//! and images — and this app does not draw one. What draws a document is the browser
+//! engine that is already on the machine, in a window of its own, whether the document
+//! is still or moving: see `webview_preview`. What is left here is the two questions the
+//! rest of the app asks before it hands one over.
 //!
-//! A parsed document is held in memory between hovers, and a drawn frame is not.
+//! The first is the name, asked the way every other format gate asks it. The renderer
+//! has the last word on whether a file is a document at all — that renderer is the
+//! engine now — and a file it turns out not to be is answered with no preview rather
+//! than with a guessed size.
 //!
-//! A hover meets the same document several times — the layout measures it for the box,
-//! the loader measures it again to scale that box, and the renderer parses it once more
-//! to draw it — and the parse is the cheap half of a vector to keep: a tree of paths and
-//! styles is small next to the frame it draws, and it is what a second hover of the same
-//! file would otherwise pay for all over again. So the parse is held, keyed by the file
-//! and the version of it that was read, and the frame is not: a frame is as large as the
-//! display's room, it can be drawn again from a tree that is already in hand, and an SVG
-//! frame has no business in the budget `image_cache_mb` counts for photos. Nothing is
-//! written to disk either — what is held lives in this process and goes when it does.
+//! The second is the size the document asks to be drawn at, which is the root element's
+//! own: its `width` and `height`, with a `viewBox` answering where they are relative or
+//! missing — a document that says only `width="100%"` is as wide as its viewBox — which
+//! is the size a viewer draws it at rather than the extent of what it happens to
+//! contain. The layout places the preview from it, the way it places a PDF page from the
+//! size the PDF engine reports, and the box that comes out is the box the engine's
+//! window is given: its page draws the document as an image that fills that box, so a
+//! document is drawn at the size the layout planned rather than at the size it asked for
+//! (see `webview_preview::frame_page`).
+//!
+//! Nothing is drawn and nothing is held decoded: a measurement is a read of the file and
+//! a parse of it, and what is kept between hovers is the answer. The layout measures a
+//! document every time it is hovered, and a pointer swept back and forth over a folder
+//! meets the same files again, so the answers are held, keyed by the file and the
+//! version of it that was read. Nothing is written to disk either — what is held lives
+//! in this process and goes when it does.
 
 use crate::config::{decode_budget_bytes, read_within_budget};
 use once_cell::sync::Lazy;
-use resvg::tiny_skia;
-use resvg::usvg;
 use std::collections::HashMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 use std::time::SystemTime;
 
 /// The bytes a gzipped document starts with, whatever it is called.
@@ -36,36 +41,18 @@ const GZIP_MAGIC: [u8; 2] = [0x1f, 0x8b];
 
 /// The viewport a document with no size of its own is assumed to have, which is what
 /// every browser assumes for a replaced element: 300 by 150 CSS pixels, the SVG
-/// specification's default. usvg's own default is a square, and a document that is
-/// a banner should not be previewed as a box.
+/// specification's default. A document that is a banner should not be previewed as a
+/// box.
 const DEFAULT_VIEWPORT_WIDTH: f32 = 300.0;
 const DEFAULT_VIEWPORT_HEIGHT: f32 = 150.0;
-
-/// The options every parse starts from, with the machine's fonts read once.
-///
-/// usvg draws text with the database it is handed and has none of its own, so a
-/// document with text in it is drawn without any until the fonts have been read. That
-/// read is a scan of the installed font files — not cheap, and not something every
-/// hover should pay for again — so it happens on the first SVG preview and the
-/// database is kept, the way the text preview's parsed themes are kept.
-static BASE_OPTIONS: Lazy<usvg::Options<'static>> = Lazy::new(|| {
-    let mut options = usvg::Options::default();
-    options.fontdb_mut().load_system_fonts();
-
-    if let Some(size) = usvg::Size::from_wh(DEFAULT_VIEWPORT_WIDTH, DEFAULT_VIEWPORT_HEIGHT) {
-        options.default_size = size;
-    }
-
-    options
-});
 
 /// Whether a file's name is an SVG's — including the gzipped form, which is the same
 /// document under a name that says it is compressed.
 ///
-/// The question is what a file is called and nothing else, exactly as the other
-/// format gates ask it: the parser has the last word on whether a file is a document
-/// at all, the way the decoder has it for a picture, and a file that turns out not to
-/// be one is answered with no preview rather than with a guessed size.
+/// The question is what a file is called and nothing else, exactly as the other format
+/// gates ask it: the renderer has the last word on whether a file is a document at all,
+/// the way the decoder has it for a picture, and a file that turns out not to be one is
+/// answered with no preview rather than with a guessed size.
 pub fn is_svg_file(path: &Path) -> bool {
     matches!(
         path.extension()
@@ -78,82 +65,36 @@ pub fn is_svg_file(path: &Path) -> bool {
 
 /// The size the document asks to be drawn at, for the layout to place a preview from.
 ///
-/// The size is the root element's own: its `width` and `height`, with a `viewBox`
-/// answering where they are relative or missing — a document that says only
-/// `width="100%"` is as wide as its viewBox — which is the size a viewer draws it at
-/// rather than the extent of what it happens to contain. A document that will not
-/// parse, or whose size is not a size at all, reports nothing, and the hover shows no
-/// preview for it the way one onto a picture that will not decode does.
+/// The size is the root element's own — see this module's documentation for what that
+/// means, and for what a document that answers neither its own `width` and `height` nor
+/// a `viewBox` is measured at. A file that will not parse as XML, or whose root is not
+/// an `svg`, reports nothing, and the hover shows no preview for it the way one onto a
+/// picture that will not decode does.
 pub fn measure(path: &Path) -> Option<(u32, u32)> {
-    tree_size(document(path)?.as_ref())
-}
+    let key = DocumentKey {
+        path: path.to_path_buf(),
+        version: file_version(path),
+    };
 
-/// Draw the document into the largest box that fits `max_width` by `max_height`
-/// without changing its shape, and return BGRA pixels with the size they were drawn
-/// at.
-///
-/// The box is the one the layout computed from `measure`, so the fit here is that
-/// same rule's rounding rather than a second opinion about it: what comes back is the
-/// size the preview was planned at, letterboxed where rounding left the box a pixel
-/// off the document's shape.
-pub fn render(
-    path: &Path,
-    max_width: u32,
-    max_height: u32,
-    cancel: Option<&AtomicBool>,
-) -> Option<(Vec<u8>, u32, u32)> {
-    if is_cancelled(cancel) {
-        return None;
+    match held(&key) {
+        Some(Held::Measured(width, height)) => return Some((width, height)),
+        Some(Held::NotADocument) => return None,
+        None => {}
     }
 
-    let tree = document(path)?;
+    let size = read_document(path).and_then(|bytes| measure_bytes(&bytes));
+    hold(&key, size);
 
-    if is_cancelled(cancel) {
-        return None;
-    }
-
-    draw(tree.as_ref(), max_width, max_height)
+    size
 }
 
-/// Draw a document that is written out as text, which is what a frame of an animated
-/// one is: the animation is applied by writing the document again with its values at
-/// that moment, so what is drawn is a document rather than a tree that was edited.
-pub fn render_text(text: &str, max_width: u32, max_height: u32) -> Option<(Vec<u8>, u32, u32)> {
-    let tree = usvg::Tree::from_data_nested(text.as_bytes(), &parse_options()).ok()?;
-
-    draw(&tree, max_width, max_height)
-}
-
-/// A parsed document drawn into the largest box that fits the room, drawn at the size
-/// it is shown at rather than resampled into it.
-fn draw(tree: &usvg::Tree, max_width: u32, max_height: u32) -> Option<(Vec<u8>, u32, u32)> {
-    let (width, height) = tree_size(tree)?;
-    let (target_width, target_height, scale) = fit(width, height, max_width, max_height)?;
-
-    let mut pixmap = tiny_skia::Pixmap::new(target_width, target_height)?;
-    resvg::render(
-        tree,
-        tiny_skia::Transform::from_scale(scale, scale),
-        &mut pixmap.as_mut(),
-    );
-
-    Some((
-        bgra(pixmap.take_demultiplied()),
-        target_width,
-        target_height,
-    ))
-}
-
-/// A document's bytes, read for the parser.
+/// A document's bytes, read for the parse.
 ///
-/// The nested parse that is handed these bytes ignores an `<image>` element linking to
-/// an external file; see `document`.
-///
-/// A document is read and parsed whole rather than capped at a size of its own — it is
-/// a document, and what it costs is a parse proportional to it — so the budget every
-/// other file is read under is what keeps "whole" from meaning any size at all. The
-/// inflated document counts against it too, which is what a gzipped document needs: a
-/// `.svgz` is a few kilobytes that can inflate to a great many.
+/// A document is read and parsed whole rather than capped at a size of its own — it is a
+/// document, and what it costs is a parse proportional to it — so the budget every other
+/// file is read under is what keeps "whole" from meaning any size at all. The inflated
+/// document counts against it too, which is what a gzipped document needs: a `.svgz` is
+/// a few kilobytes that can inflate to a great many.
 fn read_document(path: &Path) -> Option<Vec<u8>> {
     let bytes = read_within_budget(path)?;
 
@@ -175,159 +116,199 @@ fn read_document(path: &Path) -> Option<Vec<u8>> {
     Some(bytes)
 }
 
-/// How many parsed documents are held at once.
+/// The size a document's own text asks for.
+///
+/// The root element's `width` and `height` are the answer where both of them resolve to
+/// a length; a document that names neither of them, or names one in a unit that cannot
+/// be resolved without knowing the viewport it is being drawn in, is answered by its
+/// `viewBox` — which is the area it draws in rather than a size it asks to be drawn at —
+/// and by the default viewport where it has neither.
+fn measure_bytes(bytes: &[u8]) -> Option<(u32, u32)> {
+    let text = std::str::from_utf8(bytes).ok()?;
+    let document = roxmltree::Document::parse(text).ok()?;
+    let root = document.root().first_element_child()?;
+
+    if !root.tag_name().name().eq_ignore_ascii_case("svg") {
+        return None;
+    }
+
+    let named = (
+        root.attribute("width").and_then(length),
+        root.attribute("height").and_then(length),
+    );
+
+    if let (Some(width), Some(height)) = named {
+        return Some((whole_pixels(width), whole_pixels(height)));
+    }
+
+    if let Some((width, height)) = root.attribute("viewBox").and_then(view_box_size) {
+        return Some((whole_pixels(width), whole_pixels(height)));
+    }
+
+    Some((
+        whole_pixels(DEFAULT_VIEWPORT_WIDTH),
+        whole_pixels(DEFAULT_VIEWPORT_HEIGHT),
+    ))
+}
+
+/// A length as CSS pixels: the number a document wrote, in the unit it wrote it in.
+///
+/// A length that is not a positive number is not a length — a size of zero or less is a
+/// document nothing could place — and a document that writes one is answered the way one
+/// that writes nothing at all is.
+fn length(value: &str) -> Option<f32> {
+    let value = value.trim();
+    let bytes = value.as_bytes();
+
+    let mut end = 0;
+    while end < bytes.len()
+        && (bytes[end].is_ascii_digit()
+            || bytes[end] == b'.'
+            || (end == 0 && (bytes[end] == b'+' || bytes[end] == b'-')))
+    {
+        end += 1;
+    }
+
+    // An exponent, and only where a digit follows it: `1e3px` is one number, while `10em`
+    // is ten of a unit this cannot resolve.
+    if end < bytes.len() && (bytes[end] == b'e' || bytes[end] == b'E') {
+        let mut exponent = end + 1;
+        if exponent < bytes.len() && (bytes[exponent] == b'+' || bytes[exponent] == b'-') {
+            exponent += 1;
+        }
+
+        if exponent < bytes.len() && bytes[exponent].is_ascii_digit() {
+            while exponent < bytes.len() && bytes[exponent].is_ascii_digit() {
+                exponent += 1;
+            }
+            end = exponent;
+        }
+    }
+
+    let number: f32 = value[..end].trim().parse().ok()?;
+    let pixels = number * unit_scale(value[end..].trim())?;
+
+    (pixels.is_finite() && pixels > 0.0).then_some(pixels)
+}
+
+/// How many CSS pixels one of the units a document may write its own size in is.
+///
+/// The absolute units are the ones a measurement can resolve, because they mean the same
+/// thing wherever the document is drawn. A percentage is relative to the viewport and
+/// `em`/`ex` to a font size, and neither is known here: a document that sizes itself that
+/// way is answered by its `viewBox` instead, which is what a viewer falls back on for one
+/// too.
+fn unit_scale(unit: &str) -> Option<f32> {
+    match unit.to_ascii_lowercase().as_str() {
+        "" | "px" => Some(1.0),
+        "pt" => Some(4.0 / 3.0),
+        "pc" => Some(16.0),
+        "in" => Some(96.0),
+        "mm" => Some(96.0 / 25.4),
+        "cm" => Some(96.0 / 2.54),
+        "q" => Some(96.0 / 25.4 / 4.0),
+        _ => None,
+    }
+}
+
+/// The size a `viewBox` names, which is the last two of its four numbers: the first two
+/// are where the box sits rather than how large it is.
+fn view_box_size(value: &str) -> Option<(f32, f32)> {
+    let numbers: Vec<f32> = value
+        .split(|character: char| character.is_whitespace() || character == ',')
+        .filter(|number| !number.is_empty())
+        .filter_map(|number| number.parse::<f32>().ok())
+        .collect();
+
+    let width = *numbers.get(2)?;
+    let height = *numbers.get(3)?;
+
+    (width.is_finite() && width > 0.0 && height.is_finite() && height > 0.0)
+        .then_some((width, height))
+}
+
+/// A size in whole pixels: rounded to the nearest pixel and at least one, since the
+/// layout places a preview from it and a box of no pixels is no preview.
+fn whole_pixels(value: f32) -> u32 {
+    value.round().max(1.0) as u32
+}
+
+/// How many measurements are held at once.
 ///
 /// What a pointer meets again is the folder it is in, so the handful of documents under
-/// it are the ones worth keeping; a document that falls out is parsed again the next
-/// time it is hovered, which is the cost this cache exists to save rather than one it
-/// turns into a failure.
-const MAX_HELD_DOCUMENTS: usize = 16;
+/// it are the ones worth keeping; a document that falls out is read and parsed again the
+/// next time it is hovered, which is the cost this cache exists to save rather than one
+/// it turns into a failure.
+const MAX_HELD_MEASUREMENTS: usize = 32;
 
 /// The file's modification time and length: what says a file is not the one that was
-/// parsed last time.
+/// measured last time.
 #[derive(Clone, PartialEq, Eq, Hash)]
 struct FileVersion {
     modified: Option<SystemTime>,
     len: u64,
 }
 
-/// What a held parse is only valid for: the file and the version of it that was read.
+/// What a held measurement is only valid for: the file and the version of it that was
+/// read.
 #[derive(Clone, PartialEq, Eq, Hash)]
 struct DocumentKey {
     path: PathBuf,
     version: FileVersion,
 }
 
-/// A parsed document: the tree the renderer draws, the text it was parsed from — which
-/// is what the animation pass writes out again with a moment's values in it — and
-/// whether it says it moves at all, which is what decides between the engine and this
-/// app's own reader.
-struct Parsed {
-    tree: Arc<usvg::Tree>,
-    source: Arc<str>,
-    moves: bool,
-}
-
-/// A held parse: the document, or the fact that this version of the file is not one.
+/// A held measurement: the size the document asks for, or the fact that this version of
+/// the file is not a document at all.
 ///
-/// A file that is not a document is held as that, rather than as nothing held at all,
-/// so a hover onto it costs nothing after the first instead of a read and a failed
-/// parse per pass — the same way the PDF page-size cache remembers a file it could not
-/// open. What says the answer is still good is the version in the key: a file rewritten
-/// is a different key and is read again.
+/// A file that is not one is held as that, rather than as nothing held at all, so a
+/// hover onto it costs nothing after the first instead of a read and a failed parse per
+/// pass — the same way the PDF page-size cache remembers a file it could not open. What
+/// says the answer is still good is the version in the key: a file rewritten is a
+/// different key and is read again.
+#[derive(Clone, Copy)]
 enum Held {
-    Parsed(Parsed),
+    Measured(u32, u32),
     NotADocument,
 }
 
-/// A held parse and when it was last asked for. The stamp is a counter rather than a
-/// clock, so the order documents are dropped in cannot be changed by the system clock
+/// A held measurement and when it was last asked for. The stamp is a counter rather than
+/// a clock, so the order documents are dropped in cannot be changed by the system clock
 /// moving.
-struct HeldDocument {
-    doc: Held,
+struct HeldMeasurement {
+    held: Held,
     last_used: u64,
 }
 
 #[derive(Default)]
-struct DocumentCache {
-    entries: HashMap<DocumentKey, HeldDocument>,
+struct MeasurementCache {
+    entries: HashMap<DocumentKey, HeldMeasurement>,
     tick: u64,
 }
 
-/// The parsed documents held between hovers.
+/// The measurements held between hovers.
 ///
-/// The lock is not held across a parse: the layout measures on the preview thread while
-/// a load worker may be drawing the document it was handed, and neither has anything to
-/// gain from waiting for the other to finish reading a file. Two threads that parse the
-/// same document at the same moment both get a tree and the second one stored is the one
-/// kept, which costs a duplicate parse and nothing else.
-static DOCUMENTS: Lazy<Mutex<DocumentCache>> = Lazy::new(|| Mutex::new(DocumentCache::default()));
-
-/// The document for `path`, parsed from the file once and held from then on.
-///
-/// What is parsed is the *nested* form, which ignores an `<image>` element linking to
-/// an external file: a document cannot use a hover to have a file beside it — or anywhere
-/// else on the machine — opened and drawn. An embedded `data:` image is part of the
-/// document and is drawn; a link out of it is not followed. Nothing else the parser can
-/// reach is a file either: text is drawn from the font database read once above rather
-/// than from a font a document names, and a document's own script is not run at all,
-/// because this is a renderer and not a viewer.
-fn document(path: &Path) -> Option<Arc<usvg::Tree>> {
-    parsed(path).map(|parsed| parsed.tree)
-}
-
-/// The document's bytes as the text they are, for the animation pass that writes them
-/// out again with a moment's values in them.
-pub fn source(path: &Path) -> Option<Arc<str>> {
-    parsed(path).map(|parsed| parsed.source)
-}
-
-/// Whether the document says it moves at all, which is asked of every hover: is this
-/// a document for the engine, or one to draw here? It is answered once per version of
-/// the file rather than per hover, because it costs a parse of the document's own XML
-/// and the answer cannot change while the file does not.
-pub fn moves(path: &Path) -> bool {
-    parsed(path).map(|parsed| parsed.moves).unwrap_or(false)
-}
-
-/// The held parse of `path`, reading and parsing the file when it is not held.
-fn parsed(path: &Path) -> Option<Parsed> {
-    let key = DocumentKey {
-        path: path.to_path_buf(),
-        version: file_version(path),
-    };
-
-    if let Some(held) = document_cache_get(&key) {
-        return match held {
-            Held::Parsed(parsed) => Some(parsed),
-            Held::NotADocument => None,
-        };
-    }
-
-    let parsed = read_document(path).and_then(|bytes| {
-        let source: Arc<str> = Arc::from(String::from_utf8(bytes).ok()?);
-        let tree = usvg::Tree::from_data_nested(source.as_bytes(), &parse_options())
-            .ok()
-            .map(Arc::new)?;
-        let moves = roxmltree::Document::parse(source.as_ref())
-            .map(|document| crate::svg_animation::declares_animation(&document))
-            .unwrap_or(false);
-
-        Some(Parsed {
-            tree,
-            source,
-            moves,
-        })
-    });
-
-    document_cache_put(&key, &parsed);
-
-    parsed
-}
+/// Only measurements: what a document costs this side is two numbers, and what it is
+/// drawn as is the engine's business — it is handed the file, not anything this app
+/// parsed out of it.
+static MEASUREMENTS: Lazy<Mutex<MeasurementCache>> =
+    Lazy::new(|| Mutex::new(MeasurementCache::default()));
 
 /// What is held for a version of a file, when anything is.
-fn document_cache_get(key: &DocumentKey) -> Option<Held> {
-    let mut cache = DOCUMENTS.lock().ok()?;
+fn held(key: &DocumentKey) -> Option<Held> {
+    let mut cache = MEASUREMENTS.lock().ok()?;
     cache.tick += 1;
     let tick = cache.tick;
 
     let held = cache.entries.get_mut(key)?;
     held.last_used = tick;
 
-    Some(match &held.doc {
-        Held::Parsed(parsed) => Held::Parsed(Parsed {
-            tree: Arc::clone(&parsed.tree),
-            source: Arc::clone(&parsed.source),
-            moves: parsed.moves,
-        }),
-        Held::NotADocument => Held::NotADocument,
-    })
+    Some(held.held)
 }
 
-/// Hold the parse of a file — or the fact that there is none — dropping the least
-/// recently used document once the cap is passed.
-fn document_cache_put(key: &DocumentKey, parsed: &Option<Parsed>) {
-    let Ok(mut cache) = DOCUMENTS.lock() else {
+/// Hold the size of a file — or the fact that there is none — dropping the least
+/// recently used measurement once the cap is passed.
+fn hold(key: &DocumentKey, size: Option<(u32, u32)>) {
+    let Ok(mut cache) = MEASUREMENTS.lock() else {
         return;
     };
 
@@ -336,20 +317,16 @@ fn document_cache_put(key: &DocumentKey, parsed: &Option<Parsed>) {
 
     cache.entries.insert(
         key.clone(),
-        HeldDocument {
-            doc: match parsed {
-                Some(parsed) => Held::Parsed(Parsed {
-                    tree: Arc::clone(&parsed.tree),
-                    source: Arc::clone(&parsed.source),
-                    moves: parsed.moves,
-                }),
+        HeldMeasurement {
+            held: match size {
+                Some((width, height)) => Held::Measured(width, height),
                 None => Held::NotADocument,
             },
             last_used: tick,
         },
     );
 
-    while cache.entries.len() > MAX_HELD_DOCUMENTS {
+    while cache.entries.len() > MAX_HELD_MEASUREMENTS {
         let Some(oldest) = cache
             .entries
             .iter()
@@ -374,78 +351,6 @@ fn file_version(path: &Path) -> FileVersion {
             len: 0,
         },
     }
-}
-
-/// The options one parse runs with: everything default except the fonts, which are
-/// the shared database rather than a database of its own.
-fn parse_options() -> usvg::Options<'static> {
-    usvg::Options {
-        fontdb: Arc::clone(&BASE_OPTIONS.fontdb),
-        ..Default::default()
-    }
-}
-
-/// A tree's own size in whole pixels.
-///
-/// A document is measured in user units, which are neither whole numbers nor
-/// necessarily sane, so what comes back is rounded up to at least one pixel rather
-/// than truncated to nothing; a size that is not a size at all — zero, negative, or
-/// not a number — is refused, because that is a document nothing could draw and there
-/// is nothing for a layout to place.
-fn tree_size(tree: &usvg::Tree) -> Option<(u32, u32)> {
-    let size = tree.size();
-    let (width, height) = (size.width(), size.height());
-
-    if !width.is_finite() || !height.is_finite() || width <= 0.0 || height <= 0.0 {
-        return None;
-    }
-
-    Some((
-        width.round().max(1.0) as u32,
-        height.round().max(1.0) as u32,
-    ))
-}
-
-/// The box the document is drawn into, and the scale that fills it: the largest size
-/// that fits the room without changing the document's own shape, so a document that
-/// is not the shape the layout assumed is letterboxed rather than stretched.
-///
-/// The rounding and the clamp are the layout's own, which is what keeps the frame the
-/// size the window was given.
-fn fit(width: u32, height: u32, max_width: u32, max_height: u32) -> Option<(u32, u32, f32)> {
-    let scale = (max_width as f32 / width as f32).min(max_height as f32 / height as f32);
-
-    if !scale.is_finite() || scale <= 0.0 {
-        return None;
-    }
-
-    let target_width = (width as f32 * scale)
-        .round()
-        .clamp(1.0, max_width.max(1) as f32) as u32;
-    let target_height = (height as f32 * scale)
-        .round()
-        .clamp(1.0, max_height.max(1) as f32) as u32;
-
-    Some((target_width, target_height, scale))
-}
-
-/// Straight-alpha BGRA, which is the frame every preview arrives in: the renderer
-/// produces premultiplied RGBA, its own format, and the composition that puts a frame
-/// on screen premultiplies for itself.
-fn bgra(rgba: Vec<u8>) -> Vec<u8> {
-    let mut pixels = rgba;
-
-    for pixel in pixels.chunks_exact_mut(4) {
-        pixel.swap(0, 2);
-    }
-
-    pixels
-}
-
-fn is_cancelled(cancel: Option<&AtomicBool>) -> bool {
-    cancel
-        .map(|flag| flag.load(Ordering::Acquire))
-        .unwrap_or(false)
 }
 
 #[cfg(test)]
@@ -488,10 +393,10 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
-    /// A document rewritten in place is parsed again: the version of the file is part
-    /// of what a held parse is valid for.
+    /// A document rewritten in place is measured again: the version of the file is part
+    /// of what a held measurement is valid for.
     #[test]
-    fn a_revised_document_is_parsed_again() {
+    fn a_revised_document_is_measured_again() {
         let path = fixture(
             "revised.svg",
             br#"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"/>"#,
@@ -521,55 +426,71 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
+    /// A viewBox is four numbers however they are separated, and the size is the last
+    /// two of them rather than the first.
     #[test]
-    fn draws_at_the_size_the_layout_asked_for() {
+    fn reads_a_view_box_written_with_commas() {
         let path = fixture(
-            "square.svg",
-            br##"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10" fill="#ff0000"/></svg>"##,
+            "commas.svg",
+            br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="10,20,64,48"/>"#,
         );
 
-        let (pixels, width, height) = render(&path, 64, 64, None).expect("a drawn document");
-        assert_eq!(
-            (width, height),
-            (64, 64),
-            "drawn to fill the box it was given"
-        );
-        // BGRA, straight alpha: an opaque red pixel is blue 0, green 0, red 255.
-        assert_eq!(&pixels[..4], &[0, 0, 255, 255]);
+        assert_eq!(measure(&path), Some((64, 48)));
         let _ = std::fs::remove_file(&path);
     }
 
+    /// A size is a length in the units a document may name it in, and those are the
+    /// absolute ones — the ones that mean the same thing wherever it is drawn.
     #[test]
-    fn keeps_the_documents_shape_inside_the_box() {
+    fn reads_a_size_written_in_a_unit() {
         let path = fixture(
-            "wide.svg",
-            br#"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="50"/>"#,
+            "units.svg",
+            br#"<svg xmlns="http://www.w3.org/2000/svg" width="10mm" height="1in"/>"#,
         );
 
-        let (_, width, height) = render(&path, 200, 400, None).expect("a drawn document");
-        assert_eq!(
-            (width, height),
-            (200, 100),
-            "the box is taller than the shape"
-        );
+        // Ten millimetres at 96 pixels to the inch is 37.8, and an inch is the 96
+        // pixels it is.
+        assert_eq!(measure(&path), Some((38, 96)));
         let _ = std::fs::remove_file(&path);
     }
 
-    /// Text is drawn with the machine's fonts, which have to have been read for it to
-    /// be drawn at all: a database with nothing in it leaves the text out, and a
-    /// document of nothing but text comes back blank.
+    /// A document that names no size, or one that cannot be resolved without knowing the
+    /// viewport it is drawn in, is measured at the viewport every browser assumes.
     #[test]
-    fn draws_text_with_the_machines_fonts() {
+    fn measures_a_document_with_no_resolvable_size_at_the_default_viewport() {
+        for (name, contents) in [
+            (
+                "unsized.svg",
+                br#"<svg xmlns="http://www.w3.org/2000/svg"><rect/></svg>"#.as_slice(),
+            ),
+            (
+                "relative.svg",
+                br#"<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="100%"/>"#
+                    .as_slice(),
+            ),
+            (
+                "font-relative.svg",
+                br#"<svg xmlns="http://www.w3.org/2000/svg" width="4em" height="2ex"/>"#
+                    .as_slice(),
+            ),
+        ] {
+            let path = fixture(name, contents);
+            assert_eq!(measure(&path), Some((300, 150)), "{name}");
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+
+    /// A size that is not a size — nothing of a width, or less than nothing — is no
+    /// answer, so the viewBox answers instead, and the default viewport where there is
+    /// none.
+    #[test]
+    fn refuses_a_size_that_is_not_a_size() {
         let path = fixture(
-            "text.svg",
-            br#"<svg xmlns="http://www.w3.org/2000/svg" width="200" height="60"><text x="10" y="40" font-family="Arial" font-size="30">Aa</text></svg>"#,
+            "not-a-size.svg",
+            br#"<svg xmlns="http://www.w3.org/2000/svg" width="0" height="-4" viewBox="0 0 12 6"/>"#,
         );
 
-        let (pixels, _, _) = render(&path, 200, 60, None).expect("a drawn document");
-        assert!(
-            pixels.chunks_exact(4).any(|pixel| pixel[3] != 0),
-            "something was drawn where the text is"
-        );
+        assert_eq!(measure(&path), Some((12, 6)));
         let _ = std::fs::remove_file(&path);
     }
 
@@ -590,10 +511,17 @@ mod tests {
 
     #[test]
     fn a_file_that_is_not_a_document_reports_nothing() {
-        let path = fixture("not-a-document.svg", b"just some bytes");
+        for (name, contents) in [
+            ("not-a-document.svg", b"just some bytes".as_slice()),
+            (
+                "not-an-svg-root.svg",
+                br#"<html><body>a page</body></html>"#.as_slice(),
+            ),
+        ] {
+            let path = fixture(name, contents);
 
-        assert_eq!(measure(&path), None);
-        assert_eq!(render(&path, 64, 64, None), None);
-        let _ = std::fs::remove_file(&path);
+            assert_eq!(measure(&path), None, "{name}");
+            let _ = std::fs::remove_file(&path);
+        }
     }
 }

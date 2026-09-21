@@ -83,7 +83,7 @@ run during normal use.
   whatever you had copied — expected side effect, local only.
 - **External processes:** only `ffplay`/`ffprobe`/`ffmpeg` (your install), your
   Office apps (`WINWORD`/`EXCEL`/`POWERPNT`), and the WebView2 browser Windows
-  ships with (`msedgewebview2.exe`) for animated SVG previews. Office is started
+  ships with (`msedgewebview2.exe`) for SVG previews. Office is started
   hidden unless you already had that app open — your open instance is never
   hidden, quit, or killed, and neither is a browser another application owns.
   Everything this app starts is put in a Windows job object and written to a
@@ -102,7 +102,7 @@ run during normal use.
 Your file content is handed to these local programs only, never over a
 network: your Microsoft Office (Office previews), your FFmpeg binaries (video
 previews), the Windows PDF engine (PDF previews), and the WebView2 runtime
-(animated SVG previews, which it is given with all network access denied). Their
+(SVG previews, which it is given with all network access denied). Their
 own vendor privacy statements apply to them; this app adds no reporting on top.
 
 ## If you report a bug

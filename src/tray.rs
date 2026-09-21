@@ -1157,9 +1157,9 @@ unsafe fn show_context_menu(hwnd: HWND) {
         true,
     );
 
-    // SVG Engine TTL: the same question about the browser this app starts to play a
-    // document that moves. It is greyed out on a machine with no WebView2 runtime,
-    // since there is nothing there to keep.
+    // SVG Engine TTL: the same question about the browser that draws a document —
+    // every document, still or not. It is greyed out on a machine with no WebView2
+    // runtime, since there is nothing there to keep.
     let webview_idle = CONFIG
         .lock()
         .map(|c| c.webview_idle)
@@ -1849,7 +1849,7 @@ fn set_office_engine_idle(index: u16) {
     }
 }
 
-/// How long the browser engine is kept after the last document it played. Nothing is
+/// How long the browser engine is kept after the last document it drew. Nothing is
 /// rebuilt here either: the engine reads the setting every time it decides whether to
 /// let itself go, so a shorter time applies to the engine that is already warm.
 fn set_webview_idle(index: u16) {

@@ -1,7 +1,7 @@
 //! The processes this app starts, and how they are made to go with it.
 //!
 //! Three things this app starts would otherwise outlive it: the Office application
-//! that draws a document's page, the browser that plays an animated document, and
+//! that draws a document's page, the browser that draws an SVG document, and
 //! the player a video preview runs in. Each of them is ended where it is ended
 //! deliberately — an engine let go for idle, a player stopped — and what this
 //! module is for is the ways an app does not get to choose: ended from Task

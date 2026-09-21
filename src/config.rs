@@ -104,7 +104,9 @@ pub const MAX_DECODE_BUDGET_GB: f32 = 64.0;
 /// default.
 pub const DEFAULT_OFFICE_ENGINE_IDLE_SECS: u64 = 600;
 /// How long the WebView2 engine is kept warm by default: ten minutes, the same as the
-/// Office engine, because both are a process this app would rather not start twice.
+/// Office engine, because both are a process this app would rather not start twice. The
+/// browser is what draws every SVG document this app previews, so what this buys is
+/// every hover after the first one in a while.
 pub const DEFAULT_WEBVIEW_IDLE_SECS: u64 = 600;
 /// The ceiling a hand-edited number of seconds is reduced to. Past a day there is
 /// nothing a number says that `indefinitely` does not say better.
@@ -359,8 +361,8 @@ pub const DEFAULT_OFFICE_SCALE: PreviewScale = PreviewScale::FitToScreen;
 /// How long an engine that is kept warm between documents is kept.
 ///
 /// Two settings are one shape: the Office engine, which is the application this app
-/// started and would rather not start again, and the WebView2 engine that plays an
-/// animated document, which is a browser process. Both are kept for a while after the
+/// started and would rather not start again, and the WebView2 engine that draws SVG
+/// documents, which is a browser process. Both are kept for a while after the
 /// last document and then let go, both may be kept for the life of the app, and both
 /// take the same words in `config.ini`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -584,9 +586,8 @@ pub enum PreviewType {
     Archives,
     Office,
     /// SVG documents, which are their own kind despite being entries of the image
-    /// list: what draws one is the SVG reader rather than a decoder, and what plays
-    /// one that moves is a browser, so a user who wants neither has a switch for them
-    /// that is not the switch for pictures.
+    /// list: what draws one is a browser rather than a decoder, so a user who wants
+    /// none of them has a switch for them that is not the switch for pictures.
     Svg,
 }
 
@@ -756,6 +757,10 @@ pub struct AppConfig {
     /// question means is different: the transparency of a picture is the picture's,
     /// while a document is drawn on a page, and a document's own opacity is not a
     /// photograph's.
+    ///
+    /// The checkerboard among the four is the page's own: the engine can be given a
+    /// colour and nothing else, and the squares are painted by the page it draws the
+    /// document in rather than by the window around it (see `webview_preview::frame_page`).
     pub svg_background: TransparentBackground,
     pub video_volume: u32,
     pub preview_scale: PreviewScale,
@@ -817,10 +822,9 @@ pub struct AppConfig {
     /// How long the Office engine a family started is kept after that family's
     /// last page, which is the tray's `Performance → Office Engine TTL` setting.
     pub office_engine_idle: EngineIdle,
-    /// How long the WebView2 engine is kept after the last animated document it
-    /// played. Beginning one is a browser start, and pointing a warm one at another
-    /// document is a few milliseconds, so what this buys is every hover after the
-    /// first.
+    /// How long the WebView2 engine is kept after the last document it drew. Beginning
+    /// one is a browser start, and pointing a warm one at another document is a few
+    /// milliseconds, so what this buys is every hover after the first.
     pub webview_idle: EngineIdle,
     /// Memory the pages PDF previews were drawn as may hold, in megabytes, between
     /// hovers. A page is rendered at `0` like at any other size; it is simply not

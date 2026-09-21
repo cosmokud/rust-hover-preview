@@ -1,6 +1,6 @@
 [package]
 name = "rust-hover-preview"
-version = "0.2.9"
+version = "0.2.10"
 edition = "2021"
 description = "Windows 11 system tray app that shows image, video, PDF, text, and archive previews on hover in Explorer"
 authors = ["Rust Hover Preview Contributors"]
@@ -71,28 +71,21 @@ image = { version = "0.25", default-features = false, features = [
     "webp",
 ] }
 
-# SVG previews. A document is rasterized at the size the preview is shown at rather
-# than decoded and resampled, by usvg + tiny-skia through resvg — pure Rust, and no
-# external tool to install. `svgz` is off because a gzipped document is inflated on
-# this side, and `memmap-fonts` is off because the font database is read into memory
-# once.
-resvg = { version = "0.48", default-features = false, features = [
-    "raster-images",
-    "system-fonts",
-    "text",
-] }
-
-# The XML reader the animation pass works from: usvg drops `<animate>` elements, so
-# what a document animates is read from its own text and written back into it per
-# frame. Pinned to the version usvg parses with, so one reader is compiled in.
+# SVG previews. Nothing here rasterizes a document: every one of them — still, gzipped
+# or animated — is drawn by the browser engine that is already on the machine, in a
+# window of its own (see `webview_preview`). What this side answers is the name gate and
+# the size the document asks to be drawn at, which is what `roxmltree` is here for: the
+# root element's own `width`, `height` and `viewBox`.
 roxmltree = "0.21"
 
-# The browser engine that is already on the machine, for a document that moves: usvg
-# plays no animation, and where a document says more than this app's own reader can
-# carry out, Chromium does. Pinned to the release that binds `windows` 0.58 — the
-# version this app is on — because the two must agree on HWND and the COM types
-# around it. The loader is linked in statically (`WebView2LoaderStatic.lib` is this
-# crate's default), so the portable exe stays one file.
+# The browser engine that is already on the machine, which draws every SVG document
+# this app previews, still or moving: nothing is rasterized on this side, so a document
+# is drawn at the size the preview is shown at by the one renderer on the machine that
+# implements the whole of SVG rather than a subset of it. Pinned to the release that
+# binds `windows` 0.58 — the version this app is on — because the two must agree on HWND
+# and the COM types around it. The loader is linked in statically
+# (`WebView2LoaderStatic.lib` is this crate's default), so the portable exe stays one
+# file.
 webview2-com = "0.34"
 
 # Animated WebP support via Google's libwebp
@@ -137,8 +130,8 @@ winres = "0.1"
 sevenz-rust2 = { version = "0.20", features = ["compress", "util"] }
 
 # What this app is built out of is mostly other people's code — the Windows bindings,
-# the syntax highlighter, the SVG renderer, the browser bindings — and what a change to
-# it costs is mostly those crates and the link at the end. These two settings are what
+# the syntax highlighter, the archive readers, the browser bindings — and what a change
+# to it costs is mostly those crates and the link at the end. These two settings are what
 # keeps that loop short: a dependency is compiled without debug information, which
 # nothing steps through anyway, and the release link is thin LTO rather than
 # whole-program, which is a few seconds of link instead of most of a minute.
