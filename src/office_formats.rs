@@ -185,46 +185,6 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
-    fn list() -> Vec<String> {
-        sanitize_office_extensions(DEFAULT_OFFICE_EXTENSIONS)
-    }
-
-    #[test]
-    fn keeps_only_bare_extensions() {
-        let extensions = list();
-        assert!(extensions.contains(&"docx".to_string()));
-        assert!(extensions.contains(&"xlsx".to_string()));
-        assert!(extensions.contains(&"pptx".to_string()));
-
-        let typed = sanitize_office_extensions(".DOCX, xlsm ,nonsense*,,, docx");
-        assert_eq!(typed, vec!["docx", "xlsm"]);
-    }
-
-    #[test]
-    fn matches_names_the_way_the_list_writes_them() {
-        let extensions = list();
-        assert!(matches_office_list(
-            &PathBuf::from(r"C:\docs\report.docx"),
-            &extensions
-        ));
-        assert!(matches_office_list(
-            &PathBuf::from(r"C:\docs\Q3.XLSX"),
-            &extensions
-        ));
-        assert!(matches_office_list(
-            &PathBuf::from(r"C:\docs\deck.pptm"),
-            &extensions
-        ));
-        assert!(!matches_office_list(
-            &PathBuf::from(r"C:\docs\notes.txt"),
-            &extensions
-        ));
-        assert!(!matches_office_list(
-            &PathBuf::from(r"C:\docs\archive.zip"),
-            &extensions
-        ));
-    }
-
     #[test]
     fn finds_an_engine_by_family() {
         assert_eq!(

@@ -1300,7 +1300,7 @@ fn background_color(background: TransparentBackground) -> COREWEBVIEW2_COLOR {
 /// A local file as a URL, which is what the engine is pointed at.
 ///
 /// The path a hover carries is the Shell's, and the Shell canonicalizes paths to the
-/// verbatim form — `\\?\G:\…`, with `\\?\UNC\` in front of a share — which is not
+/// verbatim form — `\\?\C:\…`, with `\\?\UNC\` in front of a share — which is not
 /// something a URL may contain: a browser pointed at it fails at once, silently, and
 /// what a hover shows is nothing. So the prefix comes off first, and a share keeps its
 /// server: `\\?\UNC\server\share` becomes `file://server/share`, a drive becomes
@@ -1560,12 +1560,12 @@ mod tests {
     fn turns_a_verbatim_path_into_a_url_a_browser_opens() {
         for (path, expected) in [
             (
-                r"G:\Downloads\Stash\Animated_clock.svg",
-                "file:///G:/Downloads/Stash/Animated_clock.svg",
+                r"C:\art\clock.svg",
+                "file:///C:/art/clock.svg",
             ),
             (
-                r"\\?\G:\Downloads\Stash\Animated_clock.svg",
-                "file:///G:/Downloads/Stash/Animated_clock.svg",
+                r"\\?\C:\art\clock.svg",
+                "file:///C:/art/clock.svg",
             ),
             (r"\\?\C:\a b\c#d.svg", "file:///C:/a%20b/c%23d.svg"),
             (r"\\?\UNC\server\share\a.svg", "file://server/share/a.svg"),
