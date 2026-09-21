@@ -25,8 +25,22 @@ use std::path::Path;
 /// them is the codec Windows has rather than one this app carries — a `webp` being the
 /// one of them with a second reader behind it, libwebp in the binary, for the machine
 /// that codec is missing from and for the picture that moves; see `wic_image` and
-/// `webp_image`.
+/// `webp_image`. `dds` is a picture of the same kind and by the same route: the codec
+/// Windows has for it draws one at the size of the preview rather than the size of the
+/// file, and the formats that codec does not read — the uncompressed ones, BC4 and BC5 —
+/// are read by a decoder of this app's own; see `dds_image`.
 pub const DEFAULT_IMAGE_EXTENSIONS: &str =
+    "apng,avif,bmp,dds,exr,ff,gif,hdr,heic,heif,ico,jfif,jpe,jpeg,jpg,jxl,pam,pbm,pgm,png,pnm,ppm,qoi,svg,svgz,tga,tif,tiff,webp";
+
+/// The built-in image list as it stood before `dds` was added to it.
+///
+/// A file holding exactly these entries is the app's own older list rather than a
+/// user's edit — nobody has touched it — so it is brought up to the built-in list
+/// rather than kept as written. Without that, the format would reach a fresh
+/// installation only: every `config.ini` already written holds a list that differs
+/// from the built-in one, and a list that differs is otherwise the user's own (see
+/// `config::configured_list_over_history`).
+pub const IMAGE_EXTENSIONS_BEFORE_DDS: &str =
     "apng,avif,bmp,exr,ff,gif,hdr,heic,heif,ico,jfif,jpe,jpeg,jpg,jxl,pam,pbm,pgm,png,pnm,ppm,qoi,svg,svgz,tga,tif,tiff,webp";
 
 /// The built-in image list as it stood before the formats Windows has a codec for were
