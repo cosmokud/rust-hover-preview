@@ -127,7 +127,12 @@ pub fn decode(path: &Path, width: u32, height: u32) -> Option<Vec<u8>> {
 }
 
 /// The imaging factory this thread asks through, made on first use.
-fn factory() -> Option<IWICImagingFactory> {
+///
+/// It is shared with the media engine's video path rather than made a second time
+/// there: one WIC factory is one factory, and a thread that draws a video frame into a
+/// WIC bitmap and a thread that decodes a picture into one are asking the same object
+/// for the same thing (see `video_player`).
+pub(crate) fn factory() -> Option<IWICImagingFactory> {
     FACTORY.with(|slot| {
         let mut slot = slot.borrow_mut();
 

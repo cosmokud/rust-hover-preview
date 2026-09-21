@@ -8,6 +8,7 @@ use crate::config::{
     DEFAULT_SVG_SCALE_PERCENT, DEFAULT_TEXT_CACHE_MB, DEFAULT_TEXT_FONT_SCALE_PERCENT,
     DEFAULT_WEBVIEW_IDLE_SECS,
 };
+use crate::codecs;
 use crate::explorer_hook;
 use crate::office_render;
 use crate::pdf_preview;
@@ -1378,6 +1379,17 @@ unsafe fn show_context_menu(hwnd: HWND) {
         w!("Performance"),
     );
 
+    // Add the "Codecs" submenu: every engine and every codec extension a preview can lean
+    // on, each marked with whether this machine has it. The list is what is installed
+    // rather than what this app can do, so a row that is greyed is a preview that will not
+    // be shown and a package that can be installed to show it.
+    //
+    // The answers are asked again here, because this is the one moment a user is looking
+    // at them: a codec extension installed a minute ago shows up the next time the menu is
+    // opened, rather than at the next restart.
+    codecs::refresh();
+    append_codecs_menu(menu);
+
     let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
 
     // Add "Run at Startup" with checkmark
@@ -1858,6 +1870,80 @@ fn append_engine_idle_menu(
     };
 
     let _ = unsafe { AppendMenuW(parent, flags, menu.0 as usize, label) };
+}
+
+/// The `Codecs` submenu: what this machine has of everything a preview leans on, grouped
+/// by what each thing is for.
+///
+/// Nothing in it is a setting and nothing in it does anything — the rows are there to be
+/// read. A row that is there is marked and reads as any other item does, while one that is
+/// not is greyed and cannot be picked at all. A Windows item cannot be both normal-looking
+/// and unpickable, so the rows that are present are made inert by having no id at all
+/// rather than by being disabled, and the mark they carry is a glyph rather than the
+/// checkmark column a menu item can draw — those are the same trade the other way round
+/// (see `codec_row_label`).
+fn append_codecs_menu(menu: HMENU) {
+    let codecs_menu = unsafe { CreatePopupMenu().unwrap() };
+
+    append_codec_group(codecs_menu, w!("Video"), codecs::video());
+    append_codec_group(codecs_menu, w!("Images"), codecs::images());
+    append_codec_group(codecs_menu, w!("Engines"), codecs::engines());
+
+    let _ = unsafe {
+        AppendMenuW(
+            menu,
+            MF_STRING | MF_POPUP,
+            codecs_menu.0 as usize,
+            w!("Codecs"),
+        )
+    };
+}
+
+/// One group of the `Codecs` submenu, with a row per engine or codec in it.
+fn append_codec_group(parent: HMENU, label: PCWSTR, rows: Vec<codecs::Row>) {
+    let group = unsafe { CreatePopupMenu().unwrap() };
+
+    // The labels are kept for as long as the group is being filled out, for the reason the
+    // cache labels are: `AppendMenuW` is handed a pointer, so the wide strings have to
+    // outlive the call that lists them.
+    let labels: Vec<Vec<u16>> = rows
+        .iter()
+        .map(|row| {
+            codec_row_label(row)
+                .encode_utf16()
+                .chain(std::iter::once(0))
+                .collect()
+        })
+        .collect();
+
+    for (index, row) in rows.iter().enumerate() {
+        // The id is nothing on purpose: no command is matched against a codec row, so
+        // picking one closes the menu and does nothing else.
+        let flags = if row.available {
+            MF_STRING
+        } else {
+            MF_STRING | MF_GRAYED
+        };
+
+        let _ = unsafe { AppendMenuW(group, flags, 0, PCWSTR(labels[index].as_ptr())) };
+    }
+
+    let _ = unsafe { AppendMenuW(parent, MF_STRING | MF_POPUP, group.0 as usize, label) };
+}
+
+/// What one row of the `Codecs` submenu is written as: the mark that says whether it is
+/// there, and the name of the engine or format.
+///
+/// The mark is a glyph in the label rather than the checkmark column a menu item can carry,
+/// because the two cannot be told apart for the rows that matter: a menu greys a checked
+/// item along with everything else about it, so a present row and a missing one would look
+/// the same. A glyph is nothing but text, and it stays legible on the row it is on.
+fn codec_row_label(row: &codecs::Row) -> String {
+    if row.available {
+        format!("\u{2714} {}", row.name)
+    } else {
+        format!("\u{2716} {}", row.name)
+    }
 }
 
 /// What an idle time is called in an `… Engine TTL` submenu: the time, with the one an
