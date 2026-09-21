@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.2.11]
+
+### Added
+
+- Video previews without FFmpeg: where `ffplay` is not installed, videos are decoded by the media engine Windows already has — `mp4`, `mov`, `m4v`, `mkv`, `webm`, `avi`, `wmv`, `asf`, `ts`, `m2ts`, `mts`, `3gp`, and more with the codec extensions below — played in the same preview window as everything else, with sound and looping. FFmpeg is now optional rather than required.
+- `Codecs` in the tray menu: what this machine has of every engine and codec a preview can lean on, grouped into `Video`, `Images` and `Engines`, with a check or a cross per row and the missing ones greyed. The rows are for reading only — nothing in the menu does anything, and there is no setting behind it.
+- `windows-core` as a declared dependency, for the media engine's event callback. Nothing is added to the build graph by it.
+
+### Changed
+
+- `README.md` describes what FFmpeg adds rather than requiring it, and lists the free Microsoft Store codec extensions for HEVC, VP9, AV1, MPEG-2 and Ogg.
+- Bump version to 0.2.11 in `Cargo.toml` and `Cargo.lock`.
+
 ## [0.2.10]
 
 ### Added

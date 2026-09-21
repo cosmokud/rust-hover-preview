@@ -1,6 +1,6 @@
 [package]
 name = "rust-hover-preview"
-version = "0.2.10"
+version = "0.2.11"
 edition = "2021"
 description = "Windows 11 system tray app that shows image, video, PDF, text, and archive previews on hover in Explorer"
 authors = ["Rust Hover Preview Contributors"]
@@ -45,6 +45,14 @@ windows = { version = "0.58", features = [
     "UI",
     "implement",
 ]}
+
+# The `implement` feature above is what lets this app be handed an interface the system
+# will call back into — the media engine's event sink is the one of those (see
+# `video_player`) — and the macro it expands to names `windows_core` by its own path, so
+# that crate has to be a dependency of this one rather than reached through `windows`.
+# Nothing is added to the graph by saying so: `windows` already depends on exactly this
+# version of it, and it is compiled either way.
+windows-core = "0.58"
 
 # Image handling. The decoders are named rather than defaulted, so what this app reads
 # is the list itself: the defaults carry `avif`, which is ravif and with it rav1e — an
@@ -184,7 +192,7 @@ strip = true
 # GitHub workflows and `build-installers.ps1` package with `--profile github`, while
 # `cargo build --release` keeps the profile above, so the edit-build-test loop is still
 # a short one. What ships is optimized as one program instead of as sixteen codegen
-# units apiece — 461 KB, 6.1% of the release binary measured on 0.2.10 — and nothing
+# units apiece — 419 KB, 5.7% of the release binary measured on 0.2.11 — and nothing
 # about it is slower at run time.
 [profile.github]
 inherits = "release"

@@ -1,6 +1,7 @@
 use crate::archive_formats;
 use crate::archive_preview::{self, ArchivePreviewOptions};
 use crate::cloud_files;
+use crate::codecs;
 use crate::config::{
     frame_bytes_within_budget, image_decode_limits, read_within_budget, sanitize_image_cache_mb,
     sanitize_webp_playback_fps, MarkdownMode, PreviewScale, PreviewType, TextTheme,
@@ -20,6 +21,7 @@ use crate::svg_preview;
 use crate::text_formats;
 use crate::text_preview::{self, TextPreviewOptions};
 use crate::video_formats::{self, is_video_file};
+use crate::video_player;
 use crate::webp_image;
 use crate::webview_preview;
 use crate::wheel_input;
@@ -346,7 +348,16 @@ enum MediaType {
     AnimatedGif,
     AnimatedApng,
     AnimatedWebP,
+    /// A video played by `ffplay`, whose own window is the preview while it is up.
     Video,
+    /// A video the media engine Windows has decodes and this window draws — the kind of
+    /// video preview a machine without FFmpeg gets (see `video_player`).
+    ///
+    /// It is a kind of its own rather than a difference inside `Video` because the two are
+    /// drawn by different things: the player's window is the preview for one, and the
+    /// layered window this app owns is the preview for the other, which is the one
+    /// question `render_layered_preview_at` asks of a frame.
+    NativeVideo,
     Pdf,
     Text,
     Archive,
@@ -364,7 +375,7 @@ impl MediaType {
             | Self::AnimatedWebP => Some(PreviewType::Images),
             Self::EngineSvg => Some(PreviewType::Svg),
             Self::EngineFont => Some(PreviewType::Fonts),
-            Self::Video => Some(PreviewType::Videos),
+            Self::Video | Self::NativeVideo => Some(PreviewType::Videos),
             Self::Text => Some(PreviewType::Text),
             Self::Pdf => Some(PreviewType::Pdf),
             Self::Archive => Some(PreviewType::Archives),
@@ -382,6 +393,12 @@ impl MediaType {
     /// The preview loop asks before it reaches for a frame, because there is none.
     fn is_engine(&self) -> bool {
         matches!(self, Self::EngineSvg | Self::EngineFont)
+    }
+
+    /// Whether this is a video the media engine decodes and this window draws, which is
+    /// what the tick asks before it pulls a frame.
+    fn is_native_video(&self) -> bool {
+        matches!(self, Self::NativeVideo)
     }
 
     /// Whether this preview's appearance is painted into its own frame rather
@@ -677,6 +694,29 @@ impl MediaData {
         if let Some(flag) = self.stream_cancel.take() {
             flag.store(true, Ordering::Release);
         }
+    }
+
+    /// Take the frame the media engine has ready into the one frame a preview of this kind
+    /// is composed of, answering whether there was one to take.
+    ///
+    /// A video played by the media engine is not a file that is decoded once and drawn
+    /// again — it is a new picture every frame — so the frame the placeholder was made of
+    /// is the frame every one after it lands in. That is also what keeps a playing video
+    /// from allocating: the buffer is written into rather than replaced, and the frames
+    /// that arrive between repaints are simply the ones that are never seen.
+    fn take_native_video_frame(&mut self) -> bool {
+        let Some(frame) = self.frames.first_mut() else {
+            return false;
+        };
+
+        let Some((width, height)) = video_player::copy_frame_into(&mut frame.pixels) else {
+            return false;
+        };
+
+        frame.width = width;
+        frame.height = height;
+
+        true
     }
 }
 
@@ -1048,6 +1088,13 @@ fn current_font_background() -> TransparentBackground {
         .lock()
         .map(|cfg| cfg.font_background)
         .unwrap_or(TransparentBackground::Transparent)
+}
+
+/// How loud a video is played, which is read when one is started rather than when the
+/// setting changes: a preview is a few seconds long, and the next one is played at
+/// whatever the volume is by then.
+fn current_video_volume() -> u32 {
+    CONFIG.lock().map(|cfg| cfg.video_volume).unwrap_or(0)
 }
 
 /// The backdrop an engine-drawn preview of `path` is drawn over: the kind decides it, the
@@ -2726,11 +2773,26 @@ fn load_video_thumbnail(
     max_height: u32,
     preview_scale: PreviewScale,
 ) -> Option<MediaData> {
-    let geometry = get_video_geometry(path).unwrap_or(VideoGeometry {
-        width: 1920,
-        height: 1080,
-        crop: None,
-    });
+    // Which engine plays this file is settled here, once, and everything below follows
+    // from it: FFmpeg's player when it is installed, and the media engine Windows has when
+    // it is not.
+    let native = codecs::plays_video_natively();
+
+    let geometry = match get_video_geometry(path) {
+        Some(geometry) => geometry,
+        // No geometry, and the engine that would play the file cannot open it either: a
+        // file this machine has no reader for is answered with no preview rather than with
+        // a 16:9 box nothing would be drawn into.
+        None if native => return None,
+        // FFmpeg is the one that would play it, so the box the layout uses is the one it
+        // has always used for a file ffprobe could not measure.
+        None => VideoGeometry {
+            width: 1920,
+            height: 1080,
+            crop: None,
+        },
+    };
+
     let (target_width, target_height) = scale_dimensions(
         geometry.width,
         geometry.height,
@@ -2755,7 +2817,11 @@ fn load_video_thumbnail(
         all_frames_loaded: None,
         current_frame: 0,
         last_frame_time: Instant::now(),
-        media_type: MediaType::Video,
+        media_type: if native {
+            MediaType::NativeVideo
+        } else {
+            MediaType::Video
+        },
         stream_cancel: None,
         video_process: None,
         loading_start: None,
@@ -2974,7 +3040,13 @@ fn get_video_geometry(path: &PathBuf) -> Option<VideoGeometry> {
         )
     });
 
-    let (src_w, src_h) = dimensions?;
+    // A file FFmpeg is not there for — or one its own probe could not read — is asked of
+    // the media engine Windows has, which is also the engine that would play it. That is
+    // the whole of the fallback's geometry: there is no crop to detect, because cropdetect
+    // is an FFmpeg filter and the engine is handed the frame as the file holds it.
+    let Some((src_w, src_h)) = dimensions.or_else(|| video_player::dimensions(path)) else {
+        return None;
+    };
     let crop = best_valid_crop(candidates, src_w, src_h);
 
     let geometry = if let Some(crop) = crop {
@@ -3265,6 +3337,15 @@ fn start_video_playback(path: &PathBuf, x: i32, y: i32, width: i32, height: i32)
 
 /// Stop video playback process
 fn stop_video_playback(media: &mut MediaData) {
+    // A video the media engine is playing has no process and no window of its own: letting
+    // the engine go is the whole of stopping it, and it is done here because this is where
+    // every path that ends a video already comes through — the pointer leaving the file,
+    // another preview taking its place, the `Videos` gate closing, a display change, a
+    // resume from sleep, and the app itself.
+    if media.media_type.is_native_video() {
+        video_player::stop();
+    }
+
     if let Some(ref mut process) = media.video_process {
         // Kill only, never wait: a process stuck in kernel I/O would block the
         // caller (possibly the Explorer hook thread) indefinitely. The leftover
@@ -3596,9 +3677,13 @@ fn load_media(
 /// Get original dimensions of media for positioning calculations
 fn get_media_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
     if video_formats::is_video_preview(path) {
+        // A 16:9 box is what a video FFmpeg could not measure has always been placed at,
+        // because `ffplay` will play the file anyway. The media engine will not: it plays
+        // what it can open and nothing else, so a file it could not measure is a file
+        // there is no preview for, and reporting no size is how the layout drops it.
         return get_video_geometry(path)
             .map(|g| (g.width, g.height))
-            .or(Some((1920, 1080)));
+            .or_else(|| (!codecs::plays_video_natively()).then_some((1920, 1080)));
     }
 
     // A PDF is measured from its own first page; one that cannot be read as a
@@ -6151,6 +6236,14 @@ pub fn run_preview_window() {
                     if media.update_loading_frame() {
                         needs_repaint = true;
                     }
+                    // A video the media engine plays is a new picture every frame rather
+                    // than a file that is decoded once and drawn again, so its frame is
+                    // taken here — once a tick, which is as often as one can be shown.
+                    // The kind is asked first so that a preview of any other kind pays
+                    // for this with one comparison.
+                    if media.media_type.is_native_video() && media.take_native_video_frame() {
+                        needs_repaint = true;
+                    }
                     // While streaming first-frame loading, repaint for spinner animation.
                     if media.should_draw_streaming_overlay()
                         && last_stream_overlay_repaint.elapsed() >= Duration::from_millis(83)
@@ -6212,6 +6305,50 @@ pub fn run_preview_window() {
                             }
                         }
                         Some(media_data) => {
+                            // A video the media engine plays is started here, before its
+                            // preview is put up: what this window is about to draw is a
+                            // frame of it, and an engine that would not start is a file
+                            // with no preview rather than a box of the placeholder pixels
+                            // a video preview is opened with.
+                            if media_data.media_type.is_native_video() {
+                                let (width, height) = (
+                                    media_data.current_width(),
+                                    media_data.current_height(),
+                                );
+
+                                // A hover that lands on the file already playing leaves it
+                                // playing, the same way the FFmpeg path compares the file
+                                // it last started.
+                                if video_player::playing_path().as_deref()
+                                    == Some(result.path.as_path())
+                                    && video_player::is_playing()
+                                {
+                                    video_player::resize(width, height);
+                                } else {
+                                    video_player::play(
+                                        &result.path,
+                                        width,
+                                        height,
+                                        current_video_volume(),
+                                    );
+                                }
+
+                                if !video_player::is_playing() {
+                                    let _ = ShowWindow(hwnd, SW_HIDE);
+                                    clear_pointer_hold();
+                                    pending_load = None;
+
+                                    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+                                        if let Some(ref mut existing) = *current {
+                                            existing.cancel_background_work();
+                                        }
+                                        *current = None;
+                                    }
+
+                                    continue;
+                                }
+                            }
+
                             let mw = media_data.current_width() as i32;
                             let mh = media_data.current_height() as i32;
 
@@ -6794,7 +6931,14 @@ pub fn run_preview_window() {
                         current_show = show_snapshot.clone();
                     }
 
-                    if show_is_video {
+                    // A video is played by `ffplay` when FFmpeg is installed, and by the
+                    // media engine Windows has when it is not. The two take different
+                    // roads from here: FFmpeg's player is its own window, which is what
+                    // the branch below puts up, while the engine's frames come back
+                    // through the ordinary load and are drawn by this app's own window.
+                    let ffplay_plays_video = show_is_video && codecs::ffplay_available();
+
+                    if ffplay_plays_video {
                         // Cancel any in-flight image load before switching to video.
                         current_generation += 1;
                         pending_load = None;
@@ -8132,6 +8276,14 @@ mod tests {
             crate::webview_preview::draws(&path),
             crate::webview_preview::is_warm()
         );
+        // Which engine would play a video here, which is the whole of the fallback's
+        // routing: `ffplay` when it is installed, and the media engine Windows has when it
+        // is not. Reported for every file rather than only for a video, because a probe is
+        // run to find out what the machine is doing.
+        println!(
+            "video: played natively = {}",
+            crate::codecs::plays_video_natively()
+        );
 
         std::thread::spawn(run_preview_window);
         std::thread::sleep(Duration::from_millis(500));
@@ -8147,12 +8299,20 @@ mod tests {
                         media.current_width(),
                         media.current_height(),
                         media.frames.len(),
+                        media.media_type.is_native_video(),
+                        // Whether the placeholder a video preview is opened with has been
+                        // replaced by a frame of it, which is the one thing a video that
+                        // plays and a video that does not look different in.
+                        media
+                            .current_pixels()
+                            .chunks_exact(4)
+                            .any(|pixel| pixel[..3] != [40, 40, 40]),
                     )
                 })
             });
 
             println!(
-                "{:>5} ms: engine_showing={} media={:?}",
+                "{:>5} ms: engine_showing={} (w, h, frames, native video, framed)={:?}",
                 (step + 1) * 200,
                 crate::webview_preview::is_showing(),
                 media

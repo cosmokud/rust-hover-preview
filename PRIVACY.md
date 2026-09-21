@@ -12,9 +12,11 @@ That read happens locally, only for the hovered item, and only for preview
 types you leave enabled:
 
 - **Images:** decoded on your PC.
-- **Videos:** measured and played with the FFmpeg tools you installed
-  (`ffprobe`, `ffmpeg`, `ffplay`). The file path is passed to those local
-  programs as a command-line argument.
+- **Videos:** measured and played on your PC. Where you have installed FFmpeg,
+  that is the FFmpeg tools (`ffprobe`, `ffmpeg`, `ffplay`), and the file path is
+  passed to those local programs as a command-line argument. Where you have not,
+  it is the media engine built into Windows, which decodes the video inside this
+  app's own process — nothing is started and no path leaves the app.
 - **PDFs:** first page rendered with the PDF engine built into Windows.
 - **Text and code:** the start of the file is read (capped at 2 MB / 2,000
   lines), decoded, and highlighted on your PC.
@@ -81,11 +83,12 @@ run during normal use.
   sheet via `CopyPicture`, reads that bitmap, then clears the clipboard so
   Excel can quit cleanly. That means hovering a spreadsheet can replace
   whatever you had copied — expected side effect, local only.
-- **External processes:** only `ffplay`/`ffprobe`/`ffmpeg` (your install), your
-  Office apps (`WINWORD`/`EXCEL`/`POWERPNT`), and the WebView2 browser Windows
-  ships with (`msedgewebview2.exe`) for SVG previews. Office is started
-  hidden unless you already had that app open — your open instance is never
-  hidden, quit, or killed, and neither is a browser another application owns.
+- **External processes:** only `ffplay`/`ffprobe`/`ffmpeg` (your install, and
+  only when it is installed), your Office apps (`WINWORD`/`EXCEL`/`POWERPNT`),
+  and the WebView2 browser Windows ships with (`msedgewebview2.exe`) for SVG
+  previews. Office is started hidden unless you already had that app open — your
+  open instance is never hidden, quit, or killed, and neither is a browser
+  another application owns.
   Everything this app starts is put in a Windows job object and written to a
   small file under `%LOCALAPPDATA%\rust-hover-preview\engines`, so that a crash,
   a kill from Task Manager, or a logoff cannot leave a process running: the job
@@ -101,8 +104,9 @@ run during normal use.
 
 Your file content is handed to these local programs only, never over a
 network: your Microsoft Office (Office previews), your FFmpeg binaries (video
-previews), the Windows PDF engine (PDF previews), and the WebView2 runtime
-(SVG previews, which it is given with all network access denied). Their
+previews, if you have them), the Windows media engine and the Windows PDF engine
+(video and PDF previews), and the WebView2 runtime (SVG previews, which it is
+given with all network access denied). Their
 own vendor privacy statements apply to them; this app adds no reporting on top.
 
 ## If you report a bug

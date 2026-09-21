@@ -15,7 +15,7 @@ A Windows 11 tray app inspired by QTTabBar that shows instant File Explorer prev
 - HEIC, AVIF, and JPEG XL, decoded by the codec Windows already has
 - SVG vectors drawn at the size they are shown, animated or still
 - Fonts — `ttf`, `otf`, `ttc`, `woff`, `woff2` — drawn as a specimen: the name the font calls itself and the sample lines its own character map covers
-- Videos through FFmpeg
+- Videos through FFmpeg, or through Windows' own media engine where FFmpeg is not installed
 - PDF first pages via the built-in Windows PDF engine
 - Text and code with syntax highlighting, rendered Markdown, and bundled/custom themes
 - Archive contents — zip, rar, 7z, tar — as a file tree with sizes, read without unpacking anything
@@ -39,11 +39,13 @@ You can add or remove formats in config.ini. Unsupported formats will not show a
 
 ### Fonts
 
-`ttf`, `otf`, `ttc`, `woff`, `woff2` — drawn by the same WebView2 runtime, as a specimen: the name the font calls itself, the pangram *The quick brown fox jumps over the lazy dog.*, and a line for each of Japanese, Chinese, Korean, Cyrillic and Greek that the font's own character map covers. A font of a script there is no line for — an Arabic one, a symbol one — is shown by the characters its map holds instead, so nothing is ever drawn in a system font and passed off as the font. A `.ttc` previews its first face, and everything is drawn at the size **Placement → Font Scaling** names, half the display by default. The runtime draws a font too, so a machine without it shows no font preview.
+`ttf`, `otf`, `ttc`, `woff`, `woff2` — drawn by the same WebView2 runtime.
 
-### Videos (FFmpeg required)
+### Videos
 
-`mp4`, `webm`, `mkv`, `avi`, `mov`, `wmv`, `flv`, `m4v`, `ts`, `m2ts`, `mts`, `mpg`, `mpeg`, `vob`, `3gp`, `ogv`, `rmvb`, `asf`, `divx`, `f4v`, `mxf`, `dv`. FFmpeg-supported containers and codecs generally work.
+`mp4`, `webm`, `mkv`, `avi`, `mov`, `wmv`, `flv`, `m4v`, `ts`, `m2ts`, `mts`, `mpg`, `mpeg`, `vob`, `3gp`, `ogv`, `rmvb`, `asf`, `divx`, `f4v`, `mxf`, `dv`.
+
+With [FFmpeg installed](#optional-enable-video-preview-ffmpeg) the app plays them through it, so FFmpeg-supported containers and codecs generally work. Without it, videos are played by the media engine Windows already has, which covers `mp4`, `mov`, `m4v`, `mkv`, `webm`, `avi`, `wmv`, `asf`, `ts`, `m2ts`, `mts` and `3gp` — and everything else the codec extensions listed under [Optional: Enable More Video Codecs](#optional-enable-more-video-codecs-windows-codecs) have added. A format neither engine can read shows no preview. The tray's **Codecs** menu says which of the two you have and which codecs are installed.
 
 ### PDF
 
@@ -85,7 +87,7 @@ No Rust toolchain is needed. If upgrading from an earlier version, the installer
 
 ## Optional: Enable Video Preview (FFmpeg)
 
-Video previews need `ffplay` and `ffprobe` in your `PATH`.
+Videos preview without FFmpeg, through the media engine Windows ships with — FFmpeg is what makes previews cover far more of them. Install it if you want the formats and codecs Windows does not decode. With it, `ffplay` and `ffprobe` need to be in your `PATH`.
 
 **Option A: winget**
 
@@ -106,6 +108,20 @@ ffplay -version
 ffprobe -version
 ```
 
+## Optional: Enable More Video Codecs (Windows Codecs)
+
+The media engine decodes H.264, MPEG-4 and WMV out of the box, and each of the codecs below is a separate free extension from the Microsoft Store:
+
+| Codec                                  | Needs                                                                                                                      |
+| -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| HEVC (H.265)                           | [HEVC Video Extensions](https://apps.microsoft.com/detail/9N4WGH0Z6VHQ)                                                    |
+| VP9                                    | [VP9 Video Extensions](https://apps.microsoft.com/detail/9N4D0MSMP0PT)                                                     |
+| AV1                                    | [AV1 Video Extension](https://apps.microsoft.com/detail/9MVZQVXJBQ9V)                                                      |
+| MPEG-1 and MPEG-2                      | [MPEG-2 Video Extension](https://apps.microsoft.com/detail/9N95Q1ZZPMH4)                                                   |
+| Theora, Vorbis and Opus in an Ogg file | [Web Media Extensions](https://apps.microsoft.com/detail/9N5TDP8VCMHS)                                                     |
+
+All of them are free, and a Windows 11 device usually has the HEVC, VP9 and AV1 ones already. Installing one takes effect the next time the tray's **Codecs** menu is opened — there is no restart, and nothing to configure. They are not needed at all while FFmpeg is installed.
+
 ## Optional: Enable HEIC, AVIF, JPEG XL and WebP Preview (Windows Codecs)
 
 `heic`, `heif`, `avif`, `jxl` and a still `webp` are decoded by a codec Windows provides rather than by one shipped with the app, so each one needs its extension installed once from the Microsoft Store:
@@ -117,7 +133,7 @@ ffprobe -version
 | `jxl`          | [JPEG XL Image Extension](https://apps.microsoft.com/detail/9MZPRTH5C0TB), or the **JXL support** optional feature on Windows 11 24H2            |
 | `webp`         | [WebP Image Extension](https://apps.microsoft.com/detail/9PG2DK419DRG) — optional: the app decodes WebP without it                               |
 
-All of them are free, and a Windows 11 device often has the HEIF, AV1 and WebP ones already. Where one is missing, hovering such a file shows no preview rather than an error, and a multi-image file — a HEIC burst, an animated AVIF, an animated JPEG XL — shows its first frame. A `.webp` is the exception in both directions: it is the one picture here that needs none of them, because the app carries a libwebp decoder of its own — that is what plays an animated one, and what decodes a still one where the WebP codec is missing — so WebP previews on a Windows 10 machine that has never been near the Store.
+All of them are free, and a Windows 11 device often has the HEIF, AV1 and WebP ones already. Where one is missing, hovering such a file shows no preview rather than an error, and a multi-image file — a HEIC burst, an animated AVIF, an animated JPEG XL — shows its first frame. A `.webp` is the exception in both directions: it is the one picture here that needs none of them, because the app carries a libwebp decoder of its own — that is what plays an animated one, and what decodes a still one where the WebP codec is missing — so WebP previews on a Windows 10 machine.
 
 ## Usage
 
@@ -164,6 +180,10 @@ All of them are free, and a Windows 11 device often has the HEIF, AV1 and WebP o
     - **PDF** — pages PDF previews were drawn as.
     - **Office** — pages Office rendered.
   - **Decode Budget** — 16 GB down to 512 MB, 1 GB (default): a file past it gets no preview.
+- **Codecs** — what this machine has, for reading only; a check or a cross per row, and the missing ones greyed.
+  - **Video** — FFmpeg, Windows Media Foundation, and the video codecs.
+  - **Images** — HEIF (HEIC), AVIF, JPEG XL, WebP.
+  - **Engines** — WebView2, Microsoft Word, Excel and PowerPoint, and the Windows PDF engine.
 - **Run at Startup** — add or remove the Windows startup entry.
 - **Config.ini** — open the configuration file; the item is named for the running version.
 - **Exit** — close the app.
@@ -283,7 +303,7 @@ The release binary is written to `target/release/rust-hover-preview.exe`. A rele
 
 ## Architecture
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the full system overview. In short: Windows accessibility APIs and Shell COM identify the hovered or focused Explorer item, GDI paints the preview into a topmost layered window, text and code are highlighted with TextMate-style themes, Markdown is rendered, archive contents are listed from the archives' own tables of contents, Office documents are drawn from the page Office renders in the background, the WebView2 runtime draws SVG documents and font specimens, and FFmpeg handles video.
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the full system overview. In short: Windows accessibility APIs and Shell COM identify the hovered or focused Explorer item, GDI paints the preview into a topmost layered window, text and code are highlighted with TextMate-style themes, Markdown is rendered, archive contents are listed from the archives' own tables of contents, Office documents are drawn from the page Office renders in the background, the WebView2 runtime draws SVG documents and font specimens, and video is played by FFmpeg where it is installed and by Windows' own media engine where it is not.
 
 ## TODO
 
@@ -291,7 +311,7 @@ See [TODO.md](TODO.md) for planned work, known bugs, and other issues.
 
 ## Privacy
 
-Rust Hover Preview works fully offline — no telemetry, analytics, ads, update checks, or accounts. It reads only the item you hover or focus in Explorer, locally and only for enabled preview types. Cloud-only placeholders are skipped; password-protected files are never bypassed. Settings and themes live under `%APPDATA%\rust-hover-preview`; optional previews use your local FFmpeg, Microsoft Office, and Windows PDF engine. Caches are in-memory and bounded by `config.ini`. See [PRIVACY.md](PRIVACY.md) for full details.
+Rust Hover Preview works fully offline — no telemetry, analytics, ads, update checks, or accounts. It reads only the item you hover or focus in Explorer, locally and only for enabled preview types. Cloud-only placeholders are skipped; password-protected files are never bypassed. Settings and themes live under `%APPDATA%\rust-hover-preview`; optional previews use your local FFmpeg if you have installed it, Microsoft Office, Windows' own media engine, and the Windows PDF engine. Caches are in-memory and bounded by `config.ini`. See [PRIVACY.md](PRIVACY.md) for full details.
 
 ## License
 
