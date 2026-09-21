@@ -5,8 +5,8 @@ use crate::codecs;
 use crate::config::{
     frame_bytes_within_budget, image_decode_limits, read_within_budget, sanitize_image_cache_mb,
     sanitize_spinner_delay_ms, sanitize_webp_playback_fps, MarkdownMode, PreviewScale, PreviewType,
-    TextTheme, TransparentBackground, DEFAULT_FONT_SCALE, DEFAULT_IMAGE_CACHE_MB,
-    DEFAULT_OFFICE_SCALE, DEFAULT_PDF_SCALE, DEFAULT_PREVIEW_SCALE_PERCENT,
+    TextTheme, TransparentBackground, DEFAULT_ANIMATED_SCALE_PERCENT, DEFAULT_FONT_SCALE,
+    DEFAULT_IMAGE_CACHE_MB, DEFAULT_OFFICE_SCALE, DEFAULT_PDF_SCALE, DEFAULT_PREVIEW_SCALE_PERCENT,
     DEFAULT_SPINNER_DELAY_MS, DEFAULT_SVG_SCALE_PERCENT, DEFAULT_TEXT_FONT_SCALE_PERCENT,
     DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS, DEFAULT_VIDEO_SCALE_PERCENT,
     DEFAULT_WEBP_PLAYBACK_FPS,
@@ -1046,7 +1046,7 @@ fn is_webp_file(path: &Path) -> bool {
 /// True when a `.png` file carries an animation control chunk. An APNG is an
 /// ordinary PNG plus an `acTL` chunk ahead of its first `IDAT`, so the chunk list
 /// is walked instead of decoding anything.
-fn png_has_animation_control_chunk(path: &PathBuf) -> bool {
+fn png_has_animation_control_chunk(path: &Path) -> bool {
     use std::io::{Read, Seek, SeekFrom};
 
     const SIGNATURE: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
@@ -1085,7 +1085,7 @@ fn png_has_animation_control_chunk(path: &PathBuf) -> bool {
     false
 }
 
-fn is_apng_file(path: &PathBuf) -> bool {
+fn is_apng_file(path: &Path) -> bool {
     match path
         .extension()
         .and_then(|ext| ext.to_str())
@@ -1098,6 +1098,159 @@ fn is_apng_file(path: &PathBuf) -> bool {
         Some("png") => png_has_animation_control_chunk(path),
         _ => false,
     }
+}
+
+/// Whether a GIF holds more than its first frame, which is the whole of what makes
+/// one an animation rather than a picture: the frames are the file's own blocks, and
+/// whether there is a second one is a thing its structure says.
+///
+/// Nothing is decoded here. The blocks are walked by their own lengths — an
+/// extension's sub-blocks are stepped over the same way, since they carry lengths
+/// too — so what this costs is a few seeks and no pixels: the same rule the PNG
+/// probe above follows, and the one the decoder follows when it does decode the
+/// file for real.
+fn gif_is_animated(path: &Path) -> bool {
+    use std::io::{Read, Seek, SeekFrom};
+
+    let Ok(file) = File::open(path) else {
+        return false;
+    };
+    let mut reader = BufReader::new(file);
+
+    // The signature and the logical screen descriptor: `GIF87a` or `GIF89a`, then
+    // seven bytes of screen size, colour table and background.
+    let mut header = [0u8; 13];
+    if reader.read_exact(&mut header).is_err() || &header[..3] != b"GIF" {
+        return false;
+    }
+
+    // A global colour table follows the descriptor, and the frame blocks after it:
+    // `0x2C` opens one and carries its own bounds and local table, `0x21` opens an
+    // extension whose sub-blocks carry lengths, and `0x3B` ends the file.
+    if header[10] & 0x80 != 0 {
+        let table_bytes = 3 * (1u64 << ((header[10] & 0x07) + 1));
+        if reader.seek(SeekFrom::Current(table_bytes as i64)).is_err() {
+            return false;
+        }
+    }
+
+    let mut frames = 0usize;
+    let mut block = [0u8; 1];
+
+    while reader.read_exact(&mut block).is_ok() {
+        match block[0] {
+            0x2C => {
+                frames += 1;
+                if frames > 1 {
+                    return true;
+                }
+
+                // The frame's bounds and flags: the local colour table, where it has
+                // one, sits between the flags and the frame's pixels.
+                let mut descriptor = [0u8; 9];
+                if reader.read_exact(&mut descriptor).is_err() {
+                    return false;
+                }
+                if descriptor[8] & 0x80 != 0 {
+                    let table_bytes = 3 * (1u64 << ((descriptor[8] & 0x07) + 1));
+                    if reader.seek(SeekFrom::Current(table_bytes as i64)).is_err() {
+                        return false;
+                    }
+                }
+
+                // The LZW code size byte, then the pixel data as sub-blocks.
+                if reader.read_exact(&mut block).is_err() || !skip_gif_sub_blocks(&mut reader) {
+                    return false;
+                }
+            }
+            0x21 => {
+                // An extension's label byte, then its own sub-blocks.
+                if reader.read_exact(&mut block).is_err() || !skip_gif_sub_blocks(&mut reader) {
+                    return false;
+                }
+            }
+            0x3B => return false,
+            // Anything else is not where the next block can be, so the walk is over.
+            _ => return false,
+        }
+    }
+
+    false
+}
+
+/// Step a GIF reader over one run of sub-blocks: a length byte per block, ending at
+/// a zero-length one. The pixels and the extensions a specimen of either is skipped
+/// by are both held this way, so the one walk serves both.
+fn skip_gif_sub_blocks(reader: &mut BufReader<File>) -> bool {
+    use std::io::{Read, Seek, SeekFrom};
+
+    let mut length = [0u8; 1];
+    loop {
+        if reader.read_exact(&mut length).is_err() {
+            return false;
+        }
+        if length[0] == 0 {
+            return true;
+        }
+        if reader
+            .seek(SeekFrom::Current(length[0] as i64))
+            .is_err()
+        {
+            return false;
+        }
+    }
+}
+
+/// Whether a WebP file holds an animation, which its container says: an extended
+/// WebP that animates carries an `ANIM` chunk, and its frames are `ANMF` chunks
+/// after it.
+///
+/// The chunks are walked by their own lengths for the same reason the GIF's blocks
+/// are: what is asked is what the file holds, and nothing has to be decoded to
+/// answer it. A plain `VP8 ` or `VP8L` WebP has no chunk list at all — its picture
+/// data is the chunk itself — so the walk stops where the picture starts.
+fn webp_has_animation(path: &Path) -> bool {
+    use std::io::{Read, Seek, SeekFrom};
+
+    let Ok(file) = File::open(path) else {
+        return false;
+    };
+    let mut reader = BufReader::new(file);
+
+    // `RIFF`, the file's own length, and the form type every WebP carries.
+    let mut header = [0u8; 12];
+    if reader.read_exact(&mut header).is_err()
+        || &header[..4] != b"RIFF"
+        || &header[8..] != b"WEBP"
+    {
+        return false;
+    }
+
+    let mut chunk = [0u8; 8];
+    while reader.read_exact(&mut chunk).is_ok() {
+        let length = u32::from_le_bytes([chunk[4], chunk[5], chunk[6], chunk[7]]) as i64;
+
+        if &chunk[..4] == b"ANIM" {
+            return true;
+        }
+
+        // The picture data is the end of anything worth walking: an extended WebP
+        // that animates names its animation ahead of its frames, and a plain one is
+        // nothing but the picture.
+        if &chunk[..4] == b"VP8 " || &chunk[..4] == b"VP8L" {
+            return false;
+        }
+
+        // Chunks are padded to an even length.
+        if reader
+            .seek(SeekFrom::Current(length + length % 2))
+            .is_err()
+        {
+            return false;
+        }
+    }
+
+    false
 }
 
 fn is_confirm_file_type_enabled() -> bool {
@@ -1332,6 +1485,7 @@ fn current_hover_scales() -> HoverScales {
         .map(|cfg| HoverScales {
             picture: cfg.preview_scale,
             video: cfg.video_scale,
+            animated: cfg.animated_scale,
             svg: cfg.svg_scale,
             page: cfg.pdf_scale,
             office: cfg.office_scale,
@@ -1340,6 +1494,7 @@ fn current_hover_scales() -> HoverScales {
         .unwrap_or(HoverScales {
             picture: PreviewScale::Percent(DEFAULT_PREVIEW_SCALE_PERCENT),
             video: PreviewScale::Percent(DEFAULT_VIDEO_SCALE_PERCENT),
+            animated: PreviewScale::Percent(DEFAULT_ANIMATED_SCALE_PERCENT),
             svg: PreviewScale::Percent(DEFAULT_SVG_SCALE_PERCENT),
             page: DEFAULT_PDF_SCALE,
             office: DEFAULT_OFFICE_SCALE,
@@ -1487,6 +1642,13 @@ struct HoverScales {
     picture: PreviewScale,
     /// The share of its own size a video is drawn at.
     video: PreviewScale,
+    /// The share of its own size an animated picture is drawn at.
+    ///
+    /// It is read apart from the picture scale beside it — and read for an animated
+    /// file whether it moves or not, since a single-frame GIF or WebP is a picture —
+    /// so that what moves is drawn at the size one wants it at rather than at the size
+    /// one wants a photograph at.
+    animated: PreviewScale,
     /// The share of the display an SVG document is drawn at.
     svg: PreviewScale,
     /// The share of the display a PDF page is drawn at.
@@ -1540,6 +1702,14 @@ struct HoverScales {
 /// always the size one wants to watch a file at. The one thing read beside it is whether
 /// the probe has answered yet (see `video_probe_due`).
 ///
+/// An animated picture keeps the share of its own size `animated_scale` names, which is
+/// the picture's rule once more — its frames are bitmaps — with the file's own content
+/// asked which of the two settings it is under: a `.gif`, `.webp` or `.png` that holds
+/// more than one frame is animated and follows `animated_scale`, while one that holds a
+/// single frame is a still picture and keeps `preview_scale` like any other. Which one
+/// it is is the probe below's answer, and it is asked as one question so that the size
+/// a hover is placed at and the size its frames are decoded at are the same answer.
+///
 /// Every other format keeps the picture scale.
 fn effective_preview_scale(path: &Path, scales: HoverScales) -> PreviewScale {
     if pdf_preview::is_pdf_file(path) {
@@ -1574,7 +1744,54 @@ fn effective_preview_scale(path: &Path, scales: HoverScales) -> PreviewScale {
     } else if is_video_file(path) {
         scales.video
     } else {
-        scales.picture
+        // The animated arm is asked last because asking it is the one thing here that
+        // reads the file, and a file that has already answered as another kind never
+        // pays for it (see `image_is_animated`).
+        animated_scale_for(path, scales).unwrap_or(scales.picture)
+    }
+}
+
+/// The share of a bitmap's own size an animated picture is drawn at, for a file that
+/// holds an animation — or `None` for every file this question is not about: one that
+/// is not an animated format, one whose animation scale is the same as its picture
+/// scale, and one that turned out to hold a single frame after all.
+///
+/// The two scales being equal is the cheap early exit, and it is the whole reason this
+/// can be asked on every hover: where the answer cannot change what is drawn, the file
+/// is not read at all, which is the state a fresh install is in because both settings
+/// start at `100%`. Only a user who has taken the trouble to give animations a size of
+/// their own pays for the probe, and what that probe costs is the file's own structure
+/// rather than its pixels (see `image_is_animated`).
+fn animated_scale_for(path: &Path, scales: HoverScales) -> Option<PreviewScale> {
+    if scales.animated == scales.picture {
+        return None;
+    }
+
+    image_is_animated(path).then_some(scales.animated)
+}
+
+/// Whether a picture file holds an animation rather than a single frame: a GIF with
+/// more than one frame, a WebP with an animation chunk, or a PNG with an animation
+/// control chunk.
+///
+/// Nothing is decoded, and the question is asked of the file's own structure rather
+/// than of its name alone: a still `.gif` and an animated `.png` are both files a name
+/// cannot settle, which is the same reason the loader asks the file and not its
+/// extension what it is. A file that is none of the three formats — whatever it is
+/// called — is answered by the bytes its reader sees, and a format whose containers do
+/// not animate, a JPEG or a `.bmp`, is answered without opening anything at all.
+fn image_is_animated(path: &Path) -> bool {
+    let extension = path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.to_ascii_lowercase());
+
+    match extension.as_deref() {
+        Some("gif") => gif_is_animated(path),
+        Some("webp") => webp_has_animation(path),
+        Some("apng") => true,
+        Some("png") => png_has_animation_control_chunk(path),
+        _ => false,
     }
 }
 
@@ -7975,11 +8192,98 @@ mod tests {
         HoverScales {
             picture: PreviewScale::Percent(DEFAULT_PREVIEW_SCALE_PERCENT),
             video: PreviewScale::Percent(DEFAULT_VIDEO_SCALE_PERCENT),
+            animated: PreviewScale::Percent(DEFAULT_ANIMATED_SCALE_PERCENT),
             svg: PreviewScale::Percent(DEFAULT_SVG_SCALE_PERCENT),
             page: DEFAULT_PDF_SCALE,
             office: DEFAULT_OFFICE_SCALE,
             font: DEFAULT_FONT_SCALE,
         }
+    }
+
+    /// A little GIF of one pixel, written with `frames` frame blocks in it: an
+    /// animation when there is more than one frame and a still picture when there is
+    /// one, which is the whole of what tells the two apart. The bytes are a real file
+    /// rather than a shape, because that is what the probe and the decoder both read —
+    /// two colours, one pixel, and the frames of it.
+    fn write_test_gif(path: &Path, frames: usize) {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"GIF89a");
+        bytes.extend_from_slice(&[1, 0, 1, 0]); // one pixel square
+        bytes.push(0xF0); // a global colour table, two entries
+        bytes.push(0); // background colour index
+        bytes.push(0); // pixel aspect ratio
+        bytes.extend_from_slice(&[0, 0, 0, 255, 255, 255]); // black and white
+
+        for _ in 0..frames {
+            bytes.push(0x2C); // an image descriptor
+            bytes.extend_from_slice(&[0, 0, 0, 0, 1, 0, 1, 0, 0]); // at 0,0, one pixel
+            bytes.push(2); // the LZW code size
+            bytes.extend_from_slice(&[2, 0x4C, 0x01, 0]); // one block of one code, then the end
+        }
+
+        bytes.push(0x3B); // the trailer
+        std::fs::write(path, bytes).expect("a written GIF");
+    }
+
+    /// A little PNG, with an `acTL` chunk ahead of its image data when `animated`: the
+    /// chunk is the whole of what the probe reads, and the pixel chunks after it are a
+    /// real still frame so that the file is a PNG either way.
+    fn write_test_png(path: &Path, animated: bool) {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]);
+
+        // The header: one pixel, eight bits, colour type six.
+        push_png_chunk(&mut bytes, *b"IHDR", &[0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0, 0]);
+
+        if animated {
+            push_png_chunk(&mut bytes, *b"acTL", &[0, 0, 0, 2, 0, 0, 0, 0]);
+            push_png_chunk(
+                &mut bytes,
+                *b"fcTL",
+                &[
+                    0, 0, 0, 0, // the first frame's sequence number
+                    0, 0, 0, 1, 0, 0, 0, 1, // its width and height
+                    0, 0, 0, 0, 0, 0, // where it sits
+                    0, 0, 0, 1, 0, 0, 0, 1, // the frame's own delay
+                    0, 0, // how it replaces what it is drawn over
+                ],
+            );
+        }
+
+        push_png_chunk(
+            &mut bytes,
+            *b"IDAT",
+            &[0x78, 0x01, 0x63, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01],
+        );
+        push_png_chunk(&mut bytes, *b"IEND", &[]);
+
+        std::fs::write(path, bytes).expect("a written PNG");
+    }
+
+    /// One PNG chunk: its body's length, its type, its body, and the CRC of the type and
+    /// the body together, which is the whole of the container.
+    fn push_png_chunk(bytes: &mut Vec<u8>, kind: [u8; 4], body: &[u8]) {
+        bytes.extend_from_slice(&(body.len() as u32).to_be_bytes());
+        bytes.extend_from_slice(&kind);
+        bytes.extend_from_slice(body);
+        bytes.extend_from_slice(&crc32(&[&kind, body].concat()).to_be_bytes());
+    }
+
+    /// The CRC every PNG chunk is checked with: a table-less, bit-at-a-time take on the
+    /// standard polynomial, which is all a test fixture needs.
+    fn crc32(bytes: &[u8]) -> u32 {
+        let mut crc = 0xFFFF_FFFFu32;
+        for byte in bytes {
+            crc ^= *byte as u32;
+            for _ in 0..8 {
+                crc = if crc & 1 != 0 {
+                    (crc >> 1) ^ 0xEDB8_8320
+                } else {
+                    crc >> 1
+                };
+            }
+        }
+        !crc
     }
 
     /// A keyboard preview of a row is placed in the room past the region the `Avoid`
@@ -8376,6 +8680,145 @@ mod tests {
             PreviewScale::FitToScreen,
             "and taking the whole of its own size is a share it is offered too"
         );
+    }
+
+    /// A GIF that moves, a WebP that moves and a PNG that moves are one kind of preview —
+    /// the kind whose size `animated_scale` names — while a GIF or a PNG that holds a
+    /// single frame is a picture like any other and keeps the picture scale. What tells
+    /// them apart is the file's own content, not its name: an animated PNG is very often
+    /// called `.png`, and a `.gif` written by a still encoder is a picture.
+    #[test]
+    fn an_animation_follows_its_own_scale_and_a_still_keeps_the_pictures() {
+        let folder = std::env::temp_dir().join("rhp-animated-scale-fixtures");
+        std::fs::create_dir_all(&folder).expect("a fixture folder");
+
+        let animated_gif = folder.join("animated.gif");
+        write_test_gif(&animated_gif, 2);
+        let still_gif = folder.join("still.gif");
+        write_test_gif(&still_gif, 1);
+        let animated_apng = folder.join("animated.png");
+        write_test_png(&animated_apng, true);
+        let still_png = folder.join("still.png");
+        write_test_png(&still_png, false);
+
+        let scales = HoverScales {
+            picture: PreviewScale::Percent(100),
+            animated: PreviewScale::Percent(25),
+            ..hover_scales()
+        };
+
+        assert_eq!(
+            effective_preview_scale(&animated_gif, scales),
+            PreviewScale::Percent(25),
+            "a GIF with two frames is an animation"
+        );
+        assert_eq!(
+            effective_preview_scale(&still_gif, scales),
+            PreviewScale::Percent(100),
+            "a GIF with one frame is a picture"
+        );
+        assert_eq!(
+            effective_preview_scale(&animated_apng, scales),
+            PreviewScale::Percent(25),
+            "a PNG whose chunks say it animates is an animation"
+        );
+        assert_eq!(
+            effective_preview_scale(&still_png, scales),
+            PreviewScale::Percent(100),
+            "a PNG without the animation control chunk is a picture"
+        );
+
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    /// A WebP's animation is a chunk of its container, and the probe reads it there: an
+    /// `ANIM` chunk ahead of the picture data is an animation, while a plain `VP8 ` or
+    /// `VP8L` WebP is a picture whatever else follows it. Nothing checksummed is written
+    /// here — the probe walks chunk lengths, and the frames those chunks hold are the
+    /// loader's business rather than this question's.
+    #[test]
+    fn a_webp_is_an_animation_when_its_container_says_so() {
+        let folder = std::env::temp_dir().join("rhp-webp-probe-fixtures");
+        std::fs::create_dir_all(&folder).expect("a fixture folder");
+
+        let chunk = |kind: &[u8; 4], body: &[u8]| {
+            let mut bytes = kind.to_vec();
+            bytes.extend_from_slice(&(body.len() as u32).to_le_bytes());
+            bytes.extend_from_slice(body);
+            if body.len() % 2 == 1 {
+                bytes.push(0); // chunks are padded to an even length
+            }
+            bytes
+        };
+        let riff = |chunks: Vec<u8>| {
+            let mut bytes = b"RIFF".to_vec();
+            bytes.extend_from_slice(&((chunks.len() + 4) as u32).to_le_bytes());
+            bytes.extend_from_slice(b"WEBP");
+            bytes.extend_from_slice(&chunks);
+            bytes
+        };
+
+        let mut animated_chunks = chunk(b"VP8X", &[0x02, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        animated_chunks.extend_from_slice(&chunk(b"ANIM", &[0; 6]));
+        animated_chunks.extend_from_slice(&chunk(b"ANMF", &[0; 16]));
+        let animated_path = folder.join("animated.webp");
+        std::fs::write(&animated_path, riff(animated_chunks)).expect("a written WebP");
+
+        let still_path = folder.join("still.webp");
+        std::fs::write(&still_path, riff(chunk(b"VP8 ", &[0; 4]))).expect("a written WebP");
+
+        assert!(webp_has_animation(&animated_path), "an `ANIM` chunk");
+        assert!(!webp_has_animation(&still_path), "a plain picture");
+        assert!(
+            !webp_has_animation(&folder.join("missing.webp")),
+            "a file that is not there is not an animation"
+        );
+
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    #[test]
+    fn only_a_gif_with_a_second_frame_counts_as_one() {
+        let folder = std::env::temp_dir().join("rhp-animated-probe-fixtures");
+        std::fs::create_dir_all(&folder).expect("a fixture folder");
+
+        let gif = folder.join("animation.gif");
+        write_test_gif(&gif, 2);
+        let still = folder.join("still.gif");
+        write_test_gif(&still, 1);
+
+        assert!(gif_is_animated(&gif), "two frame blocks in the file");
+        assert!(!gif_is_animated(&still), "one frame block in the file");
+
+        // The same file the loader sees, so the size a hover is placed at is the size its
+        // frames are decoded at: two frames are what makes it an animation there as well.
+        let loaded = load_animated_gif(
+            &gif,
+            64,
+            64,
+            PreviewScale::Percent(100),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .expect("the two-frame file loads as an animation");
+        assert_eq!(
+            loaded.media_type.kind(),
+            Some(PreviewType::Images),
+            "it is a preview of the `Images` kind"
+        );
+
+        assert!(
+            load_animated_gif(
+                &still,
+                64,
+                64,
+                PreviewScale::Percent(100),
+                Arc::new(AtomicBool::new(false)),
+            )
+            .is_none(),
+            "a single frame is not an animation, so the loader turns it down"
+        );
+
+        let _ = std::fs::remove_dir_all(&folder);
     }
 
     /// A share of the fitted size is not a share of the media's own size, and the

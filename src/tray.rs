@@ -3,11 +3,11 @@ use crate::config::{
     sanitize_decode_budget_gb, sanitize_image_cache_mb, sanitize_office_cache_mb,
     sanitize_pdf_cache_mb, sanitize_text_cache_mb, sanitize_text_font_scale_percent, AvoidMode,
     EngineIdle, MarkdownMode, PreviewScale, PreviewType, TextTheme, TransparentBackground,
-    TriggerKeyMode, DEFAULT_DECODE_BUDGET_GB, DEFAULT_FONT_SCALE, DEFAULT_IMAGE_CACHE_MB,
-    DEFAULT_OFFICE_CACHE_MB, DEFAULT_OFFICE_ENGINE_IDLE_SECS, DEFAULT_OFFICE_SCALE,
-    DEFAULT_PDF_CACHE_MB, DEFAULT_PDF_SCALE, DEFAULT_PREVIEW_SCALE, DEFAULT_SVG_SCALE,
-    DEFAULT_TEXT_CACHE_MB, DEFAULT_TEXT_FONT_SCALE_PERCENT, DEFAULT_VIDEO_SCALE,
-    DEFAULT_WEBVIEW_IDLE_SECS,
+    TriggerKeyMode, DEFAULT_ANIMATED_SCALE, DEFAULT_DECODE_BUDGET_GB, DEFAULT_FONT_SCALE,
+    DEFAULT_IMAGE_CACHE_MB, DEFAULT_OFFICE_CACHE_MB, DEFAULT_OFFICE_ENGINE_IDLE_SECS,
+    DEFAULT_OFFICE_SCALE, DEFAULT_PDF_CACHE_MB, DEFAULT_PDF_SCALE, DEFAULT_PREVIEW_SCALE,
+    DEFAULT_SVG_SCALE, DEFAULT_TEXT_CACHE_MB, DEFAULT_TEXT_FONT_SCALE_PERCENT,
+    DEFAULT_VIDEO_SCALE, DEFAULT_WEBVIEW_IDLE_SECS,
 };
 use crate::explorer_hook;
 use crate::office_render;
@@ -133,6 +133,11 @@ const ID_TRAY_FONT_SCALE_BASE: u16 = 1420;
 /// and it is a range of its own because a click on a video's scale is never a click on a
 /// picture's.
 const ID_TRAY_VIDEO_SCALE_BASE: u16 = 1425;
+/// `Animated Scaling`, the third of them, in the range after the video one: an animated
+/// picture is a bitmap like the two above it, so it lists the same shares through the
+/// same builder, and the range is its own because what moves has a size apart from what
+/// does not.
+const ID_TRAY_ANIMATED_SCALE_BASE: u16 = 1435;
 /// The shares of the display every `… Scaling` submenu offers, in the order it lists
 /// them: the whole room a document can be given at the top, then the shares of it a
 /// document is asked for below. What differs between the settings is where they start —
@@ -470,6 +475,15 @@ unsafe extern "system" fn tray_window_proc(
                     .contains(&cmd) =>
                 {
                     set_video_scale(cmd - ID_TRAY_VIDEO_SCALE_BASE)
+                }
+                // And how large an animated picture is drawn, the same way again. Which
+                // files that is — a GIF or a WebP that moves, a PNG that does — is settled
+                // by the file's own content when its hover is laid out.
+                cmd if (ID_TRAY_ANIMATED_SCALE_BASE
+                    ..ID_TRAY_ANIMATED_SCALE_BASE + BITMAP_SCALE_CHOICES.len() as u16)
+                    .contains(&cmd) =>
+                {
+                    set_animated_scale(cmd - ID_TRAY_ANIMATED_SCALE_BASE)
                 }
                 ID_TRAY_FONT_400 => set_text_font_scale(400),
                 ID_TRAY_FONT_300 => set_text_font_scale(300),
@@ -977,14 +991,20 @@ unsafe fn show_context_menu(hwnd: HWND) {
 
     append_avoid_menu(placement_menu, w!("Avoid"), ID_TRAY_AVOID_BASE, avoid_mode);
 
-    // Add the Images Scaling and Videos Scaling submenus: how large a picture and how
-    // large a video is drawn, each at a share of its own size rather than of the display.
-    // One builder serves both — the shares are the same shares, and so is what a click on
-    // one means — and each is a submenu of its own because the two sizes are two settings.
-    let (preview_scale, video_scale) = CONFIG
+    // Add the Images Scaling, Videos Scaling and Animated Scaling submenus: how large a
+    // picture, a video and an animated picture is drawn, each at a share of its own size
+    // rather than of the display. One builder serves all three — the shares are the same
+    // shares, and so is what a click on one means — and each is a submenu of its own
+    // because the sizes are settings of their own: what does not move, what plays, and
+    // what moves inside its frame are three questions.
+    let (preview_scale, video_scale, animated_scale) = CONFIG
         .lock()
-        .map(|c| (c.preview_scale, c.video_scale))
-        .unwrap_or((DEFAULT_PREVIEW_SCALE, DEFAULT_VIDEO_SCALE));
+        .map(|c| (c.preview_scale, c.video_scale, c.animated_scale))
+        .unwrap_or((
+            DEFAULT_PREVIEW_SCALE,
+            DEFAULT_VIDEO_SCALE,
+            DEFAULT_ANIMATED_SCALE,
+        ));
 
     append_bitmap_scale_menu(
         placement_menu,
@@ -999,6 +1019,13 @@ unsafe fn show_context_menu(hwnd: HWND) {
         ID_TRAY_VIDEO_SCALE_BASE,
         video_scale,
         DEFAULT_VIDEO_SCALE,
+    );
+    append_bitmap_scale_menu(
+        placement_menu,
+        w!("Animated Scaling"),
+        ID_TRAY_ANIMATED_SCALE_BASE,
+        animated_scale,
+        DEFAULT_ANIMATED_SCALE,
     );
 
     // Add the SVG Scaling, PDF Scaling, Office Scaling and Font Scaling submenus: how much
@@ -2284,6 +2311,22 @@ fn set_video_scale(index: u16) {
     }
 }
 
+/// And the same for an animated picture, at the share `animated_scale` names: the frames
+/// an animation decodes into are bitmaps like a picture's, so this submenu offers the same
+/// shares as the two beside it, and the setting written is the animation's own. Which
+/// files are animated is not a setting at all: a GIF, a WebP or a PNG is one when the file
+/// itself holds more than a single frame, and a still one keeps the picture scale.
+fn set_animated_scale(index: u16) {
+    let Some(scale) = bitmap_scale_at(index) else {
+        return;
+    };
+
+    if let Ok(mut config) = CONFIG.lock() {
+        config.animated_scale = scale;
+        config.save();
+    }
+}
+
 /// How much of the display a document is drawn over, by the position the item was
 /// listed at.
 ///
@@ -2792,30 +2835,49 @@ mod tests {
         }
     }
 
-    /// The `Images Scaling` and `Videos Scaling` submenus are one range each, and the
-    /// `Videos Scaling` range sits directly past the specimen's scale: a click on a share
-    /// of a bitmap is never read as a click on the other bitmap's share or on a share of
-    /// the display, and the other way round. Each lists every share the setting can be
-    /// asked for, in order, and every id resolves back to the share its item was listed
-    /// for — which is what makes a click select what it named.
+    /// The `Images Scaling`, `Videos Scaling` and `Animated Scaling` submenus are one
+    /// range each, and none of them reaches into another or into the display shares the
+    /// specimen's scale hands out: a click on a share of a bitmap is never read as a
+    /// click on another setting's share. Each lists every share the setting can be asked
+    /// for, in order, and every id resolves back to the share its item was listed for —
+    /// which is what makes a click select what it named.
     #[test]
     fn the_bitmap_scaling_submenus_carry_ids_of_their_own() {
-        let pictures = ID_TRAY_SCALE_BASE..ID_TRAY_SCALE_BASE + BITMAP_SCALE_CHOICES.len() as u16;
-        let videos =
-            ID_TRAY_VIDEO_SCALE_BASE..ID_TRAY_VIDEO_SCALE_BASE + BITMAP_SCALE_CHOICES.len() as u16;
-        let font_scales =
-            ID_TRAY_FONT_SCALE_BASE..ID_TRAY_FONT_SCALE_BASE + DOCUMENT_SCALE_CHOICES.len() as u16;
-
-        assert!(
-            !videos.contains(&font_scales.start) && !font_scales.contains(&videos.start),
-            "the ranges {videos:?} and {font_scales:?} overlap"
+        let bitmap_bases = [
+            ID_TRAY_SCALE_BASE,
+            ID_TRAY_VIDEO_SCALE_BASE,
+            ID_TRAY_ANIMATED_SCALE_BASE,
+        ];
+        let ranges: Vec<(u16, u16)> = bitmap_bases
+            .iter()
+            .map(|base| (*base, base + BITMAP_SCALE_CHOICES.len() as u16))
+            .collect();
+        let font_scales = (
+            ID_TRAY_FONT_SCALE_BASE,
+            ID_TRAY_FONT_SCALE_BASE + DOCUMENT_SCALE_CHOICES.len() as u16,
         );
-        assert!(
-            !videos.contains(&pictures.start) && !pictures.contains(&videos.start),
-            "the ranges {videos:?} and {pictures:?} overlap"
-        );
 
-        for base in [ID_TRAY_SCALE_BASE, ID_TRAY_VIDEO_SCALE_BASE] {
+        let overlaps = |ours: (u16, u16), theirs: (u16, u16)| {
+            (ours.0 < theirs.1 && theirs.0 < ours.1).then_some((ours, theirs))
+        };
+
+        for (index, range) in ranges.iter().enumerate() {
+            for other in ranges.iter().skip(index + 1) {
+                assert_eq!(
+                    overlaps(*range, *other),
+                    None,
+                    "the ranges {range:?} and {other:?} overlap"
+                );
+            }
+
+            assert_eq!(
+                overlaps(*range, font_scales),
+                None,
+                "the range {range:?} and the display shares {font_scales:?} overlap"
+            );
+        }
+
+        for base in bitmap_bases {
             for (index, scale) in BITMAP_SCALE_CHOICES.iter().enumerate() {
                 assert_eq!(bitmap_scale_at(index as u16), Some(*scale));
             }
@@ -2851,7 +2913,11 @@ mod tests {
             ]
         );
 
-        for default in [DEFAULT_PREVIEW_SCALE, DEFAULT_VIDEO_SCALE] {
+        for default in [
+            DEFAULT_PREVIEW_SCALE,
+            DEFAULT_VIDEO_SCALE,
+            DEFAULT_ANIMATED_SCALE,
+        ] {
             let marked: Vec<String> = BITMAP_SCALE_CHOICES
                 .iter()
                 .map(|scale| bitmap_scale_label(*scale, default))
