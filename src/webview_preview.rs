@@ -1,10 +1,18 @@
-//! Drawing a document in the browser engine that is already on the machine.
+//! Drawing a document — or a font specimen — in the browser engine that is already on the
+//! machine.
 //!
 //! Every document this app previews is drawn here — still, gzipped or animated: this app
 //! rasterizes none of them, so what a document needs is the WebView2 runtime Windows 11
 //! ships with, which is Chromium, and which is the only complete implementation of SVG
 //! that is on the machine without installing anything. A machine without the runtime has
 //! no SVG preview at all, which is the answer a file that will not decode gets.
+//!
+//! A font is drawn by the same engine for the same reason, and it is one of the two kinds
+//! this app draws rather than rasterizes: the five formats a font goes by are one container
+//! or another around the same outlines, and the browser reads all of them. What the page
+//! carries for one is a specimen — the font's own name and the lines its character map
+//! covers, worked out on this side by `font_preview` — and a collection is answered with its
+//! first face written out as a font of its own, because no page can name a face inside one.
 //!
 //! What lives here is the engine and the window it draws in, not the preview loop: the
 //! loop measures the document for the layout, hands it over with the box the layout came
@@ -57,6 +65,8 @@ use crate::config::{
     EngineIdle, PreviewType, TransparentBackground, DEFAULT_WEBVIEW_IDLE_SECS,
 };
 use crate::engine_processes;
+use crate::font_formats;
+use crate::font_preview;
 use crate::{svg_preview, CONFIG};
 
 /// The window class the engine's window is made from. It exists to refuse activation: a
@@ -182,16 +192,16 @@ pub fn last_timings() -> Timings {
         .unwrap_or_default()
 }
 
-/// Whether a document is one the engine draws: the runtime is on the machine, the file
-/// is a document, and the engine is not in one of its own bad spells.
+/// Whether a file is one the engine draws: the runtime is on the machine, the file is a
+/// document or a font, and the engine is not in one of its own bad spells.
 pub fn draws(path: &Path) -> bool {
-    can_draw() && svg_preview::is_svg_file(path)
+    can_draw() && (svg_preview::is_svg_file(path) || font_formats::is_font_file(path))
 }
 
 /// Whether the engine can draw anything at all.
 ///
-/// The runtime is what draws a document, so a machine without it — or one the engine has
-/// stood down on — has no SVG preview: this is the question the layout asks before it
+/// The runtime is what draws a document or a specimen, so a machine without it — or one the
+/// engine has stood down on — has neither: this is the question the layout asks before it
 /// measures one, and answering no is what keeps a hover from opening a box that nothing
 /// would be drawn into.
 pub fn can_draw() -> bool {
@@ -299,16 +309,11 @@ fn frame_page(
     background: TransparentBackground,
 ) -> Option<(PathBuf, String)> {
     let document = file_url(path)?;
-    let page = user_data_folder().join("frame.html");
-
-    let checkerboard = match background {
-        TransparentBackground::Checkerboard => {
-            "<style>html{background:#e0e0e0;background-image:\
-             conic-gradient(#909090 25%,transparent 0 50%,#909090 0 75%,transparent 0);\
-             background-size:32px 32px}</style>"
-        }
-        _ => "",
-    };
+    // The backdrop is in the page's name as well as in its content, of the four kinds the
+    // one that is a page's own — a checkerboard — is painted here rather than by the
+    // controller: a change of backdrop is then a page the browser has not seen, rather than
+    // the same URL answered out of its cache with the squares of the last one.
+    let page = user_data_folder().join(format!("frame-{}.html", background.as_str()));
 
     // The version is in the image's URL and in the page's, so neither is answered out
     // of the browser's cache with a document that has been written since it was read.
@@ -318,20 +323,128 @@ fn frame_page(
          img{{display:block;width:100%;height:100%;object-fit:contain}}</style>\
          {checkerboard}\
          <img src=\"{}?v={version}\" alt=\"\">",
-        escape_attribute(&document)
+        escape_attribute(&document),
+        checkerboard = checkerboard_style(background)
     );
 
+    write_page(&page, &html, version)
+}
+
+/// The page a font specimen is drawn in: the font itself, in the page through
+/// `@font-face`, with the lines the file's own character map covers under a heading the
+/// font's `name` table supplies.
+///
+/// One page per font, pointed at the file the engine can actually read — the font itself, or
+/// the face `font_preview::browser_source` wrote out for a collection — and every size in it
+/// is a viewport unit, so the window the layout planned is the size the type is drawn at: the
+/// share of the display `font_scale` names is a share of the specimen's size, the same
+/// relationship `object-fit: contain` gives a document.
+fn font_page(
+    path: &Path,
+    version: u64,
+    background: TransparentBackground,
+) -> Option<(PathBuf, String)> {
+    let specimen = font_preview::probe(path)?;
+    let source = font_preview::browser_source(path, specimen.faces, &user_data_folder())?;
+    let font = file_url(&source)?;
+    let page = user_data_folder().join(format!("font-{}.html", background.as_str()));
+
+    // The first line is the specimen's headline — the pangram wherever the font has Latin —
+    // and the lines under it are the scripts the font also holds.
+    let lines: String = specimen
+        .samples
+        .iter()
+        .enumerate()
+        .map(|(index, line)| {
+            let class = if index == 0 { "pangram" } else { "script" };
+            format!("<p class=\"line {class}\">{}</p>", escape_text(line))
+        })
+        .collect();
+
+    let (ink, shadow) = specimen_ink(background);
+    let html = format!(
+        "<!doctype html><meta charset=\"utf-8\"><title>preview</title>\
+         <style>\
+         html,body{{margin:0;padding:0;height:100%;overflow:hidden}}\
+         body{{display:flex;flex-direction:column;justify-content:center;\
+         padding:6vh 6vw;box-sizing:border-box;color:{ink};{shadow}}}\
+         .title{{font-family:\"Segoe UI\",system-ui,sans-serif;font-size:2.4vh;\
+         font-weight:600;opacity:.6;margin:0 0 2.4vh;white-space:nowrap;\
+         overflow:hidden;text-overflow:ellipsis}}\
+         .line{{font-family:\"RHPPreviewFont\",\"Segoe UI\",sans-serif;margin:0;\
+         line-height:1.15}}\
+         .pangram{{font-size:8vh}}\
+         .script{{font-size:5vh;margin-top:1.6vh}}\
+         </style>\
+         <style>@font-face{{font-family:\"RHPPreviewFont\";\
+         src:url(\"{font}?v={version}\")}}</style>\
+         {checkerboard}\
+         <div class=\"title\">{title}</div>{lines}",
+        font = escape_attribute(&font),
+        title = escape_text(&specimen.title),
+        checkerboard = checkerboard_style(background)
+    );
+
+    write_page(&page, &html, version)
+}
+
+/// Put a page where the engine will find it, and answer with the URL it is navigated to.
+///
+/// The version — the file's own modification time — goes into that URL, which is what keeps
+/// an edited file from being answered out of the browser's cache: the URL changes when the
+/// file does, and the same file at the same version is drawn again from memory.
+fn write_page(page: &Path, html: &str, version: u64) -> Option<(PathBuf, String)> {
     std::fs::create_dir_all(user_data_folder()).ok()?;
-    std::fs::write(&page, html).ok()?;
+    std::fs::write(page, html).ok()?;
 
-    let url = format!("{}?v={version}", file_url(&page)?);
+    let url = format!("{}?v={version}", file_url(page)?);
 
-    Some((page, url))
+    Some((page.to_path_buf(), url))
+}
+
+/// The squares a checkerboard backdrop is drawn as, for the one backdrop the engine cannot be
+/// given: it takes a colour and nothing else, so the squares are painted by the page — over
+/// the mid grey the controller is given, which is what the two square colours average to (see
+/// `background_color`).
+fn checkerboard_style(background: TransparentBackground) -> &'static str {
+    const SQUARES: &str = "<style>html{background:#e0e0e0;background-image:\
+         conic-gradient(#909090 25%,transparent 0 50%,#909090 0 75%,transparent 0);\
+         background-size:32px 32px}</style>";
+
+    match background {
+        TransparentBackground::Checkerboard => SQUARES,
+        _ => "",
+    }
+}
+
+/// The colour a specimen's text is drawn in over each backdrop, and the shadow that goes with
+/// it.
+///
+/// Three of the four are a colour: light text on black, dark on white and on the checkerboard's
+/// light squares. The one that is not is transparency, which has no colour to be read
+/// against — so the glyphs are drawn light with a soft dark shadow behind them, and what a
+/// specimen looks like over whatever the desktop happens to be is still readable.
+fn specimen_ink(background: TransparentBackground) -> (&'static str, &'static str) {
+    match background {
+        TransparentBackground::Black => ("#f2f2f2", ""),
+        TransparentBackground::White | TransparentBackground::Checkerboard => ("#1a1a1a", ""),
+        TransparentBackground::Transparent => ("#f2f2f2", "text-shadow:0 0 .45vh rgba(0,0,0,.6);"),
+    }
 }
 
 /// A URL as an attribute value: the two characters that would end it early.
 fn escape_attribute(url: &str) -> String {
     url.replace('&', "&amp;").replace('"', "&quot;")
+}
+
+/// A string as the page's text: the characters that would end it, or open a tag in it. A
+/// specimen's title is the font's own business rather than this app's — it is a name out of a
+/// file — so it is escaped rather than trusted.
+fn escape_text(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }
 
 /// Ask the engine to draw `path` in a window at `area`.
@@ -525,14 +638,15 @@ fn engine_thread(commands: Receiver<Command>) {
 
         pump_messages();
 
-        // A document's kind switched off is a browser held for nothing: while that gate
-        // is off no hover can be answered with an animation at all, so there is nothing
-        // warm to keep. It is read here rather than being told because the gate can be
-        // closed either way — in the tray, or in `config.ini` for the watcher to reload
-        // — and because the thread that would be told is this one, parked on its
-        // channel. The browser's own children are its business: ending it ends them.
-        if host.is_some() && !PreviewType::Svg.enabled() {
-            trace("engine: let go, the kind is switched off");
+        // The engine draws two kinds, and both gates switched off is a browser held for
+        // nothing: while neither can be shown no hover can be answered with a document or a
+        // specimen at all, so there is nothing warm to keep. It is read here rather than being
+        // told because a gate can be closed either way — in the tray, or in `config.ini` for
+        // the watcher to reload — and because the thread that would be told is this one,
+        // parked on its channel. The browser's own children are its business: ending it ends
+        // them.
+        if host.is_some() && !PreviewType::Svg.enabled() && !PreviewType::Fonts.enabled() {
+            trace("engine: let go, the kinds are switched off");
 
             if let Some(mut host) = host.take() {
                 host.close();
@@ -580,9 +694,12 @@ struct Host {
     environment: ICoreWebView2Environment,
     controller: ICoreWebView2Controller,
     webview: ICoreWebView2,
-    /// The document the engine is holding, so a second hover on the same file is a
-    /// window that is put back up rather than a navigation.
-    current: Option<PathBuf>,
+    /// The file the engine is holding, and the backdrop its page was written for, so a second
+    /// hover on the same file is a window that is put back up rather than a navigation — and a
+    /// change of backdrop is a page to write again, since three of the four are partly the
+    /// page's own (the checkerboard's squares, a specimen's ink) and the page is what the
+    /// browser caches.
+    current: Option<(PathBuf, TransparentBackground)>,
     /// The browser process this engine started, when it could be told which one it
     /// was. The runtime owns the browser, but the process is this app's own child —
     /// started by the loader in this process — and it is what is ended if it is
@@ -712,10 +829,10 @@ impl Host {
             });
         }
 
-        // A document the engine is not already holding is navigated to *before* the
-        // window is put up: a window shown first would be the document before it, and
-        // what is on screen a moment ago belongs to another hover.
-        if self.current.as_deref() != Some(path) {
+        // A file the engine is not already holding, or one whose backdrop has changed, is
+        // navigated to *before* the window is put up: a window shown first would be the file
+        // before it, and what is on screen a moment ago belongs to another hover.
+        if self.current.as_ref() != Some(&(path.to_path_buf(), background)) {
             let started = Instant::now();
             let arrived = self.navigate(path, background);
             trace(&format!(
@@ -725,9 +842,9 @@ impl Host {
             ));
 
             if !arrived {
-                // The document was not put up. The engine is fine — the next document
-                // is drawn as this one was meant to be — but the hover waiting on this
-                // one has nothing left to wait for.
+                // The page was not put up. The engine is fine — the next file is drawn as
+                // this one was meant to be — but the hover waiting on this one has nothing
+                // left to wait for.
                 self.hide();
                 note_document_failed();
                 return;
@@ -737,7 +854,7 @@ impl Host {
                 timings.navigate_ms = started.elapsed().as_millis() as u64;
             }
 
-            self.current = Some(path.to_path_buf());
+            self.current = Some((path.to_path_buf(), background));
         }
 
         unsafe {
@@ -780,14 +897,22 @@ impl Host {
         let _ = &self.environment;
     }
 
-    /// Point the engine at the document and wait for the page to arrive, pumping the
-    /// thread's messages while it does.
+    /// Point the engine at `path` and wait for the page to arrive, pumping the thread's
+    /// messages while it does.
     ///
-    /// What it is pointed at is the page `frame_page` writes rather than the document
-    /// itself, which is what makes the document the size of the window: see there.
+    /// What it is pointed at is a page of this app's rather than the file itself, and which
+    /// page is what the file is: a document's is the document as an image, which is what makes
+    /// it the size of the window, and a font's is the font in the page with its own lines under
+    /// it; see `frame_page` and `font_page`.
     fn navigate(&self, path: &Path, background: TransparentBackground) -> bool {
         let version = file_version(path);
-        let Some((page, url)) = frame_page(path, version, background) else {
+        let page = if font_formats::is_font_file(path) {
+            font_page(path, version, background)
+        } else {
+            frame_page(path, version, background)
+        };
+
+        let Some((page, url)) = page else {
             return false;
         };
 
@@ -1239,6 +1364,141 @@ mod tests {
         assert!(html.contains("conic-gradient"));
         assert!(html.contains("#e0e0e0"));
         assert!(html.contains("background-size:32px 32px"));
+    }
+
+    /// A specimen's page is the font itself in the page, the lines the file's own character
+    /// map covers, and a heading the font's `name` table supplies — the three things the page
+    /// carries rather than asks the engine for. Two of the four backdrops are the page's too:
+    /// the checkerboard's squares, and the ink a specimen is drawn in, which is dark on the
+    /// light backdrops, light on black, and light with a shadow where there is no backdrop at
+    /// all to be read against.
+    #[test]
+    fn the_page_draws_the_font_with_its_own_lines_and_a_name() {
+        let folder = std::env::temp_dir().join("rust-hover-preview-font-page-tests");
+        std::fs::create_dir_all(&folder).expect("a test folder");
+        let font = folder.join("specimen.ttf");
+        std::fs::write(&font, specimen_font()).expect("a written font");
+
+        let (page, url) =
+            font_page(&font, 7, TransparentBackground::Black).expect("a page for a font");
+        let html = std::fs::read_to_string(&page).expect("a written page");
+
+        assert!(html.contains("@font-face"));
+        assert!(html.contains("font-family:\"RHPPreviewFont\""));
+        assert!(
+            html.contains("specimen.ttf?v=7"),
+            "the font is in the page as the file it is, at the version that was read"
+        );
+        assert!(html.contains("Test Family Regular"));
+        assert!(html.contains("The quick brown fox jumps over the lazy dog."));
+        assert!(html.contains("#f2f2f2"), "light ink on a black backdrop");
+        assert!(
+            !html.contains("conic-gradient"),
+            "a backdrop the controller can be given is the controller's"
+        );
+        assert!(
+            !html.contains("text-shadow"),
+            "and so is the colour the text is drawn in"
+        );
+        assert!(url.ends_with("?v=7"));
+        assert!(url.contains("font-black.html"));
+
+        // The two backdrops the page owns: the squares, and the ink that reads on them.
+        let (page, _) = font_page(&font, 7, TransparentBackground::Checkerboard).expect("a page");
+        let html = std::fs::read_to_string(&page).expect("a written page");
+
+        assert!(html.contains("conic-gradient"));
+        assert!(html.contains("#1a1a1a"), "dark ink on the light squares");
+
+        // And the one with no backdrop to be read against: the ink carries its own shadow.
+        let (page, _) = font_page(&font, 7, TransparentBackground::Transparent).expect("a page");
+        let html = std::fs::read_to_string(&page).expect("a written page");
+
+        assert!(html.contains("text-shadow"));
+        assert!(!html.contains("conic-gradient"));
+
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    /// A font of this test's own making: an sfnt with a `cmap` covering the pangram and a
+    /// `name` table naming it, which is everything a specimen's page is built from.
+    fn specimen_font() -> Vec<u8> {
+        let mut codes: Vec<u32> = "The quick brown fox jumps over the lazy dog."
+            .chars()
+            .map(u32::from)
+            .collect();
+        codes.sort_unstable();
+        codes.dedup();
+
+        let mut cmap = Vec::new();
+        cmap.extend_from_slice(&12u16.to_be_bytes()); // format
+        cmap.extend_from_slice(&0u16.to_be_bytes()); // reserved
+        cmap.extend_from_slice(&(16u32 + codes.len() as u32 * 12).to_be_bytes()); // length
+        cmap.extend_from_slice(&0u32.to_be_bytes()); // language
+        cmap.extend_from_slice(&(codes.len() as u32).to_be_bytes()); // numGroups
+        for (index, code) in codes.iter().enumerate() {
+            cmap.extend_from_slice(&code.to_be_bytes());
+            cmap.extend_from_slice(&code.to_be_bytes());
+            cmap.extend_from_slice(&(index as u32 + 1).to_be_bytes());
+        }
+
+        let mut cmap_table = Vec::new();
+        cmap_table.extend_from_slice(&0u16.to_be_bytes()); // version
+        cmap_table.extend_from_slice(&1u16.to_be_bytes()); // numTables
+        cmap_table.extend_from_slice(&3u16.to_be_bytes()); // Windows
+        cmap_table.extend_from_slice(&10u16.to_be_bytes()); // UCS-4
+        cmap_table.extend_from_slice(&12u32.to_be_bytes()); // offset
+        cmap_table.extend_from_slice(&cmap);
+
+        let mut strings = Vec::new();
+        let mut records = Vec::new();
+        for (name_id, text) in [(1u16, "Test Family"), (2u16, "Regular")] {
+            let offset = strings.len();
+            for unit in text.encode_utf16() {
+                strings.extend_from_slice(&unit.to_be_bytes());
+            }
+
+            records.extend_from_slice(&3u16.to_be_bytes()); // Windows
+            records.extend_from_slice(&1u16.to_be_bytes()); // Unicode BMP
+            records.extend_from_slice(&0x0409u16.to_be_bytes()); // English (United States)
+            records.extend_from_slice(&name_id.to_be_bytes());
+            records.extend_from_slice(&((strings.len() - offset) as u16).to_be_bytes());
+            records.extend_from_slice(&(offset as u16).to_be_bytes());
+        }
+
+        let mut name_table = Vec::new();
+        name_table.extend_from_slice(&0u16.to_be_bytes()); // format
+        name_table.extend_from_slice(&2u16.to_be_bytes()); // count
+        name_table.extend_from_slice(&((6 + 2 * 12) as u16).to_be_bytes()); // stringOffset
+        name_table.extend_from_slice(&records);
+        name_table.extend_from_slice(&strings);
+
+        let tables: [(&[u8; 4], &[u8]); 2] = [
+            (b"cmap", cmap_table.as_slice()),
+            (b"name", name_table.as_slice()),
+        ];
+        let count = tables.len();
+        let mut directory = Vec::new();
+        let mut data = Vec::new();
+
+        for (tag, table) in tables {
+            directory.extend_from_slice(tag);
+            directory.extend_from_slice(&0u32.to_be_bytes()); // checksum, which nothing reads
+            directory.extend_from_slice(&((12 + count * 16 + data.len()) as u32).to_be_bytes());
+            directory.extend_from_slice(&(table.len() as u32).to_be_bytes());
+            data.extend_from_slice(table);
+            while !data.len().is_multiple_of(4) {
+                data.push(0);
+            }
+        }
+
+        let mut font = Vec::new();
+        font.extend_from_slice(b"\x00\x01\x00\x00");
+        font.extend_from_slice(&(count as u16).to_be_bytes());
+        font.extend_from_slice(&[0u8; 6]); // the binary-search fields
+        font.extend_from_slice(&directory);
+        font.extend_from_slice(&data);
+        font
     }
 
     /// What a hover's path becomes when it is handed to the engine: the Shell's

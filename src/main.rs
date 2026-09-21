@@ -7,6 +7,8 @@ mod cloud_files;
 mod config;
 mod engine_processes;
 mod explorer_hook;
+mod font_formats;
+mod font_preview;
 mod image_formats;
 mod office_formats;
 mod office_preview;
