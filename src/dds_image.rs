@@ -17,6 +17,14 @@
 //! that does it lives in `bcn` beside the signed codebook, which is the same conversion
 //! applied to the values a block holds.
 //!
+//! Light comes signed as well, and is drawn the other way round. A signed `BC6H` holds a
+//! range that goes below zero rather than one that starts at it — a render's negative
+//! radiance, a displacement that goes under its plane — and what is made of it is the curve
+//! every other kind of light is put through rather than a stretch over the display's, which
+//! lands a light below zero on black. That is the one place a signed file is not drawn as
+//! the data it holds: a level is a level whatever its sign, but light is light, and a light
+//! that is not there is what a display has to draw it as (see `tone_map`).
+//!
 //! What Windows answers for is smaller than that. Its DDS codec — the one a `.dds` is
 //! opened by before this module is reached (see `wic_image`) — reads BC1, BC2 and BC3,
 //! measured rather than assumed: every DXGI format from BC4 on, and every uncompressed
@@ -437,10 +445,11 @@ fn dx10_picture(format: u32) -> Option<Picture> {
             84 => Blocks::Bc5Snorm,
             _ => Blocks::Bc5,
         })),
-        // BC6H is two formats, and only the unsigned one is read: the signed range is a
-        // thing a render's intermediate data is written in rather than a picture, and the
-        // formats this app has no answer for are answered with no preview (see `bcn`).
+        // BC6H is two formats — the same blocks, read as a range above zero or as a range
+        // either side of it — and both are read: a signed file is drawn as light like the
+        // unsigned one, with what is below zero landing on black (see `bcn` and `tone_map`).
         95 => Some(Picture::Blocks(Blocks::Bc6h)),
+        96 => Some(Picture::Blocks(Blocks::Bc6hSf16)),
         97..=99 => Some(Picture::Blocks(Blocks::Bc7)),
 
         2 => Some(Picture::Samples(Samples::Colour(Order::Rgba, Sample::F32))),
@@ -495,7 +504,9 @@ fn read_level(path: &Path, offset: usize, bytes: usize) -> Option<Vec<u8>> {
 /// Five of the six formats come out of `bcn` as the levels they hold; BC6H comes out as
 /// the light it holds, which is not what a frame is composed in — so what that format's
 /// texels get is the same curve an EXR's do, applied a texel at a time on the way past
-/// (see `tone_map`).
+/// (see `tone_map`). A signed file's light below zero is put through the same curve as the
+/// rest of it, and what the curve makes of one is black, which is what a display does with
+/// light that is not there.
 fn decode_blocks(
     blocks: Blocks,
     level: &[u8],

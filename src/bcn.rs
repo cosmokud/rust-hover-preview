@@ -15,8 +15,9 @@
 //! is two of them and a mask is one. BC7 is the modern one: eight modes of endpoints and
 //! index widths, chosen per block, which is what lets it hold a photograph at a third of
 //! BC1's size without the banding BC1 shows. And BC6H holds *light* rather than levels —
-//! half-float endpoints and a range past what a screen can draw — so its texels come back
-//! as the numbers they are and are tone mapped on the way to a frame (see `tone_map`).
+//! half-float endpoints and a range past what a screen can draw, either side of zero in the
+//! signed variant of it — so its texels come back as the numbers they are and are tone
+//! mapped on the way to a frame (see `tone_map`).
 //!
 //! Everything here is the format's own arithmetic: the tables below are the formats'
 //! tables, as published in the Direct3D specification of block compression — which
@@ -31,9 +32,13 @@
 //! picture that merely looks odd. BC7 agrees with two independent implementations to the
 //! byte on every block of a four-thousand-block sample, and BC6H agrees with the reference
 //! everywhere except in the subnormal range — values below the smallest ordinary half,
-//! which no preview can show. BC6H's *signed* variant is not read at all: a decode of it
-//! that the machine's own decoder disagrees with is not a decode worth handing to a
-//! preview, and it is rare enough that no preview is the better answer.
+//! which no preview can show. BC6H's signed variant, which was the one format left unread,
+//! is read here too and is held to the same test: an independent decoder, four hundred
+//! thousand random blocks, every mode, agreeing with it to the bit. What that settles is
+//! the signed arithmetic — endpoints read as the numbers of their width rather than as its
+//! levels, the signed codebook, the sign a half float carries — since the tables the blocks
+//! and the partitions come out of are the unsigned reading's, and it is the unsigned
+//! variant that is what holds those to the published ones.
 
 /// A block as the bit stream the formats read it as: 128 bits, the first byte's low bit
 /// first.
@@ -94,7 +99,8 @@ pub enum Texels {
     /// Levels, four bytes to the texel.
     Levels([[u8; 4]; 16]),
     /// Light: red, green and blue as the numbers they are, which is what a range wider
-    /// than a display's can show is written as.
+    /// than a display's can show — or, in the signed variant, one that goes below zero as
+    /// well — is written as.
     Light([[f32; 3]; 16]),
 }
 
@@ -113,6 +119,11 @@ pub enum Blocks {
     /// the numbers they are rather than as levels.
     Bc5Snorm,
     Bc6h,
+    /// The same blocks as `Bc6h`, read as signed light: half-float endpoints whose range
+    /// goes both ways from zero, which is what a render's negative radiance or a signed
+    /// displacement is written as, and which a file names apart from the unsigned one
+    /// (`BC6H_SF16` rather than `BC6H_UF16`).
+    Bc6hSf16,
     Bc7,
 }
 
@@ -129,6 +140,7 @@ impl Blocks {
             | Blocks::Bc5
             | Blocks::Bc5Snorm
             | Blocks::Bc6h
+            | Blocks::Bc6hSf16
             | Blocks::Bc7 => 16,
         }
     }
@@ -192,7 +204,8 @@ impl Blocks {
 
                 Texels::Levels(texels)
             }
-            Blocks::Bc6h => Texels::Light(bc6h(block)),
+            Blocks::Bc6h => Texels::Light(bc6h(block, false)),
+            Blocks::Bc6hSf16 => Texels::Light(bc6h(block, true)),
             Blocks::Bc7 => Texels::Levels(bc7(block)),
         }
     }
@@ -885,11 +898,14 @@ static BC6H_MODES: [Bc6hMode; 32] = [
 /// arithmetic below is a half float a channel, which is why the texels are handed back as
 /// numbers and the curve is applied to them afterwards (`tone_map`).
 ///
-/// What a file names as BC6H is two formats — this one, and the same blocks read as
-/// *signed* light — and only the unsigned one is read here: signed light is a range
-/// either side of zero that the formats around it have no use for, and a decode of it that
-/// disagrees with the machine's own is not a decode worth handing to a preview.
-fn bc6h(block: &[u8]) -> [[f32; 3]; 16] {
+/// What a file names as BC6H is two formats, and both are read here: the blocks are the
+/// same, the tables the bit layouts and the partitions come out of are the same, and the
+/// three steps the two readings differ in are branches of this one rather than a decoder
+/// of their own — a signed file's endpoints are the numbers of the width they were written
+/// at rather than the levels of it, its endpoints' arithmetic is the signed codebook beside
+/// the unsigned one, and what a light that came out below zero is written as is the sign a
+/// half float carries. `signed` says which of the two readings this block is to be given.
+fn bc6h(block: &[u8], signed: bool) -> [[f32; 3]; 16] {
     let Some(mut bits) = Bits::new(block) else {
         return [[0.0; 3]; 16];
     };
@@ -1212,10 +1228,35 @@ fn bc6h(block: &[u8]) -> [[f32; 3]; 16] {
         }
     }
 
+    // A signed file's every endpoint is a number rather than a level, and what the fields
+    // were read as is the same either way: the width a mode wrote one at is the width of
+    // the number, so what the unsigned reading takes as the value it is, this takes as the
+    // number of that width it stands for. The additions above are the format's own in both
+    // readings — a difference that carries past the top of the field wraps in it — and what
+    // wraps around is the number the wrap landed on, which is why this reads the sum the
+    // same way it reads the endpoints that were written outright.
+    if signed {
+        for endpoint in 0..subsets * 2 {
+            red[endpoint] = sign_extend(red[endpoint], settings.endpoint_bits);
+            green[endpoint] = sign_extend(green[endpoint], settings.endpoint_bits);
+            blue[endpoint] = sign_extend(blue[endpoint], settings.endpoint_bits);
+        }
+    }
+
+    let mut red_value = [0i32; 4];
+    let mut green_value = [0i32; 4];
+    let mut blue_value = [0i32; 4];
+
     for endpoint in 0..subsets * 2 {
-        red[endpoint] = unquantize(red[endpoint], settings.endpoint_bits);
-        green[endpoint] = unquantize(green[endpoint], settings.endpoint_bits);
-        blue[endpoint] = unquantize(blue[endpoint], settings.endpoint_bits);
+        if signed {
+            red_value[endpoint] = unquantize_signed(red[endpoint], settings.endpoint_bits);
+            green_value[endpoint] = unquantize_signed(green[endpoint], settings.endpoint_bits);
+            blue_value[endpoint] = unquantize_signed(blue[endpoint], settings.endpoint_bits);
+        } else {
+            red_value[endpoint] = unquantize(red[endpoint], settings.endpoint_bits) as i32;
+            green_value[endpoint] = unquantize(green[endpoint], settings.endpoint_bits) as i32;
+            blue_value[endpoint] = unquantize(blue[endpoint], settings.endpoint_bits) as i32;
+        }
     }
 
     // The cut comes after the endpoints rather than before them, and the indices are three
@@ -1240,9 +1281,9 @@ fn bc6h(block: &[u8]) -> [[f32; 3]; 16] {
         let at = subset * 2;
 
         *texel = [
-            completed(red[at], red[at + 1], weight),
-            completed(green[at], green[at + 1], weight),
-            completed(blue[at], blue[at + 1], weight),
+            completed(red_value[at], red_value[at + 1], weight, signed),
+            completed(green_value[at], green_value[at + 1], weight, signed),
+            completed(blue_value[at], blue_value[at + 1], weight, signed),
         ];
     }
 
@@ -1250,10 +1291,16 @@ fn bc6h(block: &[u8]) -> [[f32; 3]; 16] {
 }
 
 /// A light between two endpoints as the half float it is drawn as.
-fn completed(first: u16, second: u16, weight: u32) -> f32 {
-    let blended = (first as u32 * (64 - weight) + second as u32 * weight + 32) >> 6;
+///
+/// The blend is the format's own and is the same in both readings of it — a weight of 64
+/// naming the whole of the second endpoint, the sum taken in a field wide enough for either
+/// — since what differs is not how two endpoints are mixed but what they are worth and what
+/// the answer is written as, which is `finish_unquantize`'s business.
+fn completed(first: i32, second: i32, weight: u32, signed: bool) -> f32 {
+    let weight = weight as i32;
+    let blended = (first * (64 - weight) + second * weight + 32) >> 6;
 
-    half_to_float(finish_unquantize(blended))
+    half_to_float(finish_unquantize(blended, signed))
 }
 
 /// A two's-complement number of the width it was read at.
@@ -1291,8 +1338,59 @@ fn unquantize(value: u16, bits: usize) -> u16 {
     ((((value as u32) << 15) + 0x4000) >> (bits - 1)) as u16
 }
 
+/// A signed endpoint of the width a mode wrote it with, as the number either side of zero
+/// it stands for.
+///
+/// It is the unsigned reading of the same field over the range a signed sample has rather
+/// than over a level's: the magnitude is scaled by a power of two rather than stretched, and
+/// the ends of the range saturate rather than wrap — the most negative a width can write is
+/// one step past what a signed channel holds, and it is read as the end of the range the way
+/// the largest positive is. Nothing here is a level: what comes out is the number the block
+/// stands for, which is what the interpolation and the curve are handed next.
+fn unquantize_signed(value: u16, bits: usize) -> i32 {
+    if bits >= 16 {
+        return value as i16 as i32;
+    }
+
+    let number = value as i16 as i32;
+    let magnitude = number.unsigned_abs();
+
+    let unquantized = if magnitude == 0 {
+        0
+    } else if magnitude >= (1 << (bits - 1)) - 1 {
+        0x7fff
+    } else {
+        ((magnitude << 15) + 0x4000) >> (bits - 1)
+    };
+
+    if number < 0 {
+        -(unquantized as i32)
+    } else {
+        unquantized as i32
+    }
+}
+
 /// The last step of the format's own arithmetic: what the interpolation came out as, as
 /// the half float a texel is drawn from.
-fn finish_unquantize(value: u32) -> u16 {
-    ((value * 31) >> 6) as u16
+///
+/// The two readings of the format part here, over the two fields a half float has. An
+/// unsigned light is a magnitude, and it is scaled into the whole of what a half float
+/// holds; a signed one is a magnitude and a sign, so the sign is written in the half
+/// float's own sign bit and one bit less of the field is left for the magnitude to be
+/// scaled into. What is scaled either way is the format's `31/32`, which lands the largest
+/// a block can mean on the largest ordinary half. A signed light that came out below zero
+/// is kept below zero — that is the number the file holds — and what a preview draws of one
+/// is the curve's business rather than this function's (see `tone_map`).
+fn finish_unquantize(value: i32, signed: bool) -> u16 {
+    if signed {
+        let magnitude = (value.unsigned_abs() * 31) >> 5;
+
+        if value < 0 {
+            (magnitude as u16) | 0x8000
+        } else {
+            magnitude as u16
+        }
+    } else {
+        ((value.max(0) as u32 * 31) >> 6) as u16
+    }
 }
