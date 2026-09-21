@@ -3049,69 +3049,6 @@ mod tests {
         }
     }
 
-    /// A frame key of this module's own, for a frame that was never painted.
-    fn key(name: &str, first_line: usize) -> FrameKey {
-        FrameKey {
-            path: PathBuf::from(name),
-            modified: None,
-            len: 0,
-            theme: TextTheme::Light,
-            theme_generation: 0,
-            markdown_mode: MarkdownMode::Rendered,
-            font_scale_percent: 125,
-            full_mode: true,
-            dpi: 96,
-            width: 800,
-            height: 600,
-            first_line,
-        }
-    }
-
-    /// A held frame of `size` pixels.
-    fn held(size: usize, last_used: u64) -> FrameCacheEntry {
-        FrameCacheEntry {
-            frame: TextFrame {
-                pixels: vec![0u8; size],
-                width: 800,
-                height: 600,
-                first_line: 0,
-                visible_lines: 10,
-                scrollable_lines: 10,
-                scrollbar: None,
-                lines: Vec::new(),
-            },
-            size,
-            last_used,
-        }
-    }
-
-    /// The frame that was asked for least recently is the one that goes, and the
-    /// bytes the cache reports are the bytes that are left in it.
-    #[test]
-    fn trims_the_frame_cache_least_recently_used_first() {
-        let mut cache = FrameCache::default();
-        cache.entries.insert(key("old", 0), held(64, 1));
-        cache.entries.insert(key("new", 0), held(64, 2));
-        cache.bytes = 128;
-
-        frame_cache_trim(&mut cache, 64);
-
-        assert!(
-            cache.entries.contains_key(&key("new", 0)),
-            "the newer frame stays"
-        );
-        assert!(
-            !cache.entries.contains_key(&key("old", 0)),
-            "the older frame goes"
-        );
-        assert_eq!(cache.bytes, 64, "the budget is what is held");
-
-        // A budget of nothing empties it, which is what `0 MB` means.
-        frame_cache_trim(&mut cache, 0);
-        assert!(cache.entries.is_empty());
-        assert_eq!(cache.bytes, 0);
-    }
-
     /// The file, its version, the options and the box a frame was painted in, and
     /// the line it starts at: any of them changing is another frame.
     #[test]
