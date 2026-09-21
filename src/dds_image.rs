@@ -25,6 +25,16 @@
 //! live in `bcn` and this module is the container around them — which format a file holds,
 //! where the level that format is read from begins, and what becomes of what comes out.
 //!
+//! One thing a `DX10` header declares that a classic one cannot is what a file's alpha
+//! channel *means*, and one of those declarations is acted on here: a file that says it is
+//! opaque is drawn as if every texel were. A file that says so is a file whose alpha holds
+//! nothing — a texture a tool wrote without ever touching the channel — and drawing that
+//! channel as it stands is a picture nothing can be seen through, which is a faithful
+//! decode and a useless preview. What is *not* acted on is the rest of that declaration: a
+//! straight or a premultiplied channel is composited as it always was, which for a
+//! premultiplied file means its colour is drawn at the strength its alpha says rather than
+//! the strength the colour already holds.
+//!
 //! What is read of a file is its first mip level and its first face, which is the shape
 //! the rest of the app takes with a picture that holds more than one: a cubemap is six
 //! faces and a texture array is however many slices its header declares, and what a hover
@@ -58,6 +68,11 @@ const DDPF_ALPHA: u32 = 0x2;
 const DDPF_FOURCC: u32 = 0x4;
 const DDPF_RGB: u32 = 0x40;
 const DDPF_LUMINANCE: u32 = 0x20_000;
+/// What a `DX10` header says its alpha channel means, in the low three bits of
+/// `miscFlags2`. Only one of the modes is acted on: a file that calls itself opaque is one
+/// whose alpha holds nothing, and it is drawn as every other opaque picture is.
+const DDS_ALPHA_MODE_MASK: u32 = 0x7;
+const DDS_ALPHA_MODE_OPAQUE: u32 = 3;
 
 /// A texture's own size, which is the size the layout places it at.
 ///
@@ -98,7 +113,7 @@ pub fn decode(path: &Path, width: u32, height: u32) -> Option<Vec<u8>> {
     // this file turns out to be (see `tone_map`).
     let tone = ToneMap::current();
 
-    let pixels = match header.picture {
+    let mut pixels = match header.picture {
         Picture::Blocks(blocks) => {
             decode_blocks(blocks, &level, header.width, header.height, tone)?
         }
@@ -106,6 +121,15 @@ pub fn decode(path: &Path, width: u32, height: u32) -> Option<Vec<u8>> {
             decode_samples(samples, &level, header.width, header.height, tone)?
         }
     };
+
+    // A file that calls itself opaque is drawn as every other opaque picture is: what its
+    // alpha channel holds is nothing, whatever the texels happen to say (see the module's
+    // own note).
+    if header.opaque {
+        for texel in pixels.chunks_exact_mut(4) {
+            texel[3] = 255;
+        }
+    }
 
     let source = image::RgbaImage::from_raw(header.width, header.height, pixels)?;
     let scaled = if (header.width, header.height) == (width, height) {
@@ -227,6 +251,9 @@ struct Header {
     offset: usize,
     /// How many bytes that level is.
     level_bytes: usize,
+    /// Whether the file says its alpha channel holds nothing, which is a thing only a
+    /// `DX10` header can say (see the module's own note).
+    opaque: bool,
 }
 
 /// The header of a file whose first bytes claim to be a DDS.
@@ -267,20 +294,28 @@ fn read_header(path: &Path) -> Option<Header> {
     ];
 
     // The extended header a `DX10` file carries names its format as a DXGI one rather
-    // than as masks, and the data starts after it.
-    let (picture, offset) = if fourcc == *b"DX10" {
+    // than as masks, and the data starts after it. It is also the only one of the two that
+    // says what the alpha channel is for.
+    let (picture, offset, opaque) = if fourcc == *b"DX10" {
         let mut extended = [0u8; DX10_HEADER_BYTES];
         file.read_exact(&mut extended).ok()?;
 
         let format = u32::from_le_bytes(extended[0..4].try_into().ok()?);
+        let alpha_mode =
+            u32::from_le_bytes(extended[16..20].try_into().ok()?) & DDS_ALPHA_MODE_MASK;
+
         (
             dx10_picture(format)?,
             HEADER_BYTES + DX10_HEADER_BYTES,
+            alpha_mode == DDS_ALPHA_MODE_OPAQUE,
         )
     } else {
+        // A classic header declares no such thing: what its alpha means is not written
+        // down anywhere, so nothing is read into it.
         (
             legacy_picture(&fourcc, flags, bits, masks)?,
             HEADER_BYTES,
+            false,
         )
     };
 
@@ -292,6 +327,7 @@ fn read_header(path: &Path) -> Option<Header> {
         picture,
         offset,
         level_bytes,
+        opaque,
     })
 }
 
