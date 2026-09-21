@@ -102,11 +102,6 @@ static RUNTIME: Lazy<Option<String>> = Lazy::new(runtime_version);
 /// to take its own window down, so it is an atomic rather than a message.
 static SHOWING: AtomicBool = AtomicBool::new(false);
 
-/// Whether the engine is holding a browser that a document could be pointed at now.
-/// Beginning one is a browser start and pointing a warm one at a document is a few
-/// milliseconds, so this is what decides whether a hover is worth a spinner.
-static HOST_READY: AtomicBool = AtomicBool::new(false);
-
 /// Where the engine's window is while it is on screen, in screen coordinates: the box
 /// the document was last handed over in. Kept as a rectangle rather than as the window
 /// handle, because a rectangle is what the preview loop asks about a preview.
@@ -149,13 +144,6 @@ pub fn is_available() -> bool {
 /// Whether the engine has a window on screen.
 pub fn is_showing() -> bool {
     SHOWING.load(Ordering::Acquire)
-}
-
-/// Whether the engine has a browser of its own already up, which is what a hover asks
-/// before it decides to put a spinner on screen for one: a warm engine has drawn the
-/// document by the time a spinner would have been worth drawing.
-pub fn is_warm() -> bool {
-    HOST_READY.load(Ordering::Acquire)
 }
 
 /// Where the engine's window is, when it has one on screen: the box the document was
@@ -836,10 +824,6 @@ impl Host {
             browser_pid,
         };
 
-        // A browser up and a document drawn in it is what a hover asks about before it
-        // decides to wait on screen for one; see `is_warm`.
-        HOST_READY.store(true, Ordering::Release);
-
         Some(host)
     }
 
@@ -997,7 +981,6 @@ impl Host {
 impl Drop for Host {
     fn drop(&mut self) {
         SHOWING.store(false, Ordering::Release);
-        HOST_READY.store(false, Ordering::Release);
         publish_rect(None);
 
         // Closing the engine drops the environment, and the browser goes with the

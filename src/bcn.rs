@@ -105,7 +105,13 @@ pub enum Blocks {
     Bc2,
     Bc3,
     Bc4,
+    /// The same blocks as `Bc4`, read as signed data: a single channel either side of zero,
+    /// which is what a height map or a difference between two renders is written as.
+    Bc4Snorm,
     Bc5,
+    /// The same blocks as `Bc5`, read as signed data — the two channels of a normal map as
+    /// the numbers they are rather than as levels.
+    Bc5Snorm,
     Bc6h,
     Bc7,
 }
@@ -114,11 +120,16 @@ impl Blocks {
     /// How many bytes one block of the format is.
     pub fn block_bytes(self) -> usize {
         match self {
-            // The ones that carry a colour block alone, and the one that carries a single
+            // The ones that carry a colour block alone, and the ones that carry a single
             // channel: eight bytes. The rest hold an alpha block as well, or are nothing
             // but alpha blocks.
-            Blocks::Bc1 | Blocks::Bc4 => 8,
-            Blocks::Bc2 | Blocks::Bc3 | Blocks::Bc5 | Blocks::Bc6h | Blocks::Bc7 => 16,
+            Blocks::Bc1 | Blocks::Bc4 | Blocks::Bc4Snorm => 8,
+            Blocks::Bc2
+            | Blocks::Bc3
+            | Blocks::Bc5
+            | Blocks::Bc5Snorm
+            | Blocks::Bc6h
+            | Blocks::Bc7 => 16,
         }
     }
 
@@ -144,9 +155,14 @@ impl Blocks {
 
                 Texels::Levels(texels)
             }
-            Blocks::Bc4 => {
+            Blocks::Bc4 | Blocks::Bc4Snorm => {
                 let mut texels = [[0u8, 0, 0, 255]; 16];
-                gradient_alpha(&mut texels, block, AlphaChannel::Red);
+
+                if self == Blocks::Bc4Snorm {
+                    gradient_signed(&mut texels, block, AlphaChannel::Red);
+                } else {
+                    gradient_alpha(&mut texels, block, AlphaChannel::Red);
+                }
 
                 // A single channel held in the alpha block's own form, drawn as grey: the
                 // value is the value, whichever of the three channels it is asked for as.
@@ -157,10 +173,22 @@ impl Blocks {
 
                 Texels::Levels(texels)
             }
-            Blocks::Bc5 => {
-                let mut texels = [[0u8, 0, 0, 255]; 16];
-                gradient_alpha(&mut texels, &block[0..8], AlphaChannel::Red);
-                gradient_alpha(&mut texels, &block[8..16], AlphaChannel::Green);
+            Blocks::Bc5 | Blocks::Bc5Snorm => {
+                let signed = self == Blocks::Bc5Snorm;
+
+                // The channel a two-channel format does not carry is drawn at the level its
+                // kind measures nothing at: black for the unsigned blocks, the middle of the
+                // range for the signed ones, because the z a normal map leaves out is a zero
+                // rather than an absence.
+                let mut texels = [[0u8, 0, if signed { 128 } else { 0 }, 255]; 16];
+
+                if signed {
+                    gradient_signed(&mut texels, &block[0..8], AlphaChannel::Red);
+                    gradient_signed(&mut texels, &block[8..16], AlphaChannel::Green);
+                } else {
+                    gradient_alpha(&mut texels, &block[0..8], AlphaChannel::Red);
+                    gradient_alpha(&mut texels, &block[8..16], AlphaChannel::Green);
+                }
 
                 Texels::Levels(texels)
             }
@@ -199,6 +227,37 @@ pub fn half_to_float(bits: u16) -> f32 {
     };
 
     if sign == 0 { value } else { -value }
+}
+
+// ---- signed samples: the SNORM side of the same formats ------------------------------
+//
+// A signed-normalized sample is not a level: it carries a number either side of zero — the
+// x and y of a normal, a height that can go below its plane, the difference between two
+// renders — and what a preview does with one is the remap every tool that draws such data
+// does, stretching `-1..1` over the display's range so a negative value is dark, zero is
+// the middle and a positive one is light. A file that holds one is drawn as a picture of
+// that data rather than as the data, the same way a BC4 mask is drawn as grey.
+
+/// A signed eight-bit sample as the level it is drawn at.
+///
+/// The arithmetic is the one DirectXTex and the GPU's own conversion produce — the same
+/// answer a file of this kind is given by the tools it was written for — which is what
+/// this was checked against rather than derived: the two halves are not quite the
+/// symmetric remap they look like, and matching the conversion is worth more here than a
+/// tidier formula that disagrees with it by a level.
+pub fn snorm8_to_level(value: u8) -> u8 {
+    match value.cmp(&128) {
+        std::cmp::Ordering::Less => value + 128,
+        std::cmp::Ordering::Equal => 0,
+        std::cmp::Ordering::Greater => value - 129,
+    }
+}
+
+/// A signed sixteen-bit sample as the level it is drawn at.
+pub fn snorm16_to_level(value: u16) -> u8 {
+    let signed = ((value as i16) as f32 / 32767.0).max(-1.0);
+
+    ((signed * 0.5 + 0.5) * 255.0).round() as u8
 }
 
 // ---- BC1, BC2 and BC3: two 565 colours and two bits a texel -------------------------
@@ -290,6 +349,61 @@ fn gradient_alpha(texels: &mut [[u8; 4]; 16], block: &[u8], channel: AlphaChanne
 
     for texel in 0..16 {
         let value = codes[((packed >> (3 * texel)) & 0x7) as usize];
+
+        match channel {
+            AlphaChannel::Alpha => texels[texel][3] = value,
+            AlphaChannel::Red => texels[texel][0] = value,
+            AlphaChannel::Green => texels[texel][1] = value,
+        }
+    }
+}
+
+/// The values of a signed gradient block — BC4_SNORM and each half of BC5_SNORM — as the
+/// levels they are drawn at.
+///
+/// It is the same shape as the unsigned codebook over signed endpoints: the two values a
+/// block wrote are numbers either side of zero, the ones between them are the same
+/// fractions of the two, and the codebook that reaches the ends of the range holds the
+/// ends of the *signed* range rather than nothing and everything. Two differences are
+/// worth naming. The endpoints are compared as the signed numbers they are, so a block
+/// whose first endpoint is below its second is the one that gets the long codebook — the
+/// same rule as the unsigned one, read the other way. And the fractions are rounded rather
+/// than truncated, because that is the arithmetic of the reference this path was checked
+/// against; the unsigned codebook beside it truncates, and the two differ by at most a
+/// level on the blocks where it shows.
+fn gradient_signed(texels: &mut [[u8; 4]; 16], block: &[u8], channel: AlphaChannel) {
+    // A seventh and a fifth, in the fixed point the fractions are taken at.
+    const SEVENTHS: [i32; 6] = [9363, 18724, 28086, 37450, 46812, 56173];
+    const FIFTHS: [i32; 4] = [13107, 26215, 39321, 52429];
+
+    // A signed endpoint of the width the format has, with the one value past the end of
+    // that range clamped to the end: a signed channel spans `-1..1`, and `-128` is one step
+    // beyond it.
+    let mut codes = [0i32; 8];
+    codes[0] = (block[0] as i8).max(-127) as i32;
+    codes[1] = (block[1] as i8).max(-127) as i32;
+
+    if codes[0] > codes[1] {
+        for step in 0..6usize {
+            codes[2 + step] =
+                (SEVENTHS[5 - step] * codes[0] + SEVENTHS[step] * codes[1] + 32768) >> 16;
+        }
+    } else {
+        for step in 0..4usize {
+            codes[2 + step] =
+                (FIFTHS[3 - step] * codes[0] + FIFTHS[step] * codes[1] + 32768) >> 16;
+        }
+        codes[6] = -127;
+        codes[7] = 127;
+    }
+
+    let mut packed = 0u64;
+    for (index, byte) in block[2..8].iter().enumerate() {
+        packed |= (*byte as u64) << (8 * index);
+    }
+
+    for texel in 0..16 {
+        let value = snorm8_to_level(codes[((packed >> (3 * texel)) & 0x7) as usize] as u8);
 
         match channel {
             AlphaChannel::Alpha => texels[texel][3] = value,
