@@ -7,17 +7,23 @@
 - Video previews without FFmpeg: where `ffplay` is not installed, videos are decoded by the media engine Windows already has — `mp4`, `mov`, `m4v`, `mkv`, `webm`, `avi`, `wmv`, `asf`, `ts`, `m2ts`, `mts`, `3gp`, and more with the codec extensions below — played in the same preview window as everything else, with sound and looping. FFmpeg is now optional rather than required.
 - `Codecs` in the tray menu: what this machine has of every engine and codec a preview can lean on, grouped into `Video`, `Images` and `Engines`, with a check or a cross per row and the missing ones greyed. The rows are for reading only — nothing in the menu does anything, and there is no setting behind it.
 - `windows-core` as a declared dependency, for the media engine's event callback. Nothing is added to the build graph by it.
+- Sample lines for Arabic, Hebrew, Thai and Devanagari, so a font of one of those scripts is drawn as its own script rather than by the first characters its map happens to hold: the Arabic and Hebrew pangrams, and the openings of the Thai pangram written by the Computer Association of Thailand and of the Devanagari one the script is sampled with. A line is still drawn whole or not at all, so a script a font holds every character of is a line and one it does not is the font's own characters, the same rule as before.
+- `Font Face` under the tray's **Placement** menu, with `ttc_face` in `config.ini`: which face of a `.ttc` collection a specimen is drawn from — `First Face` (the default) down to `Tenth Face`. A page has no syntax for naming a face inside a collection, so the face is written out as a font of its own, and this is which one; a collection with fewer faces than the setting names is drawn from the last one it has, and the specimen's heading says which face came out — `(2 of 4)` — so what was asked for and what was drawn cannot be taken for each other.
 
 ### Changed
 
 - `README.md` describes what FFmpeg adds rather than requiring it, and lists the free Microsoft Store codec extensions for HEVC, VP9, AV1, MPEG-2 and Ogg.
 - Bump version to 0.2.11 in `Cargo.toml` and `Cargo.lock`.
+- A specimen's lines carry their own direction, so the Arabic and Hebrew lines are laid out from the right, their full stop ending them where the script ends it rather than where a left-to-right page would; every other line is drawn as it was.
+- A font that covers more of the sample lines than the specimen's box was shaped for — a pan-script one, which covers most of them — is drawn at smaller type rather than past the bottom of the box.
+- The page a specimen is drawn in is named for the face as well as the backdrop, so switching faces is a page the browser has not seen rather than the one before it answered out of its cache.
+- Bump version to 0.2.12 in `Cargo.toml` and `Cargo.lock`.
 
 ## [0.2.10]
 
 ### Added
 
-- Font previews for `ttf`, `otf`, `ttc`, `woff` and `woff2`, drawn by the WebView2 engine the SVG previews already use: the name the font calls itself, the pangram *The quick brown fox jumps over the lazy dog.*, and a line each for Japanese, Chinese, Korean, Cyrillic and Greek that the font's own character map covers. A line is drawn only where every character of it is in the font — a browser falls back per glyph and says nothing about it — so nothing is ever shown in a system font and passed off as the font; a font of a script there is no line for is shown by the characters its own map holds instead.
+- Font previews for `ttf`, `otf`, `ttc`, `woff` and `woff2`, drawn by the WebView2 engine the SVG previews already use: the name the font calls itself, the pangram _The quick brown fox jumps over the lazy dog._, and a line each for Japanese, Chinese, Korean, Cyrillic and Greek that the font's own character map covers. A line is drawn only where every character of it is in the font — a browser falls back per glyph and says nothing about it — so nothing is ever shown in a system font and passed off as the font; a font of a script there is no line for is shown by the characters its own map holds instead.
 - `Font Scaling` under the tray's **Placement** menu, with `font_scale` in `config.ini`: how much of the screen a specimen is drawn over — `Fit to Screen`, or 75%, 50% (the default), 25%, 10%.
 - `Fonts` under **Preview Types**, and a `[font]` extension list in `config.ini`; both are written on first run.
 - `Font Background` under the tray's **Background** menu, with `font_background` in `config.ini`: a specimen is a page of text, so its ink follows the backdrop — light on black, dark on the light ones, and light with a shadow where there is none to be read against.

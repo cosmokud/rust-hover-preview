@@ -17,9 +17,10 @@
 //! something about the font that is not true. So the sample lines *are* the font's own
 //! coverage: each one is checked against the font's character map, and only the lines the
 //! map answers for are drawn — the pangram always among them where the font has Latin, and
-//! a line apiece where it has Japanese, Chinese, Korean, Cyrillic or Greek. A font of a
-//! script there is no line for — an Arabic one, a symbol one — is drawn from the characters
-//! its own map holds, which is the same answer reached the other way round.
+//! a line apiece where it has Japanese, Chinese, Korean, Cyrillic, Greek, Arabic, Hebrew,
+//! Thai or Devanagari. A font of a script there is no line for — a Georgian one, a symbol
+//! one — is drawn from the characters its own map holds, which is the same answer reached
+//! the other way round.
 //!
 //! Answering it costs a read of the file under the budget every other read is answered
 //! under, and a parse of two of its tables: the character map, and the `name` table the
@@ -30,12 +31,13 @@
 //! the same two tables a `.ttf` holds in the open.
 //!
 //! One thing is written to disk, and it is the one thing the engine cannot be handed: a page
-//! has no syntax for naming a face inside a collection, so a `.ttc` is answered with its
-//! first face written out as a font of its own, beside the browser's own profile folder and
-//! named for the file and the version of it — where the next run's startup clears it away
-//! with everything else that folder held.
+//! has no syntax for naming a face inside a collection, so a `.ttc` is answered with the face
+//! the setting names written out as a font of its own, beside the browser's own profile
+//! folder and named for the file, the version of it and the face — where the next run's
+//! startup clears it away with everything else that folder held.
 
-use crate::config::{decode_budget_bytes, read_within_budget};
+use crate::config::{decode_budget_bytes, read_within_budget, DEFAULT_TTC_FACE};
+use crate::CONFIG;
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::fs::File;
@@ -60,18 +62,26 @@ pub const SPECIMEN_HEIGHT: u32 = 1000;
 /// or as well as — Latin.
 ///
 /// A line is drawn only where the font's own character map covers every character of it;
-/// see this module's documentation. The Japanese line is the iroha, the poem the kana were
-/// ordered by for a thousand years and the closest thing the script has to a pangram; the
-/// Chinese one is the first line of the Thousand Character Classic, four characters of
-/// which carry almost every stroke a Han glyph is built from; and the Cyrillic and Greek
-/// ones are the pangrams those scripts are sampled with.
-const SAMPLE_LINES: [&str; 6] = [
+/// see this module's documentation. Each is the closest thing its script has to a pangram,
+/// which is what a specimen is for: the Japanese line is the iroha, the poem the kana were
+/// ordered by for a thousand years; the Chinese one is the first line of the Thousand
+/// Character Classic, four characters of which carry almost every stroke a Han glyph is
+/// built from; the Cyrillic, Greek, Arabic and Hebrew ones are the pangrams those scripts
+/// are sampled with; and the Thai and Devanagari ones are the openings of the pangrams
+/// those scripts are sampled with, the rest of each being words a font is as likely to be
+/// asked for as it is to have — and a line is drawn whole or not at all, so a word a font
+/// has not got costs the script its line rather than part of one.
+const SAMPLE_LINES: [&str; 10] = [
     "The quick brown fox jumps over the lazy dog.",
     "いろはにほへと ちりぬるを",
     "天地玄黄 宇宙洪荒",
     "다람쥐 헌 쳇바퀴에 타고파",
     "Съешь же ещё этих мягких французских булок да выпей чаю",
     "Ξεσκεπάζω την ψυχοφθόρα βδελυγμία",
+    "نص حكيم له سر قاطع وذو شأن عظيم مكتوب على ثوب أخضر ومغلف بجلد أزرق.",
+    "דג סקרן שט בים מאוכזב ולפתע מצא חברה",
+    "เป็นมนุษย์สุดประเสริฐเลิศคุณค่า กว่าบรรดาฝูงสัตว์เดรัจฉาน",
+    "ऋषियों को सताने वाले दुष्ट राक्षसों के राजा रावण का सर्वनाश",
 ];
 
 /// How many characters the last-resort line carries: what a font that covers none of the
@@ -91,50 +101,86 @@ pub struct Specimen {
     /// How many faces the file holds: more than one is a collection, which the engine can
     /// be pointed at only through a face written out on its own; see `browser_source`.
     pub faces: usize,
+    /// Which of those faces this is, as an index into the collection's directory — the face
+    /// the setting asked for, reduced to the last one the file holds where it holds fewer
+    /// than that, and `0` for a file that is not a collection at all. It is the face the
+    /// title counts from one and the one `browser_source` writes out.
+    pub face: usize,
 }
 
-/// The specimen `path` makes, or nothing for a file that is not a font this can describe.
+/// The specimen `path` makes at the face the setting names: see `configured_face`.
 ///
-/// The answer is held between hovers — the file, the version of it that was read — for the
-/// reason a document's measurement is: the layout asks for it on every hover, and a pointer
-/// swept back and forth over a folder meets the same files again. A file that turned out
-/// not to be a font at all is held as that, so a hover onto it costs nothing after the
-/// first.
+/// The answer is held between hovers — the file, the version of it that was read, and the
+/// face — for the reason a document's measurement is: the layout asks for it on every
+/// hover, and a pointer swept back and forth over a folder meets the same files again. A
+/// file that turned out not to be a font at all is held as that, so a hover onto it costs
+/// nothing after the first.
 pub fn probe(path: &Path) -> Option<Specimen> {
+    probe_face(path, configured_face())
+}
+
+/// The specimen `path` makes at one face of a collection: `face` is an index into the
+/// faces a `.ttc` holds, and a file that holds a single font answers it the same way
+/// whatever it is.
+///
+/// The face is part of what a held specimen is valid for, because it is part of what the
+/// specimen is: the two faces of one collection are two fonts that share a file, and an
+/// answer read at one of them is not an answer for the other.
+pub fn probe_face(path: &Path, face: usize) -> Option<Specimen> {
     let key = FontKey {
         path: path.to_path_buf(),
         version: file_version(path),
+        face,
     };
 
     if let Some(held) = held(&key) {
         return held;
     }
 
-    let specimen = read_specimen(path);
+    let specimen = read_specimen(path, face);
     hold(&key, specimen.clone());
 
     specimen
 }
 
+/// Which face of a collection a preview is of, as the setting numbers it — from `1`, the
+/// first face, down to the last face a file holds.
+///
+/// It is read from the configuration each time rather than captured, so the tray's `Font
+/// Face` setting applies to the next hover rather than to the next run. What comes back is
+/// the index the face is read at, which is the setting's own number less one; a file with
+/// fewer faces than that is read at the last one it has, so a collection of two is its
+/// second face whatever past the second the setting asks for.
+pub fn configured_face() -> usize {
+    CONFIG
+        .lock()
+        .map(|config| config.ttc_face)
+        .unwrap_or(DEFAULT_TTC_FACE)
+        .saturating_sub(1) as usize
+}
+
 /// The file the engine is pointed at for `path`: the font itself, or — for a collection,
-/// which no page can name a face of — its first face written out as a font of its own.
+/// which no page can name a face of — the face the specimen was read at, written out as a
+/// font of its own.
 ///
 /// The extracted face lands in `folder`, which is the browser's own profile folder for this
-/// run; it is named for the file and the version of it that was read, so the same
-/// collection hovered again is the same file and an edited one is another. What this costs
-/// is one write per collection per version, and what it is not is permanent: the folder is
-/// cleared at the next start, with the rest of what a run leaves behind.
-pub fn browser_source(path: &Path, faces: usize, folder: &Path) -> Option<PathBuf> {
-    if faces <= 1 {
+/// run; it is named for the file, the version of it that was read and the face, so the same
+/// face of the same collection hovered again is the same file, another face is another, and
+/// an edited one is another again. What this costs is one write per face per version, and
+/// what it is not is permanent: the folder is cleared at the next start, with the rest of
+/// what a run leaves behind.
+pub fn browser_source(path: &Path, specimen: &Specimen, folder: &Path) -> Option<PathBuf> {
+    if specimen.faces <= 1 {
         return Some(path.to_path_buf());
     }
 
-    let (offset, flavor) = collection_face(path)?;
+    let (offset, flavor) = collection_face(path, specimen.face)?;
     let extension = if flavor == *b"OTTO" { "otf" } else { "ttf" };
     let extracted = folder.join("fonts").join(format!(
-        "{:016x}-{}.{extension}",
+        "{:016x}-{}-{}.{extension}",
         path_hash(path),
-        file_stamp(path)
+        file_stamp(path),
+        specimen.face
     ));
 
     if extracted.is_file() {
@@ -150,10 +196,10 @@ pub fn browser_source(path: &Path, faces: usize, folder: &Path) -> Option<PathBu
     Some(extracted)
 }
 
-/// The specimen a file makes, read fresh.
-fn read_specimen(path: &Path) -> Option<Specimen> {
+/// The specimen a file makes at one of its faces, read fresh.
+fn read_specimen(path: &Path, face: usize) -> Option<Specimen> {
     let bytes = read_within_budget(path)?;
-    let tables = tables_of(&bytes)?;
+    let tables = tables_of(&bytes, face)?;
 
     // What a specimen is checked against, and what it is drawn from where none of the
     // lines fit: a font with no character map has no characters, so there is nothing to
@@ -166,13 +212,14 @@ fn read_specimen(path: &Path) -> Option<Specimen> {
     }
 
     Some(Specimen {
-        title: specimen_title(path, tables.name.as_deref(), tables.faces),
+        title: specimen_title(path, tables.name.as_deref(), tables.faces, tables.face),
         samples,
         faces: tables.faces,
+        face: tables.face,
     })
 }
 
-/// The lines a specimen is drawn from: every line of the six the font's own character map
+/// The lines a specimen is drawn from: every line of the ten the font's own character map
 /// covers, or — where it covers none of them — one line of its own characters.
 fn sample_lines(cmap: &CharacterMap) -> Vec<String> {
     let covered: Vec<String> = SAMPLE_LINES
@@ -208,9 +255,10 @@ fn covers(cmap: &CharacterMap, line: &str) -> bool {
 /// What a specimen is headed with: the family and style the font calls itself, or the
 /// file's own name where its `name` table is missing or says nothing.
 ///
-/// A collection is noted as such, because what is drawn is one of its faces: the file is a
-/// font, and the preview is of the face the engine could be pointed at.
-fn specimen_title(path: &Path, name: Option<&[u8]>, faces: usize) -> String {
+/// A collection is noted as such and noted for which of its faces is drawn, because what
+/// is drawn is one face of it: the file is a font, and the preview is of the face the
+/// setting asked for — or of the last one the file holds, where it holds fewer than that.
+fn specimen_title(path: &Path, name: Option<&[u8]>, faces: usize, face: usize) -> String {
     let named = name
         .and_then(name_strings)
         .map(|(family, style)| match style {
@@ -226,34 +274,40 @@ fn specimen_title(path: &Path, name: Option<&[u8]>, faces: usize) -> String {
     });
 
     if faces > 1 {
-        format!("{title} (1 of {faces})")
+        format!("{title} ({} of {faces})", face + 1)
     } else {
         title
     }
 }
 
 /// The tables a specimen is read from, out of whichever container the file turned out to
-/// be: a font's own table directory, a webfont's compressed one, or the first face of a
+/// be: a font's own table directory, a webfont's compressed one, or one face of a
 /// collection.
 struct Tables {
     /// The character map, as the font stores it.
     cmap: Option<Vec<u8>>,
     /// The name table, as the font stores it.
     name: Option<Vec<u8>>,
+    /// How many faces the file holds: more than one is a collection.
     faces: usize,
+    /// Which of those faces these tables came out of, as an index into it — `0` for a file
+    /// that holds a single font, whatever face the setting named.
+    face: usize,
 }
 
 /// Which container the file is, by its own first bytes rather than by what it is called: a
 /// collection, one of the two webfont containers, or an sfnt written out in the open.
 ///
-/// A file that is none of them — a `.ttf` that holds something else, a download that never
+/// `face` is which face of a collection to read, and is ignored by the containers that hold
+/// one font: a `.ttf` is its own face whatever number the setting holds. A file that is
+/// none of the containers — a `.ttf` that holds something else, a download that never
 /// finished — is answered with nothing, which is what keeps a hover from opening a box
 /// nothing would be drawn into.
-fn tables_of(bytes: &[u8]) -> Option<Tables> {
+fn tables_of(bytes: &[u8], face: usize) -> Option<Tables> {
     let version = bytes.get(..4)?;
 
     if version == b"ttcf" {
-        return collection_tables(bytes);
+        return collection_tables(bytes, face);
     }
     if version == b"wOFF" {
         return woff_tables(bytes);
@@ -274,23 +328,24 @@ fn is_sfnt_version(bytes: &[u8]) -> bool {
     bytes == b"\x00\x01\x00\x00" || bytes == b"OTTO" || bytes == b"true" || bytes == b"typ1"
 }
 
-/// The two tables, out of the table directory that begins at `face` — a file's own, or the
-/// one face `face` points at inside a collection.
-fn sfnt_tables(bytes: &[u8], face: usize) -> Option<Tables> {
+/// The two tables, out of the table directory that begins at `at` — a file's own, or the
+/// directory of one face inside a collection.
+fn sfnt_tables(bytes: &[u8], at: usize) -> Option<Tables> {
     Some(Tables {
-        cmap: table(bytes, face, b"cmap").map(<[u8]>::to_vec),
-        name: table(bytes, face, b"name").map(<[u8]>::to_vec),
+        cmap: table(bytes, at, b"cmap").map(<[u8]>::to_vec),
+        name: table(bytes, at, b"name").map(<[u8]>::to_vec),
         faces: 1,
+        face: 0,
     })
 }
 
 /// One table of an sfnt, by its tag: what its own table directory says the table is and
 /// where it lies, which is the only place a table's size is written down.
-fn table<'a>(bytes: &'a [u8], face: usize, tag: &[u8; 4]) -> Option<&'a [u8]> {
-    let count = be_u16(bytes, face + 4)? as usize;
+fn table<'a>(bytes: &'a [u8], at: usize, tag: &[u8; 4]) -> Option<&'a [u8]> {
+    let count = be_u16(bytes, at + 4)? as usize;
 
     for index in 0..count {
-        let record = face + 12 + index * 16;
+        let record = at + 12 + index * 16;
         if bytes.get(record..record + 4)? != tag {
             continue;
         }
@@ -304,17 +359,23 @@ fn table<'a>(bytes: &'a [u8], face: usize, tag: &[u8; 4]) -> Option<&'a [u8]> {
     None
 }
 
-/// The first face of a collection, which is the one a preview is of: a `.ttc` is a
+/// The two tables, out of the face of a collection the setting asks for: a `.ttc` is a
 /// directory of faces that share their table data, and what a specimen can be read from is
-/// the face at the first offset.
-fn collection_tables(bytes: &[u8]) -> Option<Tables> {
+/// the directory at one of the offsets it lists.
+///
+/// `face` is that face as an index, and a file that holds fewer faces than it names is read
+/// at the last one it has — which is the same reduction `collection_face` makes where the
+/// face is written out, so the specimen and the file the engine draws are one face.
+fn collection_tables(bytes: &[u8], face: usize) -> Option<Tables> {
     let faces = be_u32(bytes, 8)? as usize;
     if faces == 0 {
         return None;
     }
 
-    let mut tables = sfnt_tables(bytes, be_u32(bytes, 12)? as usize)?;
+    let at = face.min(faces - 1);
+    let mut tables = sfnt_tables(bytes, be_u32(bytes, 12 + at * 4)? as usize)?;
     tables.faces = faces;
+    tables.face = at;
 
     Some(tables)
 }
@@ -350,6 +411,7 @@ fn woff_tables(bytes: &[u8]) -> Option<Tables> {
         cmap,
         name,
         faces: 1,
+        face: 0,
     })
 }
 
@@ -465,6 +527,7 @@ fn woff2_tables(bytes: &[u8]) -> Option<Tables> {
         cmap: slice(cmap),
         name: slice(name),
         faces: 1,
+        face: 0,
     })
 }
 
@@ -963,12 +1026,16 @@ fn decode_name(platform: u16, bytes: &[u8]) -> Option<String> {
     }
 }
 
-/// Where a collection's first face begins, and what its outlines are — which is also what
-/// decides what the face is written out as.
-fn collection_face(path: &Path) -> Option<(usize, [u8; 4])> {
+/// Where the face `face` of a collection begins, and what its outlines are — which is also
+/// what decides what the face is written out as.
+///
+/// The face is clamped to the last one the file holds, the same way `collection_tables`
+/// clamps it, so a file edited between the two reads cannot answer with an offset it has
+/// no face at.
+fn collection_face(path: &Path, face: usize) -> Option<(usize, [u8; 4])> {
     let mut file = File::open(path).ok()?;
-    // The tag, the two version numbers, the face count, and then the face offsets — of which
-    // the first is the one a preview is of.
+    // The tag, the two version numbers, the face count, and then the face offsets — of
+    // which the one the setting asks for is the one a preview is of.
     let mut header = [0u8; 16];
     file.read_exact(&mut header).ok()?;
 
@@ -976,7 +1043,17 @@ fn collection_face(path: &Path) -> Option<(usize, [u8; 4])> {
         return None;
     }
 
-    let offset = u32::from_be_bytes([header[12], header[13], header[14], header[15]]) as u64;
+    let faces = u32::from_be_bytes([header[8], header[9], header[10], header[11]]) as usize;
+    if faces == 0 {
+        return None;
+    }
+
+    let mut entry = [0u8; 4];
+    file.seek(SeekFrom::Start((12 + face.min(faces - 1) * 4) as u64))
+        .ok()?;
+    file.read_exact(&mut entry).ok()?;
+
+    let offset = u32::from_be_bytes(entry) as u64;
     file.seek(SeekFrom::Start(offset)).ok()?;
 
     let mut version = [0u8; 4];
@@ -1102,11 +1179,14 @@ struct FileVersion {
     len: u64,
 }
 
-/// What a held specimen is valid for: the file and the version of it that was read.
+/// What a held specimen is valid for: the file, the version of it that was read, and the
+/// face of a collection it was read at — since another face of the same file is another
+/// specimen, and a setting that names one is answered only by the specimen read at it.
 #[derive(Clone, PartialEq, Eq, Hash)]
 struct FontKey {
     path: PathBuf,
     version: FileVersion,
+    face: usize,
 }
 
 /// A held specimen and when it was last asked for. The stamp is a counter rather than a
@@ -1584,11 +1664,11 @@ mod tests {
         }
     }
 
-    /// A collection previews its first face, which is the one thing a page cannot be
+    /// A collection is drawn from one face of it, which is the one thing a page cannot be
     /// pointed at inside a `.ttc`: the face is written out as a font of its own, and what
     /// comes out is that face's tables rather than the face next to it.
     #[test]
-    fn writes_the_first_face_of_a_collection_out_as_its_own_font() {
+    fn writes_out_the_face_a_specimen_was_read_at() {
         let path = fixture(
             "collection.ttc",
             &collection(&[
@@ -1603,36 +1683,96 @@ mod tests {
             ]),
         );
 
-        let specimen = probe(&path).expect("a specimen");
-        assert_eq!(specimen.faces, 2);
-        assert_eq!(specimen.title, "First Family Regular (1 of 2)");
-        assert_eq!(specimen.samples, vec![SAMPLE_LINES[0].to_string()]);
+        let first = probe_face(&path, 0).expect("a specimen");
+        assert_eq!(first.faces, 2);
+        assert_eq!(first.face, 0);
+        assert_eq!(first.title, "First Family Regular (1 of 2)");
+        assert_eq!(first.samples, vec![SAMPLE_LINES[0].to_string()]);
 
+        // The face beside it is another font in the same file and a specimen of its own: its
+        // own name, its own characters, and a heading saying which face of the file it is.
+        let second = probe_face(&path, 1).expect("a specimen");
+        assert_eq!(second.face, 1);
+        assert_eq!(second.title, "Second Family Bold (2 of 2)");
+        assert_eq!(second.samples, vec![SAMPLE_LINES[1].to_string()]);
+
+        // Held per face: the first face asked for again is still the answer it was, and not
+        // the answer the second one was read as.
+        assert_eq!(probe_face(&path, 0), Some(first.clone()));
+
+        // A face past the last one a file holds is the last one it has, and the heading says
+        // which face came out rather than which was asked for.
+        let last = probe_face(&path, 7).expect("a specimen");
+        assert_eq!(last.face, 1);
+        assert_eq!(last.title, "Second Family Bold (2 of 2)");
+
+        // What the engine is handed is the face as a font of its own — another face being
+        // another file — and what it holds is that face's tables.
         let folder = std::env::temp_dir().join("rust-hover-preview-font-tests-extracted");
-        let extracted = browser_source(&path, specimen.faces, &folder).expect("a face");
-        assert_ne!(extracted, path);
+        let first_source = browser_source(&path, &first, &folder).expect("a face");
+        let second_source = browser_source(&path, &second, &folder).expect("a face");
+        assert_ne!(first_source, path);
+        assert_ne!(second_source, first_source, "another face is another file");
 
-        let bytes = std::fs::read(&extracted).expect("a written face");
-        let tables = tables_of(&bytes).expect("a font of its own");
+        let bytes = std::fs::read(&second_source).expect("a written face");
+        let tables = tables_of(&bytes, 0).expect("a font of its own");
         let cmap = CharacterMap::parse(tables.cmap.as_deref().expect("a cmap")).expect("a map");
 
-        // The first face's own map — which holds the pangram's characters, an `A` not being
-        // one of them — and not the face beside it, whose map is the kana line.
-        assert!(cmap.maps('z'), "the first face's own map");
-        assert!(cmap.maps('.'), "and the rest of the line it covers");
-        assert!(!cmap.maps('い'), "and not the face beside it");
+        // The second face's own map — which holds the kana line — and not the face beside it,
+        // whose map is the pangram.
+        assert!(cmap.maps('い'), "the second face's own map");
+        assert!(!cmap.maps('z'), "and not the face beside it");
 
         // A single-face font is handed over as it is, with nothing written anywhere.
         let single = fixture("single.ttf", &font("Single Family", &[SAMPLE_LINES[0]]));
         let specimen = probe(&single).expect("a specimen");
         assert_eq!(
-            browser_source(&single, specimen.faces, &folder),
+            browser_source(&single, &specimen, &folder),
             Some(single.clone())
         );
 
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(&single);
         let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    /// Which face a specimen is read at is the setting's own number less one: faces are
+    /// numbered from `1` by the menu and from `0` by a collection's own directory, and the
+    /// number is what the two have to agree about.
+    #[test]
+    fn reads_the_face_the_setting_names() {
+        let before = crate::CONFIG.lock().expect("a configuration").ttc_face;
+
+        for (named, index) in [(1, 0), (4, 3), (crate::config::MAX_TTC_FACE, 9)] {
+            crate::CONFIG.lock().expect("a configuration").ttc_face = named;
+
+            assert_eq!(configured_face(), index, "face {named}");
+        }
+
+        crate::CONFIG.lock().expect("a configuration").ttc_face = before;
+    }
+
+    /// The scripts that had no line of their own are sampled by their own script's line
+    /// rather than by the first characters their map happens to hold — which is what an
+    /// Arabic, Hebrew, Thai or Devanagari font used to be shown by.
+    #[test]
+    fn draws_the_line_of_the_script_a_font_is_of() {
+        // The four lines, in the order the constants list them.
+        for (script, line) in SAMPLE_LINES[6..].iter().enumerate() {
+            let path = fixture(
+                &format!("script-{script}.ttf"),
+                &font("Script Family", &[line]),
+            );
+            let specimen = probe(&path).expect("a specimen");
+
+            assert_eq!(
+                specimen.samples,
+                vec![line.to_string()],
+                "a font of one script is shown by that script's line and nothing else"
+            );
+
+            let _ = std::fs::remove_file(&path);
+        }
     }
 
     #[test]
