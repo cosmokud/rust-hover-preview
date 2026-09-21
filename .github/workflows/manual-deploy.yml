@@ -79,7 +79,7 @@ jobs:
           name: rust-hover-preview-installers-${{ inputs.tag_to_build }}
           path: |
             target/packager/*.exe
-            target/release/rust-hover-preview.exe
+            target/github/rust-hover-preview.exe
           if-no-files-found: error
 
       - name: Extract Changelog
@@ -103,4 +103,4 @@ jobs:
           make_latest: false
           files: |
             target/packager/*.exe
-            target/release/rust-hover-preview.exe
+            target/github/rust-hover-preview.exe

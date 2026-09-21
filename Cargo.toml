@@ -53,6 +53,16 @@ windows = { version = "0.58", features = [
 # it is a crate the size of a small project to compile for every clean build. The
 # formats this crate has no reader for at all are asked of Windows instead, which is
 # what `Win32_Graphics_Imaging` above and `wic_image` are for.
+#
+# `webp` is one of those now: a still WebP is the picture the codec Windows has for it
+# draws, at the box the layout planned, and the one that moves is libwebp's (see
+# `webp-animation`), so `image-webp` — which was here for the stills alone — is out of
+# the graph and out of the binary.
+#
+# `rayon` is out for the other reason: it is what this crate's parallel `ImageBuffer`
+# iterators are behind, and nothing here iterates an image that way. What dropping it
+# also drops is the EXR decoder's own threading (`exr/rayon`), which is the whole cost
+# of it — a `.exr` preview decodes on one thread.
 image = { version = "0.25", default-features = false, features = [
     "bmp",
     "dds",
@@ -65,10 +75,8 @@ image = { version = "0.25", default-features = false, features = [
     "png",
     "pnm",
     "qoi",
-    "rayon",
     "tga",
     "tiff",
-    "webp",
 ] }
 
 # SVG previews. Nothing here rasterizes a document: every one of them — still, gzipped
@@ -91,8 +99,10 @@ webview2-com = "0.34"
 # Animated WebP support via Google's libwebp
 webp-animation = "0.10"
 
-# Animated GIF support
-gif = "0.13"
+# Animated GIF support. The version `image` reads its own GIFs with, so the decoder is
+# one crate in the graph rather than two: everything this app asks of `gif` — the
+# decode options, the color output, the frame records — is the same in both.
+gif = "0.14"
 
 # For async operations
 once_cell = "1.19"
@@ -149,6 +159,17 @@ opt-level = 3
 lto = "thin"
 strip = true
 
+# What the release artifacts are built with, and the only thing that uses it: the
+# GitHub workflows and `build-installers.ps1` package with `--profile github`, while
+# `cargo build --release` keeps the profile above, so the edit-build-test loop is still
+# a short one. What ships is optimized as one program instead of as sixteen codegen
+# units apiece — 461 KB, 6.1% of the release binary measured on 0.2.10 — and nothing
+# about it is slower at run time.
+[profile.github]
+inherits = "release"
+lto = "fat"
+codegen-units = 1
+
 [package.metadata.packager]
 product-name = "Rust Hover Preview"
 identifier = "dev.rust-hover-preview.app"
@@ -158,8 +179,11 @@ license-file = "LICENSE"
 icons = ["assets/icon.ico"]
 formats = ["nsis"]
 out-dir = "target/packager"
-binaries-dir = "target/release"
-before-packaging-command = "cargo build --release"
+# Where the `github` profile puts the binary it builds, which is the one an installer
+# carries: see the profile's own note above for why the packaged app is not the one
+# `cargo build --release` leaves in `target/release`.
+binaries-dir = "target/github"
+before-packaging-command = "cargo build --profile github"
 
 [[package.metadata.packager.binaries]]
 path = "rust-hover-preview"

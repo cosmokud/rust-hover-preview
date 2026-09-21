@@ -21,8 +21,9 @@ use std::path::Path;
 /// each both an animated format and a still one. `svg` and `svgz` are pictures as far
 /// as the kind goes — they are behind the same `Images` gate and the same list — while
 /// what draws them is a browser rather than a decoder; see `svg_preview`. `avif`,
-/// `heic`, `heif` and `jxl` are pictures the same way, and what decodes them is the
-/// codec Windows has rather than one this app carries; see `wic_image`.
+/// `heic`, `heif`, `jxl` and a still `webp` are pictures the same way, and what decodes
+/// them is the codec Windows has rather than one this app carries; a `webp` that moves
+/// is the exception, played by libwebp in the binary; see `wic_image`.
 pub const DEFAULT_IMAGE_EXTENSIONS: &str =
     "apng,avif,bmp,exr,ff,gif,hdr,heic,heif,ico,jfif,jpe,jpeg,jpg,jxl,pam,pbm,pgm,png,pnm,ppm,qoi,svg,svgz,tga,tif,tiff,webp";
 
