@@ -30,21 +30,7 @@ You can add or remove formats in config.ini. Unsupported formats will not show a
 
 ### Images
 
-`jpg`, `jpeg`, `png`, `apng`, `gif`, `bmp`, `ico`, `tiff`, `webp`, `tga`, `hdr`, `exr`, `qoi`, and more. Animated GIF, APNG, and WebP files play; animation is detected from file content.
-
-### Next-gen formats (Windows codec required)
-
-`heic`, `heif`, `avif`, and `jxl` — the formats this app has no decoder of its own for. The codec Windows has decodes them instead, so nothing is bundled and nothing is installed with the app, and what a codec is asked for is the size of the preview rather than the size of the file: a 48-megapixel photo from a phone costs what its preview costs.
-
-These need their codec extension, once, from the Microsoft Store. Where one is missing, hovering such a file shows no preview rather than an error:
-
-| Format | Needs |
-| --- | --- |
-| `heic`, `heif` | [HEIF Image Extension](https://apps.microsoft.com/detail/9PMMSR1CGPWG) + [HEVC Video Extensions](https://apps.microsoft.com/detail/9N4WGH0Z6VHQ) |
-| `avif` | [HEIF Image Extension](https://apps.microsoft.com/detail/9PMMSR1CGPWG) + [AV1 Video Extension](https://apps.microsoft.com/detail/9MVZQVXJBQ9V) |
-| `jxl` | [JPEG XL Image Extension](https://apps.microsoft.com/detail/9MZPRTH5C0TB), or the **JXL support** optional feature on Windows 11 24H2 |
-
-All of them are free, and a Windows 11 device often has the HEIF and AV1 ones already. A multi-image file — a HEIC burst, an animated AVIF, an animated JPEG XL — shows its first frame.
+`jpg`, `jpeg`, `png`, `apng`, `gif`, `bmp`, `ico`, `tiff`, `webp`, `tga`, `hdr`, `exr`, `qoi`, `heic`, `heif`, `avif`, `jxl`, and more. Animated GIF, APNG, and WebP files play; animation is detected from file content. The last four are decoded by a codec extension Windows provides — see [Optional: Enable HEIC, AVIF and JPEG XL Preview](#optional-enable-heic-avif-and-jpeg-xl-preview-windows-codecs).
 
 ### Vectors
 
@@ -114,6 +100,18 @@ Verify either way:
 ffplay -version
 ffprobe -version
 ```
+
+## Optional: Enable HEIC, AVIF and JPEG XL Preview (Windows Codecs)
+
+`heic`, `heif`, `avif` and `jxl` are decoded by a codec Windows provides rather than by one shipped with the app, so each one needs its extension installed once from the Microsoft Store:
+
+| Format         | Needs                                                                                                                                            |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `heic`, `heif` | [HEIF Image Extension](https://apps.microsoft.com/detail/9PMMSR1CGPWG) + [HEVC Video Extensions](https://apps.microsoft.com/detail/9N4WGH0Z6VHQ) |
+| `avif`         | [HEIF Image Extension](https://apps.microsoft.com/detail/9PMMSR1CGPWG) + [AV1 Video Extension](https://apps.microsoft.com/detail/9MVZQVXJBQ9V)   |
+| `jxl`          | [JPEG XL Image Extension](https://apps.microsoft.com/detail/9MZPRTH5C0TB), or the **JXL support** optional feature on Windows 11 24H2            |
+
+All of them are free, and a Windows 11 device often has the HEIF and AV1 ones already. Where one is missing, hovering such a file shows no preview rather than an error, and a multi-image file — a HEIC burst, an animated AVIF, an animated JPEG XL — shows its first frame.
 
 ## Usage
 
