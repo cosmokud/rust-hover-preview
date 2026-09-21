@@ -4,76 +4,82 @@
 ![Windows](https://img.shields.io/badge/Platform-Windows-blue?logo=windows)
 ![License](https://img.shields.io/badge/License-MIT-green)
 
-A Windows 11 tray app inspired by QTTabBar that shows instant File Explorer previews when you hover a file with the mouse or navigate with the arrow keys, and the preview appears beside it.
+A Windows 11 tray app inspired by QTTabBar. Hover a file in File Explorer — or move with the arrow keys — and a preview appears beside it. It works with mouse and keyboard, and you configure it from the tray icon or a simple `config.ini`.
 
 [Showcase.webm](https://github.com/user-attachments/assets/33ee1f35-d399-4226-8847-5bd50f867ebb)
 
-## Features
+## Highlights
 
-- Mouse-hover and keyboard-navigation previews in Explorer
-- Images, including animated GIF, APNG, and WebP
-- HEIC, AVIF, and JPEG XL, decoded by the codec Windows already has
-- SVG vectors drawn at the size they are shown, animated or still
-- Fonts — `ttf`, `otf`, `ttc`, `woff`, `woff2` — drawn as a specimen: the name the font calls itself and the sample lines its own character map covers, one script apiece, Latin through Arabic, Hebrew, Thai and Devanagari
-- Videos through FFmpeg, or through Windows' own media engine where FFmpeg is not installed
-- PDF first pages via the built-in Windows PDF engine
-- Text and code with syntax highlighting, rendered Markdown, and bundled/custom themes
-- Archive contents — zip, rar, 7z, tar — as a file tree with sizes, read without unpacking anything
-- Office documents — Word, Excel and PowerPoint — drawn from a page Office renders in the background and keeps, so a document previews from its first hover and instantly after
-- Preview scaling from 25% to 400%, or fit-to-screen, with a display share of its own for SVG, PDF, Office pages, and fonts
-- Previews appear beside the cursor or focused item and are never clipped by screen edges
-- Tray menu and hand-editable `config.ini`
-- DPI aware, single-instance, sleep/resume resilient, and light on idle CPU
+- Mouse-hover and keyboard-navigation previews in Explorer.
+- Images, including animated GIF, APNG, and WebP.
+- HEIC, AVIF, and JPEG XL through Windows codec extensions where installed.
+- SVG vectors drawn sharply at preview size.
+- Font specimens: font name plus sample lines covering its own character map.
+- Videos through FFmpeg if installed, otherwise through Windows’ own media engine.
+- PDF first pages via the built-in Windows PDF engine.
+- Text and code with syntax highlighting, rendered Markdown, and themes.
+- Archives as a file tree with sizes — read without unpacking.
+- Office documents drawn from a background Office render, so previews appear quickly after the first hover.
+- Scaling from 25% to 400%, or fit-to-screen. Separate scaling for SVG, PDF, Office pages, and fonts.
+- Previews appear beside the cursor or focused item and are kept on screen.
+- Tray menu and hand-editable `config.ini`.
+- DPI aware, single-instance, sleep/resume resilient, and light on idle CPU.
 
 ## Supported Formats
 
-You can add or remove formats in config.ini. Unsupported formats will not show a preview except text, which the app will try to force-read.
+You can add or remove formats in `config.ini`. Unsupported formats show no preview, except text, which the app will try to force-read.
 
 ### Images
 
-`jpg`, `jpeg`, `png`, `apng`, `gif`, `bmp`, `ico`, `tiff`, `webp`, `tga`, `hdr`, `exr`, `qoi`, `heic`, `heif`, `avif`, `jxl`, `dds`, and more. Animated GIF, APNG, and WebP files play; animation is detected from file content. `heic`, `heif`, `avif`, `jxl` and a still `webp` are decoded by a codec extension Windows provides where one is installed — or, for `webp`, by the libwebp the app carries when it is not; see [Optional: Enable HEIC, AVIF, JPEG XL and WebP Preview](#optional-enable-heic-avif-jpeg-xl-and-webp-preview-windows-codecs).
+`jpg`, `jpeg`, `png`, `apng`, `gif`, `bmp`, `ico`, `tiff`, `webp`, `tga`, `hdr`, `exr`, `qoi`, `heic`, `heif`, `avif`, `jxl`, `dds`, and more.
 
-`dds` textures are previewed in BC1, BC2, BC3, BC4 and BC5, and in the uncompressed formats a tool writes — the classic header and the DX10 one alike. BC6H and BC7 show no preview yet, and what a cubemap, a texture array or a mip chain shows is its first face and first level. Windows decodes BC1 to BC3 at the size of the preview; the rest is decoded by the app.
-
-`hdr` and `exr` hold light rather than screen values, so they are tone mapped on the way to the preview: an exposure, a curve and the sRGB transfer, with `hdr_tone_map` and `hdr_exposure` in `config.ini` choosing them (see [Configuration](#configuration)).
+Animated GIF, APNG, and WebP files play. HEIC, HEIF, AVIF, JPEG XL, and still WebP usually need Windows codec extensions — except WebP, which the app can also decode on its own. HDR and EXR images are tone-mapped for screen preview. DDS textures show basic previews; some advanced DDS variants are not supported yet.
 
 ### Vectors
 
-`svg`, `svgz` — drawn at the size they are shown by the WebView2 runtime Windows 11 ships with, so they stay sharp when enlarged, and animated documents play too. That runtime is what draws a document, so a machine without it shows no SVG preview; nothing of the drawing is done by the app itself.
+`svg`, `svgz` — drawn by the WebView2 runtime Windows 11 ships with, so they stay sharp when enlarged. Animated SVG documents play too. If WebView2 is missing, SVG previews do not appear.
 
 ### Fonts
 
-`ttf`, `otf`, `ttc`, `woff`, `woff2` — drawn by the same WebView2 runtime.
+`ttf`, `otf`, `ttc`, `woff`, `woff2` — drawn by WebView2. The preview shows a font specimen: the name the font calls itself and sample lines its character map covers, from Latin through Arabic, Hebrew, Thai, and Devanagari.
 
 ### Videos
 
 `mp4`, `webm`, `mkv`, `avi`, `mov`, `wmv`, `flv`, `m4v`, `ts`, `m2ts`, `mts`, `mpg`, `mpeg`, `vob`, `3gp`, `ogv`, `rmvb`, `asf`, `divx`, `f4v`, `mxf`, `dv`.
 
-With [FFmpeg installed](#optional-enable-video-preview-ffmpeg) the app plays them through it, so FFmpeg-supported containers and codecs generally work. Without it, videos are played by the media engine Windows already has, which covers `mp4`, `mov`, `m4v`, `mkv`, `webm`, `avi`, `wmv`, `asf`, `ts`, `m2ts`, `mts` and `3gp` — and everything else the codec extensions listed under [Optional: Enable More Video Codecs](#optional-enable-more-video-codecs-windows-codecs) have added. A format neither engine can read shows no preview. The tray's **Codecs** menu says which of the two you have and which codecs are installed.
+With FFmpeg installed, many more containers and codecs work. Without it, videos use the media engine Windows already has, plus any codec extensions you installed. The tray’s **Codecs** menu shows what is available.
 
 ### PDF
 
 `pdf` — the first page is rendered by the Windows PDF engine. Password-protected and damaged files are skipped.
 
-### Text and code
+### Text and Code
 
 `txt`, `md`, `rtf`, `nfo`, `json`, `toml`, `yaml`, `xml`, `ini`, `csv`, `log`, `sql`, `py`, `js`, `ts`, `rs`, `go`, `c`, `h`, `cpp`, `cs`, `java`, `kt`, `swift`, `php`, `rb`, `lua`, `sh`, `ps1`, `bat`, `html`, `css`, and more.
 
-Extensionless repository files such as `LICENSE`, `Makefile`, `Dockerfile`, and `.gitignore` are also supported. Markdown can be rendered or shown as source. Full mode adds scrolling, selection, copy;
+Extensionless files such as `LICENSE`, `Makefile`, `Dockerfile`, and `.gitignore` are also supported. Markdown can be rendered or shown as source. Full mode adds scrolling, selection, and copy.
 
 ### Archives
 
 `zip`, `zipx`, `jar`, `apk`, `xpi`, `cbz`, `rar`, `7z`, `tar`, `tgz`, and `tar.gz`.
 
-### Office documents
+Archive previews show a file tree with sizes, read directly from the archive’s table of contents — nothing is unpacked.
+
+### Office Documents
 
 `doc`, `docm`, `docx`, `dot`, `dotm`, `dotx`, `xls`, `xlsb`, `xlsm`, `xlsx`, `xlt`, `xltm`, `xltx`, `ppt`, `pptm`, `pptx`, `pps`, `ppsm`, `ppsx`, `pot`, `potm`, `potx`.
 
-To show previews for these Office document types, the user must have **Microsoft Office** installed. Excel needs a print queue to export a page — **Microsoft Print to PDF** is enough (make sure that the Print Spooler service is enabled) — and falls back to the sheet's top-left corner without one.
+Office previews require **Microsoft Office** installed. Excel needs a print queue to export a page — **Microsoft Print to PDF** is enough, and the Print Spooler service must be enabled. Without one, Excel falls back to the sheet’s top-left corner.
 
 ### Themes
 
-Text, code, and archive listings use Atom One Light (default), One Dark Pro, or any `.tmTheme` file placed in `%APPDATA%\rust-hover-preview\theme`. Archive listings follow the tray's **Text Preview → Font Size** setting.
+Text, code, and archive listings use Atom One Light by default, One Dark Pro, or any `.tmTheme` file placed in:
+
+```text
+%APPDATA%\rust-hover-preview\theme
+```
+
+Archive listings follow the tray’s **Text Preview → Font Size** setting.
 
 ## Installation
 
@@ -82,16 +88,18 @@ Each release provides two options:
 - `rust-hover-preview_<version>_x64-setup.exe` — NSIS installer. Installs to `%LOCALAPPDATA%\rust-hover-preview` with an optional startup entry.
 - `rust-hover-preview.exe` — portable standalone binary. Run it from any folder.
 
-1. Open [Releases](../../releases)
-2. Download your preferred asset
-3. Run the installer, or place the portable binary wherever you like
-4. Launch Rust Hover Preview
+Steps:
+
+1. Open [Releases](../../releases).
+2. Download your preferred asset.
+3. Run the installer, or place the portable binary wherever you like.
+4. Launch Rust Hover Preview.
 
 No Rust toolchain is needed. If upgrading from an earlier version, the installer cleans up the old `%LOCALAPPDATA%\Rust Hover Preview` folder automatically.
 
-## Optional: Enable Video Preview (FFmpeg)
+## Optional: Enable Video Preview with FFmpeg
 
-Videos preview without FFmpeg, through the media engine Windows ships with — FFmpeg is what makes previews cover far more of them. Install it if you want the formats and codecs Windows does not decode. With it, `ffplay` and `ffprobe` need to be in your `PATH`.
+Videos preview without FFmpeg through the media engine Windows ships with. FFmpeg adds far more formats and codecs. Install it if you want formats Windows does not decode. `ffplay` and `ffprobe` need to be in your `PATH`.
 
 **Option A: winget**
 
@@ -112,38 +120,34 @@ ffplay -version
 ffprobe -version
 ```
 
-## Optional: Enable More Video Codecs (Windows Codecs)
+## Optional: More Video Codecs (Windows Codecs)
 
-The media engine decodes H.264, MPEG-4 and WMV out of the box, and each of the codecs below is a separate free extension from the Microsoft Store:
+The Windows media engine decodes H.264, MPEG-4, and WMV out of the box. Free Microsoft Store extensions add more:
 
-| Codec                                  | Needs                                                                                                                      |
-| -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| HEVC (H.265)                           | [HEVC Video Extensions](https://apps.microsoft.com/detail/9N4WGH0Z6VHQ)                                                    |
-| VP9                                    | [VP9 Video Extensions](https://apps.microsoft.com/detail/9N4D0MSMP0PT)                                                     |
-| AV1                                    | [AV1 Video Extension](https://apps.microsoft.com/detail/9MVZQVXJBQ9V)                                                      |
-| MPEG-1 and MPEG-2                      | [MPEG-2 Video Extension](https://apps.microsoft.com/detail/9N95Q1ZZPMH4)                                                   |
-| Theora, Vorbis and Opus in an Ogg file | [Web Media Extensions](https://apps.microsoft.com/detail/9N5TDP8VCMHS)                                                     |
+- HEVC (H.265) — HEVC Video Extensions
+- VP9 — VP9 Video Extensions
+- AV1 — AV1 Video Extension
+- MPEG-1 and MPEG-2 — MPEG-2 Video Extension
+- Theora, Vorbis, and Opus in Ogg — Web Media Extensions
 
-All of them are free, and a Windows 11 device usually has the HEVC, VP9 and AV1 ones already. Installing one takes effect the next time the tray's **Codecs** menu is opened — there is no restart, and nothing to configure. They are not needed at all while FFmpeg is installed.
+Windows 11 devices usually already have HEVC, VP9, and AV1. Installing one takes effect the next time the tray’s **Codecs** menu is opened. They are not needed while FFmpeg is installed.
 
-## Optional: Enable HEIC, AVIF, JPEG XL and WebP Preview (Windows Codecs)
+## Optional: HEIC, AVIF, JPEG XL, and WebP (Windows Codecs)
 
-`heic`, `heif`, `avif`, `jxl` and a still `webp` are decoded by a codec Windows provides rather than by one shipped with the app, so each one needs its extension installed once from the Microsoft Store:
+These formats are usually decoded by Windows codec extensions rather than by the app itself:
 
-| Format         | Needs                                                                                                                                            |
-| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `heic`, `heif` | [HEIF Image Extension](https://apps.microsoft.com/detail/9PMMSR1CGPWG) + [HEVC Video Extensions](https://apps.microsoft.com/detail/9N4WGH0Z6VHQ) |
-| `avif`         | [HEIF Image Extension](https://apps.microsoft.com/detail/9PMMSR1CGPWG) + [AV1 Video Extension](https://apps.microsoft.com/detail/9MVZQVXJBQ9V)   |
-| `jxl`          | [JPEG XL Image Extension](https://apps.microsoft.com/detail/9MZPRTH5C0TB), or the **JXL support** optional feature on Windows 11 24H2            |
-| `webp`         | [WebP Image Extension](https://apps.microsoft.com/detail/9PG2DK419DRG) — optional: the app decodes WebP without it                               |
+- `heic`, `heif` — HEIF Image Extension + HEVC Video Extensions
+- `avif` — HEIF Image Extension + AV1 Video Extension
+- `jxl` — JPEG XL Image Extension, or the JXL support feature on Windows 11 24H2
+- `webp` — WebP Image Extension, optional because the app can decode WebP itself
 
-All of them are free, and a Windows 11 device often has the HEIF, AV1 and WebP ones already. Where one is missing, hovering such a file shows no preview rather than an error, and a multi-image file — a HEIC burst, an animated AVIF, an animated JPEG XL — shows its first frame. A `.webp` is the exception in both directions: it is the one picture here that needs none of them, because the app carries a libwebp decoder of its own — that is what plays an animated one, and what decodes a still one where the WebP codec is missing — so WebP previews on a Windows 10 machine.
+If a codec is missing, hovering shows no preview rather than an error. Multi-image files such as HEIC bursts, animated AVIF, or animated JPEG XL show their first frame. WebP is the exception: it works without the extension, because the app carries a libwebp decoder.
 
 ## Usage
 
 1. Start the app — a tray icon appears.
 2. Hover media files in Explorer to preview them.
-3. Or navigate with the keyboard (arrow keys/Tab) to preview the focused item.
+3. Or navigate with the keyboard — arrow keys or Tab — to preview the focused item.
 4. Right-click the tray icon to configure behavior.
 
 ## System Tray Menu
@@ -163,32 +167,25 @@ All of them are free, and a Windows 11 device often has the HEIF, AV1 and WebP o
   - **Rehover Delay** — the same steps, before the same file can preview again.
 - **Placement**
   - **Position** — Follow Cursor or Best Position.
-  - **Avoid** — Don't Avoid, Avoid Filename (the default), Avoid Filename Column, or Avoid Details: what a preview is kept off instead of covering the item it is about. Avoid Filename keeps it off the hovered name alone, measured as far as the name is actually drawn — extension and all, at the size the view draws it, so a `Content` row's larger name counts too — leaving the rest of the row free to be covered; Avoid Filename Column keeps it off the whole column the name sits in; Avoid Details keeps it off every column a row draws; and Don't Avoid places it by the position alone.
+  - **Avoid** — Don’t Avoid, Avoid Filename (default), Avoid Filename Column, or Avoid Details. This keeps a preview off the item it is about.
   - **Scaling** — Fit to Screen or 25%–400%.
   - **SVG Scaling** — Fit to Screen, or 75%, 50% (default), 25%, 10% of the display.
   - **PDF Scaling** — Fit to Screen (default), or the same shares of the display.
-  - **Office Scaling** — the same for a page Office rendered; a workbook's fallback bitmap is never enlarged.
-  - **Font Scaling** — the same shares for a font specimen, 50% (default).
-  - **Font Face** — which face of a `.ttc` collection is drawn: First Face (the default) down to Tenth Face. A collection has fewer faces than that usually, and one with fewer than the item names is drawn from its last face; the specimen's heading says which face came out, as `(2 of 4)`.
+  - **Office Scaling** — the same for a page Office rendered; a workbook’s fallback bitmap is never enlarged.
+  - **Font Scaling** — the same shares for a font specimen, 50% by default.
+  - **Font Face** — which face of a `.ttc` collection is drawn: First Face (default) down to Tenth Face. The heading says which face came out, such as `(2 of 4)`.
 - **Background**
   - **Image Background** — Transparent, Black, White, or Checkerboard.
   - **SVG Background** — the same backdrops for documents.
-  - **Font Background** — the same backdrops for a font specimen, which is drawn on a page of its own.
+  - **Font Background** — the same backdrops for a font specimen.
 - **Volume** — Max, High, Medium, Low, Very Low, Mute: 100% down to 0%.
-- **Performance** — what the app costs to stay fast.
+- **Performance**
   - **Confirm File Type** — validate file content against the extension.
-  - **Office Engine TTL** — how long a family's Office app is kept warm: Indefinitely, 1 hour, 30 minutes, 10 minutes (default), 5 minutes, 1 minute, 0 seconds.
-  - **SVG Engine TTL** — how long the browser that draws an SVG document is kept warm; greyed out where WebView2 is missing.
-  - **Cache** — memory held between hovers, 2 GB down to 0 MB, each cache's own default marked:
-    - **Image** — decoded image frames.
-    - **Text** — frames text previews were painted as.
-    - **PDF** — pages PDF previews were drawn as.
-    - **Office** — pages Office rendered.
-  - **Decode Budget** — 16 GB down to 512 MB, 1 GB (default): a file past it gets no preview.
-- **Codecs** — what this machine has, for reading only; a check or a cross per row, and the missing ones greyed.
-  - **Video** — FFmpeg, Windows Media Foundation, and the video codecs.
-  - **Images** — HEIF (HEIC), AVIF, JPEG XL, WebP.
-  - **Engines** — WebView2, Microsoft Word, Excel and PowerPoint, and the Windows PDF engine.
+  - **Office Engine TTL** — how long a family’s Office app is kept warm: Indefinitely, 1 hour, 30 minutes, 10 minutes (default), 5 minutes, 1 minute, 0 seconds.
+  - **SVG Engine TTL** — how long the browser that draws SVG documents is kept warm; greyed out where WebView2 is missing.
+  - **Cache** — memory held between hovers, 2 GB down to 0 MB: Image, Text, PDF, Office caches.
+  - **Decode Budget** — 16 GB down to 512 MB, 1 GB default: a file past it gets no preview.
+- **Codecs** — what this machine has: Video, Images, and Engines. Missing ones are greyed out.
 - **Run at Startup** — add or remove the Windows startup entry.
 - **Config.ini** — open the configuration file; the item is named for the running version.
 - **Exit** — close the app.
@@ -203,7 +200,7 @@ Settings are stored at:
 
 The file is watched, and changes apply without a restart.
 
-Example:
+Example, trimmed:
 
 ```ini
 [settings]
@@ -244,7 +241,6 @@ office_scale=fit
 font_scale=50
 theme=light
 markdown_mode=rendered
-text_preview_enabled=true
 text_preview_full_mode=false
 text_font_scale=125
 
@@ -268,37 +264,33 @@ extensions=doc,docm,docx,dot,dotm,dotx,pot,potm,potx,pps,ppsm,ppsx,ppt,pptm,pptx
 extensions=otf,ttc,ttf,woff,woff2
 ```
 
-Key settings:
+Key settings, in plain terms:
 
-- `theme` — `light` (default), `dark`, or `custom:<name>`.
+- `theme` — `light`, `dark`, or `custom:<name>`.
 - `markdown_mode` — `rendered` or `source`.
-- `image_preview_enabled` / `video_preview_enabled` / `text_preview_enabled` / `pdf_preview_enabled` / `archive_preview_enabled` / `office_preview_enabled` / `svg_preview_enabled` / `font_preview_enabled` — whether previews of that kind may be shown at all; the lists of files it covers stay as they are.
+- `*_preview_enabled` — whether that kind of preview may show at all; the file lists stay as they are.
 - `text_preview_full_mode` — `true` adds scrolling, selection, and copy.
 - `text_font_scale` — a percentage from 1 to 1000, default `125`; archive listings follow it too.
-- `extensions` / `names` — the text-preview gates: extensions are written without dots, and a name matches an extensionless file.
-- `image_extensions` — the image-preview gate, under `[image]`, written without dots.
-- `video_extensions` — the video-preview gate, under `[video]`, written without dots.
-- `archive_extensions` — the archive-preview gate, under `[archive]`, written without dots; an entry with a dot in it (`tar.gz`) is matched against the end of the file name.
-- `image_cache_mb` — the memory decoded image frames are kept in: default `32`, at most `2048`; a hit skips a full-resolution decode, and `0` holds nothing.
-- `office_cache_mb` — the same for the pages Office rendered: default `64`, at most `2048`; a page costs an Office start and an export, so keeping one is worth it. `0` holds nothing between hovers, but a page is still rendered for the hover that asks for it.
-- `pdf_cache_mb` — the same for the pages PDF previews were rendered as: default `32`, at most `2048`; a page is kept as the pixels it was drawn as, so the same file at two preview sizes is held as two pages.
-- `text_cache_mb` — the same for the frames text previews were painted as: default `0`, at most `2048`; the text itself is already cached, and a frame is per file, per box and per scroll position — never one a selection was painted into.
-- `decode_budget_gb` — the most memory one hover may decode or read for (a picture, the measurement of an SVG document and what a `.svgz` inflates to, a font's tables and what a `.woff2` inflates to, an animation's frames, the page Office exported, a theme file): default `1`, smallest `0.25`, largest `64`. It caps the file rather than what is kept, and a file past it shows no preview instead of the app asking for memory the allocator may refuse — which is why no value means "no limit".
-- `hdr_tone_map` — the curve a picture whose samples are light is brought into eight bits with: an `.exr`, a Radiance `.hdr`, and a `.dds` of one of the float formats. `reinhard` (the default) leaves a value the display can already show very nearly where it was and brings everything above it down without clipping it; `aces` is the filmic one, darker in the shadows and more saturated; `srgb` applies the transfer alone, which clips what is past white; `off` is the bare clamp — what a linear `0.5` is drawn at with each of them is `156`, `206`, `188` and `128`. An unknown name falls back to the default. Pictures that hold screen values already — a PNG, a JPEG — are never put through it.
-- `hdr_exposure` — how many stops those pictures are shifted by before that curve, for a file far darker or brighter than a display can show: `0` (the default) is the picture as the file holds it, and values are clamped to `-10`–`10`.
-- `office_engine_idle` — how long a family's Office engine is kept after that family's last page: seconds, or `indefinitely` for one kept as long as the app runs; default `600`. `0` lets it go as soon as it has drawn a page, so every document pays its own Office start.
-- `office_extensions` — the Office-preview gate, under `[office]`, written without dots.
-- `font_extensions` — the font-preview gate, under `[font]`, written without dots.
-- A deleted `extensions=` line — or its whole section — comes back with the built-in entries; an `extensions=` line left empty stays empty.
+- `extensions` / `names` — the text-preview gates. Extensions are written without dots. Names match extensionless files.
+- `image_extensions`, `video_extensions`, `archive_extensions`, `office_extensions`, `font_extensions` — per-type preview gates, written without dots. An entry with a dot in it, like `tar.gz`, is matched against the end of the file name.
+- `image_cache_mb` — memory for decoded image frames: default `32`, max `2048`; `0` holds nothing.
+- `office_cache_mb` — memory for Office-rendered pages: default `64`, max `2048`; `0` holds nothing between hovers but still renders for the current hover.
+- `pdf_cache_mb` — memory for PDF pages as pixels: default `32`, max `2048`; the same file at two preview sizes is held as two pages.
+- `text_cache_mb` — memory for text frames: default `0`, max `2048`; the text itself is already cached.
+- `decode_budget_gb` — the most memory one hover may decode or read for: default `1`, smallest `0.25`, largest `64`. A file past it shows no preview.
+- `hdr_tone_map` — how HDR/EXR light values become screen values: `reinhard` (default), `aces` (filmic), `srgb` (clips), or `off` (bare clamp). Pictures already in screen values, like PNG or JPEG, are never affected.
+- `hdr_exposure` — how many stops those pictures are shifted before that curve: default `0`, clamped to `-10`–`10`.
+- `office_engine_idle` — seconds an Office engine is kept after its last page, or `indefinitely`; default `600`. `0` lets it go as soon as it has drawn a page.
 - `trigger_key` / `trigger_key_mode` / `trigger_key_enabled` — the key (`alt`, `ctrl`, `shift`, `win`), what it does (`disable` or `enable`), and whether it is watched at all; `true` by default.
 - `follow_cursor` — `true` for Follow Cursor, `false` for Best Position.
-- `avoid_mode` — `filename` (the default), `filename_column`, `details`, or `off`: what a preview is kept off, moving it and resizing it where there is no room beside that region, so the item it is about stays readable; applies to hovered and keyboard previews alike, at both positions. `filename` keeps it off the name alone, measured in the font the shell draws folder names in, at the scale of the display and at the larger of the sizes a view draws a name at (`Content` draws it 125% larger than a `Details` row), so the extension counts and only the name's own width is cleared — the rest of the column and the columns beside it are free to be covered; `filename_column` keeps it off the whole column the name sits in, as the view reports it; `details` keeps it off everything a row draws. A file written with the old `avoid_filename` key reads as `details` for `true` and `off` for `false`.
+- `avoid_mode` — `filename` (default), `filename_column`, `details`, or `off`: what a preview is kept off.
 - `preview_scale` — percentage or `fit`.
-- `svg_scale` — how much of the screen an SVG is drawn over: a percentage or `fit`, read against the screen rather than the size the document asks for, so `50` (the default) is half of it, `fit` all of it, and `100` or more read as `fit`. The engine's window is the size that comes out of this and its page fills it, so the setting is what the document is drawn at.
-- `pdf_scale` / `office_scale` — the same for a PDF page and for a page Office rendered, both `fit` (the default) as well as a percentage; a workbook's fallback bitmap follows its share of its own size and is never enlarged.
-- `font_scale` — how much of the screen a font specimen is drawn over: a percentage or `fit`, read against the screen, so `50` (the default) is half of it, `fit` all of it, and `100` or more read as `fit`. The specimen is sized from the window that comes out of this, so the setting is the size the type is drawn at. A font has no size of its own to be a percentage of, which is why the share is of the display rather than of the file.
-- `ttc_face` — which face of a `.ttc` collection a specimen is drawn from: `1` (the default) is the first face, and the last the setting holds is `10`. A page has no syntax for naming a face inside a collection, so the face is written out as a font of its own and drawn from there, and a collection with fewer faces than the setting names is drawn from the last one it has — the specimen's heading says which face came out. Files that hold a single font ignore it.
-- `font_background` — what a font specimen is drawn over: `black` (the default), `white`, `checkerboard`, or `transparent`. Text is drawn light on black, dark on the light backdrops, and light with a soft shadow where there is no backdrop at all to be read against.
+- `svg_scale` — percentage or `fit`, read against the screen. `50` is default, `fit` is all of it, and `100` or more reads as `fit`.
+- `pdf_scale` / `office_scale` — the same for a PDF page and an Office-rendered page, both `fit` by default as well as a percentage. A workbook’s fallback bitmap follows its own size and is never enlarged.
+- `font_scale` — percentage or `fit`, read against the screen. `50` is default, `fit` is all of it, and `100` or more reads as `fit`. A font has no size of its own, so the share is of the display.
+- `ttc_face` — which face of a `.ttc` collection is drawn: `1` is the first face, and the highest setting is `10`. The heading says which face came out.
+- `font_background` — `black` (default), `white`, `checkerboard`, or `transparent`.
+- A deleted `extensions=` line or whole section comes back with built-in entries. An `extensions=` line left empty stays empty.
 
 ## Build from Source
 
@@ -309,11 +301,11 @@ cargo build            # debug
 cargo build --release  # release
 ```
 
-The release binary is written to `target/release/rust-hover-preview.exe`. A release build ends a running copy of the app first, since Windows will not let the linker replace a binary that is open; debug builds are left alone.
+The release binary is written to `target/release/rust-hover-preview.exe`. A release build ends a running copy first, since Windows will not let the linker replace an open binary. Debug builds are left alone.
 
 ## Architecture
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the full system overview. In short: Windows accessibility APIs and Shell COM identify the hovered or focused Explorer item, GDI paints the preview into a topmost layered window, text and code are highlighted with TextMate-style themes, Markdown is rendered, archive contents are listed from the archives' own tables of contents, Office documents are drawn from the page Office renders in the background, the WebView2 runtime draws SVG documents and font specimens, and video is played by FFmpeg where it is installed and by Windows' own media engine where it is not.
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the full system overview. In short: Windows accessibility APIs and Shell COM identify the hovered or focused Explorer item. GDI paints the preview into a topmost layered window. Text and code are highlighted with TextMate-style themes, Markdown is rendered, archive contents are listed from the archives’ own tables of contents, Office documents are drawn from a page Office renders in the background, WebView2 draws SVG documents and font specimens, and video is played by FFmpeg where installed and by Windows’ own media engine where it is not.
 
 ## TODO
 
@@ -321,10 +313,10 @@ See [TODO.md](TODO.md) for planned work, known bugs, and other issues.
 
 ## Privacy
 
-Rust Hover Preview works fully offline — no telemetry, analytics, ads, update checks, or accounts. It reads only the item you hover or focus in Explorer, locally and only for enabled preview types. Cloud-only placeholders are skipped; password-protected files are never bypassed. Settings and themes live under `%APPDATA%\rust-hover-preview`; optional previews use your local FFmpeg if you have installed it, Microsoft Office, Windows' own media engine, and the Windows PDF engine. Caches are in-memory and bounded by `config.ini`. See [PRIVACY.md](PRIVACY.md) for full details.
+Rust Hover Preview works fully offline — no telemetry, analytics, ads, update checks, or accounts. It reads only the item you hover or focus in Explorer, locally and only for enabled preview types. Cloud-only placeholders are skipped; password-protected files are never bypassed. Settings and themes live under `%APPDATA%\rust-hover-preview`; optional previews use your local FFmpeg if installed, Microsoft Office, Windows’ own media engine, and the Windows PDF engine. Caches are in-memory and bounded by `config.ini`. See [PRIVACY.md](PRIVACY.md) for full details.
 
 ## License
 
 MIT. See [LICENSE](LICENSE).
 
-RAR archives are read with RARLAB's UnRAR sources, compiled into the binary by the `unrar` crate. UnRAR source code may be used in any software to handle RAR archives without limitations and free of charge, but it may not be used to develop a RAR-compatible archiver or to recreate the RAR compression algorithm, which is proprietary. See [RARLAB's licence](https://www.rarlab.com/license.htm) for the full terms.
+RAR archives are read with RARLAB’s UnRAR sources, compiled into the binary by the `unrar` crate. UnRAR source code may be used in any software to handle RAR archives without limitations and free of charge, but it may not be used to develop a RAR-compatible archiver or to recreate the RAR compression algorithm, which is proprietary. See [RARLAB’s licence](https://www.rarlab.com/license.htm) for the full terms.
