@@ -180,6 +180,7 @@ All are free. Windows 11 often has HEIF, AV1, and WebP already. Where one is mis
   - **Image Background** — Transparent, Black, White, or Checkerboard.
   - **SVG Background** — the same backdrops for documents.
   - **Font Background** — the same backdrops for a font specimen.
+  - **DDS Background** — the same backdrops for `.dds` textures, whose alpha channel is as often a mask or an unused channel as it is transparency.
 - **Volume** — Max, High, Medium, Low, Very Low, Mute: 100% down to 0%.
 - **Performance**
   - **Confirm File Type** — validate file content against the extension.

@@ -840,6 +840,15 @@ pub struct AppConfig {
     /// to be — so the glyphs there are drawn light with a soft dark shadow behind them (see
     /// `webview_preview::font_page`).
     pub font_background: TransparentBackground,
+    /// The backdrop a `.dds` texture is drawn over.
+    ///
+    /// A setting of its own for a reason of the format's rather than of the picture's: a
+    /// texture's alpha channel is very often not alpha at all — a mask, a height, the
+    /// roughness of a material, or a channel a tool never touched and left at zero — so a
+    /// texture is the one kind of picture whose transparency says least about what is
+    /// behind it, and the one kind a reader may want composited differently from a
+    /// photograph (see `dds_image`).
+    pub dds_background: TransparentBackground,
     pub video_volume: u32,
     pub preview_scale: PreviewScale,
     /// How large an SVG document is drawn, as a share of the room the display has
@@ -993,6 +1002,7 @@ impl Default for AppConfig {
             image_background: TransparentBackground::Black,
             svg_background: TransparentBackground::Black,
             font_background: TransparentBackground::Black,
+            dds_background: TransparentBackground::Black,
             video_volume: 0, // Mute by default
             preview_scale: PreviewScale::Percent(DEFAULT_PREVIEW_SCALE_PERCENT),
             svg_scale: PreviewScale::Percent(DEFAULT_SVG_SCALE_PERCENT),
@@ -1281,6 +1291,11 @@ impl AppConfig {
             );
             ini.set(
                 CONFIG_SECTION,
+                "dds_background",
+                Some(self.dds_background.as_str().to_string()),
+            );
+            ini.set(
+                CONFIG_SECTION,
                 "video_volume",
                 Some(self.video_volume.to_string()),
             );
@@ -1533,11 +1548,19 @@ impl AppConfig {
             }
         }
         // A font's backdrop is read apart from the legacy key above rather than through it:
-        // fonts are a kind of their own and always were, so there is no earlier spelling of
+        // fonts are a kind of its own and always were, so there is no earlier spelling of
         // this one to answer.
         if let Some(value) = ini.get(CONFIG_SECTION, "font_background") {
             if let Some(background) = TransparentBackground::from_str(&value) {
                 self.font_background = background;
+            }
+        }
+        // A texture's is read the same way, and for the same reason: the DDS kind is one of
+        // its own, so a file written before it has nothing under this name and what it wrote
+        // about a picture stays what it wrote about a picture.
+        if let Some(value) = ini.get(CONFIG_SECTION, "dds_background") {
+            if let Some(background) = TransparentBackground::from_str(&value) {
+                self.dds_background = background;
             }
         }
         if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "video_volume") {

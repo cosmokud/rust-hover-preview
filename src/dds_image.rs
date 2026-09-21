@@ -74,6 +74,18 @@ const DDPF_LUMINANCE: u32 = 0x20_000;
 const DDS_ALPHA_MODE_MASK: u32 = 0x7;
 const DDS_ALPHA_MODE_OPAQUE: u32 = 3;
 
+/// Whether a file is a texture, as its name says.
+///
+/// It is the name and not the bytes, for the reason the gates are: what the question is
+/// asked for is not whether a file will decode but what the preview of it is drawn over,
+/// and that is a question about the kind of file it is — see the tray's `Background`
+/// submenu, which keeps a texture's backdrop apart from a picture's.
+pub fn is_dds_file(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("dds"))
+}
+
 /// A texture's own size, which is the size the layout places it at.
 ///
 /// `None` is a file that is not a DDS, one whose format neither this module nor `bcn` has
