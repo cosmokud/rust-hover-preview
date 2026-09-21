@@ -1,15 +1,20 @@
 //! The picture formats this app's own decoder does not read and Windows does: HEIF
-//! (`.heic`, `.heif`), AVIF (`.avif`) and JPEG XL (`.jxl`).
+//! (`.heic`, `.heif`), AVIF (`.avif`), JPEG XL (`.jxl`) and a still WebP (`.webp`).
 //!
 //! Nothing is bundled for them and nothing is installed beside the app. What decodes
 //! them is the Windows Imaging Component — the codec surface Windows itself draws
 //! Explorer's thumbnails with — through whichever codec the machine has: the **HEIF
 //! Image Extension** for `.heic` and `.avif`, which is what needs the **HEVC Video
-//! Extensions** for one and the **AV1 Video Extension** for the other, and the
-//! **JPEG XL Image Extension** for `.jxl`. A machine without the codec is a machine
-//! with no preview for that format, which is the answer a file that will not decode
-//! gets; the extensions are named in the README, and the app never sends anyone to
-//! the Store by itself.
+//! Extensions** for one and the **AV1 Video Extension** for the other, the **JPEG XL
+//! Image Extension** for `.jxl`, and the **WebP Image Extension** for a WebP still. A
+//! machine without the codec is a machine with no preview for that format, which is
+//! the answer a file that will not decode gets; the extensions are named in the
+//! README, and the app never sends anyone to the Store by itself.
+//!
+//! A WebP that *moves* is not this module's. libwebp is in the binary for it and is
+//! asked first (see the animated reader in `preview_window`), so what arrives here is
+//! the picture that does not move — which is the whole of what a WebP decoder of this
+//! app's own used to be carried for.
 //!
 //! A codec is asked for the box the layout planned rather than for the file's own
 //! size, so a hover onto a forty-megapixel photograph costs what its preview costs.
@@ -55,7 +60,7 @@ use windows::Win32::System::Com::{
 /// a picture at all, and these are pictures — so this is only which pictures the
 /// codec has to be asked about rather than the decoder every other picture goes
 /// through.
-const CODEC_EXTENSIONS: &[&str] = &["avif", "heic", "heif", "jxl"];
+const CODEC_EXTENSIONS: &[&str] = &["avif", "heic", "heif", "jxl", "webp"];
 
 thread_local! {
     /// The imaging factory this thread asks its codecs through.
@@ -365,6 +370,8 @@ mod tests {
             "picture.HEIC",
             "picture.heif",
             "picture.jxl",
+            "picture.webp",
+            "picture.WEBP",
         ] {
             assert!(is_codec_file(Path::new(name)), "{name}");
         }

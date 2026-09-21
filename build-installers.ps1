@@ -34,8 +34,11 @@ $($_.Exception.Message)
 Write-Host "Using cargo-packager tool cache:"
 Write-Host $packagerToolsRoot
 
+# The `github` profile is what ships: fat LTO over one codegen unit rather than the thin
+# LTO the local `cargo build --release` uses, and it puts its binary in `target/github`
+# — which is where the packaging metadata looks for it.
 Write-Host "Building NSIS installer..."
-cargo packager --release --formats nsis
+cargo packager --profile github --formats nsis
 if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }

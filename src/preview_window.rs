@@ -978,8 +978,8 @@ fn decode_image_by_extension(path: &PathBuf) -> Option<image::DynamicImage> {
 ///
 /// A format the `image` crate has no reader for at all is a file it cannot answer for
 /// rather than a file that is not a picture, so the codec Windows has is asked before
-/// the answer is no: what a hover onto a `.heic` is measured from is its own frame;
-/// see `wic_image`.
+/// the answer is no: what a hover onto a `.heic`, or onto a still `.webp`, is measured
+/// from is its own frame; see `wic_image`.
 fn image_dimensions_with_header_check(path: &PathBuf) -> Option<(u32, u32)> {
     image::ImageReader::open(path)
         .ok()?
@@ -3461,7 +3461,9 @@ fn load_media(
         if cancel.load(Ordering::Acquire) {
             return None;
         }
-        // Fall back to static for non-animated WebP
+        // What is left is a still, and a still is not decoded here either: it is the
+        // picture the codec Windows has for WebP draws, at the box the layout planned,
+        // which is what `load_static_image` asks for; see `wic_image`.
         return load_static_image(path, max_width, max_height, preview_scale);
     }
 

@@ -1,5 +1,14 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- What ships is built from a `github` profile — fat LTO over one codegen unit — rather than from `release`: the deploy workflows and `build-installers.ps1` package with it, while `cargo build --release` keeps the thin LTO the edit-build-test loop is short on. The released exe is 461 KB smaller for it (7,544,320 to 7,083,008 bytes, 6.1%) and nothing about it is slower at run time.
+- A still WebP is decoded by the codec Windows has for it, at the box the layout planned, rather than by a decoder of this app's own: `image-webp` is out of the build graph and out of the binary. An animated WebP is unchanged — libwebp, in the binary, is what plays it. The WebP Image Extension is what the still path needs, Windows 11 ships it and Windows 10 usually does not, so a Windows 10 machine without it shows no preview for a still `.webp`; the extension is listed in the README beside the others.
+- `rayon` is out of the build graph: it was there for `image`'s parallel buffer iterators, which nothing here iterates with. What it also cost is the EXR decoder's own threading, so a `.exr` preview decodes on one thread now.
+- `gif` is one version in the build graph rather than two: `0.13` is bumped to the `0.14` that `image` reads its own GIFs with, and the two agree on every API the animated path asks for.
+
 ## [0.2.10]
 
 ### Changed
