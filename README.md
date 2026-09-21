@@ -12,6 +12,7 @@ A Windows 11 tray app inspired by QTTabBar that shows instant File Explorer prev
 
 - Mouse-hover and keyboard-navigation previews in Explorer
 - Images, including animated GIF, APNG, and WebP
+- HEIC, AVIF, and JPEG XL, decoded by the codec Windows already has
 - SVG vectors drawn at the size they are shown, animated or still
 - Videos through FFmpeg
 - PDF first pages via the built-in Windows PDF engine
@@ -30,6 +31,20 @@ You can add or remove formats in config.ini. Unsupported formats will not show a
 ### Images
 
 `jpg`, `jpeg`, `png`, `apng`, `gif`, `bmp`, `ico`, `tiff`, `webp`, `tga`, `hdr`, `exr`, `qoi`, and more. Animated GIF, APNG, and WebP files play; animation is detected from file content.
+
+### Next-gen formats (Windows codec required)
+
+`heic`, `heif`, `avif`, and `jxl` — the formats this app has no decoder of its own for. The codec Windows has decodes them instead, so nothing is bundled and nothing is installed with the app, and what a codec is asked for is the size of the preview rather than the size of the file: a 48-megapixel photo from a phone costs what its preview costs.
+
+These need their codec extension, once, from the Microsoft Store. Where one is missing, hovering such a file shows no preview rather than an error:
+
+| Format | Needs |
+| --- | --- |
+| `heic`, `heif` | [HEIF Image Extension](https://apps.microsoft.com/detail/9PMMSR1CGPWG) + [HEVC Video Extensions](https://apps.microsoft.com/detail/9N4WGH0Z6VHQ) |
+| `avif` | [HEIF Image Extension](https://apps.microsoft.com/detail/9PMMSR1CGPWG) + [AV1 Video Extension](https://apps.microsoft.com/detail/9MVZQVXJBQ9V) |
+| `jxl` | [JPEG XL Image Extension](https://apps.microsoft.com/detail/9MZPRTH5C0TB), or the **JXL support** optional feature on Windows 11 24H2 |
+
+All of them are free, and a Windows 11 device often has the HEIF and AV1 ones already. A multi-image file — a HEIC burst, an animated AVIF, an animated JPEG XL — shows its first frame.
 
 ### Vectors
 
@@ -198,7 +213,7 @@ text_preview_full_mode=false
 text_font_scale=125
 
 [image]
-extensions=apng,bmp,exr,ff,gif,hdr,ico,jfif,jpe,jpeg,jpg,pam,pbm,pgm,png,pnm,ppm,qoi,svg,svgz,tga,tif,tiff,webp
+extensions=apng,avif,bmp,exr,ff,gif,hdr,heic,heif,ico,jfif,jpe,jpeg,jpg,jxl,pam,pbm,pgm,png,pnm,ppm,qoi,svg,svgz,tga,tif,tiff,webp
 
 [video]
 extensions=264,265,266,3g2,3gp,3gpp,apv,asf,av1,avc,avi,avs,avs2,avs3,bik,bk2,c93,cavs,cdg,cdxl,cin,cpk,dav,...
