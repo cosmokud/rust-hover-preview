@@ -124,16 +124,15 @@ All of them are free, and a Windows 11 device often has the HEIF and AV1 ones al
 
 - **Enable Preview** — turn previews on or off.
 - **Preview Types** — Images, Videos, Text, PDF, Archives, Office, SVG: gate a kind without touching its file list.
-- **Confirm File Type** — validate file content against the extension.
-- **Trigger Key (Alt)** — the key is named in the item itself.
-  - **Enable Trigger Key** — whether the key is watched at all.
-  - **Hold to Disable Preview** / **Hold to Enable Preview** — what holding it does.
 - **Text Preview**
   - **Full Mode** — adds scrolling, selection, and copy; off by default.
   - **Theme** — Atom One Light, One Dark Pro, or any `.tmTheme` in the theme folder.
   - **Font Size** — 400% at the top down to 70% at the bottom.
   - **Markdown** — Rendered or Source.
 - **Timing**
+  - **Trigger Key (Alt)** — the key is named in the item itself.
+    - **Enable Trigger Key** — whether the key is watched at all.
+    - **Hold to Disable Preview** / **Hold to Enable Preview** — what holding it does.
   - **Delay** — Instant, Fast, Medium, Relaxed, Slow: 0 ms to 1000 ms.
   - **Rehover Delay** — the same steps, before the same file can preview again.
 - **Placement**
@@ -148,8 +147,9 @@ All of them are free, and a Windows 11 device often has the HEIF and AV1 ones al
   - **SVG Background** — the same backdrops for documents.
 - **Volume** — Max, High, Medium, Low, Very Low, Mute: 100% down to 0%.
 - **Performance** — what the app costs to stay fast.
-  - **Keep Office Engine** — how long a family's Office app is kept warm: Indefinitely, 1 hour, 30 minutes, 10 minutes (default), 5 minutes, 1 minute, 0 seconds.
-  - **Keep Animated SVG Engine** — how long the browser that plays an animated document is kept warm; greyed out where WebView2 is missing.
+  - **Confirm File Type** — validate file content against the extension.
+  - **Office Engine TTL** — how long a family's Office app is kept warm: Indefinitely, 1 hour, 30 minutes, 10 minutes (default), 5 minutes, 1 minute, 0 seconds.
+  - **SVG Engine TTL** — how long the browser that plays an animated document is kept warm; greyed out where WebView2 is missing.
   - **Cache** — memory held between hovers, 2 GB down to 0 MB, each cache's own default marked:
     - **Image** — decoded image frames.
     - **Text** — frames text previews were painted as.
