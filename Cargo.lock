@@ -1390,7 +1390,7 @@ dependencies = [
 
 [[package]]
 name = "rust-hover-preview"
-version = "0.2.10"
+version = "0.2.9"
 dependencies = [
  "configparser",
  "directories",
