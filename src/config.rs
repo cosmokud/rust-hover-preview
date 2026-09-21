@@ -50,6 +50,12 @@ pub const MAX_PREVIEW_SCALE_PERCENT: u32 = 1000;
 /// percentage of the size the file asks for, and the setting starts at the same place
 /// the picture's does.
 pub const DEFAULT_VIDEO_SCALE_PERCENT: u32 = 100;
+/// The share of its own size an animated picture is drawn at unless asked otherwise.
+///
+/// An animation is drawn from the frames it decodes, which are bitmaps like a picture's,
+/// so the share means the same thing here as it does for one — a percentage of the size
+/// the file asks for — and the setting starts at the same place the picture's does.
+pub const DEFAULT_ANIMATED_SCALE_PERCENT: u32 = 100;
 /// The share of the display an SVG document is drawn at unless asked otherwise.
 ///
 /// A document is drawn at whatever size it is asked for, so what it is asked for is
@@ -445,11 +451,13 @@ impl PreviewScale {
 pub const DEFAULT_PDF_SCALE: PreviewScale = PreviewScale::FitToScreen;
 /// The same for the page an Office document is drawn as.
 pub const DEFAULT_OFFICE_SCALE: PreviewScale = PreviewScale::FitToScreen;
-/// What a picture and a video are drawn at unless the configuration says otherwise: the
-/// size each file asks for, at the share its own setting names.
+/// What a picture, a video and an animated picture are drawn at unless the configuration
+/// says otherwise: the size each file asks for, at the share its own setting names.
 pub const DEFAULT_PREVIEW_SCALE: PreviewScale =
     PreviewScale::Percent(DEFAULT_PREVIEW_SCALE_PERCENT);
 pub const DEFAULT_VIDEO_SCALE: PreviewScale = PreviewScale::Percent(DEFAULT_VIDEO_SCALE_PERCENT);
+pub const DEFAULT_ANIMATED_SCALE: PreviewScale =
+    PreviewScale::Percent(DEFAULT_ANIMATED_SCALE_PERCENT);
 /// The same for an SVG document, at the share of the display its own setting names rather
 /// than a share of the file.
 pub const DEFAULT_SVG_SCALE: PreviewScale = PreviewScale::Percent(DEFAULT_SVG_SCALE_PERCENT);
@@ -909,6 +917,18 @@ pub struct AppConfig {
     /// large enough to read a frame is a window over the file rather than a photograph on
     /// a desk.
     pub video_scale: PreviewScale,
+    /// How large an animated picture — a GIF, an animated WebP or an APNG — is drawn, as a
+    /// share of its own size: the same question, and the same answers, as the picture scale
+    /// above it.
+    ///
+    /// An animation is decoded into frames, and a frame is a bitmap like a picture's, so a
+    /// share of it is a share of the size the file asks for the same way a picture's is —
+    /// and the share is read for one whether it moves or not: a `.gif` holding a single
+    /// frame is a still picture and keeps `preview_scale`, which is what this setting is
+    /// asked apart from. It is a setting of its own because the two are hovered for
+    /// different reasons: a picture is studied at the size it was written, while an
+    /// animation at `50%` is half the pixels to decode and draw for every frame of it.
+    pub animated_scale: PreviewScale,
     /// How large an SVG document is drawn, as a share of the room the display has
     /// for it.
     ///
@@ -1065,6 +1085,7 @@ impl Default for AppConfig {
             video_volume: 0, // Mute by default
             preview_scale: PreviewScale::Percent(DEFAULT_PREVIEW_SCALE_PERCENT),
             video_scale: PreviewScale::Percent(DEFAULT_VIDEO_SCALE_PERCENT),
+            animated_scale: PreviewScale::Percent(DEFAULT_ANIMATED_SCALE_PERCENT),
             svg_scale: PreviewScale::Percent(DEFAULT_SVG_SCALE_PERCENT),
             pdf_scale: DEFAULT_PDF_SCALE,
             office_scale: DEFAULT_OFFICE_SCALE,
@@ -1374,6 +1395,11 @@ impl AppConfig {
                 "video_scale",
                 Some(self.video_scale.as_str()),
             );
+            ini.set(
+                CONFIG_SECTION,
+                "animated_scale",
+                Some(self.animated_scale.as_str()),
+            );
             ini.set(CONFIG_SECTION, "svg_scale", Some(self.svg_scale.as_str()));
             ini.set(CONFIG_SECTION, "pdf_scale", Some(self.pdf_scale.as_str()));
             ini.set(
@@ -1657,6 +1683,17 @@ impl AppConfig {
                 }
             }
             None => self.video_scale = self.preview_scale,
+        }
+        // And an animation's, the same way again: before it was a setting of its own, an
+        // animated picture was drawn at the picture scale like any other, so a file that
+        // has no key for it starts both at the one it wrote.
+        match ini.get(CONFIG_SECTION, "animated_scale") {
+            Some(value) => {
+                if let Some(scale) = PreviewScale::from_str(&value) {
+                    self.animated_scale = scale;
+                }
+            }
+            None => self.animated_scale = self.preview_scale,
         }
         // A document's scale is written the way a picture's is, but it is read apart
         // from it: what the number is a percentage of is the room the display has
@@ -2136,6 +2173,51 @@ mod tests {
 
         assert_eq!(config.preview_scale, DEFAULT_PREVIEW_SCALE);
         assert_eq!(config.video_scale, DEFAULT_VIDEO_SCALE);
+    }
+
+    /// And the same for an animation: a setting of its own beside the video and picture
+    /// scales, so one key changing leaves the others where they were — and a file that
+    /// has no key for it starts it at the share its pictures are drawn at, which is the
+    /// answer every animated picture got before there was a setting to give.
+    #[test]
+    fn an_animations_scale_is_read_from_its_own_key() {
+        let mut ini = Ini::new();
+        ini.set(CONFIG_SECTION, "preview_scale", Some("400".to_string()));
+        ini.set(CONFIG_SECTION, "video_scale", Some("75".to_string()));
+        ini.set(CONFIG_SECTION, "animated_scale", Some("50".to_string()));
+
+        let mut config = AppConfig::default();
+        config.apply_ini(&ini);
+
+        assert_eq!(config.animated_scale, PreviewScale::Percent(50));
+        assert_eq!(config.video_scale, PreviewScale::Percent(75));
+        assert_eq!(config.preview_scale, PreviewScale::Percent(400));
+
+        let mut ini = Ini::new();
+        ini.set(
+            CONFIG_SECTION,
+            "animated_scale",
+            Some(" Fit to Screen ".to_string()),
+        );
+
+        let mut config = AppConfig::default();
+        config.apply_ini(&ini);
+
+        assert_eq!(config.animated_scale, PreviewScale::FitToScreen);
+
+        // A file with no key for it — one written before the setting was one — starts it
+        // at the picture scale, which is what its animations were drawn at as well.
+        let mut ini = Ini::new();
+        ini.set(CONFIG_SECTION, "preview_scale", Some("25".to_string()));
+
+        let mut config = AppConfig::default();
+        config.apply_ini(&ini);
+
+        assert_eq!(config.animated_scale, PreviewScale::Percent(25));
+
+        let config = AppConfig::default();
+
+        assert_eq!(config.animated_scale, DEFAULT_ANIMATED_SCALE);
     }
 
     /// A page is drawn at the whole room the display has unless the file says

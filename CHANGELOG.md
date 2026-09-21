@@ -12,6 +12,7 @@
 - New `hdr_tone_map` and `hdr_exposure` settings control how HDR images are shown.
 - New `spinner_delay_ms` setting controls how long to wait before showing the loading spinner.
 - New `Videos Scaling` under the tray's **Placement** menu, with `video_scale` in `config.ini`: how large a video is shown, 100% by default.
+- New `Animated Scaling` beside it, with `animated_scale` in `config.ini`: how large an animated GIF, WebP or PNG is shown, 100% by default. A check of the file itself tells an animation apart from a still — a GIF or PNG with a single frame follows `Images Scaling` like any other picture.
 
 ### Changed
 
@@ -26,6 +27,7 @@
 - Truncated or too-short DDS files are handled safely using the real file length.
 - DDS is now in the built-in image list, and older config files are updated automatically.
 - The tray's `Scaling` is now `Images Scaling`, and videos have a `Videos Scaling` of their own; both stay hand-editable in `config.ini`.
+- Animated GIF, WebP and PNG previews follow their own `Animated Scaling`, separate from still images; a `config.ini` written before this gets the animation scale from `preview_scale`.
 - `Font Face` is out of the tray menu; `ttc_face` in `config.ini` still picks the face of a `.ttc`.
 
 ### Fixed
