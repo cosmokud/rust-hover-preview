@@ -9,6 +9,14 @@
 //! and BC7 for a photograph-quality colour at half of BC1's size. And some tools write a
 //! texture with no compression at all, in a format declared by channel masks.
 //!
+//! Both kinds come signed as well: a `_SNORM` sample is a number either side of zero
+//! rather than a level — the x and y of a normal map, a height that goes below its plane,
+//! the difference between two renders — and a file of one is a file of data rather than of
+//! a picture. What is drawn for it is the remap such data is shown with everywhere: the
+//! range stretched over the display's, dark below zero and light above it. The conversion
+//! that does it lives in `bcn` beside the signed codebook, which is the same conversion
+//! applied to the values a block holds.
+//!
 //! What Windows answers for is smaller than that. Its DDS codec — the one a `.dds` is
 //! opened by before this module is reached (see `wic_image`) — reads BC1, BC2 and BC3,
 //! measured rather than assumed: every DXGI format from BC4 on, and every uncompressed
@@ -167,14 +175,34 @@ enum Sample {
     U16,
     F16,
     F32,
+    /// A byte read as the signed number it is rather than as a level: one channel of a
+    /// file whose data goes both ways from zero — the difference between two renders, or a
+    /// value a shader reads and puts through a curve of its own.
+    Snorm8,
+    /// The same at sixteen bits, where the value is worth keeping that far apart.
+    Snorm16,
 }
 
 impl Sample {
     fn bytes(self) -> usize {
         match self {
-            Sample::U8 => 1,
-            Sample::U16 | Sample::F16 => 2,
+            Sample::U8 | Sample::Snorm8 => 1,
+            Sample::U16 | Sample::F16 | Sample::Snorm16 => 2,
             Sample::F32 => 4,
+        }
+    }
+
+    /// The level this kind of sample holds nothing at, which is what a channel the format
+    /// does not carry is drawn with.
+    ///
+    /// An unsigned sample measures nothing at zero, and so does a float. A signed one
+    /// measures it in the middle of its range — a normal map's missing z is a zero like any
+    /// other — so a two-channel signed format is drawn the same way the tools that read it
+    /// draw it, over the level that means zero rather than over black.
+    fn zero_level(self) -> u8 {
+        match self {
+            Sample::Snorm8 | Sample::Snorm16 => 128,
+            Sample::U8 | Sample::U16 | Sample::F16 | Sample::F32 => 0,
         }
     }
 }
@@ -202,7 +230,8 @@ enum Samples {
     },
     /// One channel, drawn as grey.
     Red(Sample),
-    /// Two channels, drawn with blue empty and alpha full, the way a BC5 block is.
+    /// Two channels, drawn with blue at the level the kind measures nothing at and alpha
+    /// full, the way a BC5 block is.
     RedGreen(Sample),
     /// Three channels and an alpha, in the order named.
     Colour(Order, Sample),
@@ -397,8 +426,17 @@ fn dx10_picture(format: u32) -> Option<Picture> {
         70..=72 => Some(Picture::Blocks(Blocks::Bc1)),
         73..=75 => Some(Picture::Blocks(Blocks::Bc2)),
         76..=78 => Some(Picture::Blocks(Blocks::Bc3)),
-        79..=81 => Some(Picture::Blocks(Blocks::Bc4)),
-        82..=84 => Some(Picture::Blocks(Blocks::Bc5)),
+        // BC4 and BC5 are three formats each: the same blocks read as unsigned data, as
+        // signed data, and as neither (which is a question for whoever reads them next, and
+        // is read here as it is stored).
+        79..=81 => Some(Picture::Blocks(match format {
+            81 => Blocks::Bc4Snorm,
+            _ => Blocks::Bc4,
+        })),
+        82..=84 => Some(Picture::Blocks(match format {
+            84 => Blocks::Bc5Snorm,
+            _ => Blocks::Bc5,
+        })),
         // BC6H is two formats, and only the unsigned one is read: the signed range is a
         // thing a render's intermediate data is written in rather than a picture, and the
         // formats this app has no answer for are answered with no preview (see `bcn`).
@@ -408,16 +446,22 @@ fn dx10_picture(format: u32) -> Option<Picture> {
         2 => Some(Picture::Samples(Samples::Colour(Order::Rgba, Sample::F32))),
         10 => Some(Picture::Samples(Samples::Colour(Order::Rgba, Sample::F16))),
         11 => Some(Picture::Samples(Samples::Colour(Order::Rgba, Sample::U16))),
+        13 => Some(Picture::Samples(Samples::Colour(Order::Rgba, Sample::Snorm16))),
         16 => Some(Picture::Samples(Samples::RedGreen(Sample::F32))),
         24 => Some(Picture::Samples(Samples::Rgb10a2)),
         28 | 29 => Some(Picture::Samples(Samples::Colour(Order::Rgba, Sample::U8))),
+        31 => Some(Picture::Samples(Samples::Colour(Order::Rgba, Sample::Snorm8))),
         34 => Some(Picture::Samples(Samples::RedGreen(Sample::F16))),
         35 => Some(Picture::Samples(Samples::RedGreen(Sample::U16))),
+        37 => Some(Picture::Samples(Samples::RedGreen(Sample::Snorm16))),
         41 => Some(Picture::Samples(Samples::Red(Sample::F32))),
         49 => Some(Picture::Samples(Samples::RedGreen(Sample::U8))),
+        51 => Some(Picture::Samples(Samples::RedGreen(Sample::Snorm8))),
         54 => Some(Picture::Samples(Samples::Red(Sample::F16))),
         56 => Some(Picture::Samples(Samples::Red(Sample::U16))),
+        58 => Some(Picture::Samples(Samples::Red(Sample::Snorm16))),
         61 => Some(Picture::Samples(Samples::Red(Sample::U8))),
+        63 => Some(Picture::Samples(Samples::Red(Sample::Snorm8))),
         85 => Some(Picture::Samples(Samples::Rgb565 { alpha: false })),
         86 => Some(Picture::Samples(Samples::Rgb565 { alpha: true })),
         87 | 91 => Some(Picture::Samples(Samples::Colour(Order::Bgra, Sample::U8))),
@@ -538,7 +582,7 @@ fn decode_samples(
                 [
                     sample_level(sample, &pixel[..sample_bytes], tone),
                     sample_level(sample, &pixel[sample_bytes..], tone),
-                    0,
+                    sample.zero_level(),
                     255,
                 ]
             }
@@ -672,6 +716,10 @@ fn sample_level(sample: Sample, bytes: &[u8], tone: crate::tone_map::ToneMap) ->
         Sample::U16 => narrow_sixteen(u16::from_le_bytes([bytes[0], bytes[1]])),
         Sample::F16 => tone.encode(bcn::half_to_float(u16::from_le_bytes([bytes[0], bytes[1]]))),
         Sample::F32 => tone.encode(f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])),
+        // Signed data is not light, so no curve is applied to it: it is drawn at the level
+        // its own range puts it at, which is what a tool that opens such a file shows.
+        Sample::Snorm8 => bcn::snorm8_to_level(bytes[0]),
+        Sample::Snorm16 => bcn::snorm16_to_level(u16::from_le_bytes([bytes[0], bytes[1]])),
     }
 }
 
@@ -685,6 +733,11 @@ fn sample_alpha(sample: Sample, bytes: &[u8]) -> u8 {
         Sample::F32 => narrow_float(f32::from_le_bytes([
             bytes[0], bytes[1], bytes[2], bytes[3],
         ])),
+        // A signed channel is a number either side of zero rather than coverage, and the
+        // formats that hold one have no alpha channel at all — the fourth sample of a
+        // signed four-channel format is another number, and a preview has nothing to do
+        // with it, so the texel is drawn opaque.
+        Sample::Snorm8 | Sample::Snorm16 => 255,
     }
 }
 

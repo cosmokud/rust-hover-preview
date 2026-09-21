@@ -71,6 +71,20 @@ pub const MIN_TEXT_FONT_SCALE_PERCENT: u32 = 1;
 pub const MAX_TEXT_FONT_SCALE_PERCENT: u32 = 1000;
 pub const DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS: f32 = 40.0;
 pub const MAX_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS: f32 = 1000.0;
+/// How long a hover's load may run before the waiting spinner is put up for it.
+///
+/// The window is hidden while a load runs, so one that finishes inside this has gone
+/// straight from nothing to the preview: the delay is what keeps a decode that takes a
+/// few milliseconds from flashing a spinner on the way past. A quarter of a second is
+/// where a wait starts to be worth showing, and `0` is a spinner that goes up with the
+/// load. Every kind of preview is answered by it — a decode, a page Office is rendering,
+/// a browser that has to start — because a wait is a wait to the pointer that is on the
+/// file.
+pub const DEFAULT_SPINNER_DELAY_MS: u64 = 250;
+/// The ceiling a hand-edited delay is reduced to: past ten seconds a load this app
+/// shows has finished or failed, and a larger number switches the spinner off by
+/// arithmetic rather than by a setting of its own.
+pub const MAX_SPINNER_DELAY_MS: u64 = 10_000;
 /// Memory the decoded-image cache may hold. A preview is decoded at the size the
 /// layout asked for, so this is a ceiling on retained pixels rather than on
 /// files: how many images fit depends entirely on how large they are shown.
@@ -227,6 +241,14 @@ pub fn sanitize_text_scroll_far_edge_grace_pixels(value: f32) -> f32 {
     } else {
         DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS
     }
+}
+
+/// The delay before a hover's load puts the spinner up, in milliseconds.
+///
+/// `0` is a delay like any other — the spinner then goes up with the load — so only a
+/// number past the ceiling is corrected.
+pub fn sanitize_spinner_delay_ms(value: u64) -> u64 {
+    value.min(MAX_SPINNER_DELAY_MS)
 }
 
 /// The decode budget in gigabytes.
@@ -813,6 +835,14 @@ pub struct AppConfig {
     /// back where the position modes alone would have them.
     pub avoid_mode: AvoidMode,
     pub same_file_rehover_delay_ms: u64,
+    /// How long a hover's load may run before the waiting spinner is put up for it,
+    /// in milliseconds. `0` puts it up with the load.
+    ///
+    /// The one spinner timing there is: every kind of preview is answered by it — a
+    /// decode, a page Office is rendering, a browser that has to start — so what the
+    /// number says is the one thing it means, how long a wait is given before it is
+    /// shown as one.
+    pub spinner_delay_ms: u64,
     pub webp_playback_fps: u32,
     /// Memory the decoded-image cache may hold, in megabytes. `0` switches the
     /// cache off, so every preview is decoded again.
@@ -997,6 +1027,7 @@ impl Default for AppConfig {
             follow_cursor: false,
             avoid_mode: AvoidMode::Filename,
             same_file_rehover_delay_ms: 750,
+            spinner_delay_ms: DEFAULT_SPINNER_DELAY_MS,
             webp_playback_fps: DEFAULT_WEBP_PLAYBACK_FPS,
             image_cache_mb: DEFAULT_IMAGE_CACHE_MB,
             image_background: TransparentBackground::Black,
@@ -1266,6 +1297,11 @@ impl AppConfig {
             );
             ini.set(
                 CONFIG_SECTION,
+                "spinner_delay_ms",
+                Some(sanitize_spinner_delay_ms(self.spinner_delay_ms).to_string()),
+            );
+            ini.set(
+                CONFIG_SECTION,
                 "webp_playback_fps",
                 Some(sanitize_webp_playback_fps(self.webp_playback_fps).to_string()),
             );
@@ -1516,6 +1552,9 @@ impl AppConfig {
         }
         if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "same_file_rehover_delay_ms") {
             self.same_file_rehover_delay_ms = value;
+        }
+        if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "spinner_delay_ms") {
+            self.spinner_delay_ms = sanitize_spinner_delay_ms(value);
         }
         if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "webp_playback_fps") {
             if let Ok(value) = u32::try_from(value) {
@@ -2262,5 +2301,42 @@ mod tests {
             "what the file says is what the list is"
         );
         assert!(!config.image_extensions.contains(&"svg".to_string()));
+    }
+
+    /// The delay a hover's load is given before the spinner goes up is a setting of its
+    /// own, read from its own key in milliseconds: `0` is a delay like any other, and a
+    /// number past the ceiling is reduced to it.
+    #[test]
+    fn the_spinner_delay_is_read_from_its_own_key() {
+        assert_eq!(
+            AppConfig::default().spinner_delay_ms,
+            DEFAULT_SPINNER_DELAY_MS,
+            "a load is given a quarter of a second unless the file says otherwise"
+        );
+
+        let mut ini = Ini::new();
+        ini.set(CONFIG_SECTION, "spinner_delay_ms", Some("900".to_string()));
+
+        let mut config = AppConfig::default();
+        config.apply_ini(&ini);
+        assert_eq!(config.spinner_delay_ms, 900);
+
+        let mut ini = Ini::new();
+        ini.set(CONFIG_SECTION, "spinner_delay_ms", Some("0".to_string()));
+
+        let mut config = AppConfig::default();
+        config.apply_ini(&ini);
+        assert_eq!(config.spinner_delay_ms, 0, "`0` is a delay like any other");
+
+        let mut ini = Ini::new();
+        ini.set(
+            CONFIG_SECTION,
+            "spinner_delay_ms",
+            Some((MAX_SPINNER_DELAY_MS + 1).to_string()),
+        );
+
+        let mut config = AppConfig::default();
+        config.apply_ini(&ini);
+        assert_eq!(config.spinner_delay_ms, MAX_SPINNER_DELAY_MS);
     }
 }
