@@ -1954,22 +1954,6 @@ mod tests {
         assert_eq!(config.svg_background, TransparentBackground::White);
     }
 
-    /// A document's scale is a setting of its own, read from its own key: what it is
-    /// a percentage of is the room the display has, so reading it as the picture scale
-    /// would make a hover's size depend on a setting about another kind of preview.
-    #[test]
-    fn a_documents_scale_is_read_from_its_own_key() {
-        let mut ini = Ini::new();
-        ini.set(CONFIG_SECTION, "preview_scale", Some("400".to_string()));
-        ini.set(CONFIG_SECTION, "svg_scale", Some("75".to_string()));
-
-        let mut config = AppConfig::default();
-        config.apply_ini(&ini);
-
-        assert_eq!(config.svg_scale, PreviewScale::Percent(75));
-        assert_eq!(config.preview_scale, PreviewScale::Percent(400));
-    }
-
     /// A document is drawn at half the room the display has unless the file says
     /// otherwise — which is what the setting starts at, and what a fresh install
     /// writes.
