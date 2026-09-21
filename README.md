@@ -14,7 +14,7 @@ A Windows 11 tray app inspired by QTTabBar that shows instant File Explorer prev
 - Images, including animated GIF, APNG, and WebP
 - HEIC, AVIF, and JPEG XL, decoded by the codec Windows already has
 - SVG vectors drawn at the size they are shown, animated or still
-- Fonts — `ttf`, `otf`, `ttc`, `woff`, `woff2` — drawn as a specimen: the name the font calls itself and the sample lines its own character map covers
+- Fonts — `ttf`, `otf`, `ttc`, `woff`, `woff2` — drawn as a specimen: the name the font calls itself and the sample lines its own character map covers, one script apiece, Latin through Arabic, Hebrew, Thai and Devanagari
 - Videos through FFmpeg, or through Windows' own media engine where FFmpeg is not installed
 - PDF first pages via the built-in Windows PDF engine
 - Text and code with syntax highlighting, rendered Markdown, and bundled/custom themes
@@ -165,6 +165,7 @@ All of them are free, and a Windows 11 device often has the HEIF, AV1 and WebP o
   - **PDF Scaling** — Fit to Screen (default), or the same shares of the display.
   - **Office Scaling** — the same for a page Office rendered; a workbook's fallback bitmap is never enlarged.
   - **Font Scaling** — the same shares for a font specimen, 50% (default).
+  - **Font Face** — which face of a `.ttc` collection is drawn: First Face (the default) down to Tenth Face. A collection has fewer faces than that usually, and one with fewer than the item names is drawn from its last face; the specimen's heading says which face came out, as `(2 of 4)`.
 - **Background**
   - **Image Background** — Transparent, Black, White, or Checkerboard.
   - **SVG Background** — the same backdrops for documents.
@@ -288,6 +289,7 @@ Key settings:
 - `svg_scale` — how much of the screen an SVG is drawn over: a percentage or `fit`, read against the screen rather than the size the document asks for, so `50` (the default) is half of it, `fit` all of it, and `100` or more read as `fit`. The engine's window is the size that comes out of this and its page fills it, so the setting is what the document is drawn at.
 - `pdf_scale` / `office_scale` — the same for a PDF page and for a page Office rendered, both `fit` (the default) as well as a percentage; a workbook's fallback bitmap follows its share of its own size and is never enlarged.
 - `font_scale` — how much of the screen a font specimen is drawn over: a percentage or `fit`, read against the screen, so `50` (the default) is half of it, `fit` all of it, and `100` or more read as `fit`. The specimen is sized from the window that comes out of this, so the setting is the size the type is drawn at. A font has no size of its own to be a percentage of, which is why the share is of the display rather than of the file.
+- `ttc_face` — which face of a `.ttc` collection a specimen is drawn from: `1` (the default) is the first face, and the last the setting holds is `10`. A page has no syntax for naming a face inside a collection, so the face is written out as a font of its own and drawn from there, and a collection with fewer faces than the setting names is drawn from the last one it has — the specimen's heading says which face came out. Files that hold a single font ignore it.
 - `font_background` — what a font specimen is drawn over: `black` (the default), `white`, `checkerboard`, or `transparent`. Text is drawn light on black, dark on the light backdrops, and light with a soft shadow where there is no backdrop at all to be read against.
 
 ## Build from Source
