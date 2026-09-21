@@ -10,6 +10,7 @@ use crate::config::{
     DEFAULT_TEXT_FONT_SCALE_PERCENT, DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS,
     DEFAULT_WEBP_PLAYBACK_FPS,
 };
+use crate::dds_image;
 use crate::engine_processes;
 use crate::font_formats;
 use crate::font_preview;
@@ -20,6 +21,7 @@ use crate::pdf_preview;
 use crate::svg_preview;
 use crate::text_formats;
 use crate::text_preview::{self, TextPreviewOptions};
+use crate::tone_map;
 use crate::video_formats::{self, is_video_file};
 use crate::video_player;
 use crate::webp_image;
@@ -1044,13 +1046,81 @@ fn image_dimensions_with_header_check(path: &PathBuf) -> Option<(u32, u32)> {
 /// The size a picture of a format this app's own decoder does not read is measured
 /// from: the frame the codec Windows has for it reports, and — where that codec is the
 /// WebP one and the machine has none, which is what a Windows 10 machine usually is —
-/// libwebp's, which is in the binary; see `wic_image` and `webp_image`.
+/// libwebp's, which is in the binary; see `wic_image` and `webp_image`. A `.dds` of a
+/// format the codec does not read is measured by the decoder this app carries for the
+/// rest of that format; see `dds_image`.
 fn codec_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
-    wic_image::dimensions(path).or_else(|| webp_image::dimensions(path))
+    wic_image::dimensions(path)
+        .or_else(|| dds_image::dimensions(path))
+        .or_else(|| webp_image::dimensions(path))
+}
+
+/// The eight-bit picture a picture whose samples are light is shown as.
+///
+/// `None` is every picture that holds levels already — a PNG, a JPEG, a BMP, and every
+/// other format this app's reader decodes — because a level put through a transfer
+/// function a second time is a washed-out picture rather than a corrected one.
+///
+/// What arrives as one of these is an `.exr` and a Radiance `.hdr`, which are the two
+/// float kinds the `image` crate has: three channels for a `.hdr` — and for the `.exr`
+/// that was written without an alpha — and four for the one that carries it. A
+/// single-channel file is the decoder's to widen, and it arrives as one of the two as
+/// well. What the curve does with them is `tone_map`'s; what is done here is the shape,
+/// and an alpha is not light and is not put through a curve.
+fn tone_mapped_image(img: &image::DynamicImage) -> Option<image::RgbaImage> {
+    let (samples, channels, width, height) = match img {
+        image::DynamicImage::ImageRgb32F(buffer) => (
+            buffer.as_raw().as_slice(),
+            3,
+            buffer.width(),
+            buffer.height(),
+        ),
+        image::DynamicImage::ImageRgba32F(buffer) => (
+            buffer.as_raw().as_slice(),
+            4,
+            buffer.width(),
+            buffer.height(),
+        ),
+        _ => return None,
+    };
+
+    let tone = tone_map::ToneMap::current();
+    let count = width as usize * height as usize;
+    let mut pixels = vec![0u8; count * 4];
+
+    for index in 0..count {
+        let texel = &samples[index * channels..][..channels];
+
+        let alpha = if channels == 4 { texel[3] } else { 1.0 };
+
+        let at = index * 4;
+        pixels[at] = tone.encode(texel[0]);
+        pixels[at + 1] = tone.encode(texel[1]);
+        pixels[at + 2] = tone.encode(texel[2]);
+        pixels[at + 3] = tone_mapped_alpha(alpha);
+    }
+
+    image::RgbaImage::from_raw(width, height, pixels)
+}
+
+/// An alpha as a level: brought into the range and scaled, with no curve applied — what
+/// the alpha of a float texture gets as well, and for the same reason: coverage is not
+/// light, and a picture composited over a backdrop with a curve put on its alpha is a
+/// picture that fades differently from every other one beside it.
+fn tone_mapped_alpha(alpha: f32) -> u8 {
+    if !alpha.is_finite() {
+        return 0;
+    }
+
+    (alpha.clamp(0.0, 1.0) * 255.0 + 0.5) as u8
 }
 
 /// Convert RGBA pixels to BGRA for Windows GDI
-fn rgba_to_bgra(rgba: &[u8]) -> Vec<u8> {
+///
+/// Shared with the readers that hand back their own pixels rather than going through the
+/// `image` crate — a texture this app decodes itself, a codec's own frame — because a
+/// frame is composed in one order whatever produced it (see `dds_image`).
+pub(crate) fn rgba_to_bgra(rgba: &[u8]) -> Vec<u8> {
     let mut bgra = Vec::with_capacity(rgba.len());
     for chunk in rgba.chunks(4) {
         if chunk.len() == 4 {
@@ -2536,8 +2606,13 @@ fn load_static_image(
         // The WebP codec is the one of them that is a Store package rather than
         // something Windows has, so a machine without it — a Windows 10 machine,
         // usually — is answered by libwebp instead, which is in the binary for the
-        // picture that moves; see `webp_image`.
+        // picture that moves; see `webp_image`. A `.dds` is the one of them the codec
+        // reads a smaller set of than the format holds, so what it has no answer for —
+        // the uncompressed formats, BC4 and BC5 — is asked of a decoder of this app's
+        // own; see `dds_image`. Both are guarded by the file's own header, so being
+        // asked about a picture that is neither costs a header rather than a file.
         let pixels = wic_image::decode(path, width, height)
+            .or_else(|| dds_image::decode(path, width, height))
             .or_else(|| webp_image::decode(path, width, height))?;
 
         (pixels, width, height)
@@ -2546,6 +2621,17 @@ fn load_static_image(
             decode_image_with_header_check(path)?
         } else {
             decode_image_by_extension(path)?
+        };
+
+        // A picture whose samples are light rather than levels — an EXR, a Radiance HDR —
+        // is brought into eight bits before anything else is done with it. It is the one
+        // thing that has to see the whole of the file's range, and the order is also the
+        // cheaper one: what follows is a resample, and resampling one byte to the channel
+        // is a quarter of the memory and a fraction of the time of resampling four bytes
+        // of float (see `tone_map`).
+        let img = match tone_mapped_image(&img) {
+            Some(toned) => image::DynamicImage::ImageRgba8(toned),
+            None => img,
         };
 
         let (orig_width, orig_height) = img.dimensions();

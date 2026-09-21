@@ -13,13 +13,14 @@ use crate::archive_formats::{sanitize_archive_extensions, DEFAULT_ARCHIVE_EXTENS
 use crate::font_formats::{sanitize_font_extensions, DEFAULT_FONT_EXTENSIONS};
 use crate::image_formats::{
     sanitize_image_extensions, DEFAULT_IMAGE_EXTENSIONS, IMAGE_EXTENSIONS_BEFORE_CODEC_FORMATS,
-    IMAGE_EXTENSIONS_BEFORE_SVG,
+    IMAGE_EXTENSIONS_BEFORE_DDS, IMAGE_EXTENSIONS_BEFORE_SVG,
 };
 use crate::office_formats::{sanitize_office_extensions, DEFAULT_OFFICE_EXTENSIONS};
 use crate::text_formats::{
     sanitize_extensions, sanitize_names, DEFAULT_TEXT_EXTENSIONS, DEFAULT_TEXT_NAMES,
 };
 use crate::theme_files;
+use crate::tone_map::Curve;
 use crate::video_formats::{sanitize_video_extensions, DEFAULT_VIDEO_EXTENSIONS};
 
 const CONFIG_SECTION: &str = "settings";
@@ -118,6 +119,23 @@ pub const MAX_TEXT_CACHE_MB: u32 = 2048;
 pub const DEFAULT_DECODE_BUDGET_GB: f32 = 1.0;
 pub const MIN_DECODE_BUDGET_GB: f32 = 0.25;
 pub const MAX_DECODE_BUDGET_GB: f32 = 64.0;
+/// The curve a picture whose samples are light is brought into eight bits with: an EXR, a
+/// Radiance HDR and a float texture hold light rather than levels, so what they need is
+/// the transfer function a PNG has already been through and a curve that brings a range
+/// wider than the display's into it (see `tone_map`).
+///
+/// Reinhard by default. It is the curve that leaves a value the display can already show
+/// very nearly where it was and brings everything above that down without clipping it, so
+/// a render whose lamp is a hundred times white is a picture rather than a white patch;
+/// `off` is the bare clamp the app drew before this existed, and `aces` is the filmic
+/// answer: darker in the shadows and more saturated.
+pub const DEFAULT_HDR_TONE_MAP: Curve = Curve::Reinhard;
+/// How many stops those pictures are shifted by before the curve, which is what a file far
+/// darker or brighter than a display can be is brought into range with. `0` is the picture
+/// as the file holds it.
+pub const DEFAULT_HDR_EXPOSURE: f32 = 0.0;
+pub const MIN_HDR_EXPOSURE: f32 = -10.0;
+pub const MAX_HDR_EXPOSURE: f32 = 10.0;
 /// How long the Office engine a family started is kept after that family's last
 /// page. Producing a page costs an Office start, and an engine still warm is what
 /// makes the next document of that family cheap, so one is kept for a while by
@@ -223,6 +241,18 @@ pub fn sanitize_decode_budget_gb(value: f32) -> f32 {
     } else {
         value.clamp(MIN_DECODE_BUDGET_GB, MAX_DECODE_BUDGET_GB)
     }
+}
+
+/// The stops a picture whose samples are light is shifted by. A value that is not a number
+/// falls back to the default, and one far outside what any picture would be shifted by is
+/// clamped to the range: the shift is taken as a power of two of the number, and what an
+/// exponent of a thousand is is an infinity.
+pub fn sanitize_hdr_exposure(value: f32) -> f32 {
+    if !value.is_finite() {
+        return DEFAULT_HDR_EXPOSURE;
+    }
+
+    value.clamp(MIN_HDR_EXPOSURE, MAX_HDR_EXPOSURE)
 }
 
 /// What a reader may ask the allocator for, in bytes.
@@ -911,6 +941,11 @@ pub struct AppConfig {
     /// handed it before it allocates, so a file larger than the budget is answered
     /// with no preview instead of with memory the app may not get.
     pub decode_budget_gb: f32,
+    /// The curve a picture whose samples are light is brought into eight bits with — an
+    /// EXR, a Radiance HDR, a float texture — as `hdr_tone_map` names it.
+    pub hdr_tone_map: Curve,
+    /// How many stops those pictures are shifted by before that curve, as `hdr_exposure`.
+    pub hdr_exposure: f32,
     /// Whether a text preview is more than something to look at: a preview that
     /// scrolls, that can be selected and copied from, and that a pointer can rest
     /// on without closing it. Off by default, because it changes what a preview
@@ -981,6 +1016,8 @@ impl Default for AppConfig {
             pdf_cache_mb: DEFAULT_PDF_CACHE_MB,
             text_cache_mb: DEFAULT_TEXT_CACHE_MB,
             decode_budget_gb: DEFAULT_DECODE_BUDGET_GB,
+            hdr_tone_map: DEFAULT_HDR_TONE_MAP,
+            hdr_exposure: DEFAULT_HDR_EXPOSURE,
             text_preview_full_mode: false,
             text_font_scale_percent: DEFAULT_TEXT_FONT_SCALE_PERCENT,
             text_scroll_far_edge_grace_pixels: DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS,
@@ -1343,6 +1380,16 @@ impl AppConfig {
             );
             ini.set(
                 CONFIG_SECTION,
+                "hdr_tone_map",
+                Some(self.hdr_tone_map.as_str().to_string()),
+            );
+            ini.set(
+                CONFIG_SECTION,
+                "hdr_exposure",
+                Some(sanitize_hdr_exposure(self.hdr_exposure).to_string()),
+            );
+            ini.set(
+                CONFIG_SECTION,
                 "text_preview_full_mode",
                 Some(self.text_preview_full_mode.to_string()),
             );
@@ -1603,6 +1650,17 @@ impl AppConfig {
         if let Ok(Some(value)) = ini.getfloat(CONFIG_SECTION, "decode_budget_gb") {
             self.decode_budget_gb = sanitize_decode_budget_gb(value as f32);
         }
+        // A curve is read by name, and a name that is not one of them is answered with the
+        // default this field already holds rather than with a curve picked at random: what
+        // the setting says has to be a curve for it to be used.
+        if let Some(value) = ini.get(CONFIG_SECTION, "hdr_tone_map") {
+            if let Some(curve) = Curve::from_str(&value) {
+                self.hdr_tone_map = curve;
+            }
+        }
+        if let Ok(Some(value)) = ini.getfloat(CONFIG_SECTION, "hdr_exposure") {
+            self.hdr_exposure = sanitize_hdr_exposure(value as f32);
+        }
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "text_preview_full_mode") {
             self.text_preview_full_mode = value;
         }
@@ -1622,15 +1680,16 @@ impl AppConfig {
         let mut restored = false;
 
         // The image list is the one whose built-in entries have changed since a file
-        // may have been written — `svg` and `svgz` were added to it, and then the
-        // formats Windows has a codec for — so it is read through the history beside
-        // the app's own older lists.
+        // may have been written — `svg` and `svgz` were added to it, then the
+        // formats Windows has a codec for, then `dds` — so it is read through the
+        // history beside the app's own older lists.
         let (list, defaulted) = configured_list_over_history(
             ini,
             IMAGE_SECTION,
             "extensions",
             DEFAULT_IMAGE_EXTENSIONS,
             &[
+                IMAGE_EXTENSIONS_BEFORE_DDS,
                 IMAGE_EXTENSIONS_BEFORE_CODEC_FORMATS,
                 IMAGE_EXTENSIONS_BEFORE_SVG,
             ],

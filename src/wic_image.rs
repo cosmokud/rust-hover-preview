@@ -1,5 +1,6 @@
 //! The picture formats this app's own decoder does not read and Windows does: HEIF
-//! (`.heic`, `.heif`), AVIF (`.avif`), JPEG XL (`.jxl`) and a still WebP (`.webp`).
+//! (`.heic`, `.heif`), AVIF (`.avif`), JPEG XL (`.jxl`), a still WebP (`.webp`) and a
+//! DirectDraw Surface (`.dds`).
 //!
 //! Nothing is bundled for them and nothing is installed beside the app. What decodes
 //! them is the Windows Imaging Component — the codec surface Windows itself draws
@@ -40,6 +41,15 @@
 //! picture whose bytes are stored sideways is drawn sideways. What shape that fix
 //! takes is settled by what the codecs do with the container's own transform, which
 //! is a question for a file written by a phone rather than for a guess.
+//!
+//! A `.dds` is the one format here this app *does* carry a decoder of its own for (see
+//! `dds_image`), and it is still asked of the codec first. What the codec gives it that
+//! no decoder of this side's does is the size: a texture is asked for at the box the
+//! layout planned and decoded there, while a decoder of this side's has to decode the
+//! whole of it — a four-thousand-square texture is sixty-four megabytes of texels — and
+//! scale that down afterwards. What the codec reads of a DDS is a smaller set than what
+//! the format holds, which is what `dds_image` is for: BC1, BC2 and BC3 here, and the
+//! uncompressed formats, BC4 and BC5 there.
 
 use crate::config::frame_bytes_within_budget;
 use std::cell::RefCell;
@@ -63,7 +73,7 @@ use windows::Win32::System::Com::{
 /// a picture at all, and these are pictures — so this is only which pictures the
 /// codec has to be asked about rather than the decoder every other picture goes
 /// through.
-const CODEC_EXTENSIONS: &[&str] = &["avif", "heic", "heif", "jxl", "webp"];
+const CODEC_EXTENSIONS: &[&str] = &["avif", "dds", "heic", "heif", "jxl", "webp"];
 
 thread_local! {
     /// The imaging factory this thread asks its codecs through.
@@ -375,6 +385,8 @@ mod tests {
     fn claims_the_names_windows_has_a_codec_for() {
         for name in [
             "picture.avif",
+            "picture.dds",
+            "picture.DDS",
             "picture.HEIC",
             "picture.heif",
             "picture.jxl",

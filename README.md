@@ -31,7 +31,11 @@ You can add or remove formats in config.ini. Unsupported formats will not show a
 
 ### Images
 
-`jpg`, `jpeg`, `png`, `apng`, `gif`, `bmp`, `ico`, `tiff`, `webp`, `tga`, `hdr`, `exr`, `qoi`, `heic`, `heif`, `avif`, `jxl`, and more. Animated GIF, APNG, and WebP files play; animation is detected from file content. The last four, and a still `webp`, are decoded by a codec extension Windows provides where one is installed — or, for `webp`, by the libwebp the app carries when it is not; see [Optional: Enable HEIC, AVIF, JPEG XL and WebP Preview](#optional-enable-heic-avif-jpeg-xl-and-webp-preview-windows-codecs).
+`jpg`, `jpeg`, `png`, `apng`, `gif`, `bmp`, `ico`, `tiff`, `webp`, `tga`, `hdr`, `exr`, `qoi`, `heic`, `heif`, `avif`, `jxl`, `dds`, and more. Animated GIF, APNG, and WebP files play; animation is detected from file content. `heic`, `heif`, `avif`, `jxl` and a still `webp` are decoded by a codec extension Windows provides where one is installed — or, for `webp`, by the libwebp the app carries when it is not; see [Optional: Enable HEIC, AVIF, JPEG XL and WebP Preview](#optional-enable-heic-avif-jpeg-xl-and-webp-preview-windows-codecs).
+
+`dds` textures are previewed in BC1, BC2, BC3, BC4 and BC5, and in the uncompressed formats a tool writes — the classic header and the DX10 one alike. BC6H and BC7 show no preview yet, and what a cubemap, a texture array or a mip chain shows is its first face and first level. Windows decodes BC1 to BC3 at the size of the preview; the rest is decoded by the app.
+
+`hdr` and `exr` hold light rather than screen values, so they are tone mapped on the way to the preview: an exposure, a curve and the sRGB transfer, with `hdr_tone_map` and `hdr_exposure` in `config.ini` choosing them (see [Configuration](#configuration)).
 
 ### Vectors
 
@@ -221,6 +225,8 @@ pdf_cache_mb=32
 text_cache_mb=0
 image_cache_mb=32
 decode_budget_gb=1
+hdr_tone_map=reinhard
+hdr_exposure=0
 trigger_key=alt
 trigger_key_mode=disable
 trigger_key_enabled=true
@@ -243,7 +249,7 @@ text_preview_full_mode=false
 text_font_scale=125
 
 [image]
-extensions=apng,avif,bmp,exr,ff,gif,hdr,heic,heif,ico,jfif,jpe,jpeg,jpg,jxl,pam,pbm,pgm,png,pnm,ppm,qoi,svg,svgz,tga,tif,tiff,webp
+extensions=apng,avif,bmp,dds,exr,ff,gif,hdr,heic,heif,ico,jfif,jpe,jpeg,jpg,jxl,pam,pbm,pgm,png,pnm,ppm,qoi,svg,svgz,tga,tif,tiff,webp
 
 [video]
 extensions=264,265,266,3g2,3gp,3gpp,apv,asf,av1,avc,avi,avs,avs2,avs3,bik,bk2,c93,cavs,cdg,cdxl,cin,cpk,dav,...
@@ -278,6 +284,8 @@ Key settings:
 - `pdf_cache_mb` — the same for the pages PDF previews were rendered as: default `32`, at most `2048`; a page is kept as the pixels it was drawn as, so the same file at two preview sizes is held as two pages.
 - `text_cache_mb` — the same for the frames text previews were painted as: default `0`, at most `2048`; the text itself is already cached, and a frame is per file, per box and per scroll position — never one a selection was painted into.
 - `decode_budget_gb` — the most memory one hover may decode or read for (a picture, the measurement of an SVG document and what a `.svgz` inflates to, a font's tables and what a `.woff2` inflates to, an animation's frames, the page Office exported, a theme file): default `1`, smallest `0.25`, largest `64`. It caps the file rather than what is kept, and a file past it shows no preview instead of the app asking for memory the allocator may refuse — which is why no value means "no limit".
+- `hdr_tone_map` — the curve a picture whose samples are light is brought into eight bits with: an `.exr`, a Radiance `.hdr`, and a `.dds` of one of the float formats. `reinhard` (the default) leaves a value the display can already show very nearly where it was and brings everything above it down without clipping it; `aces` is the filmic one, darker in the shadows and more saturated; `srgb` applies the transfer alone, which clips what is past white; `off` is the bare clamp — what a linear `0.5` is drawn at with each of them is `156`, `206`, `188` and `128`. An unknown name falls back to the default. Pictures that hold screen values already — a PNG, a JPEG — are never put through it.
+- `hdr_exposure` — how many stops those pictures are shifted by before that curve, for a file far darker or brighter than a display can show: `0` (the default) is the picture as the file holds it, and values are clamped to `-10`–`10`.
 - `office_engine_idle` — how long a family's Office engine is kept after that family's last page: seconds, or `indefinitely` for one kept as long as the app runs; default `600`. `0` lets it go as soon as it has drawn a page, so every document pays its own Office start.
 - `office_extensions` — the Office-preview gate, under `[office]`, written without dots.
 - `font_extensions` — the font-preview gate, under `[font]`, written without dots.

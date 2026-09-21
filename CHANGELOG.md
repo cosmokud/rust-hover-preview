@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.2.12]
+
+### Added
+
+- `dds` texture previews: BC1, BC2, BC3, BC4 and BC5, and the uncompressed formats a tool writes, behind the classic header and the DX10 one alike. Windows decodes the first three at the size of the preview and the app decodes the rest; BC6H and BC7 show no preview yet, and a cubemap, a texture array or a mip chain shows its first face and first level.
+- `hdr_tone_map` and `hdr_exposure` in `config.ini`: the curve and the exposure a picture whose samples are light — an `.exr`, a Radiance `.hdr`, a float texture — is brought into the preview with. `reinhard` (the default) leaves a value the display can already show where it was and rolls off everything above it instead of clipping it; `aces`, `srgb` and `off` are the other answers.
+
+### Changed
+
+- `.exr` and `.hdr` previews are tone mapped rather than clamped: a linear `0.5` was drawn as `128` and is drawn as `156`, and values past white are rolled off rather than burnt out.
+- `dds` is in the built-in image list; a `config.ini` written by an earlier version is brought up to it rather than left without it.
+
 ## [0.2.11]
 
 ### Added
@@ -17,7 +29,6 @@
 - A specimen's lines carry their own direction, so the Arabic and Hebrew lines are laid out from the right, their full stop ending them where the script ends it rather than where a left-to-right page would; every other line is drawn as it was.
 - A font that covers more of the sample lines than the specimen's box was shaped for — a pan-script one, which covers most of them — is drawn at smaller type rather than past the bottom of the box.
 - The page a specimen is drawn in is named for the face as well as the backdrop, so switching faces is a page the browser has not seen rather than the one before it answered out of its cache.
-- Bump version to 0.2.12 in `Cargo.toml` and `Cargo.lock`.
 
 ## [0.2.10]
 
