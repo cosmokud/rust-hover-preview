@@ -10,6 +10,7 @@
 ### Changed
 
 - `.exr` and `.hdr` previews are tone mapped rather than clamped: a linear `0.5` was drawn as `128` and is drawn as `156`, and values past white are rolled off rather than burnt out.
+- A `.dds` whose `DX10` header declares itself opaque is previewed opaque, instead of at whatever its unused alpha channel happens to hold — which is what a tool that never touched that channel leaves behind.
 - `dds` is in the built-in image list; a `config.ini` written by an earlier version is brought up to it rather than left without it.
 
 ## [0.2.11]
