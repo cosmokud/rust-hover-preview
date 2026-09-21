@@ -20,7 +20,7 @@ A Windows 11 tray app inspired by QTTabBar. Hover a file in File Explorer — or
 - Text and code with syntax highlighting, rendered Markdown, and themes.
 - Archives as a file tree with sizes — read without unpacking.
 - Office documents drawn from a background Office render, so previews appear quickly after the first hover.
-- Scaling from 25% to 400%, or fit-to-screen. Separate scaling for SVG, PDF, Office pages, and fonts.
+- Scaling from 25% to 400%, or fit-to-screen. Separate scaling for images and videos, and for SVG, PDF, Office pages, and fonts.
 - Previews appear beside the cursor or focused item and are kept on screen.
 - Tray menu and hand-editable `config.ini`.
 - DPI aware, single-instance, sleep/resume resilient, and light on idle CPU.
@@ -170,12 +170,12 @@ All are free. Windows 11 often has HEIF, AV1, and WebP already. Where one is mis
 - **Placement**
   - **Position** — Follow Cursor or Best Position.
   - **Avoid** — Don’t Avoid, Avoid Filename (default), Avoid Filename Column, or Avoid Details. This keeps a preview off the item it is about.
-  - **Scaling** — Fit to Screen or 25%–400%.
+  - **Images Scaling** — Fit to Screen or 25%–400%, of the image's own size.
+  - **Videos Scaling** — the same shares for a video, 100% (default).
   - **SVG Scaling** — Fit to Screen, or 75%, 50% (default), 25%, 10% of the display.
   - **PDF Scaling** — Fit to Screen (default), or the same shares of the display.
   - **Office Scaling** — the same for a page Office rendered; a workbook’s fallback bitmap is never enlarged.
   - **Font Scaling** — the same shares for a font specimen, 50% by default.
-  - **Font Face** — which face of a `.ttc` collection is drawn: First Face (default) down to Tenth Face. The heading says which face came out, such as `(2 of 4)`.
 - **Background**
   - **Image Background** — Transparent, Black, White, or Checkerboard.
   - **SVG Background** — the same backdrops for documents.
@@ -239,6 +239,7 @@ svg_background=black
 font_background=black
 video_volume=0
 preview_scale=100
+video_scale=100
 svg_scale=50
 pdf_scale=fit
 office_scale=fit
@@ -289,7 +290,8 @@ Key settings, in plain terms:
 - `trigger_key` / `trigger_key_mode` / `trigger_key_enabled` — the key (`alt`, `ctrl`, `shift`, `win`), what it does (`disable` or `enable`), and whether it is watched at all; `true` by default.
 - `follow_cursor` — `true` for Follow Cursor, `false` for Best Position.
 - `avoid_mode` — `filename` (default), `filename_column`, `details`, or `off`: what a preview is kept off.
-- `preview_scale` — percentage or `fit`.
+- `preview_scale` — percentage or `fit`, read against the picture's own size.
+- `video_scale` — the same for a video, `100` by default; a file written before the two were split gets its video scale from `preview_scale`.
 - `svg_scale` — percentage or `fit`, read against the screen. `50` is default, `fit` is all of it, and `100` or more reads as `fit`.
 - `pdf_scale` / `office_scale` — the same for a PDF page and an Office-rendered page, both `fit` by default as well as a percentage. A workbook’s fallback bitmap follows its own size and is never enlarged.
 - `font_scale` — percentage or `fit`, read against the screen. `50` is default, `fit` is all of it, and `100` or more reads as `fit`. A font has no size of its own, so the share is of the display.

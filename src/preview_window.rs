@@ -8,7 +8,8 @@ use crate::config::{
     TextTheme, TransparentBackground, DEFAULT_FONT_SCALE, DEFAULT_IMAGE_CACHE_MB,
     DEFAULT_OFFICE_SCALE, DEFAULT_PDF_SCALE, DEFAULT_PREVIEW_SCALE_PERCENT,
     DEFAULT_SPINNER_DELAY_MS, DEFAULT_SVG_SCALE_PERCENT, DEFAULT_TEXT_FONT_SCALE_PERCENT,
-    DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS, DEFAULT_WEBP_PLAYBACK_FPS,
+    DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS, DEFAULT_VIDEO_SCALE_PERCENT,
+    DEFAULT_WEBP_PLAYBACK_FPS,
 };
 use crate::dds_image;
 use crate::engine_processes;
@@ -397,10 +398,9 @@ impl MediaType {
     /// The kind of preview this media is, as the tray's gates name them.
     fn kind(&self) -> Option<PreviewType> {
         match self {
-            Self::StaticImage
-            | Self::AnimatedGif
-            | Self::AnimatedApng
-            | Self::AnimatedWebP => Some(PreviewType::Images),
+            Self::StaticImage | Self::AnimatedGif | Self::AnimatedApng | Self::AnimatedWebP => {
+                Some(PreviewType::Images)
+            }
             // A texture is a picture as far as the gates go: the list a `.dds` is in is the
             // image list, and the switch for pictures is the switch for it.
             Self::Dds => Some(PreviewType::Images),
@@ -453,9 +453,22 @@ struct ImageFrame {
 /// queue and the player drains it; `released` records that the player gave back
 /// frames it already showed, after which the animation can no longer loop from
 /// memory and the decoder has to start the file over.
+///
+/// The two are read and written under this one lock, and that is what makes the
+/// arrangement sound: a pass that ends with nothing given back leaves every frame
+/// in the player's hands and the file needs no decoder again (`decoded`), while a
+/// pass that ends after frames were given back is a pass to run again. Settling
+/// both under the same lock is what keeps a release and the end of a decode from
+/// passing each other, which is a player left holding the last frame of an
+/// animation whose decoder has already gone.
 struct StreamedFrames {
     queue: VecDeque<ImageFrame>,
     released: bool,
+    /// Whether a pass was decoded whole with nothing given back, so the player
+    /// holds the file entire and loops it from memory. Nothing is released after
+    /// this: a frame dropped out of a file the decoder is done with could never be
+    /// decoded again.
+    decoded: bool,
 }
 
 /// Media data that can be either static or animated
@@ -572,14 +585,17 @@ impl MediaData {
     ///
     /// Frames are only taken while the retained window has room: the decoder
     /// waits once its queue is full, so this is what keeps a long animation from
-    /// decoding itself into memory faster than it is shown.
+    /// decoding itself into memory faster than it is shown. The window stops
+    /// meaning anything once the decoder is done with the file — there is nothing
+    /// left to hold back, and the frames it finished with are frames of the
+    /// animation whatever is in hand.
     fn sync_shared_frames(&mut self) {
         let Some(shared) = self.shared_frames.clone() else {
             return;
         };
 
         let retained_bytes: usize = self.frames.iter().map(|frame| frame.pixels.len()).sum();
-        if retained_bytes < ANIMATION_RETAINED_BYTES {
+        if retained_bytes < ANIMATION_RETAINED_BYTES || self.is_fully_loaded() {
             let result = shared.lock();
             if let Ok(mut streamed) = result {
                 if !streamed.queue.is_empty() {
@@ -588,7 +604,7 @@ impl MediaData {
             }
         }
 
-        self.release_played_frames();
+        self.release_played_frames(retained_bytes);
     }
 
     /// Whether the player has given back frames it already showed.
@@ -603,13 +619,27 @@ impl MediaData {
     /// Without this a long animation would either stop part-way at a fixed size
     /// cap or keep its whole decoded length in memory; with it, playback stays
     /// inside a fixed window while the decoder replays the file to loop.
-    fn release_played_frames(&mut self) {
+    ///
+    /// Two things have to hold before a frame is given back, and both of them are
+    /// about a promise the player makes to itself: the frames that are dropped are
+    /// frames that have to be decoded again. The window has to be full, which is
+    /// the only thing a release is for — an animation that fits in
+    /// `ANIMATION_RETAINED_BYTES` is held whole, plays from beginning to end and
+    /// wraps back into the frame it started on, and the file is read once for all
+    /// of it. And the decoder has to still be working, which is settled under the
+    /// same lock the decoder takes as it ends a pass: a decoder that has finished
+    /// with a file it decoded whole has nothing to decode again.
+    fn release_played_frames(&mut self, retained_bytes: usize) {
         let Some(shared) = self.shared_frames.clone() else {
             return;
         };
 
         let keep_from = self.current_frame.saturating_sub(1);
         if keep_from == 0 {
+            return;
+        }
+
+        if retained_bytes < ANIMATION_RETAINED_BYTES {
             return;
         }
 
@@ -621,10 +651,17 @@ impl MediaData {
             return;
         }
 
+        let Ok(mut streamed) = shared.lock() else {
+            return;
+        };
+        if streamed.decoded {
+            return;
+        }
+
         self.frames.drain(..keep_from);
         self.current_frame -= keep_from;
 
-        mark_streamed_frames_released(&shared);
+        streamed.released = true;
     }
 
     fn advance_frame(&mut self) -> bool {
@@ -674,9 +711,24 @@ impl MediaData {
             }
         }
 
-        // Safety: if last_frame_time drifted too far behind (e.g. >1s),
-        // snap it forward to avoid perpetual catch-up across multiple loops
-        if self.last_frame_time.elapsed() > Duration::from_secs(1) {
+        // The playhead is snapped forward when it is late by more than a second
+        // past the delay the frame it is on asks for — a machine that slept, a
+        // decode that took far longer than the frame it was for — so that catching
+        // up cannot run on across several loops.
+        //
+        // The frame's own delay is part of what late means, and leaving it out is
+        // what a frame held for a long time used to cost: a GIF frame that waits
+        // two seconds is a frame waiting for two seconds and not a playhead that
+        // has fallen behind, so a snap on a flat second reset the clock every tick
+        // and a delay of a whole second or more could never be reached — an
+        // animation whose first frame is held for 1.2 seconds sat on that frame
+        // for good.
+        let waiting_for = Duration::from_millis(effective_frame_delay_ms(
+            &self.media_type,
+            self.frames[self.current_frame].delay_ms,
+        ) as u64)
+            + Duration::from_secs(1);
+        if self.last_frame_time.elapsed() > waiting_for {
             self.last_frame_time = Instant::now();
         }
 
@@ -1271,46 +1323,28 @@ fn current_webp_playback_fps() -> u32 {
         .unwrap_or(DEFAULT_WEBP_PLAYBACK_FPS)
 }
 
-fn current_preview_scale() -> PreviewScale {
+/// Every scale a hover is laid out by, read together so that a measure and the render
+/// that follows it agree on all of them — one read of the configuration rather than a
+/// handful of them, and one answer per kind of preview.
+fn current_hover_scales() -> HoverScales {
     CONFIG
         .lock()
-        .map(|cfg| cfg.preview_scale)
-        .unwrap_or(PreviewScale::Percent(DEFAULT_PREVIEW_SCALE_PERCENT))
-}
-
-/// The share of the display an SVG document is drawn at, read from the configuration
-/// the way the picture scale beside it is.
-fn current_svg_scale() -> PreviewScale {
-    CONFIG
-        .lock()
-        .map(|cfg| cfg.svg_scale)
-        .unwrap_or(PreviewScale::Percent(DEFAULT_SVG_SCALE_PERCENT))
-}
-
-/// The share of the display a PDF page is drawn at, read from the configuration the
-/// way the document scale above it is.
-fn current_pdf_scale() -> PreviewScale {
-    CONFIG
-        .lock()
-        .map(|cfg| cfg.pdf_scale)
-        .unwrap_or(DEFAULT_PDF_SCALE)
-}
-
-/// The same for the page an Office document is drawn as.
-fn current_office_scale() -> PreviewScale {
-    CONFIG
-        .lock()
-        .map(|cfg| cfg.office_scale)
-        .unwrap_or(DEFAULT_OFFICE_SCALE)
-}
-
-/// The share of the display a font specimen is drawn at, read the way the three document
-/// scales above it are.
-fn current_font_scale() -> PreviewScale {
-    CONFIG
-        .lock()
-        .map(|cfg| cfg.font_scale)
-        .unwrap_or(DEFAULT_FONT_SCALE)
+        .map(|cfg| HoverScales {
+            picture: cfg.preview_scale,
+            video: cfg.video_scale,
+            svg: cfg.svg_scale,
+            page: cfg.pdf_scale,
+            office: cfg.office_scale,
+            font: cfg.font_scale,
+        })
+        .unwrap_or(HoverScales {
+            picture: PreviewScale::Percent(DEFAULT_PREVIEW_SCALE_PERCENT),
+            video: PreviewScale::Percent(DEFAULT_VIDEO_SCALE_PERCENT),
+            svg: PreviewScale::Percent(DEFAULT_SVG_SCALE_PERCENT),
+            page: DEFAULT_PDF_SCALE,
+            office: DEFAULT_OFFICE_SCALE,
+            font: DEFAULT_FONT_SCALE,
+        })
 }
 
 /// The theme, Markdown rendering and font size the configuration currently
@@ -1444,6 +1478,25 @@ fn request_office_render(
     Some((path.to_path_buf(), generation))
 }
 
+/// Every scale a hover is laid out by, read from the configuration together so that the
+/// measure of a file and the render that follows it cannot disagree about the size.
+#[derive(Debug, Clone, Copy)]
+struct HoverScales {
+    /// The share of its own size a picture is drawn at, which is also the scale every
+    /// format that is none of the others below keeps.
+    picture: PreviewScale,
+    /// The share of its own size a video is drawn at.
+    video: PreviewScale,
+    /// The share of the display an SVG document is drawn at.
+    svg: PreviewScale,
+    /// The share of the display a PDF page is drawn at.
+    page: PreviewScale,
+    /// The share of the display the page an Office document is drawn as is shown at.
+    office: PreviewScale,
+    /// The share of the display a font specimen is drawn at.
+    font: PreviewScale,
+}
+
 /// The scale a preview is laid out and rendered with.
 ///
 /// A PDF page is a vector, so the engine draws it at whatever size it is asked
@@ -1480,17 +1533,17 @@ fn request_office_render(
 /// type. A file that will not parse as a font is not measured at all, so a hover onto one
 /// never reaches this.
 ///
-/// Every other format keeps the configured scale.
-fn effective_preview_scale(
-    path: &Path,
-    preview_scale: PreviewScale,
-    svg_scale: PreviewScale,
-    pdf_scale: PreviewScale,
-    office_scale: PreviewScale,
-    font_scale: PreviewScale,
-) -> PreviewScale {
+/// A video keeps the share of its own size `video_scale` names, which is the picture's
+/// rule: what a video's preview is, until the player's window is over it, is its first
+/// frame — a bitmap measured the way a picture is — so the share is of the file's own
+/// size, and it is a setting of its own because a size that suits a photograph is not
+/// always the size one wants to watch a file at. The one thing read beside it is whether
+/// the probe has answered yet (see `video_probe_due`).
+///
+/// Every other format keeps the picture scale.
+fn effective_preview_scale(path: &Path, scales: HoverScales) -> PreviewScale {
     if pdf_preview::is_pdf_file(path) {
-        fit_reduced(pdf_scale)
+        fit_reduced(scales.page)
     } else if is_text_preview(path) || archive_formats::is_archive_file(path) {
         PreviewScale::Percent(100)
     } else if video_probe_due(path) {
@@ -1511,15 +1564,17 @@ fn effective_preview_scale(
             // spinner in a box of its own, and a box that small is placed at the
             // size it is rather than fitted to the display the way a page is.
             office_preview::SourceKind::None => PreviewScale::Percent(100),
-            source if source.may_be_enlarged() => fit_reduced(office_scale),
-            _ => bitmap_at_display_scale(office_scale),
+            source if source.may_be_enlarged() => fit_reduced(scales.office),
+            _ => bitmap_at_display_scale(scales.office),
         }
     } else if svg_preview::is_svg_file(path) {
-        fit_reduced(svg_scale)
+        fit_reduced(scales.svg)
     } else if font_formats::is_font_file(path) {
-        fit_reduced(font_scale)
+        fit_reduced(scales.font)
+    } else if is_video_file(path) {
+        scales.video
     } else {
-        preview_scale
+        scales.picture
     }
 }
 
@@ -1830,23 +1885,6 @@ fn await_frame_queue_room(shared: &Arc<Mutex<StreamedFrames>>, cancel: &Arc<Atom
     false
 }
 
-/// Whether the player has released the frames it already showed, which means the
-/// file has to be decoded again to play the animation another time.
-fn streamed_frames_released(shared: &Arc<Mutex<StreamedFrames>>) -> bool {
-    shared
-        .lock()
-        .map(|streamed| streamed.released)
-        .unwrap_or(false)
-}
-
-/// Records that the player gave back frames it already showed.
-fn mark_streamed_frames_released(shared: &Arc<Mutex<StreamedFrames>>) {
-    let result = shared.lock();
-    if let Ok(mut streamed) = result {
-        streamed.released = true;
-    }
-}
-
 fn load_animated_gif(
     path: &PathBuf,
     max_width: u32,
@@ -1930,6 +1968,7 @@ fn load_animated_gif(
     let shared = Arc::new(Mutex::new(StreamedFrames {
         queue: VecDeque::new(),
         released: false,
+        decoded: false,
     }));
     let shared_clone = Arc::clone(&shared);
     let loaded_flag = Arc::new(AtomicBool::new(false));
@@ -1987,9 +2026,27 @@ fn load_animated_gif(
                 frame_idx += 1;
             }
 
-            // The player gave back the frames it already showed, so the file is
-            // decoded again to play the animation another time.
-            if cancelled || !streamed_frames_released(&shared_clone) {
+            // Whether the file has to be decoded again is settled under the same
+            // lock the player takes before it gives frames back, so that a release
+            // and the end of a pass cannot pass each other: whichever happens
+            // first, the other sees it. A pass that ends with nothing given back
+            // leaves every frame in the player's hands — the file is its own
+            // memory from there, and no frame of it is ever decoded again — while a
+            // pass that ends after frames were given back is one to run again.
+            let replay = match shared_clone.lock() {
+                Ok(mut streamed) => {
+                    if streamed.released {
+                        true
+                    } else {
+                        streamed.decoded = true;
+                        false
+                    }
+                }
+                // A lock that cannot be taken is nothing left to decode for.
+                Err(_) => false,
+            };
+
+            if cancelled || !replay {
                 break;
             }
             skip = 0;
@@ -2141,6 +2198,7 @@ fn load_animated_apng(
     let shared = Arc::new(Mutex::new(StreamedFrames {
         queue: VecDeque::new(),
         released: false,
+        decoded: false,
     }));
     let shared_clone = Arc::clone(&shared);
     let loaded_flag = Arc::new(AtomicBool::new(false));
@@ -2185,9 +2243,27 @@ fn load_animated_apng(
                 }
             }
 
-            // The player gave back the frames it already showed, so the file is
-            // decoded again to play the animation another time.
-            if cancelled || !streamed_frames_released(&shared_clone) {
+            // Whether the file has to be decoded again is settled under the same
+            // lock the player takes before it gives frames back, so that a release
+            // and the end of a pass cannot pass each other: whichever happens
+            // first, the other sees it. A pass that ends with nothing given back
+            // leaves every frame in the player's hands — the file is its own
+            // memory from there, and no frame of it is ever decoded again — while a
+            // pass that ends after frames were given back is one to run again.
+            let replay = match shared_clone.lock() {
+                Ok(mut streamed) => {
+                    if streamed.released {
+                        true
+                    } else {
+                        streamed.decoded = true;
+                        false
+                    }
+                }
+                // A lock that cannot be taken is nothing left to decode for.
+                Err(_) => false,
+            };
+
+            if cancelled || !replay {
                 break;
             }
             skip = 0;
@@ -2352,6 +2428,7 @@ fn load_animated_webp(
     let shared = Arc::new(Mutex::new(StreamedFrames {
         queue: VecDeque::new(),
         released: false,
+        decoded: false,
     }));
     let shared_clone = Arc::clone(&shared);
     let loaded_flag = Arc::new(AtomicBool::new(false));
@@ -2408,9 +2485,27 @@ fn load_animated_webp(
                 }
             }
 
-            // The player gave back the frames it already showed, so the file is
-            // decoded again to play the animation another time.
-            if cancelled || !streamed_frames_released(&shared_clone) {
+            // Whether the file has to be decoded again is settled under the same
+            // lock the player takes before it gives frames back, so that a release
+            // and the end of a pass cannot pass each other: whichever happens
+            // first, the other sees it. A pass that ends with nothing given back
+            // leaves every frame in the player's hands — the file is its own
+            // memory from there, and no frame of it is ever decoded again — while a
+            // pass that ends after frames were given back is one to run again.
+            let replay = match shared_clone.lock() {
+                Ok(mut streamed) => {
+                    if streamed.released {
+                        true
+                    } else {
+                        streamed.decoded = true;
+                        false
+                    }
+                }
+                // A lock that cannot be taken is nothing left to decode for.
+                Err(_) => false,
+            };
+
+            if cancelled || !replay {
                 break;
             }
             skip = 0;
@@ -6713,10 +6808,8 @@ pub fn run_preview_window() {
                             // with no preview rather than a box of the placeholder pixels
                             // a video preview is opened with.
                             if media_data.media_type.is_native_video() {
-                                let (width, height) = (
-                                    media_data.current_width(),
-                                    media_data.current_height(),
-                                );
+                                let (width, height) =
+                                    (media_data.current_width(), media_data.current_height());
 
                                 // A hover that lands on the file already playing leaves it
                                 // playing, the same way the FFmpeg path compares the file
@@ -7177,7 +7270,7 @@ pub fn run_preview_window() {
                 // video itself (see `video_probe_due`).
                 let mut show_video_probe: bool = false;
                 let mut show_requested = false;
-                let mut preview_scale = current_preview_scale();
+                let mut preview_scale = current_hover_scales().picture;
                 let mut show_dpi = 96u32;
                 let show_snapshot = matches!(
                     preview_msg,
@@ -7197,14 +7290,7 @@ pub fn run_preview_window() {
                         let bounds = monitor_bounds_from_point(x, y);
                         let dpi = monitor_dpi_from_point(x, y);
                         let follow_cursor = CONFIG.lock().map(|c| c.follow_cursor).unwrap_or(true);
-                        preview_scale = effective_preview_scale(
-                            &path,
-                            preview_scale,
-                            current_svg_scale(),
-                            current_pdf_scale(),
-                            current_office_scale(),
-                            current_font_scale(),
-                        );
+                        preview_scale = effective_preview_scale(&path, current_hover_scales());
 
                         // A document with no page rendered for it yet has nothing to
                         // measure but the wait, so its preview is laid out as the
@@ -7278,14 +7364,7 @@ pub fn run_preview_window() {
                         let bounds = monitor_bounds_from_point(center.0, center.1);
                         let dpi = monitor_dpi_from_point(center.0, center.1);
                         let follow_cursor = CONFIG.lock().map(|c| c.follow_cursor).unwrap_or(true);
-                        preview_scale = effective_preview_scale(
-                            &path,
-                            preview_scale,
-                            current_svg_scale(),
-                            current_pdf_scale(),
-                            current_office_scale(),
-                            current_font_scale(),
-                        );
+                        preview_scale = effective_preview_scale(&path, current_hover_scales());
 
                         if let Some(orig_dims) = media_dimensions(&path, bounds, dpi) {
                             let is_video = is_video_file(&path);
@@ -7890,6 +7969,19 @@ mod tests {
         )
     }
 
+    /// Every scale a hover is laid out by, at the shares the app starts at. A test that
+    /// is about one of them names that one and leaves the rest where the app has them.
+    fn hover_scales() -> HoverScales {
+        HoverScales {
+            picture: PreviewScale::Percent(DEFAULT_PREVIEW_SCALE_PERCENT),
+            video: PreviewScale::Percent(DEFAULT_VIDEO_SCALE_PERCENT),
+            svg: PreviewScale::Percent(DEFAULT_SVG_SCALE_PERCENT),
+            page: DEFAULT_PDF_SCALE,
+            office: DEFAULT_OFFICE_SCALE,
+            font: DEFAULT_FONT_SCALE,
+        }
+    }
+
     /// A keyboard preview of a row is placed in the room past the region the `Avoid`
     /// setting keeps it off, so a row is cleared only as far as the setting asks: past
     /// every column at `Avoid Details`, and only past the name at `Avoid Filename`,
@@ -7970,11 +8062,13 @@ mod tests {
             assert_eq!(
                 effective_preview_scale(
                     &pdf,
-                    configured,
-                    svg_scale,
-                    configured,
-                    office_scale,
-                    DEFAULT_FONT_SCALE
+                    HoverScales {
+                        picture: configured,
+                        page: configured,
+                        svg: svg_scale,
+                        office: office_scale,
+                        ..hover_scales()
+                    }
                 ),
                 PreviewScale::FitToScreen
             );
@@ -7983,22 +8077,26 @@ mod tests {
         assert_eq!(
             effective_preview_scale(
                 &pdf,
-                PreviewScale::Percent(400),
-                svg_scale,
-                PreviewScale::Percent(50),
-                office_scale,
-                DEFAULT_FONT_SCALE
+                HoverScales {
+                    picture: PreviewScale::Percent(400),
+                    page: PreviewScale::Percent(50),
+                    svg: svg_scale,
+                    office: office_scale,
+                    ..hover_scales()
+                }
             ),
             PreviewScale::FitToScreenReduced(50)
         );
         assert_eq!(
             effective_preview_scale(
                 &pdf,
-                PreviewScale::Percent(400),
-                svg_scale,
-                PreviewScale::Percent(25),
-                office_scale,
-                DEFAULT_FONT_SCALE
+                HoverScales {
+                    picture: PreviewScale::Percent(400),
+                    page: PreviewScale::Percent(25),
+                    svg: svg_scale,
+                    office: office_scale,
+                    ..hover_scales()
+                }
             ),
             PreviewScale::FitToScreenReduced(25),
             "a page follows its own share of the display, whatever the picture scale says"
@@ -8006,11 +8104,13 @@ mod tests {
         assert_eq!(
             effective_preview_scale(
                 &pdf,
-                PreviewScale::Percent(400),
-                svg_scale,
-                PreviewScale::FitToScreen,
-                office_scale,
-                DEFAULT_FONT_SCALE
+                HoverScales {
+                    picture: PreviewScale::Percent(400),
+                    page: PreviewScale::FitToScreen,
+                    svg: svg_scale,
+                    office: office_scale,
+                    ..hover_scales()
+                }
             ),
             PreviewScale::FitToScreen
         );
@@ -8030,11 +8130,12 @@ mod tests {
         assert_eq!(
             effective_preview_scale(
                 &svg,
-                configured,
-                PreviewScale::FitToScreen,
-                page,
-                page,
-                DEFAULT_FONT_SCALE
+                HoverScales {
+                    picture: configured,
+                    svg: PreviewScale::FitToScreen,
+                    page,
+                    ..hover_scales()
+                }
             ),
             PreviewScale::FitToScreen
         );
@@ -8042,11 +8143,12 @@ mod tests {
             assert_eq!(
                 effective_preview_scale(
                     &svg,
-                    configured,
-                    PreviewScale::Percent(percent),
-                    page,
-                    page,
-                    DEFAULT_FONT_SCALE
+                    HoverScales {
+                        picture: configured,
+                        svg: PreviewScale::Percent(percent),
+                        page,
+                        ..hover_scales()
+                    }
                 ),
                 PreviewScale::FitToScreenReduced(percent),
                 "{percent}% of the room"
@@ -8056,11 +8158,12 @@ mod tests {
         assert_eq!(
             effective_preview_scale(
                 &svg,
-                configured,
-                PreviewScale::Percent(60),
-                page,
-                page,
-                DEFAULT_FONT_SCALE
+                HoverScales {
+                    picture: configured,
+                    svg: PreviewScale::Percent(60),
+                    page,
+                    ..hover_scales()
+                }
             ),
             PreviewScale::FitToScreenReduced(60),
             "a share the menu does not offer is the share it is"
@@ -8074,11 +8177,12 @@ mod tests {
             assert_eq!(
                 effective_preview_scale(
                     &svg,
-                    configured,
-                    PreviewScale::Percent(100),
-                    page,
-                    page,
-                    DEFAULT_FONT_SCALE
+                    HoverScales {
+                        picture: configured,
+                        svg: PreviewScale::Percent(100),
+                        page,
+                        ..hover_scales()
+                    }
                 ),
                 PreviewScale::FitToScreen,
                 "asking for the whole room or more is the whole room"
@@ -8098,7 +8202,15 @@ mod tests {
         let svg = PreviewScale::Percent(75);
 
         assert_eq!(
-            effective_preview_scale(&font, picture, svg, page, page, DEFAULT_FONT_SCALE),
+            effective_preview_scale(
+                &font,
+                HoverScales {
+                    picture,
+                    svg,
+                    page,
+                    ..hover_scales()
+                }
+            ),
             PreviewScale::FitToScreenReduced(DEFAULT_FONT_SCALE_PERCENT),
             "a specimen starts at half the room, whatever the other kinds are set to"
         );
@@ -8107,11 +8219,13 @@ mod tests {
             assert_eq!(
                 effective_preview_scale(
                     &font,
-                    picture,
-                    svg,
-                    page,
-                    page,
-                    PreviewScale::Percent(percent)
+                    HoverScales {
+                        picture,
+                        svg,
+                        page,
+                        font: PreviewScale::Percent(percent),
+                        ..hover_scales()
+                    }
                 ),
                 PreviewScale::FitToScreenReduced(percent),
                 "{percent}% of the room"
@@ -8124,7 +8238,16 @@ mod tests {
             PreviewScale::Percent(400),
         ] {
             assert_eq!(
-                effective_preview_scale(&font, picture, svg, page, page, configured),
+                effective_preview_scale(
+                    &font,
+                    HoverScales {
+                        picture,
+                        svg,
+                        page,
+                        font: configured,
+                        ..hover_scales()
+                    }
+                ),
                 PreviewScale::FitToScreen,
                 "asking for the whole room or more is the whole room"
             );
@@ -8135,11 +8258,13 @@ mod tests {
         assert_eq!(
             effective_preview_scale(
                 &png,
-                PreviewScale::Percent(200),
-                svg,
-                page,
-                page,
-                PreviewScale::Percent(10)
+                HoverScales {
+                    picture: PreviewScale::Percent(200),
+                    svg,
+                    page,
+                    font: PreviewScale::Percent(10),
+                    ..hover_scales()
+                }
             ),
             PreviewScale::Percent(200)
         );
@@ -8156,11 +8281,14 @@ mod tests {
         assert_eq!(
             effective_preview_scale(
                 &svg,
-                picture,
-                PreviewScale::Percent(DEFAULT_SVG_SCALE_PERCENT),
-                PreviewScale::Percent(25),
-                PreviewScale::Percent(75),
-                PreviewScale::Percent(10)
+                HoverScales {
+                    picture,
+                    svg: PreviewScale::Percent(DEFAULT_SVG_SCALE_PERCENT),
+                    page: PreviewScale::Percent(25),
+                    office: PreviewScale::Percent(75),
+                    font: PreviewScale::Percent(10),
+                    ..hover_scales()
+                }
             ),
             PreviewScale::FitToScreenReduced(DEFAULT_SVG_SCALE_PERCENT),
             "a document follows its own share, not a page's"
@@ -8172,13 +8300,81 @@ mod tests {
         assert_eq!(
             effective_preview_scale(
                 &png,
-                PreviewScale::Percent(200),
-                PreviewScale::FitToScreen,
-                PreviewScale::Percent(25),
-                PreviewScale::Percent(75),
-                PreviewScale::Percent(10)
+                HoverScales {
+                    picture: PreviewScale::Percent(200),
+                    svg: PreviewScale::FitToScreen,
+                    page: PreviewScale::Percent(25),
+                    office: PreviewScale::Percent(75),
+                    font: PreviewScale::Percent(10),
+                    ..hover_scales()
+                }
             ),
             PreviewScale::Percent(200)
+        );
+    }
+
+    /// A video's size is a setting of its own: a video the probe has answered for keeps
+    /// the share `video_scale` names whatever the pictures beside it are drawn at. A
+    /// video the probe has not answered for is not laid out at any share yet — what is
+    /// on screen is the wait for the probe — so both settings leave that hover in the
+    /// spinner's own box (see `video_probe_due`).
+    #[test]
+    fn a_video_follows_its_own_scale() {
+        let video = PathBuf::from(r"C:\clips\holiday.mp4");
+        let unprobed = PathBuf::from(r"C:\clips\not-probed-yet.mp4");
+
+        assert_eq!(
+            effective_preview_scale(
+                &unprobed,
+                HoverScales {
+                    video: PreviewScale::Percent(50),
+                    picture: PreviewScale::Percent(400),
+                    ..hover_scales()
+                }
+            ),
+            PreviewScale::Percent(100),
+            "a video the probe has not answered for waits in the spinner's own box"
+        );
+
+        // The probe's answer is held per file and version, which is the state a hover
+        // the probe has already answered for is in by the time its replay is laid out.
+        if let Ok(mut cache) = VIDEO_GEOMETRY_CACHE.lock() {
+            cache.insert(
+                VideoGeometryKey {
+                    path: video.clone(),
+                    version: file_version(&video),
+                },
+                ProbedGeometry::Measured(VideoGeometry {
+                    width: 1920,
+                    height: 1080,
+                    crop: None,
+                }),
+            );
+        }
+
+        assert_eq!(
+            effective_preview_scale(
+                &video,
+                HoverScales {
+                    video: PreviewScale::Percent(50),
+                    picture: PreviewScale::Percent(400),
+                    ..hover_scales()
+                }
+            ),
+            PreviewScale::Percent(50),
+            "a measured video follows its own share, not the picture's"
+        );
+
+        assert_eq!(
+            effective_preview_scale(
+                &video,
+                HoverScales {
+                    video: PreviewScale::FitToScreen,
+                    ..hover_scales()
+                }
+            ),
+            PreviewScale::FitToScreen,
+            "and taking the whole of its own size is a share it is offered too"
         );
     }
 
@@ -8223,11 +8419,14 @@ mod tests {
         let waiting = PathBuf::from(r"C:\docs\not-rendered-yet.docx");
         let scale = effective_preview_scale(
             &waiting,
-            PreviewScale::Percent(400),
-            PreviewScale::Percent(DEFAULT_SVG_SCALE_PERCENT),
-            PreviewScale::Percent(25),
-            PreviewScale::Percent(10),
-            PreviewScale::Percent(DEFAULT_FONT_SCALE_PERCENT),
+            HoverScales {
+                picture: PreviewScale::Percent(400),
+                svg: PreviewScale::Percent(DEFAULT_SVG_SCALE_PERCENT),
+                page: PreviewScale::Percent(25),
+                office: PreviewScale::Percent(10),
+                font: PreviewScale::Percent(DEFAULT_FONT_SCALE_PERCENT),
+                ..hover_scales()
+            },
         );
 
         assert_eq!(scale, PreviewScale::Percent(100));
@@ -9151,15 +9350,8 @@ mod tests {
             let path = PathBuf::from(path);
             println!("\n--- {} ---", path.display());
 
-            let configured = current_preview_scale();
-            let scale = effective_preview_scale(
-                &path,
-                configured,
-                current_svg_scale(),
-                current_pdf_scale(),
-                current_office_scale(),
-                current_font_scale(),
-            );
+            let configured = current_hover_scales().picture;
+            let scale = effective_preview_scale(&path, current_hover_scales());
             println!("scale: configured {configured:?}, effective {scale:?}");
 
             let Some(dimensions) = media_dimensions(&path, bounds, dpi) else {
@@ -9217,5 +9409,96 @@ mod tests {
                 ),
             }
         }
+    }
+
+    #[test]
+    #[ignore = "builds an animation larger than the retained window of its own"]
+    fn sliding_window_probe() {
+        use image::codecs::gif::{GifEncoder, Repeat};
+        use image::{Delay, Frame, Rgba, RgbaImage};
+        use std::io::BufWriter;
+
+        let path = std::env::temp_dir().join("rhp-sliding-window-probe.gif");
+        let (side, frame_count, delay_ms) = (1024u32, 40u32, 40u32);
+
+        {
+            let file = File::create(&path).expect("a file to write the probe animation to");
+            let mut encoder = GifEncoder::new_with_speed(BufWriter::new(file), 30);
+            encoder.set_repeat(Repeat::Infinite).expect("looping");
+            for index in 0..frame_count {
+                let shade = (index * 251 / frame_count) as u8;
+                let image = RgbaImage::from_pixel(side, side, Rgba([shade, 40, 255 - shade, 255]));
+                encoder
+                    .encode_frame(Frame::from_parts(
+                        image,
+                        0,
+                        0,
+                        Delay::from_numer_denom_ms(delay_ms, 1),
+                    ))
+                    .expect("a frame");
+            }
+        }
+
+        let decoded_mb = u64::from(side) * u64::from(side) * 4 * u64::from(frame_count) / 1048576;
+        println!(
+            "\n--- {} ({} frames, {} MB decoded) ---",
+            path.display(),
+            frame_count,
+            decoded_mb
+        );
+
+        let cancel = Arc::new(AtomicBool::new(false));
+        let Some(mut media) = load_animated_gif(
+            &path,
+            1920,
+            1080,
+            PreviewScale::Percent(100),
+            Arc::clone(&cancel),
+        ) else {
+            println!("load: None");
+            return;
+        };
+
+        let start = Instant::now();
+        let mut last_frame = media.current_frame;
+        let mut advances = 0usize;
+        let mut wraps = 0usize;
+        let mut next_log = Instant::now();
+
+        while start.elapsed() < Duration::from_secs(12) {
+            if media.advance_frame() {
+                advances += 1;
+                if media.current_frame <= last_frame {
+                    wraps += 1;
+                }
+                last_frame = media.current_frame;
+            }
+
+            if Instant::now() >= next_log {
+                next_log = Instant::now() + Duration::from_millis(1000);
+                println!(
+                    "  t={:>5.2}s frame={:<4} held={:<4} loaded={:<5} released={:<5} advances={} wraps={}",
+                    start.elapsed().as_secs_f32(),
+                    media.current_frame,
+                    media.frames.len(),
+                    media.is_fully_loaded(),
+                    media.frames_were_released(),
+                    advances,
+                    wraps
+                );
+            }
+
+            std::thread::sleep(Duration::from_millis(4));
+        }
+
+        println!(
+            "after 12s: advances={} wraps={} frame={} held={}",
+            advances,
+            wraps,
+            media.current_frame,
+            media.frames.len()
+        );
+        media.cancel_background_work();
+        let _ = std::fs::remove_file(&path);
     }
 }

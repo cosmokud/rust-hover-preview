@@ -1,14 +1,14 @@
+use crate::codecs::{self, refresh as refresh_codecs, Row};
 use crate::config::{
     sanitize_decode_budget_gb, sanitize_image_cache_mb, sanitize_office_cache_mb,
-    sanitize_pdf_cache_mb, sanitize_text_cache_mb, sanitize_text_font_scale_percent,
-    sanitize_ttc_face, AvoidMode, EngineIdle, MarkdownMode, PreviewScale, PreviewType, TextTheme,
-    TransparentBackground, TriggerKeyMode, DEFAULT_DECODE_BUDGET_GB, DEFAULT_FONT_SCALE,
-    DEFAULT_IMAGE_CACHE_MB, DEFAULT_OFFICE_CACHE_MB, DEFAULT_OFFICE_ENGINE_IDLE_SECS,
-    DEFAULT_OFFICE_SCALE, DEFAULT_PDF_CACHE_MB, DEFAULT_PDF_SCALE, DEFAULT_PREVIEW_SCALE_PERCENT,
-    DEFAULT_SVG_SCALE_PERCENT, DEFAULT_TEXT_CACHE_MB, DEFAULT_TEXT_FONT_SCALE_PERCENT,
-    DEFAULT_TTC_FACE, DEFAULT_WEBVIEW_IDLE_SECS,
+    sanitize_pdf_cache_mb, sanitize_text_cache_mb, sanitize_text_font_scale_percent, AvoidMode,
+    EngineIdle, MarkdownMode, PreviewScale, PreviewType, TextTheme, TransparentBackground,
+    TriggerKeyMode, DEFAULT_DECODE_BUDGET_GB, DEFAULT_FONT_SCALE, DEFAULT_IMAGE_CACHE_MB,
+    DEFAULT_OFFICE_CACHE_MB, DEFAULT_OFFICE_ENGINE_IDLE_SECS, DEFAULT_OFFICE_SCALE,
+    DEFAULT_PDF_CACHE_MB, DEFAULT_PDF_SCALE, DEFAULT_PREVIEW_SCALE, DEFAULT_SVG_SCALE,
+    DEFAULT_TEXT_CACHE_MB, DEFAULT_TEXT_FONT_SCALE_PERCENT, DEFAULT_VIDEO_SCALE,
+    DEFAULT_WEBVIEW_IDLE_SECS,
 };
-use crate::codecs;
 use crate::explorer_hook;
 use crate::office_render;
 use crate::pdf_preview;
@@ -110,14 +110,11 @@ const ID_TRAY_REHOVER_DELAY_SLOW: u16 = 1037; // 1000ms
 const ID_TRAY_DELAY_FAST_PLUS: u16 = 1038; // 750ms
 const ID_TRAY_REHOVER_DELAY_FAST_PLUS: u16 = 1039; // 750ms
 const ID_TRAY_OPEN_CONFIG: u16 = 1040;
-const ID_TRAY_SCALE_FIT: u16 = 1041;
-const ID_TRAY_SCALE_400: u16 = 1042; // 400%
-const ID_TRAY_SCALE_300: u16 = 1043; // 300%
-const ID_TRAY_SCALE_200: u16 = 1044; // 200%
-const ID_TRAY_SCALE_150: u16 = 1045; // 150%
-const ID_TRAY_SCALE_100: u16 = 1046; // 100%
-const ID_TRAY_SCALE_50: u16 = 1047; // 50%
-const ID_TRAY_SCALE_25: u16 = 1048; // 25%
+/// The `Placement → Images Scaling` submenu: one command per share of its own size a
+/// picture is drawn at, in the order it lists them — the first of the two bitmap
+/// submenus, each with a range of its own so a click on one is never read as a click
+/// on the other.
+const ID_TRAY_SCALE_BASE: u16 = 1041;
 /// The `Placement → SVG Scaling` submenu: one command per share of the display a
 /// document is drawn at, in the order it lists them. The ids start past the last
 /// range the app's own items occupy — the caches, which end below this — so a share
@@ -131,28 +128,11 @@ const ID_TRAY_OFFICE_SCALE_BASE: u16 = 1415;
 /// `Font Scaling`, the fourth of them, in the range after the Office one: a specimen is
 /// drawn at a share of the display the same way a document is.
 const ID_TRAY_FONT_SCALE_BASE: u16 = 1420;
-/// The `Placement → Font Face` submenu: which face of a collection a specimen is drawn
-/// from, in the order it lists them. It sits directly after the `Font Scaling` range, so
-/// the two questions a specimen answers — how large it is drawn and which face it is drawn
-/// from — are read as one pair of ranges and neither is read as the other.
-const ID_TRAY_FONT_FACE_BASE: u16 = 1425;
-/// The faces the `Font Face` submenu offers, in the order it lists them: the first face a
-/// collection holds at the top, down to the tenth — which is the whole range the setting
-/// holds, so a face a hand-edited `config.ini` asks for is the face the menu marks. A
-/// collection with fewer faces than the setting names is drawn from its last one, and the
-/// specimen's heading says which face that was.
-const FONT_FACE_CHOICES: [&str; 10] = [
-    "First Face",
-    "Second Face",
-    "Third Face",
-    "Fourth Face",
-    "Fifth Face",
-    "Sixth Face",
-    "Seventh Face",
-    "Eighth Face",
-    "Ninth Face",
-    "Tenth Face",
-];
+/// `Videos Scaling`, the `Images Scaling` submenu's twin below it, in the range directly
+/// after the font one: it lists the same shares, so the two share a table and a builder,
+/// and it is a range of its own because a click on a video's scale is never a click on a
+/// picture's.
+const ID_TRAY_VIDEO_SCALE_BASE: u16 = 1425;
 /// The shares of the display every `… Scaling` submenu offers, in the order it lists
 /// them: the whole room a document can be given at the top, then the shares of it a
 /// document is asked for below. What differs between the settings is where they start —
@@ -164,6 +144,21 @@ const DOCUMENT_SCALE_CHOICES: [PreviewScale; 5] = [
     PreviewScale::Percent(50),
     PreviewScale::Percent(25),
     PreviewScale::Percent(10),
+];
+/// The shares the `Images Scaling` and `Videos Scaling` submenus offer, in the order they
+/// list them: a bitmap is drawn at a share of its own size rather than of the display, so
+/// the percentages are the ones that mean something for one. Nothing is marked as the
+/// default here — the default is passed to the labels rather than written into the table,
+/// because which share a setting starts at is the setting's own business.
+const BITMAP_SCALE_CHOICES: [PreviewScale; 8] = [
+    PreviewScale::FitToScreen,
+    PreviewScale::Percent(400),
+    PreviewScale::Percent(300),
+    PreviewScale::Percent(200),
+    PreviewScale::Percent(150),
+    PreviewScale::Percent(100),
+    PreviewScale::Percent(50),
+    PreviewScale::Percent(25),
 ];
 const ID_TRAY_THEME_LIGHT: u16 = 1050; // Atom One Light
 const ID_TRAY_THEME_DARK: u16 = 1051; // One Dark Pro
@@ -375,14 +370,13 @@ unsafe extern "system" fn tray_window_proc(
                 ID_TRAY_REHOVER_DELAY_FAST_PLUS => set_same_file_rehover_delay(750),
                 ID_TRAY_REHOVER_DELAY_SLOW => set_same_file_rehover_delay(1000),
                 ID_TRAY_OPEN_CONFIG => open_config_file(),
-                ID_TRAY_SCALE_FIT => set_preview_scale(PreviewScale::FitToScreen),
-                ID_TRAY_SCALE_400 => set_preview_scale(PreviewScale::Percent(400)),
-                ID_TRAY_SCALE_300 => set_preview_scale(PreviewScale::Percent(300)),
-                ID_TRAY_SCALE_200 => set_preview_scale(PreviewScale::Percent(200)),
-                ID_TRAY_SCALE_150 => set_preview_scale(PreviewScale::Percent(150)),
-                ID_TRAY_SCALE_100 => set_preview_scale(PreviewScale::Percent(100)),
-                ID_TRAY_SCALE_50 => set_preview_scale(PreviewScale::Percent(50)),
-                ID_TRAY_SCALE_25 => set_preview_scale(PreviewScale::Percent(25)),
+                // How large a picture is drawn, by the position its item was listed at.
+                cmd if (ID_TRAY_SCALE_BASE
+                    ..ID_TRAY_SCALE_BASE + BITMAP_SCALE_CHOICES.len() as u16)
+                    .contains(&cmd) =>
+                {
+                    set_preview_scale(cmd - ID_TRAY_SCALE_BASE)
+                }
                 ID_TRAY_THEME_LIGHT => set_theme(TextTheme::Light),
                 ID_TRAY_THEME_DARK => set_theme(TextTheme::Dark),
                 // The `theme` folder's items, by the position the submenu gave
@@ -468,13 +462,14 @@ unsafe extern "system" fn tray_window_proc(
                 {
                     set_font_scale(cmd - ID_TRAY_FONT_SCALE_BASE)
                 }
-                // Which face of a collection a specimen is drawn from, by the position it
-                // was listed at.
-                cmd if (ID_TRAY_FONT_FACE_BASE
-                    ..ID_TRAY_FONT_FACE_BASE + FONT_FACE_CHOICES.len() as u16)
+                // How large a video is drawn, by the position its item was listed at: the
+                // same shares the pictures above it are offered, in a range of their own
+                // because the two settings are read one each.
+                cmd if (ID_TRAY_VIDEO_SCALE_BASE
+                    ..ID_TRAY_VIDEO_SCALE_BASE + BITMAP_SCALE_CHOICES.len() as u16)
                     .contains(&cmd) =>
                 {
-                    set_font_face(cmd - ID_TRAY_FONT_FACE_BASE)
+                    set_video_scale(cmd - ID_TRAY_VIDEO_SCALE_BASE)
                 }
                 ID_TRAY_FONT_400 => set_text_font_scale(400),
                 ID_TRAY_FONT_300 => set_text_font_scale(300),
@@ -982,75 +977,28 @@ unsafe fn show_context_menu(hwnd: HWND) {
 
     append_avoid_menu(placement_menu, w!("Avoid"), ID_TRAY_AVOID_BASE, avoid_mode);
 
-    // Add the Scaling submenu
-    let preview_scale = CONFIG
+    // Add the Images Scaling and Videos Scaling submenus: how large a picture and how
+    // large a video is drawn, each at a share of its own size rather than of the display.
+    // One builder serves both — the shares are the same shares, and so is what a click on
+    // one means — and each is a submenu of its own because the two sizes are two settings.
+    let (preview_scale, video_scale) = CONFIG
         .lock()
-        .map(|c| c.preview_scale)
-        .unwrap_or(PreviewScale::Percent(DEFAULT_PREVIEW_SCALE_PERCENT));
-    let scale_menu = CreatePopupMenu().unwrap();
+        .map(|c| (c.preview_scale, c.video_scale))
+        .unwrap_or((DEFAULT_PREVIEW_SCALE, DEFAULT_VIDEO_SCALE));
 
-    let scale_flag = |scale: PreviewScale| {
-        MF_STRING
-            | if preview_scale == scale {
-                MF_CHECKED
-            } else {
-                MF_UNCHECKED
-            }
-    };
-    let _ = AppendMenuW(
-        scale_menu,
-        scale_flag(PreviewScale::FitToScreen),
-        ID_TRAY_SCALE_FIT as usize,
-        w!("Fit to Screen"),
-    );
-    let _ = AppendMenuW(
-        scale_menu,
-        scale_flag(PreviewScale::Percent(400)),
-        ID_TRAY_SCALE_400 as usize,
-        w!("400%"),
-    );
-    let _ = AppendMenuW(
-        scale_menu,
-        scale_flag(PreviewScale::Percent(300)),
-        ID_TRAY_SCALE_300 as usize,
-        w!("300%"),
-    );
-    let _ = AppendMenuW(
-        scale_menu,
-        scale_flag(PreviewScale::Percent(200)),
-        ID_TRAY_SCALE_200 as usize,
-        w!("200%"),
-    );
-    let _ = AppendMenuW(
-        scale_menu,
-        scale_flag(PreviewScale::Percent(150)),
-        ID_TRAY_SCALE_150 as usize,
-        w!("150%"),
-    );
-    let _ = AppendMenuW(
-        scale_menu,
-        scale_flag(PreviewScale::Percent(100)),
-        ID_TRAY_SCALE_100 as usize,
-        w!("100%"),
-    );
-    let _ = AppendMenuW(
-        scale_menu,
-        scale_flag(PreviewScale::Percent(50)),
-        ID_TRAY_SCALE_50 as usize,
-        w!("50%"),
-    );
-    let _ = AppendMenuW(
-        scale_menu,
-        scale_flag(PreviewScale::Percent(25)),
-        ID_TRAY_SCALE_25 as usize,
-        w!("25%"),
-    );
-
-    let _ = AppendMenuW(
+    append_bitmap_scale_menu(
         placement_menu,
-        MF_STRING | MF_POPUP,
-        scale_menu.0 as usize,
-        w!("Scaling"),
+        w!("Images Scaling"),
+        ID_TRAY_SCALE_BASE,
+        preview_scale,
+        DEFAULT_PREVIEW_SCALE,
+    );
+    append_bitmap_scale_menu(
+        placement_menu,
+        w!("Videos Scaling"),
+        ID_TRAY_VIDEO_SCALE_BASE,
+        video_scale,
+        DEFAULT_VIDEO_SCALE,
     );
 
     // Add the SVG Scaling, PDF Scaling, Office Scaling and Font Scaling submenus: how much
@@ -1063,7 +1011,7 @@ unsafe fn show_context_menu(hwnd: HWND) {
         .lock()
         .map(|c| (c.svg_scale, c.pdf_scale, c.office_scale, c.font_scale))
         .unwrap_or((
-            PreviewScale::Percent(DEFAULT_SVG_SCALE_PERCENT),
+            DEFAULT_SVG_SCALE,
             DEFAULT_PDF_SCALE,
             DEFAULT_OFFICE_SCALE,
             DEFAULT_FONT_SCALE,
@@ -1074,7 +1022,7 @@ unsafe fn show_context_menu(hwnd: HWND) {
         w!("SVG Scaling"),
         ID_TRAY_SVG_SCALE_BASE,
         svg_scale,
-        PreviewScale::Percent(DEFAULT_SVG_SCALE_PERCENT),
+        DEFAULT_SVG_SCALE,
     );
     append_document_scale_menu(
         placement_menu,
@@ -1096,50 +1044,6 @@ unsafe fn show_context_menu(hwnd: HWND) {
         ID_TRAY_FONT_SCALE_BASE,
         font_scale,
         DEFAULT_FONT_SCALE,
-    );
-
-    // Add the Font Face submenu, beside the specimen's scale: a `.ttc` is one file holding
-    // several fonts — a family's regular and bold, a typeface's several languages — which
-    // share their outlines and are found by offsets into them, and a page can be pointed at
-    // none of them but the one written out of the file. Which face that is is the same kind
-    // of question as how large the specimen is drawn: what the page shows rather than where
-    // its window goes. A collection of fewer faces than the item names is drawn from its
-    // last, which the specimen's own heading reports.
-    let ttc_face = CONFIG
-        .lock()
-        .map(|c| sanitize_ttc_face(c.ttc_face))
-        .unwrap_or(DEFAULT_TTC_FACE);
-
-    let face_menu = CreatePopupMenu().unwrap();
-
-    // The labels are kept for as long as the menu is being filled out, for the same reason
-    // the cache labels are: `AppendMenuW` is handed a pointer, so the wide strings have to
-    // outlive the call that lists them.
-    let face_labels: Vec<Vec<u16>> = FONT_FACE_CHOICES
-        .iter()
-        .map(|label| label.encode_utf16().chain(std::iter::once(0)).collect())
-        .collect();
-
-    for (index, _) in FONT_FACE_CHOICES.iter().enumerate() {
-        let flags = MF_STRING
-            | if index as u32 + 1 == ttc_face {
-                MF_CHECKED
-            } else {
-                MF_UNCHECKED
-            };
-        let _ = AppendMenuW(
-            face_menu,
-            flags,
-            (ID_TRAY_FONT_FACE_BASE + index as u16) as usize,
-            PCWSTR(face_labels[index].as_ptr()),
-        );
-    }
-
-    let _ = AppendMenuW(
-        placement_menu,
-        MF_STRING | MF_POPUP,
-        face_menu.0 as usize,
-        w!("Font Face"),
     );
 
     let _ = AppendMenuW(
@@ -1490,7 +1394,7 @@ unsafe fn show_context_menu(hwnd: HWND) {
     // The answers are asked again here, because this is the one moment a user is looking
     // at them: a codec extension installed a minute ago shows up the next time the menu is
     // opened, rather than at the next restart.
-    codecs::refresh();
+    refresh_codecs();
     append_codecs_menu(menu);
 
     let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
@@ -1903,6 +1807,71 @@ fn append_document_scale_menu(
     let _ = unsafe { AppendMenuW(parent, MF_STRING | MF_POPUP, menu.0 as usize, label) };
 }
 
+/// The `Images Scaling` and `Videos Scaling` submenus: the shares of its own size a bitmap
+/// — a picture, or a video's first frame and the player window over it — is drawn at, with
+/// the one the setting is on marked and nothing marked for a share the menu does not
+/// offer, which is what a hand-edited `config.ini` can ask for. One builder serves both
+/// because the two are the same question asked of two kinds of file: the shares are one
+/// list, the labels are one function, and what differs is only which setting the submenu
+/// writes and the id its items carry.
+fn append_bitmap_scale_menu(
+    parent: HMENU,
+    label: PCWSTR,
+    base: u16,
+    scale: PreviewScale,
+    default: PreviewScale,
+) {
+    let menu = unsafe { CreatePopupMenu().unwrap() };
+
+    // The labels are kept for as long as the menu is being filled out, for the same
+    // reason the cache labels are: `AppendMenuW` is handed a pointer, so the wide
+    // strings have to outlive the call that lists them.
+    let labels: Vec<Vec<u16>> = BITMAP_SCALE_CHOICES
+        .iter()
+        .map(|choice| {
+            bitmap_scale_label(*choice, default)
+                .encode_utf16()
+                .chain(std::iter::once(0))
+                .collect()
+        })
+        .collect();
+
+    for (index, choice) in BITMAP_SCALE_CHOICES.iter().enumerate() {
+        let flags = MF_STRING
+            | if *choice == scale {
+                MF_CHECKED
+            } else {
+                MF_UNCHECKED
+            };
+        let _ = unsafe {
+            AppendMenuW(
+                menu,
+                flags,
+                (base + index as u16) as usize,
+                PCWSTR(labels[index].as_ptr()),
+            )
+        };
+    }
+
+    let _ = unsafe { AppendMenuW(parent, MF_STRING | MF_POPUP, menu.0 as usize, label) };
+}
+
+/// What a share of a bitmap's own size is called in the menu: the percentage itself, with
+/// the one the setting starts at marked as the default. Taking the whole of it is not a
+/// percentage, so it is named for what it does.
+fn bitmap_scale_label(scale: PreviewScale, default: PreviewScale) -> String {
+    let label = match scale {
+        PreviewScale::Percent(percent) => format!("{percent}%"),
+        _ => "Fit to Screen".to_string(),
+    };
+
+    if scale == default {
+        format!("{label} (Default)")
+    } else {
+        label
+    }
+}
+
 /// What a share of the display is called in the menu: the percentage itself, with the
 /// one the setting starts at marked as the default. The whole room is not a percentage
 /// of it, so it is named for what it is.
@@ -2017,7 +1986,7 @@ fn append_codecs_menu(menu: HMENU) {
 }
 
 /// One group of the `Codecs` submenu, with a row per engine or codec in it.
-fn append_codec_group(parent: HMENU, label: PCWSTR, rows: Vec<codecs::Row>) {
+fn append_codec_group(parent: HMENU, label: PCWSTR, rows: Vec<Row>) {
     let group = unsafe { CreatePopupMenu().unwrap() };
 
     // The labels are kept for as long as the group is being filled out, for the reason the
@@ -2055,7 +2024,7 @@ fn append_codec_group(parent: HMENU, label: PCWSTR, rows: Vec<codecs::Row>) {
 /// because the two cannot be told apart for the rows that matter: a menu greys a checked
 /// item along with everything else about it, so a present row and a missing one would look
 /// the same. A glyph is nothing but text, and it stays legible on the row it is on.
-fn codec_row_label(row: &codecs::Row) -> String {
+fn codec_row_label(row: &Row) -> String {
     if row.available {
         format!("\u{2714} {}", row.name)
     } else {
@@ -2285,9 +2254,32 @@ fn set_avoid_mode(index: u16) {
     }
 }
 
-fn set_preview_scale(scale: PreviewScale) {
+/// How large a picture is drawn, by the position the item was listed at.
+///
+/// The size a bitmap is drawn at is part of the placement that was made when the preview
+/// was opened — the box is sized, and the frame is scaled into it — so, like the position
+/// beside it, this applies to the next hover rather than resizing the preview that is up.
+fn set_preview_scale(index: u16) {
+    let Some(scale) = bitmap_scale_at(index) else {
+        return;
+    };
+
     if let Ok(mut config) = CONFIG.lock() {
         config.preview_scale = scale;
+        config.save();
+    }
+}
+
+/// The same for a video, at the share `video_scale` names: the frame that stands in for
+/// one is a bitmap like a picture, so the shares its submenu offers are the picture's
+/// shares, and the setting written is the video's own.
+fn set_video_scale(index: u16) {
+    let Some(scale) = bitmap_scale_at(index) else {
+        return;
+    };
+
+    if let Ok(mut config) = CONFIG.lock() {
+        config.video_scale = scale;
         config.save();
     }
 }
@@ -2350,20 +2342,11 @@ fn set_font_scale(index: u16) {
     }
 }
 
-/// Which face of a collection a specimen is drawn from, by the position the item was listed
-/// at — the position is the face's own number less one, and a face past the setting's last
-/// one is that last one.
-///
-/// The preview on screen is rebuilt rather than only composited again, for the reason a
-/// change of backdrop is: which face is drawn is the page's own content, and the specimen
-/// the page is built from. A collection that is up is read again at the new face, the two
-/// being two specimens rather than one.
-fn set_font_face(index: u16) {
-    if let Ok(mut config) = CONFIG.lock() {
-        config.ttc_face = sanitize_ttc_face(u32::from(index) + 1);
-        config.save();
-    }
-    refresh_preview();
+/// The share of its own size an item of the `Images Scaling` or `Videos Scaling` submenu
+/// stands for, by the position it was listed at. An id past the last choice the menu
+/// offered is one that is not there.
+fn bitmap_scale_at(index: u16) -> Option<PreviewScale> {
+    BITMAP_SCALE_CHOICES.get(index as usize).copied()
 }
 
 fn set_hover_delay(hover_delay_ms: u64) {
@@ -2633,7 +2616,8 @@ mod tests {
             ID_TRAY_THEME_LIGHT,
             ID_TRAY_MARKDOWN_RENDERED,
             ID_TRAY_OPEN_CONFIG,
-            ID_TRAY_SCALE_FIT,
+            ID_TRAY_SCALE_BASE,
+            ID_TRAY_VIDEO_SCALE_BASE,
             ID_TRAY_TYPE_IMAGES,
             ID_TRAY_TRIGGER_ENABLED,
         ] {
@@ -2717,7 +2701,7 @@ mod tests {
     /// submenu marks as the default is the share its own setting starts at.
     #[test]
     fn every_offered_document_scale_is_one_the_setting_keeps() {
-        let svg_default = PreviewScale::Percent(DEFAULT_SVG_SCALE_PERCENT);
+        let svg_default = DEFAULT_SVG_SCALE;
 
         assert_eq!(
             DOCUMENT_SCALE_CHOICES.map(|scale| document_scale_label(scale, svg_default)),
@@ -2808,41 +2792,87 @@ mod tests {
         }
     }
 
-    /// The `Font Face` submenu is a range of its own, directly past the specimen's scale:
-    /// a click on a share of the display is never read as a face, and the other way round.
-    /// It offers every face the setting can hold, in order, so the face its item names is
-    /// the face the setting is left at.
+    /// The `Images Scaling` and `Videos Scaling` submenus are one range each, and the
+    /// `Videos Scaling` range sits directly past the specimen's scale: a click on a share
+    /// of a bitmap is never read as a click on the other bitmap's share or on a share of
+    /// the display, and the other way round. Each lists every share the setting can be
+    /// asked for, in order, and every id resolves back to the share its item was listed
+    /// for — which is what makes a click select what it named.
     #[test]
-    fn the_font_face_submenu_carries_ids_of_its_own() {
-        let faces = ID_TRAY_FONT_FACE_BASE..ID_TRAY_FONT_FACE_BASE + FONT_FACE_CHOICES.len() as u16;
-        let scales =
+    fn the_bitmap_scaling_submenus_carry_ids_of_their_own() {
+        let pictures = ID_TRAY_SCALE_BASE..ID_TRAY_SCALE_BASE + BITMAP_SCALE_CHOICES.len() as u16;
+        let videos =
+            ID_TRAY_VIDEO_SCALE_BASE..ID_TRAY_VIDEO_SCALE_BASE + BITMAP_SCALE_CHOICES.len() as u16;
+        let font_scales =
             ID_TRAY_FONT_SCALE_BASE..ID_TRAY_FONT_SCALE_BASE + DOCUMENT_SCALE_CHOICES.len() as u16;
 
         assert!(
-            !faces.contains(&scales.start) && !scales.contains(&faces.start),
-            "the ranges {faces:?} and {scales:?} overlap"
+            !videos.contains(&font_scales.start) && !font_scales.contains(&videos.start),
+            "the ranges {videos:?} and {font_scales:?} overlap"
+        );
+        assert!(
+            !videos.contains(&pictures.start) && !pictures.contains(&videos.start),
+            "the ranges {videos:?} and {pictures:?} overlap"
         );
 
+        for base in [ID_TRAY_SCALE_BASE, ID_TRAY_VIDEO_SCALE_BASE] {
+            for (index, scale) in BITMAP_SCALE_CHOICES.iter().enumerate() {
+                assert_eq!(bitmap_scale_at(index as u16), Some(*scale));
+            }
+
+            assert_eq!(
+                bitmap_scale_at(BITMAP_SCALE_CHOICES.len() as u16),
+                None,
+                "an id past the last item of the range at {base} is not one it offered"
+            );
+        }
+    }
+
+    /// The `Images Scaling` and `Videos Scaling` submenus offer the shares a bitmap can be
+    /// drawn at — the share of its own size, rather than the share of the display the
+    /// document scales beside them are — in one order and with one set of labels: what a
+    /// share is called does not depend on which of the two is asking, and exactly one
+    /// label — the share each setting starts at — reads as the default. Every share an
+    /// item can pick is one the setting keeps, so a choice made here is still the choice
+    /// after a restart.
+    #[test]
+    fn every_offered_bitmap_scale_is_one_the_setting_keeps() {
         assert_eq!(
-            FONT_FACE_CHOICES.len() as u32,
-            crate::config::MAX_TTC_FACE,
-            "every face the setting holds is one the menu offers"
-        );
-        assert_eq!(
-            (
-                FONT_FACE_CHOICES[0],
-                FONT_FACE_CHOICES[FONT_FACE_CHOICES.len() - 1]
-            ),
-            ("First Face", "Tenth Face"),
-            "the faces are listed from the first one down"
+            BITMAP_SCALE_CHOICES.map(|scale| bitmap_scale_label(scale, DEFAULT_PREVIEW_SCALE)),
+            [
+                "Fit to Screen".to_string(),
+                "400%".to_string(),
+                "300%".to_string(),
+                "200%".to_string(),
+                "150%".to_string(),
+                "100% (Default)".to_string(),
+                "50%".to_string(),
+                "25%".to_string(),
+            ]
         );
 
-        // Every item is a face the setting keeps, and the ids are handed out one apiece: the
-        // position an item was listed at is the face's own number less one.
-        for (index, _) in FONT_FACE_CHOICES.iter().enumerate() {
-            let face = index as u32 + 1;
+        for default in [DEFAULT_PREVIEW_SCALE, DEFAULT_VIDEO_SCALE] {
+            let marked: Vec<String> = BITMAP_SCALE_CHOICES
+                .iter()
+                .map(|scale| bitmap_scale_label(*scale, default))
+                .filter(|label| label.ends_with(" (Default)"))
+                .collect();
 
-            assert_eq!(sanitize_ttc_face(face), face, "face {face}");
+            assert_eq!(
+                marked,
+                [bitmap_scale_label(default, default)],
+                "one share is the default at {default:?}"
+            );
+        }
+
+        for scale in BITMAP_SCALE_CHOICES {
+            let written = scale.as_str();
+
+            assert_eq!(
+                PreviewScale::from_str(&written),
+                Some(scale),
+                "`{written}` read back"
+            );
         }
     }
 
