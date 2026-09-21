@@ -20,7 +20,7 @@ use std::path::Path;
 /// `acTL` chunk rather than by what it is called — and `gif`, `png` and `webp` are
 /// each both an animated format and a still one. `svg` and `svgz` are pictures as far
 /// as the kind goes — they are behind the same `Images` gate and the same list — while
-/// what draws them is a renderer rather than a decoder; see `svg_preview`. `avif`,
+/// what draws them is a browser rather than a decoder; see `svg_preview`. `avif`,
 /// `heic`, `heif` and `jxl` are pictures the same way, and what decodes them is the
 /// codec Windows has rather than one this app carries; see `wic_image`.
 pub const DEFAULT_IMAGE_EXTENSIONS: &str =

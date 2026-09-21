@@ -15,7 +15,6 @@ mod pdf_preview;
 mod preview_window;
 mod single_instance;
 mod startup;
-mod svg_animation;
 mod svg_preview;
 mod text_formats;
 mod text_paint;
@@ -82,7 +81,7 @@ fn main() {
         engine_processes::end_browsers_started_by(pid);
     }
 
-    // The browser that plays an animated document keeps its state in a folder of its
+    // The browser that draws a document keeps its state in a folder of its
     // own, one per run; what earlier runs left behind is cleared away here, before this
     // run has a folder for something to hold.
     webview_preview::clear_stale_profiles();
