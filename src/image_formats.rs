@@ -22,8 +22,10 @@ use std::path::Path;
 /// as the kind goes — they are behind the same `Images` gate and the same list — while
 /// what draws them is a browser rather than a decoder; see `svg_preview`. `avif`,
 /// `heic`, `heif`, `jxl` and a still `webp` are pictures the same way, and what decodes
-/// them is the codec Windows has rather than one this app carries; a `webp` that moves
-/// is the exception, played by libwebp in the binary; see `wic_image`.
+/// them is the codec Windows has rather than one this app carries — a `webp` being the
+/// one of them with a second reader behind it, libwebp in the binary, for the machine
+/// that codec is missing from and for the picture that moves; see `wic_image` and
+/// `webp_image`.
 pub const DEFAULT_IMAGE_EXTENSIONS: &str =
     "apng,avif,bmp,exr,ff,gif,hdr,heic,heif,ico,jfif,jpe,jpeg,jpg,jxl,pam,pbm,pgm,png,pnm,ppm,qoi,svg,svgz,tga,tif,tiff,webp";
 

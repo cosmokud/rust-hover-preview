@@ -11,10 +11,13 @@
 //! the answer a file that will not decode gets; the extensions are named in the
 //! README, and the app never sends anyone to the Store by itself.
 //!
-//! A WebP that *moves* is not this module's. libwebp is in the binary for it and is
-//! asked first (see the animated reader in `preview_window`), so what arrives here is
-//! the picture that does not move — which is the whole of what a WebP decoder of this
-//! app's own used to be carried for.
+//! The WebP one is the codec a machine is most likely to be missing — Windows 11
+//! comes with it and Windows 10 usually has to be given it — so a still WebP is the
+//! one picture here that is not simply lost to a missing package: `webp_image` decodes
+//! it with the libwebp the binary already carries, and this module is only the reader
+//! asked first. The WebP that *moves* is not this module's at all: libwebp is asked
+//! for it before anything else (see the animated reader in `preview_window`), so what
+//! arrives here is the picture that does not move.
 //!
 //! A codec is asked for the box the layout planned rather than for the file's own
 //! size, so a hover onto a forty-megapixel photograph costs what its preview costs.

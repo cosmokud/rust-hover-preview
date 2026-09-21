@@ -17,6 +17,7 @@ use crate::svg_preview;
 use crate::text_formats;
 use crate::text_preview::{self, TextPreviewOptions};
 use crate::video_formats::{self, is_video_file};
+use crate::webp_image;
 use crate::webview_preview;
 use crate::wheel_input;
 use crate::wic_image;
@@ -987,7 +988,15 @@ fn image_dimensions_with_header_check(path: &PathBuf) -> Option<(u32, u32)> {
         .ok()?
         .into_dimensions()
         .ok()
-        .or_else(|| wic_image::dimensions(path))
+        .or_else(|| codec_dimensions(path))
+}
+
+/// The size a picture of a format this app's own decoder does not read is measured
+/// from: the frame the codec Windows has for it reports, and — where that codec is the
+/// WebP one and the machine has none, which is what a Windows 10 machine usually is —
+/// libwebp's, which is in the binary; see `wic_image` and `webp_image`.
+fn codec_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
+    wic_image::dimensions(path).or_else(|| webp_image::dimensions(path))
 }
 
 /// Convert RGBA pixels to BGRA for Windows GDI
@@ -2402,7 +2411,14 @@ fn load_static_image(
             None => (max_width, max_height),
         };
 
-        (wic_image::decode(path, width, height)?, width, height)
+        // The WebP codec is the one of them that is a Store package rather than
+        // something Windows has, so a machine without it — a Windows 10 machine,
+        // usually — is answered by libwebp instead, which is in the binary for the
+        // picture that moves; see `webp_image`.
+        let pixels = wic_image::decode(path, width, height)
+            .or_else(|| webp_image::decode(path, width, height))?;
+
+        (pixels, width, height)
     } else {
         let img = if is_confirm_file_type_enabled() {
             decode_image_with_header_check(path)?
@@ -3551,7 +3567,7 @@ fn get_media_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
         // picture formats this app's decoder cannot read at all.
         image::image_dimensions(path)
             .ok()
-            .or_else(|| wic_image::dimensions(path))
+            .or_else(|| codec_dimensions(path))
     }
 }
 

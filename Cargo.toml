@@ -57,7 +57,9 @@ windows = { version = "0.58", features = [
 # `webp` is one of those now: a still WebP is the picture the codec Windows has for it
 # draws, at the box the layout planned, and the one that moves is libwebp's (see
 # `webp-animation`), so `image-webp` — which was here for the stills alone — is out of
-# the graph and out of the binary.
+# the graph and out of the binary. The WebP codec is the one of those that is a Store
+# package rather than something Windows ships, so the machine without it is answered by
+# that same libwebp instead; see `webp_image`.
 #
 # `rayon` is out for the other reason: it is what this crate's parallel `ImageBuffer`
 # iterators are behind, and nothing here iterates an image that way. What dropping it
@@ -96,8 +98,15 @@ roxmltree = "0.21"
 # file.
 webview2-com = "0.34"
 
-# Animated WebP support via Google's libwebp
+# WebP support via Google's libwebp: what plays the picture that moves, and — where
+# Windows has no WebP codec to ask, which is what a Windows 10 machine usually is —
+# what decodes the one that does not either; see `preview_window` and `webp_image`.
 webp-animation = "0.10"
+
+# The same libwebp, bound directly, for the still decode `webp_image` does — one C
+# library in the graph rather than two, since this is the crate `webp-animation`
+# reaches its own calls through.
+libwebp-sys2 = "0.2"
 
 # Animated GIF support. The version `image` reads its own GIFs with, so the decoder is
 # one crate in the graph rather than two: everything this app asks of `gif` — the

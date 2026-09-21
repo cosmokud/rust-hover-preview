@@ -1,26 +1,21 @@
 # Changelog
 
-## [Unreleased]
-
-### Changed
-
-- What ships is built from a `github` profile — fat LTO over one codegen unit — rather than from `release`: the deploy workflows and `build-installers.ps1` package with it, while `cargo build --release` keeps the thin LTO the edit-build-test loop is short on. The released exe is 461 KB smaller for it (7,544,320 to 7,083,008 bytes, 6.1%) and nothing about it is slower at run time.
-- A still WebP is decoded by the codec Windows has for it, at the box the layout planned, rather than by a decoder of this app's own: `image-webp` is out of the build graph and out of the binary. An animated WebP is unchanged — libwebp, in the binary, is what plays it. The WebP Image Extension is what the still path needs, Windows 11 ships it and Windows 10 usually does not, so a Windows 10 machine without it shows no preview for a still `.webp`; the extension is listed in the README beside the others.
-- `rayon` is out of the build graph: it was there for `image`'s parallel buffer iterators, which nothing here iterates with. What it also cost is the EXR decoder's own threading, so a `.exr` preview decodes on one thread now.
-- `gif` is one version in the build graph rather than two: `0.13` is bumped to the `0.14` that `image` reads its own GIFs with, and the two agree on every API the animated path asks for.
-
 ## [0.2.10]
 
 ### Changed
 
-- SVG previews are drawn by the WebView2 runtime Windows 11 ships with — the browser that already played animated documents — and nothing about a document is rasterized by this app any more: `svg_preview` answers the name gate and the size a document asks to be drawn at, and the engine is given the box the layout came out with. `resvg`, `usvg` and `tiny-skia` — and the font, shaping and geometry crates under them — are out of the build graph, which takes the release exe back to 7.2 MB from 10.6 MB and a clean build with it.
-- The app's own reader for documents that move is gone with the rasterizer it drew through. A document is drawn by the engine whether it moves or not, so there is no "does it move?" question left in the path, and an animation needs nothing of its own.
-- A machine with no WebView2 runtime has no SVG preview at all now, since there is no reader behind the engine to fall back to; the tray's `SVG Engine TTL` was already greyed out there. Windows 11 ships the runtime.
-- A hover onto a document opens on the waiting spinner rather than on a still frame this app drew. The spinner goes up at once when a browser has to be started for the document, and not at all when the engine is warm, which draws it in a few milliseconds.
-- A wait that follows the pointer now takes the engine's window with it, so a document is drawn where the wait ended up rather than where the hover began.
-- An engine that fails is stood down for a minute rather than five, since every SVG hover waits on it; a document the engine could not put up costs that hover and nothing else, its wait coming down instead of standing as a spinner over nothing.
-- `Checkerboard` for `svg_background` is painted by the page the engine draws the document in — a checkerboard is drawn by whatever composites the frame, and the engine composites its own — so documents keep the backdrop every other kind of preview has.
-- Bumped version to 0.2.10 in Cargo.toml and Cargo.lock.
+- Build deploy artifacts with a `github` profile (fat LTO, one codegen unit), which with the three changes below takes the released exe from 7,544,320 to 6,676,992 bytes (867 KB, 11.5%); `cargo build --release` keeps thin LTO for the local loop.
+- Decode still WebP with the Windows codec at the layout box, removing `image-webp`, and with the bundled libwebp (`webp_image`) where that codec is not installed — which is what a Windows 10 machine usually is; animated WebP is unchanged.
+- Remove `rayon` from the build graph, making `.exr` previews decode single-threaded.
+- Unify GIF on `gif 0.14` to match `image`.
+- Draw SVG previews with WebView2 instead of in-app rasterization, removing `resvg`, `usvg`, `tiny-skia`, and related crates (exe 10.6 MB → 7.2 MB).
+- Remove the app’s own animated-document reader, leaving all documents to the engine with no movement check.
+- Drop SVG preview on machines without WebView2, since no fallback reader remains.
+- Show the spinner immediately on cold-engine document hovers, and not at all when warm.
+- Move the engine window with the pointer wait so documents draw where the wait ended.
+- Stand down failed engines for one minute instead of five, costing only that hover and clearing its spinner.
+- Paint `Checkerboard` for `svg_background` in the engine page so SVG previews keep the standard backdrop.
+- Bump version to 0.2.10 in `Cargo.toml` and `Cargo.lock`.
 
 ## [0.2.9]
 
