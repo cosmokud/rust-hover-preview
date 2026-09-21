@@ -4,11 +4,14 @@ use crate::cloud_files;
 use crate::config::{
     frame_bytes_within_budget, image_decode_limits, read_within_budget, sanitize_image_cache_mb,
     sanitize_webp_playback_fps, MarkdownMode, PreviewScale, PreviewType, TextTheme,
-    TransparentBackground, DEFAULT_IMAGE_CACHE_MB, DEFAULT_OFFICE_SCALE, DEFAULT_PDF_SCALE,
-    DEFAULT_PREVIEW_SCALE_PERCENT, DEFAULT_SVG_SCALE_PERCENT, DEFAULT_TEXT_FONT_SCALE_PERCENT,
-    DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS, DEFAULT_WEBP_PLAYBACK_FPS,
+    TransparentBackground, DEFAULT_FONT_SCALE, DEFAULT_IMAGE_CACHE_MB, DEFAULT_OFFICE_SCALE,
+    DEFAULT_PDF_SCALE, DEFAULT_PREVIEW_SCALE_PERCENT, DEFAULT_SVG_SCALE_PERCENT,
+    DEFAULT_TEXT_FONT_SCALE_PERCENT, DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS,
+    DEFAULT_WEBP_PLAYBACK_FPS,
 };
 use crate::engine_processes;
+use crate::font_formats;
+use crate::font_preview;
 use crate::office_formats;
 use crate::office_preview;
 use crate::office_render;
@@ -334,6 +337,12 @@ enum MediaType {
     /// its own (see the tray's `Background` submenu) — a backdrop the engine is given
     /// rather than one this app composes.
     EngineSvg,
+    /// A font the engine draws a specimen of in a window of its own, the same shape as a
+    /// document: this side holds no frame for one, and what it answers about a font — the
+    /// lines the file's own character map covers, and the face a collection is drawn by —
+    /// comes from `font_preview`. It is a kind of its own for the reason above it, and
+    /// because what it is drawn over is a page of its own rather than a document's.
+    EngineFont,
     AnimatedGif,
     AnimatedApng,
     AnimatedWebP,
@@ -354,6 +363,7 @@ impl MediaType {
             | Self::AnimatedApng
             | Self::AnimatedWebP => Some(PreviewType::Images),
             Self::EngineSvg => Some(PreviewType::Svg),
+            Self::EngineFont => Some(PreviewType::Fonts),
             Self::Video => Some(PreviewType::Videos),
             Self::Text => Some(PreviewType::Text),
             Self::Pdf => Some(PreviewType::Pdf),
@@ -371,7 +381,7 @@ impl MediaType {
     /// Whether this is a document the engine draws rather than a frame this app holds.
     /// The preview loop asks before it reaches for a frame, because there is none.
     fn is_engine(&self) -> bool {
-        matches!(self, Self::EngineSvg)
+        matches!(self, Self::EngineSvg | Self::EngineFont)
     }
 
     /// Whether this preview's appearance is painted into its own frame rather
@@ -1031,6 +1041,44 @@ fn current_svg_background() -> TransparentBackground {
         .unwrap_or(TransparentBackground::Transparent)
 }
 
+/// The backdrop a font specimen is drawn over, which is a page of its own: a document's
+/// backdrop is the one its shapes are drawn on, and a specimen's is the one its glyphs are.
+fn current_font_background() -> TransparentBackground {
+    CONFIG
+        .lock()
+        .map(|cfg| cfg.font_background)
+        .unwrap_or(TransparentBackground::Transparent)
+}
+
+/// The backdrop an engine-drawn preview of `path` is drawn over: the kind decides it, the
+/// same way it decides everything else about a document.
+fn engine_background(path: &Path) -> TransparentBackground {
+    if font_formats::is_font_file(path) {
+        current_font_background()
+    } else {
+        current_svg_background()
+    }
+}
+
+/// The kind of engine-drawn preview `path` would get, when it is one of the two the browser
+/// draws: a document, or a font file's specimen.
+///
+/// It stands in for the file's name where a hover is replayed or taken down: what is on
+/// screen for either kind is the engine's window rather than anything this app composed, so
+/// what the loop asks about one it asks about the other — the same way the loader asks the
+/// name gates in one order.
+fn engine_kind_of(path: &Path) -> Option<PreviewType> {
+    if svg_preview::is_svg_file(path) {
+        return Some(PreviewType::Svg);
+    }
+
+    if font_formats::is_font_file(path) {
+        return Some(PreviewType::Fonts);
+    }
+
+    None
+}
+
 fn current_webp_playback_fps() -> u32 {
     CONFIG
         .lock()
@@ -1069,6 +1117,15 @@ fn current_office_scale() -> PreviewScale {
         .lock()
         .map(|cfg| cfg.office_scale)
         .unwrap_or(DEFAULT_OFFICE_SCALE)
+}
+
+/// The share of the display a font specimen is drawn at, read the way the three document
+/// scales above it are.
+fn current_font_scale() -> PreviewScale {
+    CONFIG
+        .lock()
+        .map(|cfg| cfg.font_scale)
+        .unwrap_or(DEFAULT_FONT_SCALE)
 }
 
 /// The theme, Markdown rendering and font size the configuration currently
@@ -1232,6 +1289,12 @@ fn request_office_render(
 /// a page is the bitmap a workbook is answered with where no page can be exported, and
 /// it follows the share the way `bitmap_at_display_scale` reads it.
 ///
+/// A font is the same rule once more, at the share `font_scale` names: the specimen is a
+/// page of this app's own — the box `font_preview` measures a font at — and the glyphs are
+/// sized from the window the engine draws it in, so a share of the room is a share of the
+/// type. A file that will not parse as a font is not measured at all, so a hover onto one
+/// never reaches this.
+///
 /// Every other format keeps the configured scale.
 fn effective_preview_scale(
     path: &Path,
@@ -1239,6 +1302,7 @@ fn effective_preview_scale(
     svg_scale: PreviewScale,
     pdf_scale: PreviewScale,
     office_scale: PreviewScale,
+    font_scale: PreviewScale,
 ) -> PreviewScale {
     if pdf_preview::is_pdf_file(path) {
         fit_reduced(pdf_scale)
@@ -1261,6 +1325,8 @@ fn effective_preview_scale(
         }
     } else if svg_preview::is_svg_file(path) {
         fit_reduced(svg_scale)
+    } else if font_formats::is_font_file(path) {
+        fit_reduced(font_scale)
     } else {
         preview_scale
     }
@@ -2341,6 +2407,15 @@ fn engine_svg_media() -> MediaData {
         video_process: None,
         loading_start: None,
         text_state: None,
+    }
+}
+
+/// A font as `MediaData`: a kind and nothing else, the same shape as a document — the
+/// specimen is the engine's to draw, so there is no frame of this app's to install.
+fn engine_font_media() -> MediaData {
+    MediaData {
+        media_type: MediaType::EngineFont,
+        ..engine_svg_media()
     }
 }
 
@@ -3439,6 +3514,16 @@ fn load_media(
         return webview_preview::draws(path).then(engine_svg_media);
     }
 
+    // A font is drawn the same way, and asks two questions before it is: whether the engine
+    // can draw anything at all, and whether the file is a font this side can describe. A
+    // `.ttf` holding something else is answered with nothing rather than with a page of
+    // another font's glyphs, which is what the probe settles — and what it answers is what
+    // the specimen is made of, so the second question is asked first.
+    if font_formats::is_font_file(path) {
+        return (font_preview::probe(path).is_some() && webview_preview::draws(path))
+            .then(engine_font_media);
+    }
+
     let guessed_format = if is_confirm_file_type_enabled() {
         guessed_image_format(path)
     } else {
@@ -3551,6 +3636,21 @@ fn get_media_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
         }
 
         return svg_preview::measure(path);
+    }
+
+    // A font is measured at a box of this app's own rather than by anything the file says:
+    // a font has no size it asks to be drawn at — what it holds is outlines — so the box is
+    // the shape a specimen wants, and the share of the display `font_scale` names decides
+    // how large that box is shown. `Fonts` is the gate, and a file that will not parse as a
+    // font reports no size at all: that is how a `.ttf` that is something else comes to show
+    // nothing rather than a page of another font's glyphs.
+    if font_formats::is_font_preview(path) {
+        if !webview_preview::can_draw() {
+            return None;
+        }
+
+        return font_preview::probe(path)
+            .map(|_| (font_preview::SPECIMEN_WIDTH, font_preview::SPECIMEN_HEIGHT));
     }
 
     // Whatever is left is a picture, so the `Images` gate is what decides it.
@@ -4200,9 +4300,12 @@ unsafe fn render_layered_preview_at(hwnd: HWND, x: i32, y: i32) {
         let media_guard = CURRENT_MEDIA.lock().ok()?;
         let media = media_guard.as_ref()?;
 
-        // Two kinds are not this window's to draw: a video is played by the player's own
-        // window, and a document is drawn by the engine's.
-        if matches!(media.media_type, MediaType::Video | MediaType::EngineSvg) {
+        // Three kinds are not this window's to draw: a video is played by the player's own
+        // window, and a document and a font specimen are drawn by the engine's.
+        if matches!(
+            media.media_type,
+            MediaType::Video | MediaType::EngineSvg | MediaType::EngineFont
+        ) {
             return None;
         }
 
@@ -6082,10 +6185,10 @@ pub fn run_preview_window() {
                                         width: pl.width as i32,
                                         height: pl.height as i32,
                                     },
-                                    // The document is an SVG — that is what the engine
-                                    // draws — so the backdrop is the one the tray keeps
-                                    // for documents rather than the picture's.
-                                    current_svg_background(),
+                                    // The engine draws two kinds — a document and a font
+                                    // specimen — and each is composited over a backdrop of
+                                    // its own rather than over the picture's.
+                                    engine_background(&pl.path),
                                 );
                             }
 
@@ -6259,13 +6362,13 @@ pub fn run_preview_window() {
                             show_loading_spinner(hwnd, pl);
                         }
 
-                        // A wait for a document takes the engine's window with it: the
-                        // same document asked for again is that window moved rather than
-                        // the document navigated to again, so what it is about to draw
-                        // in is where the wait ended up. Nothing is asked of an engine
-                        // that already has the document up — that is the document
-                        // itself, and it follows nothing.
-                        if svg_preview::is_svg_file(&pl.path) && !webview_preview::is_showing() {
+                        // A wait for an engine-drawn preview takes the engine's window with
+                        // it: the same file asked for again is that window moved rather
+                        // than the page navigated to again, so what it is about to draw in
+                        // is where the wait ended up. Nothing is asked of an engine that
+                        // already has it up — that is the preview itself, and it follows
+                        // nothing.
+                        if engine_kind_of(&pl.path).is_some() && !webview_preview::is_showing() {
                             webview_preview::show(
                                 &pl.path,
                                 webview_preview::Area {
@@ -6274,7 +6377,7 @@ pub fn run_preview_window() {
                                     width: pl.width as i32,
                                     height: pl.height as i32,
                                 },
-                                current_svg_background(),
+                                engine_background(&pl.path),
                             );
                         }
                     }
@@ -6349,14 +6452,14 @@ pub fn run_preview_window() {
                                 (Some(kind), Some(show)) if !kind.enabled() => {
                                     latest_preview_msg = Some(show)
                                 }
-                                // A document has no media of its own — it is the
-                                // engine that draws one — so its kind is read from
-                                // the file the hover is about rather than from what
-                                // is on screen.
+                                // A preview the engine draws has no media of its own —
+                                // the engine's window is the preview — so its kind is
+                                // read from the file the hover is about rather than
+                                // from what is on screen.
                                 (None, Some(show))
-                                    if !PreviewType::Svg.enabled()
-                                        && show_path(&show)
-                                            .is_some_and(|path| svg_preview::is_svg_file(path)) =>
+                                    if show_path(&show)
+                                        .and_then(|path| engine_kind_of(path))
+                                        .is_some_and(|kind| !kind.enabled()) =>
                                 {
                                     latest_preview_msg = Some(show)
                                 }
@@ -6459,16 +6562,16 @@ pub fn run_preview_window() {
             }
 
             // The engine has something to answer for: it could not be had at all, or it
-            // could not put the document of the hover that is up into its window. Either
-            // way this app draws no document itself, so there is nothing to fall back to
-            // and nothing left to wait for — the wait goes rather than standing as a
-            // spinner over nothing.
+            // could not put the file of the hover that is up into its window. Either way
+            // this app draws none of it itself, so there is nothing to fall back to and
+            // nothing left to wait for — the wait goes rather than standing as a spinner
+            // over nothing.
             if latest_preview_msg.is_none() && webview_preview::take_failure_notice() {
-                let waiting_on_a_document = pending_load
+                let waiting_on_the_engine = pending_load
                     .as_ref()
-                    .is_some_and(|pl| svg_preview::is_svg_file(&pl.path));
+                    .is_some_and(|pl| engine_kind_of(&pl.path).is_some());
 
-                if waiting_on_a_document && !webview_preview::is_showing() {
+                if waiting_on_the_engine && !webview_preview::is_showing() {
                     pending_load = None;
                     pending_load_cancel = None;
                     let _ = ShowWindow(hwnd, SW_HIDE);
@@ -6513,6 +6616,7 @@ pub fn run_preview_window() {
                             current_svg_scale(),
                             current_pdf_scale(),
                             current_office_scale(),
+                            current_font_scale(),
                         );
 
                         // A document with no page rendered for it yet is answered with
@@ -6572,6 +6676,7 @@ pub fn run_preview_window() {
                             current_svg_scale(),
                             current_pdf_scale(),
                             current_office_scale(),
+                            current_font_scale(),
                         );
 
                         if let Some(orig_dims) = media_dimensions(&path, bounds, dpi) {
@@ -6772,10 +6877,9 @@ pub fn run_preview_window() {
                             video_pos = (0, 0, 0, 0);
                         }
 
-                        // Any preview that is not a document is drawn here, so the
-                        // engine's window — if one is still up — comes down as this one
-                        // goes up.
-                        if !svg_preview::is_svg_file(&path) {
+                        // Any preview the engine does not draw is drawn here, so its window
+                        // — if one is still up — comes down as this one goes up.
+                        if engine_kind_of(&path).is_none() {
                             webview_preview::hide();
                         }
 
@@ -6954,6 +7058,7 @@ pub fn run_preview_window() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::DEFAULT_FONT_SCALE_PERCENT;
 
     /// A display to place on: 1000 by 800 at its top-left corner.
     fn bounds() -> ScreenBounds {
@@ -7102,7 +7207,14 @@ mod tests {
             PreviewScale::Percent(400),
         ] {
             assert_eq!(
-                effective_preview_scale(&pdf, configured, svg_scale, configured, office_scale),
+                effective_preview_scale(
+                    &pdf,
+                    configured,
+                    svg_scale,
+                    configured,
+                    office_scale,
+                    DEFAULT_FONT_SCALE
+                ),
                 PreviewScale::FitToScreen
             );
         }
@@ -7113,7 +7225,8 @@ mod tests {
                 PreviewScale::Percent(400),
                 svg_scale,
                 PreviewScale::Percent(50),
-                office_scale
+                office_scale,
+                DEFAULT_FONT_SCALE
             ),
             PreviewScale::FitToScreenReduced(50)
         );
@@ -7123,7 +7236,8 @@ mod tests {
                 PreviewScale::Percent(400),
                 svg_scale,
                 PreviewScale::Percent(25),
-                office_scale
+                office_scale,
+                DEFAULT_FONT_SCALE
             ),
             PreviewScale::FitToScreenReduced(25),
             "a page follows its own share of the display, whatever the picture scale says"
@@ -7134,7 +7248,8 @@ mod tests {
                 PreviewScale::Percent(400),
                 svg_scale,
                 PreviewScale::FitToScreen,
-                office_scale
+                office_scale,
+                DEFAULT_FONT_SCALE
             ),
             PreviewScale::FitToScreen
         );
@@ -7152,7 +7267,14 @@ mod tests {
         let page = PreviewScale::FitToScreen;
 
         assert_eq!(
-            effective_preview_scale(&svg, configured, PreviewScale::FitToScreen, page, page),
+            effective_preview_scale(
+                &svg,
+                configured,
+                PreviewScale::FitToScreen,
+                page,
+                page,
+                DEFAULT_FONT_SCALE
+            ),
             PreviewScale::FitToScreen
         );
         for percent in [75, 50, 25, 10] {
@@ -7162,7 +7284,8 @@ mod tests {
                     configured,
                     PreviewScale::Percent(percent),
                     page,
-                    page
+                    page,
+                    DEFAULT_FONT_SCALE
                 ),
                 PreviewScale::FitToScreenReduced(percent),
                 "{percent}% of the room"
@@ -7170,7 +7293,14 @@ mod tests {
         }
 
         assert_eq!(
-            effective_preview_scale(&svg, configured, PreviewScale::Percent(60), page, page),
+            effective_preview_scale(
+                &svg,
+                configured,
+                PreviewScale::Percent(60),
+                page,
+                page,
+                DEFAULT_FONT_SCALE
+            ),
             PreviewScale::FitToScreenReduced(60),
             "a share the menu does not offer is the share it is"
         );
@@ -7181,11 +7311,77 @@ mod tests {
             PreviewScale::Percent(400),
         ] {
             assert_eq!(
-                effective_preview_scale(&svg, configured, PreviewScale::Percent(100), page, page),
+                effective_preview_scale(
+                    &svg,
+                    configured,
+                    PreviewScale::Percent(100),
+                    page,
+                    page,
+                    DEFAULT_FONT_SCALE
+                ),
                 PreviewScale::FitToScreen,
                 "asking for the whole room or more is the whole room"
             );
         }
+    }
+
+    /// A font is drawn at a share of the room the way a document is, and it is the fourth
+    /// setting of its own: the specimen is a page of this app's making, so the share decides
+    /// how large the type is drawn — and what a PDF, a document and a page are configured at
+    /// leaves it where it is.
+    #[test]
+    fn a_specimen_is_drawn_at_its_share_of_the_room() {
+        let font = PathBuf::from(r"C:\fonts\Inter-Regular.woff2");
+        let picture = PreviewScale::Percent(400);
+        let page = PreviewScale::FitToScreen;
+        let svg = PreviewScale::Percent(75);
+
+        assert_eq!(
+            effective_preview_scale(&font, picture, svg, page, page, DEFAULT_FONT_SCALE),
+            PreviewScale::FitToScreenReduced(DEFAULT_FONT_SCALE_PERCENT),
+            "a specimen starts at half the room, whatever the other kinds are set to"
+        );
+
+        for percent in [75, 50, 25, 10] {
+            assert_eq!(
+                effective_preview_scale(
+                    &font,
+                    picture,
+                    svg,
+                    page,
+                    page,
+                    PreviewScale::Percent(percent)
+                ),
+                PreviewScale::FitToScreenReduced(percent),
+                "{percent}% of the room"
+            );
+        }
+
+        for configured in [
+            PreviewScale::FitToScreen,
+            PreviewScale::Percent(100),
+            PreviewScale::Percent(400),
+        ] {
+            assert_eq!(
+                effective_preview_scale(&font, picture, svg, page, page, configured),
+                PreviewScale::FitToScreen,
+                "asking for the whole room or more is the whole room"
+            );
+        }
+
+        // A file that is not a font keeps the picture scale, whatever the specimen's is.
+        let png = PathBuf::from(r"C:\art\photo.png");
+        assert_eq!(
+            effective_preview_scale(
+                &png,
+                PreviewScale::Percent(200),
+                svg,
+                page,
+                page,
+                PreviewScale::Percent(10)
+            ),
+            PreviewScale::Percent(200)
+        );
     }
 
     /// The picture scale is about another kind of preview, so a document's size does
@@ -7202,7 +7398,8 @@ mod tests {
                 picture,
                 PreviewScale::Percent(DEFAULT_SVG_SCALE_PERCENT),
                 PreviewScale::Percent(25),
-                PreviewScale::Percent(75)
+                PreviewScale::Percent(75),
+                PreviewScale::Percent(10)
             ),
             PreviewScale::FitToScreenReduced(DEFAULT_SVG_SCALE_PERCENT),
             "a document follows its own share, not a page's"
@@ -7217,7 +7414,8 @@ mod tests {
                 PreviewScale::Percent(200),
                 PreviewScale::FitToScreen,
                 PreviewScale::Percent(25),
-                PreviewScale::Percent(75)
+                PreviewScale::Percent(75),
+                PreviewScale::Percent(10)
             ),
             PreviewScale::Percent(200)
         );
@@ -7268,6 +7466,7 @@ mod tests {
             PreviewScale::Percent(DEFAULT_SVG_SCALE_PERCENT),
             PreviewScale::Percent(25),
             PreviewScale::Percent(10),
+            PreviewScale::Percent(DEFAULT_FONT_SCALE_PERCENT),
         );
 
         assert_eq!(scale, PreviewScale::Percent(100));
@@ -8050,6 +8249,7 @@ mod tests {
                 current_svg_scale(),
                 current_pdf_scale(),
                 current_office_scale(),
+                current_font_scale(),
             );
             println!("scale: configured {configured:?}, effective {scale:?}");
 

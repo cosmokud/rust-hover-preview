@@ -1,6 +1,7 @@
 use crate::archive_formats::matches_archive_list;
 use crate::cloud_files;
 use crate::config::{AvoidMode, PreviewType, TriggerKeyMode};
+use crate::font_formats::matches_font_list;
 use crate::image_formats::matches_image_list;
 use crate::office_formats::matches_office_list;
 use crate::pdf_preview::is_pdf_file;
@@ -883,6 +884,14 @@ fn is_media_file(path: &Path) -> bool {
     }
     if matches_text_lists(path, &config.text_extensions, &config.text_names) {
         return PreviewType::Text.enabled_in(&config);
+    }
+
+    // A font is its own kind rather than an entry of the image list — what draws one is the
+    // browser engine, the way a document's is — so it is asked here, ahead of the list that
+    // would have turned a `.ttf` down: the renderer asks the same question in the same
+    // place, so the two cannot disagree about which gate a file is under.
+    if matches_font_list(path, &config.font_extensions) {
+        return PreviewType::Fonts.enabled_in(&config);
     }
 
     if !matches_image_list(path, &config.image_extensions) {

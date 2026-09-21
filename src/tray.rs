@@ -2,10 +2,11 @@ use crate::config::{
     sanitize_decode_budget_gb, sanitize_image_cache_mb, sanitize_office_cache_mb,
     sanitize_pdf_cache_mb, sanitize_text_cache_mb, sanitize_text_font_scale_percent, AvoidMode,
     EngineIdle, MarkdownMode, PreviewScale, PreviewType, TextTheme, TransparentBackground,
-    TriggerKeyMode, DEFAULT_DECODE_BUDGET_GB, DEFAULT_IMAGE_CACHE_MB, DEFAULT_OFFICE_CACHE_MB,
-    DEFAULT_OFFICE_ENGINE_IDLE_SECS, DEFAULT_OFFICE_SCALE, DEFAULT_PDF_CACHE_MB, DEFAULT_PDF_SCALE,
-    DEFAULT_PREVIEW_SCALE_PERCENT, DEFAULT_SVG_SCALE_PERCENT, DEFAULT_TEXT_CACHE_MB,
-    DEFAULT_TEXT_FONT_SCALE_PERCENT, DEFAULT_WEBVIEW_IDLE_SECS,
+    TriggerKeyMode, DEFAULT_DECODE_BUDGET_GB, DEFAULT_FONT_SCALE, DEFAULT_IMAGE_CACHE_MB,
+    DEFAULT_OFFICE_CACHE_MB, DEFAULT_OFFICE_ENGINE_IDLE_SECS, DEFAULT_OFFICE_SCALE,
+    DEFAULT_PDF_CACHE_MB, DEFAULT_PDF_SCALE, DEFAULT_PREVIEW_SCALE_PERCENT,
+    DEFAULT_SVG_SCALE_PERCENT, DEFAULT_TEXT_CACHE_MB, DEFAULT_TEXT_FONT_SCALE_PERCENT,
+    DEFAULT_WEBVIEW_IDLE_SECS,
 };
 use crate::explorer_hook;
 use crate::office_render;
@@ -47,13 +48,16 @@ const ID_TRAY_TRIGGER_DISABLE: u16 = 1005; // Hold the trigger key to stop previ
 const ID_TRAY_TRIGGER_ENABLE: u16 = 1006; // Hold the trigger key to allow previews
 const ID_TRAY_TRIGGER_ENABLED: u16 = 1068; // Whether the trigger key is watched at all
 /// The `Background` submenu: one command per backdrop it offers, in the order it
-/// lists them, for each of the two kinds of preview it keeps apart — a picture's
-/// backdrop and a document's. Each half is a base plus the position the choice was
-/// listed at, so one table and one builder serve both, and the two ranges are four
-/// wide and apart, which is what keeps an item of one from being read as a choice
-/// of the other.
+/// lists them, for each of the three kinds of preview it keeps apart — a picture's
+/// backdrop, a document's, and a font specimen's. Each half is a base plus the position
+/// the choice was listed at, so one table and one builder serve all of them, and the
+/// three ranges are four wide and apart, which is what keeps an item of one from being
+/// read as a choice of another.
 const ID_TRAY_IMAGE_BACKGROUND_BASE: u16 = 1023;
 const ID_TRAY_SVG_BACKGROUND_BASE: u16 = 1054;
+/// The third half of the `Background` submenu, for a font specimen — which is a page of its
+/// own and so has a backdrop of its own, the same way a document does.
+const ID_TRAY_FONT_BACKGROUND_BASE: u16 = 1058;
 /// The backdrops a half of the `Background` submenu offers, in the order it lists
 /// them, with `Transparent` at the top: the whole range the setting holds, so nothing
 /// a hand-edited `config.ini` can ask for is left unmarked.
@@ -114,10 +118,14 @@ const ID_TRAY_SVG_SCALE_BASE: u16 = 1400;
 /// never read as a way of avoiding the item a preview is about.
 const ID_TRAY_PDF_SCALE_BASE: u16 = 1405;
 const ID_TRAY_OFFICE_SCALE_BASE: u16 = 1415;
+/// `Font Scaling`, the fourth of them, in the range after the Office one: a specimen is
+/// drawn at a share of the display the same way a document is.
+const ID_TRAY_FONT_SCALE_BASE: u16 = 1420;
 /// The shares of the display every `… Scaling` submenu offers, in the order it lists
 /// them: the whole room a document can be given at the top, then the shares of it a
 /// document is asked for below. What differs between the settings is where they start —
-/// `50`, half the display, for an SVG document, and `Fit to Screen` for a page.
+/// `50`, half the display, for an SVG document and for a font specimen, and `Fit to
+/// Screen` for a page.
 const DOCUMENT_SCALE_CHOICES: [PreviewScale; 5] = [
     PreviewScale::FitToScreen,
     PreviewScale::Percent(75),
@@ -138,6 +146,8 @@ const ID_TRAY_TYPE_PDF: u16 = 1065;
 const ID_TRAY_TYPE_ARCHIVES: u16 = 1066;
 const ID_TRAY_TYPE_OFFICE: u16 = 1067;
 const ID_TRAY_TYPE_SVG: u16 = 1069; // 1068 is the trigger key's own switch
+/// The `Fonts` gate beside it, under the same `Preview Types` submenu.
+const ID_TRAY_TYPE_FONTS: u16 = 1070;
 /// The `Cache` submenu: one command per size it offers, in the order it lists
 /// them, for each of the caches it sizes. They start past the range the `theme`
 /// folder's own items occupy (see `ID_TRAY_THEME_CUSTOM_BASE`).
@@ -295,6 +305,12 @@ unsafe extern "system" fn tray_window_proc(
                 {
                     set_svg_background(cmd - ID_TRAY_SVG_BACKGROUND_BASE)
                 }
+                cmd if (ID_TRAY_FONT_BACKGROUND_BASE
+                    ..ID_TRAY_FONT_BACKGROUND_BASE + BACKGROUND_CHOICES.len() as u16)
+                    .contains(&cmd) =>
+                {
+                    set_font_background(cmd - ID_TRAY_FONT_BACKGROUND_BASE)
+                }
                 ID_TRAY_VOLUME_MAX => set_volume(100),
                 ID_TRAY_VOLUME_HIGH => set_volume(80),
                 ID_TRAY_VOLUME_MEDIUM => set_volume(50),
@@ -346,6 +362,7 @@ unsafe extern "system" fn tray_window_proc(
                 ID_TRAY_TYPE_ARCHIVES => toggle_preview_type(PreviewType::Archives),
                 ID_TRAY_TYPE_OFFICE => toggle_preview_type(PreviewType::Office),
                 ID_TRAY_TYPE_SVG => toggle_preview_type(PreviewType::Svg),
+                ID_TRAY_TYPE_FONTS => toggle_preview_type(PreviewType::Fonts),
                 // An Office engine's idle time, by the position it was listed at.
                 cmd if (ID_TRAY_ENGINE_IDLE_BASE
                     ..ID_TRAY_ENGINE_IDLE_BASE + ENGINE_IDLE_CHOICES.len() as u16)
@@ -406,6 +423,12 @@ unsafe extern "system" fn tray_window_proc(
                     .contains(&cmd) =>
                 {
                     set_office_scale(cmd - ID_TRAY_OFFICE_SCALE_BASE)
+                }
+                cmd if (ID_TRAY_FONT_SCALE_BASE
+                    ..ID_TRAY_FONT_SCALE_BASE + DOCUMENT_SCALE_CHOICES.len() as u16)
+                    .contains(&cmd) =>
+                {
+                    set_font_scale(cmd - ID_TRAY_FONT_SCALE_BASE)
                 }
                 ID_TRAY_FONT_400 => set_text_font_scale(400),
                 ID_TRAY_FONT_300 => set_text_font_scale(300),
@@ -475,6 +498,7 @@ unsafe fn show_context_menu(hwnd: HWND) {
         (PreviewType::Archives, ID_TRAY_TYPE_ARCHIVES, w!("Archives")),
         (PreviewType::Office, ID_TRAY_TYPE_OFFICE, w!("Office")),
         (PreviewType::Svg, ID_TRAY_TYPE_SVG, w!("SVG")),
+        (PreviewType::Fonts, ID_TRAY_TYPE_FONTS, w!("Fonts")),
     ];
     let types_menu = CreatePopupMenu().unwrap();
 
@@ -983,19 +1007,20 @@ unsafe fn show_context_menu(hwnd: HWND) {
         w!("Scaling"),
     );
 
-    // Add the SVG Scaling, PDF Scaling and Office Scaling submenus: how much of the
-    // display each kind of document is drawn over. They sit beside the picture scale
+    // Add the SVG Scaling, PDF Scaling, Office Scaling and Font Scaling submenus: how much
+    // of the display each kind of document is drawn over. They sit beside the picture scale
     // because they are the same question about other kinds of preview, and each is a
     // submenu of its own because the answers are not the same answers: a picture's
-    // percentage is of its own size, a document's is of the display — and a document
-    // and a page do not start at the same share of it either.
-    let (svg_scale, pdf_scale, office_scale) = CONFIG
+    // percentage is of its own size, a document's is of the display — and a document and a
+    // page do not start at the same share of it either.
+    let (svg_scale, pdf_scale, office_scale, font_scale) = CONFIG
         .lock()
-        .map(|c| (c.svg_scale, c.pdf_scale, c.office_scale))
+        .map(|c| (c.svg_scale, c.pdf_scale, c.office_scale, c.font_scale))
         .unwrap_or((
             PreviewScale::Percent(DEFAULT_SVG_SCALE_PERCENT),
             DEFAULT_PDF_SCALE,
             DEFAULT_OFFICE_SCALE,
+            DEFAULT_FONT_SCALE,
         ));
 
     append_document_scale_menu(
@@ -1019,6 +1044,13 @@ unsafe fn show_context_menu(hwnd: HWND) {
         office_scale,
         DEFAULT_OFFICE_SCALE,
     );
+    append_document_scale_menu(
+        placement_menu,
+        w!("Font Scaling"),
+        ID_TRAY_FONT_SCALE_BASE,
+        font_scale,
+        DEFAULT_FONT_SCALE,
+    );
 
     let _ = AppendMenuW(
         menu,
@@ -1029,12 +1061,13 @@ unsafe fn show_context_menu(hwnd: HWND) {
 
     // Add the "Background" submenu: what a preview is drawn over, which is a question
     // a picture and a document answer differently — a picture's transparency is the
-    // picture's, while a document is drawn on a page — so each of the two has a half
+    // picture's, while a document is drawn on a page — so each of the three has a half
     // of its own, listing the same backdrops.
-    let (image_background, svg_background) = CONFIG
+    let (image_background, svg_background, font_background) = CONFIG
         .lock()
-        .map(|c| (c.image_background, c.svg_background))
+        .map(|c| (c.image_background, c.svg_background, c.font_background))
         .unwrap_or((
+            TransparentBackground::Transparent,
             TransparentBackground::Transparent,
             TransparentBackground::Transparent,
         ));
@@ -1051,6 +1084,12 @@ unsafe fn show_context_menu(hwnd: HWND) {
         w!("SVG Background"),
         ID_TRAY_SVG_BACKGROUND_BASE,
         svg_background,
+    );
+    append_background_menu(
+        background_menu,
+        w!("Font Background"),
+        ID_TRAY_FONT_BACKGROUND_BASE,
+        font_background,
     );
 
     let _ = AppendMenuW(
@@ -1465,6 +1504,21 @@ fn set_svg_background(index: u16) {
     refresh_preview();
 }
 
+/// And the same again for a font specimen, which is drawn on a page of its own: the page's
+/// colours are part of what the engine draws, so the preview on screen is rebuilt rather
+/// than only composited again.
+fn set_font_background(index: u16) {
+    let Some(background) = background_at(index) else {
+        return;
+    };
+
+    if let Ok(mut config) = CONFIG.lock() {
+        config.font_background = background;
+        config.save();
+    }
+    refresh_preview();
+}
+
 /// A text preview's colors and glyphs are painted into its frame, so the preview
 /// on screen is rebuilt rather than only composited again.
 fn set_theme(theme: TextTheme) {
@@ -1612,9 +1666,9 @@ fn avoid_label(mode: AvoidMode) -> &'static str {
 }
 
 /// One half of the `Background` submenu: the backdrops a preview can be drawn over,
-/// with the one that half is on marked. The two halves a picture and a document get
-/// list the same choices, which is why one builder is handed the base of the ids and
-/// the backdrop to mark rather than the items themselves.
+/// with the one that half is on marked. The three halves a picture, a document and a
+/// specimen get list the same choices, which is why one builder is handed the base of the
+/// ids and the backdrop to mark rather than the items themselves.
 fn append_background_menu(
     parent: HMENU,
     label: PCWSTR,
@@ -2080,6 +2134,19 @@ fn set_office_scale(index: u16) {
     }
 }
 
+/// How much of the display a font specimen is drawn over, by the position the item was
+/// listed at. The same rule as the three beside it: the next hover, not the one that is up.
+fn set_font_scale(index: u16) {
+    let Some(scale) = document_scale_at(index) else {
+        return;
+    };
+
+    if let Ok(mut config) = CONFIG.lock() {
+        config.font_scale = scale;
+        config.save();
+    }
+}
+
 fn set_hover_delay(hover_delay_ms: u64) {
     if let Ok(mut config) = CONFIG.lock() {
         config.hover_delay_ms = hover_delay_ms;
@@ -2356,7 +2423,7 @@ mod tests {
         );
     }
 
-    /// The three `… Scaling` submenus are one range each, and the `Avoid` items sit in
+    /// The four `… Scaling` submenus are one range each, and the `Avoid` items sit in
     /// the slack between them: a click on a share of the display is never read as a way
     /// of avoiding the item a preview is about, and the other way round.
     #[test]
@@ -2366,10 +2433,11 @@ mod tests {
             ID_TRAY_SVG_SCALE_BASE,
             ID_TRAY_PDF_SCALE_BASE,
             ID_TRAY_OFFICE_SCALE_BASE,
+            ID_TRAY_FONT_SCALE_BASE,
         ]
         .map(|base| base..base + DOCUMENT_SCALE_CHOICES.len() as u16);
 
-        for range in document_scales {
+        for range in &document_scales {
             assert!(
                 !range.contains(&avoid.start) && !avoid.contains(&range.start),
                 "the ranges {range:?} and {avoid:?} overlap"
@@ -2379,6 +2447,17 @@ mod tests {
             avoid.start > ID_TRAY_POSITION_BEST,
             "the avoid items are listed after the position choices"
         );
+
+        // One range per submenu as well: a click on one scale is never read as a click on
+        // the submenu beside it.
+        for (index, range) in document_scales.iter().enumerate() {
+            for other in document_scales.iter().skip(index + 1) {
+                assert!(
+                    !range.contains(&other.start) && !other.contains(&range.start),
+                    "the ranges {range:?} and {other:?} overlap"
+                );
+            }
+        }
     }
 
     /// Every `… Scaling` submenu offers the whole room a document can be given and then
@@ -2400,7 +2479,12 @@ mod tests {
             ]
         );
 
-        for default in [svg_default, DEFAULT_PDF_SCALE, DEFAULT_OFFICE_SCALE] {
+        for default in [
+            svg_default,
+            DEFAULT_PDF_SCALE,
+            DEFAULT_OFFICE_SCALE,
+            DEFAULT_FONT_SCALE,
+        ] {
             assert_eq!(
                 DOCUMENT_SCALE_CHOICES.map(|scale| document_scale_label(scale, default)),
                 [
