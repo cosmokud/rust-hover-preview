@@ -12,7 +12,7 @@ A Windows 11 tray app inspired by QTTabBar that shows instant File Explorer prev
 
 - Mouse-hover and keyboard-navigation previews in Explorer
 - Images, including animated GIF, APNG, and WebP
-- HEIC, AVIF, JPEG XL, and still WebP, decoded by the codec Windows already has
+- HEIC, AVIF, and JPEG XL, decoded by the codec Windows already has
 - SVG vectors drawn at the size they are shown, animated or still
 - Videos through FFmpeg
 - PDF first pages via the built-in Windows PDF engine
@@ -30,7 +30,7 @@ You can add or remove formats in config.ini. Unsupported formats will not show a
 
 ### Images
 
-`jpg`, `jpeg`, `png`, `apng`, `gif`, `bmp`, `ico`, `tiff`, `webp`, `tga`, `hdr`, `exr`, `qoi`, `heic`, `heif`, `avif`, `jxl`, and more. Animated GIF, APNG, and WebP files play; animation is detected from file content. The last four, and a still `webp`, are decoded by a codec extension Windows provides — see [Optional: Enable HEIC, AVIF, JPEG XL and WebP Preview](#optional-enable-heic-avif-jpeg-xl-and-webp-preview-windows-codecs).
+`jpg`, `jpeg`, `png`, `apng`, `gif`, `bmp`, `ico`, `tiff`, `webp`, `tga`, `hdr`, `exr`, `qoi`, `heic`, `heif`, `avif`, `jxl`, and more. Animated GIF, APNG, and WebP files play; animation is detected from file content. The last four, and a still `webp`, are decoded by a codec extension Windows provides where one is installed — or, for `webp`, by the libwebp the app carries when it is not; see [Optional: Enable HEIC, AVIF, JPEG XL and WebP Preview](#optional-enable-heic-avif-jpeg-xl-and-webp-preview-windows-codecs).
 
 ### Vectors
 
@@ -110,9 +110,9 @@ ffprobe -version
 | `heic`, `heif` | [HEIF Image Extension](https://apps.microsoft.com/detail/9PMMSR1CGPWG) + [HEVC Video Extensions](https://apps.microsoft.com/detail/9N4WGH0Z6VHQ) |
 | `avif`         | [HEIF Image Extension](https://apps.microsoft.com/detail/9PMMSR1CGPWG) + [AV1 Video Extension](https://apps.microsoft.com/detail/9MVZQVXJBQ9V)   |
 | `jxl`          | [JPEG XL Image Extension](https://apps.microsoft.com/detail/9MZPRTH5C0TB), or the **JXL support** optional feature on Windows 11 24H2            |
-| `webp`         | [WebP Image Extension](https://apps.microsoft.com/detail/9PG2DK419DRG), which Windows 11 already has                                             |
+| `webp`         | [WebP Image Extension](https://apps.microsoft.com/detail/9PG2DK419DRG) — optional: the app decodes WebP without it                               |
 
-All of them are free, and a Windows 11 device often has the HEIF, AV1 and WebP ones already. Where one is missing, hovering such a file shows no preview rather than an error, and a multi-image file — a HEIC burst, an animated AVIF, an animated JPEG XL — shows its first frame. An animated `.webp` is the one picture here that needs none of them: it is played by a decoder inside the app, so it previews on a Windows 10 machine that has never been near the Store.
+All of them are free, and a Windows 11 device often has the HEIF, AV1 and WebP ones already. Where one is missing, hovering such a file shows no preview rather than an error, and a multi-image file — a HEIC burst, an animated AVIF, an animated JPEG XL — shows its first frame. A `.webp` is the exception in both directions: it is the one picture here that needs none of them, because the app carries a libwebp decoder of its own — that is what plays an animated one, and what decodes a still one where the WebP codec is missing — so WebP previews on a Windows 10 machine that has never been near the Store.
 
 ## Usage
 

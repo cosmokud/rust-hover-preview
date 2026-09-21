@@ -753,6 +753,7 @@ dependencies = [
  "flate2",
  "gif",
  "image",
+ "libwebp-sys2 0.2.0",
  "once_cell",
  "pulldown-cmark",
  "roxmltree",
