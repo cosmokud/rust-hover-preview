@@ -20,8 +20,22 @@ use std::path::Path;
 /// `acTL` chunk rather than by what it is called — and `gif`, `png` and `webp` are
 /// each both an animated format and a still one. `svg` and `svgz` are pictures as far
 /// as the kind goes — they are behind the same `Images` gate and the same list — while
-/// what draws them is a renderer rather than a decoder; see `svg_preview`.
+/// what draws them is a renderer rather than a decoder; see `svg_preview`. `avif`,
+/// `heic`, `heif` and `jxl` are pictures the same way, and what decodes them is the
+/// codec Windows has rather than one this app carries; see `wic_image`.
 pub const DEFAULT_IMAGE_EXTENSIONS: &str =
+    "apng,avif,bmp,exr,ff,gif,hdr,heic,heif,ico,jfif,jpe,jpeg,jpg,jxl,pam,pbm,pgm,png,pnm,ppm,qoi,svg,svgz,tga,tif,tiff,webp";
+
+/// The built-in image list as it stood before the formats Windows has a codec for were
+/// added to it: `avif`, `heic`, `heif` and `jxl`.
+///
+/// A file holding exactly these entries is the app's own older list rather than a
+/// user's edit — nobody has touched it — so it is brought up to the built-in list
+/// rather than kept as written. Without that, the four formats would reach a fresh
+/// installation only: every `config.ini` already written holds a list that differs
+/// from the built-in one, and a list that differs is otherwise the user's own (see
+/// `config::configured_list_over_history`).
+pub const IMAGE_EXTENSIONS_BEFORE_CODEC_FORMATS: &str =
     "apng,bmp,exr,ff,gif,hdr,ico,jfif,jpe,jpeg,jpg,pam,pbm,pgm,png,pnm,ppm,qoi,svg,svgz,tga,tif,tiff,webp";
 
 /// The built-in image list as it stood before `svg` and `svgz` were added to it.

@@ -11,7 +11,8 @@ use std::time::Duration;
 
 use crate::archive_formats::{sanitize_archive_extensions, DEFAULT_ARCHIVE_EXTENSIONS};
 use crate::image_formats::{
-    sanitize_image_extensions, DEFAULT_IMAGE_EXTENSIONS, IMAGE_EXTENSIONS_BEFORE_SVG,
+    sanitize_image_extensions, DEFAULT_IMAGE_EXTENSIONS, IMAGE_EXTENSIONS_BEFORE_CODEC_FORMATS,
+    IMAGE_EXTENSIONS_BEFORE_SVG,
 };
 use crate::office_formats::{sanitize_office_extensions, DEFAULT_OFFICE_EXTENSIONS};
 use crate::text_formats::{
@@ -216,6 +217,21 @@ pub fn image_decode_limits() -> image::Limits {
     let mut limits = image::Limits::no_limits();
     limits.max_alloc = Some(decode_budget_bytes());
     limits
+}
+
+/// The bytes a frame of this shape is, when they fit what one hover may decode for —
+/// the question for the readers that allocate a canvas of their own rather than going
+/// through a decoder's limits: the GIF's and the animated WebP's, and the codec
+/// Windows is asked for a picture's pixels.
+///
+/// A picture's shape is itself unbounded: a seven-thousand by ten-thousand
+/// illustration is an ordinary thing to hover and is decoded at the size it is, so
+/// what a file may ask for is the budget rather than a cap on its dimensions (see
+/// `decode_budget_bytes`). The product is taken in `u64`, so a shape whose frame
+/// overflows a `u32` cannot wrap into a size that would pass.
+pub fn frame_bytes_within_budget(width: u32, height: u32, bytes_per_pixel: u64) -> Option<usize> {
+    let bytes = width as u64 * height as u64 * bytes_per_pixel;
+    (bytes <= decode_budget_bytes()).then_some(bytes as usize)
 }
 
 /// A file's bytes, read whole, when the file is small enough to be read under the
@@ -1478,14 +1494,18 @@ impl AppConfig {
         let mut restored = false;
 
         // The image list is the one whose built-in entries have changed since a file
-        // may have been written — `svg` and `svgz` were added to it — so it is read
-        // through the history beside the app's own older list.
+        // may have been written — `svg` and `svgz` were added to it, and then the
+        // formats Windows has a codec for — so it is read through the history beside
+        // the app's own older lists.
         let (list, defaulted) = configured_list_over_history(
             ini,
             IMAGE_SECTION,
             "extensions",
             DEFAULT_IMAGE_EXTENSIONS,
-            &[IMAGE_EXTENSIONS_BEFORE_SVG],
+            &[
+                IMAGE_EXTENSIONS_BEFORE_CODEC_FORMATS,
+                IMAGE_EXTENSIONS_BEFORE_SVG,
+            ],
             sanitize_image_extensions,
         );
         self.image_extensions = list;
@@ -1832,11 +1852,40 @@ mod tests {
         );
     }
 
+    /// The same, one list's worth of entries later: a file holding the list the app
+    /// shipped before the formats Windows has a codec for were added to it is the
+    /// app's own older list, so those four reach an installation that already exists
+    /// rather than a fresh one only.
+    #[test]
+    fn a_list_holding_the_apps_own_image_entries_takes_the_codec_formats_added_to_them() {
+        let mut ini = Ini::new();
+        ini.set(
+            IMAGE_SECTION,
+            "extensions",
+            Some(IMAGE_EXTENSIONS_BEFORE_CODEC_FORMATS.to_string()),
+        );
+
+        let mut config = AppConfig::default();
+        config.apply_ini(&ini);
+
+        assert_eq!(
+            config.image_extensions,
+            sanitize_image_extensions(DEFAULT_IMAGE_EXTENSIONS),
+            "the list the app shipped before is read as the list it ships now"
+        );
+        for extension in ["avif", "heic", "heif", "jxl"] {
+            assert!(
+                config.image_extensions.contains(&extension.to_string()),
+                "`{extension}` was added to the built-in list"
+            );
+        }
+    }
+
     /// The same list with one entry of the user's own in it is the user's list, not
     /// the app's: the entries added since are left out of it.
     #[test]
     fn an_image_list_anyone_has_edited_is_kept_as_written() {
-        let written = format!("avif,{IMAGE_EXTENSIONS_BEFORE_SVG}");
+        let written = format!("dng,{IMAGE_EXTENSIONS_BEFORE_SVG}");
 
         let mut ini = Ini::new();
         ini.set(IMAGE_SECTION, "extensions", Some(written.clone()));

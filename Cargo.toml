@@ -1,6 +1,6 @@
 [package]
 name = "rust-hover-preview"
-version = "0.2.9"
+version = "0.2.10"
 edition = "2021"
 description = "Windows 11 system tray app that shows image, video, PDF, text, and archive previews on hover in Explorer"
 authors = ["Rust Hover Preview Contributors"]
@@ -25,6 +25,7 @@ windows = { version = "0.58", features = [
     "Win32_System_Diagnostics_ToolHelp",
     "Win32_System_Registry",
     "Win32_Graphics_Gdi",
+    "Win32_Graphics_Imaging",
     "Win32_UI_Controls",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_System_Com",
@@ -45,8 +46,30 @@ windows = { version = "0.58", features = [
     "implement",
 ]}
 
-# Image handling
-image = "0.25"
+# Image handling. The decoders are named rather than defaulted, so what this app reads
+# is the list itself: the defaults carry `avif`, which is ravif and with it rav1e — an
+# AV1 *encoder*, in an app that only ever decodes one. It was never in the binary (the
+# linker had no call site to pull it in from); what it was in is the build graph, and
+# it is a crate the size of a small project to compile for every clean build. The
+# formats this crate has no reader for at all are asked of Windows instead, which is
+# what `Win32_Graphics_Imaging` above and `wic_image` are for.
+image = { version = "0.25", default-features = false, features = [
+    "bmp",
+    "dds",
+    "exr",
+    "ff",
+    "gif",
+    "hdr",
+    "ico",
+    "jpeg",
+    "png",
+    "pnm",
+    "qoi",
+    "rayon",
+    "tga",
+    "tiff",
+    "webp",
+] }
 
 # SVG previews. A document is rasterized at the size the preview is shown at rather
 # than decoded and resampled, by usvg + tiny-skia through resvg — pure Rust, and no
