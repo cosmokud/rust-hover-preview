@@ -18,13 +18,12 @@
 //! and this module both read do not come here at all.
 //!
 //! So this module is the reader for the rest of them: the uncompressed formats, whose
-//! pixels are read out of the masks or the DXGI format the file declares, and BC4 and
-//! BC5, which are decoded here because the alternative was a crate carrying a compressor
-//! and a table of block modes for a decoder this app would use two thirds of. The two
-//! that remain — BC6H and BC7 — are named in the table below and answered with no
-//! preview: a BC7 decoder is eight block modes and sixty-four partition tables, which is
-//! a piece of work rather than a line, and a file of either format is far rarer than the
-//! ones around it.
+//! pixels are read out of the masks or the DXGI format the file declares, and every block
+//! format the codec does not read — BC4, BC5, BC6H and BC7 — which are decoded by this app
+//! rather than by anything the machine has. Nothing of theirs is here: a block format is
+//! arithmetic on sixteen bytes with nothing to carry between blocks, so all six of them
+//! live in `bcn` and this module is the container around them — which format a file holds,
+//! where the level that format is read from begins, and what becomes of what comes out.
 //!
 //! What is read of a file is its first mip level and its first face, which is the shape
 //! the rest of the app takes with a picture that holds more than one: a cubemap is six
@@ -41,7 +40,9 @@
 //! format that is not one of the ones above, a level that will not fit the budget every
 //! other reader is handed, and a read that comes back short are one answer: no preview.
 
+use crate::bcn::{self, Blocks, Texels};
 use crate::config::{decode_budget_bytes, frame_bytes_within_budget};
+use crate::tone_map::ToneMap;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
@@ -60,9 +61,10 @@ const DDPF_LUMINANCE: u32 = 0x20_000;
 
 /// A texture's own size, which is the size the layout places it at.
 ///
-/// `None` is a file that is not a DDS, one whose format this module has no decoder for —
-/// BC6H and BC7 among them — and one whose header will not be read, and every one of them
-/// is the same answer: no preview.
+/// `None` is a file that is not a DDS, one whose format neither this module nor `bcn` has
+/// a decoder for — a DXGI format outside the two tables below, a pixel format declared no
+/// way a pixel can be read out of — and one whose header will not be read, and every one
+/// of them is the same answer: no preview.
 pub fn dimensions(path: &Path) -> Option<(u32, u32)> {
     let header = read_header(path)?;
     Some((header.width, header.height))
@@ -90,10 +92,18 @@ pub fn decode(path: &Path, width: u32, height: u32) -> Option<Vec<u8>> {
 
     let level = read_level(path, header.offset, header.level_bytes)?;
 
+    // Whether a curve is applied belongs to the picture rather than to the format — a
+    // texture that holds light is brought into a frame with one, and a texture that holds
+    // levels is not — so it is read once here and handed to whichever of the two readers
+    // this file turns out to be (see `tone_map`).
+    let tone = ToneMap::current();
+
     let pixels = match header.picture {
-        Picture::Blocks(blocks) => decode_blocks(blocks, &level, header.width, header.height)?,
+        Picture::Blocks(blocks) => {
+            decode_blocks(blocks, &level, header.width, header.height, tone)?
+        }
         Picture::Samples(samples) => {
-            decode_samples(samples, &level, header.width, header.height)?
+            decode_samples(samples, &level, header.width, header.height, tone)?
         }
     };
 
@@ -112,27 +122,6 @@ pub fn decode(path: &Path, width: u32, height: u32) -> Option<Vec<u8>> {
 enum Picture {
     Blocks(Blocks),
     Samples(Samples),
-}
-
-/// A block-compressed format, which is four texels square whatever the file's shape is.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Blocks {
-    Bc1,
-    Bc2,
-    Bc3,
-    Bc4,
-    Bc5,
-}
-
-impl Blocks {
-    fn block_bytes(self) -> usize {
-        match self {
-            // The two that carry a colour block alone; the others carry an alpha block as
-            // well, or are nothing but alpha blocks.
-            Blocks::Bc1 | Blocks::Bc4 => 8,
-            Blocks::Bc2 | Blocks::Bc3 | Blocks::Bc5 => 16,
-        }
-    }
 }
 
 /// One sample as the file stores it.
@@ -362,9 +351,11 @@ fn dx10_picture(format: u32) -> Option<Picture> {
         76..=78 => Some(Picture::Blocks(Blocks::Bc3)),
         79..=81 => Some(Picture::Blocks(Blocks::Bc4)),
         82..=84 => Some(Picture::Blocks(Blocks::Bc5)),
-
-        // BC6H (94-96) and BC7 (97-99) are named here and answered with no preview, which
-        // is the module's one deliberate hole: see its own documentation.
+        // BC6H is two formats, and only the unsigned one is read: the signed range is a
+        // thing a render's intermediate data is written in rather than a picture, and the
+        // formats this app has no answer for are answered with no preview (see `bcn`).
+        95 => Some(Picture::Blocks(Blocks::Bc6h)),
+        97..=99 => Some(Picture::Blocks(Blocks::Bc7)),
 
         2 => Some(Picture::Samples(Samples::Colour(Order::Rgba, Sample::F32))),
         10 => Some(Picture::Samples(Samples::Colour(Order::Rgba, Sample::F16))),
@@ -408,7 +399,18 @@ fn read_level(path: &Path, offset: usize, bytes: usize) -> Option<Vec<u8>> {
 }
 
 /// A block-compressed level decoded into the frame the preview composes in.
-fn decode_blocks(blocks: Blocks, level: &[u8], width: u32, height: u32) -> Option<Vec<u8>> {
+///
+/// Five of the six formats come out of `bcn` as the levels they hold; BC6H comes out as
+/// the light it holds, which is not what a frame is composed in — so what that format's
+/// texels get is the same curve an EXR's do, applied a texel at a time on the way past
+/// (see `tone_map`).
+fn decode_blocks(
+    blocks: Blocks,
+    level: &[u8],
+    width: u32,
+    height: u32,
+    tone: ToneMap,
+) -> Option<Vec<u8>> {
     let block_bytes = blocks.block_bytes();
     let wide = width.div_ceil(4) as usize;
     let high = height.div_ceil(4) as usize;
@@ -423,7 +425,17 @@ fn decode_blocks(blocks: Blocks, level: &[u8], width: u32, height: u32) -> Optio
     for block_y in 0..high {
         for block_x in 0..wide {
             let start = (block_y * wide + block_x) * block_bytes;
-            let texels = decode_block(blocks, &level[start..start + block_bytes]);
+            let texels = match blocks.decode(&level[start..start + block_bytes]) {
+                Texels::Levels(levels) => levels,
+                Texels::Light(light) => light.map(|texel| {
+                    [
+                        tone.encode(texel[0]),
+                        tone.encode(texel[1]),
+                        tone.encode(texel[2]),
+                        255,
+                    ]
+                }),
+            };
 
             for y in 0..4 {
                 let row = block_y * 4 + y;
@@ -447,162 +459,14 @@ fn decode_blocks(blocks: Blocks, level: &[u8], width: u32, height: u32) -> Optio
     Some(pixels)
 }
 
-/// The sixteen texels of one compressed block.
-fn decode_block(blocks: Blocks, block: &[u8]) -> [[u8; 4]; 16] {
-    match blocks {
-        Blocks::Bc1 | Blocks::Bc2 | Blocks::Bc3 => {
-            // The colour block is the whole of a BC1 block and the second half of the
-            // other two, whose first half is how their alpha is written.
-            let colour = if blocks == Blocks::Bc1 {
-                &block[0..8]
-            } else {
-                &block[8..16]
-            };
-
-            let mut texels = colour_texels(colour, blocks == Blocks::Bc1);
-
-            match blocks {
-                Blocks::Bc1 => {}
-                Blocks::Bc2 => narrow_alpha(&mut texels, &block[0..8]),
-                _ => gradient_alpha(&mut texels, &block[0..8], AlphaChannel::Alpha),
-            }
-
-            texels
-        }
-        Blocks::Bc4 => {
-            let mut texels = [[0u8, 0, 0, 255]; 16];
-            gradient_alpha(&mut texels, block, AlphaChannel::Red);
-
-            // A single channel held in the alpha block's own form, drawn as grey: the
-            // value is the value, whichever of the three channels it is asked for as.
-            for texel in &mut texels {
-                texel[1] = texel[0];
-                texel[2] = texel[0];
-            }
-
-            texels
-        }
-        Blocks::Bc5 => {
-            let mut texels = [[0u8, 0, 0, 255]; 16];
-            gradient_alpha(&mut texels, &block[0..8], AlphaChannel::Red);
-            gradient_alpha(&mut texels, &block[8..16], AlphaChannel::Green);
-
-            texels
-        }
-    }
-}
-
-/// The four colours a BC1, BC2 or BC3 block offers and the two bits per texel that choose
-/// between them.
-fn colour_texels(block: &[u8], bc1: bool) -> [[u8; 4]; 16] {
-    let first = u16::from_le_bytes([block[0], block[1]]);
-    let second = u16::from_le_bytes([block[2], block[3]]);
-
-    let start = wide_colour(first);
-    let end = wide_colour(second);
-
-    // Two of the four are the block's own endpoints and the other two are between them,
-    // and a BC1 block whose first endpoint does not sit above its second spends its
-    // fourth on a transparent black instead — that format's one bit of alpha, which is
-    // why the order they came in is a thing to read rather than a thing to correct. What
-    // the third one is, is not the same between them either: the three-colour form has
-    // nothing but the two to go on, so it is their midpoint, while the four-colour form
-    // gives it three parts of the first endpoint to one of the second.
-    let colours: [[u8; 4]; 4] = if bc1 && first <= second {
-        [
-            start,
-            end,
-            between(start, end, 1, 1),
-            [0, 0, 0, 0],
-        ]
-    } else {
-        [
-            start,
-            end,
-            between(start, end, 2, 1),
-            between(start, end, 1, 2),
-        ]
-    };
-
-    let mut texels = [[0u8; 4]; 16];
-    for row in 0..4 {
-        let packed = block[4 + row];
-
-        for column in 0..4 {
-            let index = ((packed >> (2 * column)) & 0x3) as usize;
-            texels[row * 4 + column] = colours[index];
-        }
-    }
-
-    texels
-}
-
-/// The alpha of a BC2 block, which is four bits to the texel and nothing else.
-fn narrow_alpha(texels: &mut [[u8; 4]; 16], block: &[u8]) {
-    for (index, byte) in block.iter().enumerate() {
-        let low = byte & 0x0F;
-        let high = byte >> 4;
-
-        texels[index * 2][3] = (low << 4) | low;
-        texels[index * 2 + 1][3] = (high << 4) | high;
-    }
-}
-
-/// Which channel a gradient block's values are read into.
-#[derive(Clone, Copy)]
-enum AlphaChannel {
-    Alpha,
-    Red,
-    Green,
-}
-
-/// The values of a BC3, BC4 or BC5 gradient block: two endpoints and the six between
-/// them, or the four between them and a hard zero and a hard full.
-///
-/// Which of the two codebooks a block uses is settled by the order its own endpoints came
-/// in, and the second is the one that can reach the ends of the range — the reason a
-/// gradient block that wrote its larger endpoint first is the one that can say "no alpha
-/// at all" and "full alpha" exactly.
-fn gradient_alpha(texels: &mut [[u8; 4]; 16], block: &[u8], channel: AlphaChannel) {
-    let first = block[0];
-    let second = block[1];
-
-    let mut codes = [0u8; 8];
-    codes[0] = first;
-    codes[1] = second;
-
-    if first <= second {
-        for step in 1..5u32 {
-            codes[1 + step as usize] =
-                (((5 - step) * first as u32 + step * second as u32) / 5) as u8;
-        }
-        codes[6] = 0;
-        codes[7] = 255;
-    } else {
-        for step in 1..7u32 {
-            codes[1 + step as usize] =
-                (((7 - step) * first as u32 + step * second as u32) / 7) as u8;
-        }
-    }
-
-    let mut packed = 0u64;
-    for (index, byte) in block[2..8].iter().enumerate() {
-        packed |= (*byte as u64) << (8 * index);
-    }
-
-    for texel in 0..16 {
-        let value = codes[((packed >> (3 * texel)) & 0x7) as usize];
-
-        match channel {
-            AlphaChannel::Alpha => texels[texel][3] = value,
-            AlphaChannel::Red => texels[texel][0] = value,
-            AlphaChannel::Green => texels[texel][1] = value,
-        }
-    }
-}
-
 /// An uncompressed level read into the frame the preview composes in.
-fn decode_samples(samples: Samples, level: &[u8], width: u32, height: u32) -> Option<Vec<u8>> {
+fn decode_samples(
+    samples: Samples,
+    level: &[u8],
+    width: u32,
+    height: u32,
+    tone: ToneMap,
+) -> Option<Vec<u8>> {
     let count = width as usize * height as usize;
     let stride = samples.bytes_per_pixel()?;
 
@@ -610,7 +474,6 @@ fn decode_samples(samples: Samples, level: &[u8], width: u32, height: u32) -> Op
         return None;
     }
 
-    let tone = crate::tone_map::ToneMap::current();
     let mut pixels = vec![0u8; count * 4];
 
     for index in 0..count {
@@ -647,13 +510,13 @@ fn decode_samples(samples: Samples, level: &[u8], width: u32, height: u32) -> Op
 
                 if alpha {
                     [
-                        widen_5(((packed >> 10) & 0x1F) as u8),
-                        widen_5(((packed >> 5) & 0x1F) as u8),
-                        widen_5((packed & 0x1F) as u8),
+                        bcn::widen_5(((packed >> 10) & 0x1F) as u8),
+                        bcn::widen_5(((packed >> 5) & 0x1F) as u8),
+                        bcn::widen_5((packed & 0x1F) as u8),
                         if packed & 0x8000 != 0 { 255 } else { 0 },
                     ]
                 } else {
-                    wide_colour(packed)
+                    bcn::wide_colour(packed)
                 }
             }
         };
@@ -759,7 +622,7 @@ fn sample_level(sample: Sample, bytes: &[u8], tone: crate::tone_map::ToneMap) ->
     match sample {
         Sample::U8 => bytes[0],
         Sample::U16 => narrow_sixteen(u16::from_le_bytes([bytes[0], bytes[1]])),
-        Sample::F16 => tone.encode(half_to_float(u16::from_le_bytes([bytes[0], bytes[1]]))),
+        Sample::F16 => tone.encode(bcn::half_to_float(u16::from_le_bytes([bytes[0], bytes[1]]))),
         Sample::F32 => tone.encode(f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])),
     }
 }
@@ -770,7 +633,7 @@ fn sample_alpha(sample: Sample, bytes: &[u8]) -> u8 {
     match sample {
         Sample::U8 => bytes[0],
         Sample::U16 => narrow_sixteen(u16::from_le_bytes([bytes[0], bytes[1]])),
-        Sample::F16 => narrow_float(half_to_float(u16::from_le_bytes([bytes[0], bytes[1]]))),
+        Sample::F16 => narrow_float(bcn::half_to_float(u16::from_le_bytes([bytes[0], bytes[1]]))),
         Sample::F32 => narrow_float(f32::from_le_bytes([
             bytes[0], bytes[1], bytes[2], bytes[3],
         ])),
@@ -796,64 +659,4 @@ fn narrow_float(value: f32) -> u8 {
     };
 
     (clamped * 255.0 + 0.5) as u8
-}
-
-/// A 5-bit channel widened to eight.
-fn widen_5(value: u8) -> u8 {
-    (value << 3) | (value >> 2)
-}
-
-/// A 6-bit channel widened to eight.
-fn widen_6(value: u8) -> u8 {
-    (value << 2) | (value >> 4)
-}
-
-/// A 565 colour widened to eight bits a channel, with a full alpha.
-fn wide_colour(packed: u16) -> [u8; 4] {
-    [
-        widen_5(((packed >> 11) & 0x1F) as u8),
-        widen_6(((packed >> 5) & 0x3F) as u8),
-        widen_5((packed & 0x1F) as u8),
-        255,
-    ]
-}
-
-/// A colour between two others, weighted: what a block's two middle colours are made of.
-fn between(start: [u8; 4], end: [u8; 4], start_weight: u32, end_weight: u32) -> [u8; 4] {
-    let total = start_weight + end_weight;
-    let mut mixed = [0u8; 4];
-
-    for channel in 0..4 {
-        mixed[channel] =
-            ((start_weight * start[channel] as u32 + end_weight * end[channel] as u32) / total) as u8;
-    }
-
-    mixed
-}
-
-/// A half float as the number it is.
-///
-/// The fields are a `f32`'s own at half the width, so this is the shift and the bias
-/// rather than anything a library is needed for: a half's exponent is biased by fifteen
-/// and a float's by a hundred and twenty-seven.
-fn half_to_float(bits: u16) -> f32 {
-    let sign = (bits >> 15) as u32;
-    let exponent = ((bits >> 10) & 0x1F) as u32;
-    let mantissa = (bits & 0x3FF) as u32;
-
-    let value = match exponent {
-        // A subnormal half is an ordinary float: the mantissa alone, scaled by the
-        // smallest exponent the format has.
-        0 => mantissa as f32 * 2.0f32.powi(-24),
-        0x1F => {
-            if mantissa == 0 {
-                f32::INFINITY
-            } else {
-                f32::NAN
-            }
-        }
-        _ => (1.0 + mantissa as f32 / 1024.0) * 2.0f32.powi(exponent as i32 - 15),
-    };
-
-    if sign == 0 { value } else { -value }
 }

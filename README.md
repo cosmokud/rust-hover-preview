@@ -33,7 +33,7 @@ You can add or remove formats in `config.ini`. Unsupported formats show no previ
 
 `jpg`, `jpeg`, `png`, `apng`, `gif`, `bmp`, `ico`, `tiff`, `webp`, `tga`, `hdr`, `exr`, `qoi`, `heic`, `heif`, `avif`, `jxl`, `dds`, and more.
 
-Animated GIF, APNG, and WebP files play. HEIC, HEIF, AVIF, JPEG XL, and still WebP usually need Windows codec extensions — except WebP, which the app can also decode on its own. HDR and EXR images are tone-mapped for screen preview. DDS textures show basic previews; some advanced DDS variants are not supported yet.
+Animated GIF, APNG, and WebP files play. HEIC, HEIF, AVIF, JPEG XL, and still WebP usually need Windows codec extensions — except WebP, which the app can also decode on its own. HDR and EXR images are tone-mapped for screen preview. DDS textures preview in every block format they are written in — BC1 through BC7, plus unsigned BC6H — and in the uncompressed formats, showing the first face and first level of a cubemap or mip chain; the signed BC6H variant shows no preview.
 
 ### Vectors
 
@@ -79,8 +79,6 @@ Text, code, and archive listings use Atom One Light by default, One Dark Pro, or
 %APPDATA%\rust-hover-preview\theme
 ```
 
-Archive listings follow the tray’s **Text Preview → Font Size** setting.
-
 ## Installation
 
 Each release provides two options:
@@ -120,28 +118,32 @@ ffplay -version
 ffprobe -version
 ```
 
-## Optional: More Video Codecs (Windows Codecs)
+## Optional: Enable More Video Codecs (Windows Codecs) — They are not needed while FFmpeg is installed.
 
-The Windows media engine decodes H.264, MPEG-4, and WMV out of the box. Free Microsoft Store extensions add more:
+The media engine decodes H.264, MPEG-4, and WMV out of the box. Each codec below is a separate free extension from the Microsoft Store:
 
-- HEVC (H.265) — HEVC Video Extensions
-- VP9 — VP9 Video Extensions
-- AV1 — AV1 Video Extension
-- MPEG-1 and MPEG-2 — MPEG-2 Video Extension
-- Theora, Vorbis, and Opus in Ogg — Web Media Extensions
+| Codec                                  | Needs                                                                    |
+| -------------------------------------- | ------------------------------------------------------------------------ |
+| HEVC (H.265)                           | [HEVC Video Extensions](https://apps.microsoft.com/detail/9N4WGH0Z6VHQ)  |
+| VP9                                    | [VP9 Video Extensions](https://apps.microsoft.com/detail/9N4D0MSMP0PT)   |
+| AV1                                    | [AV1 Video Extension](https://apps.microsoft.com/detail/9MVZQVXJBQ9V)    |
+| MPEG-1 and MPEG-2                      | [MPEG-2 Video Extension](https://apps.microsoft.com/detail/9N95Q1ZZPMH4) |
+| Theora, Vorbis and Opus in an Ogg file | [Web Media Extensions](https://apps.microsoft.com/detail/9N5TDP8VCMHS)   |
 
-Windows 11 devices usually already have HEVC, VP9, and AV1. Installing one takes effect the next time the tray’s **Codecs** menu is opened. They are not needed while FFmpeg is installed.
+All are free. Windows 11 usually has HEVC, VP9, and AV1 already. Installing one takes effect the next time the tray’s **Codecs** menu is opened — no restart, nothing to configure.
 
-## Optional: HEIC, AVIF, JPEG XL, and WebP (Windows Codecs)
+## Optional: Enable HEIC, AVIF, JPEG XL and WebP Preview (Windows Codecs)
 
-These formats are usually decoded by Windows codec extensions rather than by the app itself:
+`heic`, `heif`, `avif`, `jxl`, and still `webp` are decoded by a codec Windows provides rather than one shipped with the app. Each needs its extension installed once from the Microsoft Store:
 
-- `heic`, `heif` — HEIF Image Extension + HEVC Video Extensions
-- `avif` — HEIF Image Extension + AV1 Video Extension
-- `jxl` — JPEG XL Image Extension, or the JXL support feature on Windows 11 24H2
-- `webp` — WebP Image Extension, optional because the app can decode WebP itself
+| Format         | Needs                                                                                                                                            |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `heic`, `heif` | [HEIF Image Extension](https://apps.microsoft.com/detail/9PMMSR1CGPWG) + [HEVC Video Extensions](https://apps.microsoft.com/detail/9N4WGH0Z6VHQ) |
+| `avif`         | [HEIF Image Extension](https://apps.microsoft.com/detail/9PMMSR1CGPWG) + [AV1 Video Extension](https://apps.microsoft.com/detail/9MVZQVXJBQ9V)   |
+| `jxl`          | [JPEG XL Image Extension](https://apps.microsoft.com/detail/9MZPRTH5C0TB), or the **JXL support** optional feature on Windows 11 24H2            |
+| `webp`         | [WebP Image Extension](https://apps.microsoft.com/detail/9PG2DK419DRG) — optional: the app decodes WebP without it                               |
 
-If a codec is missing, hovering shows no preview rather than an error. Multi-image files such as HEIC bursts, animated AVIF, or animated JPEG XL show their first frame. WebP is the exception: it works without the extension, because the app carries a libwebp decoder.
+All are free. Windows 11 often has HEIF, AV1, and WebP already. Where one is missing, hovering such a file shows no preview rather than an error, and a multi-image file — a HEIC burst, an animated AVIF, an animated JPEG XL — shows its first frame. A `.webp` is the exception: it needs none of them, because the app carries its own libwebp decoder, so WebP previews even on Windows 10.
 
 ## Usage
 
