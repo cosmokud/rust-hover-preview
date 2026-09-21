@@ -674,7 +674,6 @@ dependencies = [
  "qoi",
  "ravif",
  "rayon",
- "rgb",
  "tiff",
  "zune-core 0.5.1",
  "zune-jpeg 0.5.11",
@@ -1391,7 +1390,7 @@ dependencies = [
 
 [[package]]
 name = "rust-hover-preview"
-version = "0.2.9"
+version = "0.2.10"
 dependencies = [
  "configparser",
  "directories",

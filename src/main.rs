@@ -26,6 +26,7 @@ mod tray;
 mod video_formats;
 mod webview_preview;
 mod wheel_input;
+mod wic_image;
 
 use once_cell::sync::Lazy;
 use std::fs;

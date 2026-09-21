@@ -2,7 +2,7 @@ use crate::archive_formats;
 use crate::archive_preview::{self, ArchivePreviewOptions};
 use crate::cloud_files;
 use crate::config::{
-    decode_budget_bytes, image_decode_limits, read_within_budget, sanitize_image_cache_mb,
+    frame_bytes_within_budget, image_decode_limits, read_within_budget, sanitize_image_cache_mb,
     sanitize_webp_playback_fps, MarkdownMode, PreviewScale, PreviewType, TextTheme,
     TransparentBackground, DEFAULT_IMAGE_CACHE_MB, DEFAULT_OFFICE_SCALE, DEFAULT_PDF_SCALE,
     DEFAULT_PREVIEW_SCALE_PERCENT, DEFAULT_SVG_SCALE_PERCENT, DEFAULT_TEXT_FONT_SCALE_PERCENT,
@@ -20,6 +20,7 @@ use crate::text_preview::{self, TextPreviewOptions};
 use crate::video_formats::{self, is_video_file};
 use crate::webview_preview;
 use crate::wheel_input;
+use crate::wic_image;
 use crate::{CONFIG, RUNNING};
 use gif::DecodeOptions;
 use image::{AnimationDecoder, GenericImageView};
@@ -961,6 +962,11 @@ fn decode_image_by_extension(path: &PathBuf) -> Option<image::DynamicImage> {
 }
 
 /// Read image dimensions by sniffing magic bytes instead of trusting the extension.
+///
+/// A format the `image` crate has no reader for at all is a file it cannot answer for
+/// rather than a file that is not a picture, so the codec Windows has is asked before
+/// the answer is no: what a hover onto a `.heic` is measured from is its own frame;
+/// see `wic_image`.
 fn image_dimensions_with_header_check(path: &PathBuf) -> Option<(u32, u32)> {
     image::ImageReader::open(path)
         .ok()?
@@ -968,6 +974,7 @@ fn image_dimensions_with_header_check(path: &PathBuf) -> Option<(u32, u32)> {
         .ok()?
         .into_dimensions()
         .ok()
+        .or_else(|| wic_image::dimensions(path))
 }
 
 /// Convert RGBA pixels to BGRA for Windows GDI
@@ -2146,20 +2153,6 @@ fn load_animated_webp(
     })
 }
 
-/// The bytes a frame of this shape is, when they fit what one hover may decode for
-/// — the question for the readers that allocate a canvas of their own rather than
-/// going through a decoder's limits.
-///
-/// A picture's shape is itself unbounded: a seven-thousand by ten-thousand
-/// illustration is an ordinary thing to hover and is decoded at the size it is, so
-/// what a file may ask for is the budget rather than a cap on its dimensions (see
-/// `config::decode_budget_bytes`). The product is taken in `u64`, so a shape whose
-/// frame overflows a `u32` cannot wrap into a size that would pass.
-fn frame_bytes_within_budget(width: u32, height: u32, bytes_per_pixel: u64) -> Option<usize> {
-    let bytes = width as u64 * height as u64 * bytes_per_pixel;
-    (bytes <= decode_budget_bytes()).then_some(bytes as usize)
-}
-
 /// A frame's place in the cache, and when it was last asked for. The stamp is a
 /// counter rather than a clock, so the order frames are dropped in cannot be
 /// changed by the system clock moving.
@@ -2370,37 +2363,53 @@ fn load_static_image(
     // A header that would not report its dimensions is not a reason to refuse the
     // file: the decoder has the last word on whether it is an image at all, and a
     // frame measured this way is simply not held.
-    let img = if is_confirm_file_type_enabled() {
-        decode_image_with_header_check(path)?
+    //
+    // A picture of a format this app's own decoder does not read is asked of the codec
+    // Windows has for it instead, and that one is handed the box the layout planned
+    // rather than the file's own size: what it decodes is the preview, and what it
+    // hands back is already in the pixel order the frame is composed in, so the
+    // resample and the two conversions are not paid for either; see `wic_image`.
+    let (pixels, target_width, target_height) = if wic_image::is_codec_file(path) {
+        let (width, height) = match cache_key.as_ref() {
+            Some(key) => (key.width, key.height),
+            // A picture whose size would not be read has no size to take a share of,
+            // so what it is decoded into is the box the layout has.
+            None => (max_width, max_height),
+        };
+
+        (wic_image::decode(path, width, height)?, width, height)
     } else {
-        decode_image_by_extension(path)?
+        let img = if is_confirm_file_type_enabled() {
+            decode_image_with_header_check(path)?
+        } else {
+            decode_image_by_extension(path)?
+        };
+
+        let (orig_width, orig_height) = img.dimensions();
+        let (width, height) = match cache_key.as_ref() {
+            Some(key) => (key.width, key.height),
+            None => scale_dimensions(
+                orig_width,
+                orig_height,
+                max_width,
+                max_height,
+                preview_scale,
+            ),
+        };
+
+        let resized = if width != orig_width || height != orig_height {
+            img.resize_exact(width, height, image::imageops::FilterType::Triangle)
+        } else {
+            img
+        };
+
+        let rgba = resized.to_rgba8();
+
+        (rgba_to_bgra(rgba.as_raw()), width, height)
     };
 
-    let (orig_width, orig_height) = img.dimensions();
-    let (target_width, target_height) = match cache_key.as_ref() {
-        Some(key) => (key.width, key.height),
-        None => scale_dimensions(
-            orig_width,
-            orig_height,
-            max_width,
-            max_height,
-            preview_scale,
-        ),
-    };
-
-    let resized = if target_width != orig_width || target_height != orig_height {
-        img.resize_exact(
-            target_width,
-            target_height,
-            image::imageops::FilterType::Triangle,
-        )
-    } else {
-        img
-    };
-
-    let rgba = resized.to_rgba8();
     let frame = ImageFrame {
-        pixels: rgba_to_bgra(rgba.as_raw()),
+        pixels,
         width: target_width,
         height: target_height,
         delay_ms: 0,
@@ -3730,7 +3739,13 @@ fn get_media_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
     if is_confirm_file_type_enabled() {
         image_dimensions_with_header_check(path)
     } else {
-        image::image_dimensions(path).ok()
+        // The same two readers, asked the way this path asks them: the name first,
+        // since a file whose content is not confirmed is taken for what it is called,
+        // and then the codec Windows has — which is the only reader there is for the
+        // picture formats this app's decoder cannot read at all.
+        image::image_dimensions(path)
+            .ok()
+            .or_else(|| wic_image::dimensions(path))
     }
 }
 
@@ -4048,8 +4063,11 @@ fn spawn_load_worker(
     result_tx: Sender<LoadResult>,
 ) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
-        // Rendering a PDF page goes through Windows.Data.Pdf on this thread.
+        // A PDF page is rendered through Windows.Data.Pdf and a picture of a format
+        // this app has no decoder for is decoded by the codec Windows has, so this
+        // thread needs an apartment before the first load asks for either.
         pdf_preview::initialize_apartment();
+        wic_image::initialize_apartment();
 
         while RUNNING.load(Ordering::Acquire) {
             let mut request = {
@@ -6041,9 +6059,10 @@ fn compute_keyboard_layout(
 }
 
 pub fn run_preview_window() {
-    // Page sizes come from Windows.Data.Pdf, so this thread needs an apartment
-    // before the first layout asks for one.
+    // Page sizes come from Windows.Data.Pdf and picture sizes from the codec Windows
+    // has, so this thread needs an apartment before the first layout asks for one.
     pdf_preview::initialize_apartment();
+    wic_image::initialize_apartment();
 
     let (tx, rx): (Sender<PreviewMessage>, Receiver<PreviewMessage>) = channel();
 
