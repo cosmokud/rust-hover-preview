@@ -334,6 +334,13 @@ pub enum PreviewMessage {
 /// Represents different types of media we can display
 enum MediaType {
     StaticImage,
+    /// A `.dds` texture, which is a still picture decoded by this app and drawn by this
+    /// window like any other — a kind of its own for the one thing about it that differs:
+    /// what a preview is drawn over. A texture's alpha channel is as often a mask, a
+    /// height or a channel a tool never filled in as it is transparency, so its backdrop
+    /// is the tray's own setting rather than a picture's (see the `Background` submenu and
+    /// `dds_image`).
+    Dds,
     /// An SVG document the engine draws in a window of its own. This side holds no
     /// frame for one: the kind is what the preview loop reads to hand the hover over,
     /// and the media it comes in arrives with nothing in it. It is a kind of its own
@@ -375,6 +382,9 @@ impl MediaType {
             | Self::AnimatedGif
             | Self::AnimatedApng
             | Self::AnimatedWebP => Some(PreviewType::Images),
+            // A texture is a picture as far as the gates go: the list a `.dds` is in is the
+            // image list, and the switch for pictures is the switch for it.
+            Self::Dds => Some(PreviewType::Images),
             Self::EngineSvg => Some(PreviewType::Svg),
             Self::EngineFont => Some(PreviewType::Fonts),
             Self::Video | Self::NativeVideo => Some(PreviewType::Videos),
@@ -1157,6 +1167,16 @@ fn current_font_background() -> TransparentBackground {
     CONFIG
         .lock()
         .map(|cfg| cfg.font_background)
+        .unwrap_or(TransparentBackground::Transparent)
+}
+
+/// The backdrop a `.dds` texture is drawn over, which the tray keeps apart from a
+/// picture's: a texture's alpha channel is as often a mask or a channel nobody filled in as
+/// it is transparency, so what is behind one is a question of its own (see `dds_image`).
+fn current_dds_background() -> TransparentBackground {
+    CONFIG
+        .lock()
+        .map(|cfg| cfg.dds_background)
         .unwrap_or(TransparentBackground::Transparent)
 }
 
@@ -2537,14 +2557,18 @@ fn engine_font_media() -> MediaData {
 }
 
 /// A still image as `MediaData`: one frame, nothing streaming.
-fn static_image_media(frame: ImageFrame) -> MediaData {
+///
+/// The kind arrives with the frame rather than being decided here: a texture is a still
+/// picture like any other, and the one thing that makes it a kind of its own is what it is
+/// drawn over — which is the loader's to know, since the loader is what held the file.
+fn static_image_media(frame: ImageFrame, kind: MediaType) -> MediaData {
     MediaData {
         frames: vec![frame],
         shared_frames: None,
         all_frames_loaded: None,
         current_frame: 0,
         last_frame_time: Instant::now(),
-        media_type: MediaType::StaticImage,
+        media_type: kind,
         stream_cancel: None,
         video_process: None,
         loading_start: None,
@@ -2568,6 +2592,15 @@ fn load_static_image(
     // would be decoded into, and so the key that frame is held under.
     let dimensions = image_dimensions_with_header_check(path);
 
+    // A texture is a picture to everything below this line, and a kind of its own to what
+    // draws it: what a `.dds` preview is composited over is the tray's texture backdrop
+    // rather than a picture's (see the `Background` submenu and `dds_image`).
+    let kind = if dds_image::is_dds_file(path) {
+        MediaType::Dds
+    } else {
+        MediaType::StaticImage
+    };
+
     let cache_key = dimensions.map(|(width, height)| {
         let (target_width, target_height) =
             scale_dimensions(width, height, max_width, max_height, preview_scale);
@@ -2582,7 +2615,7 @@ fn load_static_image(
 
     if let Some(key) = cache_key.as_ref() {
         if let Some(frame) = image_cache_get(key) {
-            return Some(static_image_media(frame));
+            return Some(static_image_media(frame, kind));
         }
     }
 
@@ -2668,7 +2701,7 @@ fn load_static_image(
         image_cache_put(key, frame.clone());
     }
 
-    Some(static_image_media(frame))
+    Some(static_image_media(frame, kind))
 }
 
 /// Render the first page of a PDF through the PDF engine built into Windows.
@@ -4490,10 +4523,14 @@ unsafe fn render_layered_preview_at(hwnd: HWND, x: i32, y: i32) {
         // The spinner is nothing but an arc, and what is behind it is the desktop:
         // a backdrop of the configured kind would put back the square its frame is
         // transparent to avoid. Everything else this window draws is composited over
-        // the picture's backdrop: a document is composited by the engine, over the
-        // backdrop of its own, and none of them reaches here.
+        // the backdrop of its kind — a picture's, or the one the tray keeps for a
+        // texture, which is a setting of its own for the reason `dds_image` gives. A
+        // document is composited by the engine, over the backdrop of its own, and none
+        // of them reaches here.
         let background = if media.media_type.is_loading() {
             TransparentBackground::Transparent
+        } else if matches!(media.media_type, MediaType::Dds) {
+            current_dds_background()
         } else {
             current_image_background()
         };

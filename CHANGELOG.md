@@ -5,6 +5,7 @@
 ### Added
 
 - `dds` texture previews: every block format a texture is written in — BC1 through BC7, and BC6H's unsigned variant — and the uncompressed formats a tool writes, behind the classic header and the DX10 one alike. Windows decodes BC1 to BC3 at the size of the preview and the app decodes the rest; a cubemap, a texture array or a mip chain shows its first face and first level, and the signed BC6H variant shows no preview.
+- `DDS Background` under the tray's **Background** menu, with `dds_background` in `config.ini`: what a `.dds` texture is previewed over, kept apart from a picture's backdrop because a texture's alpha channel is as often a mask or an unused channel as it is transparency.
 - `hdr_tone_map` and `hdr_exposure` in `config.ini`: the curve and the exposure a picture whose samples are light — an `.exr`, a Radiance `.hdr`, a float texture — is brought into the preview with. `reinhard` (the default) leaves a value the display can already show where it was and rolls off everything above it instead of clipping it; `aces`, `srgb` and `off` are the other answers.
 
 ### Changed
