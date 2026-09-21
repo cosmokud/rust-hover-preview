@@ -41,6 +41,13 @@
 //! live in `bcn` and this module is the container around them — which format a file holds,
 //! where the level that format is read from begins, and what becomes of what comes out.
 //!
+//! Two kinds of format that hold something other than colour are read here as well. The
+//! packed HDR ones spend a word on three partial floats rather than four bytes on each of
+//! them, which is what light is written as where a half float a channel is more than the
+//! picture needs; and a depth buffer is a picture of the depth of a scene, so it is read as
+//! the one channel it is and drawn the way the colour format with the same packing is drawn
+//! rather than answered with no preview.
+//!
 //! One thing a `DX10` header declares that a classic one cannot is what a file's alpha
 //! channel *means*, and one of those declarations is acted on here: a file that says it is
 //! opaque is drawn as if every texel were. A file that says so is a file whose alpha holds
@@ -51,16 +58,19 @@
 //! premultiplied file means its colour is drawn at the strength its alpha says rather than
 //! the strength the colour already holds.
 //!
-//! What is read of a file is its first mip level and its first face, which is the shape
-//! the rest of the app takes with a picture that holds more than one: a cubemap is six
-//! faces and a texture array is however many slices its header declares, and what a hover
-//! shows of either is the first one. A mip level past the first is the same picture at a
-//! smaller size. Nothing is decompressed that is not drawn, and nothing is read that the
-//! picture is not made of: the header is a hundred and forty-eight bytes, and what is
-//! read after it is exactly the first level's own bytes and nothing further — so a
-//! cubemap with ten mip levels costs what one face's first level costs, and a file that
-//! says it holds more than it does is answered by a short read rather than by an
-//! allocation the size of what it claimed.
+//! What is read of a file is its first face and one mip level of it, which is the shape the
+//! rest of the app takes with a picture that holds more than one: a cubemap is six faces
+//! and a texture array is however many slices its header declares, and what a hover shows
+//! of either is the first one. Which level is the file's own answer to what the texture
+//! looks like at a size other than its own, and what a preview draws is a fraction of that
+//! size — so the level read is the smallest one the file holds that is still at least as
+//! large as the picture being drawn, which for a four-thousand-texel texture previewed
+//! eight hundred wide is its third, the same picture to the eye for a sixteenth of the work
+//! (see `preview_level`). Nothing is decompressed that is not drawn, and nothing is read
+//! that the picture is not made of: the header is a hundred and forty-eight bytes, and what
+//! is read after it is one level's own bytes and nothing further — so a cubemap with ten mip
+//! levels costs what one face's one level costs, and a file that says it holds more than it
+//! does is answered by a short read rather than by an allocation the size of what it claimed.
 //!
 //! Nothing here is allowed to take the app down with it. A file that is not a DDS, a
 //! format that is not one of the ones above, a level that will not fit the budget every
@@ -119,7 +129,9 @@ pub fn dimensions(path: &Path) -> Option<(u32, u32)> {
 /// The scaling is done here rather than by a codec, because the format this module reads
 /// is one no codec of the machine will do it for: what comes out of a block is a 4x4
 /// square of texels, and the whole of the picture has to be decoded before one pixel of
-/// the preview is known.
+/// the preview is known. What is decoded is the level nearest this size rather than the
+/// file's first, so the work is the size of the preview rather than the size of the
+/// texture (see `preview_level`).
 pub fn decode(path: &Path, width: u32, height: u32) -> Option<Vec<u8>> {
     if width == 0 || height == 0 {
         return None;
@@ -133,7 +145,11 @@ pub fn decode(path: &Path, width: u32, height: u32) -> Option<Vec<u8>> {
     // is smaller than what is drawn.
     frame_bytes_within_budget(header.width, header.height, 4)?;
 
-    let level = read_level(path, header.offset, header.level_bytes)?;
+    // What is read is one mip level of the first face, and which level that is belongs to
+    // the size the picture is being drawn at rather than to the file (see `preview_level`).
+    let (level_width, level_height, offset, level_bytes) =
+        level_at(&header, preview_level(&header, width, height, path))?;
+    let level = read_level(path, offset, level_bytes)?;
 
     // Whether a curve is applied belongs to the picture rather than to the format — a
     // texture that holds light is brought into a frame with one, and a texture that holds
@@ -143,10 +159,10 @@ pub fn decode(path: &Path, width: u32, height: u32) -> Option<Vec<u8>> {
 
     let mut pixels = match header.picture {
         Picture::Blocks(blocks) => {
-            decode_blocks(blocks, &level, header.width, header.height, tone)?
+            decode_blocks(blocks, &level, level_width, level_height, tone)?
         }
         Picture::Samples(samples) => {
-            decode_samples(samples, &level, header.width, header.height, tone)?
+            decode_samples(samples, &level, level_width, level_height, tone)?
         }
     };
 
@@ -159,8 +175,8 @@ pub fn decode(path: &Path, width: u32, height: u32) -> Option<Vec<u8>> {
         }
     }
 
-    let source = image::RgbaImage::from_raw(header.width, header.height, pixels)?;
-    let scaled = if (header.width, header.height) == (width, height) {
+    let source = image::RgbaImage::from_raw(level_width, level_height, pixels)?;
+    let scaled = if (level_width, level_height) == (width, height) {
         source
     } else {
         image::imageops::resize(&source, width, height, image::imageops::FilterType::Triangle)
@@ -245,6 +261,13 @@ enum Samples {
     Colour(Order, Sample),
     /// Ten bits each of red, green and blue and two of alpha, packed into a word.
     Rgb10a2,
+    /// Three partial-precision floats packed into a word — eleven bits of red and green, ten
+    /// of blue, each with an exponent of its own — which is what light is written as where a
+    /// half float a channel is more than the picture needs.
+    Rgb11_11_10,
+    /// The same idea with one exponent for all three channels: three nine-bit mantissas
+    /// sharing the five bits above them.
+    Rgb9e5,
     /// Five bits of red and blue and six of green, in that order, with a leading alpha bit
     /// where the format has one.
     Rgb565 { alpha: bool },
@@ -269,6 +292,8 @@ impl Samples {
             Samples::RedGreen(sample) => sample.bytes().checked_mul(2),
             Samples::Colour(_, sample) => sample.bytes().checked_mul(4),
             Samples::Rgb10a2 => Some(4),
+            Samples::Rgb11_11_10 => Some(4),
+            Samples::Rgb9e5 => Some(4),
             Samples::Rgb565 { .. } => Some(2),
         }
     }
@@ -298,8 +323,9 @@ struct Header {
     picture: Picture,
     /// Where the first mip level of the first face begins.
     offset: usize,
-    /// How many bytes that level is.
-    level_bytes: usize,
+    /// How many mip levels the file holds, the first of them included: one for a file with
+    /// no chain, and no more than the shape allows for one that says it holds more.
+    levels: usize,
     /// Whether the file says its alpha channel holds nothing, which is a thing only a
     /// `DX10` header can say (see the module's own note).
     opaque: bool,
@@ -342,6 +368,13 @@ fn read_header(path: &Path) -> Option<Header> {
         u32::from_le_bytes(bytes[104..108].try_into().ok()?),
     ];
 
+    // How many mip levels the file says it holds, which is what a preview may read past the
+    // first of. What a file *can* hold is its shape's own answer — halving reaches one texel
+    // and stops there — so a count past that is read as the shape's rather than taken at its
+    // word, and a count of nothing or of one is a file with no chain at all.
+    let mip_count = u32::from_le_bytes(bytes[28..32].try_into().ok()?);
+    let levels = mip_count.clamp(1, 32 - width.max(height).leading_zeros()) as usize;
+
     // The extended header a `DX10` file carries names its format as a DXGI one rather
     // than as masks, and the data starts after it. It is also the only one of the two that
     // says what the alpha channel is for.
@@ -368,16 +401,80 @@ fn read_header(path: &Path) -> Option<Header> {
         )
     };
 
-    let level_bytes = picture.level_bytes(width, height)?;
+    // A format whose pixel width is not one a pixel can be written at, and a shape whose
+    // first level would not fit an address space, are answered here rather than by a reader
+    // that walked into them — and what a level of the file costs is the same arithmetic
+    // wherever it is asked for (see `level_at`).
+    picture.level_bytes(width, height)?;
 
     Some(Header {
         width,
         height,
         picture,
         offset,
-        level_bytes,
+        levels,
         opaque,
     })
+}
+
+/// Where one mip level of the first face is: its shape, where it begins and how many bytes
+/// it is.
+///
+/// The levels lie one after another from the first, each of them the picture before it
+/// halved in both directions, so where one begins is the sum of the sizes of the levels in
+/// front of it — arithmetic the header's own format and shape are enough for, and checked
+/// rather than assumed: a chain whose sum runs past what an address space holds is answered
+/// with no level rather than with a sum that wrapped.
+fn level_at(header: &Header, level: usize) -> Option<(u32, u32, usize, usize)> {
+    let mut width = header.width;
+    let mut height = header.height;
+    let mut offset = header.offset;
+
+    for _ in 0..level {
+        offset = offset.checked_add(header.picture.level_bytes(width, height)?)?;
+        width = (width / 2).max(1);
+        height = (height / 2).max(1);
+    }
+
+    let bytes = header.picture.level_bytes(width, height)?;
+
+    Some((width, height, offset, bytes))
+}
+
+/// The level a picture `width` by `height` is read from, which is the smallest one the file
+/// holds that is still at least as large as the picture being drawn.
+///
+/// A mip chain is the file's own answer to what the texture looks like at a size other than
+/// its own, and what a preview draws is a fraction of the texture's size, so the level
+/// nearest that size is the one to read: a four-thousand-texel texture previewed eight
+/// hundred wide is a sixteenth of the blocks to decode this way, and what is read is still
+/// larger than what is drawn, so nothing is lost that the preview could have shown. What
+/// makes it safe to skip the levels in front is the file: a level is taken only when the
+/// file is long enough to hold it, so a header that declares a chain it does not carry is
+/// read from its first level, which is the one every file has.
+fn preview_level(header: &Header, width: u32, height: u32, path: &Path) -> usize {
+    let length = std::fs::metadata(path).map_or(0, |meta| meta.len());
+    let mut chosen = 0;
+
+    for level in 1..header.levels {
+        let Some((level_width, level_height, offset, bytes)) = level_at(header, level) else {
+            break;
+        };
+
+        // A level smaller than the picture being drawn holds detail that cannot be shown,
+        // and every level past it is smaller still.
+        if level_width < width || level_height < height {
+            break;
+        }
+
+        if offset as u64 + bytes as u64 > length {
+            break;
+        }
+
+        chosen = level;
+    }
+
+    chosen
 }
 
 /// The picture a legacy header describes: a four-character code for a compressed format,
@@ -393,7 +490,14 @@ fn legacy_picture(fourcc: &[u8; 4], flags: u32, bits: u32, masks: [u32; 4]) -> O
             b"DXT4" | b"DXT5" => Some(Picture::Blocks(Blocks::Bc3)),
             b"ATI1" | b"BC4U" => Some(Picture::Blocks(Blocks::Bc4)),
             b"ATI2" | b"BC5U" => Some(Picture::Blocks(Blocks::Bc5)),
-            _ => None,
+            // The signed channels, which are the two above read as numbers rather than as
+            // levels and are named apart from them (see `bcn`).
+            b"BC4S" => Some(Picture::Blocks(Blocks::Bc4Snorm)),
+            b"BC5S" => Some(Picture::Blocks(Blocks::Bc5Snorm)),
+            // A legacy header names its format either way: four characters for the ones
+            // that have a name, and a `D3DFMT` number for the ones that do not, in the same
+            // field — so what no name matched is asked of the numbers.
+            _ => numeric_picture(u32::from_le_bytes(*fourcc)),
         };
     }
 
@@ -421,6 +525,32 @@ fn legacy_picture(fourcc: &[u8; 4], flags: u32, bits: u32, masks: [u32; 4]) -> O
     }
 
     Some(Picture::Samples(Samples::Masked { bits, masks, kind }))
+}
+
+/// The picture a `D3DFMT` number describes, which is the other half of what a legacy
+/// header's format field can hold.
+///
+/// Direct3D 9's own enumeration had no names for the wide and the float layouts — a
+/// sixteen-bit-to-the-channel texture, a half float, a float — so a tool of that era wrote
+/// the number where a name would have gone, and the `DX10` header that came after names the
+/// same layouts as DXGI formats. What this table is, then, is that correspondence and
+/// nothing else: each number is read as the DXGI format it stands for, and the two namings
+/// of one layout are answered by one decoder rather than by two.
+fn numeric_picture(value: u32) -> Option<Picture> {
+    dx10_picture(match value {
+        // A16B16G16R16, and the signed Q16W16V16U16 beside it.
+        36 => 11,
+        110 => 13,
+        // The half floats: one channel, two, and four.
+        111 => 54,
+        112 => 34,
+        113 => 10,
+        // The floats: one channel, two, and four.
+        114 => 41,
+        115 => 16,
+        116 => 2,
+        _ => return None,
+    })
 }
 
 /// The picture a DX10 header's DXGI format describes.
@@ -458,19 +588,35 @@ fn dx10_picture(format: u32) -> Option<Picture> {
         13 => Some(Picture::Samples(Samples::Colour(Order::Rgba, Sample::Snorm16))),
         16 => Some(Picture::Samples(Samples::RedGreen(Sample::F32))),
         24 => Some(Picture::Samples(Samples::Rgb10a2)),
+        26 => Some(Picture::Samples(Samples::Rgb11_11_10)),
         28 | 29 => Some(Picture::Samples(Samples::Colour(Order::Rgba, Sample::U8))),
         31 => Some(Picture::Samples(Samples::Colour(Order::Rgba, Sample::Snorm8))),
         34 => Some(Picture::Samples(Samples::RedGreen(Sample::F16))),
         35 => Some(Picture::Samples(Samples::RedGreen(Sample::U16))),
         37 => Some(Picture::Samples(Samples::RedGreen(Sample::Snorm16))),
+        // The depth buffers, read as the one channel they are rather than answered with no
+        // preview: a depth texture is a picture of the depth of a scene, and each depth is
+        // read as the colour layout with the same packing — the float one as light, the
+        // sixteen-bit one as a level — with the stencil a combined format carries beside it
+        // left out of the picture, and the stencil-only views not read at all, an index into
+        // a stencil buffer being no picture of anything. The enumeration scatters the depth
+        // formats among their colour siblings, so they are read where their numbers fall.
+        40 => Some(Picture::Samples(Samples::Red(Sample::F32))),
         41 => Some(Picture::Samples(Samples::Red(Sample::F32))),
+        45 | 46 => Some(Picture::Samples(Samples::Masked {
+            bits: 32,
+            masks: [0x00FF_FFFF, 0, 0, 0],
+            kind: MaskedKind::Luminance,
+        })),
         49 => Some(Picture::Samples(Samples::RedGreen(Sample::U8))),
         51 => Some(Picture::Samples(Samples::RedGreen(Sample::Snorm8))),
         54 => Some(Picture::Samples(Samples::Red(Sample::F16))),
+        55 => Some(Picture::Samples(Samples::Red(Sample::U16))),
         56 => Some(Picture::Samples(Samples::Red(Sample::U16))),
         58 => Some(Picture::Samples(Samples::Red(Sample::Snorm16))),
         61 => Some(Picture::Samples(Samples::Red(Sample::U8))),
         63 => Some(Picture::Samples(Samples::Red(Sample::Snorm8))),
+        67 => Some(Picture::Samples(Samples::Rgb9e5)),
         85 => Some(Picture::Samples(Samples::Rgb565 { alpha: false })),
         86 => Some(Picture::Samples(Samples::Rgb565 { alpha: true })),
         87 | 91 => Some(Picture::Samples(Samples::Colour(Order::Bgra, Sample::U8))),
@@ -480,17 +626,26 @@ fn dx10_picture(format: u32) -> Option<Picture> {
     }
 }
 
-/// The first mip level of the first face, and nothing after it.
+/// One mip level of the first face, and nothing after it.
 ///
 /// What is read is the one region the preview is made of rather than the file, which is
 /// what keeps a cubemap or a mip chain from being paid for: the size is the header's own
-/// answer and it is checked against the budget before a byte of it is asked for.
+/// answer and it is checked against the budget before a byte of it is asked for. What the
+/// file itself is, though, is the one thing a header cannot say, so the level is asked of a
+/// file long enough to hold it and not of one that is not: a header that describes a level
+/// its file does not carry is answered here rather than by an allocation the size of the
+/// claim and a read that comes back short.
 fn read_level(path: &Path, offset: usize, bytes: usize) -> Option<Vec<u8>> {
     if offset as u64 + bytes as u64 > decode_budget_bytes() {
         return None;
     }
 
     let mut file = File::open(path).ok()?;
+
+    if file.metadata().ok()?.len() < offset as u64 + bytes as u64 {
+        return None;
+    }
+
     file.seek(SeekFrom::Start(offset as u64)).ok()?;
 
     let mut level = vec![0u8; bytes];
@@ -606,6 +761,31 @@ fn decode_samples(
                     narrow_ten((packed >> 10) & 0x3FF),
                     narrow_ten((packed >> 20) & 0x3FF),
                     (((packed >> 30) & 0x3) * 85) as u8,
+                ]
+            }
+            Samples::Rgb11_11_10 => {
+                let packed = u32::from_le_bytes(pixel.try_into().ok()?);
+
+                [
+                    tone.encode(partial_float(packed & 0x7FF, 6)),
+                    tone.encode(partial_float((packed >> 11) & 0x7FF, 6)),
+                    tone.encode(partial_float((packed >> 22) & 0x3FF, 5)),
+                    255,
+                ]
+            }
+            Samples::Rgb9e5 => {
+                let packed = u32::from_le_bytes(pixel.try_into().ok()?);
+                // One exponent for the three channels, biased by fifteen and eight bits
+                // below the mantissa it scales: the format holds no implied leading one, so
+                // a channel is its own mantissa times two to the exponent, and the all-zero
+                // word is a zero like any other.
+                let shared = 2f32.powi((packed >> 27) as i32 - 24);
+
+                [
+                    tone.encode((packed & 0x1FF) as f32 * shared),
+                    tone.encode(((packed >> 9) & 0x1FF) as f32 * shared),
+                    tone.encode(((packed >> 18) & 0x1FF) as f32 * shared),
+                    255,
                 ]
             }
             Samples::Rgb565 { alpha } => {
@@ -771,4 +951,31 @@ fn narrow_float(value: f32) -> u8 {
     };
 
     (clamped * 255.0 + 0.5) as u8
+}
+
+/// One partial-precision float out of a word, as the number it is.
+///
+/// Eleven bits of a word are a five-bit exponent with a six-bit mantissa above it, and ten
+/// are the same exponent with five — the two widths the packed format spends on its three
+/// channels, which is what lets it hold a range past what a display draws in four bytes to
+/// the texel. There is no sign bit to read: the format is light, and light here is not
+/// negative. The two ends of the exponent are a half float's own — nothing at all is a zero,
+/// and the top of the range is where the format stops — and a mantissa under the smallest
+/// ordinary exponent is read as the small number it is rather than flushed to zero, which is
+/// what the format's own reference does with one.
+fn partial_float(bits: u32, mantissa_bits: u32) -> f32 {
+    let exponent = bits >> mantissa_bits;
+    let mantissa = bits & ((1 << mantissa_bits) - 1);
+
+    if exponent == 0 {
+        mantissa as f32 * 2f32.powi(-14 - mantissa_bits as i32)
+    } else if exponent == 0x1F {
+        if mantissa == 0 {
+            f32::INFINITY
+        } else {
+            f32::NAN
+        }
+    } else {
+        (1.0 + mantissa as f32 / (1 << mantissa_bits) as f32) * 2f32.powi(exponent as i32 - 15)
+    }
 }
