@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.2.10]
+
+### Changed
+
+- SVG previews are drawn by the WebView2 runtime Windows 11 ships with — the browser that already played animated documents — and nothing about a document is rasterized by this app any more: `svg_preview` answers the name gate and the size a document asks to be drawn at, and the engine is given the box the layout came out with. `resvg`, `usvg` and `tiny-skia` — and the font, shaping and geometry crates under them — are out of the build graph, which takes the release exe back to 7.2 MB from 10.6 MB and a clean build with it.
+- The app's own reader for documents that move is gone with the rasterizer it drew through. A document is drawn by the engine whether it moves or not, so there is no "does it move?" question left in the path, and an animation needs nothing of its own.
+- A machine with no WebView2 runtime has no SVG preview at all now, since there is no reader behind the engine to fall back to; the tray's `SVG Engine TTL` was already greyed out there. Windows 11 ships the runtime.
+- A hover onto a document opens on the waiting spinner rather than on a still frame this app drew. The spinner goes up at once when a browser has to be started for the document, and not at all when the engine is warm, which draws it in a few milliseconds.
+- A wait that follows the pointer now takes the engine's window with it, so a document is drawn where the wait ended up rather than where the hover began.
+- An engine that fails is stood down for a minute rather than five, since every SVG hover waits on it; a document the engine could not put up costs that hover and nothing else, its wait coming down instead of standing as a spinner over nothing.
+- `Checkerboard` for `svg_background` is painted by the page the engine draws the document in — a checkerboard is drawn by whatever composites the frame, and the engine composites its own — so documents keep the backdrop every other kind of preview has.
+- Bumped version to 0.2.10 in Cargo.toml and Cargo.lock.
+
 ## [0.2.9]
 
 ### Added
