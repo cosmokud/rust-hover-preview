@@ -49,16 +49,25 @@ const ID_TRAY_TRIGGER_DISABLE: u16 = 1005; // Hold the trigger key to stop previ
 const ID_TRAY_TRIGGER_ENABLE: u16 = 1006; // Hold the trigger key to allow previews
 const ID_TRAY_TRIGGER_ENABLED: u16 = 1068; // Whether the trigger key is watched at all
 /// The `Background` submenu: one command per backdrop it offers, in the order it
-/// lists them, for each of the three kinds of preview it keeps apart — a picture's
-/// backdrop, a document's, and a font specimen's. Each half is a base plus the position
-/// the choice was listed at, so one table and one builder serve all of them, and the
-/// three ranges are four wide and apart, which is what keeps an item of one from being
+/// lists them, for each of the four kinds of preview it keeps apart — a picture's
+/// backdrop, a document's, a font specimen's, and a texture's. Each half is a base plus the
+/// position the choice was listed at, so one table and one builder serve all of them, and
+/// the four ranges are four wide and apart, which is what keeps an item of one from being
 /// read as a choice of another.
 const ID_TRAY_IMAGE_BACKGROUND_BASE: u16 = 1023;
 const ID_TRAY_SVG_BACKGROUND_BASE: u16 = 1054;
 /// The third half of the `Background` submenu, for a font specimen — which is a page of its
 /// own and so has a backdrop of its own, the same way a document does.
-const ID_TRAY_FONT_BACKGROUND_BASE: u16 = 1058;
+///
+/// It sits beside the texture's half rather than in the block the first two are in: every
+/// id four wide in that block belongs to something else — 1058 to 1061 is where the text
+/// preview's `Full Mode` item is, which is where this range was to begin with, so the last
+/// two backdrops of a specimen were answered as full mode being switched on.
+const ID_TRAY_FONT_BACKGROUND_BASE: u16 = 1204;
+/// The fourth, for a `.dds` texture: a texture's alpha channel is as often a mask or a
+/// channel nobody filled in as it is transparency, so what is drawn behind one is a
+/// question of its own.
+const ID_TRAY_DDS_BACKGROUND_BASE: u16 = 1200;
 /// The backdrops a half of the `Background` submenu offers, in the order it lists
 /// them, with `Transparent` at the top: the whole range the setting holds, so nothing
 /// a hand-edited `config.ini` can ask for is left unmarked.
@@ -333,6 +342,12 @@ unsafe extern "system" fn tray_window_proc(
                     .contains(&cmd) =>
                 {
                     set_font_background(cmd - ID_TRAY_FONT_BACKGROUND_BASE)
+                }
+                cmd if (ID_TRAY_DDS_BACKGROUND_BASE
+                    ..ID_TRAY_DDS_BACKGROUND_BASE + BACKGROUND_CHOICES.len() as u16)
+                    .contains(&cmd) =>
+                {
+                    set_dds_background(cmd - ID_TRAY_DDS_BACKGROUND_BASE)
                 }
                 ID_TRAY_VOLUME_MAX => set_volume(100),
                 ID_TRAY_VOLUME_HIGH => set_volume(80),
@@ -1136,12 +1151,20 @@ unsafe fn show_context_menu(hwnd: HWND) {
 
     // Add the "Background" submenu: what a preview is drawn over, which is a question
     // a picture and a document answer differently — a picture's transparency is the
-    // picture's, while a document is drawn on a page — so each of the three has a half
+    // picture's, while a document is drawn on a page — so each of the four has a half
     // of its own, listing the same backdrops.
-    let (image_background, svg_background, font_background) = CONFIG
+    let (image_background, svg_background, font_background, dds_background) = CONFIG
         .lock()
-        .map(|c| (c.image_background, c.svg_background, c.font_background))
+        .map(|c| {
+            (
+                c.image_background,
+                c.svg_background,
+                c.font_background,
+                c.dds_background,
+            )
+        })
         .unwrap_or((
+            TransparentBackground::Transparent,
             TransparentBackground::Transparent,
             TransparentBackground::Transparent,
             TransparentBackground::Transparent,
@@ -1165,6 +1188,12 @@ unsafe fn show_context_menu(hwnd: HWND) {
         w!("Font Background"),
         ID_TRAY_FONT_BACKGROUND_BASE,
         font_background,
+    );
+    append_background_menu(
+        background_menu,
+        w!("DDS Background"),
+        ID_TRAY_DDS_BACKGROUND_BASE,
+        dds_background,
     );
 
     let _ = AppendMenuW(
@@ -1600,6 +1629,20 @@ fn set_font_background(index: u16) {
 
     if let Ok(mut config) = CONFIG.lock() {
         config.font_background = background;
+        config.save();
+    }
+    refresh_preview();
+}
+
+/// And for a texture, which is a picture like any other on this side of the answer: its
+/// frame is composited by this app, so the preview on screen only needs compositing again.
+fn set_dds_background(index: u16) {
+    let Some(background) = background_at(index) else {
+        return;
+    };
+
+    if let Ok(mut config) = CONFIG.lock() {
+        config.dds_background = background;
         config.save();
     }
     refresh_preview();
@@ -2558,19 +2601,51 @@ mod tests {
         );
     }
 
-    /// An item of one half of the submenu is never an item of the other, whatever it
-    /// was listed at: the two ranges of ids are apart.
+    /// An item of one half of the submenu is never an item of another, whatever it was
+    /// listed at — and never an id something else in the menu hands out either, which is
+    /// the failure this range was moved for: a backdrop of a specimen and the text
+    /// preview's `Full Mode` item were one id, and the backdrop was read first.
     #[test]
-    fn the_two_halves_of_the_background_submenu_carry_different_ids() {
+    fn the_four_halves_of_the_background_submenu_carry_different_ids() {
         let width = BACKGROUND_CHOICES.len() as u16;
-        let images = ID_TRAY_IMAGE_BACKGROUND_BASE..ID_TRAY_IMAGE_BACKGROUND_BASE + width;
-        let documents = ID_TRAY_SVG_BACKGROUND_BASE..ID_TRAY_SVG_BACKGROUND_BASE + width;
+        let bases = [
+            ID_TRAY_IMAGE_BACKGROUND_BASE,
+            ID_TRAY_SVG_BACKGROUND_BASE,
+            ID_TRAY_FONT_BACKGROUND_BASE,
+            ID_TRAY_DDS_BACKGROUND_BASE,
+        ];
 
-        assert!(
-            !images.contains(&ID_TRAY_SVG_BACKGROUND_BASE)
-                && !documents.contains(&ID_TRAY_IMAGE_BACKGROUND_BASE),
-            "the ranges {images:?} and {documents:?} overlap"
-        );
+        for (index, base) in bases.iter().enumerate() {
+            for other in &bases[index + 1..] {
+                let ours = *base..*base + width;
+                let theirs = *other..*other + width;
+
+                assert!(
+                    !ours.contains(other) && !theirs.contains(base),
+                    "the ranges {ours:?} and {theirs:?} overlap"
+                );
+            }
+        }
+
+        // The ids around them, of the menus that grew up beside the `Background` one.
+        for elsewhere in [
+            ID_TRAY_TEXT_FULL_MODE,
+            ID_TRAY_THEME_LIGHT,
+            ID_TRAY_MARKDOWN_RENDERED,
+            ID_TRAY_OPEN_CONFIG,
+            ID_TRAY_SCALE_FIT,
+            ID_TRAY_TYPE_IMAGES,
+            ID_TRAY_TRIGGER_ENABLED,
+        ] {
+            for base in bases {
+                let ours = base..base + width;
+
+                assert!(
+                    !ours.contains(&elsewhere),
+                    "the range {ours:?} contains {elsewhere}, which is another item's id"
+                );
+            }
+        }
     }
 
     /// The `Avoid` submenu lists every way the setting can be in, in the order the ids
