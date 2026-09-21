@@ -33,7 +33,7 @@ You can add or remove formats in `config.ini`. Unsupported formats show no previ
 
 `jpg`, `jpeg`, `png`, `apng`, `gif`, `bmp`, `ico`, `tiff`, `webp`, `tga`, `hdr`, `exr`, `qoi`, `heic`, `heif`, `avif`, `jxl`, `dds`, and more.
 
-Animated GIF, APNG, and WebP files play. HEIC, HEIF, AVIF, JPEG XL, and still WebP usually need Windows codec extensions — except WebP, which the app can also decode on its own. HDR and EXR images are tone-mapped for screen preview. DDS textures preview in every block format they are written in — BC1 through BC7, plus both variants of BC6H — and in the uncompressed formats, showing the first face and first level of a cubemap or mip chain.
+Animated GIF, APNG, and WebP files play. HEIC, HEIF, AVIF, JPEG XL, and still WebP usually need Windows codec extensions — except WebP, which the app can also decode on its own. HDR and EXR images are tone-mapped for screen preview. DDS textures preview in every block format they are written in — BC1 through BC7, plus both variants of BC6H — and in the uncompressed formats, the packed HDR ones and depth buffers among them, at the first face and the mip level nearest the preview's own size.
 
 ### Vectors
 

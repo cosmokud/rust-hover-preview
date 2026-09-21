@@ -294,7 +294,18 @@ struct VideoGeometryKey {
     version: FileVersion,
 }
 
-static VIDEO_GEOMETRY_CACHE: Lazy<Mutex<HashMap<VideoGeometryKey, VideoGeometry>>> =
+#[derive(Clone, Copy)]
+enum ProbedGeometry {
+    /// The shape the probe read, and the crop the detector settled on.
+    Measured(VideoGeometry),
+    /// The answer that there is nothing to measure: a file neither FFmpeg nor the media
+    /// engine will open. It is an answer like any other and is held like one, so a file
+    /// that cannot be measured is not probed again on every hover — and so the hover
+    /// that is waiting for a probe can be told that the probe is done (see `video_box`).
+    Unmeasurable,
+}
+
+static VIDEO_GEOMETRY_CACHE: Lazy<Mutex<HashMap<VideoGeometryKey, ProbedGeometry>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
 #[derive(Clone)]
@@ -328,6 +339,14 @@ pub enum PreviewMessage {
         path: PathBuf,
         generation: u64,
         ok: bool,
+    },
+    /// A video's probe is done: the geometry is waiting in the cache, or the answer is
+    /// that there is none. The generation is the hover that was waiting on it, so a probe
+    /// landing after the pointer has moved on is ignored — the answer is held for the next
+    /// hover either way (see `video_probe`).
+    VideoProbed {
+        path: PathBuf,
+        generation: u64,
     },
 }
 
@@ -820,6 +839,35 @@ pub fn notify_office_render(path: &Path, generation: u64, ok: bool) {
             });
         }
     }
+}
+
+/// A video's probe is done. Sent from the thread the probe ran on, through the same
+/// channel every other message arrives on, so the hover that was waiting for it is
+/// replayed the moment there is an answer to place it with.
+fn notify_video_probed(path: &Path, generation: u64) {
+    if let Ok(sender) = PREVIEW_SENDER.lock() {
+        if let Some(ref tx) = *sender {
+            let _ = tx.send(PreviewMessage::VideoProbed {
+                path: path.to_path_buf(),
+                generation,
+            });
+        }
+    }
+}
+
+/// Probe a video's geometry on a thread of its own, and tell the preview loop.
+///
+/// The probe is two external processes and the hover waits for the slower of them, so it
+/// is done here rather than on the preview thread: what is on screen while it runs is the
+/// waiting spinner, and the hover it belongs to is replayed when the answer lands (see
+/// `video_probe_due` and `video_probe` in the preview loop). A probe whose hover has moved
+/// on is not wasted — what it answers is held for the next hover of the file — so nothing
+/// here is cancelled or waited for.
+fn spawn_video_probe(path: PathBuf, generation: u64) {
+    std::thread::spawn(move || {
+        let _ = probe_video_geometry(&path);
+        notify_video_probed(&path, generation);
+    });
 }
 
 /// Which preview surface the pointer is currently on.
@@ -1444,6 +1492,12 @@ fn effective_preview_scale(
     if pdf_preview::is_pdf_file(path) {
         fit_reduced(pdf_scale)
     } else if is_text_preview(path) || archive_formats::is_archive_file(path) {
+        PreviewScale::Percent(100)
+    } else if video_probe_due(path) {
+        // A video that has not been probed yet is a hover that is waiting, and what is on
+        // screen for one is the waiting spinner: a wait is placed at the size it is rather
+        // than fitted to the display, and what the probe answers is what the replay that
+        // follows it is laid out at (see `video_probe_due`).
         PreviewScale::Percent(100)
     } else if office_formats::is_office_file(path) {
         // A page Office rendered is vector, so the room the display has is free
@@ -2897,15 +2951,15 @@ fn load_video_thumbnail(
     // it is not.
     let native = codecs::plays_video_natively();
 
-    let geometry = match get_video_geometry(path) {
-        Some(geometry) => geometry,
+    let geometry = match probe_video_geometry(path) {
+        ProbedGeometry::Measured(geometry) => geometry,
         // No geometry, and the engine that would play the file cannot open it either: a
         // file this machine has no reader for is answered with no preview rather than with
         // a 16:9 box nothing would be drawn into.
-        None if native => return None,
+        ProbedGeometry::Unmeasurable if native => return None,
         // FFmpeg is the one that would play it, so the box the layout uses is the one it
         // has always used for a file ffprobe could not measure.
-        None => VideoGeometry {
+        ProbedGeometry::Unmeasurable => VideoGeometry {
             width: 1920,
             height: 1080,
             crop: None,
@@ -3131,9 +3185,29 @@ fn best_valid_crop(
     best.map(|(crop, _)| crop)
 }
 
-/// The geometry a video preview is sized and cropped by, from the cache when the
-/// file and its version have been probed before.
-fn get_video_geometry(path: &PathBuf) -> Option<VideoGeometry> {
+/// The geometry a video has already been probed for, when it has been probed at all: the
+/// answer the probe gave, read from the cache and nothing else.
+///
+/// This is the lookup the preview thread is allowed to make — it is a mutex and a hash,
+/// not two external processes — and it is what tells a hover whether its file has been
+/// measured yet (see `video_probe_due`).
+fn cached_video_geometry(path: &Path) -> Option<ProbedGeometry> {
+    let key = VideoGeometryKey {
+        path: path.to_path_buf(),
+        version: file_version(path),
+    };
+
+    VIDEO_GEOMETRY_CACHE.lock().ok()?.get(&key).copied()
+}
+
+/// Probe a video's geometry, from the cache when the file and its version have been
+/// probed before.
+///
+/// This is the one caller that may run the two external processes, so it is only ever
+/// called from a thread whose waiting does not matter: the load worker, and the probe a
+/// hover is waiting on (see `video_probe_due` in the preview loop). What it answers is
+/// held — the failure included — so the next hover of the file is a lookup.
+fn probe_video_geometry(path: &PathBuf) -> ProbedGeometry {
     let key = VideoGeometryKey {
         path: path.clone(),
         version: file_version(path),
@@ -3141,7 +3215,7 @@ fn get_video_geometry(path: &PathBuf) -> Option<VideoGeometry> {
 
     if let Ok(cache) = VIDEO_GEOMETRY_CACHE.lock() {
         if let Some(cached) = cache.get(&key) {
-            return Some(*cached);
+            return *cached;
         }
     }
 
@@ -3164,7 +3238,14 @@ fn get_video_geometry(path: &PathBuf) -> Option<VideoGeometry> {
     // the whole of the fallback's geometry: there is no crop to detect, because cropdetect
     // is an FFmpeg filter and the engine is handed the frame as the file holds it.
     let Some((src_w, src_h)) = dimensions.or_else(|| video_player::dimensions(path)) else {
-        return None;
+        if let Ok(mut cache) = VIDEO_GEOMETRY_CACHE.lock() {
+            if !cache.contains_key(&key) && cache.len() >= VIDEO_GEOMETRY_CACHE_MAX_ENTRIES {
+                cache.clear();
+            }
+            cache.insert(key, ProbedGeometry::Unmeasurable);
+        }
+
+        return ProbedGeometry::Unmeasurable;
     };
     let crop = best_valid_crop(candidates, src_w, src_h);
 
@@ -3186,10 +3267,10 @@ fn get_video_geometry(path: &PathBuf) -> Option<VideoGeometry> {
         if !cache.contains_key(&key) && cache.len() >= VIDEO_GEOMETRY_CACHE_MAX_ENTRIES {
             cache.clear();
         }
-        cache.insert(key, geometry);
+        cache.insert(key, ProbedGeometry::Measured(geometry));
     }
 
-    Some(geometry)
+    ProbedGeometry::Measured(geometry)
 }
 
 /// Data passed to the EnumWindows callback to find ffplay window
@@ -3395,17 +3476,22 @@ fn start_video_playback(path: &PathBuf, x: i32, y: i32, width: i32, height: i32)
         cmd.args(["-af", &volume_filter]);
     }
 
-    let geometry = get_video_geometry(path);
-    let vf = geometry.map(|geometry| {
-        if let Some(crop) = geometry.crop {
-            format!(
+    // The geometry is read from the cache and never probed for here: this runs on the
+    // preview thread, which is the one thread that must not wait for two external
+    // processes — and by the time a player is started for a hover, the probe that sized
+    // that hover has already answered (see `probe_video_geometry`). A file whose answer is
+    // that there is nothing to measure gets no filter at all, which is the frame as the
+    // file holds it.
+    let vf = match cached_video_geometry(path) {
+        Some(ProbedGeometry::Measured(geometry)) => Some(match geometry.crop {
+            Some(crop) => format!(
                 "crop={}:{}:{}:{},setsar=1",
                 crop.width, crop.height, crop.x, crop.y
-            )
-        } else {
-            "setsar=1".to_string()
-        }
-    });
+            ),
+            None => "setsar=1".to_string(),
+        }),
+        _ => None,
+    };
     if let Some(vf) = vf.as_deref() {
         cmd.args(["-vf", vf]);
     }
@@ -3452,6 +3538,61 @@ fn start_video_playback(path: &PathBuf, x: i32, y: i32, width: i32, height: i32)
     }
 
     child
+}
+
+/// A player that has been started and has not put its window up yet.
+///
+/// A video's preview is the player's own window, and a player is a process: what stands
+/// in for the video until that window is there is the waiting spinner, at the pointer it
+/// is shown at for every other kind of wait, and the media the player was started for is
+/// held here until it is. Holding it here rather than in `CURRENT_MEDIA` is what keeps
+/// the spinner on screen: the frame the player will play into would otherwise be what
+/// this app's window is showing, and a video's window is the one the player draws.
+struct VideoStart {
+    /// The frame the player plays into, with the process it was started for.
+    media: MediaData,
+    path: PathBuf,
+    pid: u32,
+    started: Instant,
+}
+
+/// How long a player is given to put its window up before the wait for it is given up
+/// on: a player that has not by then is one that will not, and a spinner that never ends
+/// is worse than the desktop it leaves behind.
+const VIDEO_START_WAIT_SECS: u64 = 10;
+
+/// How the wait for a player stands: whether the video is on screen now, whether the
+/// wait is over some other way, or whether the player is still starting.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum PlayerWait {
+    /// The player's window is up: what is on screen is the video from here, and the media
+    /// it was started for is the preview.
+    Arrived,
+    /// The player is not coming: it died, its hover moved on, or it has taken longer than
+    /// a start ever does.
+    Abandoned,
+}
+
+/// How the wait for a player stands. `None` is a player still starting, which is a wait
+/// that goes on.
+///
+/// A window that is up arrives, the cap included: the video is on screen whether or not
+/// the start took long, and ending a player that has one would take a picture away. What
+/// is read before that is a player that is gone — what a process leaves behind is a
+/// handle and not a window, so a window with no player behind it is not a preview — and
+/// a start that has run past `VIDEO_START_WAIT_SECS` with no window to show for it is one
+/// this app stops watching, because a spinner that never ends is worse than the desktop
+/// it leaves behind.
+fn player_wait(window_up: bool, player_alive: bool, waited: Duration) -> Option<PlayerWait> {
+    if window_up && player_alive {
+        return Some(PlayerWait::Arrived);
+    }
+
+    if !player_alive || waited >= Duration::from_secs(VIDEO_START_WAIT_SECS) {
+        return Some(PlayerWait::Abandoned);
+    }
+
+    None
 }
 
 /// Stop video playback process
@@ -3793,16 +3934,44 @@ fn load_media(
     load_static_image(path, max_width, max_height, preview_scale)
 }
 
+/// The box a video hover is placed at.
+///
+/// A video is measured by a probe — `ffprobe` and a cropdetect pass, two external
+/// processes — and the probe is what a hover waits for when its file has not been
+/// measured yet: the answer then is the waiting box, which is the box every wait is shown
+/// in, and the layout that follows the probe's own replay reads the size here instead
+/// (see `video_probe_due`). What the probe answered when it does answer is one of two
+/// things, and the file's own lack of an answer is neither: a shape is the shape, and a
+/// file with nothing to measure is placed at the 16:9 box FFmpeg's player is handed a
+/// file it could not measure at — while the media engine, which plays only what it can
+/// open, is answered with no size at all, which is how the layout drops it.
+fn video_box(path: &Path) -> Option<(u32, u32)> {
+    match cached_video_geometry(path) {
+        Some(ProbedGeometry::Measured(geometry)) => Some((geometry.width, geometry.height)),
+        Some(ProbedGeometry::Unmeasurable) => {
+            (!codecs::plays_video_natively()).then_some((1920, 1080))
+        }
+        // Not probed yet: the wait for the probe, which is the box the hover is placed
+        // in until the answer lands and the hover is replayed.
+        None => Some((office_preview::WAITING_BOX, office_preview::WAITING_BOX)),
+    }
+}
+
+/// Whether this file is a video the probe has not answered for yet.
+///
+/// A hover for one cannot be laid out as a video — the layout has no shape to place — so
+/// it is laid out as the wait for the probe and replayed when the answer lands (see
+/// `video_probe` in the preview loop). A file the probe has already answered for is not a
+/// wait, whatever the answer was: an unmeasurable video is a video with a fallback box,
+/// not one to be probed again on every hover.
+fn video_probe_due(path: &Path) -> bool {
+    video_formats::is_video_preview(path) && cached_video_geometry(path).is_none()
+}
+
 /// Get original dimensions of media for positioning calculations
 fn get_media_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
     if video_formats::is_video_preview(path) {
-        // A 16:9 box is what a video FFmpeg could not measure has always been placed at,
-        // because `ffplay` will play the file anyway. The media engine will not: it plays
-        // what it can open and nothing else, so a file it could not measure is a file
-        // there is no preview for, and reporting no size is how the layout drops it.
-        return get_video_geometry(path)
-            .map(|g| (g.width, g.height))
-            .or_else(|| (!codecs::plays_video_natively()).then_some((1920, 1080)));
+        return video_box(path);
     }
 
     // A PDF is measured from its own first page; one that cannot be read as a
@@ -6313,6 +6482,19 @@ pub fn run_preview_window() {
         // A page that arrived for the hover already on screen, and is being loaded
         // to replace what is there rather than to open a new preview.
         let mut office_upgrade: Option<PathBuf> = None;
+        // The video whose probe a hover is waiting on, and the generation of the hover
+        // that is waiting: the geometry is measured on a thread of its own and the hover
+        // is replayed when the answer lands (see `VideoProbed`).
+        let mut video_probe: Option<(PathBuf, u64)> = None;
+        // The hover a video's probe has just answered for. Its replay is the same wait
+        // carried on rather than a new preview: what is on screen — the spinner — stays
+        // where it is until the video replaces it, the way a page landing on a spinner
+        // behaves (see `upgrading`).
+        let mut video_replay: Option<PathBuf> = None;
+        // A player that has been started and has not put its window up yet: the wait
+        // for a video, which the spinner stands in for until the player's window is
+        // there (see `VideoStart`).
+        let mut video_start: Option<VideoStart> = None;
 
         // Message loop
         let mut msg = MSG::default();
@@ -6364,6 +6546,60 @@ pub fn run_preview_window() {
                     0,
                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_FRAMECHANGED,
                 );
+            }
+
+            // A player that has been started and has not put its window up yet is being
+            // waited for: what is on screen is the spinner standing in for the video, at
+            // the pointer it is shown at for every other kind of wait, and the wait ends
+            // when the player's window is there — the frame the player was started for is
+            // handed over then, and this app's window goes with the wait. A player that
+            // never came up — one that died, one that took longer than a start ever does
+            // — is ended here rather than left playing behind nothing (see `player_wait`).
+            if let Some(start) = video_start.take() {
+                let window_up = VIDEO_HWND.load(Ordering::SeqCst) != 0
+                    && VIDEO_PID.load(Ordering::SeqCst) == start.pid;
+                let alive = is_ffplay_pid_alive(start.pid);
+
+                // The hover this player was started for may have moved on before its
+                // window was there. The player is still this app's — nobody else holds
+                // it — so it is ended below, but what is on screen and what is pending
+                // are another hover's by then and are left alone.
+                let current = current_video_path.as_deref() == Some(start.path.as_path());
+                let outcome = if current {
+                    player_wait(window_up, alive, start.started.elapsed())
+                } else {
+                    Some(PlayerWait::Abandoned)
+                };
+
+                match outcome {
+                    Some(PlayerWait::Arrived) => {
+                        // The video is what is on screen from here: the frame the player
+                        // plays into is the preview, and the spinner — this app's window,
+                        // which was standing in for it — comes down with the wait.
+                        if let Ok(mut media) = CURRENT_MEDIA.lock() {
+                            *media = Some(start.media);
+                        }
+
+                        let _ = ShowWindow(hwnd, SW_HIDE);
+                        pending_load = None;
+                        clear_pointer_hold();
+                    }
+                    Some(PlayerWait::Abandoned) => {
+                        // The player is not coming, or the hover it was started for has
+                        // gone: ending it here is what keeps a process this app started
+                        // from playing behind a preview that has gone.
+                        let mut media = start.media;
+                        stop_video_playback(&mut media);
+
+                        if current {
+                            let _ = ShowWindow(hwnd, SW_HIDE);
+                            pending_load = None;
+                            clear_pointer_hold();
+                        }
+                    }
+                    // Still starting: the wait goes on, and the player stays in hand.
+                    None => video_start = Some(start),
+                }
             }
 
             // Periodically re-assert topmost on the video window to prevent it
@@ -6733,6 +6969,8 @@ pub fn run_preview_window() {
             // The render tier's own message, held apart from the hovers: it is
             // not a hover to act on but an answer about the one on screen.
             let mut office_render_ready: Option<(PathBuf, u64, bool)> = None;
+            // A probe's answer, held apart the same way and for the same reason.
+            let mut video_probed: Option<(PathBuf, u64)> = None;
             let mut next_preview_msg = carried_preview_msg.take();
             loop {
                 let Some(preview_msg) = next_preview_msg.or_else(|| rx.try_recv().ok()) else {
@@ -6791,6 +7029,13 @@ pub fn run_preview_window() {
                         // hover is not the answer to it.
                         if latest_preview_msg.is_none() && office_render_ready.is_none() {
                             office_render_ready = Some((path, generation, ok));
+                        }
+                    }
+                    PreviewMessage::VideoProbed { path, generation } => {
+                        // Held apart the way a render's answer is: it is not a hover to
+                        // act on but an answer about the one that is waiting.
+                        if latest_preview_msg.is_none() && video_probed.is_none() {
+                            video_probed = Some((path, generation));
                         }
                     }
                     other => {
@@ -6866,6 +7111,30 @@ pub fn run_preview_window() {
                 }
             }
 
+            // A video's probe has answered for the hover that was waiting on it: that
+            // hover is replayed — this time the layout has the shape the probe cached, so
+            // the hover goes on as the video it is — and the wait it is in goes on as the
+            // video's own rather than as a new preview (see `video_probe` and
+            // `video_replay`). An answer for a hover that has gone is dropped here: what
+            // the probe measured is held for the next hover of the file either way.
+            if let Some((probed_path, probed_generation)) = video_probed {
+                let waiting = video_probe.as_ref().is_some_and(|(path, generation)| {
+                    *path == probed_path && *generation == probed_generation
+                });
+
+                if waiting {
+                    video_probe = None;
+
+                    if probed_generation == current_generation && latest_preview_msg.is_none() {
+                        // The hover is replayed where the pointer is now, the way a page
+                        // landing on a spinner is: the wait was kept with the pointer
+                        // while the probe ran, so the video should be too.
+                        video_replay = Some(probed_path);
+                        latest_preview_msg = replay_where_the_pointer_is(current_show.clone());
+                    }
+                }
+            }
+
             // The display under the preview changed and the frame that was on screen
             // went with it. The window proc could only discard what was drawn; the
             // hover it came from is what knows how to draw it again, at the scale of
@@ -6904,6 +7173,9 @@ pub fn run_preview_window() {
                 let mut show_spinner_layout: Option<PreviewLayout> = None;
                 let mut show_placement: Option<HoverPlacement> = None;
                 let mut show_is_video: bool = false;
+                // Whether this hover is waiting on a video's probe rather than on the
+                // video itself (see `video_probe_due`).
+                let mut show_video_probe: bool = false;
                 let mut show_requested = false;
                 let mut preview_scale = current_preview_scale();
                 let mut show_dpi = 96u32;
@@ -6947,6 +7219,13 @@ pub fn run_preview_window() {
                                 office_preview::SourceKind::None
                             );
 
+                        // A video whose shape the probe has not answered for yet is the
+                        // same kind of wait, and for the same reason: there is nothing to
+                        // lay out as a video until the probe answers, so the hover is the
+                        // wait for it — the spinner at the pointer — and is replayed when
+                        // the answer lands (see `video_probe_due`).
+                        let probing = video_probe_due(&path);
+
                         if let Some(orig_dims) = media_dimensions(&path, bounds, dpi) {
                             let is_video = is_video_file(&path);
                             let placement = HoverPlacement {
@@ -6954,7 +7233,7 @@ pub fn run_preview_window() {
                                 avoid,
                                 follow_cursor,
                                 preview_scale,
-                                flush_at_cursor: waiting_spinner,
+                                flush_at_cursor: waiting_spinner || probing,
                             };
                             let placed = compute_mouse_layout(x, y, placement, bounds, dpi);
                             if let Some(layout) = placed {
@@ -6971,6 +7250,7 @@ pub fn run_preview_window() {
                                     )
                                 });
                                 show_is_video = is_video;
+                                show_video_probe = probing;
                                 show_layout = Some(layout);
                                 show_placement = Some(placement);
                                 // The wait for this hover is the spinner's own box at
@@ -7030,6 +7310,7 @@ pub fn run_preview_window() {
                                     )
                                 });
                                 show_is_video = is_video;
+                                show_video_probe = video_probe_due(&path);
                                 show_layout = Some(layout);
                                 // A keyboard hover has no pointer for a wait to be
                                 // placed at, so its spinner is the arc's own box
@@ -7099,6 +7380,9 @@ pub fn run_preview_window() {
                     // Likewise answered above: a rendered page replays the hover
                     // it belongs to rather than being handled as a message here.
                     PreviewMessage::OfficeRenderReady { .. } => {}
+                    // And a probe's answer, which replays the hover that was waiting
+                    // on it the same way.
+                    PreviewMessage::VideoProbed { .. } => {}
                 }
 
                 // Shared load/display logic for Show and ShowKeyboard
@@ -7123,9 +7407,13 @@ pub fn run_preview_window() {
 
                     // A page that arrived for the hover already on screen is an
                     // upgrade: what is there — the spinner — stays up while the page
-                    // is loaded, and is replaced when it lands.
-                    let upgrading = office_upgrade.as_deref() == Some(path.as_path());
+                    // is loaded, and is replaced when it lands. A hover replayed for a
+                    // video's probe is the same thing reached another way: it is the
+                    // wait it was already in, carried on.
+                    let upgrading = office_upgrade.as_deref() == Some(path.as_path())
+                        || video_replay.as_deref() == Some(path.as_path());
                     office_upgrade = None;
+                    video_replay = None;
 
                     // A text or archive preview is rendered at the size the
                     // layout planned for it: both are painted at a fixed font
@@ -7150,7 +7438,77 @@ pub fn run_preview_window() {
                     // through the ordinary load and are drawn by this app's own window.
                     let ffplay_plays_video = show_is_video && codecs::ffplay_available();
 
-                    if ffplay_plays_video {
+                    if show_video_probe {
+                        // The hover is waiting on the probe: nothing of the file can be
+                        // laid out or loaded until there is a shape to lay it out with,
+                        // so what is put up is the wait every other preview is given —
+                        // the spinner at the pointer — and the hover it came from is
+                        // replayed when the answer lands, which is when there is a video
+                        // to load (see `video_probe_due` and `video_probe`). The probe
+                        // itself runs on a thread of its own: it is two external
+                        // processes, and this is the thread that draws the wait.
+                        //
+                        // A replay carries the wait it was already in rather than opening
+                        // a new one: the same clock — so a probe answered inside
+                        // `spinner_delay_ms` does not start that delay over — and the same
+                        // spinner, which is on screen already.
+                        let waiting = pending_load.take();
+                        let (started, spinner_shown, upgrade) = match (upgrading, waiting) {
+                            (true, Some(pl)) => (pl.started, pl.spinner_shown, true),
+                            _ => (Instant::now(), false, false),
+                        };
+
+                        current_generation += 1;
+                        let gen = current_generation;
+                        clear_load_request(&load_request_slot);
+                        if let Some(cancel) = pending_load_cancel.take() {
+                            cancel.store(true, Ordering::Release);
+                        }
+
+                        if !upgrade {
+                            // Another preview takes over here, so what is on screen goes
+                            // as the wait for the probe goes up — the frame this app's
+                            // window holds, the player a previous hover started, and the
+                            // window a document the engine draws was put in.
+                            if let Ok(mut media_guard) = CURRENT_MEDIA.lock() {
+                                if let Some(ref mut media) = *media_guard {
+                                    media.cancel_background_work();
+                                    stop_video_playback(media);
+                                }
+                                // Clear immediately so old pixels never flash while
+                                // the new target is being measured.
+                                *media_guard = None;
+                            }
+
+                            if current_video_path.is_some() {
+                                current_video_path = None;
+                                video_pos = (0, 0, 0, 0);
+                            }
+
+                            webview_preview::hide();
+
+                            let _ = ShowWindow(hwnd, SW_HIDE);
+                        }
+
+                        pending_load = Some(PendingLoad {
+                            generation: gen,
+                            path: path.clone(),
+                            started,
+                            pos_x,
+                            pos_y,
+                            width: preview_w,
+                            height: preview_h,
+                            room: (max_width, max_height),
+                            spinner_shown,
+                            spinner_delay: load_spinner_delay(),
+                            spinner_pos: (spinner_x, spinner_y),
+                            spinner_side,
+                            placement: show_placement,
+                            upgrade,
+                        });
+                        video_probe = Some((path.clone(), gen));
+                        spawn_video_probe(path, gen);
+                    } else if ffplay_plays_video {
                         // Cancel any in-flight image load before switching to video.
                         current_generation += 1;
                         pending_load = None;
@@ -7168,8 +7526,16 @@ pub fn run_preview_window() {
                             show_dpi,
                             no_cancel,
                         ) {
-                            // For video, hide our window and use ffplay
-                            let _ = ShowWindow(hwnd, SW_HIDE);
+                            // Nothing of this app's is on screen for a video — the
+                            // player draws it in a window of its own — so what is put
+                            // up while the player starts is the wait every other kind
+                            // of preview is given: the spinner at the pointer, and it
+                            // goes the moment the player's window is there (see
+                            // `video_start` and `player_wait`). A hover replayed for a
+                            // probe is already that wait, and it stays where it is.
+                            if !upgrading {
+                                let _ = ShowWindow(hwnd, SW_HIDE);
+                            }
 
                             let process_running = is_video_process_running();
                             let should_start =
@@ -7195,12 +7561,8 @@ pub fn run_preview_window() {
                                     media_width,
                                     media_height,
                                 );
-
-                                if let Ok(mut current) = CURRENT_MEDIA.lock() {
-                                    let mut data = media_data;
-                                    data.video_process = video_process;
-                                    *current = Some(data);
-                                }
+                                let pid =
+                                    video_process.as_ref().map(|child| child.id()).unwrap_or(0);
 
                                 current_video_path = Some(path.clone());
                                 video_pos = (pos_x, pos_y, media_width, media_height);
@@ -7210,6 +7572,47 @@ pub fn run_preview_window() {
                                     media_width,
                                     media_height,
                                 );
+
+                                let mut data = media_data;
+                                data.video_process = video_process;
+
+                                if pid != 0 {
+                                    // The player is a process with a window to create
+                                    // before anything of the file is on screen, and
+                                    // there is nothing under the spinner that could
+                                    // arrive sooner — a player that starts instantly is
+                                    // the only start this wait is not seen for — so it
+                                    // is shown from the first tick rather than after
+                                    // `spinner_delay_ms`: a frame of the spinner is what
+                                    // a video hover would otherwise spend showing the
+                                    // desktop.
+                                    video_start = Some(VideoStart {
+                                        media: data,
+                                        path: path.clone(),
+                                        pid,
+                                        started: Instant::now(),
+                                    });
+                                    pending_load = Some(PendingLoad {
+                                        generation: current_generation,
+                                        path: path.clone(),
+                                        started: Instant::now(),
+                                        pos_x,
+                                        pos_y,
+                                        width: media_width as u32,
+                                        height: media_height as u32,
+                                        room: (max_width, max_height),
+                                        spinner_shown: false,
+                                        spinner_delay: Duration::ZERO,
+                                        spinner_pos: (spinner_x, spinner_y),
+                                        spinner_side,
+                                        placement: show_placement,
+                                        upgrade: false,
+                                    });
+                                } else if let Ok(mut current) = CURRENT_MEDIA.lock() {
+                                    // A player that would not start is no preview:
+                                    // nothing of this app's goes up for one.
+                                    *current = Some(data);
+                                }
                             } else {
                                 video_pos = (pos_x, pos_y, media_width, media_height);
                                 let _ = ensure_video_window_topmost(
@@ -8616,6 +9019,103 @@ mod tests {
         assert!(first != key(&path), "a rewritten file is another key");
 
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// A video that has not been probed yet is a hover that is waiting, so its box is the
+    /// wait's — and the probe's answer, whatever it is, is what the box becomes: a shape
+    /// is the shape, and a file with nothing to measure is the box FFmpeg's player is
+    /// given rather than one the probe is asked for again.
+    #[test]
+    fn a_video_that_has_not_been_probed_waits_in_the_waiting_box() {
+        // A folder of this module's own, and a name no other test uses: the cache is
+        // shared, and what this test puts in it must be its own key.
+        let folder = std::env::temp_dir()
+            .join("rust-hover-preview-video-tests")
+            .join("probe-box");
+        std::fs::create_dir_all(&folder).expect("a test folder");
+        let path = folder.join("waited-for.mp4");
+        std::fs::write(&path, b"a file the probe has not seen").expect("a written file");
+
+        let key = VideoGeometryKey {
+            path: path.clone(),
+            version: file_version(&path),
+        };
+        assert!(
+            cached_video_geometry(&path).is_none(),
+            "nothing has probed this file"
+        );
+        assert_eq!(
+            video_box(&path),
+            Some((office_preview::WAITING_BOX, office_preview::WAITING_BOX)),
+            "an unprobed video is placed as the wait for its probe"
+        );
+
+        // The answer the probe gives is what the hover is placed at, and it is read from
+        // the cache rather than measured again.
+        if let Ok(mut cache) = VIDEO_GEOMETRY_CACHE.lock() {
+            cache.insert(
+                key.clone(),
+                ProbedGeometry::Measured(VideoGeometry {
+                    width: 640,
+                    height: 360,
+                    crop: None,
+                }),
+            );
+        }
+        assert_eq!(video_box(&path), Some((640, 360)));
+
+        // A file the probe could not measure is not a file to probe again: it is the box
+        // the player that would try the file anyway is given, and no preview at all where
+        // the engine that plays it cannot open it either.
+        if let Ok(mut cache) = VIDEO_GEOMETRY_CACHE.lock() {
+            cache.insert(key, ProbedGeometry::Unmeasurable);
+        }
+        assert_eq!(
+            video_box(&path),
+            (!codecs::plays_video_natively()).then_some((1920, 1080))
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// The wait for a video's player ends one of two ways and never by itself: a player
+    /// whose window is up has arrived, a player that is gone is not coming, and a start
+    /// that has run past the cap is given up on — while a player that is alive with no
+    /// window yet is a start that is still going.
+    #[test]
+    fn waits_for_a_player_only_until_it_is_there_or_gone() {
+        let cap = Duration::from_secs(VIDEO_START_WAIT_SECS);
+
+        assert_eq!(
+            player_wait(true, true, Duration::ZERO),
+            Some(PlayerWait::Arrived),
+            "a player with a window up is the video"
+        );
+        assert_eq!(
+            player_wait(false, true, Duration::from_secs(1)),
+            None,
+            "a player still starting is a wait that goes on"
+        );
+        assert_eq!(
+            player_wait(true, false, Duration::ZERO),
+            Some(PlayerWait::Abandoned),
+            "what a dead player leaves behind is a handle, not a preview"
+        );
+        assert_eq!(
+            player_wait(false, false, Duration::ZERO),
+            Some(PlayerWait::Abandoned),
+            "a player that is gone is not coming back to put a window up"
+        );
+        assert_eq!(
+            player_wait(false, true, cap),
+            Some(PlayerWait::Abandoned),
+            "a start past the cap is not watched any longer"
+        );
+        assert_eq!(
+            player_wait(true, true, cap),
+            Some(PlayerWait::Arrived),
+            "and a window that is up has arrived, cap or no cap"
+        );
     }
 
     /// The whole path a hover takes for a document that is already on disk: measure
