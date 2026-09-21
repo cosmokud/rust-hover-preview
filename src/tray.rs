@@ -193,15 +193,15 @@ const FONT_SIZE_CHOICES: [(u32, u16); 12] = [
     (80, ID_TRAY_FONT_80),
     (70, ID_TRAY_FONT_70),
 ];
-/// The `Performance → Keep Office Engine` submenu: one command per idle time it
+/// The `Performance → Office Engine TTL` submenu: one command per idle time it
 /// offers, in the order it lists them. The IDs the app used before this ended at
 /// 1082 and the `theme` folder's items start at 1100, so this range is the slack
 /// between the two.
 const ID_TRAY_ENGINE_IDLE_BASE: u16 = 1083;
-/// The `Performance → Keep Animated SVG Engine` submenu, the same shape as the Office
+/// The `Performance → SVG Engine TTL` submenu, the same shape as the Office
 /// one and in the range after it.
 const ID_TRAY_WEBVIEW_IDLE_BASE: u16 = 1090;
-/// The idle times the `Keep Office Engine` submenu offers, longest first — the
+/// The idle times the `Office Engine TTL` submenu offers, longest first — the
 /// order the menu lists them in, so an engine that is never let go is the topmost
 /// item and one that is let go as soon as it has drawn a page is the bottom one. A
 /// value a hand-edited `config.ini` asks for that is not one of these is shown with
@@ -217,7 +217,7 @@ const ENGINE_IDLE_CHOICES: [EngineIdle; 7] = [
 ];
 
 /// Where the `theme` folder's own items start: one command ID each, in the order
-/// the submenu listed them. The IDs the app uses end at the `Keep Office Engine`
+/// the submenu listed them. The IDs the app uses end at the `Office Engine TTL`
 /// range above, so these collide with nothing.
 const ID_TRAY_THEME_CUSTOM_BASE: u16 = 1100;
 /// How many files the theme submenu will list. A menu that long is unusable well
@@ -495,96 +495,6 @@ unsafe fn show_context_menu(hwnd: HWND) {
         w!("Preview Types"),
     );
 
-    let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
-
-    // Add "Confirm File Type" with checkmark (content/header sniffing)
-    let confirm_file_type = CONFIG.lock().map(|c| c.confirm_file_type).unwrap_or(false);
-    let confirm_flags = MF_STRING
-        | if confirm_file_type {
-            MF_CHECKED
-        } else {
-            MF_UNCHECKED
-        };
-    let _ = AppendMenuW(
-        menu,
-        confirm_flags,
-        ID_TRAY_CONFIRM_FILE_TYPE as usize,
-        w!("Confirm File Type"),
-    );
-
-    // Add the "Trigger Key (Alt)" submenu: whether the key is watched at all, the
-    // key it watches, and what holding it does. Which of the two modes is active is
-    // shown with radio marks, because only one of them can be.
-    let (trigger_key, trigger_key_mode, trigger_key_enabled) = CONFIG
-        .lock()
-        .map(|c| {
-            (
-                c.trigger_key.clone(),
-                c.trigger_key_mode,
-                c.trigger_key_enabled,
-            )
-        })
-        .unwrap_or(("alt".to_string(), TriggerKeyMode::Disable, true));
-    let trigger_menu = CreatePopupMenu().unwrap();
-
-    let mut trigger_key_chars = trigger_key.chars();
-    let trigger_key_display = match trigger_key_chars.next() {
-        Some(first) => first.to_uppercase().collect::<String>() + trigger_key_chars.as_str(),
-        None => trigger_key,
-    };
-    let trigger_label = format!("Trigger Key ({trigger_key_display})");
-    let trigger_label_wide: Vec<u16> = trigger_label
-        .encode_utf16()
-        .chain(std::iter::once(0))
-        .collect();
-
-    // The key itself first: with it off, nothing watches it, and the two items
-    // below say what holding it would do.
-    let _ = AppendMenuW(
-        trigger_menu,
-        MF_STRING
-            | if trigger_key_enabled {
-                MF_CHECKED
-            } else {
-                MF_UNCHECKED
-            },
-        ID_TRAY_TRIGGER_ENABLED as usize,
-        w!("Enable Trigger Key"),
-    );
-    let _ = AppendMenuW(trigger_menu, MF_SEPARATOR, 0, PCWSTR::null());
-
-    let _ = AppendMenuW(
-        trigger_menu,
-        MF_STRING,
-        ID_TRAY_TRIGGER_DISABLE as usize,
-        w!("Hold to Disable Preview"),
-    );
-    let _ = AppendMenuW(
-        trigger_menu,
-        MF_STRING,
-        ID_TRAY_TRIGGER_ENABLE as usize,
-        w!("Hold to Enable Preview"),
-    );
-    let _ = CheckMenuRadioItem(
-        trigger_menu,
-        ID_TRAY_TRIGGER_DISABLE as u32,
-        ID_TRAY_TRIGGER_ENABLE as u32,
-        match trigger_key_mode {
-            TriggerKeyMode::Disable => ID_TRAY_TRIGGER_DISABLE as u32,
-            TriggerKeyMode::Enable => ID_TRAY_TRIGGER_ENABLE as u32,
-        },
-        MF_BYCOMMAND.0,
-    );
-
-    let _ = AppendMenuW(
-        menu,
-        MF_STRING | MF_POPUP,
-        trigger_menu.0 as usize,
-        PCWSTR(trigger_label_wide.as_ptr()),
-    );
-
-    let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
-
     // Add the "Text Preview" submenu: whether full mode is on, and the theme, size
     // and Markdown mode a text preview is painted with.
     let text_menu = CreatePopupMenu().unwrap();
@@ -766,9 +676,83 @@ unsafe fn show_context_menu(hwnd: HWND) {
         w!("Text Preview"),
     );
 
-    // Add the "Timing" submenu: how long a hover waits before its preview opens,
-    // and how long the same file is held off after its preview was dismissed.
+    let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
+
+    // Add the "Timing" submenu: how long a hover waits before its preview opens, how
+    // long the same file is held off after its preview was dismissed, and what the
+    // trigger key does.
     let timing_menu = CreatePopupMenu().unwrap();
+
+    // Add the "Trigger Key (Alt)" submenu: whether the key is watched at all, the
+    // key it watches, and what holding it does. Which of the two modes is active is
+    // shown with radio marks, because only one of them can be.
+    let (trigger_key, trigger_key_mode, trigger_key_enabled) = CONFIG
+        .lock()
+        .map(|c| {
+            (
+                c.trigger_key.clone(),
+                c.trigger_key_mode,
+                c.trigger_key_enabled,
+            )
+        })
+        .unwrap_or(("alt".to_string(), TriggerKeyMode::Disable, true));
+    let trigger_menu = CreatePopupMenu().unwrap();
+
+    let mut trigger_key_chars = trigger_key.chars();
+    let trigger_key_display = match trigger_key_chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + trigger_key_chars.as_str(),
+        None => trigger_key,
+    };
+    let trigger_label = format!("Trigger Key ({trigger_key_display})");
+    let trigger_label_wide: Vec<u16> = trigger_label
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+
+    // The key itself first: with it off, nothing watches it, and the two items
+    // below say what holding it would do.
+    let _ = AppendMenuW(
+        trigger_menu,
+        MF_STRING
+            | if trigger_key_enabled {
+                MF_CHECKED
+            } else {
+                MF_UNCHECKED
+            },
+        ID_TRAY_TRIGGER_ENABLED as usize,
+        w!("Enable Trigger Key"),
+    );
+    let _ = AppendMenuW(trigger_menu, MF_SEPARATOR, 0, PCWSTR::null());
+
+    let _ = AppendMenuW(
+        trigger_menu,
+        MF_STRING,
+        ID_TRAY_TRIGGER_DISABLE as usize,
+        w!("Hold to Disable Preview"),
+    );
+    let _ = AppendMenuW(
+        trigger_menu,
+        MF_STRING,
+        ID_TRAY_TRIGGER_ENABLE as usize,
+        w!("Hold to Enable Preview"),
+    );
+    let _ = CheckMenuRadioItem(
+        trigger_menu,
+        ID_TRAY_TRIGGER_DISABLE as u32,
+        ID_TRAY_TRIGGER_ENABLE as u32,
+        match trigger_key_mode {
+            TriggerKeyMode::Disable => ID_TRAY_TRIGGER_DISABLE as u32,
+            TriggerKeyMode::Enable => ID_TRAY_TRIGGER_ENABLE as u32,
+        },
+        MF_BYCOMMAND.0,
+    );
+
+    let _ = AppendMenuW(
+        timing_menu,
+        MF_STRING | MF_POPUP,
+        trigger_menu.0 as usize,
+        PCWSTR(trigger_label_wide.as_ptr()),
+    );
 
     // Add the Delay submenu
     let hover_delay_ms = CONFIG.lock().map(|c| c.hover_delay_ms).unwrap_or(0);
@@ -1137,7 +1121,22 @@ unsafe fn show_context_menu(hwnd: HWND) {
     // what a preview looks like.
     let performance_menu = CreatePopupMenu().unwrap();
 
-    // Keep Office Engine: how long the Office engine a family started is kept after
+    // Add "Confirm File Type" with checkmark (content/header sniffing)
+    let confirm_file_type = CONFIG.lock().map(|c| c.confirm_file_type).unwrap_or(false);
+    let confirm_flags = MF_STRING
+        | if confirm_file_type {
+            MF_CHECKED
+        } else {
+            MF_UNCHECKED
+        };
+    let _ = AppendMenuW(
+        performance_menu,
+        confirm_flags,
+        ID_TRAY_CONFIRM_FILE_TYPE as usize,
+        w!("Confirm File Type"),
+    );
+
+    // Office Engine TTL: how long the Office engine a family started is kept after
     // that family's last page. Nothing is asked of an engine while it is being kept
     // — it is a process that has already been paid for, and the document it drew a
     // page of is closed — so what the setting buys is the next document of that
@@ -1151,16 +1150,16 @@ unsafe fn show_context_menu(hwnd: HWND) {
 
     append_engine_idle_menu(
         performance_menu,
-        w!("Keep Office Engine"),
+        w!("Office Engine TTL"),
         ID_TRAY_ENGINE_IDLE_BASE,
         office_idle,
         DEFAULT_OFFICE_ENGINE_IDLE_SECS,
         true,
     );
 
-    // Keep Animated SVG Engine: the same question about the browser this app starts to
-    // play a document that moves. It is greyed out on a machine with no WebView2
-    // runtime, since there is nothing there to keep.
+    // SVG Engine TTL: the same question about the browser this app starts to play a
+    // document that moves. It is greyed out on a machine with no WebView2 runtime,
+    // since there is nothing there to keep.
     let webview_idle = CONFIG
         .lock()
         .map(|c| c.webview_idle)
@@ -1168,7 +1167,7 @@ unsafe fn show_context_menu(hwnd: HWND) {
 
     append_engine_idle_menu(
         performance_menu,
-        w!("Keep Animated SVG Engine"),
+        w!("SVG Engine TTL"),
         ID_TRAY_WEBVIEW_IDLE_BASE,
         webview_idle,
         DEFAULT_WEBVIEW_IDLE_SECS,
@@ -1744,7 +1743,7 @@ fn document_scale_at(index: u16) -> Option<PreviewScale> {
     DOCUMENT_SCALE_CHOICES.get(index as usize).copied()
 }
 
-/// One `Keep … Engine` submenu: the idle times every engine this app keeps warm
+/// One `… Engine TTL` submenu: the idle times every engine this app keeps warm
 /// offers, with the one that engine is on marked, and nothing marked for a time the
 /// menu does not offer — which is what a hand-edited `config.ini` can ask for. An
 /// engine that is not on the machine at all is greyed out, since there is nothing
@@ -1807,7 +1806,7 @@ fn append_engine_idle_menu(
     let _ = unsafe { AppendMenuW(parent, flags, menu.0 as usize, label) };
 }
 
-/// What an idle time is called in a `Keep … Engine` submenu: the time, with the one an
+/// What an idle time is called in an `… Engine TTL` submenu: the time, with the one an
 /// engine is kept for by default marked. The shortest is the only one that is not a
 /// whole minute, and the longest is the only one that is not a whole number of
 /// minutes.
@@ -1827,7 +1826,7 @@ fn engine_idle_label(idle: EngineIdle, default_seconds: u64) -> String {
     }
 }
 
-/// The idle time an item of a `Keep … Engine` submenu stands for, by the position it
+/// The idle time an item of an `… Engine TTL` submenu stands for, by the position it
 /// was listed at. An id past the last time the menu offered is one that is not there.
 fn engine_idle_at(index: u16) -> Option<EngineIdle> {
     ENGINE_IDLE_CHOICES.get(index as usize).copied()

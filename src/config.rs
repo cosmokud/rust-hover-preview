@@ -815,7 +815,7 @@ pub struct AppConfig {
     /// is simply not kept once the hover it was rendered for is over.
     pub office_cache_mb: u32,
     /// How long the Office engine a family started is kept after that family's
-    /// last page, which is the tray's `Performance → Keep Office Engine` setting.
+    /// last page, which is the tray's `Performance → Office Engine TTL` setting.
     pub office_engine_idle: EngineIdle,
     /// How long the WebView2 engine is kept after the last animated document it
     /// played. Beginning one is a browser start, and pointing a warm one at another
