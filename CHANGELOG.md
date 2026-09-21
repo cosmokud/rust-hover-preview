@@ -4,26 +4,35 @@
 
 ### Added
 
-- `dds` texture previews: every block format a texture is written in — BC1 through BC7, and both variants of BC6H — and the uncompressed formats a tool writes, behind the classic header and the DX10 one alike. Windows decodes BC1 to BC3 at the size of the preview and the app decodes the rest; a cubemap, a texture array or a mip chain shows its first face and first level.
-- The signed (`SNORM`) DDS formats: `R8`, `R8G8`, `R8G8B8A8`, `R16`, `R16G16` and `R16G16B16A16` signed-normalized, and the signed variants of BC4 and BC5 — which were read as unsigned until now, silently, because the two share their numbers. A channel of a signed format is a number either side of zero rather than a level — the x and y of a normal map, a height that goes below its plane — so it is drawn the way the tools that read such data draw it, its range remapped onto the display's with zero in the middle; and the channel a two-channel signed format does not carry is drawn at the level that kind measures nothing at, the middle of the range, rather than at black.
-- Signed light in a `.dds`: the `BC6H_SF16` variant, which was answered with no preview until now. The blocks are the ones BC6H already reads, out of the same tables, and what the signed reading adds is the three steps the two part in — an endpoint is the number of its width either side of zero rather than a level of it, the endpoints are unquantized by the signed codebook beside the unsigned one, and a light that comes out below zero keeps its sign in the half float it is written as. What is drawn for it is the curve every other kind of light is put through (`hdr_tone_map`, `hdr_exposure`), which lands a light below zero on black rather than stretching it over the display's the way a signed `_SNORM` sample is drawn: a level is drawn as the data it holds whatever its sign, while light below zero is light that is not there.
-- The rest of what a `.dds` can hold, which was answered with no preview before: the packed HDR formats (`R11G11B10_FLOAT`, `R9G9B9E5_SHAREDEXP`), whose three partial floats are light and take the curve every other light takes; the depth buffers (`D16_UNORM`, `D32_FLOAT`, `D24_UNORM_S8_UINT` and its depth-only view), read as the single channel they are and drawn the way the colour format with the same packing is drawn, with the stencil beside them left out of the picture; the layouts a pre-DX10 tool named by number rather than by name (`D3DFMT` 36 and 110 to 116 — the sixteen-bit-to-the-channel formats and the half and full floats); and `BC4S`/`BC5S`, the four-character codes the signed BC4 and BC5 are written under by tools that predate the `DX10` header, which were read as unsigned until now because the two share their numbers.
-- `DDS Background` under the tray's **Background** menu, with `dds_background` in `config.ini`: what a `.dds` texture is previewed over, kept apart from a picture's backdrop because a texture's alpha channel is as often a mask or an unused channel as it is transparency.
-- `hdr_tone_map` and `hdr_exposure` in `config.ini`: the curve and the exposure a picture whose samples are light — an `.exr`, a Radiance `.hdr`, a float texture — is brought into the preview with. `reinhard` (the default) leaves a value the display can already show where it was and rolls off everything above it instead of clipping it; `aces`, `srgb` and `off` are the other answers.
-- `spinner_delay_ms` in `config.ini`: how long a hover's load may run before the waiting spinner is put up, in milliseconds — `250` by default, `0` for a spinner that goes up with the load, and a hand-edited number past ten seconds reduced to it. There is no tray entry: a wait's threshold is a file edit.
+- DDS texture previews now support almost all DDS formats, including compressed, uncompressed, cubemaps, texture arrays, and mip chains; only the first face and first level are shown.
+- Signed DDS textures now display correctly: zero is in the middle, and missing color channels show as neutral gray.
+- Signed HDR DDS textures now get a preview and use the same HDR tone mapping as other light-based images; negative light is shown as black.
+- More DDS formats now preview: packed HDR, depth buffers, old numbered formats, and signed BC4/BC5.
+- New `DDS Background` setting lets you choose what DDS textures are previewed over.
+- New `hdr_tone_map` and `hdr_exposure` settings control how HDR images are shown.
+- New `spinner_delay_ms` setting controls how long to wait before showing the loading spinner.
+- New `Videos Scaling` under the tray's **Placement** menu, with `video_scale` in `config.ini`: how large a video is shown, 100% by default.
 
 ### Changed
 
-- A video is measured off the preview thread: `ffprobe` and the cropdetect pass are two external processes, and a hover whose file has not been probed yet is now laid out as the wait for them — the same spinner at the pointer every other wait is shown as — with the hover replayed the moment the answer lands, and the wait it was in carried on rather than restarted. The answer is held either way, a shape or the lack of one, so a file neither reader will open is not probed again on every hover.
-- A video preview is waited for like every other kind: the spinner stands at the pointer from the moment the player is started until the player's own window is up, instead of the desktop showing while `ffplay` starts. Nothing of this app's is on screen for a video, so this wait is shown from its first tick rather than after `spinner_delay_ms` — there is no frame under it that could arrive sooner.
-- A player that never puts its window up is ended rather than left playing behind nothing: one that exits, one whose hover moves on, and one that outlives a start by ten seconds are each given up on, and the spinner comes down with them.
-- The waiting spinner is the arc's own box at the pointer for every kind of preview — the placement and the size a document waiting on a page has always had — rather than a preview-sized frame with a spinner drawn in the middle of it, placed where the preview will land: what a load waits in is not the box its media arrives in, and a wait is the same thing to read whatever is being waited for.
-- The waiting spinner is put up by one delay for every kind of preview, Office renders and cold browser starts included: `spinner_delay_ms`, a quarter of a second by default. It was immediate for those two and two seconds for everything else, so a document no longer flashes a spinner the instant it is hovered, while a decode that takes a third of a second now shows one.
-- `.exr` and `.hdr` previews are tone mapped rather than clamped: a linear `0.5` was drawn as `128` and is drawn as `156`, and values past white are rolled off rather than burnt out.
-- A `.dds` whose `DX10` header declares itself opaque is previewed opaque, instead of at whatever its unused alpha channel happens to hold — which is what a tool that never touched that channel leaves behind.
-- A `.dds` is previewed from the mip level nearest the size it is drawn at rather than from its largest: the file's own answer to what the texture looks like at that size, and for a four-thousand-texel texture shown eight hundred wide a sixteenth of the blocks to decode, with nothing lost that the box could have shown. A file that declares levels its data does not carry is still read from its first level.
-- A `.dds` whose header describes a level the file is too short to hold is answered by the file's own length, rather than by an allocation the size of the claim and a read that comes back short.
-- `dds` is in the built-in image list; a `config.ini` written by an earlier version is brought up to it rather than left without it.
+- Video files are now checked in the background with a spinner, and the result is remembered so they are not checked again every time.
+- Video previews show the spinner until the video player window appears.
+- Video players that fail to open or hang are closed automatically.
+- The loading spinner is now the same small pointer spinner for every preview type, not a preview-sized box.
+- Spinner delay is now unified at 250 ms by default, including Office documents and browser starts.
+- EXR and HDR previews are now tone mapped instead of clipped, so bright areas fade naturally instead of burning out.
+- DDS files marked as opaque are now shown opaque instead of using an unused alpha channel.
+- DDS previews now use the best detail level for the displayed size, reducing work without losing visible detail.
+- Truncated or too-short DDS files are handled safely using the real file length.
+- DDS is now in the built-in image list, and older config files are updated automatically.
+- The tray's `Scaling` is now `Images Scaling`, and videos have a `Videos Scaling` of their own; both stay hand-editable in `config.ini`.
+- `Font Face` is out of the tray menu; `ttc_face` in `config.ini` still picks the face of a `.ttc`.
+
+### Fixed
+
+- Animations no longer stop at the end of their first play. An animation whose frames were partly given back to keep memory in check was left holding its last frame for good, because the file was only decoded again while a decoder was still running and that decoder had already finished; the two are now settled together, so either the animation is still being decoded or the whole of it is in hand and plays from beginning to end, forever. This affected GIF, animated WebP and animated PNG previews.
+- Animations with a long frame in them no longer freeze on that frame. Any frame held for a whole second or more — which a GIF is free to ask for, and one of these asks for 1.2 seconds on its first frame — was unreachable: the playhead was treated as having fallen behind once a second had passed, and its clock was reset every tick, so the wait could never end. The frame's own delay is now part of what "behind" means, and a long hold is simply a long hold.
+- An animation that fits the memory it is kept in stays whole instead of being taken apart frame by frame: it is decoded once, plays through, and wraps back into the frame it started on rather than being read from disk again on every pass.
 
 ## [0.2.11]
 

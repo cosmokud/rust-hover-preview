@@ -43,6 +43,13 @@ pub const MAX_WEBP_PLAYBACK_FPS: u32 = 90;
 pub const DEFAULT_PREVIEW_SCALE_PERCENT: u32 = 100;
 pub const MIN_PREVIEW_SCALE_PERCENT: u32 = 1;
 pub const MAX_PREVIEW_SCALE_PERCENT: u32 = 1000;
+/// The share of its own size a video is drawn at unless asked otherwise.
+///
+/// A video is measured by a probe and drawn from its first frame, and that frame is a
+/// bitmap like a picture — so the share means the same thing here as it does there, a
+/// percentage of the size the file asks for, and the setting starts at the same place
+/// the picture's does.
+pub const DEFAULT_VIDEO_SCALE_PERCENT: u32 = 100;
 /// The share of the display an SVG document is drawn at unless asked otherwise.
 ///
 /// A document is drawn at whatever size it is asked for, so what it is asked for is
@@ -438,6 +445,14 @@ impl PreviewScale {
 pub const DEFAULT_PDF_SCALE: PreviewScale = PreviewScale::FitToScreen;
 /// The same for the page an Office document is drawn as.
 pub const DEFAULT_OFFICE_SCALE: PreviewScale = PreviewScale::FitToScreen;
+/// What a picture and a video are drawn at unless the configuration says otherwise: the
+/// size each file asks for, at the share its own setting names.
+pub const DEFAULT_PREVIEW_SCALE: PreviewScale =
+    PreviewScale::Percent(DEFAULT_PREVIEW_SCALE_PERCENT);
+pub const DEFAULT_VIDEO_SCALE: PreviewScale = PreviewScale::Percent(DEFAULT_VIDEO_SCALE_PERCENT);
+/// The same for an SVG document, at the share of the display its own setting names rather
+/// than a share of the file.
+pub const DEFAULT_SVG_SCALE: PreviewScale = PreviewScale::Percent(DEFAULT_SVG_SCALE_PERCENT);
 /// The same for a font specimen, at the share rather than the whole of the room: a specimen
 /// is a page of text rather than a document to be studied, and half the display holds the
 /// pangram at a size that can be read at a glance.
@@ -880,7 +895,20 @@ pub struct AppConfig {
     /// photograph (see `dds_image`).
     pub dds_background: TransparentBackground,
     pub video_volume: u32,
+    /// How large a picture is drawn, as a share of its own size: `100%` is the size the
+    /// file asks for, `50%` half of it, and `fit` the largest size the room the layout
+    /// gives it allows.
     pub preview_scale: PreviewScale,
+    /// How large a video is drawn, as a share of its own size — the same question, and the
+    /// same answers, as the picture scale above it.
+    ///
+    /// A video is measured by a probe and drawn from its first frame, and what the layout
+    /// places is that frame, so a share of it is a share of the size the file asks for the
+    /// same way a picture's is. It is a setting of its own because the two are hovered for
+    /// different reasons: a picture wants the detail it holds, while a video at a size
+    /// large enough to read a frame is a window over the file rather than a photograph on
+    /// a desk.
+    pub video_scale: PreviewScale,
     /// How large an SVG document is drawn, as a share of the room the display has
     /// for it.
     ///
@@ -1036,6 +1064,7 @@ impl Default for AppConfig {
             dds_background: TransparentBackground::Black,
             video_volume: 0, // Mute by default
             preview_scale: PreviewScale::Percent(DEFAULT_PREVIEW_SCALE_PERCENT),
+            video_scale: PreviewScale::Percent(DEFAULT_VIDEO_SCALE_PERCENT),
             svg_scale: PreviewScale::Percent(DEFAULT_SVG_SCALE_PERCENT),
             pdf_scale: DEFAULT_PDF_SCALE,
             office_scale: DEFAULT_OFFICE_SCALE,
@@ -1340,6 +1369,11 @@ impl AppConfig {
                 "preview_scale",
                 Some(self.preview_scale.as_str()),
             );
+            ini.set(
+                CONFIG_SECTION,
+                "video_scale",
+                Some(self.video_scale.as_str()),
+            );
             ini.set(CONFIG_SECTION, "svg_scale", Some(self.svg_scale.as_str()));
             ini.set(CONFIG_SECTION, "pdf_scale", Some(self.pdf_scale.as_str()));
             ini.set(
@@ -1611,6 +1645,18 @@ impl AppConfig {
             if let Some(scale) = PreviewScale::from_str(&value) {
                 self.preview_scale = scale;
             }
+        }
+        // A video's scale is written the way a picture's is, and it is read the same way —
+        // except by a file that has none to read, which is a file written before the two
+        // were split: what such a file's pictures were drawn at is what its videos were
+        // drawn at as well, so what it wrote as one setting is the starting point of both.
+        match ini.get(CONFIG_SECTION, "video_scale") {
+            Some(value) => {
+                if let Some(scale) = PreviewScale::from_str(&value) {
+                    self.video_scale = scale;
+                }
+            }
+            None => self.video_scale = self.preview_scale,
         }
         // A document's scale is written the way a picture's is, but it is read apart
         // from it: what the number is a percentage of is the room the display has
@@ -2038,6 +2084,58 @@ mod tests {
 
         assert_eq!(config.pdf_scale, PreviewScale::FitToScreen);
         assert_eq!(config.office_scale, PreviewScale::Percent(50));
+    }
+
+    /// The same for a video: a video's scale is a setting of its own like the four
+    /// document scales beside it, so one key changing leaves the others where they were.
+    /// A picture and a video are drawn at the same share by default, which the two keys
+    /// keep apart rather than sharing.
+    #[test]
+    fn a_videos_scale_is_read_from_its_own_key() {
+        let mut ini = Ini::new();
+        ini.set(CONFIG_SECTION, "preview_scale", Some("400".to_string()));
+        ini.set(CONFIG_SECTION, "video_scale", Some("50".to_string()));
+
+        let mut config = AppConfig::default();
+        config.apply_ini(&ini);
+
+        assert_eq!(config.video_scale, PreviewScale::Percent(50));
+        assert_eq!(config.preview_scale, PreviewScale::Percent(400));
+
+        let mut ini = Ini::new();
+        ini.set(
+            CONFIG_SECTION,
+            "video_scale",
+            Some(" Fit to Screen ".to_string()),
+        );
+
+        let mut config = AppConfig::default();
+        config.apply_ini(&ini);
+
+        assert_eq!(config.video_scale, PreviewScale::FitToScreen);
+    }
+
+    /// A file written before the video scale was a setting of its own has no key for it,
+    /// and what such a file's pictures were drawn at is what its videos were drawn at as
+    /// well: one share was both answers, so the share it holds is the starting point of
+    /// each of the two rather than a default written over it.
+    #[test]
+    fn a_file_without_a_video_scale_keeps_its_videos_where_its_pictures_are() {
+        let mut ini = Ini::new();
+        ini.set(CONFIG_SECTION, "preview_scale", Some("25".to_string()));
+
+        let mut config = AppConfig::default();
+        config.apply_ini(&ini);
+
+        assert_eq!(config.preview_scale, PreviewScale::Percent(25));
+        assert_eq!(config.video_scale, PreviewScale::Percent(25));
+
+        // With none of the two written either, both are the share a fresh install
+        // starts at.
+        let config = AppConfig::default();
+
+        assert_eq!(config.preview_scale, DEFAULT_PREVIEW_SCALE);
+        assert_eq!(config.video_scale, DEFAULT_VIDEO_SCALE);
     }
 
     /// A page is drawn at the whole room the display has unless the file says
