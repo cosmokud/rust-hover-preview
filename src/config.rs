@@ -55,6 +55,16 @@ pub const DEFAULT_SVG_SCALE_PERCENT: u32 = 50;
 /// `font_preview` measures it at, narrowed to this share of the room the display has: half
 /// of the room is where a specimen starts, the same starting point an SVG document has.
 pub const DEFAULT_FONT_SCALE_PERCENT: u32 = 50;
+/// Which face of a collection a specimen is drawn from, as the menu numbers faces: `1` is
+/// the first face a `.ttc` holds, which is what every collection starts at.
+pub const DEFAULT_TTC_FACE: u32 = 1;
+/// The last face the setting can name.
+///
+/// A collection a machine carries is one to four faces — a family's regular, bold, italic
+/// and bold italic — and the widest ones, the pan-CJK collections, hold ten; the setting
+/// stops at the tenth rather than at whatever a crafted file could claim, since what the
+/// menu offers is the whole range the setting holds.
+pub const MAX_TTC_FACE: u32 = 10;
 pub const DEFAULT_TEXT_FONT_SCALE_PERCENT: u32 = 125;
 pub const MIN_TEXT_FONT_SCALE_PERCENT: u32 = 1;
 pub const MAX_TEXT_FONT_SCALE_PERCENT: u32 = 1000;
@@ -176,6 +186,15 @@ pub fn sanitize_text_font_scale_percent(value: u32) -> u32 {
     } else {
         value.clamp(MIN_TEXT_FONT_SCALE_PERCENT, MAX_TEXT_FONT_SCALE_PERCENT)
     }
+}
+
+/// Which face of a collection a specimen is drawn from.
+///
+/// Faces are numbered from `1`, so a `0` — a key deleted by hand, or one written by an
+/// older version of the app that had nothing to write — is the first face rather than a
+/// face of its own, and a number past the last face the menu offers is that last face.
+pub fn sanitize_ttc_face(value: u32) -> u32 {
+    value.clamp(DEFAULT_TTC_FACE, MAX_TTC_FACE)
 }
 
 /// How far past the far edge of a text preview the pointer region reaches, in
@@ -835,6 +854,18 @@ pub struct AppConfig {
     /// outlines, and `50%` is half the room the display would give the specimen at its
     /// largest.
     pub font_scale: PreviewScale,
+    /// Which face of a collection a specimen is drawn from, as the menu numbers faces: `1`
+    /// (the default) is the first face the file holds.
+    ///
+    /// A `.ttc` is several fonts in one file — a family's regular and bold, a typeface's
+    /// several languages — which share their outlines and are found by offsets into them,
+    /// and a page can be pointed at none of them but the first. So which face a preview is
+    /// of is a choice rather than a property of the file, and this is that choice: the face
+    /// is the one written out for the engine to draw, and a collection with fewer faces
+    /// than the setting names is drawn from the last one it has. The specimen's heading
+    /// says which face came out — `(2 of 4)` — so what was asked for and what was drawn
+    /// cannot be mistaken for each other.
+    pub ttc_face: u32,
     pub theme: TextTheme,
     pub markdown_mode: MarkdownMode,
     /// Whether image previews may be shown at all.
@@ -933,6 +964,7 @@ impl Default for AppConfig {
             pdf_scale: DEFAULT_PDF_SCALE,
             office_scale: DEFAULT_OFFICE_SCALE,
             font_scale: DEFAULT_FONT_SCALE,
+            ttc_face: DEFAULT_TTC_FACE,
             theme: TextTheme::Light,
             markdown_mode: MarkdownMode::Rendered,
             image_preview_enabled: true,
@@ -1228,6 +1260,11 @@ impl AppConfig {
                 Some(self.office_scale.as_str()),
             );
             ini.set(CONFIG_SECTION, "font_scale", Some(self.font_scale.as_str()));
+            ini.set(
+                CONFIG_SECTION,
+                "ttc_face",
+                Some(sanitize_ttc_face(self.ttc_face).to_string()),
+            );
             ini.set(CONFIG_SECTION, "theme", Some(self.theme.as_str()));
             ini.set(
                 CONFIG_SECTION,
@@ -1492,6 +1529,13 @@ impl AppConfig {
         if let Some(value) = ini.get(CONFIG_SECTION, "font_scale") {
             if let Some(scale) = PreviewScale::from_str(&value) {
                 self.font_scale = scale;
+            }
+        }
+        // And which face of a collection the specimen is of, in the numbering the tray's
+        // `Font Face` submenu offers it in.
+        if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "ttc_face") {
+            if let Ok(value) = u32::try_from(value) {
+                self.ttc_face = sanitize_ttc_face(value);
             }
         }
         if let Some(value) = ini.get(CONFIG_SECTION, "theme") {
@@ -1949,6 +1993,41 @@ mod tests {
         assert_eq!(config.pdf_scale, PreviewScale::Percent(25));
         assert_eq!(config.office_scale, PreviewScale::Percent(10));
         assert_eq!(config.preview_scale, PreviewScale::Percent(400));
+    }
+
+    /// Which face of a collection a specimen is of is a key of its own: a file that has never
+    /// named one previews the first face, one that names a face is read at it, and a number
+    /// outside the range the menu offers is brought back into it rather than kept.
+    #[test]
+    fn the_face_of_a_collection_is_read_from_its_own_key() {
+        let config = AppConfig::default();
+        assert_eq!(config.ttc_face, DEFAULT_TTC_FACE);
+
+        for (written, expected) in [
+            ("3", 3),
+            ("10", MAX_TTC_FACE),
+            ("0", DEFAULT_TTC_FACE),
+            ("99", MAX_TTC_FACE),
+        ] {
+            let mut ini = Ini::new();
+            ini.set(CONFIG_SECTION, "ttc_face", Some(written.to_string()));
+
+            let mut config = AppConfig::default();
+            config.apply_ini(&ini);
+
+            assert_eq!(config.ttc_face, expected, "`{written}` read back");
+        }
+
+        // A face and a specimen's scale are two keys: one does not move the other.
+        let mut ini = Ini::new();
+        ini.set(CONFIG_SECTION, "font_scale", Some("25".to_string()));
+        ini.set(CONFIG_SECTION, "ttc_face", Some("2".to_string()));
+
+        let mut config = AppConfig::default();
+        config.apply_ini(&ini);
+
+        assert_eq!(config.ttc_face, 2);
+        assert_eq!(config.font_scale, PreviewScale::Percent(25));
     }
 
     /// A specimen is drawn at half the room the display has unless the file says otherwise:

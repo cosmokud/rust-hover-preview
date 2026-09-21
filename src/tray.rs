@@ -1,12 +1,12 @@
 use crate::config::{
     sanitize_decode_budget_gb, sanitize_image_cache_mb, sanitize_office_cache_mb,
-    sanitize_pdf_cache_mb, sanitize_text_cache_mb, sanitize_text_font_scale_percent, AvoidMode,
-    EngineIdle, MarkdownMode, PreviewScale, PreviewType, TextTheme, TransparentBackground,
-    TriggerKeyMode, DEFAULT_DECODE_BUDGET_GB, DEFAULT_FONT_SCALE, DEFAULT_IMAGE_CACHE_MB,
-    DEFAULT_OFFICE_CACHE_MB, DEFAULT_OFFICE_ENGINE_IDLE_SECS, DEFAULT_OFFICE_SCALE,
-    DEFAULT_PDF_CACHE_MB, DEFAULT_PDF_SCALE, DEFAULT_PREVIEW_SCALE_PERCENT,
+    sanitize_pdf_cache_mb, sanitize_text_cache_mb, sanitize_text_font_scale_percent,
+    sanitize_ttc_face, AvoidMode, EngineIdle, MarkdownMode, PreviewScale, PreviewType, TextTheme,
+    TransparentBackground, TriggerKeyMode, DEFAULT_DECODE_BUDGET_GB, DEFAULT_FONT_SCALE,
+    DEFAULT_IMAGE_CACHE_MB, DEFAULT_OFFICE_CACHE_MB, DEFAULT_OFFICE_ENGINE_IDLE_SECS,
+    DEFAULT_OFFICE_SCALE, DEFAULT_PDF_CACHE_MB, DEFAULT_PDF_SCALE, DEFAULT_PREVIEW_SCALE_PERCENT,
     DEFAULT_SVG_SCALE_PERCENT, DEFAULT_TEXT_CACHE_MB, DEFAULT_TEXT_FONT_SCALE_PERCENT,
-    DEFAULT_WEBVIEW_IDLE_SECS,
+    DEFAULT_TTC_FACE, DEFAULT_WEBVIEW_IDLE_SECS,
 };
 use crate::codecs;
 use crate::explorer_hook;
@@ -122,6 +122,28 @@ const ID_TRAY_OFFICE_SCALE_BASE: u16 = 1415;
 /// `Font Scaling`, the fourth of them, in the range after the Office one: a specimen is
 /// drawn at a share of the display the same way a document is.
 const ID_TRAY_FONT_SCALE_BASE: u16 = 1420;
+/// The `Placement → Font Face` submenu: which face of a collection a specimen is drawn
+/// from, in the order it lists them. It sits directly after the `Font Scaling` range, so
+/// the two questions a specimen answers — how large it is drawn and which face it is drawn
+/// from — are read as one pair of ranges and neither is read as the other.
+const ID_TRAY_FONT_FACE_BASE: u16 = 1425;
+/// The faces the `Font Face` submenu offers, in the order it lists them: the first face a
+/// collection holds at the top, down to the tenth — which is the whole range the setting
+/// holds, so a face a hand-edited `config.ini` asks for is the face the menu marks. A
+/// collection with fewer faces than the setting names is drawn from its last one, and the
+/// specimen's heading says which face that was.
+const FONT_FACE_CHOICES: [&str; 10] = [
+    "First Face",
+    "Second Face",
+    "Third Face",
+    "Fourth Face",
+    "Fifth Face",
+    "Sixth Face",
+    "Seventh Face",
+    "Eighth Face",
+    "Ninth Face",
+    "Tenth Face",
+];
 /// The shares of the display every `… Scaling` submenu offers, in the order it lists
 /// them: the whole room a document can be given at the top, then the shares of it a
 /// document is asked for below. What differs between the settings is where they start —
@@ -430,6 +452,14 @@ unsafe extern "system" fn tray_window_proc(
                     .contains(&cmd) =>
                 {
                     set_font_scale(cmd - ID_TRAY_FONT_SCALE_BASE)
+                }
+                // Which face of a collection a specimen is drawn from, by the position it
+                // was listed at.
+                cmd if (ID_TRAY_FONT_FACE_BASE
+                    ..ID_TRAY_FONT_FACE_BASE + FONT_FACE_CHOICES.len() as u16)
+                    .contains(&cmd) =>
+                {
+                    set_font_face(cmd - ID_TRAY_FONT_FACE_BASE)
                 }
                 ID_TRAY_FONT_400 => set_text_font_scale(400),
                 ID_TRAY_FONT_300 => set_text_font_scale(300),
@@ -1051,6 +1081,50 @@ unsafe fn show_context_menu(hwnd: HWND) {
         ID_TRAY_FONT_SCALE_BASE,
         font_scale,
         DEFAULT_FONT_SCALE,
+    );
+
+    // Add the Font Face submenu, beside the specimen's scale: a `.ttc` is one file holding
+    // several fonts — a family's regular and bold, a typeface's several languages — which
+    // share their outlines and are found by offsets into them, and a page can be pointed at
+    // none of them but the one written out of the file. Which face that is is the same kind
+    // of question as how large the specimen is drawn: what the page shows rather than where
+    // its window goes. A collection of fewer faces than the item names is drawn from its
+    // last, which the specimen's own heading reports.
+    let ttc_face = CONFIG
+        .lock()
+        .map(|c| sanitize_ttc_face(c.ttc_face))
+        .unwrap_or(DEFAULT_TTC_FACE);
+
+    let face_menu = CreatePopupMenu().unwrap();
+
+    // The labels are kept for as long as the menu is being filled out, for the same reason
+    // the cache labels are: `AppendMenuW` is handed a pointer, so the wide strings have to
+    // outlive the call that lists them.
+    let face_labels: Vec<Vec<u16>> = FONT_FACE_CHOICES
+        .iter()
+        .map(|label| label.encode_utf16().chain(std::iter::once(0)).collect())
+        .collect();
+
+    for (index, _) in FONT_FACE_CHOICES.iter().enumerate() {
+        let flags = MF_STRING
+            | if index as u32 + 1 == ttc_face {
+                MF_CHECKED
+            } else {
+                MF_UNCHECKED
+            };
+        let _ = AppendMenuW(
+            face_menu,
+            flags,
+            (ID_TRAY_FONT_FACE_BASE + index as u16) as usize,
+            PCWSTR(face_labels[index].as_ptr()),
+        );
+    }
+
+    let _ = AppendMenuW(
+        placement_menu,
+        MF_STRING | MF_POPUP,
+        face_menu.0 as usize,
+        w!("Font Face"),
     );
 
     let _ = AppendMenuW(
@@ -2233,6 +2307,22 @@ fn set_font_scale(index: u16) {
     }
 }
 
+/// Which face of a collection a specimen is drawn from, by the position the item was listed
+/// at — the position is the face's own number less one, and a face past the setting's last
+/// one is that last one.
+///
+/// The preview on screen is rebuilt rather than only composited again, for the reason a
+/// change of backdrop is: which face is drawn is the page's own content, and the specimen
+/// the page is built from. A collection that is up is read again at the new face, the two
+/// being two specimens rather than one.
+fn set_font_face(index: u16) {
+    if let Ok(mut config) = CONFIG.lock() {
+        config.ttc_face = sanitize_ttc_face(u32::from(index) + 1);
+        config.save();
+    }
+    refresh_preview();
+}
+
 fn set_hover_delay(hover_delay_ms: u64) {
     if let Ok(mut config) = CONFIG.lock() {
         config.hover_delay_ms = hover_delay_ms;
@@ -2640,6 +2730,44 @@ mod tests {
                     "the ranges {scales:?} and {other:?} overlap"
                 );
             }
+        }
+    }
+
+    /// The `Font Face` submenu is a range of its own, directly past the specimen's scale:
+    /// a click on a share of the display is never read as a face, and the other way round.
+    /// It offers every face the setting can hold, in order, so the face its item names is
+    /// the face the setting is left at.
+    #[test]
+    fn the_font_face_submenu_carries_ids_of_its_own() {
+        let faces = ID_TRAY_FONT_FACE_BASE..ID_TRAY_FONT_FACE_BASE + FONT_FACE_CHOICES.len() as u16;
+        let scales =
+            ID_TRAY_FONT_SCALE_BASE..ID_TRAY_FONT_SCALE_BASE + DOCUMENT_SCALE_CHOICES.len() as u16;
+
+        assert!(
+            !faces.contains(&scales.start) && !scales.contains(&faces.start),
+            "the ranges {faces:?} and {scales:?} overlap"
+        );
+
+        assert_eq!(
+            FONT_FACE_CHOICES.len() as u32,
+            crate::config::MAX_TTC_FACE,
+            "every face the setting holds is one the menu offers"
+        );
+        assert_eq!(
+            (
+                FONT_FACE_CHOICES[0],
+                FONT_FACE_CHOICES[FONT_FACE_CHOICES.len() - 1]
+            ),
+            ("First Face", "Tenth Face"),
+            "the faces are listed from the first one down"
+        );
+
+        // Every item is a face the setting keeps, and the ids are handed out one apiece: the
+        // position an item was listed at is the face's own number less one.
+        for (index, _) in FONT_FACE_CHOICES.iter().enumerate() {
+            let face = index as u32 + 1;
+
+            assert_eq!(sanitize_ttc_face(face), face, "face {face}");
         }
     }
 

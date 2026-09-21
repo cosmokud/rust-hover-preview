@@ -11,8 +11,9 @@
 //! this app draws rather than rasterizes: the five formats a font goes by are one container
 //! or another around the same outlines, and the browser reads all of them. What the page
 //! carries for one is a specimen — the font's own name and the lines its character map
-//! covers, worked out on this side by `font_preview` — and a collection is answered with its
-//! first face written out as a font of its own, because no page can name a face inside one.
+//! covers, worked out on this side by `font_preview` — and a collection is answered with the
+//! face the setting names written out as a font of its own, because no page can name a face
+//! inside one.
 //!
 //! What lives here is the engine and the window it draws in, not the preview loop: the
 //! loop measures the document for the layout, hands it over with the box the layout came
@@ -335,31 +336,56 @@ fn frame_page(
 /// font's `name` table supplies.
 ///
 /// One page per font, pointed at the file the engine can actually read — the font itself, or
-/// the face `font_preview::browser_source` wrote out for a collection — and every size in it
-/// is a viewport unit, so the window the layout planned is the size the type is drawn at: the
-/// share of the display `font_scale` names is a share of the specimen's size, the same
-/// relationship `object-fit: contain` gives a document.
+/// the face `font_preview::browser_source` wrote out for a collection, which is the face the
+/// specimen was read at — and every size in it is a viewport unit, so the window the layout
+/// planned is the size the type is drawn at: the share of the display `font_scale` names is a
+/// share of the specimen's size, the same relationship `object-fit: contain` gives a document.
 fn font_page(
     path: &Path,
     version: u64,
     background: TransparentBackground,
+    face: usize,
 ) -> Option<(PathBuf, String)> {
-    let specimen = font_preview::probe(path)?;
-    let source = font_preview::browser_source(path, specimen.faces, &user_data_folder())?;
+    let specimen = font_preview::probe_face(path, face)?;
+    let source = font_preview::browser_source(path, &specimen, &user_data_folder())?;
     let font = file_url(&source)?;
-    let page = user_data_folder().join(format!("font-{}.html", background.as_str()));
+    // The face is in the page's name as well as in its content, for the reason the backdrop
+    // is: a specimen read at another face is a page the browser has not seen, rather than the
+    // same URL answered out of its cache with the face before it.
+    let page = user_data_folder().join(format!(
+        "font-{}-{}.html",
+        background.as_str(),
+        specimen.face
+    ));
 
     // The first line is the specimen's headline — the pangram wherever the font has Latin —
-    // and the lines under it are the scripts the font also holds.
+    // and the lines under it are the scripts the font also holds. Each line carries the
+    // direction its own script is written in, which is what a browser settles it from anyway:
+    // an Arabic or Hebrew line is then laid out from the right, its full stop ending it where
+    // the script ends it rather than where a left-to-right page would, and a line of any
+    // other script is drawn as it was.
     let lines: String = specimen
         .samples
         .iter()
         .enumerate()
         .map(|(index, line)| {
             let class = if index == 0 { "pangram" } else { "script" };
-            format!("<p class=\"line {class}\">{}</p>", escape_text(line))
+            format!(
+                "<p class=\"line {class}\" dir=\"auto\">{}</p>",
+                escape_text(line)
+            )
         })
         .collect();
+
+    // A font that covers more of the sample lines than the box was shaped for — a pan-script
+    // one, which is rare — is drawn smaller rather than past the bottom of it: the sizes above
+    // are what a pangram and the handful of script lines a font usually holds want.
+    let (pangram_size, script_size, script_margin) = if specimen.samples.len() > SPECIMEN_FULL_LINES
+    {
+        ("6vh", "3.6vh", "1vh")
+    } else {
+        ("8vh", "5vh", "1.6vh")
+    };
 
     let (ink, shadow) = specimen_ink(background);
     let html = format!(
@@ -373,8 +399,8 @@ fn font_page(
          overflow:hidden;text-overflow:ellipsis}}\
          .line{{font-family:\"RHPPreviewFont\",\"Segoe UI\",sans-serif;margin:0;\
          line-height:1.15}}\
-         .pangram{{font-size:8vh}}\
-         .script{{font-size:5vh;margin-top:1.6vh}}\
+         .pangram{{font-size:{pangram_size}}}\
+         .script{{font-size:{script_size};margin-top:{script_margin}}}\
          </style>\
          <style>@font-face{{font-family:\"RHPPreviewFont\";\
          src:url(\"{font}?v={version}\")}}</style>\
@@ -387,6 +413,11 @@ fn font_page(
 
     write_page(&page, &html, version)
 }
+
+/// How many lines a specimen is drawn at the sizes above: the pangram and six lines under it
+/// are what the specimen's box holds, and a font that covers more of the lines this app knows
+/// than that — a pan-script font, which covers most of them — is drawn smaller instead.
+const SPECIMEN_FULL_LINES: usize = 7;
 
 /// Put a page where the engine will find it, and answer with the URL it is navigated to.
 ///
@@ -694,12 +725,14 @@ struct Host {
     environment: ICoreWebView2Environment,
     controller: ICoreWebView2Controller,
     webview: ICoreWebView2,
-    /// The file the engine is holding, and the backdrop its page was written for, so a second
-    /// hover on the same file is a window that is put back up rather than a navigation — and a
-    /// change of backdrop is a page to write again, since three of the four are partly the
-    /// page's own (the checkerboard's squares, a specimen's ink) and the page is what the
-    /// browser caches.
-    current: Option<(PathBuf, TransparentBackground)>,
+    /// The file the engine is holding, the backdrop its page was written for, and — for a font —
+    /// the face of a collection it was read at, so a second hover on the same file is a window
+    /// that is put back up rather than a navigation. A change of backdrop or of face is a page to
+    /// write again, since three of the four backdrops are partly the page's own (the
+    /// checkerboard's squares, a specimen's ink) and the page is what the browser caches, and a
+    /// specimen of another face is another page and another font in it. The face is the index the
+    /// page was written for, and `0` for a file that is not a collection.
+    current: Option<(PathBuf, TransparentBackground, usize)>,
     /// The browser process this engine started, when it could be told which one it
     /// was. The runtime owns the browser, but the process is this app's own child —
     /// started by the loader in this process — and it is what is ended if it is
@@ -811,6 +844,16 @@ impl Host {
     }
 
     fn show(&mut self, path: &Path, area: Area, background: TransparentBackground) {
+        // Which face of a collection a specimen of this file is drawn from, read here rather
+        // than inside the page: it is part of what the engine is holding, so a setting changed
+        // between two hovers of one file is a page to write and navigate to again. A file that
+        // is not a font is drawn from no face at all.
+        let face = if font_formats::is_font_file(path) {
+            font_preview::configured_face()
+        } else {
+            0
+        };
+
         unsafe {
             // The background is a setting of the controller rather than of the page,
             // and it belongs to the interface that added it.
@@ -829,12 +872,12 @@ impl Host {
             });
         }
 
-        // A file the engine is not already holding, or one whose backdrop has changed, is
-        // navigated to *before* the window is put up: a window shown first would be the file
+        // A file the engine is not already holding, or one whose backdrop or face has changed,
+        // is navigated to *before* the window is put up: a window shown first would be the file
         // before it, and what is on screen a moment ago belongs to another hover.
-        if self.current.as_ref() != Some(&(path.to_path_buf(), background)) {
+        if self.current.as_ref() != Some(&(path.to_path_buf(), background, face)) {
             let started = Instant::now();
-            let arrived = self.navigate(path, background);
+            let arrived = self.navigate(path, background, face);
             trace(&format!(
                 "engine: navigate {} arrived={arrived} in {} ms",
                 path.display(),
@@ -854,7 +897,7 @@ impl Host {
                 timings.navigate_ms = started.elapsed().as_millis() as u64;
             }
 
-            self.current = Some((path.to_path_buf(), background));
+            self.current = Some((path.to_path_buf(), background, face));
         }
 
         unsafe {
@@ -903,11 +946,12 @@ impl Host {
     /// What it is pointed at is a page of this app's rather than the file itself, and which
     /// page is what the file is: a document's is the document as an image, which is what makes
     /// it the size of the window, and a font's is the font in the page with its own lines under
-    /// it; see `frame_page` and `font_page`.
-    fn navigate(&self, path: &Path, background: TransparentBackground) -> bool {
+    /// it — read at `face`, which is which of a collection's faces is written out; see
+    /// `frame_page` and `font_page`.
+    fn navigate(&self, path: &Path, background: TransparentBackground, face: usize) -> bool {
         let version = file_version(path);
         let page = if font_formats::is_font_file(path) {
-            font_page(path, version, background)
+            font_page(path, version, background, face)
         } else {
             frame_page(path, version, background)
         };
@@ -1380,7 +1424,7 @@ mod tests {
         std::fs::write(&font, specimen_font()).expect("a written font");
 
         let (page, url) =
-            font_page(&font, 7, TransparentBackground::Black).expect("a page for a font");
+            font_page(&font, 7, TransparentBackground::Black, 0).expect("a page for a font");
         let html = std::fs::read_to_string(&page).expect("a written page");
 
         assert!(html.contains("@font-face"));
@@ -1391,6 +1435,10 @@ mod tests {
         );
         assert!(html.contains("Test Family Regular"));
         assert!(html.contains("The quick brown fox jumps over the lazy dog."));
+        assert!(
+            html.contains("<p class=\"line pangram\" dir=\"auto\">"),
+            "a line is drawn in its own script's direction, Arabic and Hebrew being written right to left"
+        );
         assert!(html.contains("#f2f2f2"), "light ink on a black backdrop");
         assert!(
             !html.contains("conic-gradient"),
@@ -1401,17 +1449,21 @@ mod tests {
             "and so is the colour the text is drawn in"
         );
         assert!(url.ends_with("?v=7"));
-        assert!(url.contains("font-black.html"));
+        assert!(
+            url.contains("font-black-0.html"),
+            "the page is named for the backdrop and the face it was written for"
+        );
 
         // The two backdrops the page owns: the squares, and the ink that reads on them.
-        let (page, _) = font_page(&font, 7, TransparentBackground::Checkerboard).expect("a page");
+        let (page, _) =
+            font_page(&font, 7, TransparentBackground::Checkerboard, 0).expect("a page");
         let html = std::fs::read_to_string(&page).expect("a written page");
 
         assert!(html.contains("conic-gradient"));
         assert!(html.contains("#1a1a1a"), "dark ink on the light squares");
 
         // And the one with no backdrop to be read against: the ink carries its own shadow.
-        let (page, _) = font_page(&font, 7, TransparentBackground::Transparent).expect("a page");
+        let (page, _) = font_page(&font, 7, TransparentBackground::Transparent, 0).expect("a page");
         let html = std::fs::read_to_string(&page).expect("a written page");
 
         assert!(html.contains("text-shadow"));
