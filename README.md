@@ -18,7 +18,7 @@ A Windows 11 tray app inspired by QTTabBar that shows instant File Explorer prev
 - Text and code with syntax highlighting, rendered Markdown, and bundled/custom themes
 - Archive contents — zip, rar, 7z, tar — as a file tree with sizes, read without unpacking anything
 - Office documents — Word, Excel and PowerPoint — drawn from a page Office renders in the background and keeps, so a document previews from its first hover and instantly after
-- Preview scaling from 25% to 400%, or fit-to-screen
+- Preview scaling from 25% to 400%, or fit-to-screen, with a display share of its own for SVG, PDF, and Office pages
 - Previews appear beside the cursor or focused item and are never clipped by screen edges
 - Tray menu and hand-editable `config.ini`
 - DPI aware, single-instance, sleep/resume resilient, and light on idle CPU
@@ -128,6 +128,8 @@ ffprobe -version
   - **Avoid** — Don't Avoid, Avoid Filename (the default), Avoid Filename Column, or Avoid Details: what a preview is kept off instead of covering the item it is about. Avoid Filename keeps it off the hovered name alone, measured as far as the name is actually drawn — extension and all, at the size the view draws it, so a `Content` row's larger name counts too — leaving the rest of the row free to be covered; Avoid Filename Column keeps it off the whole column the name sits in; Avoid Details keeps it off every column a row draws; and Don't Avoid places it by the position alone.
   - **Scaling** — Fit to Screen or 25%–400%.
   - **SVG Scaling** — Fit to Screen, or 75%, 50% (default), 25%, 10% of the display.
+  - **PDF Scaling** — Fit to Screen (default), or the same shares of the display.
+  - **Office Scaling** — the same for a page Office rendered; a workbook's fallback bitmap is never enlarged.
 - **Background**
   - **Image Background** — Transparent, Black, White, or Checkerboard.
   - **SVG Background** — the same backdrops for documents.
@@ -187,6 +189,8 @@ svg_background=black
 video_volume=0
 preview_scale=100
 svg_scale=50
+pdf_scale=fit
+office_scale=fit
 theme=light
 markdown_mode=rendered
 text_preview_enabled=true
@@ -234,6 +238,7 @@ Key settings:
 - `avoid_mode` — `filename` (the default), `filename_column`, `details`, or `off`: what a preview is kept off, moving it and resizing it where there is no room beside that region, so the item it is about stays readable; applies to hovered and keyboard previews alike, at both positions. `filename` keeps it off the name alone, measured in the font the shell draws folder names in, at the scale of the display and at the larger of the sizes a view draws a name at (`Content` draws it 125% larger than a `Details` row), so the extension counts and only the name's own width is cleared — the rest of the column and the columns beside it are free to be covered; `filename_column` keeps it off the whole column the name sits in, as the view reports it; `details` keeps it off everything a row draws. A file written with the old `avoid_filename` key reads as `details` for `true` and `off` for `false`.
 - `preview_scale` — percentage or `fit`.
 - `svg_scale` — how much of the screen an SVG is drawn over: a percentage or `fit`, read against the screen rather than the size the document asks for, so `50` (the default) is half of it, `fit` all of it, and `100` or more read as `fit`. Both readers follow it — the still frame this app draws and the engine that plays an animated document.
+- `pdf_scale` / `office_scale` — the same for a PDF page and for a page Office rendered, both `fit` (the default) as well as a percentage; a workbook's fallback bitmap follows its share of its own size and is never enlarged.
 
 ## Build from Source
 

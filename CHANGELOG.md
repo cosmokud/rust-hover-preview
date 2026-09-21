@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.2.9]
+
+### Added
+
+- `PDF Scaling` and `Office Scaling` under the tray's **Placement** menu, with `pdf_scale` and `office_scale` in `config.ini`: how much of the screen a page is drawn over — `Fit to Screen` (the default), or 75%, 50%, 25%, 10%.
+- `110%` in the tray's **Text Preview → Font Size**.
+
+### Changed
+
+- PDF and Office pages no longer follow `preview_scale`: each page kind has a share of the display of its own, so a picture's scale leaves a page alone.
+- Bumped version to 0.2.9 in Cargo.toml and Cargo.lock.
+
 ## [0.2.8]
 
 ### Added

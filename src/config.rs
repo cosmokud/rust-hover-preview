@@ -332,6 +332,14 @@ impl PreviewScale {
     }
 }
 
+/// What a PDF page is drawn at unless the configuration says otherwise: the whole of
+/// the room the display has for it, which is the answer that asks for nothing in
+/// particular — the page at its own size where the display can hold it, reduced only
+/// where it cannot.
+pub const DEFAULT_PDF_SCALE: PreviewScale = PreviewScale::FitToScreen;
+/// The same for the page an Office document is drawn as.
+pub const DEFAULT_OFFICE_SCALE: PreviewScale = PreviewScale::FitToScreen;
+
 /// How long an engine that is kept warm between documents is kept.
 ///
 /// Two settings are one shape: the Office engine, which is the application this app
@@ -749,6 +757,26 @@ pub struct AppConfig {
     /// picture's scale is how much of its own detail to show, while a document's is
     /// how much of the screen to cover.
     pub svg_scale: PreviewScale,
+    /// How large a PDF page is drawn, as a share of the room the display has for it.
+    ///
+    /// A page is a vector, so what it is asked for is a size rather than a resample:
+    /// the room the display has is free quality there, and a share of that room is what
+    /// the setting names — `50%` is half the display, not half of the page. `Fit to
+    /// Screen` is the whole of it, which is where the setting starts, and `100%` or
+    /// more reads as that fit.
+    ///
+    /// It is a setting of its own rather than the SVG scale beside it because the two
+    /// documents are hovered for different reasons: a page is read at a glance and a
+    /// drawing is looked at, so the size one wants is rarely the size the other wants.
+    pub pdf_scale: PreviewScale,
+    /// How large the page an Office document is drawn as is shown, as a share of the
+    /// room the display has — the same question, and the same answers, as the PDF
+    /// scale beside it.
+    ///
+    /// The one source that is not a page is the bitmap a workbook is answered with
+    /// where no page can be exported: it is only as good as the pixels it holds, so it
+    /// follows the share as a share of its own size and is never enlarged.
+    pub office_scale: PreviewScale,
     pub theme: TextTheme,
     pub markdown_mode: MarkdownMode,
     /// Whether image previews may be shown at all.
@@ -839,6 +867,8 @@ impl Default for AppConfig {
             video_volume: 0, // Mute by default
             preview_scale: PreviewScale::Percent(DEFAULT_PREVIEW_SCALE_PERCENT),
             svg_scale: PreviewScale::Percent(DEFAULT_SVG_SCALE_PERCENT),
+            pdf_scale: DEFAULT_PDF_SCALE,
+            office_scale: DEFAULT_OFFICE_SCALE,
             theme: TextTheme::Light,
             markdown_mode: MarkdownMode::Rendered,
             image_preview_enabled: true,
@@ -1120,6 +1150,12 @@ impl AppConfig {
                 Some(self.preview_scale.as_str()),
             );
             ini.set(CONFIG_SECTION, "svg_scale", Some(self.svg_scale.as_str()));
+            ini.set(CONFIG_SECTION, "pdf_scale", Some(self.pdf_scale.as_str()));
+            ini.set(
+                CONFIG_SECTION,
+                "office_scale",
+                Some(self.office_scale.as_str()),
+            );
             ini.set(CONFIG_SECTION, "theme", Some(self.theme.as_str()));
             ini.set(
                 CONFIG_SECTION,
@@ -1346,6 +1382,19 @@ impl AppConfig {
         if let Some(value) = ini.get(CONFIG_SECTION, "svg_scale") {
             if let Some(scale) = PreviewScale::from_str(&value) {
                 self.svg_scale = scale;
+            }
+        }
+        // A page's scale is read the same way and against the same whole: what the
+        // number is a percentage of is the room the display has, one setting per kind
+        // of document.
+        if let Some(value) = ini.get(CONFIG_SECTION, "pdf_scale") {
+            if let Some(scale) = PreviewScale::from_str(&value) {
+                self.pdf_scale = scale;
+            }
+        }
+        if let Some(value) = ini.get(CONFIG_SECTION, "office_scale") {
+            if let Some(scale) = PreviewScale::from_str(&value) {
+                self.office_scale = scale;
             }
         }
         if let Some(value) = ini.get(CONFIG_SECTION, "theme") {
@@ -1688,6 +1737,55 @@ mod tests {
 
         assert_eq!(config.svg_scale, PreviewScale::Percent(50));
         assert_eq!(config.svg_scale.as_str(), "50");
+    }
+
+    /// A page's scale is a setting of its own as well: a PDF, a page Office rendered
+    /// and a hand-edited picture scale are three answers to three questions, and one
+    /// of them changing leaves the others where they were.
+    #[test]
+    fn a_pages_scale_is_read_from_its_own_key() {
+        let mut ini = Ini::new();
+        ini.set(CONFIG_SECTION, "preview_scale", Some("400".to_string()));
+        ini.set(CONFIG_SECTION, "svg_scale", Some("75".to_string()));
+        ini.set(CONFIG_SECTION, "pdf_scale", Some("25".to_string()));
+        ini.set(CONFIG_SECTION, "office_scale", Some("10".to_string()));
+
+        let mut config = AppConfig::default();
+        config.apply_ini(&ini);
+
+        assert_eq!(config.pdf_scale, PreviewScale::Percent(25));
+        assert_eq!(config.office_scale, PreviewScale::Percent(10));
+        assert_eq!(config.svg_scale, PreviewScale::Percent(75));
+        assert_eq!(config.preview_scale, PreviewScale::Percent(400));
+
+        // The words a person would write are read for a page key the same way they are
+        // for a document's, since it is the same value read against the same whole.
+        let mut ini = Ini::new();
+        ini.set(
+            CONFIG_SECTION,
+            "pdf_scale",
+            Some(" Fit to Screen ".to_string()),
+        );
+        ini.set(CONFIG_SECTION, "office_scale", Some("50%".to_string()));
+
+        let mut config = AppConfig::default();
+        config.apply_ini(&ini);
+
+        assert_eq!(config.pdf_scale, PreviewScale::FitToScreen);
+        assert_eq!(config.office_scale, PreviewScale::Percent(50));
+    }
+
+    /// A page is drawn at the whole room the display has unless the file says
+    /// otherwise — which is what the two page scales start at, and what a fresh
+    /// install writes.
+    #[test]
+    fn a_pages_scale_starts_at_the_whole_room() {
+        let config = AppConfig::default();
+
+        assert_eq!(config.pdf_scale, PreviewScale::FitToScreen);
+        assert_eq!(config.pdf_scale.as_str(), "fit");
+        assert_eq!(config.office_scale, PreviewScale::FitToScreen);
+        assert_eq!(config.office_scale.as_str(), "fit");
     }
 
     /// The scale is written the way the picture scale is, so the words a person

@@ -3,9 +3,9 @@ use crate::config::{
     sanitize_pdf_cache_mb, sanitize_text_cache_mb, sanitize_text_font_scale_percent, AvoidMode,
     EngineIdle, MarkdownMode, PreviewScale, PreviewType, TextTheme, TransparentBackground,
     TriggerKeyMode, DEFAULT_DECODE_BUDGET_GB, DEFAULT_IMAGE_CACHE_MB, DEFAULT_OFFICE_CACHE_MB,
-    DEFAULT_OFFICE_ENGINE_IDLE_SECS, DEFAULT_PDF_CACHE_MB, DEFAULT_PREVIEW_SCALE_PERCENT,
-    DEFAULT_SVG_SCALE_PERCENT, DEFAULT_TEXT_CACHE_MB, DEFAULT_TEXT_FONT_SCALE_PERCENT,
-    DEFAULT_WEBVIEW_IDLE_SECS,
+    DEFAULT_OFFICE_ENGINE_IDLE_SECS, DEFAULT_OFFICE_SCALE, DEFAULT_PDF_CACHE_MB, DEFAULT_PDF_SCALE,
+    DEFAULT_PREVIEW_SCALE_PERCENT, DEFAULT_SVG_SCALE_PERCENT, DEFAULT_TEXT_CACHE_MB,
+    DEFAULT_TEXT_FONT_SCALE_PERCENT, DEFAULT_WEBVIEW_IDLE_SECS,
 };
 use crate::explorer_hook;
 use crate::office_render;
@@ -109,11 +109,16 @@ const ID_TRAY_SCALE_25: u16 = 1048; // 25%
 /// range the app's own items occupy — the caches, which end below this — so a share
 /// of the display and a cache size are never read as each other.
 const ID_TRAY_SVG_SCALE_BASE: u16 = 1400;
-/// The shares of the display the `SVG Scaling` submenu offers, in the order it lists
+/// The `PDF Scaling` and `Office Scaling` submenus beside it, each listing the same
+/// shares: they sit in the slack the `Avoid` items leave, so a share of the display is
+/// never read as a way of avoiding the item a preview is about.
+const ID_TRAY_PDF_SCALE_BASE: u16 = 1405;
+const ID_TRAY_OFFICE_SCALE_BASE: u16 = 1415;
+/// The shares of the display every `… Scaling` submenu offers, in the order it lists
 /// them: the whole room a document can be given at the top, then the shares of it a
-/// document is asked for below. `50` — half the display — is where the setting
-/// starts.
-const SVG_SCALE_CHOICES: [PreviewScale; 5] = [
+/// document is asked for below. What differs between the settings is where they start —
+/// `50`, half the display, for an SVG document, and `Fit to Screen` for a page.
+const DOCUMENT_SCALE_CHOICES: [PreviewScale; 5] = [
     PreviewScale::FitToScreen,
     PreviewScale::Percent(75),
     PreviewScale::Percent(50),
@@ -166,6 +171,28 @@ const ID_TRAY_FONT_400: u16 = 1079;
 const ID_TRAY_FONT_90: u16 = 1080;
 const ID_TRAY_FONT_80: u16 = 1081;
 const ID_TRAY_FONT_70: u16 = 1082;
+/// `110%` is listed between `125%` and `100%` and carries the one id the font sizes
+/// have left: the engine-idle ranges take 1083 up to 1096, and the `theme` folder's own
+/// items begin at 1100.
+const ID_TRAY_FONT_110: u16 = 1097;
+/// The sizes the `Text Preview → Font Size` submenu offers, in the order it lists them —
+/// largest first — with the id each size carries. A size a hand-edited `config.ini` asks
+/// for that is not one of these is shown with nothing marked rather than rounded to the
+/// nearest.
+const FONT_SIZE_CHOICES: [(u32, u16); 12] = [
+    (400, ID_TRAY_FONT_400),
+    (300, ID_TRAY_FONT_300),
+    (250, ID_TRAY_FONT_250),
+    (200, ID_TRAY_FONT_200),
+    (175, ID_TRAY_FONT_175),
+    (150, ID_TRAY_FONT_150),
+    (125, ID_TRAY_FONT_125),
+    (110, ID_TRAY_FONT_110),
+    (100, ID_TRAY_FONT_100),
+    (90, ID_TRAY_FONT_90),
+    (80, ID_TRAY_FONT_80),
+    (70, ID_TRAY_FONT_70),
+];
 /// The `Performance → Keep Office Engine` submenu: one command per idle time it
 /// offers, in the order it lists them. The IDs the app used before this ended at
 /// 1082 and the `theme` folder's items start at 1100, so this range is the slack
@@ -361,12 +388,24 @@ unsafe extern "system" fn tray_window_proc(
                     set_decode_budget_gb(cmd - ID_TRAY_DECODE_BUDGET_BASE)
                 }
                 // A share of the display a document is drawn at, by the position it
-                // was listed at.
+                // was listed at: the SVG scale, and the two page scales beside it.
                 cmd if (ID_TRAY_SVG_SCALE_BASE
-                    ..ID_TRAY_SVG_SCALE_BASE + SVG_SCALE_CHOICES.len() as u16)
+                    ..ID_TRAY_SVG_SCALE_BASE + DOCUMENT_SCALE_CHOICES.len() as u16)
                     .contains(&cmd) =>
                 {
                     set_svg_scale(cmd - ID_TRAY_SVG_SCALE_BASE)
+                }
+                cmd if (ID_TRAY_PDF_SCALE_BASE
+                    ..ID_TRAY_PDF_SCALE_BASE + DOCUMENT_SCALE_CHOICES.len() as u16)
+                    .contains(&cmd) =>
+                {
+                    set_pdf_scale(cmd - ID_TRAY_PDF_SCALE_BASE)
+                }
+                cmd if (ID_TRAY_OFFICE_SCALE_BASE
+                    ..ID_TRAY_OFFICE_SCALE_BASE + DOCUMENT_SCALE_CHOICES.len() as u16)
+                    .contains(&cmd) =>
+                {
+                    set_office_scale(cmd - ID_TRAY_OFFICE_SCALE_BASE)
                 }
                 ID_TRAY_FONT_400 => set_text_font_scale(400),
                 ID_TRAY_FONT_300 => set_text_font_scale(300),
@@ -375,6 +414,7 @@ unsafe extern "system" fn tray_window_proc(
                 ID_TRAY_FONT_175 => set_text_font_scale(175),
                 ID_TRAY_FONT_150 => set_text_font_scale(150),
                 ID_TRAY_FONT_125 => set_text_font_scale(125),
+                ID_TRAY_FONT_110 => set_text_font_scale(110),
                 ID_TRAY_FONT_100 => set_text_font_scale(100),
                 ID_TRAY_FONT_90 => set_text_font_scale(90),
                 ID_TRAY_FONT_80 => set_text_font_scale(80),
@@ -658,23 +698,9 @@ unsafe fn show_context_menu(hwnd: HWND) {
                 MF_UNCHECKED
             }
     };
-    let font_steps: [(u32, u16); 11] = [
-        (400, ID_TRAY_FONT_400),
-        (300, ID_TRAY_FONT_300),
-        (250, ID_TRAY_FONT_250),
-        (200, ID_TRAY_FONT_200),
-        (175, ID_TRAY_FONT_175),
-        (150, ID_TRAY_FONT_150),
-        (125, ID_TRAY_FONT_125),
-        (100, ID_TRAY_FONT_100),
-        (90, ID_TRAY_FONT_90),
-        (80, ID_TRAY_FONT_80),
-        (70, ID_TRAY_FONT_70),
-    ];
-
     // The labels are built once and kept: `AppendMenuW` is handed a pointer, so the
     // wide strings have to outlive the call that lists them.
-    let font_labels: Vec<Vec<u16>> = font_steps
+    let font_labels: Vec<Vec<u16>> = FONT_SIZE_CHOICES
         .iter()
         .map(|(percent, _)| {
             format!("{percent}%")
@@ -684,7 +710,7 @@ unsafe fn show_context_menu(hwnd: HWND) {
         })
         .collect();
 
-    for (index, (percent, id)) in font_steps.iter().enumerate() {
+    for (index, (percent, id)) in FONT_SIZE_CHOICES.iter().enumerate() {
         let _ = AppendMenuW(
             font_menu,
             font_flag(*percent),
@@ -973,21 +999,41 @@ unsafe fn show_context_menu(hwnd: HWND) {
         w!("Scaling"),
     );
 
-    // Add the SVG Scaling submenu: how much of the display a document is drawn over.
-    // It sits beside the picture scale because it is the same question about another
-    // kind of preview, and it is a submenu of its own because the answers are not the
-    // same answers: a picture's percentage is of its own size, a document's is of the
-    // display.
-    let svg_scale = CONFIG
+    // Add the SVG Scaling, PDF Scaling and Office Scaling submenus: how much of the
+    // display each kind of document is drawn over. They sit beside the picture scale
+    // because they are the same question about other kinds of preview, and each is a
+    // submenu of its own because the answers are not the same answers: a picture's
+    // percentage is of its own size, a document's is of the display — and a document
+    // and a page do not start at the same share of it either.
+    let (svg_scale, pdf_scale, office_scale) = CONFIG
         .lock()
-        .map(|c| c.svg_scale)
-        .unwrap_or(PreviewScale::Percent(DEFAULT_SVG_SCALE_PERCENT));
+        .map(|c| (c.svg_scale, c.pdf_scale, c.office_scale))
+        .unwrap_or((
+            PreviewScale::Percent(DEFAULT_SVG_SCALE_PERCENT),
+            DEFAULT_PDF_SCALE,
+            DEFAULT_OFFICE_SCALE,
+        ));
 
-    append_svg_scale_menu(
+    append_document_scale_menu(
         placement_menu,
         w!("SVG Scaling"),
         ID_TRAY_SVG_SCALE_BASE,
         svg_scale,
+        PreviewScale::Percent(DEFAULT_SVG_SCALE_PERCENT),
+    );
+    append_document_scale_menu(
+        placement_menu,
+        w!("PDF Scaling"),
+        ID_TRAY_PDF_SCALE_BASE,
+        pdf_scale,
+        DEFAULT_PDF_SCALE,
+    );
+    append_document_scale_menu(
+        placement_menu,
+        w!("Office Scaling"),
+        ID_TRAY_OFFICE_SCALE_BASE,
+        office_scale,
+        DEFAULT_OFFICE_SCALE,
     );
 
     let _ = AppendMenuW(
@@ -1628,26 +1674,34 @@ fn background_at(index: u16) -> Option<TransparentBackground> {
     BACKGROUND_CHOICES.get(index as usize).copied()
 }
 
-/// The `SVG Scaling` submenu: the shares of the display a document is drawn at, with
-/// the one the setting is on marked, and nothing marked for a share the menu does not
-/// offer — which is what a hand-edited `config.ini` can ask for.
-fn append_svg_scale_menu(parent: HMENU, label: PCWSTR, base: u16, scale: PreviewScale) {
+/// One `… Scaling` submenu: the shares of the display a document is drawn at, with the
+/// one the setting is on marked, and nothing marked for a share the menu does not
+/// offer — which is what a hand-edited `config.ini` can ask for. `default` says which
+/// of the shares this setting starts at, so the one it names is the one the label
+/// marks.
+fn append_document_scale_menu(
+    parent: HMENU,
+    label: PCWSTR,
+    base: u16,
+    scale: PreviewScale,
+    default: PreviewScale,
+) {
     let menu = unsafe { CreatePopupMenu().unwrap() };
 
     // The labels are kept for as long as the menu is being filled out, for the same
     // reason the cache labels are: `AppendMenuW` is handed a pointer, so the wide
     // strings have to outlive the call that lists them.
-    let labels: Vec<Vec<u16>> = SVG_SCALE_CHOICES
+    let labels: Vec<Vec<u16>> = DOCUMENT_SCALE_CHOICES
         .iter()
         .map(|choice| {
-            svg_scale_label(*choice, DEFAULT_SVG_SCALE_PERCENT)
+            document_scale_label(*choice, default)
                 .encode_utf16()
                 .chain(std::iter::once(0))
                 .collect()
         })
         .collect();
 
-    for (index, choice) in SVG_SCALE_CHOICES.iter().enumerate() {
+    for (index, choice) in DOCUMENT_SCALE_CHOICES.iter().enumerate() {
         let flags = MF_STRING
             | if *choice == scale {
                 MF_CHECKED
@@ -1670,24 +1724,24 @@ fn append_svg_scale_menu(parent: HMENU, label: PCWSTR, base: u16, scale: Preview
 /// What a share of the display is called in the menu: the percentage itself, with the
 /// one the setting starts at marked as the default. The whole room is not a percentage
 /// of it, so it is named for what it is.
-fn svg_scale_label(scale: PreviewScale, default_percent: u32) -> String {
+fn document_scale_label(scale: PreviewScale, default: PreviewScale) -> String {
     let label = match scale {
         PreviewScale::Percent(percent) => format!("{percent}%"),
         _ => "Fit to Screen".to_string(),
     };
 
-    if scale == PreviewScale::Percent(default_percent) {
+    if scale == default {
         format!("{label} (Default)")
     } else {
         label
     }
 }
 
-/// The share of the display an item of the `SVG Scaling` submenu stands for, by the
+/// The share of the display an item of a `… Scaling` submenu stands for, by the
 /// position it was listed at. An id past the last choice the menu offered is one that
 /// is not there.
-fn svg_scale_at(index: u16) -> Option<PreviewScale> {
-    SVG_SCALE_CHOICES.get(index as usize).copied()
+fn document_scale_at(index: u16) -> Option<PreviewScale> {
+    DOCUMENT_SCALE_CHOICES.get(index as usize).copied()
 }
 
 /// One `Keep … Engine` submenu: the idle times every engine this app keeps warm
@@ -1990,12 +2044,39 @@ fn set_preview_scale(scale: PreviewScale) {
 /// like the position and the picture scale beside it, this applies to the next hover
 /// rather than resizing the preview that is already up.
 fn set_svg_scale(index: u16) {
-    let Some(scale) = svg_scale_at(index) else {
+    let Some(scale) = document_scale_at(index) else {
         return;
     };
 
     if let Ok(mut config) = CONFIG.lock() {
         config.svg_scale = scale;
+        config.save();
+    }
+}
+
+/// How much of the display a PDF page is drawn over, by the position the item was
+/// listed at. The same rule as the SVG scale beside it: the next hover, not the one
+/// that is up.
+fn set_pdf_scale(index: u16) {
+    let Some(scale) = document_scale_at(index) else {
+        return;
+    };
+
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pdf_scale = scale;
+        config.save();
+    }
+}
+
+/// How much of the display the page an Office document is drawn as is shown over, by
+/// the position the item was listed at.
+fn set_office_scale(index: u16) {
+    let Some(scale) = document_scale_at(index) else {
+        return;
+    };
+
+    if let Ok(mut config) = CONFIG.lock() {
+        config.office_scale = scale;
         config.save();
     }
 }
@@ -2276,32 +2357,41 @@ mod tests {
         );
     }
 
-    /// The `Avoid` items are the app's own and sit above every range the other
-    /// submenus hand out — the `Placement` choices have no room for four beside them —
-    /// so a click on one is never read as another setting.
+    /// The three `… Scaling` submenus are one range each, and the `Avoid` items sit in
+    /// the slack between them: a click on a share of the display is never read as a way
+    /// of avoiding the item a preview is about, and the other way round.
     #[test]
     fn the_avoid_submenu_carries_ids_of_its_own() {
         let avoid = ID_TRAY_AVOID_BASE..ID_TRAY_AVOID_BASE + AVOID_CHOICES.len() as u16;
-        let top_of_the_others = ID_TRAY_SVG_SCALE_BASE + SVG_SCALE_CHOICES.len() as u16;
+        let document_scales = [
+            ID_TRAY_SVG_SCALE_BASE,
+            ID_TRAY_PDF_SCALE_BASE,
+            ID_TRAY_OFFICE_SCALE_BASE,
+        ]
+        .map(|base| base..base + DOCUMENT_SCALE_CHOICES.len() as u16);
 
-        assert!(
-            avoid.start >= top_of_the_others,
-            "the avoid items sit above the ranges the other submenus hand out: {avoid:?}"
-        );
+        for range in document_scales {
+            assert!(
+                !range.contains(&avoid.start) && !avoid.contains(&range.start),
+                "the ranges {range:?} and {avoid:?} overlap"
+            );
+        }
         assert!(
             avoid.start > ID_TRAY_POSITION_BEST,
             "the avoid items are listed after the position choices"
         );
     }
 
-    /// The `SVG Scaling` submenu offers the whole room a document can be given and
-    /// then the shares of it, in that order, and each id resolves back to the share
-    /// its item was listed for — which is what makes a click select what it named.
-    /// The share a document starts at is marked as the default.
+    /// Every `… Scaling` submenu offers the whole room a document can be given and then
+    /// the shares of it, in that order, and each id resolves back to the share its item
+    /// was listed for — which is what makes a click select what it named. What each
+    /// submenu marks as the default is the share its own setting starts at.
     #[test]
-    fn every_offered_svg_scale_is_one_the_setting_keeps() {
+    fn every_offered_document_scale_is_one_the_setting_keeps() {
+        let svg_default = PreviewScale::Percent(DEFAULT_SVG_SCALE_PERCENT);
+
         assert_eq!(
-            SVG_SCALE_CHOICES.map(|scale| svg_scale_label(scale, DEFAULT_SVG_SCALE_PERCENT)),
+            DOCUMENT_SCALE_CHOICES.map(|scale| document_scale_label(scale, svg_default)),
             [
                 "Fit to Screen".to_string(),
                 "75%".to_string(),
@@ -2311,12 +2401,35 @@ mod tests {
             ]
         );
 
-        for (index, scale) in SVG_SCALE_CHOICES.iter().enumerate() {
-            assert_eq!(svg_scale_at(index as u16), Some(*scale));
+        for default in [svg_default, DEFAULT_PDF_SCALE, DEFAULT_OFFICE_SCALE] {
+            assert_eq!(
+                DOCUMENT_SCALE_CHOICES.map(|scale| document_scale_label(scale, default)),
+                [
+                    if default == PreviewScale::FitToScreen {
+                        "Fit to Screen (Default)"
+                    } else {
+                        "Fit to Screen"
+                    },
+                    "75%",
+                    if default == PreviewScale::Percent(50) {
+                        "50% (Default)"
+                    } else {
+                        "50%"
+                    },
+                    "25%",
+                    "10%",
+                ]
+                .map(String::from),
+                "one share is marked the default at {default:?}"
+            );
+        }
+
+        for (index, scale) in DOCUMENT_SCALE_CHOICES.iter().enumerate() {
+            assert_eq!(document_scale_at(index as u16), Some(*scale));
         }
 
         assert_eq!(
-            svg_scale_at(SVG_SCALE_CHOICES.len() as u16),
+            document_scale_at(DOCUMENT_SCALE_CHOICES.len() as u16),
             None,
             "an id past the last item is not one the menu offered"
         );
@@ -2325,8 +2438,8 @@ mod tests {
     /// What the menu writes is what the file reads back: every share it offers is one
     /// the setting holds, so a choice made here is still the choice after a restart.
     #[test]
-    fn every_offered_svg_scale_round_trips_through_the_file() {
-        for scale in SVG_SCALE_CHOICES {
+    fn every_offered_document_scale_round_trips_through_the_file() {
+        for scale in DOCUMENT_SCALE_CHOICES {
             let written = scale.as_str();
 
             assert_eq!(
@@ -2340,17 +2453,48 @@ mod tests {
     /// A share of the display is never read as a cache size: the text cache is the
     /// last of the four, and the items added past it are a range of their own.
     #[test]
-    fn the_svg_scale_range_is_not_another_submenus_range() {
-        let scales =
-            ID_TRAY_SVG_SCALE_BASE..ID_TRAY_SVG_SCALE_BASE + SVG_SCALE_CHOICES.len() as u16;
+    fn the_document_scale_ranges_are_not_another_submenus_range() {
         let text_cache =
             ID_TRAY_TEXT_CACHE_BASE..ID_TRAY_TEXT_CACHE_BASE + CACHE_SIZE_CHOICES_MB.len() as u16;
         let themes = ID_TRAY_THEME_CUSTOM_BASE..ID_TRAY_IMAGE_CACHE_BASE;
 
-        for other in [text_cache, themes] {
+        for base in [
+            ID_TRAY_SVG_SCALE_BASE,
+            ID_TRAY_PDF_SCALE_BASE,
+            ID_TRAY_OFFICE_SCALE_BASE,
+        ] {
+            let scales = base..base + DOCUMENT_SCALE_CHOICES.len() as u16;
+
+            for other in [text_cache.clone(), themes.clone()] {
+                assert!(
+                    !other.contains(&base) && !scales.contains(&other.start),
+                    "the ranges {scales:?} and {other:?} overlap"
+                );
+            }
+        }
+    }
+
+    /// The font sizes are listed largest first, `110%` between the `125%` and `100%` it
+    /// sits between, and every size carries an id of its own — so a click selects the
+    /// size its item named.
+    #[test]
+    fn the_font_sizes_are_listed_largest_first() {
+        assert!(
+            FONT_SIZE_CHOICES
+                .windows(2)
+                .all(|pair| pair[0].0 > pair[1].0),
+            "every size is smaller than the one above it: {FONT_SIZE_CHOICES:?}"
+        );
+        assert!(
+            FONT_SIZE_CHOICES.contains(&(110, ID_TRAY_FONT_110)),
+            "110% is offered"
+        );
+
+        for (index, (_, id)) in FONT_SIZE_CHOICES.iter().enumerate() {
+            let above = &FONT_SIZE_CHOICES[..index];
             assert!(
-                !other.contains(&ID_TRAY_SVG_SCALE_BASE) && !scales.contains(&other.start),
-                "the ranges {scales:?} and {other:?} overlap"
+                !above.iter().any(|(_, earlier)| earlier == id),
+                "an id names one size and one only: {id}"
             );
         }
     }
