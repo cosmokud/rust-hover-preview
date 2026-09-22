@@ -19,6 +19,7 @@ use crate::engine_processes;
 use crate::eps_image;
 use crate::font_formats;
 use crate::font_preview;
+use crate::libreoffice_render;
 use crate::metafile_image;
 use crate::office_formats;
 use crate::office_preview;
@@ -3172,16 +3173,17 @@ fn load_static_image(
 
 /// The picture a design document is previewed from.
 ///
-/// Two readers answer for these documents and both hand back the same thing: the
-/// picture the file keeps of the whole document, decoded into the box the layout
-/// planned rather than at the size it is — which for a layered document can be
-/// enormous, and is why the box is what is asked for rather than the size. Which of
-/// the two is asked is settled by the file's own header rather than by its name:
-/// Photoshop's two formats are the planar merged picture this app decodes itself, and
-/// a project container is a zip holding a picture the application saved; see
-/// `psd_image` and `project_image`. An Illustrator document saved as PostScript, and a
-/// CorelDRAW document of the older shape, are read for the smaller picture each of
-/// them keeps — see `eps_image` and `cdr_image`.
+/// Three answers, in one order. Where an engine is installed the document itself is drawn
+/// by it — `libreoffice_render` — and what comes back is a page, sharp at whatever size the
+/// preview is shown at. Behind it are the pictures these formats keep of their own work,
+/// which is what a machine without the engine is answered with, and what a document the
+/// engine cannot read is answered with as well: the planar merged picture Photoshop writes
+/// at the end of a file, decoded by `psd_image`, and the picture a project container, a
+/// CorelDRAW document or a PostScript one holds, read by `project_image`, `cdr_image` and
+/// `eps_image`. Which of those is asked is settled by the file's own header rather than by
+/// its name, and each hands back the picture decoded into the box the layout planned rather
+/// than at the size it is — which for a layered document can be enormous, and is why the
+/// box is what is asked for rather than the size.
 ///
 /// Everywhere else a design preview is a frame of this app's own: it is composed like a
 /// picture, held in the image cache like one under the size it was made for, drawn over the
@@ -3214,18 +3216,28 @@ fn load_design_preview(
         return Some(static_image_media(frame, MediaType::Design));
     }
 
-    let pixels = if psd_image::is_psd_file(path) {
-        psd_image::decode(path, target_width, target_height)
+    // The engine is asked first, where it is installed; the readers below are the fallback
+    // for a machine without it and for a document it will not read. What it drew comes
+    // back at the size the page fitted into the box rather than at the box, so the frame
+    // is built from what was drawn.
+    let (pixels, width, height) = if let Some(page) = libreoffice_render::pdf_for(path) {
+        pdf_preview::render_first_page(&page, target_width, target_height)?
     } else {
-        project_image::decode(path, target_width, target_height)
-            .or_else(|| cdr_image::decode(path, target_width, target_height))
-            .or_else(|| eps_image::decode(path, target_width, target_height))
-    }?;
+        let pixels = if psd_image::is_psd_file(path) {
+            psd_image::decode(path, target_width, target_height)
+        } else {
+            project_image::decode(path, target_width, target_height)
+                .or_else(|| cdr_image::decode(path, target_width, target_height))
+                .or_else(|| eps_image::decode(path, target_width, target_height))
+        }?;
+
+        (pixels, target_width, target_height)
+    };
 
     let frame = ImageFrame {
         pixels,
-        width: target_width,
-        height: target_height,
+        width,
+        height,
         delay_ms: 0,
     };
 
@@ -3234,8 +3246,9 @@ fn load_design_preview(
     Some(static_image_media(frame, MediaType::Design))
 }
 
-/// The size of the picture a design document is previewed from: the document's own size
-/// for a Photoshop file, and the size of the picture a project container holds.
+/// The size of the picture a design document is previewed from: the page an installed
+/// render engine drew for it, the document's own size for a Photoshop file, and the size of
+/// the picture a project container, a CorelDRAW document or a PostScript one holds.
 ///
 /// What is neither of those is either a CorelDRAW document of the older shape — a RIFF
 /// container holding a bitmap rather than a zip holding a file — or the encapsulated
@@ -3246,6 +3259,13 @@ fn load_design_preview(
 /// this app has no reader for comes to show nothing at all rather than a picture of some
 /// other format's making.
 fn design_dimensions(path: &Path) -> Option<(u32, u32)> {
+    // The engine is asked first, where it is installed: what it answers is the document
+    // drawn — a page, sharp at whatever size the preview is shown at — rather than a
+    // picture of the document that its application kept at some smaller size.
+    if let Some(page) = libreoffice_render::pdf_for(path) {
+        return pdf_preview::page_dimensions(&page);
+    }
+
     if psd_image::is_psd_file(path) {
         return psd_image::dimensions(path);
     }

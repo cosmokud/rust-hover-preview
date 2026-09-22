@@ -160,6 +160,10 @@ pub fn engines() -> Vec<Row> {
             available: crate::webview_preview::is_available(),
         },
         Row {
+            name: "LibreOffice",
+            available: crate::libreoffice_render::available(),
+        },
+        Row {
             name: "Microsoft Word",
             available: prog_id_installed("Word.Application"),
         },

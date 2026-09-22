@@ -16,6 +16,7 @@ mod explorer_hook;
 mod font_formats;
 mod font_preview;
 mod image_formats;
+mod libreoffice_render;
 mod metafile_image;
 mod office_formats;
 mod office_preview;

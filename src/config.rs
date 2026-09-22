@@ -1578,6 +1578,13 @@ impl AppConfig {
         Self::folder().map(|folder| folder.join("theme"))
     }
 
+    /// The folder rendered pages are kept in, beside `config.ini`: a design document an
+    /// installed render engine drew is kept there as the PDF it was drawn as, so a
+    /// document is converted once and every hover after that is a read of a file.
+    pub fn rendered_dir() -> Option<PathBuf> {
+        Self::folder().map(|folder| folder.join("rendered"))
+    }
+
     /// The configuration as the file has it, with whatever the file had wrong or missing put
     /// right.
     ///
