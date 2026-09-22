@@ -14,14 +14,14 @@ A Windows 11 tray app inspired by QTTabBar. Hover a file in File Explorer — or
 - Images, including animated GIF, APNG, and WebP.
 - Design documents — Photoshop, Illustrator, Krita, OpenRaster, and more — previewed from the picture their own format saves of the whole document.
 - HEIC, AVIF, and JPEG XL through Windows codec extensions where installed.
-- SVG vectors drawn sharply at preview size.
+- Vector drawings — SVG, Windows metafiles, and Illustrator `.eps` — drawn sharply at preview size.
 - Font specimens: font name plus sample lines covering its own character map.
 - Videos through FFmpeg if installed, otherwise through Windows’ own media engine.
 - PDF first pages via the built-in Windows PDF engine.
 - Text and code with syntax highlighting, rendered Markdown, and themes.
 - Archives as a file tree with sizes — read without unpacking.
 - Office documents drawn from a background Office render, so previews appear quickly after the first hover.
-- Scaling from 25% to 400%, or fit-to-screen. Separate scaling for images and videos, and for SVG, PDF, Office pages, and fonts.
+- Scaling from 25% to 400%, or fit-to-screen. Separate scaling for images and videos, and for vector drawings, PDF, Office pages, fonts, and design documents.
 - Previews appear beside the cursor or focused item and are kept on screen.
 - Tray menu and hand-editable `config.ini`.
 - DPI aware, single-instance, sleep/resume resilient, and light on idle CPU.
@@ -39,6 +39,8 @@ Animated GIF/APNG/WebP play. HEIC/HEIF/AVIF/JPEG XL/still WebP usually need Wind
 ### Vectors
 
 `svg`, `svgz` — drawn by the WebView2 runtime Windows 11 ships with, so they stay sharp when enlarged. Animated SVG documents play too. If WebView2 is missing, SVG previews do not appear.
+
+`wmf`, `emf`, `eps`, `epsi` — Windows metafiles, and Illustrator files saved as encapsulated PostScript.
 
 ### Design Documents
 
@@ -162,7 +164,7 @@ All are free. Windows 11 often has HEIF, AV1, and WebP already. Where one is mis
 ## System Tray Menu
 
 - **Enable Preview** — turn previews on or off.
-- **Preview Types** — Images, Videos, Text, PDF, Archives, Office, SVG, Fonts, Design: gate a kind without touching its file list.
+- **Preview Types** — Images, Videos, Text, PDF, Archives, Office, Vector, Fonts, Design: gate a kind without touching its file list.
 - **Text Preview**
   - **Full Mode** — adds scrolling, selection, and copy; off by default.
   - **Theme** — Atom One Light, One Dark Pro, or any `.tmTheme` in the theme folder.
@@ -181,14 +183,14 @@ All are free. Windows 11 often has HEIF, AV1, and WebP already. Where one is mis
   - **Image Scaling** — Fit to Screen or 25%–400%, of the image's own size.
   - **Video Scaling** — the same shares for a video, 100% (default).
   - **Animated Scaling** — the same shares for an animated GIF, WebP, or PNG; a still GIF or PNG keeps Image Scaling. 100% (default).
-  - **SVG Scaling** — Fit to Screen, or 75%, 50% (default), 25%, 10% of the display.
+  - **Vector Scaling** — Fit to Screen, or 75%, 50% (default), 25%, 10% of the display.
   - **PDF Scaling** — Fit to Screen (default), or the same shares of the display.
   - **Office Scaling** — the same for a page Office rendered; a workbook’s fallback bitmap is never enlarged.
   - **Font Scaling** — the same shares for a font specimen, 50% by default.
   - **Design Scaling** — the same shares of the display for a design document (Photoshop, Illustrator, Krita, OpenRaster); Fit to Screen by default.
 - **Background**
   - **Image Background** — Transparent, Black, White, or Checkerboard.
-  - **SVG Background** — the same backdrops for documents.
+  - **Vector Background** — the same backdrops for a drawing: an SVG document, or a metafile.
   - **Font Background** — the same backdrops for a font specimen.
   - **DDS Background** — the same backdrops for `.dds` textures, whose alpha channel is as often a mask or an unused channel as it is transparency.
   - **Design Background** — the same backdrops for a design document.
@@ -229,7 +231,7 @@ text_preview_enabled=true
 pdf_preview_enabled=true
 archive_preview_enabled=true
 office_preview_enabled=true
-svg_preview_enabled=true
+vector_preview_enabled=true
 font_preview_enabled=true
 design_preview_enabled=true
 office_cache_mb=64
@@ -247,14 +249,14 @@ confirm_file_type=false
 follow_cursor=false
 avoid_mode=details
 image_background=black
-svg_background=black
+vector_background=black
 font_background=white
 design_background=black
 video_volume=0
 preview_scale=100
 video_scale=100
 animated_scale=100
-svg_scale=50
+vector_scale=50
 pdf_scale=fit
 office_scale=fit
 font_scale=50
@@ -284,7 +286,10 @@ extensions=doc,docm,docx,dot,dotm,dotx,pot,potm,potx,pps,ppsm,ppsx,ppt,pptm,pptx
 extensions=otf,ttc,ttf,woff,woff2
 
 [design]
-extensions=fig,kra,ora,psb,psd,sketch,xd
+extensions=ai,fig,kra,ora,psb,psd,sketch,xd
+
+[vector]
+extensions=emf,eps,epsi,wmf
 ```
 
 Key settings, in plain terms:
@@ -295,7 +300,7 @@ Key settings, in plain terms:
 - `text_preview_full_mode` — `true` adds scrolling, selection, and copy.
 - `text_font_scale` — a percentage from 1 to 1000, default `125`; archive listings follow it too.
 - `extensions` / `names` — the text-preview gates. Extensions are written without dots. Names match extensionless files.
-- `image_extensions`, `video_extensions`, `archive_extensions`, `office_extensions`, `font_extensions`, `design_extensions` — per-type preview gates, written without dots. An entry with a dot in it, like `tar.gz`, is matched against the end of the file name.
+- `image_extensions`, `video_extensions`, `archive_extensions`, `office_extensions`, `font_extensions`, `design_extensions`, `vector_extensions` — per-type preview gates, written without dots. An entry with a dot in it, like `tar.gz`, is matched against the end of the file name. `svg` and `svgz` are entries of the image list and are gated by **Vector**, not by **Images**.
 - `image_cache_mb` — memory for decoded image frames: default `32`, max `2048`; `0` holds nothing.
 - `office_cache_mb` — memory for Office-rendered pages: default `64`, max `2048`; `0` holds nothing between hovers but still renders for the current hover.
 - `pdf_cache_mb` — memory for PDF pages as pixels: default `32`, max `2048`; the same file at two preview sizes is held as two pages.
@@ -311,12 +316,13 @@ Key settings, in plain terms:
 - `preview_scale` — percentage or `fit`, read against the picture's own size.
 - `video_scale` — the same for a video, `100` by default; a file written before the two were split gets its video scale from `preview_scale`.
 - `animated_scale` — the same for an animated GIF, WebP, or PNG, `100` by default; a still GIF or PNG follows `preview_scale`, and a file written before the two were split gets this one from `preview_scale` too.
-- `svg_scale` — percentage or `fit`, read against the screen. `50` is default, `fit` is all of it, and `100` or more reads as `fit`.
+- `vector_scale` — percentage or `fit`, read against the screen. `50` is default, `fit` is all of it, and `100` or more reads as `fit`. It covers both halves of the Vector kind, and a file written before they were one names it with `svg_scale`, which is still read.
 - `pdf_scale` / `office_scale` — the same for a PDF page and an Office-rendered page, both `fit` by default as well as a percentage. A workbook’s fallback bitmap follows its own size and is never enlarged.
 - `font_scale` — percentage or `fit`, read against the screen. `50` is default, `fit` is all of it, and `100` or more reads as `fit`. A font has no size of its own, so the share is of the display.
 - `design_scale` — the same for a design document, `fit` by default. A design preview is the picture the file keeps of the whole document, so the share is of the screen the way a page’s is rather than of the document’s own size.
 - `ttc_face` — which face of a `.ttc` collection is drawn: `1` is the first face, and the highest setting is `10`. The heading says which face came out.
 - `font_background` — `white` (default), `black`, `checkerboard`, or `transparent`.
+- `vector_background` — `black` (default), `white`, `checkerboard`, or `transparent`: what an SVG document's page, or a metafile drawing, is drawn over. A file written before the two were one names it with `svg_background`, which is still read.
 - `design_background` — `black` (default), `white`, `checkerboard`, or `transparent`.
 - A deleted `extensions=` line or whole section comes back with built-in entries. An `extensions=` line left empty stays empty.
 

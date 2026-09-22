@@ -5,10 +5,13 @@
 ### Added
 
 - Preview for design documents: Photoshop `psd` and `psb`, Krita `kra`, OpenRaster `ora`, and the project containers other drawing tools save (`sketch`, `fig`, `xd`). A layered document is shown from the finished picture its format keeps inside it, so it arrives as it was saved.
-- Preview for Illustrator `ai` files, drawn as a PDF the same way a PDF is. An `.ai` saved as PostScript has no preview.
+- Preview for Illustrator `ai` files, drawn as a PDF the same way a PDF is.
 - `Design` under the tray's **Preview Types**, with `design_preview_enabled` and a `[design]` extension list in `config.ini`.
 - `Design Scaling` under the tray's **Scaling** menu, with `design_scale` in `config.ini`: how much of the screen a design preview covers — Fit to Screen (default), or 75%, 50%, 25%, 10%.
 - `Design Background` under the tray's **Background** menu, with `design_background` in `config.ini`: what a design preview is drawn over, black by default.
+- Vector previews: Windows metafiles (`wmf`, `emf`) and Illustrator files saved as encapsulated PostScript (`eps`, `epsi`), drawn by Windows at the preview's size so they stay sharp. An `.eps` shows the picture its writer saved inside it; one without such a picture shows nothing.
+- `Vector` under **Preview Types**, with `Vector Scaling` and `Vector Background` in the tray, and `vector_preview_enabled`, `vector_scale`, `vector_background` and a `[vector]` extension list in `config.ini`. SVG documents are covered by these — the `svg_background`, `svg_scale` and `svg_preview_enabled` keys are still read.
+- `ai` files that are not PDFs — Illustrator saved as PostScript — show the preview saved inside them, under the **Design** kind.
 
 ### Changed
 

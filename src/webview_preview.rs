@@ -269,7 +269,7 @@ fn note_engine_up() {
 /// The document is not the page. A browser draws a standalone SVG at the size it asks
 /// for — it does not stretch one to the window it was given — so a document given to the
 /// engine as the page is drawn small in a large window, and the window this app lays out
-/// is the share of the display `svg_scale` asked for: a document asking for 120 pixels is
+/// is the share of the display `vector_scale` asked for: a document asking for 120 pixels is
 /// a 120-pixel picture in a window half a display wide, or in a display-sized one at
 /// fit-to-screen. What is given to the engine instead is this page: an image of the
 /// document, in a box that is the whole page. An image *is* scaled to the box it is
@@ -664,7 +664,7 @@ fn engine_thread(commands: Receiver<Command>) {
         // the watcher to reload — and because the thread that would be told is this one,
         // parked on its channel. The browser's own children are its business: ending it ends
         // them.
-        if host.is_some() && !PreviewType::Svg.enabled() && !PreviewType::Fonts.enabled() {
+        if host.is_some() && !PreviewType::Vector.enabled() && !PreviewType::Fonts.enabled() {
             trace("engine: let go, the kinds are switched off");
 
             if let Some(mut host) = host.take() {

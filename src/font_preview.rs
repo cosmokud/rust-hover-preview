@@ -53,7 +53,7 @@ use std::time::SystemTime;
 /// they are drawn as is whatever size a caller asks for — so the box a specimen is placed
 /// in is this app's own: a page a shade wider than tall, which is the shape the pangram and
 /// a line or two under it want. What the setting beside it names is the share of the
-/// display that box takes, the way `svg_scale` names one for a document.
+/// display that box takes, the way `vector_scale` names one for a drawing.
 pub const SPECIMEN_WIDTH: u32 = 1500;
 pub const SPECIMEN_HEIGHT: u32 = 1000;
 

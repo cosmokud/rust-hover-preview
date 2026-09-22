@@ -4,10 +4,10 @@ use crate::config::{
     sanitize_pdf_cache_mb, sanitize_text_cache_mb, sanitize_text_font_scale_percent, AvoidMode,
     EngineIdle, MarkdownMode, PreviewScale, PreviewType, TextTheme, TransparentBackground,
     TriggerKeyMode, DEFAULT_ANIMATED_SCALE, DEFAULT_DECODE_BUDGET_GB, DEFAULT_DESIGN_SCALE,
-    DEFAULT_FONT_SCALE,
+    DEFAULT_FONT_SCALE, DEFAULT_VECTOR_SCALE,
     DEFAULT_IMAGE_CACHE_MB, DEFAULT_OFFICE_CACHE_MB, DEFAULT_OFFICE_ENGINE_IDLE_SECS,
     DEFAULT_OFFICE_SCALE, DEFAULT_PDF_CACHE_MB, DEFAULT_PDF_SCALE, DEFAULT_PREVIEW_SCALE,
-    DEFAULT_SVG_SCALE, DEFAULT_TEXT_CACHE_MB, DEFAULT_TEXT_FONT_SCALE_PERCENT,
+    DEFAULT_TEXT_CACHE_MB, DEFAULT_TEXT_FONT_SCALE_PERCENT,
     DEFAULT_VIDEO_SCALE, DEFAULT_WEBVIEW_IDLE_SECS,
 };
 use crate::explorer_hook;
@@ -51,12 +51,15 @@ const ID_TRAY_TRIGGER_ENABLE: u16 = 1006; // Hold the trigger key to allow previ
 const ID_TRAY_TRIGGER_ENABLED: u16 = 1068; // Whether the trigger key is watched at all
 /// The `Background` submenu: one command per backdrop it offers, in the order it
 /// lists them, for each of the five kinds of preview it keeps apart — a picture's
-/// backdrop, a document's, a font specimen's, a texture's, and a design document's. Each
-/// half is a base plus the position the choice was listed at, so one table and one builder
-/// serve all of them, and each range is four wide and apart from the others, which is what
-/// keeps an item of one from being read as a choice of another.
+/// backdrop, a vector drawing's, a font specimen's, a texture's, and a design
+/// document's. Each half is a base plus the position the choice was listed at, so one
+/// table and one builder serve all of them, and each range is four wide and apart from
+/// the others, which is what keeps an item of one from being read as a choice of another.
 const ID_TRAY_IMAGE_BACKGROUND_BASE: u16 = 1023;
-const ID_TRAY_SVG_BACKGROUND_BASE: u16 = 1054;
+/// The second half, for a vector drawing — an SVG document the browser draws, or a
+/// metafile the drawing layer replays: one page's backdrop for both halves of that kind,
+/// since what stands behind a drawing is the same question either way.
+const ID_TRAY_VECTOR_BACKGROUND_BASE: u16 = 1054;
 /// The third half of the `Background` submenu, for a font specimen — which is a page of its
 /// own and so has a backdrop of its own, the same way a document does.
 ///
@@ -121,11 +124,11 @@ const ID_TRAY_OPEN_CONFIG: u16 = 1040;
 /// submenus, each with a range of its own so a click on one is never read as a click
 /// on the other.
 const ID_TRAY_SCALE_BASE: u16 = 1041;
-/// The `Scaling → SVG Scaling` submenu: one command per share of the display a
-/// document is drawn at, in the order it lists them. The ids start past the last
-/// range the app's own items occupy — the caches, which end below this — so a share
-/// of the display and a cache size are never read as each other.
-const ID_TRAY_SVG_SCALE_BASE: u16 = 1400;
+/// `Vector Scaling`, the second of them, in the range the `Scaling` submenus share: a
+/// drawing is asked for a share of the display rather than for a share of a size the file
+/// asks for, and both halves of the kind — a document the browser draws and a metafile the
+/// drawing layer replays — are asked with this one setting.
+const ID_TRAY_VECTOR_SCALE_BASE: u16 = 1400;
 /// The `PDF Scaling` and `Office Scaling` submenus beside it, each listing the same
 /// shares: they sit in the slack the `Avoid` items leave, so a share of the display is
 /// never read as a way of avoiding the item a preview is about.
@@ -151,8 +154,8 @@ const ID_TRAY_DESIGN_SCALE_BASE: u16 = 1445;
 /// The shares of the display every `… Scaling` submenu offers, in the order it lists
 /// them: the whole room a document can be given at the top, then the shares of it a
 /// document is asked for below. What differs between the settings is where they start —
-/// `50`, half the display, for an SVG document and for a font specimen, and `Fit to
-/// Screen` for a page.
+/// `50`, half the display, for a vector drawing and for a font specimen, and `Fit to
+/// Screen` for a page and for a design document.
 const DOCUMENT_SCALE_CHOICES: [PreviewScale; 5] = [
     PreviewScale::FitToScreen,
     PreviewScale::Percent(75),
@@ -187,11 +190,14 @@ const ID_TRAY_TYPE_TEXT: u16 = 1064;
 const ID_TRAY_TYPE_PDF: u16 = 1065;
 const ID_TRAY_TYPE_ARCHIVES: u16 = 1066;
 const ID_TRAY_TYPE_OFFICE: u16 = 1067;
-const ID_TRAY_TYPE_SVG: u16 = 1069; // 1068 is the trigger key's own switch
 /// The `Fonts` gate beside it, under the same `Preview Types` submenu.
 const ID_TRAY_TYPE_FONTS: u16 = 1070;
 /// The `Design` gate beside those, under the same submenu.
 const ID_TRAY_TYPE_DESIGN: u16 = 1071;
+/// The `Vector` gate, for the drawings that are not pictures: SVG documents, which are the
+/// kind SVG documents have always had — the id is the one this gate carried under that name
+/// — and the metafiles and encapsulated PostScript files the same kind grew to hold.
+const ID_TRAY_TYPE_VECTOR: u16 = 1069;
 /// The `Cache` submenu: one command per size it offers, in the order it lists
 /// them, for each of the caches it sizes. They start past the range the `theme`
 /// folder's own items occupy (see `ID_TRAY_THEME_CUSTOM_BASE`).
@@ -343,12 +349,6 @@ unsafe extern "system" fn tray_window_proc(
                 {
                     set_image_background(cmd - ID_TRAY_IMAGE_BACKGROUND_BASE)
                 }
-                cmd if (ID_TRAY_SVG_BACKGROUND_BASE
-                    ..ID_TRAY_SVG_BACKGROUND_BASE + BACKGROUND_CHOICES.len() as u16)
-                    .contains(&cmd) =>
-                {
-                    set_svg_background(cmd - ID_TRAY_SVG_BACKGROUND_BASE)
-                }
                 cmd if (ID_TRAY_FONT_BACKGROUND_BASE
                     ..ID_TRAY_FONT_BACKGROUND_BASE + BACKGROUND_CHOICES.len() as u16)
                     .contains(&cmd) =>
@@ -366,6 +366,12 @@ unsafe extern "system" fn tray_window_proc(
                     .contains(&cmd) =>
                 {
                     set_design_background(cmd - ID_TRAY_DESIGN_BACKGROUND_BASE)
+                }
+                cmd if (ID_TRAY_VECTOR_BACKGROUND_BASE
+                    ..ID_TRAY_VECTOR_BACKGROUND_BASE + BACKGROUND_CHOICES.len() as u16)
+                    .contains(&cmd) =>
+                {
+                    set_vector_background(cmd - ID_TRAY_VECTOR_BACKGROUND_BASE)
                 }
                 ID_TRAY_VOLUME_MAX => set_volume(100),
                 ID_TRAY_VOLUME_HIGH => set_volume(80),
@@ -416,9 +422,9 @@ unsafe extern "system" fn tray_window_proc(
                 ID_TRAY_TYPE_PDF => toggle_preview_type(PreviewType::Pdf),
                 ID_TRAY_TYPE_ARCHIVES => toggle_preview_type(PreviewType::Archives),
                 ID_TRAY_TYPE_OFFICE => toggle_preview_type(PreviewType::Office),
-                ID_TRAY_TYPE_SVG => toggle_preview_type(PreviewType::Svg),
                 ID_TRAY_TYPE_FONTS => toggle_preview_type(PreviewType::Fonts),
                 ID_TRAY_TYPE_DESIGN => toggle_preview_type(PreviewType::Design),
+                ID_TRAY_TYPE_VECTOR => toggle_preview_type(PreviewType::Vector),
                 // An Office engine's idle time, by the position it was listed at.
                 cmd if (ID_TRAY_ENGINE_IDLE_BASE
                     ..ID_TRAY_ENGINE_IDLE_BASE + ENGINE_IDLE_CHOICES.len() as u16)
@@ -461,12 +467,12 @@ unsafe extern "system" fn tray_window_proc(
                     set_decode_budget_gb(cmd - ID_TRAY_DECODE_BUDGET_BASE)
                 }
                 // A share of the display a document is drawn at, by the position it
-                // was listed at: the SVG scale, and the two page scales beside it.
-                cmd if (ID_TRAY_SVG_SCALE_BASE
-                    ..ID_TRAY_SVG_SCALE_BASE + DOCUMENT_SCALE_CHOICES.len() as u16)
+                // was listed at: the vector scale, and the three page scales beside it.
+                cmd if (ID_TRAY_VECTOR_SCALE_BASE
+                    ..ID_TRAY_VECTOR_SCALE_BASE + DOCUMENT_SCALE_CHOICES.len() as u16)
                     .contains(&cmd) =>
                 {
-                    set_svg_scale(cmd - ID_TRAY_SVG_SCALE_BASE)
+                    set_vector_scale(cmd - ID_TRAY_VECTOR_SCALE_BASE)
                 }
                 cmd if (ID_TRAY_PDF_SCALE_BASE
                     ..ID_TRAY_PDF_SCALE_BASE + DOCUMENT_SCALE_CHOICES.len() as u16)
@@ -493,6 +499,14 @@ unsafe extern "system" fn tray_window_proc(
                     .contains(&cmd) =>
                 {
                     set_design_scale(cmd - ID_TRAY_DESIGN_SCALE_BASE)
+                }
+                // And how much of the display a vector drawing is replayed over, the same
+                // question asked of records the drawing layer draws at any size.
+                cmd if (ID_TRAY_VECTOR_SCALE_BASE
+                    ..ID_TRAY_VECTOR_SCALE_BASE + DOCUMENT_SCALE_CHOICES.len() as u16)
+                    .contains(&cmd) =>
+                {
+                    set_vector_scale(cmd - ID_TRAY_VECTOR_SCALE_BASE)
                 }
                 // How large a video is drawn, by the position its item was listed at: the
                 // same shares the pictures above it are offered, in a range of their own
@@ -579,7 +593,7 @@ unsafe fn show_context_menu(hwnd: HWND) {
         (PreviewType::Pdf, ID_TRAY_TYPE_PDF, w!("PDF")),
         (PreviewType::Archives, ID_TRAY_TYPE_ARCHIVES, w!("Archives")),
         (PreviewType::Office, ID_TRAY_TYPE_OFFICE, w!("Office")),
-        (PreviewType::Svg, ID_TRAY_TYPE_SVG, w!("SVG")),
+        (PreviewType::Vector, ID_TRAY_TYPE_VECTOR, w!("Vector")),
         (PreviewType::Fonts, ID_TRAY_TYPE_FONTS, w!("Fonts")),
         (PreviewType::Design, ID_TRAY_TYPE_DESIGN, w!("Design")),
     ];
@@ -1067,37 +1081,37 @@ unsafe fn show_context_menu(hwnd: HWND) {
         DEFAULT_ANIMATED_SCALE,
     );
 
-    // Add the SVG Scaling, PDF Scaling, Office Scaling and Font Scaling submenus: how much
-    // of the display each kind of document is drawn over. They sit beside the picture scale
-    // because they are the same question about other kinds of preview, and each is a
-    // submenu of its own because the answers are not the same answers: a picture's
+    // Add the Vector Scaling, PDF Scaling, Office Scaling, Font Scaling and Design Scaling
+    // submenus: how much of the display each kind of document is drawn over. They sit beside
+    // the picture scale because they are the same question about other kinds of preview, and
+    // each is a submenu of its own because the answers are not the same answers: a picture's
     // percentage is of its own size, a document's is of the display — and a document and a
     // page do not start at the same share of it either.
-    let (svg_scale, pdf_scale, office_scale, font_scale, design_scale) = CONFIG
+    let (pdf_scale, office_scale, font_scale, design_scale, vector_scale) = CONFIG
         .lock()
         .map(|c| {
             (
-                c.svg_scale,
                 c.pdf_scale,
                 c.office_scale,
                 c.font_scale,
                 c.design_scale,
+                c.vector_scale,
             )
         })
         .unwrap_or((
-            DEFAULT_SVG_SCALE,
             DEFAULT_PDF_SCALE,
             DEFAULT_OFFICE_SCALE,
             DEFAULT_FONT_SCALE,
             DEFAULT_DESIGN_SCALE,
+            DEFAULT_VECTOR_SCALE,
         ));
 
     append_document_scale_menu(
         scaling_menu,
-        w!("SVG Scaling"),
-        ID_TRAY_SVG_SCALE_BASE,
-        svg_scale,
-        DEFAULT_SVG_SCALE,
+        w!("Vector Scaling"),
+        ID_TRAY_VECTOR_SCALE_BASE,
+        vector_scale,
+        DEFAULT_VECTOR_SCALE,
     );
     append_document_scale_menu(
         scaling_menu,
@@ -1139,13 +1153,13 @@ unsafe fn show_context_menu(hwnd: HWND) {
     // a picture and a document answer differently — a picture's transparency is the
     // picture's, while a document is drawn on a page — so each of them has a half
     // of its own, listing the same backdrops.
-    let (image_background, svg_background, font_background, dds_background, design_background) =
+    let (image_background, vector_background, font_background, dds_background, design_background) =
         CONFIG
             .lock()
             .map(|c| {
                 (
                     c.image_background,
-                    c.svg_background,
+                    c.vector_background,
                     c.font_background,
                     c.dds_background,
                     c.design_background,
@@ -1168,9 +1182,9 @@ unsafe fn show_context_menu(hwnd: HWND) {
     );
     append_background_menu(
         background_menu,
-        w!("SVG Background"),
-        ID_TRAY_SVG_BACKGROUND_BASE,
-        svg_background,
+        w!("Vector Background"),
+        ID_TRAY_VECTOR_BACKGROUND_BASE,
+        vector_background,
     );
     append_background_menu(
         background_menu,
@@ -1601,19 +1615,6 @@ fn set_image_background(index: u16) {
     refresh_preview();
 }
 
-/// The same for an SVG document, which is drawn over a backdrop of its own.
-fn set_svg_background(index: u16) {
-    let Some(background) = background_at(index) else {
-        return;
-    };
-
-    if let Ok(mut config) = CONFIG.lock() {
-        config.svg_background = background;
-        config.save();
-    }
-    refresh_preview();
-}
-
 /// And the same again for a font specimen, which is drawn on a page of its own: the page's
 /// colours are part of what the engine draws, so the preview on screen is rebuilt rather
 /// than only composited again.
@@ -1653,6 +1654,22 @@ fn set_design_background(index: u16) {
 
     if let Ok(mut config) = CONFIG.lock() {
         config.design_background = background;
+        config.save();
+    }
+    refresh_preview();
+}
+
+/// And for a vector drawing, which is drawn over a backdrop of its own: an SVG document is
+/// drawn on a page the engine owns, so the page's colours are part of what it draws and the
+/// preview on screen is rebuilt rather than only composited again; a metafile is replayed
+/// by this side, so a change to it is composited again like a picture's.
+fn set_vector_background(index: u16) {
+    let Some(background) = background_at(index) else {
+        return;
+    };
+
+    if let Ok(mut config) = CONFIG.lock() {
+        config.vector_background = background;
         config.save();
     }
     refresh_preview();
@@ -2406,27 +2423,13 @@ fn set_animated_scale(index: u16) {
     }
 }
 
-/// How much of the display a document is drawn over, by the position the item was
+/// How much of the display a PDF page is drawn over, by the position the item was
 /// listed at.
 ///
-/// The size a document is drawn at is part of the placement that was made when the
-/// preview was opened — the box is sized, and the document is drawn into it — so,
-/// like the position and the picture scale beside it, this applies to the next hover
-/// rather than resizing the preview that is already up.
-fn set_svg_scale(index: u16) {
-    let Some(scale) = document_scale_at(index) else {
-        return;
-    };
-
-    if let Ok(mut config) = CONFIG.lock() {
-        config.svg_scale = scale;
-        config.save();
-    }
-}
-
-/// How much of the display a PDF page is drawn over, by the position the item was
-/// listed at. The same rule as the SVG scale beside it: the next hover, not the one
-/// that is up.
+/// The size a document is drawn at is part of the placement that was made when the preview
+/// was opened — the box is sized, and the document is drawn into it — so, like the position
+/// and the picture scale beside it, this applies to the next hover rather than resizing the
+/// preview that is already up.
 fn set_pdf_scale(index: u16) {
     let Some(scale) = document_scale_at(index) else {
         return;
@@ -2476,6 +2479,20 @@ fn set_design_scale(index: u16) {
 
     if let Ok(mut config) = CONFIG.lock() {
         config.design_scale = scale;
+        config.save();
+    }
+}
+
+/// How much of the display a vector drawing is replayed over, by the position the item was
+/// listed at — the same rule as the documents beside it: the share is of the display, and
+/// it applies to the next hover rather than resizing a preview that is already up.
+fn set_vector_scale(index: u16) {
+    let Some(scale) = document_scale_at(index) else {
+        return;
+    };
+
+    if let Ok(mut config) = CONFIG.lock() {
+        config.vector_scale = scale;
         config.save();
     }
 }
@@ -2731,10 +2748,10 @@ mod tests {
         let width = BACKGROUND_CHOICES.len() as u16;
         let bases = [
             ID_TRAY_IMAGE_BACKGROUND_BASE,
-            ID_TRAY_SVG_BACKGROUND_BASE,
             ID_TRAY_FONT_BACKGROUND_BASE,
             ID_TRAY_DDS_BACKGROUND_BASE,
             ID_TRAY_DESIGN_BACKGROUND_BASE,
+            ID_TRAY_VECTOR_BACKGROUND_BASE,
         ];
 
         for (index, base) in bases.iter().enumerate() {
@@ -2804,7 +2821,7 @@ mod tests {
     fn the_avoid_submenu_carries_ids_of_its_own() {
         let avoid = ID_TRAY_AVOID_BASE..ID_TRAY_AVOID_BASE + AVOID_CHOICES.len() as u16;
         let document_scales = [
-            ID_TRAY_SVG_SCALE_BASE,
+            ID_TRAY_VECTOR_SCALE_BASE,
             ID_TRAY_PDF_SCALE_BASE,
             ID_TRAY_OFFICE_SCALE_BASE,
             ID_TRAY_FONT_SCALE_BASE,
@@ -2840,7 +2857,7 @@ mod tests {
     /// submenu marks as the default is the share its own setting starts at.
     #[test]
     fn every_offered_document_scale_is_one_the_setting_keeps() {
-        let svg_default = DEFAULT_SVG_SCALE;
+        let svg_default = DEFAULT_VECTOR_SCALE;
 
         assert_eq!(
             DOCUMENT_SCALE_CHOICES.map(|scale| document_scale_label(scale, svg_default)),
@@ -2916,7 +2933,7 @@ mod tests {
         let themes = ID_TRAY_THEME_CUSTOM_BASE..ID_TRAY_IMAGE_CACHE_BASE;
 
         for base in [
-            ID_TRAY_SVG_SCALE_BASE,
+            ID_TRAY_VECTOR_SCALE_BASE,
             ID_TRAY_PDF_SCALE_BASE,
             ID_TRAY_OFFICE_SCALE_BASE,
             ID_TRAY_FONT_SCALE_BASE,
@@ -2958,6 +2975,10 @@ mod tests {
             ID_TRAY_DESIGN_SCALE_BASE,
             ID_TRAY_DESIGN_SCALE_BASE + DOCUMENT_SCALE_CHOICES.len() as u16,
         );
+        let vector_scales = (
+            ID_TRAY_VECTOR_SCALE_BASE,
+            ID_TRAY_VECTOR_SCALE_BASE + DOCUMENT_SCALE_CHOICES.len() as u16,
+        );
 
         let overlaps = |ours: (u16, u16), theirs: (u16, u16)| {
             (ours.0 < theirs.1 && theirs.0 < ours.1).then_some((ours, theirs))
@@ -2972,7 +2993,7 @@ mod tests {
                 );
             }
 
-            for document in [font_scales, design_scales] {
+            for document in [font_scales, design_scales, vector_scales] {
                 assert_eq!(
                     overlaps(*range, document),
                     None,

@@ -27,10 +27,18 @@ use std::path::Path;
 /// and OpenRaster's, which are zip containers holding that same picture as a file of
 /// its own; `sketch`, `fig` and `xd` are containers of the same kind, holding a
 /// preview of the document rather than the document drawn again. What each one is
-/// read for is in `psd_image` and `project_image`, and a container neither of them
-/// can open is a file that shows no preview, like any other format this app has no
-/// reader for.
-pub const DEFAULT_DESIGN_EXTENSIONS: &str = "fig,kra,ora,psb,psd,sketch,xd";
+/// read for is in `psd_image`, `project_image` and `eps_image`, and a container none
+/// of them can open is a file that shows no preview, like any other format this app
+/// has no reader for.
+///
+/// `ai` is the one name here that is usually not this kind's at all: an Illustrator
+/// document saved with `Create PDF Compatible File` is a PDF, and the PDF gate claims
+/// it before this list is asked. What reaches here under that name is a document saved
+/// without that compatibility, which is an encapsulated PostScript file — the artwork
+/// as a program, with the preview an older Illustrator left beside it — and what a
+/// preview of one can be is what that preview holds. A document that carries none shows
+/// nothing, which is the answer every file with no reader gets.
+pub const DEFAULT_DESIGN_EXTENSIONS: &str = "ai,fig,kra,ora,psb,psd,sketch,xd";
 
 /// Whether the configured list claims `path`.
 pub fn matches_design_list(path: &Path, extensions: &[String]) -> bool {
