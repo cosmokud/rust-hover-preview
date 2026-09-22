@@ -1559,17 +1559,94 @@ fn file_state(ini: &Ini) -> FileState {
 /// where there is nothing to overwrite, which is a fresh installation and nowhere else (see
 /// `AppConfig::load`).
 ///
-/// The reads `apply_ini` does for a key that has been renamed — `off_trigger_key`,
-/// `svg_scale`, the backdrops' older names — are not steps here, because they are reads
-/// rather than rewrites: one costs nothing on a load, leaves a file that names the current
-/// key untouched, and is deleted when the name it reads stops appearing in files people
-/// have. A step is added here only for a change that has to be *written*.
+/// A key a file may hold under a name this build does not read is the step's business rather
+/// than the read's: the file that names one was written before the stamp, so it is the first
+/// step that answers for it, and it stops being answered for when that step goes. What
+/// `apply_ini` reads is the shape of now and nothing else, which is what keeps a read of the
+/// current file from carrying the history of every name this app has ever written a value
+/// under.
 fn migrate(ini: &mut Ini, from: u32) {
     if from < 1 {
-        // The first step, and the one every file written before the stamp needs: the
-        // built-in lists have grown since such a file was written, and the lists it holds
-        // are the app's own where they hold exactly what the app shipped then.
+        // The first step, and the one every file written before the stamp needs: what such a
+        // file says under a name this build no longer reads, and the lists it holds that are
+        // the app's own older ones.
+        adopt_older_names(ini);
         adopt_older_lists(ini);
+    }
+}
+
+/// The keys this app has renamed, and the two settings that were one setting before they were
+/// split, as the step that puts what a file says under the names of now.
+///
+/// A file written before a name changed holds the value under the old one, and the value is
+/// what the setting is, so it is copied to the key this build reads. A file that names the new
+/// key as well is left alone — what a file says for itself is what it says, whatever the name
+/// beside it holds — and a value that is not one the setting keeps is copied as it is and falls
+/// back to the default where it is read, which is where it would have fallen before. Nothing is
+/// dropped from the file here: `save` writes it out from the settings it knows rather than from
+/// the text it read, so a name that is no longer written is gone the next time the file is.
+///
+/// Two of these are a split rather than a rename. A video's scale and an animation's were the
+/// picture's scale before each had one of its own, so a file with no key for either starts both
+/// at the scale its pictures are drawn at — which is what the reads used to answer for them.
+fn adopt_older_names(ini: &mut Ini) {
+    // The names a setting was written under before it had the one it has now. This runs before
+    // the shared backdrop below, which is the order the three were once read in: a drawing's
+    // backdrop is filled from `svg_background` here, and the older name of that pair reaches it
+    // only where this one is silent.
+    for (older, current) in [
+        ("off_trigger_key", "trigger_key"),
+        ("svg_background", "vector_background"),
+        ("svg_scale", "vector_scale"),
+        ("svg_preview_enabled", "vector_preview_enabled"),
+    ] {
+        let Some(value) = ini.get(CONFIG_SECTION, older) else {
+            continue;
+        };
+
+        if ini.get(CONFIG_SECTION, current).is_none() {
+            ini.set(CONFIG_SECTION, current, Some(value));
+        }
+    }
+
+    // The backdrop every preview was drawn over before each kind had one of its own: a picture
+    // and a drawing are the two that were drawn then, and the kinds that came after it say
+    // nothing about themselves under this name.
+    if let Some(background) = ini.get(CONFIG_SECTION, "transparent_background") {
+        for current in ["image_background", "vector_background"] {
+            if ini.get(CONFIG_SECTION, current).is_none() {
+                ini.set(CONFIG_SECTION, current, Some(background.clone()));
+            }
+        }
+    }
+
+    // The way a preview is kept off its item was a yes or no question before it had four
+    // answers: the `true` a file holds asks for what `details` asks for now, and the `false`
+    // for what `off` asks for.
+    if ini.get(CONFIG_SECTION, "avoid_mode").is_none() {
+        if let Ok(Some(kept_off)) = ini.getboolcoerce(CONFIG_SECTION, "avoid_filename") {
+            let mode = if kept_off {
+                AvoidMode::Details
+            } else {
+                AvoidMode::Off
+            };
+            ini.set(
+                CONFIG_SECTION,
+                "avoid_mode",
+                Some(mode.as_str().to_string()),
+            );
+        }
+    }
+
+    // A video's scale and an animation's, which the picture scale stood for until each had a
+    // key of its own. A file that names neither of them and no picture scale either is a file
+    // with nothing to say, and both settings start at the share a fresh installation gets.
+    if let Some(picture_scale) = ini.get(CONFIG_SECTION, "preview_scale") {
+        for current in ["video_scale", "animated_scale"] {
+            if ini.get(CONFIG_SECTION, current).is_none() {
+                ini.set(CONFIG_SECTION, current, Some(picture_scale.clone()));
+            }
+        }
     }
 }
 
@@ -2052,12 +2129,10 @@ impl AppConfig {
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "preview_enabled") {
             self.preview_enabled = value;
         }
-        // `off_trigger_key` is what the key was called when the trigger could only
-        // stop previews; a file written then still names the key the same way.
-        if let Some(value) = ini
-            .get(CONFIG_SECTION, "trigger_key")
-            .or_else(|| ini.get(CONFIG_SECTION, "off_trigger_key"))
-        {
+        // The key the trigger watches, by name. A file that names it says what it is; the name
+        // it was written under before the trigger could do both is the migration's business
+        // rather than this read's (see `adopt_older_names`).
+        if let Some(value) = ini.get(CONFIG_SECTION, "trigger_key") {
             let value = value.trim();
             if !value.is_empty() {
                 self.trigger_key = value.to_string();
@@ -2077,19 +2152,13 @@ impl AppConfig {
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "follow_cursor") {
             self.follow_cursor = value;
         }
-        // `avoid_filename` is what this setting was called when it was a yes or no
-        // question; a file written then names it, and the `true` it holds asks for what
-        // `details` asks for now.
+        // How far a preview is kept off its item, by the name it is written under now; the yes
+        // or no question this used to be is the migration's business (see
+        // `adopt_older_names`).
         if let Some(value) = ini.get(CONFIG_SECTION, "avoid_mode") {
             if let Some(mode) = AvoidMode::from_str(&value) {
                 self.avoid_mode = mode;
             }
-        } else if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "avoid_filename") {
-            self.avoid_mode = if value {
-                AvoidMode::Details
-            } else {
-                AvoidMode::Off
-            };
         }
         if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "same_file_rehover_delay_ms") {
             self.same_file_rehover_delay_ms = value;
@@ -2107,35 +2176,24 @@ impl AppConfig {
                 self.image_cache_mb = sanitize_image_cache_mb(value);
             }
         }
-        // `transparent_background` is what the backdrop a preview is drawn over was
-        // called when every preview had the one of them: a file written then names
-        // both with it, and is written out again under their own names.
-        let legacy_background = ini.get(CONFIG_SECTION, "transparent_background");
-        if let Some(value) = ini
-            .get(CONFIG_SECTION, "image_background")
-            .or_else(|| legacy_background.clone())
-        {
+        // A picture's backdrop, by its own name: the one setting every preview was drawn over
+        // before each kind had one of its own is the migration's business rather than this
+        // read's (see `adopt_older_names`).
+        if let Some(value) = ini.get(CONFIG_SECTION, "image_background") {
             if let Some(background) = TransparentBackground::from_str(&value) {
                 self.image_background = background;
             }
         }
-        // The backdrop a vector drawing is drawn over, which is one setting for the two
-        // halves of the kind — the documents the browser draws and the metafiles the
-        // drawing layer replays — and is read from its own key, from the key a document was
-        // written under before the two were one, or from the legacy key a file from before
-        // every kind had its own names them all with.
-        if let Some(value) = ini
-            .get(CONFIG_SECTION, "vector_background")
-            .or_else(|| ini.get(CONFIG_SECTION, "svg_background"))
-            .or(legacy_background)
-        {
+        // The backdrop a vector drawing is drawn over, which is one setting for the two halves
+        // of the kind — the documents the browser draws and the metafiles the drawing layer
+        // replays — and one name for both.
+        if let Some(value) = ini.get(CONFIG_SECTION, "vector_background") {
             if let Some(background) = TransparentBackground::from_str(&value) {
                 self.vector_background = background;
             }
         }
-        // A font's backdrop is read apart from the legacy key above rather than through it:
-        // fonts are a kind of its own and always were, so there is no earlier spelling of
-        // this one to answer.
+        // A font's backdrop is read from its own name, which it always had: fonts are a kind of
+        // its own, so there is no earlier spelling of this one to answer.
         if let Some(value) = ini.get(CONFIG_SECTION, "font_background") {
             if let Some(background) = TransparentBackground::from_str(&value) {
                 self.font_background = background;
@@ -2170,44 +2228,27 @@ impl AppConfig {
                 self.preview_scale = scale;
             }
         }
-        // A video's scale is written the way a picture's is, and it is read the same way —
-        // except by a file that has none to read, which is a file written before the two
-        // were split: what such a file's pictures were drawn at is what its videos were
-        // drawn at as well, so what it wrote as one setting is the starting point of both.
-        match ini.get(CONFIG_SECTION, "video_scale") {
-            Some(value) => {
-                if let Some(scale) = PreviewScale::from_str(&value) {
-                    self.video_scale = scale;
-                }
+        // A video's scale is written the way a picture's is, and read the same way. A file with
+        // no key for it was written before the two were split, and gets it from the picture
+        // scale in the migration rather than here (see `adopt_older_names`).
+        if let Some(value) = ini.get(CONFIG_SECTION, "video_scale") {
+            if let Some(scale) = PreviewScale::from_str(&value) {
+                self.video_scale = scale;
             }
-            None => self.video_scale = self.preview_scale,
         }
-        // And an animation's, the same way again: before it was a setting of its own, an
-        // animated picture was drawn at the picture scale like any other, so a file that
-        // has no key for it starts both at the one it wrote.
-        match ini.get(CONFIG_SECTION, "animated_scale") {
-            Some(value) => {
-                if let Some(scale) = PreviewScale::from_str(&value) {
-                    self.animated_scale = scale;
-                }
+        // And an animation's, the same way again.
+        if let Some(value) = ini.get(CONFIG_SECTION, "animated_scale") {
+            if let Some(scale) = PreviewScale::from_str(&value) {
+                self.animated_scale = scale;
             }
-            None => self.animated_scale = self.preview_scale,
         }
         // A drawing's scale is the one setting an SVG document and a metafile share — they
-        // are one kind in the tray — and it is read from its own key, from the key the
-        // documents were written under before the two were one, or from where a drawing
-        // starts. What the number is a percentage of is the room the display has rather
-        // than a size the file asks for.
-        match ini
-            .get(CONFIG_SECTION, "vector_scale")
-            .or_else(|| ini.get(CONFIG_SECTION, "svg_scale"))
-        {
-            Some(value) => {
-                if let Some(scale) = PreviewScale::from_str(&value) {
-                    self.vector_scale = scale;
-                }
+        // are one kind in the tray — and it is read from its own name. What the number is a
+        // percentage of is the room the display has rather than a size the file asks for.
+        if let Some(value) = ini.get(CONFIG_SECTION, "vector_scale") {
+            if let Some(scale) = PreviewScale::from_str(&value) {
+                self.vector_scale = scale;
             }
-            None => self.vector_scale = DEFAULT_VECTOR_SCALE,
         }
         // A page's scale is read the same way and against the same whole: what the
         // number is a percentage of is the room the display has, one setting per kind
@@ -2277,19 +2318,9 @@ impl AppConfig {
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "design_preview_enabled") {
             self.design_preview_enabled = value;
         }
-        // The vector kind's switch is read from its own key, from the one a document was
-        // written under before the two halves of the kind were one, and stays where it is
-        // where neither is written.
-        let vector_enabled = ini
-            .getboolcoerce(CONFIG_SECTION, "vector_preview_enabled")
-            .ok()
-            .flatten()
-            .or_else(|| {
-                ini.getboolcoerce(CONFIG_SECTION, "svg_preview_enabled")
-                    .ok()
-                    .flatten()
-            });
-        if let Some(value) = vector_enabled {
+        // The vector kind's switch is read from its own name, and stays where it is where the
+        // name is not written at all.
+        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "vector_preview_enabled") {
             self.vector_preview_enabled = value;
         }
         if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "office_cache_mb") {
@@ -2558,15 +2589,13 @@ mod tests {
         let mut ini = Ini::new();
         ini.set(CONFIG_SECTION, "avoid_filename", Some("true".to_string()));
 
-        let mut config = AppConfig::default();
-        config.apply_ini(&ini);
+        let config = read_file(&mut ini);
         assert_eq!(config.avoid_mode, AvoidMode::Details);
 
         let mut ini = Ini::new();
         ini.set(CONFIG_SECTION, "avoid_filename", Some("false".to_string()));
 
-        let mut config = AppConfig::default();
-        config.apply_ini(&ini);
+        let config = read_file(&mut ini);
         assert_eq!(config.avoid_mode, AvoidMode::Off);
     }
 
@@ -2578,8 +2607,7 @@ mod tests {
         ini.set(CONFIG_SECTION, "avoid_filename", Some("true".to_string()));
         ini.set(CONFIG_SECTION, "avoid_mode", Some("filename".to_string()));
 
-        let mut config = AppConfig::default();
-        config.apply_ini(&ini);
+        let config = read_file(&mut ini);
         assert_eq!(config.avoid_mode, AvoidMode::Filename);
     }
 
@@ -2595,8 +2623,7 @@ mod tests {
             Some("white".to_string()),
         );
 
-        let mut config = AppConfig::default();
-        config.apply_ini(&ini);
+        let config = read_file(&mut ini);
 
         assert_eq!(config.image_background, TransparentBackground::White);
         assert_eq!(config.vector_background, TransparentBackground::White);
@@ -2620,8 +2647,7 @@ mod tests {
         );
         ini.set(CONFIG_SECTION, "svg_background", Some("white".to_string()));
 
-        let mut config = AppConfig::default();
-        config.apply_ini(&ini);
+        let config = read_file(&mut ini);
 
         assert_eq!(config.image_background, TransparentBackground::Black);
         assert_eq!(config.vector_background, TransparentBackground::White);
@@ -2649,8 +2675,7 @@ mod tests {
         ini.set(CONFIG_SECTION, "pdf_scale", Some("25".to_string()));
         ini.set(CONFIG_SECTION, "office_scale", Some("10".to_string()));
 
-        let mut config = AppConfig::default();
-        config.apply_ini(&ini);
+        let config = read_file(&mut ini);
 
         assert_eq!(config.pdf_scale, PreviewScale::Percent(25));
         assert_eq!(config.office_scale, PreviewScale::Percent(10));
@@ -2667,8 +2692,7 @@ mod tests {
         );
         ini.set(CONFIG_SECTION, "office_scale", Some("50%".to_string()));
 
-        let mut config = AppConfig::default();
-        config.apply_ini(&ini);
+        let config = read_file(&mut ini);
 
         assert_eq!(config.pdf_scale, PreviewScale::FitToScreen);
         assert_eq!(config.office_scale, PreviewScale::Percent(50));
@@ -2684,8 +2708,7 @@ mod tests {
         ini.set(CONFIG_SECTION, "preview_scale", Some("400".to_string()));
         ini.set(CONFIG_SECTION, "video_scale", Some("50".to_string()));
 
-        let mut config = AppConfig::default();
-        config.apply_ini(&ini);
+        let config = read_file(&mut ini);
 
         assert_eq!(config.video_scale, PreviewScale::Percent(50));
         assert_eq!(config.preview_scale, PreviewScale::Percent(400));
@@ -2697,8 +2720,7 @@ mod tests {
             Some(" Fit to Screen ".to_string()),
         );
 
-        let mut config = AppConfig::default();
-        config.apply_ini(&ini);
+        let config = read_file(&mut ini);
 
         assert_eq!(config.video_scale, PreviewScale::FitToScreen);
     }
@@ -2712,8 +2734,7 @@ mod tests {
         let mut ini = Ini::new();
         ini.set(CONFIG_SECTION, "preview_scale", Some("25".to_string()));
 
-        let mut config = AppConfig::default();
-        config.apply_ini(&ini);
+        let config = read_file(&mut ini);
 
         assert_eq!(config.preview_scale, PreviewScale::Percent(25));
         assert_eq!(config.video_scale, PreviewScale::Percent(25));
@@ -2737,8 +2758,7 @@ mod tests {
         ini.set(CONFIG_SECTION, "video_scale", Some("75".to_string()));
         ini.set(CONFIG_SECTION, "animated_scale", Some("50".to_string()));
 
-        let mut config = AppConfig::default();
-        config.apply_ini(&ini);
+        let config = read_file(&mut ini);
 
         assert_eq!(config.animated_scale, PreviewScale::Percent(50));
         assert_eq!(config.video_scale, PreviewScale::Percent(75));
@@ -2751,8 +2771,7 @@ mod tests {
             Some(" Fit to Screen ".to_string()),
         );
 
-        let mut config = AppConfig::default();
-        config.apply_ini(&ini);
+        let config = read_file(&mut ini);
 
         assert_eq!(config.animated_scale, PreviewScale::FitToScreen);
 
@@ -2761,8 +2780,7 @@ mod tests {
         let mut ini = Ini::new();
         ini.set(CONFIG_SECTION, "preview_scale", Some("25".to_string()));
 
-        let mut config = AppConfig::default();
-        config.apply_ini(&ini);
+        let config = read_file(&mut ini);
 
         assert_eq!(config.animated_scale, PreviewScale::Percent(25));
 
@@ -2801,8 +2819,7 @@ mod tests {
             // kind, which is the key a file from then still names it with.
             ini.set(CONFIG_SECTION, "svg_scale", Some(written.to_string()));
 
-            let mut config = AppConfig::default();
-            config.apply_ini(&ini);
+            let config = read_file(&mut ini);
 
             assert_eq!(config.vector_scale, expected, "`{written}` read back");
         }
@@ -2823,8 +2840,7 @@ mod tests {
             Some(" Fit to Screen ".to_string()),
         );
 
-        let mut config = AppConfig::default();
-        config.apply_ini(&ini);
+        let config = read_file(&mut ini);
 
         assert_eq!(config.font_scale, PreviewScale::FitToScreen);
         assert_eq!(config.vector_scale, PreviewScale::Percent(75));
@@ -2848,8 +2864,7 @@ mod tests {
         ini.set(CONFIG_SECTION, "font_scale", Some("50".to_string()));
         ini.set(CONFIG_SECTION, "design_scale", Some(" 10% ".to_string()));
 
-        let mut config = AppConfig::default();
-        config.apply_ini(&ini);
+        let config = read_file(&mut ini);
 
         assert_eq!(config.design_scale, PreviewScale::Percent(10));
         assert_eq!(config.vector_scale, PreviewScale::Percent(75));
@@ -2886,8 +2901,7 @@ mod tests {
         ini.set(CONFIG_SECTION, "font_scale", Some("25".to_string()));
         ini.set(CONFIG_SECTION, "ttc_face", Some("2".to_string()));
 
-        let mut config = AppConfig::default();
-        config.apply_ini(&ini);
+        let config = read_file(&mut ini);
 
         assert_eq!(config.ttc_face, 2);
         assert_eq!(config.font_scale, PreviewScale::Percent(25));
@@ -2922,8 +2936,7 @@ mod tests {
             Some("checkerboard".to_string()),
         );
 
-        let mut config = AppConfig::default();
-        config.apply_ini(&ini);
+        let config = read_file(&mut ini);
         assert_eq!(config.font_background, TransparentBackground::Checkerboard);
 
         // The legacy key reaches the two backdrops it was written for and leaves the
@@ -2935,8 +2948,7 @@ mod tests {
             Some("white".to_string()),
         );
 
-        let mut config = AppConfig::default();
-        config.apply_ini(&ini);
+        let config = read_file(&mut ini);
         assert_eq!(config.image_background, TransparentBackground::White);
         assert_eq!(config.vector_background, TransparentBackground::White);
         assert_eq!(config.font_background, TransparentBackground::White);
@@ -2959,8 +2971,7 @@ mod tests {
             Some("checkerboard".to_string()),
         );
 
-        let mut config = AppConfig::default();
-        config.apply_ini(&ini);
+        let config = read_file(&mut ini);
 
         assert_eq!(
             config.design_background,
@@ -2983,8 +2994,7 @@ mod tests {
         let mut ini = Ini::new();
         ini.set(FONT_SECTION, "extensions", Some(".OTF,ttf".to_string()));
 
-        let mut config = AppConfig::default();
-        config.apply_ini(&ini);
+        let config = read_file(&mut ini);
         assert_eq!(config.font_extensions, vec!["otf", "ttf"]);
 
         // A file with no section at all is answered with the built-in list, and told so, so
@@ -3017,11 +3027,15 @@ mod tests {
         assert!(PreviewType::Fonts.enabled_in(&config));
     }
 
-    /// A file as `load` reads one: the steps an older file needs are run over it first, and
-    /// what the configuration then reads is what the file says. Every test that reads a file
-    /// this app once wrote goes through this, because it is what happens to one.
-    fn read_an_older_file(ini: &mut Ini) -> AppConfig {
-        migrate(ini, 0);
+    /// A file as the app reads one: what the version stamped in it says it needs is done to it
+    /// first, and then what the configuration reads is what the file says. A file a test builds
+    /// by hand has no stamp at all — the stamp is written by the save that writes the file, and
+    /// nothing here writes one — so it is the oldest version there is and every step is run
+    /// over it, which is what the app does with a file written before the stamp existed.
+    fn read_file(ini: &mut Ini) -> AppConfig {
+        if let FileState::Older(from) = file_state(ini) {
+            migrate(ini, from);
+        }
 
         let mut config = AppConfig::default();
         config.apply_ini(ini);
@@ -3040,12 +3054,36 @@ mod tests {
             Some(IMAGE_EXTENSIONS_BEFORE_SVG.to_string()),
         );
 
-        let config = read_an_older_file(&mut ini);
+        let config = read_file(&mut ini);
 
         assert_eq!(
             config.image_extensions,
             sanitize_image_extensions(DEFAULT_IMAGE_EXTENSIONS),
             "the list the app shipped before is read as the list it ships now"
+        );
+    }
+
+    /// The other side of the names. A file at this build's version was written by a build that
+    /// knew the names of now — every key the file holds is one it writes — so a key left under
+    /// an older name in one is a key nothing reads, and the setting it names is where the file
+    /// says it is, which is nowhere.
+    #[test]
+    fn a_stamped_file_is_read_by_the_names_of_now() {
+        let mut ini = Ini::new();
+        ini.set(
+            CONFIG_SECTION,
+            "config_version",
+            Some(CONFIG_VERSION.to_string()),
+        );
+        ini.set(CONFIG_SECTION, "svg_scale", Some("75".to_string()));
+
+        assert_eq!(file_state(&ini), FileState::Current);
+
+        let config = read_file(&mut ini);
+
+        assert_eq!(
+            config.vector_scale, DEFAULT_VECTOR_SCALE,
+            "a file this build wrote is read by the keys this build writes, and no others"
         );
     }
 
@@ -3166,8 +3204,7 @@ preview_enabled=true
 
         assert_eq!(file_state(&ini), FileState::Current);
 
-        let mut config = AppConfig::default();
-        config.apply_ini(&ini);
+        let config = read_file(&mut ini);
 
         assert_eq!(
             config.image_extensions, trimmed,
@@ -3189,7 +3226,7 @@ preview_enabled=true
             Some(DESIGN_EXTENSIONS_BEFORE_AI.to_string()),
         );
 
-        let config = read_an_older_file(&mut ini);
+        let config = read_file(&mut ini);
 
         assert_eq!(
             config.design_extensions,
@@ -3201,7 +3238,7 @@ preview_enabled=true
         let mut ini = Ini::new();
         ini.set(DESIGN_SECTION, "extensions", Some(edited.clone()));
 
-        let config = read_an_older_file(&mut ini);
+        let config = read_file(&mut ini);
 
         assert_eq!(
             config.design_extensions,
@@ -3223,7 +3260,7 @@ preview_enabled=true
             Some(IMAGE_EXTENSIONS_BEFORE_CODEC_FORMATS.to_string()),
         );
 
-        let config = read_an_older_file(&mut ini);
+        let config = read_file(&mut ini);
 
         assert_eq!(
             config.image_extensions,
@@ -3251,7 +3288,7 @@ preview_enabled=true
             Some(IMAGE_EXTENSIONS_WITH_SVG.to_string()),
         );
 
-        let config = read_an_older_file(&mut ini);
+        let config = read_file(&mut ini);
 
         assert_eq!(
             config.image_extensions,
@@ -3274,7 +3311,7 @@ preview_enabled=true
             Some(VECTOR_EXTENSIONS_BEFORE_SVG.to_string()),
         );
 
-        let config = read_an_older_file(&mut ini);
+        let config = read_file(&mut ini);
 
         assert_eq!(
             config.vector_extensions,
@@ -3298,8 +3335,7 @@ preview_enabled=true
         let mut ini = Ini::new();
         ini.set(IMAGE_SECTION, "extensions", Some(written.clone()));
 
-        let mut config = AppConfig::default();
-        config.apply_ini(&ini);
+        let config = read_file(&mut ini);
 
         assert_eq!(
             config.image_extensions,
@@ -3323,15 +3359,13 @@ preview_enabled=true
         let mut ini = Ini::new();
         ini.set(CONFIG_SECTION, "spinner_delay_ms", Some("900".to_string()));
 
-        let mut config = AppConfig::default();
-        config.apply_ini(&ini);
+        let config = read_file(&mut ini);
         assert_eq!(config.spinner_delay_ms, 900);
 
         let mut ini = Ini::new();
         ini.set(CONFIG_SECTION, "spinner_delay_ms", Some("0".to_string()));
 
-        let mut config = AppConfig::default();
-        config.apply_ini(&ini);
+        let config = read_file(&mut ini);
         assert_eq!(config.spinner_delay_ms, 0, "`0` is a delay like any other");
 
         let mut ini = Ini::new();
@@ -3341,8 +3375,7 @@ preview_enabled=true
             Some((MAX_SPINNER_DELAY_MS + 1).to_string()),
         );
 
-        let mut config = AppConfig::default();
-        config.apply_ini(&ini);
+        let config = read_file(&mut ini);
         assert_eq!(config.spinner_delay_ms, MAX_SPINNER_DELAY_MS);
     }
 
@@ -3525,8 +3558,7 @@ something_new=1
             Some("checkerboard".to_string()),
         );
 
-        let mut config = AppConfig::default();
-        config.apply_ini(&ini);
+        let config = read_file(&mut ini);
 
         assert_eq!(config.dds_background, DEFAULT_DDS_BACKGROUND);
     }
