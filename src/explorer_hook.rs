@@ -872,13 +872,37 @@ static HOOK_TRACE: Lazy<bool> = Lazy::new(|| std::env::var_os("RHP_HOOK_TRACE").
 
 /// The crossings into the shell a probe has made since the last line was written:
 /// the window collections walked, the windows those walks passed between them, the
-/// times a walk was not needed, the item walks through the view's provider, and the
-/// points resolved.
+/// times the view that answered last was even asked, the times it answered, the item
+/// walks through the view's provider, and the points resolved.
+///
+/// The two counts in the middle are the pair that settles something this app has
+/// been argued about rather than measured. That view is only consulted while the
+/// whole desktop holds one registered Shell window, so a count of answers cannot
+/// stand on its own: nothing answered because it was never asked and nothing answered
+/// because it was asked and could not say are opposite readings of a zero, and they
+/// point at different work.
 static PROBE_VIEW_WALKS: AtomicU64 = AtomicU64::new(0);
 static PROBE_VIEW_WINDOWS: AtomicU64 = AtomicU64::new(0);
+/// The walks that ended at the window the pointer is in rather than walking the
+/// collection out. The loop stops there by design, and whether that ever happens is
+/// not something a count of windows walked can say: a walk that stopped at the third
+/// of five and a collection that holds three are the same number.
+static PROBE_VIEW_POINTER_MATCHES: AtomicU64 = AtomicU64::new(0);
+static PROBE_VIEW_CACHE_OPENED: AtomicU64 = AtomicU64::new(0);
 static PROBE_VIEW_CACHE_HITS: AtomicU64 = AtomicU64::new(0);
 static PROBE_ITEM_WALKS: AtomicU64 = AtomicU64::new(0);
 static PROBE_POINTER_RESOLUTIONS: AtomicU64 = AtomicU64::new(0);
+
+/// The slowest of the view walks since the last line, in milliseconds — what a probe
+/// costs in time rather than in calls, which is the number that says whether the
+/// shell was held long enough for anyone to feel it.
+static PROBE_VIEW_SLOWEST_MS: AtomicU64 = AtomicU64::new(0);
+
+/// The slowest of the item walks since the last line, in milliseconds, and timed apart
+/// from the walks above on purpose: they are different work against different providers
+/// — one walks Explorer's window collection, the other walks its accessibility tree —
+/// and one of them being cheap says nothing about the other.
+static PROBE_ITEM_SLOWEST_MS: AtomicU64 = AtomicU64::new(0);
 
 /// Count one of those crossings.
 ///
@@ -888,6 +912,11 @@ static PROBE_POINTER_RESOLUTIONS: AtomicU64 = AtomicU64::new(0);
 /// depend on when the variable happened to be read.
 fn note_probe(counter: &AtomicU64) {
     counter.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Note how long one of those crossings took, keeping the slowest of them.
+fn note_probe_ms(counter: &AtomicU64, elapsed: Duration) {
+    counter.fetch_max(elapsed.as_millis() as u64, Ordering::Relaxed);
 }
 
 /// Where the probe counts are written, or nothing at all when `RHP_HOOK_TRACE` did
@@ -911,9 +940,13 @@ fn flush_probe_counts(now: Instant, last: &mut Instant, path: &Path) {
 
     let walks = PROBE_VIEW_WALKS.swap(0, Ordering::Relaxed);
     let windows = PROBE_VIEW_WINDOWS.swap(0, Ordering::Relaxed);
+    let matches = PROBE_VIEW_POINTER_MATCHES.swap(0, Ordering::Relaxed);
+    let opened = PROBE_VIEW_CACHE_OPENED.swap(0, Ordering::Relaxed);
     let hits = PROBE_VIEW_CACHE_HITS.swap(0, Ordering::Relaxed);
     let items = PROBE_ITEM_WALKS.swap(0, Ordering::Relaxed);
     let points = PROBE_POINTER_RESOLUTIONS.swap(0, Ordering::Relaxed);
+    let view_slowest = PROBE_VIEW_SLOWEST_MS.swap(0, Ordering::Relaxed);
+    let item_slowest = PROBE_ITEM_SLOWEST_MS.swap(0, Ordering::Relaxed);
 
     if walks == 0 && items == 0 && points == 0 {
         return;
@@ -927,7 +960,7 @@ fn flush_probe_counts(now: Instant, last: &mut Instant, path: &Path) {
         use std::io::Write;
         let _ = writeln!(
             file,
-            "points {points}  view walks {walks} (windows {windows}, answered from the last view {hits})  item walks {items}"
+            "points {points}  item walks {items} (slowest {item_slowest}ms)  view walks {walks} (windows {windows}, pointer matched {matches}, cache asked {opened}, answered {hits}, slowest {view_slowest}ms)"
         );
     }
 }
@@ -1530,6 +1563,7 @@ fn get_active_shell_view_context(
             });
 
             if holds_cursor {
+                note_probe(&PROBE_VIEW_POINTER_MATCHES);
                 break;
             }
         }
@@ -1546,13 +1580,20 @@ fn get_active_shell_view_context_at_cursor(
     resolver: &ItemResolver,
     want_folder: bool,
 ) -> Option<ActiveShellViewContext> {
-    unsafe {
-        let mut cursor_pos = POINT::default();
-        if GetCursorPos(&mut cursor_pos).is_err() {
-            return None;
-        }
-        get_active_shell_view_context(resolver.shell_windows.as_ref(), &cursor_pos, want_folder)
+    let mut cursor_pos = POINT::default();
+    if unsafe { GetCursorPos(&mut cursor_pos) }.is_err() {
+        return None;
     }
+
+    // Timed around the whole of it — the walk, the choice between the windows it
+    // found, and what the window that won was asked — because what a probe costs in
+    // time is not what it costs in calls, and the shell is the other side of it.
+    let started = Instant::now();
+    let context =
+        get_active_shell_view_context(resolver.shell_windows.as_ref(), &cursor_pos, want_folder);
+    note_probe_ms(&PROBE_VIEW_SLOWEST_MS, started.elapsed());
+
+    context
 }
 
 fn hwnd_is_same_or_ancestor(child: HWND, ancestor: HWND) -> bool {
@@ -1743,9 +1784,18 @@ fn uia_item_from_point(
     let automation = resolver.automation.as_ref()?;
     let cache = resolver.cache.as_ref()?;
     note_probe(&PROBE_ITEM_WALKS);
-    let element = unsafe { automation.ElementFromPointBuildCache(point, cache) }.ok()?;
 
-    walk_to_item(resolver, &element, Some(point), measure_content)
+    // Timed from the first crossing to the last — the element is asked of the view's
+    // provider and the walk climbs from it — and timed around the early answers too,
+    // which a `?` reaching out of the function would have timed past.
+    let started = Instant::now();
+    let found = (|| {
+        let element = unsafe { automation.ElementFromPointBuildCache(point, cache) }.ok()?;
+        walk_to_item(resolver, &element, Some(point), measure_content)
+    })();
+    note_probe_ms(&PROBE_ITEM_SLOWEST_MS, started.elapsed());
+
+    found
 }
 
 /// The item the keyboard is on: the element Explorer says holds the focus, or the
@@ -1754,21 +1804,28 @@ fn uia_item_from_focus(resolver: &ItemResolver) -> Option<HoveredItem> {
     let automation = resolver.automation.as_ref()?;
     let cache = resolver.cache.as_ref()?;
     note_probe(&PROBE_ITEM_WALKS);
-    let focused = unsafe { automation.GetFocusedElementBuildCache(cache) }.ok()?;
 
-    // A view can report the list itself as focused while the focus it draws is on
-    // one of its items — the search results view does — and a list's name is not a
-    // file's, so the selection is where the item has to be taken from. For a
-    // focused element that already is an item this is the element itself.
-    let start = if element_names_an_item(&focused) {
-        focused
-    } else {
-        selected_item_of_focused_list(&focused)?
-    };
+    let started = Instant::now();
+    let found = (|| {
+        let focused = unsafe { automation.GetFocusedElementBuildCache(cache) }.ok()?;
 
-    // A keyboard preview is placed from the item alone, so the text the region is made
-    // of is read with it — see `item_text_box`.
-    walk_to_item(resolver, &start, None, true)
+        // A view can report the list itself as focused while the focus it draws is on
+        // one of its items — the search results view does — and a list's name is not a
+        // file's, so the selection is where the item has to be taken from. For a
+        // focused element that already is an item this is the element itself.
+        let start = if element_names_an_item(&focused) {
+            focused
+        } else {
+            selected_item_of_focused_list(&focused)?
+        };
+
+        // A keyboard preview is placed from the item alone, so the text the region is
+        // made of is read with it — see `item_text_box`.
+        walk_to_item(resolver, &start, None, true)
+    })();
+    note_probe_ms(&PROBE_ITEM_SLOWEST_MS, started.elapsed());
+
+    found
 }
 
 /// The nearest item at or above an element, as the view reports it.
@@ -2218,6 +2275,7 @@ fn item_file_path(
     // a cached tab is one of several, and the cache cannot say which of them is
     // showing.
     if registrations == Some(1) {
+        note_probe(&PROBE_VIEW_CACHE_OPENED);
         if let Some(answered) = resolver.view.as_ref() {
             if answered.browser_hwnd == root_key && answered.is_current() {
                 if let Some(path) = view_item_media_path(&answered.folder_view, index) {
@@ -4589,7 +4647,10 @@ mod tests {
     /// `flush_probe_counts`.
     ///
     /// One test rather than two: the counters are process-wide, and two tests adding
-    /// to them at the same time would be asserting about each other's numbers.
+    /// to them at the same time would be asserting about each other's numbers. What
+    /// is asserted is a floor for the same reason — the probe test beside this one
+    /// walks a real shell and adds to some of the same counters, so a run holding
+    /// both would otherwise be reading the other test's totals.
     #[test]
     fn the_probe_counts_are_written_once_a_second_where_the_trace_asks() {
         let path = std::env::temp_dir().join(format!("rhp-hook-trace-{}.log", std::process::id()));
@@ -4597,20 +4658,50 @@ mod tests {
 
         PROBE_VIEW_WALKS.fetch_add(2, Ordering::Relaxed);
         PROBE_VIEW_WINDOWS.fetch_add(7, Ordering::Relaxed);
+        PROBE_VIEW_POINTER_MATCHES.fetch_add(5, Ordering::Relaxed);
+        PROBE_VIEW_CACHE_OPENED.fetch_add(4, Ordering::Relaxed);
         PROBE_VIEW_CACHE_HITS.fetch_add(3, Ordering::Relaxed);
         PROBE_POINTER_RESOLUTIONS.fetch_add(1, Ordering::Relaxed);
+        note_probe_ms(&PROBE_VIEW_SLOWEST_MS, Duration::from_millis(9));
+        note_probe_ms(&PROBE_ITEM_SLOWEST_MS, Duration::from_millis(11));
 
         let now = Instant::now();
         let mut last = now - Duration::from_secs(5);
         flush_probe_counts(now, &mut last, &path);
 
         let first = std::fs::read_to_string(&path).expect("the counts are written");
+
+        /// The number written after one label of the line, which is the whole of what
+        /// this is reading: the fields are named rather than positional so that one
+        /// being added does not silently shift another one's number into its place.
+        fn written(line: &str, label: &str) -> u64 {
+            line.split(label)
+                .nth(1)
+                .and_then(|rest| rest.split_whitespace().next())
+                .map(|value| value.trim_end_matches([',', ')']))
+                .and_then(|value| value.trim_end_matches("ms").parse().ok())
+                .unwrap_or_else(|| panic!("the line carries {label:?}: {line}"))
+        }
+
+        assert!(written(&first, "points ") >= 1, "points: {first}");
+        assert!(written(&first, "view walks ") >= 2, "view walks: {first}");
+        assert!(written(&first, "windows ") >= 7, "windows: {first}");
         assert!(
-            first.contains("points 1")
-                && first.contains("view walks 2")
-                && first.contains("windows 7")
-                && first.contains("answered from the last view 3"),
-            "the line carries the counts: {first}"
+            written(&first, "pointer matched ") >= 5,
+            "pointer matches: {first}"
+        );
+        assert!(written(&first, "cache asked ") >= 4, "asked: {first}");
+        assert!(written(&first, "answered ") >= 3, "answered: {first}");
+        // Two slowest figures, and the first of them belongs to the item walks: read
+        // by name so that one field being added cannot shift another's number into
+        // its place.
+        assert!(
+            first.contains("(slowest 11ms)"),
+            "the item walks are timed apart from the view walks: {first}"
+        );
+        assert!(
+            first.contains("slowest 9ms)"),
+            "the view walks carry their own slowest: {first}"
         );
 
         // A second flush inside the same second writes nothing more: what a run being
