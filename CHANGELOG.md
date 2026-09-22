@@ -17,6 +17,10 @@
 
 - Bump version to 0.2.13 in `Cargo.toml` and `Cargo.lock`.
 
+### Fixed
+
+- EPS files whose preview is a palette picture — the shape Photoshop writes into an EPS — now preview. That shape is read by the app itself, since the picture decoder turns it down.
+
 ## [0.2.12]
 
 ### Changed

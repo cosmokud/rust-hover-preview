@@ -40,6 +40,15 @@ use std::path::Path;
 /// nothing, which is the answer every file with no reader gets.
 pub const DEFAULT_DESIGN_EXTENSIONS: &str = "ai,fig,kra,ora,psb,psd,sketch,xd";
 
+/// The built-in design list as it stood before `ai` was added to it.
+///
+/// A file holding exactly these entries is the app's own older list rather than a user's
+/// edit — nobody has touched it — so it is brought up to the built-in list rather than kept
+/// as written. Without that, the entry would reach a fresh installation only: every
+/// `config.ini` already written holds a list that differs from the built-in one, and a list
+/// that differs is otherwise the user's own (see `config::configured_list_over_history`).
+pub const DESIGN_EXTENSIONS_BEFORE_AI: &str = "fig,kra,ora,psb,psd,sketch,xd";
+
 /// Whether the configured list claims `path`.
 pub fn matches_design_list(path: &Path, extensions: &[String]) -> bool {
     text_formats::matches_configured_extension(path, extensions)

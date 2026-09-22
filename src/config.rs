@@ -10,7 +10,9 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use crate::archive_formats::{sanitize_archive_extensions, DEFAULT_ARCHIVE_EXTENSIONS};
-use crate::design_formats::{sanitize_design_extensions, DEFAULT_DESIGN_EXTENSIONS};
+use crate::design_formats::{
+    sanitize_design_extensions, DEFAULT_DESIGN_EXTENSIONS, DESIGN_EXTENSIONS_BEFORE_AI,
+};
 use crate::font_formats::{sanitize_font_extensions, DEFAULT_FONT_EXTENSIONS};
 use crate::image_formats::{
     sanitize_image_extensions, DEFAULT_IMAGE_EXTENSIONS, IMAGE_EXTENSIONS_BEFORE_CODEC_FORMATS,
@@ -2018,14 +2020,17 @@ impl AppConfig {
         );
         self.font_extensions = list;
         restored |= defaulted;
-        // The design list is new with the kind itself, the way the font list above is:
-        // an older file has no section at all, so the key is gone, the built-in entries
-        // come back with it, and the file is written out again holding them.
-        let (list, defaulted) = configured_list(
+        // The design list is new with the kind itself, the way the font list above is: an
+        // older file has no section at all, so the key is gone, the built-in entries come
+        // back with it, and the file is written out again holding them. Its entries have
+        // grown since — `ai` is the one that did — so a file written by the app before that
+        // is brought up to the list of now rather than left holding the older one.
+        let (list, defaulted) = configured_list_over_history(
             ini,
             DESIGN_SECTION,
             "extensions",
             DEFAULT_DESIGN_EXTENSIONS,
+            &[DESIGN_EXTENSIONS_BEFORE_AI],
             sanitize_design_extensions,
         );
         self.design_extensions = list;
@@ -2628,6 +2633,42 @@ mod tests {
             config.image_extensions,
             sanitize_image_extensions(DEFAULT_IMAGE_EXTENSIONS),
             "the list the app shipped before is read as the list it ships now"
+        );
+    }
+
+    /// The design list's own version of the same: a file holding the list the app shipped
+    /// before `ai` was added to it is the app's own older list, so the entry reaches an
+    /// installation that already exists rather than a fresh one only — and a list anyone
+    /// has edited is kept exactly as it is.
+    #[test]
+    fn a_list_holding_the_apps_own_design_entries_takes_the_one_added_to_them() {
+        let mut ini = Ini::new();
+        ini.set(
+            DESIGN_SECTION,
+            "extensions",
+            Some(DESIGN_EXTENSIONS_BEFORE_AI.to_string()),
+        );
+
+        let mut config = AppConfig::default();
+        config.apply_ini(&ini);
+
+        assert_eq!(
+            config.design_extensions,
+            sanitize_design_extensions(DEFAULT_DESIGN_EXTENSIONS),
+            "the list the app shipped before is read as the list it ships now"
+        );
+
+        let edited = format!("dng,{DESIGN_EXTENSIONS_BEFORE_AI}");
+        let mut ini = Ini::new();
+        ini.set(DESIGN_SECTION, "extensions", Some(edited.clone()));
+
+        let mut config = AppConfig::default();
+        config.apply_ini(&ini);
+
+        assert_eq!(
+            config.design_extensions,
+            sanitize_design_extensions(&edited),
+            "a list with an entry of its own is the user's and is kept as written"
         );
     }
 
