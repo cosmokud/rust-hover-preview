@@ -4395,22 +4395,33 @@ fn load_media(
     // A vector drawing is the drawing layer's to replay rather than a decoder's to read,
     // and it is asked beside the design documents for the same reason they are: what it
     // is, is its own header's answer rather than its name's.
+    //
+    // The list names both halves of the kind, though, so the document half is asked here
+    // first: an `.svg` is an entry of the vector list beside the metafiles, and neither
+    // reader below would take one — the hover would show nothing at all, which is not
+    // what a document the gate has already claimed may come to.
     if vector_formats::is_vector_file(path) {
-        return load_vector_preview(path, max_width, max_height, preview_scale);
+        return if svg_preview::is_svg_file(path) {
+            webview_preview::draws(path).then(engine_svg_media)
+        } else {
+            load_vector_preview(path, max_width, max_height, preview_scale)
+        };
     }
 
     if text_formats::is_text_file(path) {
         return load_text_preview(path, max_width, max_height, dpi, current_text_options());
     }
 
-    // An SVG is drawn rather than decoded, and it is asked after the text lists for
-    // the same reason the hook asks them in that order: a file is whichever kind
-    // claims it first, and a name a user has put in the text list is a text file.
+    // A document is the engine's to draw — this app rasterizes none of them — so there is
+    // nothing to make here: what comes back is the kind alone, and the install path reads
+    // it as the hover to hand over. An engine that cannot draw it is no preview, which is
+    // the answer a file that will not decode gets.
     //
-    // A document is the engine's to draw — this app rasterizes none of them — so there
-    // is nothing to make here: what comes back is the kind alone, and the install path
-    // reads it as the hover to hand over. An engine that cannot draw it is no preview,
-    // which is the answer a file that will not decode gets.
+    // It is asked here for a document the vector list does not name and the image list
+    // does, which is where the hook asks the same question: its own document check sits
+    // inside the image block, after the list that would have claimed a picture. The text
+    // lists are asked ahead of it for the reason the hook asks them there too — a name a
+    // user has put in the text list is a text file.
     if svg_preview::is_svg_file(path) {
         return webview_preview::draws(path).then(engine_svg_media);
     }
@@ -4550,11 +4561,13 @@ fn get_media_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
 
     // An SVG is measured from the document rather than from a header: the size it asks
     // to be drawn at is the size the layout places, and the engine draws it at whatever
-    // box comes out of that. It is asked ahead of the `Images` gate — which is what gets
-    // a document here, its name being an entry of the image list — because a document is
-    // its own kind: what draws one is not a decoder, and the switch for it is not the
-    // switch for pictures. A file of a kind that is switched off reports no size, which
-    // is how the layout drops its preview.
+    // box comes out of that. It is asked ahead of the readers of the other half of its
+    // kind — the vector list names a document beside the metafiles, and neither of those
+    // readers would take one — and ahead of the `Images` gate, which is the other list
+    // that may have claimed it. A document is its own kind either way: what draws one is
+    // not a decoder, and the switch for it is not the switch for pictures. A file of a
+    // kind that is switched off reports no size, which is how the layout drops its
+    // preview.
     if svg_preview::is_svg_file(path) {
         if !PreviewType::Vector.enabled() {
             return None;

@@ -21,6 +21,7 @@
 
 ### Fixed
 
+- SVG previews are back: a document is drawn by the engine again rather than being handed to the readers that replay the other half of the Vector kind, which turned it down.
 - A Photoshop document smaller than the screen shows a preview again: it was refused whenever the preview was enlarged past the document's own size.
 - EPS files whose preview is a palette picture — the shape Photoshop writes into an EPS — now preview. That shape is read by the app itself, since the picture decoder turns it down.
 
