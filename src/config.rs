@@ -1272,10 +1272,10 @@ fn same_entries(list: &[String], canonical: &[String]) -> bool {
 /// menus: the menu a setting is changed from is the menu it is found under, so the file
 /// reads the way the tray does rather than as one alphabetical run of fifty keys.
 ///
-/// The table is also the list of what this app writes and reads: a key in it that a file does
-/// not have is a setting the file is missing, and the file is written out again with it (see
-/// `has_every_setting`). A setting added to the app is therefore a setting that reaches the
-/// files that already exist, with nothing else to remember.
+/// The table is also the list of what this app writes, key for key — a test holds `save` to it —
+/// so a key in it that a file does not have is a setting the file is missing, and a file missing
+/// one is written out again with it (see `differs`). A setting added to the app is therefore a
+/// setting that reaches the files that already exist, with nothing else to remember.
 ///
 /// The file lists keep sections of their own below it — `[image]`, `[video]` and the rest
 /// — because a list of extensions is a collection rather than a setting, and a section is
@@ -1467,9 +1467,9 @@ fn ordered_text(ini: &Ini) -> String {
     out
 }
 
-/// One list as the file has it: the entries its key names, or the built-in list
-/// when the key is gone. The flag says which of the two it was, so the caller knows
-/// the file has to be written out again.
+/// One list as the file has it: the entries its key names, or the built-in list when the key is
+/// gone — which is a file to write, since what it holds is then not what the app is using (see
+/// `differs`).
 ///
 /// What is read here is what the file says: a list anyone has edited keeps its own
 /// entries and its own order, and an empty value is a list with nothing in it rather than
@@ -1483,10 +1483,10 @@ fn configured_list(
     key: &str,
     defaults: &str,
     sanitize: fn(&str) -> Vec<String>,
-) -> (Vec<String>, bool) {
+) -> Vec<String> {
     match ini.get(section, key) {
-        Some(value) => (sanitize(&value), false),
-        None => (sanitize(defaults), true),
+        Some(value) => sanitize(&value),
+        None => sanitize(defaults),
     }
 }
 
@@ -1508,21 +1508,7 @@ fn repair_ini(ini: &mut Ini) -> bool {
     let named = repair_older_names(ini);
     let listed = repair_older_lists(ini);
 
-    named || listed || !has_every_setting(ini)
-}
-
-/// Whether the file holds every setting this build writes.
-///
-/// The table the settings are written under is the list of them (see `SETTING_GROUPS`), and
-/// that table is what `save` writes from, so a key it names and the file does not have is a
-/// setting the app has and the file is missing: a line that was deleted, a whole section that
-/// was, or a setting added by a build written after the file was. A file that is missing one is
-/// written out again, which is what puts it there.
-fn has_every_setting(ini: &Ini) -> bool {
-    SETTING_GROUPS
-        .iter()
-        .flat_map(|(_, keys)| *keys)
-        .all(|key| ini.get(CONFIG_SECTION, key).is_some())
+    named || listed
 }
 
 /// The names this app has written a setting under before the one it writes now, and the two
@@ -1727,9 +1713,14 @@ impl AppConfig {
             // missing by then — or was never there — is the fresh installation below.
             if ini.load(path.to_string_lossy().as_ref()).is_ok() {
                 let repaired = repair_ini(&mut ini);
-                let restored = config.apply_ini(&ini);
+                config.apply_ini(&ini);
 
-                if repaired || restored {
+                // The file is written again where the repair had something to put right — a key
+                // under a name this build no longer writes, a list of the app's own from before
+                // it grew — and where it does not say what the app is using: a setting the file
+                // does not have, or one whose value is not the value the app reads it back as,
+                // which is every value the app could not read at all.
+                if repaired || config.differs(&ini) {
                     config.save();
                 }
             }
@@ -1742,322 +1733,366 @@ impl AppConfig {
         config
     }
 
+    /// Read the file again, after the watcher saw it change, with the same repair a start puts
+    /// it through and the same question about whether it says what the app is using.
+    ///
+    /// The repair belongs here as much as it does at a start: the file is what the user edits,
+    /// and an edit that names an older key, or writes a value the app cannot read, is one to put
+    /// right there and then rather than at the next start. It settles the same way a start does —
+    /// what it writes is a file that needs nothing, so the write the watcher sees after it is a
+    /// file nothing further is done to.
     pub fn reload_from_disk(&mut self) {
         if let Some(path) = Self::config_path() {
             let mut ini = Ini::new();
             if ini.load(path.to_string_lossy().as_ref()).is_ok() {
-                // A list whose key was deleted is written back into the file rather
-                // than only kept in memory: the file is what the user edits, and a
-                // key left missing would be repaired again on every reload.
-                if self.apply_ini(&ini) {
+                let repaired = repair_ini(&mut ini);
+                self.apply_ini(&ini);
+
+                if repaired || self.differs(&ini) {
                     self.save();
                 }
             }
         }
     }
 
+    /// Write the configuration out: `to_ini` says what it holds, and `ordered_text` says what
+    /// the text of the file is.
     pub fn save(&self) {
         if let Some(path) = Self::config_path() {
             if let Some(parent) = path.parent() {
                 let _ = fs::create_dir_all(parent);
             }
-            let mut ini = Ini::new();
-            ini.set(
-                CONFIG_SECTION,
-                "run_at_startup",
-                Some(self.run_at_startup.to_string()),
-            );
-            ini.set(
-                CONFIG_SECTION,
-                "hover_delay_ms",
-                Some(self.hover_delay_ms.to_string()),
-            );
-            ini.set(
-                CONFIG_SECTION,
-                "preview_enabled",
-                Some(self.preview_enabled.to_string()),
-            );
-            ini.set(
-                CONFIG_SECTION,
-                "trigger_key",
-                Some(self.trigger_key.clone()),
-            );
-            ini.set(
-                CONFIG_SECTION,
-                "trigger_key_mode",
-                Some(self.trigger_key_mode.as_str().to_string()),
-            );
-            ini.set(
-                CONFIG_SECTION,
-                "trigger_key_enabled",
-                Some(self.trigger_key_enabled.to_string()),
-            );
-            ini.set(
-                CONFIG_SECTION,
-                "confirm_file_type",
-                Some(self.confirm_file_type.to_string()),
-            );
-            ini.set(
-                CONFIG_SECTION,
-                "follow_cursor",
-                Some(self.follow_cursor.to_string()),
-            );
-            ini.set(
-                CONFIG_SECTION,
-                "avoid_mode",
-                Some(self.avoid_mode.as_str().to_string()),
-            );
-            ini.set(
-                CONFIG_SECTION,
-                "same_file_rehover_delay_ms",
-                Some(self.same_file_rehover_delay_ms.to_string()),
-            );
-            ini.set(
-                CONFIG_SECTION,
-                "spinner_delay_ms",
-                Some(sanitize_spinner_delay_ms(self.spinner_delay_ms).to_string()),
-            );
-            ini.set(
-                CONFIG_SECTION,
-                "webp_playback_fps",
-                Some(sanitize_webp_playback_fps(self.webp_playback_fps).to_string()),
-            );
-            ini.set(
-                CONFIG_SECTION,
-                "image_cache_mb",
-                Some(sanitize_image_cache_mb(self.image_cache_mb).to_string()),
-            );
-            ini.set(
-                CONFIG_SECTION,
-                "image_background",
-                Some(self.image_background.as_str().to_string()),
-            );
-            ini.set(
-                CONFIG_SECTION,
-                "font_background",
-                Some(self.font_background.as_str().to_string()),
-            );
-            ini.set(
-                CONFIG_SECTION,
-                "dds_background",
-                Some(self.dds_background.as_str().to_string()),
-            );
-            ini.set(
-                CONFIG_SECTION,
-                "design_background",
-                Some(self.design_background.as_str().to_string()),
-            );
-            ini.set(
-                CONFIG_SECTION,
-                "vector_background",
-                Some(self.vector_background.as_str().to_string()),
-            );
-            ini.set(
-                CONFIG_SECTION,
-                "video_volume",
-                Some(self.video_volume.to_string()),
-            );
-            ini.set(
-                CONFIG_SECTION,
-                "preview_scale",
-                Some(self.preview_scale.as_str()),
-            );
-            ini.set(
-                CONFIG_SECTION,
-                "video_scale",
-                Some(self.video_scale.as_str()),
-            );
-            ini.set(
-                CONFIG_SECTION,
-                "animated_scale",
-                Some(self.animated_scale.as_str()),
-            );
-            ini.set(
-                CONFIG_SECTION,
-                "vector_scale",
-                Some(self.vector_scale.as_str()),
-            );
-            ini.set(CONFIG_SECTION, "pdf_scale", Some(self.pdf_scale.as_str()));
-            ini.set(
-                CONFIG_SECTION,
-                "office_scale",
-                Some(self.office_scale.as_str()),
-            );
-            ini.set(CONFIG_SECTION, "font_scale", Some(self.font_scale.as_str()));
-            ini.set(
-                CONFIG_SECTION,
-                "design_scale",
-                Some(self.design_scale.as_str()),
-            );
-            ini.set(
-                CONFIG_SECTION,
-                "ttc_face",
-                Some(sanitize_ttc_face(self.ttc_face).to_string()),
-            );
-            ini.set(CONFIG_SECTION, "theme", Some(self.theme.as_str()));
-            ini.set(
-                CONFIG_SECTION,
-                "markdown_mode",
-                Some(self.markdown_mode.as_str().to_string()),
-            );
-            ini.set(
-                CONFIG_SECTION,
-                "image_preview_enabled",
-                Some(self.image_preview_enabled.to_string()),
-            );
-            ini.set(
-                CONFIG_SECTION,
-                "video_preview_enabled",
-                Some(self.video_preview_enabled.to_string()),
-            );
-            ini.set(
-                CONFIG_SECTION,
-                "text_preview_enabled",
-                Some(self.text_preview_enabled.to_string()),
-            );
-            ini.set(
-                CONFIG_SECTION,
-                "pdf_preview_enabled",
-                Some(self.pdf_preview_enabled.to_string()),
-            );
-            ini.set(
-                CONFIG_SECTION,
-                "archive_preview_enabled",
-                Some(self.archive_preview_enabled.to_string()),
-            );
-            ini.set(
-                CONFIG_SECTION,
-                "office_preview_enabled",
-                Some(self.office_preview_enabled.to_string()),
-            );
-            ini.set(
-                CONFIG_SECTION,
-                "font_preview_enabled",
-                Some(self.font_preview_enabled.to_string()),
-            );
-            ini.set(
-                CONFIG_SECTION,
-                "design_preview_enabled",
-                Some(self.design_preview_enabled.to_string()),
-            );
-            ini.set(
-                CONFIG_SECTION,
-                "vector_preview_enabled",
-                Some(self.vector_preview_enabled.to_string()),
-            );
-            ini.set(
-                CONFIG_SECTION,
-                "office_cache_mb",
-                Some(sanitize_office_cache_mb(self.office_cache_mb).to_string()),
-            );
-            ini.set(
-                CONFIG_SECTION,
-                "office_engine_idle",
-                Some(self.office_engine_idle.as_str()),
-            );
-            ini.set(
-                CONFIG_SECTION,
-                "webview_idle",
-                Some(self.webview_idle.as_str()),
-            );
-            ini.set(
-                CONFIG_SECTION,
-                "pdf_cache_mb",
-                Some(sanitize_pdf_cache_mb(self.pdf_cache_mb).to_string()),
-            );
-            ini.set(
-                CONFIG_SECTION,
-                "text_cache_mb",
-                Some(sanitize_text_cache_mb(self.text_cache_mb).to_string()),
-            );
-            ini.set(
-                CONFIG_SECTION,
-                "decode_budget_gb",
-                Some(sanitize_decode_budget_gb(self.decode_budget_gb).to_string()),
-            );
-            ini.set(
-                CONFIG_SECTION,
-                "hdr_tone_map",
-                Some(self.hdr_tone_map.as_str().to_string()),
-            );
-            ini.set(
-                CONFIG_SECTION,
-                "hdr_exposure",
-                Some(sanitize_hdr_exposure(self.hdr_exposure).to_string()),
-            );
-            ini.set(
-                CONFIG_SECTION,
-                "text_preview_full_mode",
-                Some(self.text_preview_full_mode.to_string()),
-            );
-            ini.set(
-                CONFIG_SECTION,
-                "text_font_scale",
-                Some(sanitize_text_font_scale_percent(self.text_font_scale_percent).to_string()),
-            );
-            ini.set(
-                CONFIG_SECTION,
-                "text_scroll_far_edge_grace_pixels",
-                Some(
-                    sanitize_text_scroll_far_edge_grace_pixels(
-                        self.text_scroll_far_edge_grace_pixels,
-                    )
-                    .to_string(),
-                ),
-            );
-            ini.set(
-                IMAGE_SECTION,
-                "extensions",
-                Some(sanitize_image_extensions(&self.image_extensions.join(",")).join(",")),
-            );
-            ini.set(
-                VIDEO_SECTION,
-                "extensions",
-                Some(sanitize_video_extensions(&self.video_extensions.join(",")).join(",")),
-            );
-            ini.set(
-                TEXT_SECTION,
-                "extensions",
-                Some(sanitize_extensions(&self.text_extensions.join(",")).join(",")),
-            );
-            ini.set(
-                TEXT_SECTION,
-                "names",
-                Some(sanitize_names(&self.text_names.join(",")).join(",")),
-            );
-            ini.set(
-                ARCHIVE_SECTION,
-                "extensions",
-                Some(sanitize_archive_extensions(&self.archive_extensions.join(",")).join(",")),
-            );
-            ini.set(
-                OFFICE_SECTION,
-                "extensions",
-                Some(sanitize_office_extensions(&self.office_extensions.join(",")).join(",")),
-            );
-            ini.set(
-                FONT_SECTION,
-                "extensions",
-                Some(sanitize_font_extensions(&self.font_extensions.join(",")).join(",")),
-            );
-            ini.set(
-                DESIGN_SECTION,
-                "extensions",
-                Some(sanitize_design_extensions(&self.design_extensions.join(",")).join(",")),
-            );
-            ini.set(
-                VECTOR_SECTION,
-                "extensions",
-                Some(sanitize_vector_extensions(&self.vector_extensions.join(",")).join(",")),
-            );
-            let _ = fs::write(&path, ordered_text(&ini));
+
+            let _ = fs::write(&path, ordered_text(&self.to_ini()));
         }
     }
 
-    /// Read the file into the configuration. A list whose key is gone is answered
-    /// with the built-in entries, and the `bool` says whether any of them were, so
-    /// the caller knows the file has to be written out again.
-    fn apply_ini(&mut self, ini: &Ini) -> bool {
+    /// The settings as the file holds them: every key this build writes, with the value it
+    /// writes that key as.
+    ///
+    /// This is what `save` writes to disk, and it is also what a file that has just been read is
+    /// held up against, to tell whether it says what the app is using (see `differs`) — which is
+    /// why it is a method of its own rather than the body of `save`.
+    fn to_ini(&self) -> Ini {
+        let mut ini = Ini::new();
+        ini.set(
+            CONFIG_SECTION,
+            "run_at_startup",
+            Some(self.run_at_startup.to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
+            "hover_delay_ms",
+            Some(self.hover_delay_ms.to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
+            "preview_enabled",
+            Some(self.preview_enabled.to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
+            "trigger_key",
+            Some(self.trigger_key.clone()),
+        );
+        ini.set(
+            CONFIG_SECTION,
+            "trigger_key_mode",
+            Some(self.trigger_key_mode.as_str().to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
+            "trigger_key_enabled",
+            Some(self.trigger_key_enabled.to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
+            "confirm_file_type",
+            Some(self.confirm_file_type.to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
+            "follow_cursor",
+            Some(self.follow_cursor.to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
+            "avoid_mode",
+            Some(self.avoid_mode.as_str().to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
+            "same_file_rehover_delay_ms",
+            Some(self.same_file_rehover_delay_ms.to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
+            "spinner_delay_ms",
+            Some(sanitize_spinner_delay_ms(self.spinner_delay_ms).to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
+            "webp_playback_fps",
+            Some(sanitize_webp_playback_fps(self.webp_playback_fps).to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
+            "image_cache_mb",
+            Some(sanitize_image_cache_mb(self.image_cache_mb).to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
+            "image_background",
+            Some(self.image_background.as_str().to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
+            "font_background",
+            Some(self.font_background.as_str().to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
+            "dds_background",
+            Some(self.dds_background.as_str().to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
+            "design_background",
+            Some(self.design_background.as_str().to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
+            "vector_background",
+            Some(self.vector_background.as_str().to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
+            "video_volume",
+            Some(self.video_volume.to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
+            "preview_scale",
+            Some(self.preview_scale.as_str()),
+        );
+        ini.set(
+            CONFIG_SECTION,
+            "video_scale",
+            Some(self.video_scale.as_str()),
+        );
+        ini.set(
+            CONFIG_SECTION,
+            "animated_scale",
+            Some(self.animated_scale.as_str()),
+        );
+        ini.set(
+            CONFIG_SECTION,
+            "vector_scale",
+            Some(self.vector_scale.as_str()),
+        );
+        ini.set(CONFIG_SECTION, "pdf_scale", Some(self.pdf_scale.as_str()));
+        ini.set(
+            CONFIG_SECTION,
+            "office_scale",
+            Some(self.office_scale.as_str()),
+        );
+        ini.set(CONFIG_SECTION, "font_scale", Some(self.font_scale.as_str()));
+        ini.set(
+            CONFIG_SECTION,
+            "design_scale",
+            Some(self.design_scale.as_str()),
+        );
+        ini.set(
+            CONFIG_SECTION,
+            "ttc_face",
+            Some(sanitize_ttc_face(self.ttc_face).to_string()),
+        );
+        ini.set(CONFIG_SECTION, "theme", Some(self.theme.as_str()));
+        ini.set(
+            CONFIG_SECTION,
+            "markdown_mode",
+            Some(self.markdown_mode.as_str().to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
+            "image_preview_enabled",
+            Some(self.image_preview_enabled.to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
+            "video_preview_enabled",
+            Some(self.video_preview_enabled.to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
+            "text_preview_enabled",
+            Some(self.text_preview_enabled.to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
+            "pdf_preview_enabled",
+            Some(self.pdf_preview_enabled.to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
+            "archive_preview_enabled",
+            Some(self.archive_preview_enabled.to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
+            "office_preview_enabled",
+            Some(self.office_preview_enabled.to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
+            "font_preview_enabled",
+            Some(self.font_preview_enabled.to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
+            "design_preview_enabled",
+            Some(self.design_preview_enabled.to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
+            "vector_preview_enabled",
+            Some(self.vector_preview_enabled.to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
+            "office_cache_mb",
+            Some(sanitize_office_cache_mb(self.office_cache_mb).to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
+            "office_engine_idle",
+            Some(self.office_engine_idle.as_str()),
+        );
+        ini.set(
+            CONFIG_SECTION,
+            "webview_idle",
+            Some(self.webview_idle.as_str()),
+        );
+        ini.set(
+            CONFIG_SECTION,
+            "pdf_cache_mb",
+            Some(sanitize_pdf_cache_mb(self.pdf_cache_mb).to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
+            "text_cache_mb",
+            Some(sanitize_text_cache_mb(self.text_cache_mb).to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
+            "decode_budget_gb",
+            Some(sanitize_decode_budget_gb(self.decode_budget_gb).to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
+            "hdr_tone_map",
+            Some(self.hdr_tone_map.as_str().to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
+            "hdr_exposure",
+            Some(sanitize_hdr_exposure(self.hdr_exposure).to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
+            "text_preview_full_mode",
+            Some(self.text_preview_full_mode.to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
+            "text_font_scale",
+            Some(sanitize_text_font_scale_percent(self.text_font_scale_percent).to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
+            "text_scroll_far_edge_grace_pixels",
+            Some(
+                sanitize_text_scroll_far_edge_grace_pixels(self.text_scroll_far_edge_grace_pixels)
+                    .to_string(),
+            ),
+        );
+        ini.set(
+            IMAGE_SECTION,
+            "extensions",
+            Some(sanitize_image_extensions(&self.image_extensions.join(",")).join(",")),
+        );
+        ini.set(
+            VIDEO_SECTION,
+            "extensions",
+            Some(sanitize_video_extensions(&self.video_extensions.join(",")).join(",")),
+        );
+        ini.set(
+            TEXT_SECTION,
+            "extensions",
+            Some(sanitize_extensions(&self.text_extensions.join(",")).join(",")),
+        );
+        ini.set(
+            TEXT_SECTION,
+            "names",
+            Some(sanitize_names(&self.text_names.join(",")).join(",")),
+        );
+        ini.set(
+            ARCHIVE_SECTION,
+            "extensions",
+            Some(sanitize_archive_extensions(&self.archive_extensions.join(",")).join(",")),
+        );
+        ini.set(
+            OFFICE_SECTION,
+            "extensions",
+            Some(sanitize_office_extensions(&self.office_extensions.join(",")).join(",")),
+        );
+        ini.set(
+            FONT_SECTION,
+            "extensions",
+            Some(sanitize_font_extensions(&self.font_extensions.join(",")).join(",")),
+        );
+        ini.set(
+            DESIGN_SECTION,
+            "extensions",
+            Some(sanitize_design_extensions(&self.design_extensions.join(",")).join(",")),
+        );
+        ini.set(
+            VECTOR_SECTION,
+            "extensions",
+            Some(sanitize_vector_extensions(&self.vector_extensions.join(",")).join(",")),
+        );
+        ini
+    }
+
+    /// Whether the file holds something other than what this app would write for the settings
+    /// it has just read, which is what makes it a file to write back.
+    ///
+    /// Every key the app writes is held up against the file: one the file does not have is a
+    /// difference, and so is one it holds another value for. A value the app could not read at
+    /// all is that second kind, and so is one a setting reduced to what it allows — a delay past
+    /// its ceiling, a face of a collection past the last one the menu offers, a tone map that is
+    /// not one of them. What the file holds that the app does not write is the user's and is not
+    /// compared — a key of their own, a comment, the order the keys are written in — so a file
+    /// with one of those is left alone rather than rewritten the moment it is read.
+    fn differs(&self, ini: &Ini) -> bool {
+        let wanted = self.to_ini();
+
+        for (section, keys) in wanted.get_map_ref() {
+            for (key, value) in keys {
+                if ini.get(section, key) != *value {
+                    return true;
+                }
+            }
+        }
+
+        false
+    }
+
+    /// Read the file into the configuration: what the file says, under the names of now, for
+    /// every setting it has. A setting it does not have keeps the value it already holds, which
+    /// is the default for a configuration that has just been made — and whether the file needs
+    /// writing afterwards is not this read's answer to give (see `differs`).
+    fn apply_ini(&mut self, ini: &Ini) {
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "run_at_startup") {
             self.run_at_startup = value;
         }
@@ -2316,16 +2351,15 @@ impl AppConfig {
                 sanitize_text_scroll_far_edge_grace_pixels(value as f32);
         }
         // A list is what the file says it is, and a key that is gone is a list the
-        // file no longer has: the built-in entries are put back, and the caller is
-        // told so that it can write them out again. An empty value is not the same
+        // file no longer has: the built-in entries are put back, and the file is written out
+        // again because it does not say what the app is using. An empty value is not the same
         // thing — it is a list the user emptied, and it is kept as written.
-        let mut restored = false;
-
+        //
         // The image list is read as the file has it. What an older file's list needs —
         // `svg` and `svgz` given up to the vector list, the formats Windows has a codec
         // for, `dds`, and the order the entries are written in — was seen to by
         // `repair_older_lists`, which ran over the file before this did.
-        let (list, defaulted) = configured_list(
+        let list = configured_list(
             ini,
             IMAGE_SECTION,
             "extensions",
@@ -2333,8 +2367,7 @@ impl AppConfig {
             sanitize_image_extensions,
         );
         self.image_extensions = list;
-        restored |= defaulted;
-        let (list, defaulted) = configured_list(
+        let list = configured_list(
             ini,
             VIDEO_SECTION,
             "extensions",
@@ -2342,8 +2375,7 @@ impl AppConfig {
             sanitize_video_extensions,
         );
         self.video_extensions = list;
-        restored |= defaulted;
-        let (list, defaulted) = configured_list(
+        let list = configured_list(
             ini,
             TEXT_SECTION,
             "extensions",
@@ -2351,8 +2383,7 @@ impl AppConfig {
             sanitize_extensions,
         );
         self.text_extensions = list;
-        restored |= defaulted;
-        let (list, defaulted) = configured_list(
+        let list = configured_list(
             ini,
             TEXT_SECTION,
             "names",
@@ -2360,8 +2391,7 @@ impl AppConfig {
             sanitize_names,
         );
         self.text_names = list;
-        restored |= defaulted;
-        let (list, defaulted) = configured_list(
+        let list = configured_list(
             ini,
             ARCHIVE_SECTION,
             "extensions",
@@ -2369,8 +2399,7 @@ impl AppConfig {
             sanitize_archive_extensions,
         );
         self.archive_extensions = list;
-        restored |= defaulted;
-        let (list, defaulted) = configured_list(
+        let list = configured_list(
             ini,
             OFFICE_SECTION,
             "extensions",
@@ -2378,11 +2407,10 @@ impl AppConfig {
             sanitize_office_extensions,
         );
         self.office_extensions = list;
-        restored |= defaulted;
         // The font list is one whose built-in entries are new with the kind itself, so an
         // older file simply has no section: the key is gone, the built-in entries come back
         // with it, and the file is written out again with them.
-        let (list, defaulted) = configured_list(
+        let list = configured_list(
             ini,
             FONT_SECTION,
             "extensions",
@@ -2390,13 +2418,12 @@ impl AppConfig {
             sanitize_font_extensions,
         );
         self.font_extensions = list;
-        restored |= defaulted;
         // The design list is new with the kind itself, the way the font list above is: an
         // older file has no section at all, so the key is gone, the built-in entries come
         // back with it, and the file is written out again holding them. Its entries have
         // grown since — `ai` is the one that did — and that is `repair_older_lists`' business
         // rather than this read's.
-        let (list, defaulted) = configured_list(
+        let list = configured_list(
             ini,
             DESIGN_SECTION,
             "extensions",
@@ -2404,13 +2431,12 @@ impl AppConfig {
             sanitize_design_extensions,
         );
         self.design_extensions = list;
-        restored |= defaulted;
         // And the vector list, new with its kind: an older file has no section at all, so
         // the key is gone and the built-in entries come back with it. Its entries have
         // grown since — `svg` and `svgz`, which were entries of the image list until the
         // kind they belong to was given them — and that, too, is `repair_older_lists`'
         // business rather than this read's.
-        let (list, defaulted) = configured_list(
+        let list = configured_list(
             ini,
             VECTOR_SECTION,
             "extensions",
@@ -2418,9 +2444,6 @@ impl AppConfig {
             sanitize_vector_extensions,
         );
         self.vector_extensions = list;
-        restored |= defaulted;
-
-        restored
     }
 }
 
@@ -2935,17 +2958,19 @@ mod tests {
         let config = read_file(&mut ini);
         assert_eq!(config.font_extensions, vec!["otf", "ttf"]);
 
-        // A file with no section at all is answered with the built-in list, and told so, so
-        // the file is written out again with it.
+        // A file with no section at all is answered with the built-in list, and the file is one
+        // to write out again with it, since a key that is gone is not what the app is using.
         let mut ini = Ini::new();
         ini.set(CONFIG_SECTION, "run_at_startup", Some("true".to_string()));
 
-        let mut config = AppConfig::default();
-        config.font_extensions.clear();
-        assert!(config.apply_ini(&ini), "a list that was put back");
+        let config = read_file(&mut ini);
         assert_eq!(
             config.font_extensions,
             sanitize_font_extensions(DEFAULT_FONT_EXTENSIONS)
+        );
+        assert!(
+            config.differs(&ini),
+            "and the file, which has no such section, is one to write"
         );
     }
 
@@ -3110,36 +3135,118 @@ mod tests {
         }
     }
 
+    /// A file holding everything this app writes, as `save` would write it: what a file on disk
+    /// is once it has been through the app, and what the tests below change one key of.
+    fn written_file() -> Ini {
+        let mut ini = Ini::new();
+        for (section, keys) in AppConfig::default().to_ini().get_map_ref() {
+            for (key, value) in keys {
+                ini.set(section, key, value.clone());
+            }
+        }
+
+        ini
+    }
+
     /// A setting the file does not have is one the app has to write: the line was deleted, a
     /// whole section was, or the setting is one this build has and the file was written before
-    /// it existed. A file that has every setting of this build, and names nothing the old way,
-    /// is left exactly as it is.
+    /// it existed. A file that holds everything this build writes is one there is nothing to do.
     #[test]
     fn a_setting_the_file_does_not_have_is_a_reason_to_write_it() {
+        let config = AppConfig::default();
+
         let mut partial = Ini::new();
         partial.set(CONFIG_SECTION, "preview_enabled", Some("true".to_string()));
 
         assert!(
-            !has_every_setting(&partial),
-            "a file holding one setting of fifty does not have them all"
+            config.differs(&partial),
+            "a file holding one setting of fifty does not say what the app is using"
         );
         assert!(
-            repair_ini(&mut partial),
-            "and a file that is missing settings is one to write out again"
+            !config.differs(&written_file()),
+            "a file holding every one of them is one to leave alone"
+        );
+    }
+
+    /// A value the app cannot read is one it does not keep, and a file holding one is a file to
+    /// write: what was written by hand — a tone map that is not one of them, a delay past the
+    /// ceiling, a face of a collection past the last one there is — is replaced by the value the
+    /// app is actually using, so the file says what the app does rather than what it could not
+    /// read.
+    #[test]
+    fn a_value_the_app_cannot_read_is_written_back_as_the_one_it_uses() {
+        let mut ini = written_file();
+        ini.set(
+            CONFIG_SECTION,
+            "hdr_tone_map",
+            Some("reinharzzz".to_string()),
         );
 
-        let mut complete = Ini::new();
-        for (_, keys) in SETTING_GROUPS {
-            for key in *keys {
-                complete.set(CONFIG_SECTION, key, Some("1".to_string()));
-            }
+        let config = read_file(&mut ini);
+
+        assert_eq!(
+            config.hdr_tone_map, DEFAULT_HDR_TONE_MAP,
+            "a curve that is not one of them leaves the setting where it starts"
+        );
+        assert!(
+            config.differs(&ini),
+            "and the file, which names no curve the app reads, is one to write"
+        );
+
+        // And the same for a value a setting reduces: a delay past its ceiling is read as the
+        // ceiling, so a file asking for more than that is not one the app would write.
+        let mut ini = written_file();
+        ini.set(
+            CONFIG_SECTION,
+            "spinner_delay_ms",
+            Some((MAX_SPINNER_DELAY_MS * 10).to_string()),
+        );
+
+        let config = read_file(&mut ini);
+
+        assert_eq!(config.spinner_delay_ms, MAX_SPINNER_DELAY_MS);
+        assert!(config.differs(&ini));
+    }
+
+    /// A file the app writes is a file it reads back as itself: reading the text `save` puts on
+    /// disk gives the same settings, and writing those out again gives the same text. This is
+    /// what the whole check rests on — a file that read back as something else would be written
+    /// on every read, the watcher would see that write as a change, and the app would spend the
+    /// rest of the run rewriting a file it had just written.
+    #[test]
+    fn a_file_the_app_wrote_is_one_it_reads_back_as_itself() {
+        let mut config = AppConfig::default();
+        config.theme = TextTheme::Dark;
+        config.avoid_mode = AvoidMode::Details;
+        config.hdr_tone_map = Curve::Aces;
+        config.hdr_exposure = -2.5;
+        config.decode_budget_gb = 0.5;
+        config.office_engine_idle = EngineIdle::Indefinite;
+        config.webview_idle = EngineIdle::Seconds(60);
+        config.pdf_scale = PreviewScale::Percent(25);
+        config.image_background = TransparentBackground::Transparent;
+        config.text_scroll_far_edge_grace_pixels = 12.5;
+        config.office_cache_mb = 1024;
+
+        for config in [AppConfig::default(), config] {
+            let written = ordered_text(&config.to_ini());
+
+            let mut ini = Ini::new();
+            ini.read(written.clone()).expect("a file this app wrote");
+
+            let mut read_back = AppConfig::default();
+            read_back.apply_ini(&ini);
+
+            assert_eq!(
+                ordered_text(&read_back.to_ini()),
+                written,
+                "the file is read back as the file it is"
+            );
+            assert!(
+                !read_back.differs(&ini),
+                "and it is a file there is nothing to write"
+            );
         }
-
-        assert!(has_every_setting(&complete));
-        assert!(
-            !repair_ini(&mut complete),
-            "a file with every setting, under the names of now, is one to leave alone"
-        );
     }
 
     /// The repair runs on every read, so a file it has already been through has to come out of
@@ -3405,6 +3512,37 @@ video_volume=50
 [image]
 extensions=png,jpg
 "
+        );
+    }
+
+    /// Every setting the app writes is a setting the heading table names. The table is what the
+    /// headings of a file are written from, and it is what the repair reads to tell whether a
+    /// file is missing a setting, so a key `save` writes that the table does not name would be
+    /// written under `; Ungrouped` — and its absence from a file would never be noticed.
+    #[test]
+    fn every_setting_the_app_writes_is_one_the_table_names() {
+        let written = AppConfig::default().to_ini();
+        let keys = written
+            .get_map_ref()
+            .get(CONFIG_SECTION)
+            .expect("a settings section");
+
+        for key in keys.keys() {
+            assert!(
+                SETTING_GROUPS
+                    .iter()
+                    .any(|(_, group)| group.contains(&key.as_str())),
+                "`{key}` is written by `save` and named by no heading"
+            );
+        }
+
+        assert_eq!(
+            keys.len(),
+            SETTING_GROUPS
+                .iter()
+                .map(|(_, group)| group.len())
+                .sum::<usize>(),
+            "the table names as many settings as `save` writes"
         );
     }
 
