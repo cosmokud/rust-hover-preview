@@ -1,6 +1,6 @@
 [package]
 name = "rust-hover-preview"
-version = "0.2.12"
+version = "0.2.13"
 edition = "2021"
 description = "Windows 11 system tray app that shows image, video, PDF, text, and archive previews on hover in Explorer"
 authors = ["Rust Hover Preview Contributors"]
@@ -145,12 +145,18 @@ two-face = { version = "0.4.3", default-features = false, features = ["syntect-o
 # CommonMark parsing for the rendered Markdown preview mode
 pulldown-cmark = { version = "0.10.0", default-features = false }
 
-# Archive listings: every reader below decompresses nothing, which is what a
-# listing needs, so the zip crate's compression features and the 7z codecs are
-# off. RAR has no settled pure-Rust reader — the one that exists pulls in
-# GPL-3.0 code and needs a newer rustc — so the official UnRAR sources are
-# compiled in by unrar_sys instead; see the UnRAR licence note in README.
-zip = { version = "8", default-features = false }
+# Archive listings and project containers. A listing decompresses nothing, which is
+# what a listing needs, and the 7z codecs stay off for it; a project container is
+# read for the one picture it holds of the whole document, so the zip crate is given
+# deflate — and `deflate-flate2` rather than `deflate`, which is the feature that
+# names both of the deflate implementations behind it, one a compressor this app
+# never calls and the other a second deflate in the graph. What is left is `flate2`,
+# already a dependency of this app for the tarball side of a listing, so nothing is
+# added to the graph by reading a container. RAR has no settled pure-Rust reader —
+# the one that exists pulls in GPL-3.0 code and needs a newer rustc — so the official
+# UnRAR sources are compiled in by unrar_sys instead; see the UnRAR licence note in
+# README.
+zip = { version = "8", default-features = false, features = ["deflate-flate2"] }
 sevenz-rust2 = { version = "0.20", default-features = false }
 unrar = "0.5"
 tar = "0.4"

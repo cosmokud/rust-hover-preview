@@ -12,6 +12,7 @@ use crate::config::{
     DEFAULT_WEBP_PLAYBACK_FPS,
 };
 use crate::dds_image;
+use crate::design_formats;
 use crate::engine_processes;
 use crate::font_formats;
 use crate::font_preview;
@@ -19,6 +20,8 @@ use crate::office_formats;
 use crate::office_preview;
 use crate::office_render;
 use crate::pdf_preview;
+use crate::project_image;
+use crate::psd_image;
 use crate::svg_preview;
 use crate::text_formats;
 use crate::text_preview::{self, TextPreviewOptions};
@@ -393,6 +396,14 @@ enum MediaType {
     Text,
     Archive,
     Office,
+    /// A design document, previewed from the picture its own format keeps of the whole
+    /// thing: the merged image at the end of a Photoshop file, or the flattened
+    /// document a project container holds beside its layers. It is a kind of its own
+    /// for the reason the texture above is — the gate over it is not the gate over
+    /// pictures, so a user who wants none of them has a switch that is not the switch
+    /// for images — while what draws one is this window, into a frame composed like
+    /// any other.
+    Design,
     Loading,
 }
 
@@ -413,6 +424,10 @@ impl MediaType {
             Self::Pdf => Some(PreviewType::Pdf),
             Self::Archive => Some(PreviewType::Archives),
             Self::Office => Some(PreviewType::Office),
+            // A design document is drawn into a frame like any picture, and the switch
+            // over it is its own: the picture *is* what the file keeps of the document,
+            // but a user who wants none of them is not asking for pictures to be off.
+            Self::Design => Some(PreviewType::Design),
             Self::Loading => None,
         }
     }
@@ -1698,6 +1713,11 @@ struct HoverScales {
 /// sized from the window the engine draws it in, so a share of the room is a share of the
 /// type. A file that will not parse as a font is not measured at all, so a hover onto one
 /// never reaches this.
+///
+/// A design document is the picture's rule again and asks for nothing of its own: what
+/// its preview is made of is the picture the file keeps of the whole document, so the
+/// share is of the document's own size and `preview_scale` is the setting that names it —
+/// see `load_design_preview`.
 ///
 /// A video keeps the share of its own size `video_scale` names, which is the picture's
 /// rule: what a video's preview is, until the player's window is over it, is its first
@@ -3074,6 +3094,81 @@ fn load_static_image(
     Some(static_image_media(frame, kind))
 }
 
+/// The picture a design document is previewed from.
+///
+/// Two readers answer for these documents and both hand back the same thing: the
+/// picture the file keeps of the whole document, decoded into the box the layout
+/// planned rather than at the size it is — which for a layered document can be
+/// enormous, and is why the box is what is asked for rather than the size. Which of
+/// the two is asked is settled by the file's own header rather than by its name:
+/// Photoshop's two formats are the planar merged picture this app decodes itself, and
+/// a project container is a zip holding a picture the application saved; see
+/// `psd_image` and `project_image`.
+///
+/// Everywhere else in this app a design preview is a picture: the frame is composed
+/// like one, held in the image cache like one under the size it was made for, and drawn
+/// over the backdrop pictures are drawn over. The scale it is laid out at is the
+/// picture rule too — a share of the document's own size — so nothing here asks the
+/// configuration anything the caller has not already read; see
+/// `effective_preview_scale`.
+fn load_design_preview(
+    path: &Path,
+    max_width: u32,
+    max_height: u32,
+    preview_scale: PreviewScale,
+) -> Option<MediaData> {
+    let (source_width, source_height) = design_dimensions(path)?;
+    let (target_width, target_height) = scale_dimensions(
+        source_width,
+        source_height,
+        max_width,
+        max_height,
+        preview_scale,
+    );
+
+    let key = ImageCacheKey {
+        path: path.to_path_buf(),
+        version: file_version(path),
+        width: target_width,
+        height: target_height,
+    };
+
+    if let Some(frame) = image_cache_get(&key) {
+        return Some(static_image_media(frame, MediaType::Design));
+    }
+
+    let pixels = if psd_image::is_psd_file(path) {
+        psd_image::decode(path, target_width, target_height)
+    } else {
+        project_image::decode(path, target_width, target_height)
+    }?;
+
+    let frame = ImageFrame {
+        pixels,
+        width: target_width,
+        height: target_height,
+        delay_ms: 0,
+    };
+
+    image_cache_put(key, frame.clone());
+
+    Some(static_image_media(frame, MediaType::Design))
+}
+
+/// The size of the picture a design document is previewed from: the document's own
+/// size for a Photoshop file, and the size of the picture a project container holds.
+///
+/// A file neither reader will answer for reports no size, which is how a design
+/// document this app has no reader for comes to show nothing at all rather than a
+/// picture of some other format's making.
+fn design_dimensions(path: &Path) -> Option<(u32, u32)> {
+    if psd_image::is_psd_file(path) {
+        psd_image::dimensions(path)
+    } else {
+        project_image::dimensions(path)
+    }
+}
+
 /// Render the first page of a PDF through the PDF engine built into Windows.
 fn load_pdf_first_page(
     path: &Path,
@@ -4155,6 +4250,19 @@ fn load_media(
         return load_office_preview(path, max_width, max_height, preview_scale, &cancel);
     }
 
+    // A design document is read for the picture its own format keeps of the whole
+    // thing, and it is asked where the hook asks it: after the office list, ahead of
+    // the text lists and the picture path — neither of which would have claimed one of
+    // these names anyway. What the reader refuses is refused outright rather than
+    // falling through to the decoder the picture path ends in, because that decoder is
+    // for the names it names and this is not one of them.
+    //
+    // The gate is not asked here, exactly as it is not asked for a PDF or a font: the
+    // hook asks it before a hover can reach this path at all.
+    if design_formats::is_design_file(path) {
+        return load_design_preview(path, max_width, max_height, preview_scale);
+    }
+
     if text_formats::is_text_file(path) {
         return load_text_preview(path, max_width, max_height, dpi, current_text_options());
     }
@@ -4340,6 +4448,14 @@ fn get_media_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
 
         return font_preview::probe(path)
             .map(|_| (font_preview::SPECIMEN_WIDTH, font_preview::SPECIMEN_HEIGHT));
+    }
+
+    // A design document is measured from the picture it is previewed from — the merged
+    // image at the end of a Photoshop file, or the picture a project container holds —
+    // and a file neither reader will answer for reports no size, which is how it comes
+    // to show nothing at all rather than a box nothing would be drawn into.
+    if design_formats::is_design_preview(path) {
+        return design_dimensions(path);
     }
 
     // Whatever is left is a picture, so the `Images` gate is what decides it.
