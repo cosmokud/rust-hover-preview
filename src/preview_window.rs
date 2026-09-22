@@ -324,8 +324,10 @@ pub enum PreviewMessage {
     /// `Avoid` setting keeps it off — the item's own text, or the name alone, or the
     /// column the name sits in, depending on the way the setting is on. That region is
     /// where its preview is placed from as well as what it is kept off, the way a
-    /// hovered item's is. See `compute_keyboard_layout`.
-    ShowKeyboard(PathBuf, i32, i32, i32, i32, Option<ScreenRegion>),
+    /// hovered item's is, for an item that draws its text as a row of its view: the
+    /// last field says whether it does, read off the item's own text by the hook (see
+    /// `explorer_hook::ItemText`). See `compute_keyboard_layout`.
+    ShowKeyboard(PathBuf, i32, i32, i32, i32, Option<ScreenRegion>, bool),
     Hide,
     Refresh,
     /// A preview type was switched on or off. Only a preview whose own kind is
@@ -818,6 +820,7 @@ pub fn show_preview_keyboard(
     item_right: i32,
     item_bottom: i32,
     avoid: Option<ScreenRegion>,
+    draws_columns: bool,
 ) {
     if let Ok(sender) = PREVIEW_SENDER.lock() {
         if let Some(ref tx) = *sender {
@@ -828,6 +831,7 @@ pub fn show_preview_keyboard(
                 item_right,
                 item_bottom,
                 avoid,
+                draws_columns,
             ));
         }
     }
@@ -6394,40 +6398,83 @@ const KEYBOARD_GAP_PIXELS: f32 = 10.0;
 /// `compute_keyboard_layout`.
 const MIN_BESIDE_ROOM_PIXELS: f32 = 64.0;
 
-/// Compute preview layout for keyboard hover (relative to item bounding rect)
+/// What placing a keyboard preview needs: the item it is about — its box, the region
+/// the `Avoid` setting keeps it off, and whether its text is drawn as a row — and the
+/// size and mode the placement is made at.
+///
+/// It is the keyboard's answer to `HoverPlacement`, which is the same set of facts
+/// read at a cursor rather than at the focused item, and it is asked for in the same
+/// way: once as the preview opens, and again with the size a text preview measured
+/// itself at, which is the one thing that changes between the two.
+#[derive(Clone, Copy)]
+struct KeyboardPlacement {
+    /// The box the item occupies on screen, which a box item's preview is placed
+    /// beside and a row's is not — see `compute_keyboard_layout`.
+    item_rect: (i32, i32, i32, i32),
+    /// The region the `Avoid` setting keeps a preview off: the item's own text, the
+    /// name alone, or the column the name sits in, as the setting has it — or `None`
+    /// when nothing is kept off, or the view reported no text for the item.
+    avoid: Option<ScreenRegion>,
+    /// Whether the item draws anything beside the piece its name is drawn in, which
+    /// with the item's shape is what says it is a row of its view rather than a box —
+    /// see `explorer_hook::ItemText`.
+    columns: bool,
+    /// The media's own size, which the preview is scaled into the room by.
+    orig_dims: (u32, u32),
+    /// The position mode: whether the preview grows away from the item or is centred
+    /// beside it.
+    follow_cursor: bool,
+    /// The share of the media's own size the preview is drawn at.
+    preview_scale: PreviewScale,
+}
+
+/// Compute preview layout for keyboard hover (relative to the focused item's box)
 /// Positions the preview so it doesn't block the selected file item
 ///
-/// `avoid` is the region the `Avoid` setting keeps a preview off — the boxes each
-/// piece of the item's own text is drawn in, which the hook reads off the item's
-/// children in one batched call (see `explorer_hook::item_text_box`). It is what the
+/// `placement` is what the item asks for: its box, the region the `Avoid` setting
+/// keeps a preview off — the boxes each piece of the item's own text is drawn in,
+/// which the hook reads off the item's children in one batched call (see
+/// `explorer_hook::item_text_box`) — whether the item draws its text as a row of its
+/// view, and the size and mode the placement is made at. The region is what the
 /// placement is kept clear of *and* where a row's placement is measured from, so a row
 /// is only cleared as far as the setting asks; with nothing kept off, an item is
-/// placed by the position mode alone. See `avoiding_text`.
+/// placed by the position mode alone. See `avoiding_text` and `KeyboardPlacement`.
+///
+/// A row of the view is one by the columns it draws beside its name rather than by its
+/// box: the row's box is as wide as the *view* the row is drawn in, not as wide as the
+/// display, so a `Details` row of a window a quarter of the display across is a row all
+/// the same — and read by its box it would be placed past the whole of its columns at
+/// every way of avoiding.
 ///
 /// `dpi` is the display the item is on, which is what the margins this is written
 /// around — the gap it keeps off the item and the least room beside one that is worth
 /// sitting in — are scaled by.
 fn compute_keyboard_layout(
-    item_rect: (i32, i32, i32, i32),
-    orig_dims: (u32, u32),
-    follow_cursor: bool,
-    avoid: Option<ScreenRegion>,
-    preview_scale: PreviewScale,
+    placement: KeyboardPlacement,
     bounds: ScreenBounds,
     dpi: u32,
 ) -> Option<PreviewLayout> {
+    let KeyboardPlacement {
+        item_rect,
+        avoid,
+        columns,
+        orig_dims,
+        follow_cursor,
+        preview_scale,
+    } = placement;
+
     let (item_left, item_top, item_right, item_bottom) = item_rect;
     let gap = logical_px(dpi, KEYBOARD_GAP_PIXELS);
     let min_beside_room = logical_px(dpi, MIN_BESIDE_ROOM_PIXELS);
     let (orig_w, orig_h) = (orig_dims.0 as i32, orig_dims.1 as i32);
 
-    // An item far wider than it is tall and at least half the display across is a
-    // row of the list — Content view draws every item that way, as a box as wide as
-    // the view with the name and the columns written into its left end.
+    // An item far wider than it is tall whose text is drawn as a row — the name with
+    // the columns of a `Details` or `Content` row beside it, which the hook reads off
+    // the item's own text — is a row of the list: a box as wide as the view with its
+    // text written into the left end of it, whatever the view is doing on the display.
     let item_width = (item_right - item_left).max(0);
     let item_height = (item_bottom - item_top).max(1);
-    let display_width = (bounds.right - bounds.left).max(1);
-    let row_shaped = item_width >= item_height * 4 && item_width * 2 >= display_width;
+    let row_shaped = columns && item_width >= item_height * 4;
 
     // What is *beside* a row is not what its edges leave: the room past the row's
     // right edge is the space the view itself is not using — a sliver at the
@@ -7571,7 +7618,7 @@ pub fn run_preview_window() {
                             }
                         }
                     }
-                    PreviewMessage::ShowKeyboard(path, il, it, ir, ib, avoid) => {
+                    PreviewMessage::ShowKeyboard(path, il, it, ir, ib, avoid, columns) => {
                         show_requested = true;
                         // The focused item lives inside the Explorer window, so
                         // its center resolves to that window's monitor.
@@ -7585,22 +7632,21 @@ pub fn run_preview_window() {
 
                         if let Some(orig_dims) = media_dimensions(&path, bounds, dpi) {
                             let is_video = is_video_file(&path);
-                            if let Some(layout) = compute_keyboard_layout(
-                                (il, it, ir, ib),
+                            let placement = KeyboardPlacement {
+                                item_rect: (il, it, ir, ib),
+                                avoid,
+                                columns,
                                 orig_dims,
                                 follow_cursor,
-                                avoid,
                                 preview_scale,
-                                bounds,
-                                dpi,
-                            ) {
+                            };
+                            if let Some(layout) = compute_keyboard_layout(placement, bounds, dpi) {
                                 let layout = text_preview_layout(&path, layout, dpi, |size| {
                                     compute_keyboard_layout(
-                                        (il, it, ir, ib),
-                                        size,
-                                        follow_cursor,
-                                        avoid,
-                                        preview_scale,
+                                        KeyboardPlacement {
+                                            orig_dims: size,
+                                            ..placement
+                                        },
                                         bounds,
                                         dpi,
                                     )
@@ -7612,11 +7658,14 @@ pub fn run_preview_window() {
                                 // placed at, so its spinner is the arc's own box
                                 // beside the item, the way its preview is.
                                 show_spinner_layout = compute_keyboard_layout(
-                                    (il, it, ir, ib),
-                                    (office_preview::WAITING_BOX, office_preview::WAITING_BOX),
-                                    follow_cursor,
-                                    avoid,
-                                    PreviewScale::Percent(100),
+                                    KeyboardPlacement {
+                                        orig_dims: (
+                                            office_preview::WAITING_BOX,
+                                            office_preview::WAITING_BOX,
+                                        ),
+                                        preview_scale: PreviewScale::Percent(100),
+                                        ..placement
+                                    },
                                     bounds,
                                     dpi,
                                 );
@@ -8162,6 +8211,25 @@ mod tests {
         }
     }
 
+    /// A keyboard placement of one item, at the size and mode the figures are easy to
+    /// read in: the media's own size at 100%, and `Best Position`, so the place comes
+    /// out of the room beside the item alone. `columns` is whether the item is read as
+    /// a row of its view or as a box item — see `KeyboardPlacement`.
+    fn keyboard_placement(
+        item: (i32, i32, i32, i32),
+        avoid: Option<ScreenRegion>,
+        columns: bool,
+    ) -> KeyboardPlacement {
+        KeyboardPlacement {
+            item_rect: item,
+            avoid,
+            columns,
+            orig_dims: (400, 300),
+            follow_cursor: false,
+            preview_scale: PreviewScale::Percent(100),
+        }
+    }
+
     /// The display the placement figures are worked out for: 100%, which is what
     /// distances written in logical pixels are the same as the pixels of.
     const TEST_DPI: u32 = 96;
@@ -8293,25 +8361,16 @@ mod tests {
     #[test]
     fn a_keyboard_rows_tail_begins_at_the_region_it_is_kept_off() {
         let row = (0, 100, 1000, 140);
-        let media = (400, 300);
 
         let past_the_name = compute_keyboard_layout(
-            row,
-            media,
-            false,
-            Some((20, 104, 120, 136)),
-            PreviewScale::Percent(100),
+            keyboard_placement(row, Some((20, 104, 120, 136)), true),
             bounds(),
             TEST_DPI,
         )
         .expect("a placement past the name");
 
         let past_every_column = compute_keyboard_layout(
-            row,
-            media,
-            false,
-            Some((20, 104, 900, 136)),
-            PreviewScale::Percent(100),
+            keyboard_placement(row, Some((20, 104, 900, 136)), true),
             bounds(),
             TEST_DPI,
         )
@@ -8325,17 +8384,82 @@ mod tests {
         );
     }
 
+    /// A row is a row whatever the window is doing: a `Details` row of a window
+    /// narrower than half the display still takes its placement from the region the
+    /// `Avoid` setting keeps it off — past the name, past the `Name` column, past the
+    /// row's columns — rather than from its own right edge, which is where the same
+    /// row read as a box would put its preview at every one of those settings. The row
+    /// below is a sixth of the display across, its text written into the left end of
+    /// it, as `Details` draws one.
+    #[test]
+    fn a_rows_placement_is_measured_from_the_region_whatever_the_window_is() {
+        let row = (0, 100, 420, 124);
+        let gap = logical_px(TEST_DPI, KEYBOARD_GAP_PIXELS);
+
+        // The region each way of avoiding keeps off, and the edge it leaves the
+        // preview past: the name's own width, the `Name` column, and the columns.
+        let regions = [
+            ((12, 103, 180, 122), 180, "past the name"),
+            ((12, 103, 220, 122), 220, "past the `Name` column"),
+            ((12, 103, 418, 122), 418, "past the row's columns"),
+        ];
+
+        for (region, region_right, what) in regions {
+            let layout = compute_keyboard_layout(
+                keyboard_placement(row, Some(region), true),
+                bounds(),
+                TEST_DPI,
+            )
+            .unwrap_or_else(|| panic!("a placement {what}"));
+
+            assert_eq!(layout.pos_x, region_right + gap, "{what}");
+        }
+
+        // Which leaves the name's placement inside the row it belongs to, where the
+        // row's own right edge would have put it had the row been read as a box.
+        let past_the_name = compute_keyboard_layout(
+            keyboard_placement(row, Some((12, 103, 180, 122)), true),
+            bounds(),
+            TEST_DPI,
+        )
+        .expect("a placement past the name");
+
+        assert!(
+            past_the_name.pos_x < row.2,
+            "the name's tail is inside the row: {} against the row's own edge {}",
+            past_the_name.pos_x,
+            row.2
+        );
+    }
+
+    /// An item that draws nothing beside its name — the label under an icon — is a box
+    /// item: its preview is placed beside the box itself whichever region is kept off,
+    /// since the label is a piece drawn inside that box and not a row of the view.
+    #[test]
+    fn a_box_items_tail_is_its_own_edge_and_not_its_labels() {
+        let tile = (0, 100, 120, 220);
+        let label = (25, 190, 95, 206);
+        let gap = logical_px(TEST_DPI, KEYBOARD_GAP_PIXELS);
+
+        for avoid in [Some(label), None] {
+            let layout = compute_keyboard_layout(
+                keyboard_placement(tile, avoid, false),
+                bounds(),
+                TEST_DPI,
+            )
+            .expect("a placement beside the tile");
+
+            assert_eq!(layout.pos_x, tile.2 + gap, "just past the tile's own edge");
+        }
+    }
+
     /// With nothing kept off — `Avoid Nothing` — a row is placed by the position mode
     /// alone: it is anchored at its middle, the way a hover over it is read, and the
     /// preview is allowed to cover it.
     #[test]
     fn a_keyboard_row_with_nothing_kept_off_is_placed_by_position_alone() {
         let layout = compute_keyboard_layout(
-            (0, 100, 1000, 140),
-            (400, 300),
-            false,
-            None,
-            PreviewScale::Percent(100),
+            keyboard_placement((0, 100, 1000, 140), None, true),
             bounds(),
             TEST_DPI,
         )
@@ -9488,7 +9612,7 @@ mod tests {
                     bounds.right,
                     (bounds.top + bounds.bottom) / 2 + 40,
                 ),
-                // A box item, the way Content view draws one.
+                // A box item, the way an icon view draws one.
                 (
                     bounds.left + 100,
                     bounds.top + 100,
@@ -9523,21 +9647,36 @@ mod tests {
                                 Some((item_left, item_top, item_right, item_bottom)),
                             ];
 
-                            for avoid in avoids {
-                                let Some(layout) = compute_keyboard_layout(
-                                    (item_left, item_top, item_right, item_bottom),
-                                    (orig_width, orig_height),
-                                    follow_cursor,
-                                    avoid,
-                                    preview_scale,
-                                    bounds,
-                                    dpi,
-                                ) else {
-                                    continue;
-                                };
+                            // Read as a row of the view and as a box item, since what
+                            // the item draws beside its name decides which of the two
+                            // placements it gets and both are promises of their own:
+                            // the item is placed from the region it is kept off or
+                            // from its own edges, whichever its text says it is.
+                            for columns in [true, false] {
+                                for avoid in avoids {
+                                    let Some(layout) = compute_keyboard_layout(
+                                        KeyboardPlacement {
+                                            item_rect: (
+                                                item_left,
+                                                item_top,
+                                                item_right,
+                                                item_bottom,
+                                            ),
+                                            avoid,
+                                            columns,
+                                            orig_dims: (orig_width, orig_height),
+                                            follow_cursor,
+                                            preview_scale,
+                                        },
+                                        bounds,
+                                        dpi,
+                                    ) else {
+                                        continue;
+                                    };
 
-                                assert_inside_the_display(layout, bounds);
-                                placed += 1;
+                                    assert_inside_the_display(layout, bounds);
+                                    placed += 1;
+                                }
                             }
                         }
                     }

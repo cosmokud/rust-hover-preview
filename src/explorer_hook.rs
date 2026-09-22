@@ -176,6 +176,15 @@ struct ItemText {
     /// `Avoid Filename` narrows to the width the name itself is drawn at — see
     /// [`HoveredItem::name_box`].
     name: RECT,
+    /// Whether anything is drawn beside the piece the name is drawn in. A view that
+    /// draws its items as rows writes the columns beside the name there — a `Details`
+    /// row's type, date and size, the path and details of a `Content` row — where a
+    /// label under an icon, a tile's stacked lines and a name alone draw nothing
+    /// beside it. It is what says the item is a row of its view rather than a box: a
+    /// row's text is written into the left end of a box as wide as the view, so the
+    /// columns are the room a keyboard preview may take and the box's own right edge
+    /// is not — see [`HoveredItem::draws_columns`].
+    columns: bool,
 }
 
 /// The item a file is resolved from, as the view's accessibility provider reports
@@ -200,7 +209,9 @@ struct HoveredItem {
     /// items as rows writes beside it — or `None` when the view reported no text, or
     /// the walk that would have read one was not asked for it, which is what a walk
     /// with nothing to keep a preview off asks. What it holds is the region the
-    /// `Avoid` setting places a preview from, the keyboard's as much as the pointer's.
+    /// `Avoid` setting places a preview from, the keyboard's as much as the pointer's,
+    /// and whether the item draws a row of columns at all — see
+    /// [`HoveredItem::draws_columns`].
     text: Option<ItemText>,
     /// The window the item is drawn in, whose frame is the window the item's view
     /// belongs to.
@@ -232,6 +243,22 @@ impl HoveredItem {
         .unwrap_or(self.bounds);
 
         Some((region.left, region.top, region.right, region.bottom))
+    }
+
+    /// Whether the item draws its text as a row of its view: a name with the columns
+    /// of a `Details` or `Content` row written beside it, rather than the label under
+    /// an icon or a name on its own. See [`ItemText::columns`].
+    ///
+    /// It is read off the item's own text for the keyboard rather than guessed from
+    /// the item's box, because a row's box is as wide as the *view* it is drawn in and
+    /// not as wide as the display: a `Details` row of a window that is a quarter of the
+    /// display across is a row all the same, and at `Avoid Filename` its preview
+    /// belongs past the name — over the columns the setting lets it cover — and not
+    /// past the row's own right edge, which is what the placement would take were the
+    /// row read as a box. An item whose text cannot be measured answers `false`, which
+    /// leaves it placed by its box the way it always was.
+    fn draws_columns(&self) -> bool {
+        self.text.is_some_and(|text| text.columns)
     }
 
     /// The box the item's name is drawn in, cut to the width the name itself takes:
@@ -1751,11 +1778,14 @@ fn item_from_element(
 /// is reported the way a view reports everything: each piece of an item's text — a
 /// Content row's name and path, a Details row's name, type, modified date and size,
 /// the label under an icon — is an element of its own carrying the box it is drawn
-/// in, child of the item. Reading them answers two things a box cannot: the whole of
-/// what the item draws, whose right edge is where a row's content stops — the room a
-/// keyboard preview is placed in — and the leftmost piece, which in the views that
-/// draw their items as rows is the `Name` column of `Details` or the name above the
-/// path of `Content`, and which is the region a way of avoiding is measured from.
+/// in, child of the item. Reading them answers three things a box cannot: the whole of
+/// what the item draws, whose right edge is where a row's content stops — the region
+/// `Avoid Details` keeps a preview off, and the room *past* it a keyboard preview is
+/// placed in — the leftmost piece, which in the views that draw their items as rows is
+/// the `Name` column of `Details` or the name above the path of `Content`, and which
+/// is the region a way of avoiding is measured from, and whether anything is drawn
+/// beside that piece, which is what says the item is a row of its view at all — see
+/// [`ItemText`].
 ///
 /// It is measured from the item's own children for the same reason: a view reports
 /// what it draws as children, and the rightmost of them is the edge the row's content
@@ -1771,6 +1801,8 @@ fn item_text_box(
     let automation = resolver.automation.as_ref()?;
     let cache = resolver.cache.as_ref()?;
 
+    let mut pieces: Vec<RECT> = Vec::new();
+
     unsafe {
         let condition = automation.CreateTrueCondition().ok()?;
         let children = element
@@ -1778,8 +1810,6 @@ fn item_text_box(
             .ok()?;
         let count = children.Length().ok()?;
 
-        let mut all: Option<RECT> = None;
-        let mut name: Option<RECT> = None;
         for index in 0..count {
             let Ok(child) = children.GetElement(index) else {
                 continue;
@@ -1793,40 +1823,62 @@ fn item_text_box(
             if rect.right <= rect.left {
                 continue;
             }
-            // The name is the leftmost piece, which is the one the views that draw
-            // their items as rows put first; two pieces drawn from the same edge — the
-            // name above the path of `Content` — are told apart by taking the higher.
-            let is_name = match name {
-                None => true,
-                Some(current) => {
-                    rect.left < current.left
-                        || (rect.left == current.left && rect.top < current.top)
-                }
-            };
-            if is_name {
-                name = Some(rect);
+            // Text reported outside the item's box is reported wrong, and the box is
+            // what answers for an item whose text the view does not place.
+            if rect.right > bounds.left && rect.left < bounds.right {
+                pieces.push(rect);
             }
-            all = Some(match all {
-                Some(union) => RECT {
-                    left: union.left.min(rect.left),
-                    top: union.top.min(rect.top),
-                    right: union.right.max(rect.right),
-                    bottom: union.bottom.max(rect.bottom),
-                },
-                None => rect,
-            });
+        }
+    }
+
+    text_boxes(&pieces)
+}
+
+/// What the pieces of an item's own text add up to, or `None` when the item drew none.
+///
+/// Three things are read from them at once, because one walk answers all three: the
+/// whole of what the item draws as one box, the piece its name is drawn in, and
+/// whether anything was drawn *beside* that piece. The last is what tells a row of the
+/// view from a box item: a `Details` or `Content` row writes its columns to the right
+/// of the name — the type, the date, the size — where a label under an icon, a tile's
+/// stacked lines and a name on its own draw nothing there. See [`ItemText::columns`].
+fn text_boxes(pieces: &[RECT]) -> Option<ItemText> {
+    let mut all: Option<RECT> = None;
+    let mut name: Option<RECT> = None;
+
+    for rect in pieces {
+        // The name is the leftmost piece, which is the one the views that draw their
+        // items as rows put first; two pieces drawn from the same edge — the name above
+        // the path of `Content` — are told apart by taking the higher.
+        let is_name = match name {
+            None => true,
+            Some(current) => {
+                rect.left < current.left || (rect.left == current.left && rect.top < current.top)
+            }
+        };
+        if is_name {
+            name = Some(*rect);
         }
 
-        // Text reported outside the item's box is reported wrong, and the box is what
-        // answers for an item whose text the view does not place.
-        let inside = |rect: &RECT| rect.right > bounds.left && rect.left < bounds.right;
-        let all = all.filter(inside)?;
-
-        Some(ItemText {
-            all,
-            name: name.filter(inside).unwrap_or(all),
-        })
+        all = Some(match all {
+            Some(union) => RECT {
+                left: union.left.min(rect.left),
+                top: union.top.min(rect.top),
+                right: union.right.max(rect.right),
+                bottom: union.bottom.max(rect.bottom),
+            },
+            None => *rect,
+        });
     }
+
+    let all = all?;
+    let name = name.unwrap_or(all);
+
+    Some(ItemText {
+        all,
+        name,
+        columns: all.right > name.right,
+    })
 }
 
 /// Whether an element is text the view draws, which is what an item's own content
@@ -3952,6 +4004,7 @@ pub fn run_explorer_hook() {
                                         focused_info.item.bounds.right,
                                         focused_info.item.bounds.bottom,
                                         focused_info.item.avoid_box(),
+                                        focused_info.item.draws_columns(),
                                     );
                                 }
                             } else {
@@ -4011,6 +4064,7 @@ pub fn run_explorer_hook() {
                                     focused_info.item.bounds.right,
                                     focused_info.item.bounds.bottom,
                                     focused_info.item.avoid_box(),
+                                    focused_info.item.draws_columns(),
                                 );
                             }
                         } else {
@@ -4296,6 +4350,74 @@ mod tests {
             listed > stem,
             "the extension takes room of its own: {stem} vs {listed}"
         );
+    }
+
+    /// A `Details` row's text is read as a row: the name is the `Name` column, the box
+    /// the item draws is the whole of its columns, and the columns drawn beside the
+    /// name are what says the item is a row of its view rather than a box — see
+    /// `text_boxes`. The boxes are the ones a row of a `Details` folder is reported
+    /// with, a name and the columns beside it.
+    #[test]
+    fn a_details_rows_text_is_read_as_a_row() {
+        let text = text_boxes(&[
+            RECT { left: 1160, top: 372, right: 1396, bottom: 391 },
+            RECT { left: 1396, top: 372, right: 1540, bottom: 391 },
+            RECT { left: 1540, top: 372, right: 1660, bottom: 391 },
+            RECT { left: 1660, top: 372, right: 1740, bottom: 391 },
+        ])
+        .expect("a row that draws text");
+
+        assert_eq!(text.name.left, 1160, "the name is the leftmost piece");
+        assert_eq!(text.name.right, 1396, "which is the `Name` column");
+        assert_eq!(text.all.right, 1740, "the row's text stops at its last column");
+        assert!(text.columns, "the columns beside the name make it a row");
+    }
+
+    /// A `Content` row is read the same way, though its name is drawn at 125% of the
+    /// icon font and its columns are not all on the name's own line: the name is still
+    /// the leftmost piece and the pieces drawn past it still make the item a row — see
+    /// `text_boxes`.
+    #[test]
+    fn a_content_rows_text_is_read_as_a_row() {
+        let text = text_boxes(&[
+            RECT { left: 1204, top: 349, right: 1504, bottom: 371 },
+            RECT { left: 1542, top: 354, right: 1600, bottom: 370 },
+            RECT { left: 1578, top: 371, right: 1617, bottom: 387 },
+            RECT { left: 1836, top: 371, right: 1889, bottom: 387 },
+        ])
+        .expect("a row that draws text");
+
+        assert_eq!(text.name.left, 1204, "the name is the leftmost piece");
+        assert_eq!(text.all.right, 1889, "the row's text stops at its last column");
+        assert!(text.columns, "the details beside the name make it a row");
+    }
+
+    /// Text drawn *under* the name is not drawn beside it: the label under an icon is
+    /// one piece, and the lines a tile stacks share the room they are drawn in, so
+    /// neither is read as a row — the preview of such an item is placed by its box —
+    /// see `text_boxes`.
+    #[test]
+    fn text_under_the_name_is_not_a_column_beside_it() {
+        let label = text_boxes(&[RECT { left: 1235, top: 602, right: 1312, bottom: 618 }])
+            .expect("a label that draws text");
+        assert_eq!(label.all, label.name, "the label is all of the text");
+        assert!(!label.columns, "a label under an icon has nothing beside it");
+
+        let stacked = text_boxes(&[
+            RECT { left: 1193, top: 346, right: 1384, bottom: 362 },
+            RECT { left: 1193, top: 362, right: 1384, bottom: 378 },
+            RECT { left: 1193, top: 378, right: 1384, bottom: 394 },
+        ])
+        .expect("a tile that draws text");
+        assert_eq!(stacked.name.bottom, 362, "the name is the first line");
+        assert!(!stacked.columns, "the lines under it are not beside it");
+    }
+
+    /// An item that draws no text at all has no boxes to be read, which leaves its
+    /// preview placed by its box — see `item_text_box`.
+    #[test]
+    fn an_item_that_draws_no_text_has_no_boxes() {
+        assert!(text_boxes(&[]).is_none());
     }
 
     /// One window's facts, from the three answers the choice between windows is made
