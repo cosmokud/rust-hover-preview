@@ -3,7 +3,7 @@
 ## Features
 
 - **File Format Support:**
-  - Design & project files (`.psd`, `.xcf`, `.ai`)
+  - More Design & project files (`.xcf`, ...)
 - Add Office documents fallback using LibreOffice / soffice.
 - Add preview integration for voidtools Everything search.
 - Implement automatic updates.
