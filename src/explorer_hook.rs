@@ -1136,10 +1136,12 @@ fn is_media_file(path: &Path) -> bool {
         return false;
     }
 
-    // A drawing is its own kind even though a document's name is an entry of the image
-    // list: what draws one is not a decoder, and the switch for it is not the switch for
-    // pictures. Asked here the way the renderer asks it — the list first, then the
-    // drawing — so the two cannot disagree about which gate a file is under.
+    // A drawing is its own kind, and it is asked here rather than by its name alone: the
+    // vector list claims the drawings of that kind, and a file named as a picture that is
+    // one — an `svg` a hand-edited image list still names, since it was an entry of that
+    // list until the kind it belongs to was given it — is answered by what it is. The
+    // renderer asks the same question in the same place, so the two cannot disagree about
+    // which gate a file is under.
     if svg_preview::is_svg_file(path) {
         return PreviewType::Vector.enabled_in(&config);
     }
