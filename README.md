@@ -169,11 +169,11 @@ All are free. Windows 11 often has HEIF, AV1, and WebP already. Where one is mis
   - **Rehover Delay** — the same steps, before the same file can preview again.
 - **Placement**
   - **Position** — Follow Cursor or Best Position.
-  - **Avoid** — Don’t Avoid, Avoid Filename (default), Avoid Filename Column, or Avoid Details. This keeps a preview off the item it is about.
+  - **Avoid** — Avoid Nothing, Avoid Filename (default), Avoid Filename Column, or Avoid Details. This keeps a preview off the item it is about.
 - **Scaling**
-  - **Images Scaling** — Fit to Screen or 25%–400%, of the image's own size.
-  - **Videos Scaling** — the same shares for a video, 100% (default).
-  - **Animated Scaling** — the same shares for an animated GIF, WebP, or PNG; a still GIF or PNG keeps Images Scaling. 100% (default).
+  - **Image Scaling** — Fit to Screen or 25%–400%, of the image's own size.
+  - **Video Scaling** — the same shares for a video, 100% (default).
+  - **Animated Scaling** — the same shares for an animated GIF, WebP, or PNG; a still GIF or PNG keeps Image Scaling. 100% (default).
   - **SVG Scaling** — Fit to Screen, or 75%, 50% (default), 25%, 10% of the display.
   - **PDF Scaling** — Fit to Screen (default), or the same shares of the display.
   - **Office Scaling** — the same for a page Office rendered; a workbook’s fallback bitmap is never enlarged.
@@ -190,7 +190,7 @@ All are free. Windows 11 often has HEIF, AV1, and WebP already. Where one is mis
   - **SVG Engine TTL** — how long the browser that draws SVG documents is kept warm; greyed out where WebView2 is missing.
   - **Cache** — memory held between hovers, 2 GB down to 0 MB: Image, Text, PDF, Office caches.
   - **Decode Budget** — 16 GB down to 512 MB, 1 GB default: a file past it gets no preview.
-- **Codecs** — what this machine has: Video, Images, and Engines. Missing ones are greyed out.
+- **Codecs** — what this machine has: Videos, Images, and Engines. Missing ones are greyed out.
 - **Run at Startup** — add or remove the Windows startup entry.
 - **Config.ini** — open the configuration file; the item is named for the running version.
 - **Exit** — close the app.

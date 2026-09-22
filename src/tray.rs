@@ -110,7 +110,7 @@ const ID_TRAY_REHOVER_DELAY_SLOW: u16 = 1037; // 1000ms
 const ID_TRAY_DELAY_FAST_PLUS: u16 = 1038; // 750ms
 const ID_TRAY_REHOVER_DELAY_FAST_PLUS: u16 = 1039; // 750ms
 const ID_TRAY_OPEN_CONFIG: u16 = 1040;
-/// The `Scaling → Images Scaling` submenu: one command per share of its own size a
+/// The `Scaling → Image Scaling` submenu: one command per share of its own size a
 /// picture is drawn at, in the order it lists them — the first of the two bitmap
 /// submenus, each with a range of its own so a click on one is never read as a click
 /// on the other.
@@ -128,7 +128,7 @@ const ID_TRAY_OFFICE_SCALE_BASE: u16 = 1415;
 /// `Font Scaling`, the fourth of them, in the range after the Office one: a specimen is
 /// drawn at a share of the display the same way a document is.
 const ID_TRAY_FONT_SCALE_BASE: u16 = 1420;
-/// `Videos Scaling`, the `Images Scaling` submenu's twin below it, in the range directly
+/// `Video Scaling`, the `Image Scaling` submenu's twin below it, in the range directly
 /// after the font one: it lists the same shares, so the two share a table and a builder,
 /// and it is a range of its own because a click on a video's scale is never a click on a
 /// picture's.
@@ -150,7 +150,7 @@ const DOCUMENT_SCALE_CHOICES: [PreviewScale; 5] = [
     PreviewScale::Percent(25),
     PreviewScale::Percent(10),
 ];
-/// The shares the `Images Scaling` and `Videos Scaling` submenus offer, in the order they
+/// The shares the `Image Scaling` and `Video Scaling` submenus offer, in the order they
 /// list them: a bitmap is drawn at a share of its own size rather than of the display, so
 /// the percentages are the ones that mean something for one. Nothing is marked as the
 /// default here — the default is passed to the labels rather than written into the table,
@@ -1002,7 +1002,7 @@ unsafe fn show_context_menu(hwnd: HWND) {
     // rather than where it lands.
     let scaling_menu = CreatePopupMenu().unwrap();
 
-    // Add the Images Scaling, Videos Scaling and Animated Scaling submenus: how large a
+    // Add the Image Scaling, Video Scaling and Animated Scaling submenus: how large a
     // picture, a video and an animated picture is drawn, each at a share of its own size
     // rather than of the display. One builder serves all three — the shares are the same
     // shares, and so is what a click on one means — and each is a submenu of its own
@@ -1019,14 +1019,14 @@ unsafe fn show_context_menu(hwnd: HWND) {
 
     append_bitmap_scale_menu(
         scaling_menu,
-        w!("Images Scaling"),
+        w!("Image Scaling"),
         ID_TRAY_SCALE_BASE,
         preview_scale,
         DEFAULT_PREVIEW_SCALE,
     );
     append_bitmap_scale_menu(
         scaling_menu,
-        w!("Videos Scaling"),
+        w!("Video Scaling"),
         ID_TRAY_VIDEO_SCALE_BASE,
         video_scale,
         DEFAULT_VIDEO_SCALE,
@@ -1729,7 +1729,7 @@ fn append_avoid_menu(parent: HMENU, label: PCWSTR, base: u16, avoid_mode: AvoidM
 /// tray lists it under.
 fn avoid_label(mode: AvoidMode) -> &'static str {
     match mode {
-        AvoidMode::Off => "Don't Avoid",
+        AvoidMode::Off => "Avoid Nothing",
         AvoidMode::Filename => "Avoid Filename",
         AvoidMode::FilenameColumn => "Avoid Filename Column",
         AvoidMode::Details => "Avoid Details",
@@ -1845,7 +1845,7 @@ fn append_document_scale_menu(
     let _ = unsafe { AppendMenuW(parent, MF_STRING | MF_POPUP, menu.0 as usize, label) };
 }
 
-/// The `Images Scaling` and `Videos Scaling` submenus: the shares of its own size a bitmap
+/// The `Image Scaling` and `Video Scaling` submenus: the shares of its own size a bitmap
 /// — a picture, or a video's first frame and the player window over it — is drawn at, with
 /// the one the setting is on marked and nothing marked for a share the menu does not
 /// offer, which is what a hand-edited `config.ini` can ask for. One builder serves both
@@ -2009,7 +2009,7 @@ fn append_engine_idle_menu(
 fn append_codecs_menu(menu: HMENU) {
     let codecs_menu = unsafe { CreatePopupMenu().unwrap() };
 
-    append_codec_group(codecs_menu, w!("Video"), codecs::video());
+    append_codec_group(codecs_menu, w!("Videos"), codecs::video());
     append_codec_group(codecs_menu, w!("Images"), codecs::images());
     append_codec_group(codecs_menu, w!("Engines"), codecs::engines());
 
@@ -2396,7 +2396,7 @@ fn set_font_scale(index: u16) {
     }
 }
 
-/// The share of its own size an item of the `Images Scaling` or `Videos Scaling` submenu
+/// The share of its own size an item of the `Image Scaling` or `Video Scaling` submenu
 /// stands for, by the position it was listed at. An id past the last choice the menu
 /// offered is one that is not there.
 fn bitmap_scale_at(index: u16) -> Option<PreviewScale> {
@@ -2694,7 +2694,7 @@ mod tests {
         assert_eq!(
             AVOID_CHOICES.map(avoid_label),
             [
-                "Don't Avoid",
+                "Avoid Nothing",
                 "Avoid Filename",
                 "Avoid Filename Column",
                 "Avoid Details"
@@ -2846,7 +2846,7 @@ mod tests {
         }
     }
 
-    /// The `Images Scaling`, `Videos Scaling` and `Animated Scaling` submenus are one
+    /// The `Image Scaling`, `Video Scaling` and `Animated Scaling` submenus are one
     /// range each, and none of them reaches into another or into the display shares the
     /// specimen's scale hands out: a click on a share of a bitmap is never read as a
     /// click on another setting's share. Each lists every share the setting can be asked
@@ -2901,7 +2901,7 @@ mod tests {
         }
     }
 
-    /// The `Images Scaling` and `Videos Scaling` submenus offer the shares a bitmap can be
+    /// The `Image Scaling` and `Video Scaling` submenus offer the shares a bitmap can be
     /// drawn at — the share of its own size, rather than the share of the display the
     /// document scales beside them are — in one order and with one set of labels: what a
     /// share is called does not depend on which of the two is asking, and exactly one

@@ -6,6 +6,7 @@
 
 - The scaling options now live in a `Scaling` menu of their own in the tray, right below `Placement`.
 - `Font Background` now defaults to white; `font_background` in `config.ini` still sets it.
+- Tray labels renamed for consistency: `Image Scaling`, `Video Scaling`, `Avoid Nothing`, and `Videos` in `Codecs`.
 
 ## [0.2.11]
 
