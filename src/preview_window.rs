@@ -1810,17 +1810,21 @@ fn effective_preview_scale(path: &Path, scales: HoverScales) -> PreviewScale {
             source if source.may_be_enlarged() => fit_reduced(scales.office),
             _ => bitmap_at_display_scale(scales.office),
         }
-    } else if svg_preview::is_svg_file(path) {
-        fit_reduced(scales.vector)
-    } else if font_formats::is_font_file(path) {
-        fit_reduced(scales.font)
     } else if design_formats::is_design_file(path) {
         // A design document is a document for this question rather than a picture: what is
         // previewed is the picture the file keeps of the whole of itself, at whatever size
         // that is, so the share is of the display the way a page's or a specimen's is.
+        //
+        // It is asked ahead of the kind below it because the gate asks it ahead of that
+        // kind as well: a name written into both lists is a design document, and the share
+        // the vector list would give it is not the share its own setting names.
         fit_reduced(scales.design)
-    } else if vector_formats::is_vector_file(path) {
+    } else if svg_preview::is_svg_file(path) || vector_formats::is_vector_file(path) {
+        // Both halves of the kind, asked as one: what a document costs to draw and what a
+        // drawing costs to replay are the same question, and the setting is the same one.
         fit_reduced(scales.vector)
+    } else if font_formats::is_font_file(path) {
+        fit_reduced(scales.font)
     } else if is_video_file(path) {
         scales.video
     } else {
@@ -1913,13 +1917,28 @@ fn fit_reduced(preview_scale: PreviewScale) -> PreviewScale {
 
 /// Whether the preview of `path` is a text preview.
 ///
-/// The video gate is asked first, because it is the one that settles the
-/// extensions the text list shares with it — `.ts` and `.mts` — by content, and
-/// only it can tell a TypeScript source from the transport stream that goes by the
-/// same name. A file it turns down falls through to the text gate; one it accepts
-/// is a video, which the text renderer would find nothing readable in.
+/// Every kind the gate asks about before the text lists is asked about here too, and for
+/// the reason the gate asks them first: a file is whichever kind claims it, and a file the
+/// hook claimed as a drawing or a document has been measured, laid out and gated as that
+/// kind by the time this is asked. A name written into the text list as well as an earlier
+/// list is that earlier kind, and rendering it as text would be a preview of another kind
+/// than the one the tray was asked to switch.
+///
+/// The video gate is the one that settles the extensions the text list shares with it —
+/// `.ts` and `.mts` — by content, since only it can tell a TypeScript source from the
+/// transport stream that goes by the same name; the rest are bare names, so asking them
+/// costs a lookup each and no read of the file.
 fn is_text_preview(path: &Path) -> bool {
-    !is_video_file(path) && text_formats::is_text_file(path)
+    if !text_formats::is_text_file(path) {
+        return false;
+    }
+
+    !is_video_file(path)
+        && !pdf_preview::is_pdf_file(path)
+        && !archive_formats::is_archive_file(path)
+        && !office_formats::is_office_file(path)
+        && !design_formats::is_design_file(path)
+        && !vector_formats::is_vector_file(path)
 }
 
 fn effective_frame_delay_ms(media_type: &MediaType, source_delay_ms: u32) -> u32 {
@@ -4559,6 +4578,19 @@ fn get_media_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
         return office_preview::measure(path);
     }
 
+    // A design document is measured from the picture it is previewed from — the merged
+    // image at the end of a Photoshop file, or the picture a project container holds —
+    // and a file neither reader will answer for reports no size, which is how it comes
+    // to show nothing at all rather than a box nothing would be drawn into.
+    //
+    // It is asked ahead of the two kinds below it because the gate asks it ahead of them:
+    // a name written into the design list as well as into the vector or font list is a
+    // design document, and the two questions further down would report a size for another
+    // kind than the one the tray was asked to switch.
+    if design_formats::is_design_preview(path) {
+        return design_dimensions(path);
+    }
+
     // An SVG is measured from the document rather than from a header: the size it asks
     // to be drawn at is the size the layout places, and the engine draws it at whatever
     // box comes out of that. It is asked ahead of the readers of the other half of its
@@ -4584,6 +4616,12 @@ fn get_media_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
         return svg_preview::measure(path);
     }
 
+    // A vector drawing is measured from the records it holds: what an `.eps` keeps a
+    // preview of, or what a metafile's own header declares its drawing to be.
+    if vector_formats::is_vector_preview(path) {
+        return vector_dimensions(path);
+    }
+
     // A font is measured at a box of this app's own rather than by anything the file says:
     // a font has no size it asks to be drawn at — what it holds is outlines — so the box is
     // the shape a specimen wants, and the share of the display `font_scale` names decides
@@ -4597,20 +4635,6 @@ fn get_media_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
 
         return font_preview::probe(path)
             .map(|_| (font_preview::SPECIMEN_WIDTH, font_preview::SPECIMEN_HEIGHT));
-    }
-
-    // A design document is measured from the picture it is previewed from — the merged
-    // image at the end of a Photoshop file, or the picture a project container holds —
-    // and a file neither reader will answer for reports no size, which is how it comes
-    // to show nothing at all rather than a box nothing would be drawn into.
-    if design_formats::is_design_preview(path) {
-        return design_dimensions(path);
-    }
-
-    // A vector drawing is measured from the records it holds: what an `.eps` keeps a
-    // preview of, or what a metafile's own header declares its drawing to be.
-    if vector_formats::is_vector_preview(path) {
-        return vector_dimensions(path);
     }
 
     // Whatever is left is a picture, so the `Images` gate is what decides it.

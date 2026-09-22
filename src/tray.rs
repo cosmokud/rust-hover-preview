@@ -500,14 +500,6 @@ unsafe extern "system" fn tray_window_proc(
                 {
                     set_design_scale(cmd - ID_TRAY_DESIGN_SCALE_BASE)
                 }
-                // And how much of the display a vector drawing is replayed over, the same
-                // question asked of records the drawing layer draws at any size.
-                cmd if (ID_TRAY_VECTOR_SCALE_BASE
-                    ..ID_TRAY_VECTOR_SCALE_BASE + DOCUMENT_SCALE_CHOICES.len() as u16)
-                    .contains(&cmd) =>
-                {
-                    set_vector_scale(cmd - ID_TRAY_VECTOR_SCALE_BASE)
-                }
                 // How large a video is drawn, by the position its item was listed at: the
                 // same shares the pictures above it are offered, in a range of their own
                 // because the two settings are read one each.
@@ -2825,6 +2817,7 @@ mod tests {
             ID_TRAY_PDF_SCALE_BASE,
             ID_TRAY_OFFICE_SCALE_BASE,
             ID_TRAY_FONT_SCALE_BASE,
+            ID_TRAY_DESIGN_SCALE_BASE,
         ]
         .map(|base| base..base + DOCUMENT_SCALE_CHOICES.len() as u16);
 
