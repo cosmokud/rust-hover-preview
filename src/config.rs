@@ -12,6 +12,7 @@ use std::time::Duration;
 use crate::archive_formats::{sanitize_archive_extensions, DEFAULT_ARCHIVE_EXTENSIONS};
 use crate::design_formats::{
     sanitize_design_extensions, DEFAULT_DESIGN_EXTENSIONS, DESIGN_EXTENSIONS_BEFORE_AI,
+    DESIGN_EXTENSIONS_BEFORE_CDR_AND_PROCREATE,
 };
 use crate::font_formats::{sanitize_font_extensions, DEFAULT_FONT_EXTENSIONS};
 use crate::image_formats::{
@@ -1525,7 +1526,10 @@ fn repair_older_lists(ini: &mut Ini) -> bool {
         (
             DESIGN_SECTION,
             DEFAULT_DESIGN_EXTENSIONS,
-            &[DESIGN_EXTENSIONS_BEFORE_AI][..],
+            &[
+                DESIGN_EXTENSIONS_BEFORE_AI,
+                DESIGN_EXTENSIONS_BEFORE_CDR_AND_PROCREATE,
+            ][..],
             sanitize_design_extensions as fn(&str) -> Vec<String>,
         ),
         (
@@ -3101,26 +3105,27 @@ mod tests {
         );
     }
 
-    /// The design list's own version of the same: a file holding the list the app shipped
-    /// before `ai` was added to it is the app's own older list, so the entry reaches an
-    /// installation that already exists rather than a fresh one only — and a list anyone
-    /// has edited is kept exactly as it is.
+    /// The design list's own version of the same: a file holding a list the app shipped
+    /// before two more names were added to it — `ai`, and then `cdr` and `procreate` — is
+    /// the app's own older list, so those entries reach an installation that already exists
+    /// rather than a fresh one only — and a list anyone has edited is kept exactly as it is.
     #[test]
-    fn a_list_holding_the_apps_own_design_entries_takes_the_one_added_to_them() {
-        let mut ini = Ini::new();
-        ini.set(
-            DESIGN_SECTION,
-            "extensions",
-            Some(DESIGN_EXTENSIONS_BEFORE_AI.to_string()),
-        );
+    fn a_list_holding_the_apps_own_design_entries_takes_the_ones_added_to_them() {
+        for shipped in [
+            DESIGN_EXTENSIONS_BEFORE_AI,
+            DESIGN_EXTENSIONS_BEFORE_CDR_AND_PROCREATE,
+        ] {
+            let mut ini = Ini::new();
+            ini.set(DESIGN_SECTION, "extensions", Some(shipped.to_string()));
 
-        let config = read_file(&mut ini);
+            let config = read_file(&mut ini);
 
-        assert_eq!(
-            config.design_extensions,
-            sanitize_design_extensions(DEFAULT_DESIGN_EXTENSIONS),
-            "the list the app shipped before is read as the list it ships now"
-        );
+            assert_eq!(
+                config.design_extensions,
+                sanitize_design_extensions(DEFAULT_DESIGN_EXTENSIONS),
+                "the list the app shipped before (`{shipped}`) is read as the list it ships now"
+            );
+        }
 
         let edited = format!("dng,{DESIGN_EXTENSIONS_BEFORE_AI}");
         let mut ini = Ini::new();
