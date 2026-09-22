@@ -468,6 +468,11 @@ pub const DEFAULT_SVG_SCALE: PreviewScale = PreviewScale::Percent(DEFAULT_SVG_SC
 /// is a page of text rather than a document to be studied, and half the display holds the
 /// pangram at a size that can be read at a glance.
 pub const DEFAULT_FONT_SCALE: PreviewScale = PreviewScale::Percent(DEFAULT_FONT_SCALE_PERCENT);
+/// The same for a design document, at the whole of the room: what a preview of one is made
+/// of is the picture the file keeps of the whole document, so the question the setting
+/// answers is how much of the display to give it, and the answer that asks for nothing in
+/// particular is the room the display has.
+pub const DEFAULT_DESIGN_SCALE: PreviewScale = PreviewScale::FitToScreen;
 
 /// How long an engine that is kept warm between documents is kept.
 ///
@@ -912,6 +917,14 @@ pub struct AppConfig {
     /// behind it, and the one kind a reader may want composited differently from a
     /// photograph (see `dds_image`).
     pub dds_background: TransparentBackground,
+    /// The backdrop a design document is drawn over.
+    ///
+    /// A setting of its own for the reason a texture's is: what a document is previewed
+    /// from is the picture the file keeps of the whole thing — a merged image, or the
+    /// flattened document a project container holds — and that picture is as often one a
+    /// designer saved with its transparency as it is one to be looked at against a page,
+    /// so what stands behind it is worth being a setting rather than a guess.
+    pub design_background: TransparentBackground,
     pub video_volume: u32,
     /// How large a picture is drawn, as a share of its own size: `100%` is the size the
     /// file asks for, `50%` half of it, and `fit` the largest size the room the layout
@@ -981,6 +994,15 @@ pub struct AppConfig {
     /// outlines, and `50%` is half the room the display would give the specimen at its
     /// largest.
     pub font_scale: PreviewScale,
+    /// How large a design document is drawn, as a share of the room the display has for
+    /// it — the same question, and the same answers, as the document scales above.
+    ///
+    /// It is a setting of its own rather than the picture scale beside them because
+    /// what the share is applied to is a whole document rather than a photograph: a
+    /// layered document is previewed from the picture its format keeps of the whole
+    /// thing, at whatever size that picture is, so the size one wants is a share of the
+    /// screen the way a page's is rather than a share of the file's own size.
+    pub design_scale: PreviewScale,
     /// Which face of a collection a specimen is drawn from, as the menu numbers faces: `1`
     /// (the default) is the first face the file holds.
     ///
@@ -1098,6 +1120,7 @@ impl Default for AppConfig {
             svg_background: TransparentBackground::Black,
             font_background: TransparentBackground::White,
             dds_background: TransparentBackground::Black,
+            design_background: TransparentBackground::Black,
             video_volume: 0, // Mute by default
             preview_scale: PreviewScale::Percent(DEFAULT_PREVIEW_SCALE_PERCENT),
             video_scale: PreviewScale::Percent(DEFAULT_VIDEO_SCALE_PERCENT),
@@ -1106,6 +1129,7 @@ impl Default for AppConfig {
             pdf_scale: DEFAULT_PDF_SCALE,
             office_scale: DEFAULT_OFFICE_SCALE,
             font_scale: DEFAULT_FONT_SCALE,
+            design_scale: DEFAULT_DESIGN_SCALE,
             ttc_face: DEFAULT_TTC_FACE,
             theme: TextTheme::Light,
             markdown_mode: MarkdownMode::Rendered,
@@ -1400,6 +1424,11 @@ impl AppConfig {
             );
             ini.set(
                 CONFIG_SECTION,
+                "design_background",
+                Some(self.design_background.as_str().to_string()),
+            );
+            ini.set(
+                CONFIG_SECTION,
                 "video_volume",
                 Some(self.video_volume.to_string()),
             );
@@ -1426,6 +1455,11 @@ impl AppConfig {
                 Some(self.office_scale.as_str()),
             );
             ini.set(CONFIG_SECTION, "font_scale", Some(self.font_scale.as_str()));
+            ini.set(
+                CONFIG_SECTION,
+                "design_scale",
+                Some(self.design_scale.as_str()),
+            );
             ini.set(
                 CONFIG_SECTION,
                 "ttc_face",
@@ -1690,6 +1724,14 @@ impl AppConfig {
                 self.dds_background = background;
             }
         }
+        // A design document's is read the same way and for the same reason: the kind is
+        // one of its own, so a file written before it has nothing under this name, and
+        // what it wrote about a picture stays what it wrote about a picture.
+        if let Some(value) = ini.get(CONFIG_SECTION, "design_background") {
+            if let Some(background) = TransparentBackground::from_str(&value) {
+                self.design_background = background;
+            }
+        }
         if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "video_volume") {
             if let Ok(value) = u32::try_from(value) {
                 self.video_volume = value;
@@ -1749,6 +1791,13 @@ impl AppConfig {
         if let Some(value) = ini.get(CONFIG_SECTION, "font_scale") {
             if let Some(scale) = PreviewScale::from_str(&value) {
                 self.font_scale = scale;
+            }
+        }
+        // And a design document's, against the room the display has for the picture the
+        // file keeps of the document.
+        if let Some(value) = ini.get(CONFIG_SECTION, "design_scale") {
+            if let Some(scale) = PreviewScale::from_str(&value) {
+                self.design_scale = scale;
             }
         }
         // And which face of a collection the specimen is of, in the numbering the tray's
@@ -2323,6 +2372,31 @@ mod tests {
         assert_eq!(config.preview_scale, PreviewScale::Percent(400));
     }
 
+    /// A design document's scale is the fifth of them and a setting of its own like the
+    /// four: it starts at the whole of the room, and one key changing leaves the others
+    /// where they were.
+    #[test]
+    fn a_designs_scale_is_read_from_its_own_key() {
+        assert_eq!(DEFAULT_DESIGN_SCALE, PreviewScale::FitToScreen);
+        assert_eq!(AppConfig::default().design_scale, DEFAULT_DESIGN_SCALE);
+
+        let mut ini = Ini::new();
+        ini.set(CONFIG_SECTION, "svg_scale", Some("75".to_string()));
+        ini.set(CONFIG_SECTION, "pdf_scale", Some("25".to_string()));
+        ini.set(CONFIG_SECTION, "office_scale", Some("fit".to_string()));
+        ini.set(CONFIG_SECTION, "font_scale", Some("50".to_string()));
+        ini.set(CONFIG_SECTION, "design_scale", Some(" 10% ".to_string()));
+
+        let mut config = AppConfig::default();
+        config.apply_ini(&ini);
+
+        assert_eq!(config.design_scale, PreviewScale::Percent(10));
+        assert_eq!(config.svg_scale, PreviewScale::Percent(75));
+        assert_eq!(config.pdf_scale, PreviewScale::Percent(25));
+        assert_eq!(config.office_scale, PreviewScale::FitToScreen);
+        assert_eq!(config.font_scale, PreviewScale::Percent(50));
+    }
+
     /// Which face of a collection a specimen is of is a key of its own: a file that has never
     /// named one previews the first face, one that names a face is read at it, and a number
     /// outside the range the menu offers is brought back into it rather than kept.
@@ -2405,6 +2479,33 @@ mod tests {
         assert_eq!(config.image_background, TransparentBackground::White);
         assert_eq!(config.svg_background, TransparentBackground::White);
         assert_eq!(config.font_background, TransparentBackground::White);
+    }
+
+    /// A design document's backdrop is a key of its own for the reason a specimen's is:
+    /// the kind is one of its own, so the key a picture was written under is read for a
+    /// picture and leaves this one where it starts.
+    #[test]
+    fn a_designs_backdrop_is_read_from_its_own_key() {
+        let mut ini = Ini::new();
+        ini.set(
+            CONFIG_SECTION,
+            "image_background",
+            Some("white".to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
+            "design_background",
+            Some("checkerboard".to_string()),
+        );
+
+        let mut config = AppConfig::default();
+        config.apply_ini(&ini);
+
+        assert_eq!(
+            config.design_background,
+            TransparentBackground::Checkerboard
+        );
+        assert_eq!(config.image_background, TransparentBackground::White);
     }
 
     /// The font list is the fifth of them and behaves like the rest: a file that has never
