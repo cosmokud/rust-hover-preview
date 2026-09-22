@@ -11,6 +11,7 @@
 
 ### Fixed
 
+- Keyboard previews in `Details` and `Content` views now follow `Avoid Filename` and `Avoid Filename Column` instead of behaving like `Avoid Details`: a row of a view is recognized by the columns it draws beside the name rather than by its box being at least half the display across, which read the row of a narrower window as a box item and placed its preview past the whole of its columns at every way of avoiding.
 - A failed startup of the Explorer lookup could leave hover previews off for the rest of the run; it is now retried until it works.
 - The internal timeout that stops a stalled Explorer from blocking the app is now verified instead of assumed, and refreshes itself if a newer one is ever needed.
 
