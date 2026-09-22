@@ -235,11 +235,11 @@ Section PreInstall
   StrCpy $INSTDIR "$LOCALAPPDATA\\rust-hover-preview"
 
   ; Nothing is written into `config.ini` here. That file is the app's own: it is written on the
-  ; first run, from the settings of the build that wrote it, with the version stamped in it that
-  ; says so — and every key in it is one that build reads. An installer that seeded it would be
-  ; a second writer of the file, holding the defaults of whenever the installer was built, so
-  ; an installation made that way would keep those values for good: a build that moves a default
-  ; writes it where there is nothing to overwrite, and there would be something.
+  ; first run, from the settings of the build that writes it, and every key in it is one that
+  ; build reads. An installer that seeded it would be a second writer of the file, holding the
+  ; defaults of whenever the installer was built, so an installation made that way would keep
+  ; those values for good: a build that moves a default writes it where there is nothing to
+  ; overwrite, and there would be something.
   ;
   ; The startup entry is not written here either, for the same reason: the app adds it on its
   ; first run, from the setting that asks for it and at the path it is running from.
