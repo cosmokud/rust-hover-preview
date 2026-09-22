@@ -13,6 +13,7 @@ use crate::preview_window::{
 };
 use crate::svg_preview;
 use crate::text_formats::matches_text_lists;
+use crate::vector_formats::matches_vector_list;
 use crate::video_formats::{is_video_file, matches_video_list};
 use crate::wheel_input;
 use crate::{CONFIG, RUNNING};
@@ -1112,6 +1113,13 @@ fn is_media_file(path: &Path) -> bool {
         return PreviewType::Design.enabled_in(&config);
     }
 
+    // A vector drawing is a kind of its own — an SVG document is an entry of the image
+    // list and a metafile is an entry of its own — and it is asked where the renderer asks
+    // it: after the design documents, ahead of the text and image lists.
+    if matches_vector_list(path, &config.vector_extensions) {
+        return PreviewType::Vector.enabled_in(&config);
+    }
+
     if matches_text_lists(path, &config.text_extensions, &config.text_names) {
         return PreviewType::Text.enabled_in(&config);
     }
@@ -1128,12 +1136,12 @@ fn is_media_file(path: &Path) -> bool {
         return false;
     }
 
-    // A document is its own kind even though its name is an entry of the image list:
-    // what draws one is not a decoder, and the switch for it is not the switch for
+    // A drawing is its own kind even though a document's name is an entry of the image
+    // list: what draws one is not a decoder, and the switch for it is not the switch for
     // pictures. Asked here the way the renderer asks it — the list first, then the
-    // document — so the two cannot disagree about which gate a file is under.
+    // drawing — so the two cannot disagree about which gate a file is under.
     if svg_preview::is_svg_file(path) {
-        return PreviewType::Svg.enabled_in(&config);
+        return PreviewType::Vector.enabled_in(&config);
     }
 
     PreviewType::Images.enabled_in(&config)
