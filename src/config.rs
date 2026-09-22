@@ -50,6 +50,9 @@ const DESIGN_SECTION: &str = "design";
 const VECTOR_SECTION: &str = "vector";
 pub const DEFAULT_WEBP_PLAYBACK_FPS: u32 = 90;
 pub const MAX_WEBP_PLAYBACK_FPS: u32 = 90;
+/// The volume a video is played at unless the file says otherwise: silent, so a hover
+/// never makes a sound the pointer did not ask for.
+pub const DEFAULT_VIDEO_VOLUME: u32 = 0;
 pub const DEFAULT_PREVIEW_SCALE_PERCENT: u32 = 100;
 pub const MIN_PREVIEW_SCALE_PERCENT: u32 = 1;
 pub const MAX_PREVIEW_SCALE_PERCENT: u32 = 1000;
@@ -88,6 +91,21 @@ pub const MIN_TEXT_FONT_SCALE_PERCENT: u32 = 1;
 pub const MAX_TEXT_FONT_SCALE_PERCENT: u32 = 1000;
 pub const DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS: f32 = 40.0;
 pub const MAX_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS: f32 = 1000.0;
+/// How long the pointer rests on a file before a preview is put up for it, in
+/// milliseconds.
+///
+/// `0` is no wait at all, which is where the app starts: a hover is answered when it
+/// happens, and a delay is for the machine that would rather it were not — which the
+/// menu offers as a choice rather than making as one.
+pub const DEFAULT_HOVER_DELAY_MS: u64 = 0;
+/// How long the same file waits before a preview of it is put up again, in milliseconds.
+///
+/// A pointer crosses the file it has just left again on its way somewhere else as often
+/// as it comes back to it, so a preview that has just been taken down is not put back up
+/// for this long: a fifth of a second is enough for the hand that was going elsewhere,
+/// while a hand that turns back is answered before the wait is over. `0` is a file that
+/// previews again the moment it is hovered.
+pub const DEFAULT_SAME_FILE_REHOVER_DELAY_MS: u64 = 200;
 /// How long a hover's load may run before the waiting spinner is put up for it.
 ///
 /// The window is hidden while a load runs, so one that finishes inside this has gone
@@ -574,6 +592,60 @@ impl TransparentBackground {
     }
 }
 
+/// What a picture is drawn over unless the configuration says otherwise — and with it
+/// every other preview this app draws rather than one a page is handed to it: a PDF page,
+/// a painted text frame, a page Office rendered, a design document's own picture.
+///
+/// A checkerboard, which is how transparency is shown wherever it is shown at all: what a
+/// picture's alpha channel leaves unpainted is the pixels under the picture, and the
+/// squares are the answer that cannot be taken for part of the picture the way black can.
+pub const DEFAULT_IMAGE_BACKGROUND: TransparentBackground = TransparentBackground::Checkerboard;
+
+/// The same for a vector drawing — an SVG document the browser draws, or a metafile the
+/// drawing layer replays.
+///
+/// The squares again, and for the reason above with a document's own twist: a drawing
+/// says nothing about the sheet under it, and the page a browser is handed can only be
+/// given a colour (see `webview_preview::frame_page`), so a backdrop that reads as
+/// *nothing here* is the one that keeps an unpainted region from looking painted black.
+pub const DEFAULT_VECTOR_BACKGROUND: TransparentBackground = TransparentBackground::Checkerboard;
+
+/// What a font specimen is drawn over: white, which is the page a specimen is written on
+/// rather than a backdrop behind one.
+///
+/// A specimen is this app's own page with a font's glyphs on it, and the ink is picked for
+/// the page it is written on — light on black, dark on white and on the squares (see
+/// `webview_preview::font_page`) — so what is behind the text is a page's colour rather
+/// than a transparency to be shown.
+pub const DEFAULT_FONT_BACKGROUND: TransparentBackground = TransparentBackground::White;
+
+/// What a `.dds` texture is drawn over: white.
+///
+/// The two backdrops that show what stands behind a preview are not offered for a texture
+/// at all, and this is where the setting starts instead: a texture's alpha channel is as
+/// often a mask, a height or a roughness as it is transparency (see `dds_image`), so what
+/// is drawn behind one is a page to read the channels against rather than a hole to look
+/// through.
+pub const DEFAULT_DDS_BACKGROUND: TransparentBackground = TransparentBackground::White;
+
+/// What a design document is drawn over: the squares, for the reason a picture's is —
+/// what a document is previewed from is the picture the file keeps of the whole thing, and
+/// that picture's transparency is the document's own.
+pub const DEFAULT_DESIGN_BACKGROUND: TransparentBackground = TransparentBackground::Checkerboard;
+
+/// The backdrop a texture is drawn over, as the setting keeps it: either of the two a
+/// texture is offered, and the default for anything else — a `transparent` or a
+/// `checkerboard` a file still holds from when the texture's half of the `Background`
+/// submenu listed the same four backdrops as every other half.
+pub fn sanitize_dds_background(background: TransparentBackground) -> TransparentBackground {
+    match background {
+        TransparentBackground::Black | TransparentBackground::White => background,
+        TransparentBackground::Transparent | TransparentBackground::Checkerboard => {
+            DEFAULT_DDS_BACKGROUND
+        }
+    }
+}
+
 /// The marker a theme from the `theme` folder is written after in `config.ini`.
 ///
 /// It is what keeps a file named after a bundled theme apart from the bundled
@@ -857,6 +929,16 @@ impl AvoidMode {
     }
 }
 
+/// How far a preview is kept clear of the item it is about unless the configuration says
+/// otherwise: the file's name where it is drawn, which is the one thing a row the pointer
+/// is on says about itself.
+pub const DEFAULT_AVOID_MODE: AvoidMode = AvoidMode::Filename;
+
+/// Where a preview lands unless the configuration says otherwise: `Best Position` is the
+/// app's own answer to where a preview should go — the room the display has rather than
+/// wherever the pointer happens to be — and `Follow Cursor` is the other answer.
+pub const DEFAULT_FOLLOW_CURSOR: bool = false;
+
 #[derive(Debug, Clone)]
 pub struct AppConfig {
     pub is_first_run: bool,
@@ -883,6 +965,10 @@ pub struct AppConfig {
     /// of that column, `Details` off the columns beside it as well, and `Off` puts them
     /// back where the position modes alone would have them.
     pub avoid_mode: AvoidMode,
+    /// How long the same file waits before a preview of it is put up again, in
+    /// milliseconds: what keeps a pointer that crosses a file it has just left from
+    /// putting the preview back up on its way past (see
+    /// `DEFAULT_SAME_FILE_REHOVER_DELAY_MS`).
     pub same_file_rehover_delay_ms: u64,
     /// How long a hover's load may run before the waiting spinner is put up for it,
     /// in milliseconds. `0` puts it up with the load.
@@ -915,7 +1001,10 @@ pub struct AppConfig {
     /// roughness of a material, or a channel a tool never touched and left at zero — so a
     /// texture is the one kind of picture whose transparency says least about what is
     /// behind it, and the one kind a reader may want composited differently from a
-    /// photograph (see `dds_image`).
+    /// photograph (see `dds_image`). For the same reason the two backdrops that show what
+    /// stands behind a preview are not offered for a texture at all — the menu lists the
+    /// two that are a page, black and white — and a file that names one of the other two
+    /// is read as the one this setting starts at (see `sanitize_dds_background`).
     pub dds_background: TransparentBackground,
     /// The backdrop a design document is drawn over.
     ///
@@ -1112,24 +1201,24 @@ impl Default for AppConfig {
         Self {
             is_first_run: false,
             run_at_startup: true,
-            hover_delay_ms: 0,
+            hover_delay_ms: DEFAULT_HOVER_DELAY_MS,
             preview_enabled: true,
             trigger_key: "alt".to_string(),
             trigger_key_mode: TriggerKeyMode::Disable,
             trigger_key_enabled: true,
             confirm_file_type: false,
-            follow_cursor: false,
-            avoid_mode: AvoidMode::Filename,
-            same_file_rehover_delay_ms: 750,
+            follow_cursor: DEFAULT_FOLLOW_CURSOR,
+            avoid_mode: DEFAULT_AVOID_MODE,
+            same_file_rehover_delay_ms: DEFAULT_SAME_FILE_REHOVER_DELAY_MS,
             spinner_delay_ms: DEFAULT_SPINNER_DELAY_MS,
             webp_playback_fps: DEFAULT_WEBP_PLAYBACK_FPS,
             image_cache_mb: DEFAULT_IMAGE_CACHE_MB,
-            image_background: TransparentBackground::Black,
-            font_background: TransparentBackground::White,
-            dds_background: TransparentBackground::Black,
-            design_background: TransparentBackground::Black,
-            vector_background: TransparentBackground::Black,
-            video_volume: 0, // Mute by default
+            image_background: DEFAULT_IMAGE_BACKGROUND,
+            font_background: DEFAULT_FONT_BACKGROUND,
+            dds_background: DEFAULT_DDS_BACKGROUND,
+            design_background: DEFAULT_DESIGN_BACKGROUND,
+            vector_background: DEFAULT_VECTOR_BACKGROUND,
+            video_volume: DEFAULT_VIDEO_VOLUME,
             preview_scale: PreviewScale::Percent(DEFAULT_PREVIEW_SCALE_PERCENT),
             video_scale: PreviewScale::Percent(DEFAULT_VIDEO_SCALE_PERCENT),
             animated_scale: PreviewScale::Percent(DEFAULT_ANIMATED_SCALE_PERCENT),
@@ -1179,15 +1268,126 @@ fn same_entries(list: &[String], canonical: &[String]) -> bool {
     list.len() == canonical.len() && canonical.iter().all(|entry| list.contains(entry))
 }
 
-/// Write the configuration out in the shape a person reads it in: the settings
-/// section first, then the sections that hold the file lists in alphabetical order,
-/// and the keys of every section in alphabetical order as well.
+/// The headings the settings section is written under, in the order the tray lists its
+/// menus: the menu a setting is changed from is the menu it is found under, so the file
+/// reads the way the tray does rather than as one alphabetical run of fifty keys.
 ///
-/// The `Ini` the values are collected in keeps its sections and keys in hash maps,
-/// so what it writes by itself is a different order every time — which is what
-/// shuffled a hand-edited file under the person editing it. What is written here is
-/// the text that writer produces, in an order that does not move.
-fn write_ordered(ini: &Ini, path: &Path) {
+/// The file lists keep sections of their own below it — `[image]`, `[video]` and the rest
+/// — because a list of extensions is a collection rather than a setting, and a section is
+/// what the format has for a collection. A heading is a comment instead, which is all the
+/// grouping needs to be: nothing reads it back, so the shape of the file stays something
+/// the app writes rather than something it has to parse. `Advanced` is where the settings
+/// the tray has no menu item for are kept — the ones a hand edit reaches and a menu does
+/// not — and a setting `save` writes that is missing from the table is written last of
+/// all under `; Ungrouped`, which is where a heading that was forgotten shows up.
+const SETTING_GROUPS: &[(&str, &[&str])] = &[
+    ("General", &["preview_enabled", "run_at_startup"]),
+    (
+        "Preview Types",
+        &[
+            "archive_preview_enabled",
+            "design_preview_enabled",
+            "font_preview_enabled",
+            "image_preview_enabled",
+            "office_preview_enabled",
+            "pdf_preview_enabled",
+            "text_preview_enabled",
+            "vector_preview_enabled",
+            "video_preview_enabled",
+        ],
+    ),
+    (
+        "Text Preview",
+        &[
+            "markdown_mode",
+            "text_font_scale",
+            "text_preview_full_mode",
+            "theme",
+        ],
+    ),
+    (
+        "Timing",
+        &[
+            "hover_delay_ms",
+            "same_file_rehover_delay_ms",
+            "trigger_key",
+            "trigger_key_enabled",
+            "trigger_key_mode",
+        ],
+    ),
+    ("Placement", &["avoid_mode", "follow_cursor"]),
+    (
+        "Scaling",
+        &[
+            "animated_scale",
+            "design_scale",
+            "font_scale",
+            "office_scale",
+            "pdf_scale",
+            "preview_scale",
+            "vector_scale",
+            "video_scale",
+        ],
+    ),
+    (
+        "Background",
+        &[
+            "dds_background",
+            "design_background",
+            "font_background",
+            "image_background",
+            "vector_background",
+        ],
+    ),
+    ("Volume", &["video_volume"]),
+    (
+        "Performance",
+        &[
+            "confirm_file_type",
+            "decode_budget_gb",
+            "image_cache_mb",
+            "office_cache_mb",
+            "office_engine_idle",
+            "pdf_cache_mb",
+            "text_cache_mb",
+            "webview_idle",
+        ],
+    ),
+    (
+        "Advanced",
+        &[
+            "hdr_exposure",
+            "hdr_tone_map",
+            "spinner_delay_ms",
+            "text_scroll_far_edge_grace_pixels",
+            "ttc_face",
+            "webp_playback_fps",
+        ],
+    ),
+];
+
+/// One run of keys as the file writes them: the key, the value when it has one, and the
+/// line's newline.
+fn write_keys(out: &mut String, keys: &[(&str, &Option<String>)]) {
+    for (key, value) in keys {
+        out.push_str(key);
+        if let Some(value) = value {
+            out.push('=');
+            out.push_str(value);
+        }
+        out.push('\n');
+    }
+}
+
+/// The configuration as the text a person reads: the settings section first, under the
+/// headings the tray lists its menus under, then the sections that hold the file lists in
+/// alphabetical order, and the keys of every group in alphabetical order within it.
+///
+/// The `Ini` the values are collected in keeps its sections and keys in hash maps, so what
+/// it writes by itself is a different order every time — which is what shuffled a
+/// hand-edited file under the person editing it. What is returned here is the same text
+/// that writer produces, in an order that does not move.
+fn ordered_text(ini: &Ini) -> String {
     let map = ini.get_map_ref();
 
     let mut sections: Vec<&str> = map.keys().map(String::as_str).collect();
@@ -1201,6 +1401,13 @@ fn write_ordered(ini: &Ini, path: &Path) {
             continue;
         };
 
+        // Every section but the first is kept clear of what came before it: the settings
+        // section ends with the last heading's last key, and a list section beginning right
+        // under it reads as another key of that heading.
+        if !out.is_empty() {
+            out.push('\n');
+        }
+
         out.push('[');
         out.push_str(section);
         out.push_str("]\n");
@@ -1209,19 +1416,50 @@ fn write_ordered(ini: &Ini, path: &Path) {
             .iter()
             .map(|(key, value)| (key.as_str(), value))
             .collect();
-        keys.sort_unstable_by_key(|(key, _)| *key);
 
-        for (key, value) in keys {
-            out.push_str(key);
-            if let Some(value) = value {
-                out.push('=');
-                out.push_str(value);
+        // A section below the settings one is one list and is written as one run.
+        if section != CONFIG_SECTION {
+            keys.sort_unstable_by_key(|(key, _)| *key);
+            write_keys(&mut out, &keys);
+            continue;
+        }
+
+        let mut written: Vec<&str> = Vec::new();
+        for (heading, heading_keys) in SETTING_GROUPS {
+            let mut in_heading: Vec<(&str, &Option<String>)> = keys
+                .iter()
+                .copied()
+                .filter(|(key, _)| heading_keys.contains(key))
+                .collect();
+            if in_heading.is_empty() {
+                continue;
             }
+            in_heading.sort_unstable_by_key(|(key, _)| *key);
+
+            // No blank line above the first heading: what it would separate it from is
+            // the section's own name.
+            if !written.is_empty() {
+                out.push('\n');
+            }
+            out.push_str("; ");
+            out.push_str(heading);
             out.push('\n');
+            write_keys(&mut out, &in_heading);
+            written.extend(in_heading.iter().map(|(key, _)| *key));
+        }
+
+        let mut ungrouped: Vec<(&str, &Option<String>)> = keys
+            .into_iter()
+            .filter(|(key, _)| !written.contains(key))
+            .collect();
+        if !ungrouped.is_empty() {
+            ungrouped.sort_unstable_by_key(|(key, _)| *key);
+            out.push_str("\n; Ungrouped\n");
+            write_keys(&mut out, &ungrouped);
         }
     }
 
-    let _ = fs::write(path, out);
+    out
 }
 
 /// One list as the file has it: the entries its key names, or the built-in list
@@ -1634,7 +1872,7 @@ impl AppConfig {
                 "extensions",
                 Some(sanitize_vector_extensions(&self.vector_extensions.join(",")).join(",")),
             );
-            write_ordered(&ini, &path);
+            let _ = fs::write(&path, ordered_text(&ini));
         }
     }
 
@@ -1742,10 +1980,13 @@ impl AppConfig {
         }
         // A texture's is read the same way, and for the same reason: the DDS kind is one of
         // its own, so a file written before it has nothing under this name and what it wrote
-        // about a picture stays what it wrote about a picture.
+        // about a picture stays what it wrote about a picture. Two of the four backdrops are
+        // not offered for a texture — the two that show what stands behind it — so a file
+        // that names one of them is read as the backdrop this setting starts at, rather than
+        // kept as a value the menu beside it has no item for.
         if let Some(value) = ini.get(CONFIG_SECTION, "dds_background") {
             if let Some(background) = TransparentBackground::from_str(&value) {
-                self.dds_background = background;
+                self.dds_background = sanitize_dds_background(background);
             }
         }
         // A design document's is read the same way and for the same reason: the kind is
@@ -2816,5 +3057,190 @@ mod tests {
         let mut config = AppConfig::default();
         config.apply_ini(&ini);
         assert_eq!(config.spinner_delay_ms, MAX_SPINNER_DELAY_MS);
+    }
+
+    /// The settings section is written under the headings the tray lists its menus under, in
+    /// the order the tray lists them, with the keys of a heading in alphabetical order and the
+    /// file lists left to the sections below — which is the shape a person reads, rather than
+    /// one alphabetical run of every key the app knows.
+    #[test]
+    fn the_settings_are_written_under_the_headings_the_tray_lists_them_under() {
+        let mut ini = Ini::new();
+        // Set out of order, and out of the order the headings run in, so what is tested is the
+        // writer's order rather than the order they were handed over in.
+        ini.set(CONFIG_SECTION, "video_volume", Some("50".to_string()));
+        ini.set(CONFIG_SECTION, "avoid_mode", Some("details".to_string()));
+        ini.set(CONFIG_SECTION, "preview_enabled", Some("true".to_string()));
+        ini.set(
+            CONFIG_SECTION,
+            "image_background",
+            Some("white".to_string()),
+        );
+        ini.set(IMAGE_SECTION, "extensions", Some("png,jpg".to_string()));
+
+        assert_eq!(
+            ordered_text(&ini),
+            "\
+[settings]
+; General
+preview_enabled=true
+
+; Placement
+avoid_mode=details
+
+; Background
+image_background=white
+
+; Volume
+video_volume=50
+
+[image]
+extensions=png,jpg
+"
+        );
+    }
+
+    /// A heading is a comment, so the file the app writes is one it can read back: the reader
+    /// steps over the headings and the blank lines they are kept apart by, and every value
+    /// comes back as it was written.
+    #[test]
+    fn a_file_written_under_the_headings_reads_back_as_it_was() {
+        let mut ini = Ini::new();
+        ini.set(CONFIG_SECTION, "avoid_mode", Some("details".to_string()));
+        ini.set(CONFIG_SECTION, "hover_delay_ms", Some("200".to_string()));
+        ini.set(VECTOR_SECTION, "extensions", Some("svg,svgz".to_string()));
+
+        let mut read_back = Ini::new();
+        read_back
+            .read(ordered_text(&ini))
+            .expect("a file this app wrote is one it can read");
+
+        assert_eq!(
+            read_back.get(CONFIG_SECTION, "avoid_mode"),
+            Some("details".to_string())
+        );
+        assert_eq!(
+            read_back.get(CONFIG_SECTION, "hover_delay_ms"),
+            Some("200".to_string())
+        );
+        assert_eq!(
+            read_back.get(VECTOR_SECTION, "extensions"),
+            Some("svg,svgz".to_string())
+        );
+    }
+
+    /// A setting the table has not been told about is written last, under a heading of its
+    /// own: a key added to `save` and forgotten there lands at the bottom of the file where it
+    /// can be seen, rather than inside a heading it has nothing to do with or nowhere at all.
+    #[test]
+    fn a_setting_the_table_does_not_know_is_written_under_its_own_heading() {
+        let mut ini = Ini::new();
+        ini.set(CONFIG_SECTION, "something_new", Some("1".to_string()));
+        ini.set(CONFIG_SECTION, "preview_enabled", Some("true".to_string()));
+
+        assert_eq!(
+            ordered_text(&ini),
+            "\
+[settings]
+; General
+preview_enabled=true
+
+; Ungrouped
+something_new=1
+"
+        );
+    }
+
+    /// One setting belongs to one heading. A key listed under two of them is written under
+    /// both, and since what is read back is the key rather than the heading, the second one is
+    /// the one the setting takes.
+    #[test]
+    fn every_setting_belongs_to_one_heading() {
+        let mut seen: Vec<&str> = Vec::new();
+
+        for (heading, keys) in SETTING_GROUPS {
+            assert!(
+                !keys.is_empty(),
+                "the heading `{heading}` lists no settings"
+            );
+
+            for key in *keys {
+                assert!(
+                    !seen.contains(key),
+                    "`{key}` is listed under more than one heading"
+                );
+                seen.push(key);
+            }
+        }
+    }
+
+    /// The defaults the tray marks are the ones the app starts at: a picture, a drawing and a
+    /// design document are drawn over the squares, a specimen and a texture over a white page,
+    /// and the placement, the two delays and the volume start where the menu says.
+    #[test]
+    fn the_defaults_the_tray_marks_are_the_ones_the_app_starts_at() {
+        let config = AppConfig::default();
+
+        assert_eq!(config.image_background, DEFAULT_IMAGE_BACKGROUND);
+        assert_eq!(config.vector_background, DEFAULT_VECTOR_BACKGROUND);
+        assert_eq!(config.design_background, DEFAULT_DESIGN_BACKGROUND);
+        assert_eq!(config.image_background, TransparentBackground::Checkerboard);
+
+        assert_eq!(config.font_background, DEFAULT_FONT_BACKGROUND);
+        assert_eq!(config.font_background, TransparentBackground::White);
+        assert_eq!(config.dds_background, DEFAULT_DDS_BACKGROUND);
+        assert_eq!(config.dds_background, TransparentBackground::White);
+
+        assert_eq!(config.avoid_mode, DEFAULT_AVOID_MODE);
+        assert_eq!(config.avoid_mode, AvoidMode::Filename);
+        assert_eq!(config.follow_cursor, DEFAULT_FOLLOW_CURSOR);
+        assert!(
+            !config.follow_cursor,
+            "a preview is placed at its best position"
+        );
+
+        assert_eq!(config.hover_delay_ms, DEFAULT_HOVER_DELAY_MS);
+        assert_eq!(config.hover_delay_ms, 0);
+        assert_eq!(
+            config.same_file_rehover_delay_ms,
+            DEFAULT_SAME_FILE_REHOVER_DELAY_MS
+        );
+        assert_eq!(config.same_file_rehover_delay_ms, 200);
+        assert_eq!(config.video_volume, DEFAULT_VIDEO_VOLUME);
+        assert_eq!(config.video_volume, 0, "a hover never makes a sound");
+    }
+
+    /// A texture is offered two backdrops of the four, which is what `dds_image` is written
+    /// against: the two that show what stands behind a preview are read as the white page the
+    /// setting starts at, so a file that still names one is not left holding a value the menu
+    /// beside it has no item for.
+    #[test]
+    fn a_textures_backdrop_is_one_of_the_two_it_is_offered() {
+        for kept in [TransparentBackground::Black, TransparentBackground::White] {
+            assert_eq!(sanitize_dds_background(kept), kept, "`{kept:?}` is offered");
+        }
+
+        for dropped in [
+            TransparentBackground::Transparent,
+            TransparentBackground::Checkerboard,
+        ] {
+            assert_eq!(
+                sanitize_dds_background(dropped),
+                DEFAULT_DDS_BACKGROUND,
+                "`{dropped:?}` is not a backdrop a texture is offered"
+            );
+        }
+
+        let mut ini = Ini::new();
+        ini.set(
+            CONFIG_SECTION,
+            "dds_background",
+            Some("checkerboard".to_string()),
+        );
+
+        let mut config = AppConfig::default();
+        config.apply_ini(&ini);
+
+        assert_eq!(config.dds_background, DEFAULT_DDS_BACKGROUND);
     }
 }
