@@ -44,7 +44,7 @@ Animated GIF/APNG/WebP play. HEIC/HEIF/AVIF/JPEG XL/still WebP usually need Wind
 
 ### Design Documents
 
-`psd`, `psb`, `ai`, `kra`, `ora`, `sketch`, `fig`, `xd`.
+`psd`, `psb`, `ai`, `kra`, `ora`, `cdr`, `procreate`, `sketch`, `fig`, `xd`.
 
 These files usually show a preview saved inside them, so you see the design as saved—not a flattened version.
 
@@ -189,7 +189,7 @@ The item a setting starts at carries `(Default)` after its name, so a menu says 
   - **PDF Scaling** — Fit to Screen (default), or the same shares of the display.
   - **Office Scaling** — the same for a page Office rendered; a workbook’s fallback bitmap is never enlarged.
   - **Font Scaling** — the same shares for a font specimen, 50% by default.
-  - **Design Scaling** — the same shares of the display for a design document (Photoshop, Illustrator, Krita, OpenRaster); Fit to Screen by default.
+  - **Design Scaling** — the same shares of the display for a design document (Photoshop, Illustrator, Krita, OpenRaster, CorelDRAW, Procreate); Fit to Screen by default.
 - **Background**
   - **Image Background** — Transparent, Black, White, or Checkerboard; Checkerboard by default.
   - **Vector Background** — the same backdrops for a drawing: an SVG document, or a metafile; Checkerboard by default.

@@ -1,21 +1,25 @@
 //! Project containers, read for the picture they hold of the whole document.
 //!
-//! A Krita document, an OpenRaster one and a handful of others are zip containers
-//! that keep a picture of the finished work beside the layers it is built from: Krita
-//! writes the flattened document as `mergedimage.png` and a small preview as
+//! A Krita document, an OpenRaster one, a Procreate one and a CorelDRAW one are zip
+//! containers that keep a picture of the finished work beside the layers it is built
+//! from: Krita writes the flattened document as `mergedimage.png` and a small preview as
 //! `preview.png`, OpenRaster writes the same flattened document as `mergedimage.png`
-//! and a file-manager thumbnail under `Thumbnails/`, and the applications that save a
-//! container of their own keep a preview under a name of the same kind. So the
-//! preview here is not drawn and not composited: it is the picture the application
-//! itself saved, read out of the container and shown.
+//! and a file-manager thumbnail under `Thumbnails/`, a Procreate document keeps the
+//! thumbnail a file manager shows on iPad under `QuickLook/`, and CorelDRAW writes a
+//! bitmap of page 1, and the document's own thumbnail beside it, into
+//! `metadata/thumbnails/`. So the preview here is not drawn and not composited: it is
+//! the picture the application itself saved, read out of the container and shown.
 //!
 //! What that picture is worth differs from container to container and is worth being
-//! plain about. The first two of those hold the *document*: the merged image is the
-//! flattened picture at the size the work was made at, so a preview of one is the
-//! document itself at the size the display has room for. The others hold a thumbnail:
-//! a few hundred pixels the application wrote for a file dialog, which is a preview
-//! that tells a user which file this is and no more — and it is shown at the size it
-//! is rather than stretched, because it is not enlarged past what it holds.
+//! plain about. Some of them hold the *document*: a merged image is the flattened
+//! picture at the size the work was made at, so a preview of one is the document itself
+//! at the size the display has room for. The others hold a thumbnail: a few hundred
+//! pixels the application wrote for a file manager, which is a preview that tells a user
+//! which file this is and no more — and one of those is a small picture laid out at the
+//! share of the display every other design preview is laid out at, so a thumbnail at
+//! `Fit to Screen` is a thumbnail enlarged. That is why the document is preferred by
+//! name wherever a container holds both, and why a container that holds only a thumbnail
+//! is still read: a small picture of the right drawing beats no picture at all.
 //!
 //! A container none of those names answers for is a file this app has no reader for,
 //! and its answer is no preview, like any other format that is not read here. Nothing
@@ -35,18 +39,26 @@ use zip::ZipArchive;
 
 /// The names a container keeps the picture of the whole document under, in the order
 /// they are worth reading: the flattened document first, since it is the size the
-/// work was made at, and the previews an application writes for a file dialog after
+/// work was made at, and the previews an application writes for a file manager after
 /// it, since one of those is a thumbnail rather than the document.
 ///
 /// The names are the ones the formats themselves fix — Krita's and OpenRaster's
-/// `mergedimage.png`, OpenRaster's `Thumbnails/thumbnail.png` — and the rest are the
-/// same picture written by applications that keep a container of their own. Whichever
-/// of them a file holds is the one read, and the comparison is by name whatever case
-/// it is written in, since a container is written by an application rather than by
-/// this app.
+/// `mergedimage.png`, OpenRaster's `Thumbnails/thumbnail.png`, a Procreate document's
+/// `QuickLook/Thumbnail.png`, and the two bitmaps a CorelDRAW document writes beside
+/// itself under `metadata/thumbnails/` — and the rest are the same picture written by
+/// applications that keep a container of their own. Whichever of them a file holds is
+/// the one read, and the comparison is by name whatever case it is written in, since
+/// a container is written by an application rather than by this app.
+///
+/// A page comes before a thumbnail for the reason a merged image does: a page is the
+/// picture of the page itself, and a thumbnail is that picture at the size a file
+/// manager shows it.
 const PREVIEW_MEMBERS: &[&str] = &[
     "mergedimage.png",
+    "metadata/thumbnails/page1.bmp",
     "Thumbnails/thumbnail.png",
+    "QuickLook/Thumbnail.png",
+    "metadata/thumbnails/thumbnail.bmp",
     "previews/preview.png",
     "thumbnail.png",
     "preview.png",
@@ -135,23 +147,27 @@ fn probe_dimensions(path: &Path) -> Option<(u32, u32)> {
     reader.into_dimensions().ok()
 }
 
-/// The member a container's preview is read from: the first of the names a project
-/// keeps one under that this container actually holds.
+/// The member a container's preview is read from: the name of the greatest worth that
+/// this container holds.
+///
+/// The names are asked in their own order rather than the container's, because the
+/// order a container writes its members in is its own business: an OpenRaster file
+/// that holds its thumbnail before its merged image — which is what writing the names
+/// alphabetically comes to — is a document whose preview would otherwise be the
+/// thumbnail rather than the document.
 fn preview_member(archive: &mut ZipArchive<File>) -> Option<usize> {
     let count = archive.len();
 
-    for index in 0..count {
-        let found = archive
-            .by_index_raw(index)
-            .map(|entry| {
-                PREVIEW_MEMBERS
-                    .iter()
-                    .any(|candidate| entry.name().eq_ignore_ascii_case(candidate))
-            })
-            .unwrap_or(false);
+    for candidate in PREVIEW_MEMBERS {
+        for index in 0..count {
+            let found = archive
+                .by_index_raw(index)
+                .map(|entry| entry.name().eq_ignore_ascii_case(candidate))
+                .unwrap_or(false);
 
-        if found {
-            return Some(index);
+            if found {
+                return Some(index);
+            }
         }
     }
 
@@ -198,5 +214,79 @@ fn remember_dimensions(key: DimensionKey, dimensions: Option<(u32, u32)>) {
             cache.clear();
         }
         cache.insert(key, dimensions);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use image::ImageEncoder;
+    use std::io::Write;
+
+    /// A container holding the members named, in the order they are named, stored rather
+    /// than deflated: what these fixtures are asked is which member is chosen.
+    fn write_container(path: &Path, members: &[(&str, Vec<u8>)]) {
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        let mut writer = zip::ZipWriter::new(File::create(path).expect("a zip to write"));
+
+        for (name, bytes) in members {
+            writer.start_file(*name, options).expect("a member");
+            writer.write_all(bytes).expect("bytes");
+        }
+
+        writer.finish().expect("a finished zip");
+    }
+
+    fn bmp(width: u32, height: u32) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        image::codecs::bmp::BmpEncoder::new(&mut bytes)
+            .write_image(
+                &vec![0u8; (width * height * 3) as usize],
+                width,
+                height,
+                image::ExtendedColorType::Rgb8,
+            )
+            .expect("a bitmap");
+
+        bytes
+    }
+
+    /// The names are asked in the order they are worth reading rather than in the order the
+    /// container happens to write them in: a document that keeps its thumbnail ahead of the
+    /// picture of its page — or ahead of its flattened document — is previewed from the
+    /// picture, not from the thumbnail.
+    #[test]
+    fn reads_the_larger_picture_whatever_order_the_container_writes_them_in() {
+        let path = std::env::temp_dir().join("rust-hover-preview-container-order");
+
+        for (picture, thumbnail) in [
+            ("metadata/thumbnails/page1.bmp", "metadata/thumbnails/thumbnail.bmp"),
+            ("mergedimage.png", "Thumbnails/thumbnail.png"),
+            ("mergedimage.png", "previews/preview.png"),
+        ] {
+            write_container(&path, &[(thumbnail, bmp(3, 5)), (picture, bmp(6, 7))]);
+
+            assert_eq!(
+                dimensions(&path),
+                Some((6, 7)),
+                "`{picture}` is the picture read, though `{thumbnail}` is written first"
+            );
+        }
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// A container holding nothing but the thumbnail its application wrote for a file
+    /// manager is read for that: a small picture of the right drawing is a preview where
+    /// none at all would otherwise be.
+    #[test]
+    fn reads_the_thumbnail_when_it_is_all_the_container_holds() {
+        let path = std::env::temp_dir().join("rust-hover-preview-container-thumbnail");
+        write_container(&path, &[("QuickLook/Thumbnail.png", bmp(4, 6))]);
+
+        assert_eq!(dimensions(&path), Some((4, 6)));
+
+        std::fs::remove_file(&path).ok();
     }
 }

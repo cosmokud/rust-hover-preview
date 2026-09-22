@@ -10,6 +10,7 @@
 - Settings that older versions stored under a different name are no longer carried over — `svg_scale`, `svg_background`, `svg_preview_enabled`, `off_trigger_key`, `avoid_filename`, `transparent_background`. Those lines are removed and the settings go back to their defaults, so if you are updating from 0.2.12 or older it is worth a look at the **Placement**, **Scaling** and **Background** menus afterwards. Updating from 0.2.13, nothing changes.
 - The installer no longer writes into `config.ini` and no longer adds the startup entry: the app does both on its first run, at the path it is running from.
 - Bump version to 0.2.14 in `Cargo.toml` and `Cargo.lock`.
+- Preview for CorelDRAW `cdr` and Procreate `procreate` documents, under the **Design** kind: both save a picture of the drawing beside their layers, and that picture is what is shown. A CorelDRAW file's picture is a 256-pixel thumbnail, so it is small at Fit to Screen.
 
 ### Fixed
 
@@ -36,7 +37,7 @@
 
 ### Fixed
 
-- A name in the text list *and* in a drawing or document list is previewed as that kind again, not as text — the two halves of the app now agree about a file whose name is written down twice.
+- A name in the text list _and_ in a drawing or document list is previewed as that kind again, not as text — the two halves of the app now agree about a file whose name is written down twice.
 - SVG previews are back: a document is drawn by the engine again rather than being handed to the readers that replay the other half of the Vector kind, which turned it down.
 - A Photoshop document smaller than the screen shows a preview again: it was refused whenever the preview was enlarged past the document's own size.
 - EPS files whose preview is a palette picture — the shape Photoshop writes into an EPS — now preview. That shape is read by the app itself, since the picture decoder turns it down.
