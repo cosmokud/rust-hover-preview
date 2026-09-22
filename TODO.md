@@ -10,5 +10,5 @@
 
 ## Configuration
 
-- Stamp `config.ini` with a schema version and migrate an older file through ordered steps, so the legacy key and list fallbacks can be retired a release or two after the rename they cover — and so a file written by a newer version is left alone rather than rewritten without whatever it added.
-- Tell a value the app wrote apart from one the user chose, so a default that moves reaches the installations that never touched it: every key is written today, so a changed default reaches fresh installations only — which is what the `(Default)` mark a menu derives says nothing about.
+- Retire what the stamp has made redundant, a release or two after it: the reads `apply_ini` does for a key that has been renamed (`off_trigger_key`, `svg_scale`, the backdrops' older names), and the first step of `migrate` together with the `*_BEFORE_*` lists it reads — no file that old can be in use by then, and a step is only worth keeping while one can.
+- Tell a value the app wrote apart from one the user chose, so a default that moves can reach the installations that never touched it: every key is written today, so a changed default reaches fresh installations only. The stamp is what makes that possible — a file this build wrote can be told from one an older build wrote — but it is not what does it: what does it is not writing the values nobody chose.
