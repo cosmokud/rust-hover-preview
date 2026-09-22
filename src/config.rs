@@ -12,13 +12,14 @@ use std::time::Duration;
 use crate::archive_formats::{sanitize_archive_extensions, DEFAULT_ARCHIVE_EXTENSIONS};
 use crate::design_formats::{
     sanitize_design_extensions, DEFAULT_DESIGN_EXTENSIONS, DESIGN_EXTENSIONS_BEFORE_AI,
-    DESIGN_EXTENSIONS_BEFORE_CDR_AND_PROCREATE,
+    DESIGN_EXTENSIONS_BEFORE_CDR_AND_PROCREATE, DESIGN_EXTENSIONS_WITH_CDR,
 };
 use crate::font_formats::{sanitize_font_extensions, DEFAULT_FONT_EXTENSIONS};
 use crate::image_formats::{
     sanitize_image_extensions, DEFAULT_IMAGE_EXTENSIONS, IMAGE_EXTENSIONS_BEFORE_CODEC_FORMATS,
     IMAGE_EXTENSIONS_BEFORE_DDS, IMAGE_EXTENSIONS_BEFORE_SVG, IMAGE_EXTENSIONS_WITH_SVG,
 };
+use crate::libre_formats::{sanitize_libre_extensions, DEFAULT_LIBRE_EXTENSIONS};
 use crate::office_formats::{sanitize_office_extensions, DEFAULT_OFFICE_EXTENSIONS};
 use crate::text_formats::{
     sanitize_extensions, sanitize_names, DEFAULT_TEXT_EXTENSIONS, DEFAULT_TEXT_NAMES,
@@ -49,6 +50,9 @@ const FONT_SECTION: &str = "font";
 const DESIGN_SECTION: &str = "design";
 /// The vector extension list lives in its own section for the same reason.
 const VECTOR_SECTION: &str = "vector";
+/// The list of documents the render engine is asked about lives in its own section for the
+/// same reason: what this app hands to LibreOffice rather than reading itself.
+const LIBRE_SECTION: &str = "libre";
 pub const DEFAULT_WEBP_PLAYBACK_FPS: u32 = 90;
 pub const MAX_WEBP_PLAYBACK_FPS: u32 = 90;
 /// The volume a video is played at unless the file says otherwise: silent, so a hover
@@ -145,6 +149,14 @@ pub const MAX_OFFICE_CACHE_MB: u32 = 2048;
 /// budget holds fewer pages than it would frames of anything smaller.
 pub const DEFAULT_PDF_CACHE_MB: u32 = 32;
 pub const MAX_PDF_CACHE_MB: u32 = 2048;
+/// How much of what the render engine drew may be kept, in megabytes. A document the engine
+/// drew is a PDF written under the app's own folder, so what one costs once it has been
+/// converted is the size of that file, and what is kept is the working set of the folders a
+/// user previews: the oldest are given up first, and a document whose page has been given up
+/// is converted again the next time it is hovered. Thirty-two megabytes is eight or ten
+/// converted drawings.
+pub const DEFAULT_LIBRE_CACHE_MB: u32 = 32;
+pub const MAX_LIBRE_CACHE_MB: u32 = 2048;
 /// Memory the frames a text preview was painted as may hold. A frame is stored as
 /// the pixels it was painted into, so the box it was painted in and the scroll
 /// position it starts at are part of what is kept rather than only the file it came
@@ -233,6 +245,15 @@ pub fn sanitize_office_cache_mb(value: u32) -> u32 {
 /// question a size answers is how much of what was drawn is kept between hovers.
 pub fn sanitize_pdf_cache_mb(value: u32) -> u32 {
     value.min(MAX_PDF_CACHE_MB)
+}
+
+/// How much of what the render engine drew is kept, in megabytes.
+///
+/// `0` is a cache that holds nothing rather than a kind of preview that is switched off: a
+/// document is drawn for the hover that asks for it either way, and the only question a size
+/// answers is how much of what was drawn is kept between hovers.
+pub fn sanitize_libre_cache_mb(value: u32) -> u32 {
+    value.min(MAX_LIBRE_CACHE_MB)
 }
 
 /// The painted-text-frame cache size in megabytes.
@@ -493,6 +514,10 @@ pub const DEFAULT_VECTOR_SCALE: PreviewScale = PreviewScale::FitToScreen;
 /// answers is how much of the display to give it, and the answer that asks for nothing in
 /// particular is the room the display has.
 pub const DEFAULT_DESIGN_SCALE: PreviewScale = PreviewScale::FitToScreen;
+/// The same for a document the render engine draws, at the whole of the room: what a preview
+/// of one is is a page, drawn by the engine at whatever size the display has, so the question
+/// the setting answers is how much of the display to give it. See `libreoffice_render`.
+pub const DEFAULT_LIBRE_SCALE: PreviewScale = PreviewScale::FitToScreen;
 /// The same for a font specimen, at the share rather than the whole of the room: a specimen
 /// is a page of text rather than a document to be studied, and half the display holds the
 /// pangram at a size that can be read at a glance.
@@ -798,6 +823,12 @@ pub enum PreviewType {
     /// not a decoder but an engine, so its switch is this one rather than the switch for
     /// pictures; see `svg_preview`.
     Vector,
+    /// Documents this app hands to a render engine rather than reading — CorelDRAW above
+    /// all, and the word processors, spreadsheets, presentations and drawings whose own
+    /// formats no reader here has. What draws one is LibreOffice where it is installed, and
+    /// what comes back is a page; see `libre_formats` for what is listed and
+    /// `libreoffice_render` for how it is drawn.
+    Libre,
 }
 
 impl PreviewType {
@@ -821,6 +852,7 @@ impl PreviewType {
             Self::Fonts => config.font_preview_enabled,
             Self::Design => config.design_preview_enabled,
             Self::Vector => config.vector_preview_enabled,
+            Self::Libre => config.libre_preview_enabled,
         }
     }
 
@@ -836,6 +868,7 @@ impl PreviewType {
             Self::Fonts => config.font_preview_enabled = enabled,
             Self::Design => config.design_preview_enabled = enabled,
             Self::Vector => config.vector_preview_enabled = enabled,
+            Self::Libre => config.libre_preview_enabled = enabled,
         }
     }
 }
@@ -1089,6 +1122,9 @@ pub struct AppConfig {
     /// thing, at whatever size that picture is, so the size one wants is a share of the
     /// screen the way a page's is rather than a share of the file's own size.
     pub design_scale: PreviewScale,
+    /// How large a document the render engine draws is shown, as a share of the room the
+    /// display has. See `libreoffice_render`.
+    pub libre_scale: PreviewScale,
     /// How large a vector drawing is drawn, as a share of the room the display has for it —
     /// the same question, and the same answers, as the document scales above.
     ///
@@ -1131,6 +1167,10 @@ pub struct AppConfig {
     /// Whether design documents and projects are previewed at all, ahead of the design
     /// list their names are entries of.
     pub design_preview_enabled: bool,
+    /// Whether a document the render engine draws may be previewed at all. It is the gate
+    /// for `[libre]`, and the switch a user who wants their CorelDRAW files left alone
+    /// reaches for.
+    pub libre_preview_enabled: bool,
     /// Whether vector drawings are previewed at all, ahead of the vector list their names
     /// are entries of, and of the browser engine a document of that kind is drawn by.
     pub vector_preview_enabled: bool,
@@ -1138,6 +1178,10 @@ pub struct AppConfig {
     /// still rendered at `0` — a document has no other source for its preview — it
     /// is simply not kept once the hover it was rendered for is over.
     pub office_cache_mb: u32,
+    /// How much of what the render engine drew is kept between hovers, in megabytes. What
+    /// is kept is the converted pages themselves, written under the app's own folder; see
+    /// `Performance → Cache → Libre` in the tray.
+    pub libre_cache_mb: u32,
     /// How long the Office engine a family started is kept after that family's
     /// last page, which is the tray's `Performance → Office Engine TTL` setting.
     pub office_engine_idle: EngineIdle,
@@ -1193,6 +1237,10 @@ pub struct AppConfig {
     /// Extensions previewed as design documents and projects, already normalized for
     /// lookup.
     pub design_extensions: Vec<String>,
+    /// The names of the documents the render engine is asked about, as `[libre]
+    /// extensions` in `config.ini`: the formats LibreOffice reads and this app has no
+    /// reader of its own for. See `libre_formats`.
+    pub libre_extensions: Vec<String>,
     /// Extensions previewed as vector drawings, already normalized for lookup.
     pub vector_extensions: Vec<String>,
 }
@@ -1227,6 +1275,7 @@ impl Default for AppConfig {
             office_scale: DEFAULT_OFFICE_SCALE,
             font_scale: DEFAULT_FONT_SCALE,
             design_scale: DEFAULT_DESIGN_SCALE,
+            libre_scale: DEFAULT_LIBRE_SCALE,
             vector_scale: DEFAULT_VECTOR_SCALE,
             ttc_face: DEFAULT_TTC_FACE,
             theme: TextTheme::Light,
@@ -1239,8 +1288,10 @@ impl Default for AppConfig {
             office_preview_enabled: true,
             font_preview_enabled: true,
             design_preview_enabled: true,
+            libre_preview_enabled: true,
             vector_preview_enabled: true,
             office_cache_mb: DEFAULT_OFFICE_CACHE_MB,
+            libre_cache_mb: DEFAULT_LIBRE_CACHE_MB,
             office_engine_idle: EngineIdle::Seconds(DEFAULT_OFFICE_ENGINE_IDLE_SECS),
             webview_idle: EngineIdle::Seconds(DEFAULT_WEBVIEW_IDLE_SECS),
             pdf_cache_mb: DEFAULT_PDF_CACHE_MB,
@@ -1259,6 +1310,7 @@ impl Default for AppConfig {
             office_extensions: sanitize_office_extensions(DEFAULT_OFFICE_EXTENSIONS),
             font_extensions: sanitize_font_extensions(DEFAULT_FONT_EXTENSIONS),
             design_extensions: sanitize_design_extensions(DEFAULT_DESIGN_EXTENSIONS),
+            libre_extensions: sanitize_libre_extensions(DEFAULT_LIBRE_EXTENSIONS),
             vector_extensions: sanitize_vector_extensions(DEFAULT_VECTOR_EXTENSIONS),
         }
     }
@@ -1295,6 +1347,7 @@ const SETTING_GROUPS: &[(&str, &[&str])] = &[
             "design_preview_enabled",
             "font_preview_enabled",
             "image_preview_enabled",
+            "libre_preview_enabled",
             "office_preview_enabled",
             "pdf_preview_enabled",
             "text_preview_enabled",
@@ -1328,6 +1381,7 @@ const SETTING_GROUPS: &[(&str, &[&str])] = &[
             "animated_scale",
             "design_scale",
             "font_scale",
+            "libre_scale",
             "office_scale",
             "pdf_scale",
             "preview_scale",
@@ -1352,6 +1406,7 @@ const SETTING_GROUPS: &[(&str, &[&str])] = &[
             "confirm_file_type",
             "decode_budget_gb",
             "image_cache_mb",
+            "libre_cache_mb",
             "office_cache_mb",
             "office_engine_idle",
             "pdf_cache_mb",
@@ -1529,8 +1584,15 @@ fn repair_older_lists(ini: &mut Ini) -> bool {
             &[
                 DESIGN_EXTENSIONS_BEFORE_AI,
                 DESIGN_EXTENSIONS_BEFORE_CDR_AND_PROCREATE,
+                DESIGN_EXTENSIONS_WITH_CDR,
             ][..],
             sanitize_design_extensions as fn(&str) -> Vec<String>,
+        ),
+        (
+            LIBRE_SECTION,
+            DEFAULT_LIBRE_EXTENSIONS,
+            &[][..],
+            sanitize_libre_extensions as fn(&str) -> Vec<String>,
         ),
         (
             VECTOR_SECTION,
@@ -1805,6 +1867,7 @@ impl AppConfig {
             "design_scale",
             Some(self.design_scale.as_str()),
         );
+        ini.set(CONFIG_SECTION, "libre_scale", Some(self.libre_scale.as_str()));
         ini.set(
             CONFIG_SECTION,
             "ttc_face",
@@ -1858,6 +1921,11 @@ impl AppConfig {
         );
         ini.set(
             CONFIG_SECTION,
+            "libre_preview_enabled",
+            Some(self.libre_preview_enabled.to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
             "vector_preview_enabled",
             Some(self.vector_preview_enabled.to_string()),
         );
@@ -1865,6 +1933,11 @@ impl AppConfig {
             CONFIG_SECTION,
             "office_cache_mb",
             Some(sanitize_office_cache_mb(self.office_cache_mb).to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
+            "libre_cache_mb",
+            Some(sanitize_libre_cache_mb(self.libre_cache_mb).to_string()),
         );
         ini.set(
             CONFIG_SECTION,
@@ -1958,6 +2031,11 @@ impl AppConfig {
             DESIGN_SECTION,
             "extensions",
             Some(sanitize_design_extensions(&self.design_extensions.join(",")).join(",")),
+        );
+        ini.set(
+            LIBRE_SECTION,
+            "extensions",
+            Some(sanitize_libre_extensions(&self.libre_extensions.join(",")).join(",")),
         );
         ini.set(
             VECTOR_SECTION,
@@ -2167,6 +2245,11 @@ impl AppConfig {
                 self.design_scale = scale;
             }
         }
+        if let Some(value) = ini.get(CONFIG_SECTION, "libre_scale") {
+            if let Some(scale) = PreviewScale::from_str(&value) {
+                self.libre_scale = scale;
+            }
+        }
         // And which face of a collection the specimen is of, in the numbering the tray's
         // `Font Face` submenu offers it in.
         if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "ttc_face") {
@@ -2208,6 +2291,9 @@ impl AppConfig {
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "design_preview_enabled") {
             self.design_preview_enabled = value;
         }
+        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "libre_preview_enabled") {
+            self.libre_preview_enabled = value;
+        }
         // The vector kind's switch is read from its own name, and stays where it is where the
         // name is not written at all.
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "vector_preview_enabled") {
@@ -2216,6 +2302,11 @@ impl AppConfig {
         if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "office_cache_mb") {
             if let Ok(value) = u32::try_from(value) {
                 self.office_cache_mb = sanitize_office_cache_mb(value);
+            }
+        }
+        if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "libre_cache_mb") {
+            if let Ok(value) = u32::try_from(value) {
+                self.libre_cache_mb = sanitize_libre_cache_mb(value);
             }
         }
         if let Some(value) = ini.get(CONFIG_SECTION, "office_engine_idle") {

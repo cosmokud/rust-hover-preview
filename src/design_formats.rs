@@ -25,12 +25,18 @@ use std::path::Path;
 /// `psd` and `psb` are Photoshop's two, read for the merged picture the format keeps
 /// at the end of the file rather than for the layers; `kra` and `ora` are Krita's
 /// and OpenRaster's, which are zip containers holding that same picture as a file of
-/// its own; `cdr` is CorelDRAW's and `procreate` is Procreate's, which are containers
-/// of the same kind holding the picture the application wrote for a file manager; and
-/// `sketch`, `fig` and `xd` are containers of that kind as well. What each one is
-/// read for is in `psd_image`, `project_image`, `cdr_image` and `eps_image`, and a
-/// container none of them can open is a file that shows no preview, like any other
-/// format this app has no reader for.
+/// its own; `procreate` is Procreate's, a container of the same kind; and `sketch`,
+/// `fig` and `xd` are containers of that kind as well. What each one is read for is in
+/// `psd_image` and `project_image`, and a container none of them can open is a file
+/// that shows no preview, like any other format this app has no reader for.
+///
+/// `cdr` is deliberately *not* here, though a CorelDRAW document is a design document.
+/// What this app could read of one by itself is the picture CorelDRAW keeps for a file
+/// browser — 96 to 256 pixels across — and a preview of that is worse than no preview at
+/// all: what the drawing is, is in the `[libre]` list, drawn by LibreOffice where it is
+/// installed, and a machine without it shows a `.cdr` no preview rather than a blurred
+/// thumbnail. The name sits in exactly one list so that this cannot come back by
+/// accident; see `libre_formats`.
 ///
 /// `ai` is the one name here that is usually not this kind's at all: an Illustrator
 /// document saved with `Create PDF Compatible File` is a PDF, and the PDF gate claims
@@ -39,7 +45,15 @@ use std::path::Path;
 /// as a program, with the preview an older Illustrator left beside it — and what a
 /// preview of one can be is what that preview holds. A document that carries none shows
 /// nothing, which is the answer every file with no reader gets.
-pub const DEFAULT_DESIGN_EXTENSIONS: &str = "ai,cdr,fig,kra,ora,procreate,psb,psd,sketch,xd";
+pub const DEFAULT_DESIGN_EXTENSIONS: &str = "ai,fig,kra,ora,procreate,psb,psd,sketch,xd";
+
+/// The built-in design list as it stood while `cdr` was an entry of it.
+///
+/// A file holding exactly these entries is the app's own older list rather than a user's
+/// edit — nobody has touched it — so it is brought up to the built-in list rather than kept
+/// as written, which is what takes the name out of every `config.ini` already written. The
+/// engine draws a CorelDRAW document now and this list does not; see `libre_formats`.
+pub const DESIGN_EXTENSIONS_WITH_CDR: &str = "ai,cdr,fig,kra,ora,procreate,psb,psd,sketch,xd";
 
 /// The built-in design list as it stood before the two drawing applications that write a
 /// container of their own — `cdr`, CorelDRAW's, and `procreate`, Procreate's — were added
