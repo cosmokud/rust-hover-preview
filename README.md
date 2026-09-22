@@ -44,9 +44,7 @@ Animated GIF/APNG/WebP play. HEIC/HEIF/AVIF/JPEG XL/still WebP usually need Wind
 
 `psd`, `psb`, `ai`, `kra`, `ora`, `sketch`, `fig`, `xd`.
 
-A layered document is previewed from the whole picture its own format saves inside it — Photoshop keeps one at the end of the file — so it comes out as it was saved rather than as a flat merge of its visible layers. An Illustrator document is drawn as a PDF, which is what one saved with `Create PDF Compatible File` (the default) actually is. A Krita or OpenRaster project shows the flattened picture it holds; the other containers show the preview picture their application wrote, at the size it is. A document holding no such picture — Photoshop saved with `Maximize Compatibility` off, Illustrator saved as PostScript — shows no preview.
-
-Design previews are sized by **Images Scaling**, and can be switched off with **Design** in **Preview Types**.
+These files usually show a preview saved inside them, so you see the design as saved—not a flattened version.
 
 ### Fonts
 
@@ -187,11 +185,13 @@ All are free. Windows 11 often has HEIF, AV1, and WebP already. Where one is mis
   - **PDF Scaling** — Fit to Screen (default), or the same shares of the display.
   - **Office Scaling** — the same for a page Office rendered; a workbook’s fallback bitmap is never enlarged.
   - **Font Scaling** — the same shares for a font specimen, 50% by default.
+  - **Design Scaling** — the same shares of the display for a design document (Photoshop, Illustrator, Krita, OpenRaster); Fit to Screen by default.
 - **Background**
   - **Image Background** — Transparent, Black, White, or Checkerboard.
   - **SVG Background** — the same backdrops for documents.
   - **Font Background** — the same backdrops for a font specimen.
   - **DDS Background** — the same backdrops for `.dds` textures, whose alpha channel is as often a mask or an unused channel as it is transparency.
+  - **Design Background** — the same backdrops for a design document.
 - **Volume** — Max, High, Medium, Low, Very Low, Mute: 100% down to 0%.
 - **Performance**
   - **Confirm File Type** — validate file content against the extension.
@@ -249,6 +249,7 @@ avoid_mode=details
 image_background=black
 svg_background=black
 font_background=white
+design_background=black
 video_volume=0
 preview_scale=100
 video_scale=100
@@ -257,6 +258,7 @@ svg_scale=50
 pdf_scale=fit
 office_scale=fit
 font_scale=50
+design_scale=fit
 theme=light
 markdown_mode=rendered
 text_preview_full_mode=false
@@ -312,8 +314,10 @@ Key settings, in plain terms:
 - `svg_scale` — percentage or `fit`, read against the screen. `50` is default, `fit` is all of it, and `100` or more reads as `fit`.
 - `pdf_scale` / `office_scale` — the same for a PDF page and an Office-rendered page, both `fit` by default as well as a percentage. A workbook’s fallback bitmap follows its own size and is never enlarged.
 - `font_scale` — percentage or `fit`, read against the screen. `50` is default, `fit` is all of it, and `100` or more reads as `fit`. A font has no size of its own, so the share is of the display.
+- `design_scale` — the same for a design document, `fit` by default. A design preview is the picture the file keeps of the whole document, so the share is of the screen the way a page’s is rather than of the document’s own size.
 - `ttc_face` — which face of a `.ttc` collection is drawn: `1` is the first face, and the highest setting is `10`. The heading says which face came out.
 - `font_background` — `white` (default), `black`, `checkerboard`, or `transparent`.
+- `design_background` — `black` (default), `white`, `checkerboard`, or `transparent`.
 - A deleted `extensions=` line or whole section comes back with built-in entries. An `extensions=` line left empty stays empty.
 
 ## Build from Source

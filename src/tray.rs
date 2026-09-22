@@ -3,7 +3,8 @@ use crate::config::{
     sanitize_decode_budget_gb, sanitize_image_cache_mb, sanitize_office_cache_mb,
     sanitize_pdf_cache_mb, sanitize_text_cache_mb, sanitize_text_font_scale_percent, AvoidMode,
     EngineIdle, MarkdownMode, PreviewScale, PreviewType, TextTheme, TransparentBackground,
-    TriggerKeyMode, DEFAULT_ANIMATED_SCALE, DEFAULT_DECODE_BUDGET_GB, DEFAULT_FONT_SCALE,
+    TriggerKeyMode, DEFAULT_ANIMATED_SCALE, DEFAULT_DECODE_BUDGET_GB, DEFAULT_DESIGN_SCALE,
+    DEFAULT_FONT_SCALE,
     DEFAULT_IMAGE_CACHE_MB, DEFAULT_OFFICE_CACHE_MB, DEFAULT_OFFICE_ENGINE_IDLE_SECS,
     DEFAULT_OFFICE_SCALE, DEFAULT_PDF_CACHE_MB, DEFAULT_PDF_SCALE, DEFAULT_PREVIEW_SCALE,
     DEFAULT_SVG_SCALE, DEFAULT_TEXT_CACHE_MB, DEFAULT_TEXT_FONT_SCALE_PERCENT,
@@ -49,11 +50,11 @@ const ID_TRAY_TRIGGER_DISABLE: u16 = 1005; // Hold the trigger key to stop previ
 const ID_TRAY_TRIGGER_ENABLE: u16 = 1006; // Hold the trigger key to allow previews
 const ID_TRAY_TRIGGER_ENABLED: u16 = 1068; // Whether the trigger key is watched at all
 /// The `Background` submenu: one command per backdrop it offers, in the order it
-/// lists them, for each of the four kinds of preview it keeps apart — a picture's
-/// backdrop, a document's, a font specimen's, and a texture's. Each half is a base plus the
-/// position the choice was listed at, so one table and one builder serve all of them, and
-/// the four ranges are four wide and apart, which is what keeps an item of one from being
-/// read as a choice of another.
+/// lists them, for each of the five kinds of preview it keeps apart — a picture's
+/// backdrop, a document's, a font specimen's, a texture's, and a design document's. Each
+/// half is a base plus the position the choice was listed at, so one table and one builder
+/// serve all of them, and each range is four wide and apart from the others, which is what
+/// keeps an item of one from being read as a choice of another.
 const ID_TRAY_IMAGE_BACKGROUND_BASE: u16 = 1023;
 const ID_TRAY_SVG_BACKGROUND_BASE: u16 = 1054;
 /// The third half of the `Background` submenu, for a font specimen — which is a page of its
@@ -68,6 +69,11 @@ const ID_TRAY_FONT_BACKGROUND_BASE: u16 = 1204;
 /// channel nobody filled in as it is transparency, so what is drawn behind one is a
 /// question of its own.
 const ID_TRAY_DDS_BACKGROUND_BASE: u16 = 1200;
+/// The fifth, for a design document: what its preview is made of is the picture the file
+/// keeps of the whole document — a merged image, or the flattened document a project
+/// container holds — and that picture's transparency is the document's own, so what stands
+/// behind one is a question of its own.
+const ID_TRAY_DESIGN_BACKGROUND_BASE: u16 = 1208;
 /// The backdrops a half of the `Background` submenu offers, in the order it lists
 /// them, with `Transparent` at the top: the whole range the setting holds, so nothing
 /// a hand-edited `config.ini` can ask for is left unmarked.
@@ -138,6 +144,10 @@ const ID_TRAY_VIDEO_SCALE_BASE: u16 = 1425;
 /// same builder, and the range is its own because what moves has a size apart from what
 /// does not.
 const ID_TRAY_ANIMATED_SCALE_BASE: u16 = 1435;
+/// `Design Scaling`, in the range after the animated one: a design document is previewed
+/// from a picture the file keeps of the whole of itself, so it is asked for a share of the
+/// display the way a page is rather than for a share of its own size.
+const ID_TRAY_DESIGN_SCALE_BASE: u16 = 1445;
 /// The shares of the display every `… Scaling` submenu offers, in the order it lists
 /// them: the whole room a document can be given at the top, then the shares of it a
 /// document is asked for below. What differs between the settings is where they start —
@@ -351,6 +361,12 @@ unsafe extern "system" fn tray_window_proc(
                 {
                     set_dds_background(cmd - ID_TRAY_DDS_BACKGROUND_BASE)
                 }
+                cmd if (ID_TRAY_DESIGN_BACKGROUND_BASE
+                    ..ID_TRAY_DESIGN_BACKGROUND_BASE + BACKGROUND_CHOICES.len() as u16)
+                    .contains(&cmd) =>
+                {
+                    set_design_background(cmd - ID_TRAY_DESIGN_BACKGROUND_BASE)
+                }
                 ID_TRAY_VOLUME_MAX => set_volume(100),
                 ID_TRAY_VOLUME_HIGH => set_volume(80),
                 ID_TRAY_VOLUME_MEDIUM => set_volume(50),
@@ -469,6 +485,14 @@ unsafe extern "system" fn tray_window_proc(
                     .contains(&cmd) =>
                 {
                     set_font_scale(cmd - ID_TRAY_FONT_SCALE_BASE)
+                }
+                // And how much of the display a design document is drawn over, the same
+                // question asked of the picture a file keeps of the whole of one.
+                cmd if (ID_TRAY_DESIGN_SCALE_BASE
+                    ..ID_TRAY_DESIGN_SCALE_BASE + DOCUMENT_SCALE_CHOICES.len() as u16)
+                    .contains(&cmd) =>
+                {
+                    set_design_scale(cmd - ID_TRAY_DESIGN_SCALE_BASE)
                 }
                 // How large a video is drawn, by the position its item was listed at: the
                 // same shares the pictures above it are offered, in a range of their own
@@ -1049,14 +1073,23 @@ unsafe fn show_context_menu(hwnd: HWND) {
     // submenu of its own because the answers are not the same answers: a picture's
     // percentage is of its own size, a document's is of the display — and a document and a
     // page do not start at the same share of it either.
-    let (svg_scale, pdf_scale, office_scale, font_scale) = CONFIG
+    let (svg_scale, pdf_scale, office_scale, font_scale, design_scale) = CONFIG
         .lock()
-        .map(|c| (c.svg_scale, c.pdf_scale, c.office_scale, c.font_scale))
+        .map(|c| {
+            (
+                c.svg_scale,
+                c.pdf_scale,
+                c.office_scale,
+                c.font_scale,
+                c.design_scale,
+            )
+        })
         .unwrap_or((
             DEFAULT_SVG_SCALE,
             DEFAULT_PDF_SCALE,
             DEFAULT_OFFICE_SCALE,
             DEFAULT_FONT_SCALE,
+            DEFAULT_DESIGN_SCALE,
         ));
 
     append_document_scale_menu(
@@ -1087,6 +1120,13 @@ unsafe fn show_context_menu(hwnd: HWND) {
         font_scale,
         DEFAULT_FONT_SCALE,
     );
+    append_document_scale_menu(
+        scaling_menu,
+        w!("Design Scaling"),
+        ID_TRAY_DESIGN_SCALE_BASE,
+        design_scale,
+        DEFAULT_DESIGN_SCALE,
+    );
 
     let _ = AppendMenuW(
         menu,
@@ -1097,24 +1137,27 @@ unsafe fn show_context_menu(hwnd: HWND) {
 
     // Add the "Background" submenu: what a preview is drawn over, which is a question
     // a picture and a document answer differently — a picture's transparency is the
-    // picture's, while a document is drawn on a page — so each of the four has a half
+    // picture's, while a document is drawn on a page — so each of them has a half
     // of its own, listing the same backdrops.
-    let (image_background, svg_background, font_background, dds_background) = CONFIG
-        .lock()
-        .map(|c| {
-            (
-                c.image_background,
-                c.svg_background,
-                c.font_background,
-                c.dds_background,
-            )
-        })
-        .unwrap_or((
-            TransparentBackground::Transparent,
-            TransparentBackground::Transparent,
-            TransparentBackground::Transparent,
-            TransparentBackground::Transparent,
-        ));
+    let (image_background, svg_background, font_background, dds_background, design_background) =
+        CONFIG
+            .lock()
+            .map(|c| {
+                (
+                    c.image_background,
+                    c.svg_background,
+                    c.font_background,
+                    c.dds_background,
+                    c.design_background,
+                )
+            })
+            .unwrap_or((
+                TransparentBackground::Transparent,
+                TransparentBackground::Transparent,
+                TransparentBackground::Transparent,
+                TransparentBackground::Transparent,
+                TransparentBackground::Transparent,
+            ));
     let background_menu = CreatePopupMenu().unwrap();
 
     append_background_menu(
@@ -1140,6 +1183,12 @@ unsafe fn show_context_menu(hwnd: HWND) {
         w!("DDS Background"),
         ID_TRAY_DDS_BACKGROUND_BASE,
         dds_background,
+    );
+    append_background_menu(
+        background_menu,
+        w!("Design Background"),
+        ID_TRAY_DESIGN_BACKGROUND_BASE,
+        design_background,
     );
 
     let _ = AppendMenuW(
@@ -1589,6 +1638,21 @@ fn set_dds_background(index: u16) {
 
     if let Ok(mut config) = CONFIG.lock() {
         config.dds_background = background;
+        config.save();
+    }
+    refresh_preview();
+}
+
+/// And for a design document, which is composited by this app the way a texture is: what
+/// stands behind the picture the file keeps of the document is this side's to draw, so the
+/// preview on screen only needs compositing again.
+fn set_design_background(index: u16) {
+    let Some(background) = background_at(index) else {
+        return;
+    };
+
+    if let Ok(mut config) = CONFIG.lock() {
+        config.design_background = background;
         config.save();
     }
     refresh_preview();
@@ -2400,6 +2464,22 @@ fn set_font_scale(index: u16) {
     }
 }
 
+/// How much of the display a design document is drawn over, by the position the item was
+/// listed at. The same rule as the four beside it: what a document is previewed from is
+/// the picture its own format keeps of the whole thing, so the share is of the display
+/// rather than of the document, and it applies to the next hover rather than resizing a
+/// preview that is already up.
+fn set_design_scale(index: u16) {
+    let Some(scale) = document_scale_at(index) else {
+        return;
+    };
+
+    if let Ok(mut config) = CONFIG.lock() {
+        config.design_scale = scale;
+        config.save();
+    }
+}
+
 /// The share of its own size an item of the `Image Scaling` or `Video Scaling` submenu
 /// stands for, by the position it was listed at. An id past the last choice the menu
 /// offered is one that is not there.
@@ -2647,13 +2727,14 @@ mod tests {
     /// the failure this range was moved for: a backdrop of a specimen and the text
     /// preview's `Full Mode` item were one id, and the backdrop was read first.
     #[test]
-    fn the_four_halves_of_the_background_submenu_carry_different_ids() {
+    fn the_five_halves_of_the_background_submenu_carry_different_ids() {
         let width = BACKGROUND_CHOICES.len() as u16;
         let bases = [
             ID_TRAY_IMAGE_BACKGROUND_BASE,
             ID_TRAY_SVG_BACKGROUND_BASE,
             ID_TRAY_FONT_BACKGROUND_BASE,
             ID_TRAY_DDS_BACKGROUND_BASE,
+            ID_TRAY_DESIGN_BACKGROUND_BASE,
         ];
 
         for (index, base) in bases.iter().enumerate() {
@@ -2838,6 +2919,8 @@ mod tests {
             ID_TRAY_SVG_SCALE_BASE,
             ID_TRAY_PDF_SCALE_BASE,
             ID_TRAY_OFFICE_SCALE_BASE,
+            ID_TRAY_FONT_SCALE_BASE,
+            ID_TRAY_DESIGN_SCALE_BASE,
         ] {
             let scales = base..base + DOCUMENT_SCALE_CHOICES.len() as u16;
 
@@ -2852,10 +2935,10 @@ mod tests {
 
     /// The `Image Scaling`, `Video Scaling` and `Animated Scaling` submenus are one
     /// range each, and none of them reaches into another or into the display shares the
-    /// specimen's scale hands out: a click on a share of a bitmap is never read as a
-    /// click on another setting's share. Each lists every share the setting can be asked
-    /// for, in order, and every id resolves back to the share its item was listed for —
-    /// which is what makes a click select what it named.
+    /// document scales beside them hand out: a click on a share of a bitmap is never read
+    /// as a click on another setting's share. Each lists every share the setting can be
+    /// asked for, in order, and every id resolves back to the share its item was listed
+    /// for — which is what makes a click select what it named.
     #[test]
     fn the_bitmap_scaling_submenus_carry_ids_of_their_own() {
         let bitmap_bases = [
@@ -2871,6 +2954,10 @@ mod tests {
             ID_TRAY_FONT_SCALE_BASE,
             ID_TRAY_FONT_SCALE_BASE + DOCUMENT_SCALE_CHOICES.len() as u16,
         );
+        let design_scales = (
+            ID_TRAY_DESIGN_SCALE_BASE,
+            ID_TRAY_DESIGN_SCALE_BASE + DOCUMENT_SCALE_CHOICES.len() as u16,
+        );
 
         let overlaps = |ours: (u16, u16), theirs: (u16, u16)| {
             (ours.0 < theirs.1 && theirs.0 < ours.1).then_some((ours, theirs))
@@ -2885,11 +2972,13 @@ mod tests {
                 );
             }
 
-            assert_eq!(
-                overlaps(*range, font_scales),
-                None,
-                "the range {range:?} and the display shares {font_scales:?} overlap"
-            );
+            for document in [font_scales, design_scales] {
+                assert_eq!(
+                    overlaps(*range, document),
+                    None,
+                    "the range {range:?} and the display shares {document:?} overlap"
+                );
+            }
         }
 
         for base in bitmap_bases {

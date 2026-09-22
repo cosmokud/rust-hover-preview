@@ -5,7 +5,8 @@ use crate::codecs;
 use crate::config::{
     frame_bytes_within_budget, image_decode_limits, read_within_budget, sanitize_image_cache_mb,
     sanitize_spinner_delay_ms, sanitize_webp_playback_fps, MarkdownMode, PreviewScale, PreviewType,
-    TextTheme, TransparentBackground, DEFAULT_ANIMATED_SCALE_PERCENT, DEFAULT_FONT_SCALE,
+    TextTheme, TransparentBackground, DEFAULT_ANIMATED_SCALE_PERCENT, DEFAULT_DESIGN_SCALE,
+    DEFAULT_FONT_SCALE,
     DEFAULT_IMAGE_CACHE_MB, DEFAULT_OFFICE_SCALE, DEFAULT_PDF_SCALE, DEFAULT_PREVIEW_SCALE_PERCENT,
     DEFAULT_SPINNER_DELAY_MS, DEFAULT_SVG_SCALE_PERCENT, DEFAULT_TEXT_FONT_SCALE_PERCENT,
     DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS, DEFAULT_VIDEO_SCALE_PERCENT,
@@ -1452,6 +1453,16 @@ fn current_dds_background() -> TransparentBackground {
         .unwrap_or(TransparentBackground::Transparent)
 }
 
+/// The backdrop a design document is drawn over, which the tray keeps apart from a
+/// picture's: what is previewed is the picture the file keeps of the whole document, and
+/// a designer's transparency is the document's own rather than a photograph's.
+fn current_design_background() -> TransparentBackground {
+    CONFIG
+        .lock()
+        .map(|cfg| cfg.design_background)
+        .unwrap_or(TransparentBackground::Transparent)
+}
+
 /// How loud a video is played, which is read when one is started rather than when the
 /// setting changes: a preview is a few seconds long, and the next one is played at
 /// whatever the volume is by then.
@@ -1509,6 +1520,7 @@ fn current_hover_scales() -> HoverScales {
             page: cfg.pdf_scale,
             office: cfg.office_scale,
             font: cfg.font_scale,
+            design: cfg.design_scale,
         })
         .unwrap_or(HoverScales {
             picture: PreviewScale::Percent(DEFAULT_PREVIEW_SCALE_PERCENT),
@@ -1518,6 +1530,7 @@ fn current_hover_scales() -> HoverScales {
             page: DEFAULT_PDF_SCALE,
             office: DEFAULT_OFFICE_SCALE,
             font: DEFAULT_FONT_SCALE,
+            design: DEFAULT_DESIGN_SCALE,
         })
 }
 
@@ -1676,6 +1689,14 @@ struct HoverScales {
     office: PreviewScale,
     /// The share of the display a font specimen is drawn at.
     font: PreviewScale,
+    /// The share of the display a design document is drawn at.
+    ///
+    /// What a design document is previewed from is the picture its own format keeps of
+    /// the whole thing, so what the share is of is the room the display has rather than
+    /// the size that picture happens to be — the same question the document scales above
+    /// answer, and a setting of its own because a drawing wants a different share of the
+    /// screen from a page or a specimen.
+    design: PreviewScale,
 }
 
 /// The scale a preview is laid out and rendered with.
@@ -1714,10 +1735,11 @@ struct HoverScales {
 /// type. A file that will not parse as a font is not measured at all, so a hover onto one
 /// never reaches this.
 ///
-/// A design document is the picture's rule again and asks for nothing of its own: what
-/// its preview is made of is the picture the file keeps of the whole document, so the
-/// share is of the document's own size and `preview_scale` is the setting that names it —
-/// see `load_design_preview`.
+/// A design document is the document rule rather than the picture's, at the share
+/// `design_scale` names: what its preview is made of is the picture the file keeps of the
+/// whole document rather than a picture the file *is*, so the room the display has is what
+/// the share is of — the same question a page answers, and a setting of its own because a
+/// drawing and a page want different shares of it. See `load_design_preview`.
 ///
 /// A video keeps the share of its own size `video_scale` names, which is the picture's
 /// rule: what a video's preview is, until the player's window is over it, is its first
@@ -1765,6 +1787,11 @@ fn effective_preview_scale(path: &Path, scales: HoverScales) -> PreviewScale {
         fit_reduced(scales.svg)
     } else if font_formats::is_font_file(path) {
         fit_reduced(scales.font)
+    } else if design_formats::is_design_file(path) {
+        // A design document is a document for this question rather than a picture: what is
+        // previewed is the picture the file keeps of the whole of itself, at whatever size
+        // that is, so the share is of the display the way a page's or a specimen's is.
+        fit_reduced(scales.design)
     } else if is_video_file(path) {
         scales.video
     } else {
@@ -3105,12 +3132,11 @@ fn load_static_image(
 /// a project container is a zip holding a picture the application saved; see
 /// `psd_image` and `project_image`.
 ///
-/// Everywhere else in this app a design preview is a picture: the frame is composed
-/// like one, held in the image cache like one under the size it was made for, and drawn
-/// over the backdrop pictures are drawn over. The scale it is laid out at is the
-/// picture rule too — a share of the document's own size — so nothing here asks the
-/// configuration anything the caller has not already read; see
-/// `effective_preview_scale`.
+/// Everywhere else a design preview is a frame of this app's own: it is composed like a
+/// picture, held in the image cache like one under the size it was made for, drawn over the
+/// backdrop the tray keeps for this kind — `design_background`, a setting of its own — and
+/// laid out at the share of the display `design_scale` names, which is what
+/// `effective_preview_scale` has already read by the time this is called.
 fn load_design_preview(
     path: &Path,
     max_width: u32,
@@ -5173,14 +5199,16 @@ unsafe fn render_layered_preview_at(hwnd: HWND, x: i32, y: i32) {
         // The spinner is nothing but an arc, and what is behind it is the desktop:
         // a backdrop of the configured kind would put back the square its frame is
         // transparent to avoid. Everything else this window draws is composited over
-        // the backdrop of its kind — a picture's, or the one the tray keeps for a
-        // texture, which is a setting of its own for the reason `dds_image` gives. A
-        // document is composited by the engine, over the backdrop of its own, and none
-        // of them reaches here.
+        // the backdrop of its kind — a picture's, the one the tray keeps for a texture, or
+        // the one it keeps for the picture a design document is previewed from, each a
+        // setting of its own for the reason `dds_image` gives. A document is composited by
+        // the engine, over the backdrop of its own, and none of them reaches here.
         let background = if media.media_type.is_loading() {
             TransparentBackground::Transparent
         } else if matches!(media.media_type, MediaType::Dds) {
             current_dds_background()
+        } else if matches!(media.media_type, MediaType::Design) {
+            current_design_background()
         } else {
             current_image_background()
         };
@@ -8381,6 +8409,7 @@ mod tests {
             page: DEFAULT_PDF_SCALE,
             office: DEFAULT_OFFICE_SCALE,
             font: DEFAULT_FONT_SCALE,
+            design: DEFAULT_DESIGN_SCALE,
         }
     }
 
