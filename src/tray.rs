@@ -86,9 +86,9 @@ const ID_TRAY_VOLUME_MUTE: u16 = 1015; // 0%
 const ID_TRAY_POSITION_FOLLOW: u16 = 1020; // Follow cursor
 const ID_TRAY_POSITION_BEST: u16 = 1021; // Best position
 /// The `Placement → Avoid` submenu: one command per way a preview is kept off the
-/// item it is about, in the order it lists them. The ids sit above every range the
-/// app's own items hand out, because the `Placement` choices have no room for four
-/// beside them — so a way of avoiding is never read as another setting.
+/// item it is about, in the order it lists them. The ids sit in a range of their own
+/// in the slack the scaling ranges leave, so a way of avoiding is never read as a
+/// share of a preview's size.
 const ID_TRAY_AVOID_BASE: u16 = 1410;
 /// The ways the `Avoid` submenu offers, in the order it lists them: nothing avoided,
 /// the name where it is drawn, the column the name is drawn in, and every column the
@@ -110,12 +110,12 @@ const ID_TRAY_REHOVER_DELAY_SLOW: u16 = 1037; // 1000ms
 const ID_TRAY_DELAY_FAST_PLUS: u16 = 1038; // 750ms
 const ID_TRAY_REHOVER_DELAY_FAST_PLUS: u16 = 1039; // 750ms
 const ID_TRAY_OPEN_CONFIG: u16 = 1040;
-/// The `Placement → Images Scaling` submenu: one command per share of its own size a
+/// The `Scaling → Images Scaling` submenu: one command per share of its own size a
 /// picture is drawn at, in the order it lists them — the first of the two bitmap
 /// submenus, each with a range of its own so a click on one is never read as a click
 /// on the other.
 const ID_TRAY_SCALE_BASE: u16 = 1041;
-/// The `Placement → SVG Scaling` submenu: one command per share of the display a
+/// The `Scaling → SVG Scaling` submenu: one command per share of the display a
 /// document is drawn at, in the order it lists them. The ids start past the last
 /// range the app's own items occupy — the caches, which end below this — so a share
 /// of the display and a cache size are never read as each other.
@@ -942,7 +942,7 @@ unsafe fn show_context_menu(hwnd: HWND) {
     );
 
     // Add the "Placement" submenu: where a preview lands relative to the cursor or
-    // the focused item, and how large it is.
+    // the focused item.
     let placement_menu = CreatePopupMenu().unwrap();
 
     // Add the Position submenu: which side a preview takes. The two placements are one
@@ -991,6 +991,17 @@ unsafe fn show_context_menu(hwnd: HWND) {
 
     append_avoid_menu(placement_menu, w!("Avoid"), ID_TRAY_AVOID_BASE, avoid_mode);
 
+    let _ = AppendMenuW(
+        menu,
+        MF_STRING | MF_POPUP,
+        placement_menu.0 as usize,
+        w!("Placement"),
+    );
+
+    // Add the "Scaling" submenu below it: how large a preview of each kind is drawn,
+    // rather than where it lands.
+    let scaling_menu = CreatePopupMenu().unwrap();
+
     // Add the Images Scaling, Videos Scaling and Animated Scaling submenus: how large a
     // picture, a video and an animated picture is drawn, each at a share of its own size
     // rather than of the display. One builder serves all three — the shares are the same
@@ -1007,21 +1018,21 @@ unsafe fn show_context_menu(hwnd: HWND) {
         ));
 
     append_bitmap_scale_menu(
-        placement_menu,
+        scaling_menu,
         w!("Images Scaling"),
         ID_TRAY_SCALE_BASE,
         preview_scale,
         DEFAULT_PREVIEW_SCALE,
     );
     append_bitmap_scale_menu(
-        placement_menu,
+        scaling_menu,
         w!("Videos Scaling"),
         ID_TRAY_VIDEO_SCALE_BASE,
         video_scale,
         DEFAULT_VIDEO_SCALE,
     );
     append_bitmap_scale_menu(
-        placement_menu,
+        scaling_menu,
         w!("Animated Scaling"),
         ID_TRAY_ANIMATED_SCALE_BASE,
         animated_scale,
@@ -1045,28 +1056,28 @@ unsafe fn show_context_menu(hwnd: HWND) {
         ));
 
     append_document_scale_menu(
-        placement_menu,
+        scaling_menu,
         w!("SVG Scaling"),
         ID_TRAY_SVG_SCALE_BASE,
         svg_scale,
         DEFAULT_SVG_SCALE,
     );
     append_document_scale_menu(
-        placement_menu,
+        scaling_menu,
         w!("PDF Scaling"),
         ID_TRAY_PDF_SCALE_BASE,
         pdf_scale,
         DEFAULT_PDF_SCALE,
     );
     append_document_scale_menu(
-        placement_menu,
+        scaling_menu,
         w!("Office Scaling"),
         ID_TRAY_OFFICE_SCALE_BASE,
         office_scale,
         DEFAULT_OFFICE_SCALE,
     );
     append_document_scale_menu(
-        placement_menu,
+        scaling_menu,
         w!("Font Scaling"),
         ID_TRAY_FONT_SCALE_BASE,
         font_scale,
@@ -1076,8 +1087,8 @@ unsafe fn show_context_menu(hwnd: HWND) {
     let _ = AppendMenuW(
         menu,
         MF_STRING | MF_POPUP,
-        placement_menu.0 as usize,
-        w!("Placement"),
+        scaling_menu.0 as usize,
+        w!("Scaling"),
     );
 
     // Add the "Background" submenu: what a preview is drawn over, which is a question

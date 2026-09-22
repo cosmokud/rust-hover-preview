@@ -2,8 +2,20 @@
 
 ## [0.2.12]
 
+### Changed
+
+- The scaling options now live in a `Scaling` menu of their own in the tray, right below `Placement`.
+- `Font Background` now defaults to white; `font_background` in `config.ini` still sets it.
+
+## [0.2.11]
+
 ### Added
 
+- Video previews without FFmpeg: where `ffplay` is not installed, videos are decoded by the media engine Windows already has — `mp4`, `mov`, `m4v`, `mkv`, `webm`, `avi`, `wmv`, `asf`, `ts`, `m2ts`, `mts`, `3gp`, and more with the codec extensions below — played in the same preview window as everything else, with sound and looping. FFmpeg is now optional rather than required.
+- `Codecs` in the tray menu: what this machine has of every engine and codec a preview can lean on, grouped into `Video`, `Images` and `Engines`, with a check or a cross per row and the missing ones greyed. The rows are for reading only — nothing in the menu does anything, and there is no setting behind it.
+- `windows-core` as a declared dependency, for the media engine's event callback. Nothing is added to the build graph by it.
+- Sample lines for Arabic, Hebrew, Thai and Devanagari, so a font of one of those scripts is drawn as its own script rather than by the first characters its map happens to hold: the Arabic and Hebrew pangrams, and the openings of the Thai pangram written by the Computer Association of Thailand and of the Devanagari one the script is sampled with. A line is still drawn whole or not at all, so a script a font holds every character of is a line and one it does not is the font's own characters, the same rule as before.
+- `Font Face` under the tray's **Placement** menu, with `ttc_face` in `config.ini`: which face of a `.ttc` collection a specimen is drawn from — `First Face` (the default) down to `Tenth Face`. A page has no syntax for naming a face inside a collection, so the face is written out as a font of its own, and this is which one; a collection with fewer faces than the setting names is drawn from the last one it has, and the specimen's heading says which face came out — `(2 of 4)` — so what was asked for and what was drawn cannot be taken for each other.
 - DDS texture previews now support almost all DDS formats, including compressed, uncompressed, cubemaps, texture arrays, and mip chains; only the first face and first level are shown.
 - Signed DDS textures now display correctly: zero is in the middle, and missing color channels show as neutral gray.
 - Signed HDR DDS textures now get a preview and use the same HDR tone mapping as other light-based images; negative light is shown as black.
@@ -16,6 +28,11 @@
 
 ### Changed
 
+- `README.md` describes what FFmpeg adds rather than requiring it, and lists the free Microsoft Store codec extensions for HEVC, VP9, AV1, MPEG-2 and Ogg.
+- Bump version to 0.2.11 in `Cargo.toml` and `Cargo.lock`.
+- A specimen's lines carry their own direction, so the Arabic and Hebrew lines are laid out from the right, their full stop ending them where the script ends it rather than where a left-to-right page would; every other line is drawn as it was.
+- A font that covers more of the sample lines than the specimen's box was shaped for — a pan-script one, which covers most of them — is drawn at smaller type rather than past the bottom of the box.
+- The page a specimen is drawn in is named for the face as well as the backdrop, so switching faces is a page the browser has not seen rather than the one before it answered out of its cache.
 - Video files are now checked in the background with a spinner, and the result is remembered so they are not checked again every time.
 - Video previews show the spinner until the video player window appears.
 - Video players that fail to open or hang are closed automatically.
@@ -35,24 +52,6 @@
 - Animations no longer stop at the end of their first play. An animation whose frames were partly given back to keep memory in check was left holding its last frame for good, because the file was only decoded again while a decoder was still running and that decoder had already finished; the two are now settled together, so either the animation is still being decoded or the whole of it is in hand and plays from beginning to end, forever. This affected GIF, animated WebP and animated PNG previews.
 - Animations with a long frame in them no longer freeze on that frame. Any frame held for a whole second or more — which a GIF is free to ask for, and one of these asks for 1.2 seconds on its first frame — was unreachable: the playhead was treated as having fallen behind once a second had passed, and its clock was reset every tick, so the wait could never end. The frame's own delay is now part of what "behind" means, and a long hold is simply a long hold.
 - An animation that fits the memory it is kept in stays whole instead of being taken apart frame by frame: it is decoded once, plays through, and wraps back into the frame it started on rather than being read from disk again on every pass.
-
-## [0.2.11]
-
-### Added
-
-- Video previews without FFmpeg: where `ffplay` is not installed, videos are decoded by the media engine Windows already has — `mp4`, `mov`, `m4v`, `mkv`, `webm`, `avi`, `wmv`, `asf`, `ts`, `m2ts`, `mts`, `3gp`, and more with the codec extensions below — played in the same preview window as everything else, with sound and looping. FFmpeg is now optional rather than required.
-- `Codecs` in the tray menu: what this machine has of every engine and codec a preview can lean on, grouped into `Video`, `Images` and `Engines`, with a check or a cross per row and the missing ones greyed. The rows are for reading only — nothing in the menu does anything, and there is no setting behind it.
-- `windows-core` as a declared dependency, for the media engine's event callback. Nothing is added to the build graph by it.
-- Sample lines for Arabic, Hebrew, Thai and Devanagari, so a font of one of those scripts is drawn as its own script rather than by the first characters its map happens to hold: the Arabic and Hebrew pangrams, and the openings of the Thai pangram written by the Computer Association of Thailand and of the Devanagari one the script is sampled with. A line is still drawn whole or not at all, so a script a font holds every character of is a line and one it does not is the font's own characters, the same rule as before.
-- `Font Face` under the tray's **Placement** menu, with `ttc_face` in `config.ini`: which face of a `.ttc` collection a specimen is drawn from — `First Face` (the default) down to `Tenth Face`. A page has no syntax for naming a face inside a collection, so the face is written out as a font of its own, and this is which one; a collection with fewer faces than the setting names is drawn from the last one it has, and the specimen's heading says which face came out — `(2 of 4)` — so what was asked for and what was drawn cannot be taken for each other.
-
-### Changed
-
-- `README.md` describes what FFmpeg adds rather than requiring it, and lists the free Microsoft Store codec extensions for HEVC, VP9, AV1, MPEG-2 and Ogg.
-- Bump version to 0.2.11 in `Cargo.toml` and `Cargo.lock`.
-- A specimen's lines carry their own direction, so the Arabic and Hebrew lines are laid out from the right, their full stop ending them where the script ends it rather than where a left-to-right page would; every other line is drawn as it was.
-- A font that covers more of the sample lines than the specimen's box was shaped for — a pan-script one, which covers most of them — is drawn at smaller type rather than past the bottom of the box.
-- The page a specimen is drawn in is named for the face as well as the backdrop, so switching faces is a page the browser has not seen rather than the one before it answered out of its cache.
 
 ## [0.2.10]
 
