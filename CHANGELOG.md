@@ -7,6 +7,8 @@
 - Preview for design documents: Photoshop `psd` and `psb`, Krita `kra`, OpenRaster `ora`, and the project containers other drawing tools save (`sketch`, `fig`, `xd`). A layered document is shown from the finished picture its format keeps inside it, so it arrives as it was saved.
 - Preview for Illustrator `ai` files, drawn as a PDF the same way a PDF is. An `.ai` saved as PostScript has no preview.
 - `Design` under the tray's **Preview Types**, with `design_preview_enabled` and a `[design]` extension list in `config.ini`.
+- `Design Scaling` under the tray's **Scaling** menu, with `design_scale` in `config.ini`: how much of the screen a design preview covers — Fit to Screen (default), or 75%, 50%, 25%, 10%.
+- `Design Background` under the tray's **Background** menu, with `design_background` in `config.ini`: what a design preview is drawn over, black by default.
 
 ### Changed
 
