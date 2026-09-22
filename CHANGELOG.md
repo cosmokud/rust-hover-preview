@@ -4,7 +4,7 @@
 
 ### Added
 
-- Update checks, asked for by the tray menu and answered at most once an hour: where a newer release exists, its installer is fetched and a row above **Run at Startup** says so, and clicking that row installs it silently and starts the app again. The check asks this repository's own GitHub releases over HTTPS and nowhere else, and nothing is asked at all unless the menu is opened.
+- Update checks, asked for by the tray menu and answered at most once an hour: where a newer release exists, its installer is fetched and a row above **Run at Startup** says so. Clicking that row asks whether to install it, and a yes installs it silently and starts the app again. The check asks this repository's own GitHub releases over HTTPS and nowhere else, and nothing is asked at all unless the menu is opened.
 
 ### Changed
 
