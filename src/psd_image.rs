@@ -558,6 +558,12 @@ impl Reducer {
     /// What is held while it runs is the planes themselves — the size of the preview
     /// rather than the size of the document — and one row group of sums beside them,
     /// so a channel of any size costs the same as the picture it is reduced into.
+    ///
+    /// The source is walked once whatever the target is, and that is what makes a
+    /// document smaller than its box work. An enlarged preview has more target rows than
+    /// the source has rows, so most of its target rows cover no source row of their own:
+    /// what one of those is made of is the source row already in hand, which is the same
+    /// rows the columns of an enlargement are averaged from.
     fn reduce(
         &self,
         picture: &mut Picture,
@@ -569,17 +575,30 @@ impl Reducer {
         let mut sums = vec![0u64; self.target_width * components];
         let mut row = Vec::new();
         let mut samples = Vec::new();
+        // The last source row read, kept for the target rows that have none of their own.
+        let mut held = Vec::new();
+        let mut consumed = 0usize;
 
-        for (output, (_, rows)) in self.rows.iter().enumerate() {
+        for (output, (start, rows)) in self.rows.iter().enumerate() {
             sums.fill(0);
 
-            for _ in 0..*rows {
+            let end = start + rows;
+            let mut taken = 0;
+            while consumed < end {
                 picture.next_row(shape, &mut row)?;
                 row_samples(&row, shape, &mut samples)?;
                 accumulate(&samples, &self.columns, meaning, &mut sums);
+                std::mem::swap(&mut samples, &mut held);
+                consumed += 1;
+                taken += 1;
             }
 
-            let across = *rows as u64;
+            if taken == 0 {
+                accumulate(&held, &self.columns, meaning, &mut sums);
+                taken = 1;
+            }
+
+            let across = taken as u64;
             for column in 0..self.target_width {
                 let divisor = across * self.columns[column].1 as u64;
                 if divisor == 0 {
@@ -776,4 +795,82 @@ fn seek_over(file: &mut BufReader<File>, length: u64) -> Option<()> {
     file.seek(SeekFrom::Current(length as i64)).ok()?;
 
     Some(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A document of the simplest shape there is — three eight-bit channels, written raw,
+    /// with no colour mode section, no image resources and no layers — so that what is
+    /// left in the file is the picture and nothing else.
+    fn write_document(path: &Path, width: u32, height: u32, planes: &[&[u8]]) {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(SIGNATURE);
+        bytes.extend_from_slice(&1u16.to_be_bytes());
+        bytes.extend_from_slice(&[0u8; 6]);
+        bytes.extend_from_slice(&(planes.len() as u16).to_be_bytes());
+        bytes.extend_from_slice(&height.to_be_bytes());
+        bytes.extend_from_slice(&width.to_be_bytes());
+        bytes.extend_from_slice(&8u16.to_be_bytes());
+        bytes.extend_from_slice(&3u16.to_be_bytes());
+        bytes.extend_from_slice(&0u32.to_be_bytes());
+        bytes.extend_from_slice(&0u32.to_be_bytes());
+        bytes.extend_from_slice(&0u32.to_be_bytes());
+        bytes.extend_from_slice(&0u16.to_be_bytes());
+        for plane in planes {
+            bytes.extend_from_slice(plane);
+        }
+
+        std::fs::write(path, &bytes).unwrap();
+    }
+
+    fn temp_path(name: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(name)
+    }
+
+    /// A document smaller than the box it is drawn in is enlarged rather than refused:
+    /// what a target row covers where there are more target rows than source rows is the
+    /// source row it falls in, so the source is still read exactly once.
+    #[test]
+    fn enlarges_a_document_into_a_box_bigger_than_it() {
+        let path = temp_path("rust-hover-preview-psd-smaller.psd");
+        write_document(&path, 2, 2, &[&[10, 20, 30, 40], &[0; 4], &[0; 4]]);
+
+        let frame = decode(&path, 4, 4).expect("an enlarged document is a preview");
+        std::fs::remove_file(&path).ok();
+
+        assert_eq!(frame.len(), 4 * 4 * 4);
+        for y in 0..4u32 {
+            for x in 0..4u32 {
+                let at = ((y * 4 + x) * 4) as usize;
+                let expected = [10u8, 20, 30, 40][((y * 2 / 4) * 2 + (x * 2 / 4)) as usize];
+                assert_eq!(
+                    frame[at + 2],
+                    expected,
+                    "the pixel at {x},{y} is the source pixel it falls in"
+                );
+                assert_eq!(frame[at + 3], 255, "and the document has no transparency");
+            }
+        }
+    }
+
+    /// A document larger than its box is averaged into it as it always was: every source
+    /// row belongs to one target row, so the walk of the source is the same one.
+    #[test]
+    fn averages_a_document_into_a_box_smaller_than_it() {
+        let path = temp_path("rust-hover-preview-psd-larger.psd");
+        let row: Vec<u8> = (0..16).collect();
+        write_document(&path, 4, 4, &[&row, &[0; 16], &[0; 16]]);
+
+        let frame = decode(&path, 2, 2).expect("a reduced document is a preview");
+        std::fs::remove_file(&path).ok();
+
+        let red: Vec<u8> = (0..4usize).map(|at| frame[at * 4 + 2]).collect();
+        assert_eq!(
+            red,
+            vec![10 / 4, 18 / 4, 42 / 4, 50 / 4],
+            "each target pixel is the average of the block that maps to it"
+        );
+    }
 }

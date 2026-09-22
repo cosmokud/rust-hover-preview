@@ -21,6 +21,7 @@
 
 ### Fixed
 
+- A Photoshop document smaller than the screen shows a preview again: it was refused whenever the preview was enlarged past the document's own size.
 - EPS files whose preview is a palette picture — the shape Photoshop writes into an EPS — now preview. That shape is read by the app itself, since the picture decoder turns it down.
 
 ## [0.2.12]
