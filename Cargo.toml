@@ -231,46 +231,21 @@ installer-icon = "assets/icon.ico"
 appdata-paths = ["$APPDATA/rust-hover-preview"]
 preinstall-section = """
 Section PreInstall
-  StrCpy $9 "0"
-  IfFileExists "$APPDATA\\rust-hover-preview\\config.ini" +2 0
-    StrCpy $9 "1"
-  CreateDirectory "$APPDATA\\rust-hover-preview"
-  ReadINIStr $0 "$APPDATA\\rust-hover-preview\\config.ini" "settings" "run_at_startup"
-  StrCmp $0 "" 0 +2
-    WriteINIStr "$APPDATA\\rust-hover-preview\\config.ini" "settings" "run_at_startup" "true"
-  ReadINIStr $0 "$APPDATA\\rust-hover-preview\\config.ini" "settings" "hover_delay_ms"
-  StrCmp $0 "" 0 +2
-    WriteINIStr "$APPDATA\\rust-hover-preview\\config.ini" "settings" "hover_delay_ms" "0"
-  ReadINIStr $0 "$APPDATA\\rust-hover-preview\\config.ini" "settings" "preview_enabled"
-  StrCmp $0 "" 0 +2
-    WriteINIStr "$APPDATA\\rust-hover-preview\\config.ini" "settings" "preview_enabled" "true"
-  ReadINIStr $0 "$APPDATA\\rust-hover-preview\\config.ini" "settings" "enable_off_trigger_key"
-  StrCmp $0 "" 0 +2
-    WriteINIStr "$APPDATA\\rust-hover-preview\\config.ini" "settings" "enable_off_trigger_key" "true"
-  ReadINIStr $0 "$APPDATA\\rust-hover-preview\\config.ini" "settings" "off_trigger_key"
-  StrCmp $0 "" 0 +2
-    WriteINIStr "$APPDATA\\rust-hover-preview\\config.ini" "settings" "off_trigger_key" "alt"
-  ReadINIStr $0 "$APPDATA\\rust-hover-preview\\config.ini" "settings" "confirm_file_type"
-  StrCmp $0 "" 0 +2
-    WriteINIStr "$APPDATA\\rust-hover-preview\\config.ini" "settings" "confirm_file_type" "false"
-  ReadINIStr $0 "$APPDATA\\rust-hover-preview\\config.ini" "settings" "follow_cursor"
-  StrCmp $0 "" 0 +2
-    WriteINIStr "$APPDATA\\rust-hover-preview\\config.ini" "settings" "follow_cursor" "false"
-  ReadINIStr $0 "$APPDATA\\rust-hover-preview\\config.ini" "settings" "same_file_rehover_delay_ms"
-  StrCmp $0 "" 0 +2
-    WriteINIStr "$APPDATA\\rust-hover-preview\\config.ini" "settings" "same_file_rehover_delay_ms" "750"
-  ReadINIStr $0 "$APPDATA\\rust-hover-preview\\config.ini" "settings" "image_background"
-  StrCmp $0 "" 0 +2
-    WriteINIStr "$APPDATA\\rust-hover-preview\\config.ini" "settings" "image_background" "black"
-  ReadINIStr $0 "$APPDATA\\rust-hover-preview\\config.ini" "settings" "svg_background"
-  StrCmp $0 "" 0 +2
-    WriteINIStr "$APPDATA\\rust-hover-preview\\config.ini" "settings" "svg_background" "black"
-  ReadINIStr $0 "$APPDATA\\rust-hover-preview\\config.ini" "settings" "video_volume"
-  StrCmp $0 "" 0 +2
-    WriteINIStr "$APPDATA\\rust-hover-preview\\config.ini" "settings" "video_volume" "0"
+  ; Where the app is copied to, which the sections after this one read.
   StrCpy $INSTDIR "$LOCALAPPDATA\\rust-hover-preview"
-  StrCmp $9 "1" 0 +2
-    WriteRegStr HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Run" "RustHoverPreview" "$INSTDIR\\rust-hover-preview.exe"
+
+  ; Nothing is written into `config.ini` here. That file is the app's own: it is written on the
+  ; first run, from the settings of the build that wrote it, with the version stamped in it that
+  ; says so — and every key in it is one that build reads. An installer that seeded it would be
+  ; a second writer of the file, holding the defaults of whenever the installer was built, so
+  ; an installation made that way would keep those values for good: a build that moves a default
+  ; writes it where there is nothing to overwrite, and there would be something.
+  ;
+  ; The startup entry is not written here either, for the same reason: the app adds it on its
+  ; first run, from the setting that asks for it and at the path it is running from.
+  ;
+  ; What is left is the one thing this section is for: an installation of an older version,
+  ; which lived in a folder of its own.
   IfFileExists "$LOCALAPPDATA\\Rust Hover Preview\\rust-hover-preview.exe" 0 +2
     Delete "$LOCALAPPDATA\\Rust Hover Preview\\rust-hover-preview.exe"
   IfFileExists "$LOCALAPPDATA\\Rust Hover Preview\\uninstall.exe" 0 +2
