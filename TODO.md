@@ -10,5 +10,5 @@
 
 ## Configuration
 
-- Retire what the stamp has made redundant, a release or two after it: the reads `apply_ini` does for a key that has been renamed (`off_trigger_key`, `svg_scale`, the backdrops' older names), and the first step of `migrate` together with the `*_BEFORE_*` lists it reads — no file that old can be in use by then, and a step is only worth keeping while one can.
+- Delete the first step of `migrate` — `adopt_older_names` and `adopt_older_lists` with the `*_BEFORE_*` lists — a release or two after the stamp, when no file written before it can still be in use. It is the only thing in the app that knows a name or a list this app no longer writes, so it goes in one piece: nothing else reads an older name, and the lists it carries are otherwise dead weight.
 - Tell a value the app wrote apart from one the user chose, so a default that moves can reach the installations that never touched it: every key is written today, so a changed default reaches fresh installations only. The stamp is what makes that possible — a file this build wrote can be told from one an older build wrote — but it is not what does it: what does it is not writing the values nobody chose.
