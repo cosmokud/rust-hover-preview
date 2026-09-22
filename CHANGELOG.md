@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.2.14]
+
+### Changed
+
+- New defaults: previews are placed at their best position, appear instantly, and wait 200 ms before the same file previews again. Transparency is now shown over a checkerboard rather than black — for pictures, drawings and design documents (font specimens stay on a white page) — and `DDS Background` offers only Black and White, starting at white.
+- `config.ini` is grouped under the same headings as the tray menu — `General`, `Preview Types`, `Text Preview`, `Timing`, `Placement`, `Scaling`, `Background`, `Volume`, `Performance`, `Advanced` — so a setting is easy to find. Every key the app knows is written there, and the tray marks the item each setting starts at with `(Default)`.
+- `config.ini` is checked and tidied every time the app reads it, including right after you edit it: a missing setting comes back, a value the app cannot read is replaced with the value it is actually using, and any line that is not one the app writes is removed. A list you edited yourself is left exactly as it is.
+- Settings that older versions stored under a different name are no longer carried over — `svg_scale`, `svg_background`, `svg_preview_enabled`, `off_trigger_key`, `avoid_filename`, `transparent_background`. Those lines are removed and the settings go back to their defaults, so if you are updating from 0.2.12 or older it is worth a look at the **Placement**, **Scaling** and **Background** menus afterwards. Updating from 0.2.13, nothing changes.
+- The installer no longer writes into `config.ini` and no longer adds the startup entry: the app does both on its first run, at the path it is running from.
+- Bump version to 0.2.14 in `Cargo.toml` and `Cargo.lock`.
+
+### Fixed
+
+- Editing `config.ini` by hand now takes effect as soon as you save it, and a value the app cannot read — a misspelled tone map, a delay past its limit — is written back as the value in use instead of staying in the file.
+
 ## [0.2.13]
 
 ### Added

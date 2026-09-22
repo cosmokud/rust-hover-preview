@@ -1490,115 +1490,6 @@ fn configured_list(
     }
 }
 
-/// Fix what the file has wrong or missing, and say whether it has to be written back.
-///
-/// This is the whole of what the app does with a file it did not write itself, and it is done
-/// on every read of one: what the file holds under a name this build no longer writes, the
-/// lists that are this app's own from before they grew, and the settings that are not in it at
-/// all. A file that comes out of this the same as it went in is one there is nothing to write;
-/// a file it changed is written out again, which is also what puts a setting this build has
-/// into a file written before the setting existed.
-///
-/// What it does not do is change a value a user has. A default this app has changed its mind
-/// about is no reason to write anything: a value in the file is a value the user has, whether
-/// they typed it or an older build wrote it there, and a build that prefers another one writes
-/// it where there is nothing to overwrite, which is a fresh installation and nowhere else (see
-/// `AppConfig::load`).
-fn repair_ini(ini: &mut Ini) -> bool {
-    let named = repair_older_names(ini);
-    let listed = repair_older_lists(ini);
-
-    named || listed
-}
-
-/// The names this app has written a setting under before the one it writes now, and the two
-/// settings that were one setting before they were split, put right.
-///
-/// A file written before a name changed holds the value under the old one, and the value is
-/// what the setting is, so it is moved to the name this build reads and the old name is taken
-/// out of the file: what the file says about a setting is said once, under the name that is
-/// read. A file that names the new key as well is left alone — what a file says for itself is
-/// what it says, whatever the name beside it holds — and a value that is not one the setting
-/// keeps is moved as it is and falls back to the default where it is read, which is where it
-/// would have fallen before.
-///
-/// Two of these are a split rather than a rename. A video's scale and an animation's were the
-/// picture's scale before each had one of its own, so a file with no key for either starts both
-/// at the scale its pictures are drawn at.
-fn repair_older_names(ini: &mut Ini) -> bool {
-    let mut repaired = false;
-
-    // The names a setting was written under before it had the one it has now. This runs before
-    // the shared backdrop below, which is the order the three were once read in: a drawing's
-    // backdrop is filled from `svg_background` here, and the older name of that pair reaches it
-    // only where this one is silent.
-    for (older, current) in [
-        ("off_trigger_key", "trigger_key"),
-        ("svg_background", "vector_background"),
-        ("svg_scale", "vector_scale"),
-        ("svg_preview_enabled", "vector_preview_enabled"),
-    ] {
-        let Some(value) = ini.get(CONFIG_SECTION, older) else {
-            continue;
-        };
-
-        if ini.get(CONFIG_SECTION, current).is_none() {
-            ini.set(CONFIG_SECTION, current, Some(value));
-        }
-        let _ = ini.remove_key(CONFIG_SECTION, older);
-        repaired = true;
-    }
-
-    // The backdrop every preview was drawn over before each kind had one of its own: a picture
-    // and a drawing are the two that were drawn then, and the kinds that came after it say
-    // nothing about themselves under this name.
-    if let Some(background) = ini.get(CONFIG_SECTION, "transparent_background") {
-        for current in ["image_background", "vector_background"] {
-            if ini.get(CONFIG_SECTION, current).is_none() {
-                ini.set(CONFIG_SECTION, current, Some(background.clone()));
-            }
-        }
-        let _ = ini.remove_key(CONFIG_SECTION, "transparent_background");
-        repaired = true;
-    }
-
-    // The way a preview is kept off its item was a yes or no question before it had four
-    // answers: the `true` a file holds asks for what `details` asks for now, and the `false`
-    // for what `off` asks for.
-    if ini.get(CONFIG_SECTION, "avoid_mode").is_none() {
-        if let Ok(Some(kept_off)) = ini.getboolcoerce(CONFIG_SECTION, "avoid_filename") {
-            let mode = if kept_off {
-                AvoidMode::Details
-            } else {
-                AvoidMode::Off
-            };
-            ini.set(
-                CONFIG_SECTION,
-                "avoid_mode",
-                Some(mode.as_str().to_string()),
-            );
-        }
-    }
-    if ini.get(CONFIG_SECTION, "avoid_filename").is_some() {
-        let _ = ini.remove_key(CONFIG_SECTION, "avoid_filename");
-        repaired = true;
-    }
-
-    // A video's scale and an animation's, which the picture scale stood for until each had a
-    // key of its own. A file that names neither of them and no picture scale either is a file
-    // with nothing to say, and both settings start at the share a fresh installation gets.
-    if let Some(picture_scale) = ini.get(CONFIG_SECTION, "preview_scale") {
-        for current in ["video_scale", "animated_scale"] {
-            if ini.get(CONFIG_SECTION, current).is_none() {
-                ini.set(CONFIG_SECTION, current, Some(picture_scale.clone()));
-                repaired = true;
-            }
-        }
-    }
-
-    repaired
-}
-
 /// The built-in lists this app shipped and then changed, brought up to the list of now.
 ///
 /// A list is only ever read out of a file — nothing in the tray edits one — so a list that
@@ -1686,12 +1577,13 @@ impl AppConfig {
     /// The configuration as the file has it, with whatever the file had wrong or missing put
     /// right.
     ///
-    /// The file is read in one of two ways: there is none, so a fresh installation is written
-    /// — or there is one, and it is repaired before anything is read from it (`repair_ini`),
-    /// since the file is what the user edits and a key left missing would be repaired again on
-    /// every load. It is written back where the repair left something to write, and where it
-    /// did not, the file on disk is left exactly as it is: a file this build wrote, with nothing
-    /// deleted from it and nothing added to it since, is one there is nothing to say about.
+    /// The file is read in one of two ways: there is none, so a fresh installation is written —
+    /// or there is one, and the lists it holds that are this app's own older ones are brought up
+    /// before anything is read from it (`repair_older_lists`), since the file is what the user
+    /// edits and a key left missing would be repaired again on every load. It is written back
+    /// where that left something to write, and where it did not, the file on disk is left exactly
+    /// as it is: a file this build wrote, with nothing deleted from it and nothing added to it
+    /// since, is one there is nothing to say about.
     pub fn load() -> Self {
         let mut config = Self::default();
 
@@ -1712,14 +1604,14 @@ impl AppConfig {
             // the file, which is the one kind of write this app does not make. A file that is
             // missing by then — or was never there — is the fresh installation below.
             if ini.load(path.to_string_lossy().as_ref()).is_ok() {
-                let repaired = repair_ini(&mut ini);
+                let repaired = repair_older_lists(&mut ini);
                 config.apply_ini(&ini);
 
-                // The file is written again where the repair had something to put right — a key
-                // under a name this build no longer writes, a list of the app's own from before
-                // it grew — and where it does not say what the app is using: a setting the file
-                // does not have, or one whose value is not the value the app reads it back as,
-                // which is every value the app could not read at all.
+                // The file is written again where the repair had a list to bring up, and where
+                // it does not hold what this app writes: a setting the file does not have, one
+                // whose value is not the value the app reads it back as — which is every value
+                // the app could not read at all — and any key that is not one the app writes,
+                // which is where a name this app no longer uses goes.
                 if repaired || config.differs(&ini) {
                     config.save();
                 }
@@ -1736,16 +1628,16 @@ impl AppConfig {
     /// Read the file again, after the watcher saw it change, with the same repair a start puts
     /// it through and the same question about whether it says what the app is using.
     ///
-    /// The repair belongs here as much as it does at a start: the file is what the user edits,
-    /// and an edit that names an older key, or writes a value the app cannot read, is one to put
-    /// right there and then rather than at the next start. It settles the same way a start does —
-    /// what it writes is a file that needs nothing, so the write the watcher sees after it is a
-    /// file nothing further is done to.
+    /// Both belong here as much as they do at a start: the file is what the user edits, and an
+    /// edit that writes a value the app cannot read, adds a key of their own, or names a setting
+    /// the way an older build named it, is one to put right there and then rather than at the
+    /// next start. It settles the same way a start does — what it writes is a file that needs
+    /// nothing, so the write the watcher sees after it is a file nothing further is done to.
     pub fn reload_from_disk(&mut self) {
         if let Some(path) = Self::config_path() {
             let mut ini = Ini::new();
             if ini.load(path.to_string_lossy().as_ref()).is_ok() {
-                let repaired = repair_ini(&mut ini);
+                let repaired = repair_older_lists(&mut ini);
                 self.apply_ini(&ini);
 
                 if repaired || self.differs(&ini) {
@@ -2065,21 +1957,34 @@ impl AppConfig {
     }
 
     /// Whether the file holds something other than what this app would write for the settings
-    /// it has just read, which is what makes it a file to write back.
+    /// it has just read, which is what makes it a file to write back. The two are held up against
+    /// each other both ways round: every key the app writes has to be in the file, holding what
+    /// the app writes for it, and every key in the file has to be one the app writes.
     ///
-    /// Every key the app writes is held up against the file: one the file does not have is a
-    /// difference, and so is one it holds another value for. A value the app could not read at
-    /// all is that second kind, and so is one a setting reduced to what it allows — a delay past
-    /// its ceiling, a face of a collection past the last one the menu offers, a tone map that is
-    /// not one of them. What the file holds that the app does not write is the user's and is not
-    /// compared — a key of their own, a comment, the order the keys are written in — so a file
-    /// with one of those is left alone rather than rewritten the moment it is read.
+    /// A key the file does not have is a difference, and so is one it holds another value for. A
+    /// value the app could not read at all is that second kind, and so is one a setting reduced to
+    /// what it allows — a delay past its ceiling, a face of a collection past the last one the
+    /// menu offers, a tone map that is not one of them. A key the app does not write is a
+    /// difference too: the file is what this app writes and nothing else, so a key of the user's
+    /// own, or one left behind by an older or a newer build, is dropped by the write it asks for.
+    ///
+    /// What is not compared is what is not a key: a comment, a blank line, the order the keys are
+    /// written in — so a comment survives until a write happens for another reason, which is when
+    /// `save` writes the file out from the settings it knows and the comment goes with it.
     fn differs(&self, ini: &Ini) -> bool {
         let wanted = self.to_ini();
 
         for (section, keys) in wanted.get_map_ref() {
             for (key, value) in keys {
                 if ini.get(section, key) != *value {
+                    return true;
+                }
+            }
+        }
+
+        for (section, keys) in ini.get_map_ref() {
+            for key in keys.keys() {
+                if wanted.get(section, key).is_none() {
                     return true;
                 }
             }
@@ -2102,9 +2007,9 @@ impl AppConfig {
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "preview_enabled") {
             self.preview_enabled = value;
         }
-        // The key the trigger watches, by name. A file that names it says what it is; the name
-        // it was written under before the trigger could do both is the repair's business
-        // rather than this read's (see `repair_older_names`).
+        // The key the trigger watches, by name. A file that names it says what it is; a name an
+        // older build wrote it under is not a name this app reads at all, and the line goes when
+        // the file is written again (see `differs`).
         if let Some(value) = ini.get(CONFIG_SECTION, "trigger_key") {
             let value = value.trim();
             if !value.is_empty() {
@@ -2125,9 +2030,9 @@ impl AppConfig {
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "follow_cursor") {
             self.follow_cursor = value;
         }
-        // How far a preview is kept off its item, by the name it is written under now; the yes
-        // or no question this used to be is the repair's business (see
-        // `repair_older_names`).
+        // How far a preview is kept off its item, by the name it is written under now. The yes
+        // or no question this used to be is not read: an older name is a line the app does not
+        // write, and the file is written again without it (see `differs`).
         if let Some(value) = ini.get(CONFIG_SECTION, "avoid_mode") {
             if let Some(mode) = AvoidMode::from_str(&value) {
                 self.avoid_mode = mode;
@@ -2149,9 +2054,9 @@ impl AppConfig {
                 self.image_cache_mb = sanitize_image_cache_mb(value);
             }
         }
-        // A picture's backdrop, by its own name: the one setting every preview was drawn over
-        // before each kind had one of its own is the repair's business rather than this
-        // read's (see `repair_older_names`).
+        // A picture's backdrop, by its own name. The one setting every preview was drawn over
+        // before each kind had one of its own is not read from a file that still names it: the
+        // line is one the app does not write, and it goes with the next write (see `differs`).
         if let Some(value) = ini.get(CONFIG_SECTION, "image_background") {
             if let Some(background) = TransparentBackground::from_str(&value) {
                 self.image_background = background;
@@ -2201,9 +2106,10 @@ impl AppConfig {
                 self.preview_scale = scale;
             }
         }
-        // A video's scale is written the way a picture's is, and read the same way. A file with
-        // no key for it was written before the two were split, and gets it from the picture
-        // scale in the repair rather than here (see `repair_older_names`).
+        // A video's scale is written the way a picture's is, and read the same way. A file with no
+        // key for it leaves the setting where a fresh installation starts: the picture scale is
+        // not an answer to this question, and a file that says nothing about it is a file that
+        // says nothing about it (see `differs`).
         if let Some(value) = ini.get(CONFIG_SECTION, "video_scale") {
             if let Some(scale) = PreviewScale::from_str(&value) {
                 self.video_scale = scale;
@@ -2542,78 +2448,6 @@ mod tests {
         );
     }
 
-    /// How far a preview is kept off its item was a yes or no question before it had
-    /// three answers, so a file that still names the old key is read as the answer it
-    /// was: `true` for the details it used to avoid, `false` for no avoiding at all.
-    #[test]
-    fn an_avoid_named_the_old_way_is_read_as_the_answer_it_was() {
-        let mut ini = Ini::new();
-        ini.set(CONFIG_SECTION, "avoid_filename", Some("true".to_string()));
-
-        let config = read_file(&mut ini);
-        assert_eq!(config.avoid_mode, AvoidMode::Details);
-
-        let mut ini = Ini::new();
-        ini.set(CONFIG_SECTION, "avoid_filename", Some("false".to_string()));
-
-        let config = read_file(&mut ini);
-        assert_eq!(config.avoid_mode, AvoidMode::Off);
-    }
-
-    /// A file that names the setting for itself is what the setting is, whatever the
-    /// name the old key carries says.
-    #[test]
-    fn the_avoid_mode_is_read_from_its_own_key() {
-        let mut ini = Ini::new();
-        ini.set(CONFIG_SECTION, "avoid_filename", Some("true".to_string()));
-        ini.set(CONFIG_SECTION, "avoid_mode", Some("filename".to_string()));
-
-        let config = read_file(&mut ini);
-        assert_eq!(config.avoid_mode, AvoidMode::Filename);
-    }
-
-    /// The backdrop a preview is drawn over was one setting before a document had one
-    /// of its own naming it apart from a picture's, so a file that still names the one
-    /// is read as both rather than falling back to the default for the new one.
-    #[test]
-    fn a_backdrop_named_the_old_way_is_read_as_both_of_the_two() {
-        let mut ini = Ini::new();
-        ini.set(
-            CONFIG_SECTION,
-            "transparent_background",
-            Some("white".to_string()),
-        );
-
-        let config = read_file(&mut ini);
-
-        assert_eq!(config.image_background, TransparentBackground::White);
-        assert_eq!(config.vector_background, TransparentBackground::White);
-    }
-
-    /// A file that names the two for itself is what the two settings are, whatever
-    /// the name the old one carried says — a key left in the file by hand edits it
-    /// no longer governs.
-    #[test]
-    fn the_backdrops_are_read_from_their_own_keys() {
-        let mut ini = Ini::new();
-        ini.set(
-            CONFIG_SECTION,
-            "transparent_background",
-            Some("checkerboard".to_string()),
-        );
-        ini.set(
-            CONFIG_SECTION,
-            "image_background",
-            Some("black".to_string()),
-        );
-        ini.set(CONFIG_SECTION, "svg_background", Some("white".to_string()));
-
-        let config = read_file(&mut ini);
-
-        assert_eq!(config.image_background, TransparentBackground::Black);
-        assert_eq!(config.vector_background, TransparentBackground::White);
-    }
-
     /// A drawing is drawn at the whole room the display has unless the file says
     /// otherwise — which is what the setting starts at, and what a fresh install
     /// writes.
@@ -2632,7 +2466,7 @@ mod tests {
     fn a_pages_scale_is_read_from_its_own_key() {
         let mut ini = Ini::new();
         ini.set(CONFIG_SECTION, "preview_scale", Some("400".to_string()));
-        ini.set(CONFIG_SECTION, "svg_scale", Some("75".to_string()));
+        ini.set(CONFIG_SECTION, "vector_scale", Some("75".to_string()));
         ini.set(CONFIG_SECTION, "pdf_scale", Some("25".to_string()));
         ini.set(CONFIG_SECTION, "office_scale", Some("10".to_string()));
 
@@ -2686,22 +2520,19 @@ mod tests {
         assert_eq!(config.video_scale, PreviewScale::FitToScreen);
     }
 
-    /// A file written before the video scale was a setting of its own has no key for it,
-    /// and what such a file's pictures were drawn at is what its videos were drawn at as
-    /// well: one share was both answers, so the share it holds is the starting point of
-    /// each of the two rather than a default written over it.
+    /// A video's scale is a setting of its own: a file that says nothing about one leaves it
+    /// where a fresh installation starts, whatever the file says its pictures are drawn at —
+    /// one share is not an answer to the other's question.
     #[test]
-    fn a_file_without_a_video_scale_keeps_its_videos_where_its_pictures_are() {
+    fn a_file_without_a_video_scale_leaves_it_where_it_starts() {
         let mut ini = Ini::new();
         ini.set(CONFIG_SECTION, "preview_scale", Some("25".to_string()));
 
         let config = read_file(&mut ini);
 
         assert_eq!(config.preview_scale, PreviewScale::Percent(25));
-        assert_eq!(config.video_scale, PreviewScale::Percent(25));
+        assert_eq!(config.video_scale, DEFAULT_VIDEO_SCALE);
 
-        // With none of the two written either, both are the share a fresh install
-        // starts at.
         let config = AppConfig::default();
 
         assert_eq!(config.preview_scale, DEFAULT_PREVIEW_SCALE);
@@ -2709,9 +2540,8 @@ mod tests {
     }
 
     /// And the same for an animation: a setting of its own beside the video and picture
-    /// scales, so one key changing leaves the others where they were — and a file that
-    /// has no key for it starts it at the share its pictures are drawn at, which is the
-    /// answer every animated picture got before there was a setting to give.
+    /// scales, so one key changing leaves the others where they were — and a file that has
+    /// no key for it leaves it where a fresh installation starts, like the video's.
     #[test]
     fn an_animations_scale_is_read_from_its_own_key() {
         let mut ini = Ini::new();
@@ -2736,14 +2566,14 @@ mod tests {
 
         assert_eq!(config.animated_scale, PreviewScale::FitToScreen);
 
-        // A file with no key for it — one written before the setting was one — starts it
-        // at the picture scale, which is what its animations were drawn at as well.
+        // A file with no key for it leaves the setting where a fresh installation starts,
+        // whatever share the file draws its pictures at.
         let mut ini = Ini::new();
         ini.set(CONFIG_SECTION, "preview_scale", Some("25".to_string()));
 
         let config = read_file(&mut ini);
 
-        assert_eq!(config.animated_scale, PreviewScale::Percent(25));
+        assert_eq!(config.animated_scale, DEFAULT_ANIMATED_SCALE);
 
         let config = AppConfig::default();
 
@@ -2776,9 +2606,7 @@ mod tests {
             ("10", PreviewScale::Percent(10)),
         ] {
             let mut ini = Ini::new();
-            // Written under the key a document's scale had before the drawings were one
-            // kind, which is the key a file from then still names it with.
-            ini.set(CONFIG_SECTION, "svg_scale", Some(written.to_string()));
+            ini.set(CONFIG_SECTION, "vector_scale", Some(written.to_string()));
 
             let config = read_file(&mut ini);
 
@@ -2792,7 +2620,7 @@ mod tests {
     fn a_specimens_scale_is_read_from_its_own_key() {
         let mut ini = Ini::new();
         ini.set(CONFIG_SECTION, "preview_scale", Some("400".to_string()));
-        ini.set(CONFIG_SECTION, "svg_scale", Some("75".to_string()));
+        ini.set(CONFIG_SECTION, "vector_scale", Some("75".to_string()));
         ini.set(CONFIG_SECTION, "pdf_scale", Some("25".to_string()));
         ini.set(CONFIG_SECTION, "office_scale", Some("10".to_string()));
         ini.set(
@@ -2819,7 +2647,7 @@ mod tests {
         assert_eq!(AppConfig::default().design_scale, DEFAULT_DESIGN_SCALE);
 
         let mut ini = Ini::new();
-        ini.set(CONFIG_SECTION, "svg_scale", Some("75".to_string()));
+        ini.set(CONFIG_SECTION, "vector_scale", Some("75".to_string()));
         ini.set(CONFIG_SECTION, "pdf_scale", Some("25".to_string()));
         ini.set(CONFIG_SECTION, "office_scale", Some("fit".to_string()));
         ini.set(CONFIG_SECTION, "font_scale", Some("50".to_string()));
@@ -2880,17 +2708,11 @@ mod tests {
         assert_eq!(config.font_scale, DEFAULT_FONT_SCALE);
     }
 
-    /// A specimen's backdrop is a key of its own, and it is not read through the key the
-    /// other backdrops were once written with: fonts are a kind of their own, so a file that
-    /// predates them says nothing about one, and a file that names one is what it is.
+    /// A specimen's backdrop is a key of its own: fonts are a kind of their own, so the setting
+    /// is read from its own name and from nothing else.
     #[test]
     fn a_specimens_backdrop_is_read_from_its_own_key() {
         let mut ini = Ini::new();
-        ini.set(
-            CONFIG_SECTION,
-            "transparent_background",
-            Some("white".to_string()),
-        );
         ini.set(
             CONFIG_SECTION,
             "font_background",
@@ -2900,19 +2722,13 @@ mod tests {
         let config = read_file(&mut ini);
         assert_eq!(config.font_background, TransparentBackground::Checkerboard);
 
-        // The legacy key reaches the two backdrops it was written for and leaves the
-        // specimen's at its default.
-        let mut ini = Ini::new();
-        ini.set(
-            CONFIG_SECTION,
-            "transparent_background",
-            Some("white".to_string()),
-        );
+        // A file that says nothing about one leaves the setting where it starts, which for a
+        // specimen is the page it is written on.
+        let ini = Ini::new();
 
-        let config = read_file(&mut ini);
-        assert_eq!(config.image_background, TransparentBackground::White);
-        assert_eq!(config.vector_background, TransparentBackground::White);
-        assert_eq!(config.font_background, TransparentBackground::White);
+        let mut config = AppConfig::default();
+        config.apply_ini(&ini);
+        assert_eq!(config.font_background, DEFAULT_FONT_BACKGROUND);
     }
 
     /// A design document's backdrop is a key of its own for the reason a specimen's is:
@@ -2993,7 +2809,7 @@ mod tests {
     /// A file as the app reads one: what it has wrong or missing is put right first, and then
     /// what the configuration reads is what the file says.
     fn read_file(ini: &mut Ini) -> AppConfig {
-        repair_ini(ini);
+        repair_older_lists(ini);
 
         let mut config = AppConfig::default();
         config.apply_ini(ini);
@@ -3021,55 +2837,39 @@ mod tests {
         );
     }
 
-    /// A setting a file holds under a name this build no longer writes is read at that value,
-    /// and the file is written again with it under the name that is read: what the file says
-    /// about the setting is said once, and what it says is the value rather than the default.
+    /// A name this app no longer writes is a key it does not write, and that is all it is: the
+    /// setting the line once named is not read from it — this app has no way to know what the
+    /// name meant — and the line goes with every other line that is not the app's, which is what
+    /// keeps a file from carrying the history of the names it has been written under.
     #[test]
-    fn a_setting_named_the_old_way_is_read_and_written_under_its_own_name() {
-        let mut ini = Ini::new();
+    fn a_name_the_app_no_longer_writes_is_dropped_with_the_line_it_is_on() {
+        let mut ini = written_file();
         ini.set(CONFIG_SECTION, "svg_scale", Some("75".to_string()));
 
-        let config = read_file(&mut ini);
+        assert!(
+            AppConfig::default().differs(&ini),
+            "a line the app does not write is one the file is written again for"
+        );
+
+        let mut config = AppConfig::default();
+        config.apply_ini(&ini);
 
         assert_eq!(
-            config.vector_scale,
-            PreviewScale::Percent(75),
-            "the drawing is drawn at the share the file named for it"
-        );
-        assert_eq!(
-            ini.get(CONFIG_SECTION, "vector_scale"),
-            Some("75".to_string()),
-            "and the file holds it under the name this build reads"
-        );
-        assert_eq!(
-            ini.get(CONFIG_SECTION, "svg_scale"),
-            None,
-            "the name it was written under is gone from the file"
+            config.vector_scale, DEFAULT_VECTOR_SCALE,
+            "and the setting it once named is where a fresh installation starts"
         );
     }
 
-    /// A file written before any of the names or lists below existed, read as the app reads one:
-    /// every value it holds is kept — the drawing's scale and backdrop, the trigger key, the way
-    /// a preview is kept off its item, the picture backdrop — and the lists it holds are brought
-    /// up to the ones this build ships, which is what gives an installation that already exists
-    /// the formats added since. The file is left holding none of the older names.
+    /// An old file, read as the app reads one: the lists it holds are brought up to the ones this
+    /// build ships, which is what gives an installation that already exists the formats added
+    /// since — while the settings it holds under names this app no longer writes are not read at
+    /// all, so those go back to their defaults and the lines are dropped with the write.
     #[test]
-    fn an_old_file_keeps_what_it_says_and_is_written_under_the_names_of_now() {
-        let mut ini = Ini::new();
+    fn an_old_file_keeps_its_lists_and_loses_the_names_this_app_no_longer_writes() {
+        let mut ini = written_file();
         ini.set(CONFIG_SECTION, "off_trigger_key", Some("ctrl".to_string()));
         ini.set(CONFIG_SECTION, "avoid_filename", Some("true".to_string()));
-        ini.set(
-            CONFIG_SECTION,
-            "transparent_background",
-            Some("black".to_string()),
-        );
         ini.set(CONFIG_SECTION, "svg_scale", Some("75".to_string()));
-        ini.set(CONFIG_SECTION, "svg_background", Some("white".to_string()));
-        ini.set(
-            CONFIG_SECTION,
-            "svg_preview_enabled",
-            Some("false".to_string()),
-        );
         ini.set(
             IMAGE_SECTION,
             "extensions",
@@ -3082,34 +2882,12 @@ mod tests {
         );
 
         assert!(
-            repair_ini(&mut ini),
-            "an old file is one there is something to write about"
+            repair_older_lists(&mut ini),
+            "the lists are what the repair has to do with a file like this"
         );
 
         let mut config = AppConfig::default();
         config.apply_ini(&ini);
-
-        assert_eq!(config.trigger_key, "ctrl", "the key it named is the key");
-        assert_eq!(
-            config.avoid_mode,
-            AvoidMode::Details,
-            "`true` is what it meant"
-        );
-        assert_eq!(config.vector_scale, PreviewScale::Percent(75));
-        assert!(
-            !config.vector_preview_enabled,
-            "the kind it switched off stays off"
-        );
-        assert_eq!(
-            config.image_background,
-            TransparentBackground::Black,
-            "the one backdrop every kind shared was the picture's"
-        );
-        assert_eq!(
-            config.vector_background,
-            TransparentBackground::White,
-            "and the drawing's own name for it came first"
-        );
 
         for extension in ["dds", "avif", "heic", "heif", "jxl"] {
             assert!(
@@ -3119,20 +2897,17 @@ mod tests {
         }
         assert!(config.design_extensions.contains(&"ai".to_string()));
 
-        for older in [
-            "off_trigger_key",
-            "avoid_filename",
-            "transparent_background",
-            "svg_scale",
-            "svg_background",
-            "svg_preview_enabled",
-        ] {
-            assert_eq!(
-                ini.get(CONFIG_SECTION, older),
-                None,
-                "`{older}` is not a name the file keeps"
-            );
-        }
+        assert_eq!(
+            config.trigger_key, "alt",
+            "a name the app does not write says nothing, however clear it looks"
+        );
+        assert_eq!(config.avoid_mode, DEFAULT_AVOID_MODE);
+        assert_eq!(config.vector_scale, DEFAULT_VECTOR_SCALE);
+
+        assert!(
+            config.differs(&ini),
+            "and the file, holding lines the app does not write, is one to write again"
+        );
     }
 
     /// A file holding everything this app writes, as `save` would write it: what a file on disk
@@ -3165,6 +2940,31 @@ mod tests {
         assert!(
             !config.differs(&written_file()),
             "a file holding every one of them is one to leave alone"
+        );
+    }
+
+    /// The file is what this app writes and nothing else: a key of the user's own, or a section
+    /// of their own, is a difference like any other, and the write it asks for is what drops it.
+    /// The one thing this does not touch is a comment, which is not a key and is not compared.
+    #[test]
+    fn a_key_the_app_does_not_write_is_a_reason_to_write_it() {
+        let mut ini = written_file();
+        assert!(
+            !AppConfig::default().differs(&ini),
+            "a file holding what the app writes is one to leave alone"
+        );
+
+        ini.set(CONFIG_SECTION, "cat", Some("yes".to_string()));
+        assert!(
+            AppConfig::default().differs(&ini),
+            "a key of the user's own is not a key the app writes"
+        );
+
+        let mut own_section = written_file();
+        own_section.set("mine", "key", Some("yes".to_string()));
+        assert!(
+            AppConfig::default().differs(&own_section),
+            "and neither is a section of their own"
         );
     }
 
@@ -3254,13 +3054,7 @@ mod tests {
     /// watcher, and the app would keep reading its own write back for as long as it ran.
     #[test]
     fn a_file_the_repair_has_been_through_is_left_alone() {
-        let mut ini = Ini::new();
-        for (_, keys) in SETTING_GROUPS {
-            for key in *keys {
-                ini.set(CONFIG_SECTION, key, Some("1".to_string()));
-            }
-        }
-        ini.set(CONFIG_SECTION, "svg_scale", Some("75".to_string()));
+        let mut ini = written_file();
         ini.set(
             IMAGE_SECTION,
             "extensions",
@@ -3268,15 +3062,14 @@ mod tests {
         );
 
         assert!(
-            repair_ini(&mut ini),
-            "the file had a name and a list to put right"
+            repair_older_lists(&mut ini),
+            "the file had a list of the app's own from before it grew"
         );
-        assert_eq!(ini.get(CONFIG_SECTION, "svg_scale"), None);
 
         let once = ordered_text(&ini);
 
         assert!(
-            !repair_ini(&mut ini),
+            !repair_older_lists(&mut ini),
             "the file it made is one there is nothing left to do to"
         );
         assert_eq!(
