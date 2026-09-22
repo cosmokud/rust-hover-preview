@@ -311,17 +311,17 @@ Key settings, in plain terms:
 - `follow_cursor` — `true` for Follow Cursor, `false` for Best Position.
 - `avoid_mode` — `filename` (default), `filename_column`, `details`, or `off`: what a preview is kept off.
 - `preview_scale` — percentage or `fit`, read against the picture's own size.
-- `video_scale` — the same for a video, `100` by default; a file written before the two were split gets its video scale from `preview_scale`.
-- `animated_scale` — the same for an animated GIF, WebP, or PNG, `100` by default; a still GIF or PNG follows `preview_scale`, and a file written before the two were split gets this one from `preview_scale` too.
-- `vector_scale` — percentage or `fit`, read against the screen. `fit` is default, is all of the room, and `100` or more reads as it. It covers every drawing the Vector kind holds, and a file written before they were one kind names it with `svg_scale`: such a file is read at it and written back with `vector_scale`.
+- `video_scale` — the same for a video, `100` by default.
+- `animated_scale` — the same for an animated GIF, WebP, or PNG, `100` by default; a still GIF or PNG follows `preview_scale`.
+- `vector_scale` — percentage or `fit`, read against the screen. `fit` is default, is all of the room, and `100` or more reads as it. It covers every drawing the Vector kind holds. The name it used to be written under (`svg_scale`) is not read: a line like that is removed the next time the file is written, and the setting goes back to its default.
 - `pdf_scale` / `office_scale` — the same for a PDF page and an Office-rendered page, both `fit` by default as well as a percentage. A workbook’s fallback bitmap follows its own size and is never enlarged.
 - `font_scale` — percentage or `fit`, read against the screen. `50` is default, `fit` is all of it, and `100` or more reads as `fit`. A font has no size of its own, so the share is of the display.
 - `design_scale` — the same for a design document, `fit` by default. A design preview is the picture the file keeps of the whole document, so the share is of the screen the way a page’s is rather than of the document’s own size.
 - `ttc_face` — which face of a `.ttc` collection is drawn: `1` is the first face, and the highest setting is `10`. The heading says which face came out.
-- `image_background` — `checkerboard` (default), `black`, `white`, or `transparent`: what a picture is drawn over, and with it a PDF page, a painted text frame and a page Office rendered. A file written before each kind had a backdrop of its own names it with `transparent_background`: such a file is read at it — for a picture and for a drawing alike — and written back with their own names.
+- `image_background` — `checkerboard` (default), `black`, `white`, or `transparent`: what a picture is drawn over, and with it a PDF page, a painted text frame and a page Office rendered. The one name every kind used to share (`transparent_background`) is not read: lines like that are removed the next time the file is written.
 - `font_background` — `white` (default), `black`, `checkerboard`, or `transparent`.
 - `dds_background` — `white` (default) or `black`, and only those two: a texture's alpha channel is as often a mask, a height or a roughness as it is transparency, so the backdrops that show what stands behind a preview are not offered for one, and a file that names one of them is read as `white`.
-- `vector_background` — `checkerboard` (default), `white`, `black`, or `transparent`: what an SVG document's page, or a metafile drawing, is drawn over. A file written before the two were one names it with `svg_background`: such a file is read at it and written back with `vector_background`.
+- `vector_background` — `checkerboard` (default), `white`, `black`, or `transparent`: what an SVG document's page, or a metafile drawing, is drawn over. The name it used to be written under (`svg_background`) is not read: a line like that is removed the next time the file is written.
 - `design_background` — `checkerboard` (default), `white`, `black`, or `transparent`.
 - A deleted `extensions=` line or whole section comes back with built-in entries. An `extensions=` line left empty stays empty.
 
