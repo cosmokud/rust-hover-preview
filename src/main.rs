@@ -4,6 +4,7 @@ mod archive_formats;
 mod archive_listing;
 mod archive_preview;
 mod bcn;
+mod cdr_image;
 mod cloud_files;
 mod codecs;
 mod config;
