@@ -1,5 +1,6 @@
 use crate::archive_formats;
 use crate::archive_preview::{self, ArchivePreviewOptions};
+use crate::cdr_image;
 use crate::cloud_files;
 use crate::codecs;
 use crate::config::{
@@ -3178,7 +3179,9 @@ fn load_static_image(
 /// the two is asked is settled by the file's own header rather than by its name:
 /// Photoshop's two formats are the planar merged picture this app decodes itself, and
 /// a project container is a zip holding a picture the application saved; see
-/// `psd_image` and `project_image`.
+/// `psd_image` and `project_image`. An Illustrator document saved as PostScript, and a
+/// CorelDRAW document of the older shape, are read for the smaller picture each of
+/// them keeps — see `eps_image` and `cdr_image`.
 ///
 /// Everywhere else a design preview is a frame of this app's own: it is composed like a
 /// picture, held in the image cache like one under the size it was made for, drawn over the
@@ -3215,6 +3218,7 @@ fn load_design_preview(
         psd_image::decode(path, target_width, target_height)
     } else {
         project_image::decode(path, target_width, target_height)
+            .or_else(|| cdr_image::decode(path, target_width, target_height))
             .or_else(|| eps_image::decode(path, target_width, target_height))
     }?;
 
@@ -3233,9 +3237,10 @@ fn load_design_preview(
 /// The size of the picture a design document is previewed from: the document's own size
 /// for a Photoshop file, and the size of the picture a project container holds.
 ///
-/// What is neither of those is either a container this app has no reader for or the
-/// encapsulated PostScript a document was saved as before Illustrator wrote PDFs, and each
-/// reader answers for what a file is rather than for what it is called.
+/// What is neither of those is either a CorelDRAW document of the older shape — a RIFF
+/// container holding a bitmap rather than a zip holding a file — or the encapsulated
+/// PostScript a document was saved as before Illustrator wrote PDFs, and each reader
+/// answers for what a file is rather than for what it is called.
 ///
 /// A file none of them will answer for reports no size, which is how a design document
 /// this app has no reader for comes to show nothing at all rather than a picture of some
@@ -3245,7 +3250,9 @@ fn design_dimensions(path: &Path) -> Option<(u32, u32)> {
         return psd_image::dimensions(path);
     }
 
-    project_image::dimensions(path).or_else(|| eps_image::dimensions(path))
+    project_image::dimensions(path)
+        .or_else(|| cdr_image::dimensions(path))
+        .or_else(|| eps_image::dimensions(path))
 }
 
 /// The drawing a vector file is previewed from.
