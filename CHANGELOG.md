@@ -7,6 +7,11 @@
 - The scaling options now live in a `Scaling` menu of their own in the tray, right below `Placement`.
 - `Font Background` now defaults to white; `font_background` in `config.ini` still sets it.
 - Tray labels renamed for consistency: `Image Scaling`, `Video Scaling`, `Avoid Nothing`, and `Videos` in `Codecs`.
+- Hover checks ask Explorer for less: the window list is reused instead of rebuilt every time, only the window under the pointer is asked which folder it is showing, and the number of open windows is read once instead of twice.
+
+### Fixed
+
+- The timeout that keeps a stalled Explorer from blocking the app is now confirmed rather than assumed, and reapplied until it takes, so hover tracking recovers on its own where it used to be able to hang.
 
 ## [0.2.11]
 

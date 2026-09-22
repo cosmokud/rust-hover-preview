@@ -52,8 +52,9 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows::Win32::UI::Shell::{
     IFolderView, IFolderView2, IPersistFolder2, IShellBrowser, IShellItem, IShellView,
-    IShellWindows, ItemIndex_Property_GUID, SHCreateItemFromIDList, SID_STopLevelBrowser,
-    ShellWindows, SIGDN_DESKTOPABSOLUTEPARSING, SIGDN_FILESYSPATH, SIGDN_NORMALDISPLAY,
+    IShellWindows, IWebBrowser2, ItemIndex_Property_GUID, SHCreateItemFromIDList,
+    SID_STopLevelBrowser, ShellWindows, SIGDN_DESKTOPABSOLUTEPARSING, SIGDN_FILESYSPATH,
+    SIGDN_NORMALDISPLAY,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetAncestor, GetClassNameW, GetCursorPos, GetForegroundWindow, GetWindowPlacement,
@@ -118,6 +119,11 @@ struct HoverResolverHints {
 /// kept warm for either path to have an answer.
 struct ItemResolver {
     automation: Option<IUIAutomation>,
+    /// Whether every call the client above makes is bounded. A resolver holding one
+    /// that is not asks for a bounded client again on a slow cadence, because a
+    /// probe through an unbounded one is a wait with nothing watching it — see
+    /// `rebuild_automation`.
+    automation_bounded: bool,
     /// The batched property request every element is read with, so an element
     /// costs one crossing into the view's provider rather than one per property.
     cache: Option<IUIAutomationCacheRequest>,
@@ -343,10 +349,30 @@ fn drawn_name_width(name: &str, dpi: u32) -> Option<i32> {
 }
 
 impl ItemResolver {
-    fn new(automation: Option<IUIAutomation>) -> Self {
+    fn new(automation: Option<AutomationClient>) -> Self {
         let item_index_property = register_item_index_property();
+        let automation_bounded = automation.as_ref().is_some_and(|client| client.bounded);
 
-        let (cache, walker) = match automation.as_ref() {
+        let mut resolver = Self {
+            automation: automation.map(|client| client.client),
+            automation_bounded,
+            cache: None,
+            walker: None,
+            item_index_property,
+            shell_windows: None,
+            view: None,
+            probe: None,
+        };
+        resolver.rebuild_automation_parts();
+        resolver.rebuild_shell();
+        resolver
+    }
+
+    /// The batched property request and the tree walker, built from the client in
+    /// hand. They are rebuilt with that client rather than kept across one, so
+    /// nothing built by a client is read through its replacement.
+    fn rebuild_automation_parts(&mut self) {
+        let (cache, walker) = match self.automation.as_ref() {
             Some(automation) => unsafe {
                 let cache = automation.CreateCacheRequest().ok();
                 if let Some(cache) = cache.as_ref() {
@@ -359,7 +385,7 @@ impl ItemResolver {
                     ] {
                         let _ = cache.AddProperty(property);
                     }
-                    if let Some(item_index) = item_index_property {
+                    if let Some(item_index) = self.item_index_property {
                         let _ = cache.AddProperty(item_index);
                     }
                     let _ = cache.AddPattern(UIA_LegacyIAccessiblePatternId);
@@ -369,17 +395,40 @@ impl ItemResolver {
             None => (None, None),
         };
 
-        let mut resolver = Self {
-            automation,
-            cache,
-            walker,
-            item_index_property,
-            shell_windows: None,
-            view: None,
-            probe: None,
+        self.cache = cache;
+        self.walker = walker;
+    }
+
+    /// Ask for a client that can be bounded, for a resolver holding one that cannot.
+    ///
+    /// A client that could not be bounded is reached through the legacy object the
+    /// timeouts are not on, so every probe made through it runs until the shell
+    /// answers. That is worth leaving rather than settling into, and the shell's own
+    /// first moments are the likeliest reason for it: the modern client is asked for
+    /// again on a slow cadence, and the moment it can be created the timeouts are
+    /// back and the wait with them. A resolver that never got a client at all is
+    /// asked for one here too, since a machine where both objects were unavailable
+    /// at startup is a machine that may have them a moment later.
+    ///
+    /// A client no better than the one in hand is not taken. What this is for is an
+    /// upgrade, and replacing one unbounded client with another of its kind would
+    /// throw away the request and the walker built from it for nothing.
+    fn rebuild_automation(&mut self) {
+        if self.automation_bounded {
+            return;
+        }
+
+        let Some(client) = automation_client() else {
+            return;
         };
-        resolver.rebuild_shell();
-        resolver
+
+        if !client.bounded && self.automation.is_some() {
+            return;
+        }
+
+        self.automation = Some(client.client);
+        self.automation_bounded = client.bounded;
+        self.rebuild_automation_parts();
     }
 
     /// Build the Shell window collection again, and drop the view that answered
@@ -446,8 +495,24 @@ impl AnsweredView {
 /// leaves an unbounded wait with nothing watching it.
 const UIA_TIMEOUT_MS: u32 = 500;
 
+/// How often a resolver left with a client that could not be bounded asks for one
+/// that can be; see `ItemResolver::rebuild_automation`.
+const UIA_REBIND_RETRY_MS: u64 = 2000;
+
+/// The UI Automation client both paths resolve items with, and whether every call
+/// it makes is bounded.
+struct AutomationClient {
+    client: IUIAutomation,
+    /// Whether `IUIAutomation2` answered for this client *and* took both timeouts.
+    /// What a client that is not bounded costs is a probe that runs until the shell
+    /// answers, however long that is — which is why it is a state to leave rather
+    /// than one to settle into, and why it is carried beside the client rather than
+    /// assumed from it.
+    bounded: bool,
+}
+
 /// The UI Automation client both paths resolve items with, with every call
-/// bounded.
+/// bounded wherever the machine can bound one.
 ///
 /// `CUIAutomation8` is the client that carries `IUIAutomation2`, which is where
 /// the timeouts live: the legacy `CUIAutomation` object does not answer for that
@@ -457,22 +522,33 @@ const UIA_TIMEOUT_MS: u32 = 500;
 /// used, because a client that cannot be bounded still resolves items: what it
 /// costs is the wait the timeouts were meant to remove, which is the behavior the
 /// app had before, and not a dead app.
-fn automation_client() -> Option<IUIAutomation> {
-    let automation: IUIAutomation = unsafe {
+///
+/// What it is not is a client to keep. The fallback is reached exactly where
+/// `CUIAutomation8` could not be created, and a shell that is not up yet is as good
+/// a reason for that as a machine without the object is, so a client that came back
+/// unbounded is asked for again rather than held — see
+/// `ItemResolver::rebuild_automation`.
+///
+/// Both setters are checked rather than assumed. A client that answered for the
+/// interface and refused a call would otherwise be recorded as bounded while every
+/// probe it makes ran unbounded, which is the one thing this pair is here to stop.
+fn automation_client() -> Option<AutomationClient> {
+    let client: IUIAutomation = unsafe {
         match CoCreateInstance(&CUIAutomation8, None, CLSCTX_ALL) {
-            Ok(automation) => automation,
+            Ok(client) => client,
             Err(_) => CoCreateInstance(&CUIAutomation, None, CLSCTX_ALL).ok()?,
         }
     };
 
-    if let Ok(bounded) = automation.cast::<IUIAutomation2>() {
-        unsafe {
-            let _ = bounded.SetConnectionTimeout(UIA_TIMEOUT_MS);
-            let _ = bounded.SetTransactionTimeout(UIA_TIMEOUT_MS);
-        }
-    }
+    let bounded = match client.cast::<IUIAutomation2>() {
+        Ok(bounded) => unsafe {
+            bounded.SetConnectionTimeout(UIA_TIMEOUT_MS).is_ok()
+                && bounded.SetTransactionTimeout(UIA_TIMEOUT_MS).is_ok()
+        },
+        Err(_) => false,
+    };
 
-    Some(automation)
+    Some(AutomationClient { client, bounded })
 }
 
 /// Explorer's own `ItemIndex` property, asked of the UI Automation registrar.
@@ -1177,23 +1253,64 @@ fn is_probable_search_view_context(context: &ActiveShellViewContext) -> bool {
         .unwrap_or(false)
 }
 
-fn get_active_shell_view_context(screen_point: &POINT) -> Option<ActiveShellViewContext> {
+/// One Shell window the pointer could be in, with what it takes to ask that window
+/// what it is showing.
+///
+/// What a window is asked is not free — the URL it was opened with and the folder it
+/// has open are crossings into the shell apiece, and the folder is a walk through the
+/// view's own objects — so the window is chosen first and asked second. One view is
+/// described per probe rather than every view that could have been.
+struct ShellViewCandidate {
+    shell_view_hwnd: isize,
+    browser: IWebBrowser2,
+    shell_view: IShellView,
+}
+
+impl ShellViewCandidate {
+    /// What the view is showing: the URL it was opened with, and the folder it has
+    /// open, which is what a probe remembers about the place.
+    fn describe(self) -> ActiveShellViewContext {
+        unsafe {
+            let location_url = self.browser.LocationURL().ok().map(|url| url.to_string());
+
+            ActiveShellViewContext {
+                shell_view_hwnd: self.shell_view_hwnd,
+                location_url,
+                folder_path: get_shell_view_folder_path(&self.shell_view),
+            }
+        }
+    }
+}
+
+/// The Shell window a point is in, out of the collection the resolver already holds.
+///
+/// The collection is handed in rather than built here. Building it is the one call
+/// every lookup would otherwise repeat, and the resolver keeps one for exactly that
+/// reason (`ItemResolver::shell_windows`) — a probe that built its own would pay for
+/// a Shell object per call and hold a second, unrelated one beside the resolver's,
+/// both of them proxies into the same process. A collection the resolver does not
+/// have yet answers no probe, which is what the resolver's own lookups do with it
+/// too.
+fn get_active_shell_view_context(
+    shell_windows: Option<&IShellWindows>,
+    screen_point: &POINT,
+) -> Option<ActiveShellViewContext> {
     unsafe {
-        let shell_windows =
-            CoCreateInstance::<_, IShellWindows>(&ShellWindows, None, CLSCTX_ALL).ok()?;
+        let shell_windows = shell_windows?;
         let count = shell_windows.Count().ok()?;
         let cursor_hwnd = WindowFromPoint(*screen_point);
-        let mut rect_candidate: Option<ActiveShellViewContext> = None;
-        let mut foreground_candidate: Option<ActiveShellViewContext> = None;
+        let mut cursor_candidate: Option<ShellViewCandidate> = None;
+        let mut rect_candidate: Option<ShellViewCandidate> = None;
+        let mut foreground_candidate: Option<ShellViewCandidate> = None;
         let foreground = GetForegroundWindow();
 
-        for i in 0..count {
+        for i in 0..count.min(SHELL_WINDOW_LIMIT) {
             let variant = VARIANT::from(i);
             let disp = match shell_windows.Item(&variant) {
                 Ok(disp) => disp,
                 Err(_) => continue,
             };
-            let browser = match disp.cast::<windows::Win32::UI::Shell::IWebBrowser2>() {
+            let browser = match disp.cast::<IWebBrowser2>() {
                 Ok(browser) => browser,
                 Err(_) => continue,
             };
@@ -1221,47 +1338,53 @@ fn get_active_shell_view_context(screen_point: &POINT) -> Option<ActiveShellView
             if !IsWindowVisible(shell_view_hwnd).as_bool() || is_window_minimized(shell_view_hwnd) {
                 continue;
             }
-            let shell_view_hwnd_key = shell_view_hwnd.0 as isize;
+
+            let candidate = ShellViewCandidate {
+                shell_view_hwnd: shell_view_hwnd.0 as isize,
+                browser,
+                shell_view,
+            };
+
+            // The window the pointer is in is the answer whatever the others are, so
+            // it ends the walk rather than joining it.
+            if !cursor_hwnd.is_invalid() && hwnd_is_same_or_ancestor(cursor_hwnd, shell_view_hwnd) {
+                cursor_candidate = Some(candidate);
+                break;
+            }
 
             let mut rect = RECT::default();
             if GetWindowRect(shell_view_hwnd, &mut rect).is_err() {
                 continue;
             }
 
-            let location_url = browser.LocationURL().ok().map(|url| url.to_string());
-            let folder_path = get_shell_view_folder_path(&shell_view);
-
-            let context = ActiveShellViewContext {
-                shell_view_hwnd: shell_view_hwnd_key,
-                location_url,
-                folder_path,
-            };
-
-            if !cursor_hwnd.is_invalid() && hwnd_is_same_or_ancestor(cursor_hwnd, shell_view_hwnd) {
-                return Some(context);
-            }
-
-            if point_in_rect(screen_point, &rect) && rect_candidate.is_none() {
-                rect_candidate = Some(context);
+            if point_in_rect(screen_point, &rect) {
+                if rect_candidate.is_none() {
+                    rect_candidate = Some(candidate);
+                }
                 continue;
             }
 
             if foreground == HWND(browser_hwnd.0 as *mut _) {
-                foreground_candidate = Some(context);
+                foreground_candidate = Some(candidate);
             }
         }
 
-        rect_candidate.or(foreground_candidate)
+        cursor_candidate
+            .or(rect_candidate)
+            .or(foreground_candidate)
+            .map(ShellViewCandidate::describe)
     }
 }
 
-fn get_active_shell_view_context_at_cursor() -> Option<ActiveShellViewContext> {
+fn get_active_shell_view_context_at_cursor(
+    resolver: &ItemResolver,
+) -> Option<ActiveShellViewContext> {
     unsafe {
         let mut cursor_pos = POINT::default();
         if GetCursorPos(&mut cursor_pos).is_err() {
             return None;
         }
-        get_active_shell_view_context(&cursor_pos)
+        get_active_shell_view_context(resolver.shell_windows.as_ref(), &cursor_pos)
     }
 }
 
@@ -1290,8 +1413,8 @@ fn hwnd_is_same_or_ancestor(child: HWND, ancestor: HWND) -> bool {
 /// Whether the view under the pointer is a search's results. The hints carry the
 /// same answer, but they are read at the folder probe's cadence: a search opened a
 /// moment ago is seen here before it is seen there.
-fn is_current_search_view_legacy() -> bool {
-    match get_active_shell_view_context_at_cursor() {
+fn is_current_search_view_legacy(resolver: &ItemResolver) -> bool {
+    match get_active_shell_view_context_at_cursor(resolver) {
         Some(context) => context
             .location_url
             .as_deref()
@@ -1308,10 +1431,10 @@ fn is_current_search_view_legacy() -> bool {
 /// opened with — and by nothing else: the resolution of a file does not depend on
 /// it, so a view the shell does not describe leaves the hints empty rather than
 /// sending the hook looking for another witness.
-fn get_current_hover_resolver_hints() -> HoverResolverHints {
+fn get_current_hover_resolver_hints(resolver: &ItemResolver) -> HoverResolverHints {
     let mut hints = HoverResolverHints::default();
 
-    if let Some(context) = get_active_shell_view_context_at_cursor() {
+    if let Some(context) = get_active_shell_view_context_at_cursor(resolver) {
         hints.current_folder = context.folder_path.clone();
         hints.location_url = context.location_url.clone();
         hints.shell_view_hwnd = Some(context.shell_view_hwnd);
@@ -1769,22 +1892,34 @@ fn root_window_at(point: POINT) -> Option<HWND> {
 /// views rather than one, and something else has to say which of them the pointer
 /// is in. The tabs that are not showing are not skipped here: they are what the
 /// item settles, and a view skipped here could be the one holding it.
-fn folder_views_for_window(resolver: &ItemResolver, root_key: isize) -> Vec<AnsweredView> {
+fn folder_views_for_window(
+    resolver: &ItemResolver,
+    root_key: isize,
+    registrations: Option<i32>,
+) -> Vec<AnsweredView> {
     let mut candidates: Vec<AnsweredView> = Vec::new();
     let Some(shell_windows) = resolver.shell_windows.as_ref() else {
         return candidates;
     };
 
     unsafe {
-        let Ok(count) = shell_windows.Count() else {
-            return candidates;
+        // The count the caller is already holding is the one used: asking the
+        // collection for it again is another crossing into the shell for a number
+        // that is already in hand. It is read here only for a caller that had none,
+        // and a caller in that position is a collection that could not answer.
+        let count = match registrations {
+            Some(registrations) => registrations,
+            None => match shell_windows.Count() {
+                Ok(count) => count,
+                Err(_) => return candidates,
+            },
         };
 
         for index in 0..count.min(SHELL_WINDOW_LIMIT) {
             let Ok(dispatch) = shell_windows.Item(&VARIANT::from(index)) else {
                 continue;
             };
-            let Ok(browser) = dispatch.cast::<windows::Win32::UI::Shell::IWebBrowser2>() else {
+            let Ok(browser) = dispatch.cast::<IWebBrowser2>() else {
                 continue;
             };
             let Ok(handle) = browser.HWND() else {
@@ -1838,6 +1973,10 @@ fn folder_views_for_window(resolver: &ItemResolver, root_key: isize) -> Vec<Answ
 
 /// How many Shell windows are registered, which is what says whether a window
 /// could be holding tabs.
+///
+/// The number is read once and carried: the walk that looks a window's views up
+/// needs the same count, and asking the collection for it a second time would be a
+/// second crossing into the shell for it — see `folder_views_for_window`.
 fn shell_window_count(resolver: &ItemResolver) -> Option<i32> {
     unsafe { resolver.shell_windows.as_ref()?.Count().ok() }
 }
@@ -1896,7 +2035,7 @@ fn item_file_path(
     let mut answer: Option<(AnsweredView, PathBuf)> = None;
     let mut disagreed = false;
 
-    for candidate in folder_views_for_window(resolver, root_key) {
+    for candidate in folder_views_for_window(resolver, root_key, registrations) {
         if !view_item_holds(&candidate.folder_view, index, &item.name) {
             continue;
         }
@@ -2898,6 +3037,8 @@ pub fn run_explorer_hook() {
     // is tried again rather than left missing for the rest of the run.
     let mut last_explorer_restarts = explorer_restart_count();
     let mut last_shell_build = Instant::now();
+    // When a client that could not be bounded was last asked for again.
+    let mut last_automation_rebind = Instant::now();
 
     while RUNNING.load(Ordering::SeqCst) {
         // Explorer restarting is not something the resolver can recover from by
@@ -2948,6 +3089,19 @@ pub fn run_explorer_hook() {
                 Some(Instant::now() + Duration::from_millis(EXPLORER_RESTART_BACKOFF_MS));
             current_state = get_explorer_state();
             last_state_check = Instant::now();
+        }
+
+        // A client that could not be bounded makes a probe that runs until the shell
+        // answers, with nothing watching it, so a resolver left holding one asks for a
+        // bounded client again. What makes the modern client unavailable is as often
+        // the shell's own first moments as it is a machine without it, so this is a
+        // state the app leaves rather than one it settles into — and a resolver that
+        // never got a client at all is asked for one here too.
+        if !resolver.automation_bounded
+            && last_automation_rebind.elapsed() >= Duration::from_millis(UIA_REBIND_RETRY_MS)
+        {
+            last_automation_rebind = Instant::now();
+            resolver.rebuild_automation();
         }
 
         // The pointer's answer belongs to the tick that produced it: the list under
@@ -3428,7 +3582,7 @@ pub fn run_explorer_hook() {
                 )
             {
                 last_folder_probe = Instant::now();
-                hover_resolver_hints = get_current_hover_resolver_hints();
+                hover_resolver_hints = get_current_hover_resolver_hints(&resolver);
                 if let Some(location_key) = hover_location_key(&hover_resolver_hints) {
                     if last_cursor_location.as_ref() != Some(&location_key) {
                         // A change that follows recent input is user navigation:
@@ -3915,7 +4069,8 @@ pub fn run_explorer_hook() {
                         }
 
                         let search_view_active =
-                            hover_resolver_hints.is_search_view || is_current_search_view_legacy();
+                            hover_resolver_hints.is_search_view
+                                || is_current_search_view_legacy(&resolver);
                         if search_view_active {
                             let miss_started =
                                 stationary_search_miss_started_at.get_or_insert_with(Instant::now);
