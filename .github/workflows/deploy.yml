@@ -60,12 +60,27 @@ jobs:
         shell: pwsh
         run: .\build-installers.ps1
 
+      # The two names a running app asks for. `releases/latest/download/<name>` is GitHub's
+      # stable address for an asset of the newest release, so the installer is copied out
+      # under a name that does not change from version to version, and the version itself is
+      # published as a file of its own. The check inside the app is then a fixed pair of URLs
+      # instead of a query to the releases API: nothing to parse, and no rate limit to spend.
+      - name: Prepare update assets
+        shell: pwsh
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          $version = $env:TAG -replace '^v', ''
+          Set-Content -Path target/packager/version.txt -NoNewline -Value $version
+          Copy-Item target/packager/*.exe target/packager/rust-hover-preview-setup.exe
+
       - name: Upload installer artifacts
         uses: actions/upload-artifact@v4
         with:
           name: rust-hover-preview-installers-${{ github.ref_name }}
           path: |
             target/packager/*.exe
+            target/packager/version.txt
             target/github/rust-hover-preview.exe
           if-no-files-found: error
 
@@ -89,4 +104,5 @@ jobs:
           fail_on_unmatched_files: true
           files: |
             target/packager/*.exe
+            target/packager/version.txt
             target/github/rust-hover-preview.exe

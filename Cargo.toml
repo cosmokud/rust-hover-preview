@@ -1,6 +1,6 @@
 [package]
 name = "rust-hover-preview"
-version = "0.2.14"
+version = "0.3.0"
 edition = "2021"
 description = "Windows 11 system tray app that shows image, video, PDF, text, and archive previews on hover in Explorer"
 authors = ["Rust Hover Preview Contributors"]
@@ -36,6 +36,11 @@ windows = { version = "0.58", features = [
     "Win32_System_Variant",
     "Win32_System_WinRT",
     "Win32_Media_MediaFoundation",
+    # The update check, which is the one thing in this app that asks the network
+    # anything: WinHTTP rather than an HTTP crate of its own, so the connection
+    # is the machine's — its certificate store, and the proxy the user
+    # configured — and nothing is bundled for either. See `updates`.
+    "Win32_Networking_WinHttp",
     "Win32_Graphics_Direct3D11",
     "Win32_Graphics_Dxgi_Common",
     "Foundation",
