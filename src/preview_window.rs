@@ -6,17 +6,19 @@ use crate::config::{
     frame_bytes_within_budget, image_decode_limits, read_within_budget, sanitize_image_cache_mb,
     sanitize_spinner_delay_ms, sanitize_webp_playback_fps, MarkdownMode, PreviewScale, PreviewType,
     TextTheme, TransparentBackground, DEFAULT_ANIMATED_SCALE_PERCENT, DEFAULT_DESIGN_SCALE,
-    DEFAULT_FONT_SCALE,
+    DEFAULT_FONT_SCALE, DEFAULT_VECTOR_SCALE,
     DEFAULT_IMAGE_CACHE_MB, DEFAULT_OFFICE_SCALE, DEFAULT_PDF_SCALE, DEFAULT_PREVIEW_SCALE_PERCENT,
-    DEFAULT_SPINNER_DELAY_MS, DEFAULT_SVG_SCALE_PERCENT, DEFAULT_TEXT_FONT_SCALE_PERCENT,
+    DEFAULT_SPINNER_DELAY_MS, DEFAULT_TEXT_FONT_SCALE_PERCENT,
     DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS, DEFAULT_VIDEO_SCALE_PERCENT,
     DEFAULT_WEBP_PLAYBACK_FPS,
 };
 use crate::dds_image;
 use crate::design_formats;
 use crate::engine_processes;
+use crate::eps_image;
 use crate::font_formats;
 use crate::font_preview;
+use crate::metafile_image;
 use crate::office_formats;
 use crate::office_preview;
 use crate::office_render;
@@ -27,6 +29,7 @@ use crate::svg_preview;
 use crate::text_formats;
 use crate::text_preview::{self, TextPreviewOptions};
 use crate::tone_map;
+use crate::vector_formats;
 use crate::video_formats::{self, is_video_file};
 use crate::video_player;
 use crate::webp_image;
@@ -405,6 +408,13 @@ enum MediaType {
     /// for images — while what draws one is this window, into a frame composed like
     /// any other.
     Design,
+    /// A vector drawing: Windows' metafiles, and the preview an encapsulated PostScript
+    /// file carries. It is a kind of its own — drawn into this window's frame like a
+    /// picture, but drawn by the drawing layer rather than decoded, and composited over a
+    /// backdrop of its own — and what makes it worth a kind of its own is the size: the
+    /// records are replayed at whatever box the preview is shown at, so a drawing is
+    /// sharp at any size the display has.
+    Vector,
     Loading,
 }
 
@@ -418,7 +428,7 @@ impl MediaType {
             // A texture is a picture as far as the gates go: the list a `.dds` is in is the
             // image list, and the switch for pictures is the switch for it.
             Self::Dds => Some(PreviewType::Images),
-            Self::EngineSvg => Some(PreviewType::Svg),
+            Self::EngineSvg => Some(PreviewType::Vector),
             Self::EngineFont => Some(PreviewType::Fonts),
             Self::Video | Self::NativeVideo => Some(PreviewType::Videos),
             Self::Text => Some(PreviewType::Text),
@@ -429,6 +439,7 @@ impl MediaType {
             // over it is its own: the picture *is* what the file keeps of the document,
             // but a user who wants none of them is not asking for pictures to be off.
             Self::Design => Some(PreviewType::Design),
+            Self::Vector => Some(PreviewType::Vector),
             Self::Loading => None,
         }
     }
@@ -1425,15 +1436,6 @@ fn current_image_background() -> TransparentBackground {
         .unwrap_or(TransparentBackground::Transparent)
 }
 
-/// The backdrop an SVG document is drawn over, which the tray keeps apart from a
-/// picture's.
-fn current_svg_background() -> TransparentBackground {
-    CONFIG
-        .lock()
-        .map(|cfg| cfg.svg_background)
-        .unwrap_or(TransparentBackground::Transparent)
-}
-
 /// The backdrop a font specimen is drawn over, which is a page of its own: a document's
 /// backdrop is the one its shapes are drawn on, and a specimen's is the one its glyphs are.
 fn current_font_background() -> TransparentBackground {
@@ -1463,6 +1465,20 @@ fn current_design_background() -> TransparentBackground {
         .unwrap_or(TransparentBackground::Transparent)
 }
 
+/// The backdrop a vector drawing is drawn over, which the tray keeps apart from a
+/// picture's.
+///
+/// The kind holds two halves that answer this the same way for different reasons: a
+/// metafile says what was drawn and nothing about the sheet under it, so what stands
+/// behind the marks is this app's (see `metafile_image`), and an SVG document is drawn on
+/// a page of the engine's own, so what it is given is a colour (see `webview_preview`).
+fn current_vector_background() -> TransparentBackground {
+    CONFIG
+        .lock()
+        .map(|cfg| cfg.vector_background)
+        .unwrap_or(TransparentBackground::Transparent)
+}
+
 /// How loud a video is played, which is read when one is started rather than when the
 /// setting changes: a preview is a few seconds long, and the next one is played at
 /// whatever the volume is by then.
@@ -1471,12 +1487,14 @@ fn current_video_volume() -> u32 {
 }
 
 /// The backdrop an engine-drawn preview of `path` is drawn over: the kind decides it, the
-/// same way it decides everything else about a document.
+/// same way it decides everything else about a document. The one engine draws both kinds
+/// this app hands it — an SVG document, which is a vector drawing, and a font file's
+/// specimen — and each has a backdrop of its own.
 fn engine_background(path: &Path) -> TransparentBackground {
     if font_formats::is_font_file(path) {
         current_font_background()
     } else {
-        current_svg_background()
+        current_vector_background()
     }
 }
 
@@ -1489,7 +1507,7 @@ fn engine_background(path: &Path) -> TransparentBackground {
 /// name gates in one order.
 fn engine_kind_of(path: &Path) -> Option<PreviewType> {
     if svg_preview::is_svg_file(path) {
-        return Some(PreviewType::Svg);
+        return Some(PreviewType::Vector);
     }
 
     if font_formats::is_font_file(path) {
@@ -1516,21 +1534,21 @@ fn current_hover_scales() -> HoverScales {
             picture: cfg.preview_scale,
             video: cfg.video_scale,
             animated: cfg.animated_scale,
-            svg: cfg.svg_scale,
             page: cfg.pdf_scale,
             office: cfg.office_scale,
             font: cfg.font_scale,
             design: cfg.design_scale,
+            vector: cfg.vector_scale,
         })
         .unwrap_or(HoverScales {
             picture: PreviewScale::Percent(DEFAULT_PREVIEW_SCALE_PERCENT),
             video: PreviewScale::Percent(DEFAULT_VIDEO_SCALE_PERCENT),
             animated: PreviewScale::Percent(DEFAULT_ANIMATED_SCALE_PERCENT),
-            svg: PreviewScale::Percent(DEFAULT_SVG_SCALE_PERCENT),
             page: DEFAULT_PDF_SCALE,
             office: DEFAULT_OFFICE_SCALE,
             font: DEFAULT_FONT_SCALE,
             design: DEFAULT_DESIGN_SCALE,
+            vector: DEFAULT_VECTOR_SCALE,
         })
 }
 
@@ -1681,8 +1699,6 @@ struct HoverScales {
     /// so that what moves is drawn at the size one wants it at rather than at the size
     /// one wants a photograph at.
     animated: PreviewScale,
-    /// The share of the display an SVG document is drawn at.
-    svg: PreviewScale,
     /// The share of the display a PDF page is drawn at.
     page: PreviewScale,
     /// The share of the display the page an Office document is drawn as is shown at.
@@ -1697,6 +1713,12 @@ struct HoverScales {
     /// answer, and a setting of its own because a drawing wants a different share of the
     /// screen from a page or a specimen.
     design: PreviewScale,
+    /// The share of the display a vector drawing is replayed over.
+    ///
+    /// A drawing is not a bitmap: the records are played again at whatever size the box
+    /// asks for, so the room the display has is free quality the way a document's is, and
+    /// the share is of that room.
+    vector: PreviewScale,
 }
 
 /// The scale a preview is laid out and rendered with.
@@ -1741,6 +1763,11 @@ struct HoverScales {
 /// the share is of — the same question a page answers, and a setting of its own because a
 /// drawing and a page want different shares of it. See `load_design_preview`.
 ///
+/// A vector drawing is the document rule once more, at the share `vector_scale` names: the
+/// records are replayed at whatever size they are asked for, so the room the display has is
+/// free quality and a share of it is what the setting means — there is nothing to enlarge
+/// and nothing to lose by it. See `load_vector_preview`.
+///
 /// A video keeps the share of its own size `video_scale` names, which is the picture's
 /// rule: what a video's preview is, until the player's window is over it, is its first
 /// frame — a bitmap measured the way a picture is — so the share is of the file's own
@@ -1784,7 +1811,7 @@ fn effective_preview_scale(path: &Path, scales: HoverScales) -> PreviewScale {
             _ => bitmap_at_display_scale(scales.office),
         }
     } else if svg_preview::is_svg_file(path) {
-        fit_reduced(scales.svg)
+        fit_reduced(scales.vector)
     } else if font_formats::is_font_file(path) {
         fit_reduced(scales.font)
     } else if design_formats::is_design_file(path) {
@@ -1792,6 +1819,8 @@ fn effective_preview_scale(path: &Path, scales: HoverScales) -> PreviewScale {
         // previewed is the picture the file keeps of the whole of itself, at whatever size
         // that is, so the share is of the display the way a page's or a specimen's is.
         fit_reduced(scales.design)
+    } else if vector_formats::is_vector_file(path) {
+        fit_reduced(scales.vector)
     } else if is_video_file(path) {
         scales.video
     } else {
@@ -3167,6 +3196,7 @@ fn load_design_preview(
         psd_image::decode(path, target_width, target_height)
     } else {
         project_image::decode(path, target_width, target_height)
+            .or_else(|| eps_image::decode(path, target_width, target_height))
     }?;
 
     let frame = ImageFrame {
@@ -3181,18 +3211,91 @@ fn load_design_preview(
     Some(static_image_media(frame, MediaType::Design))
 }
 
-/// The size of the picture a design document is previewed from: the document's own
-/// size for a Photoshop file, and the size of the picture a project container holds.
+/// The size of the picture a design document is previewed from: the document's own size
+/// for a Photoshop file, and the size of the picture a project container holds.
 ///
-/// A file neither reader will answer for reports no size, which is how a design
-/// document this app has no reader for comes to show nothing at all rather than a
-/// picture of some other format's making.
+/// What is neither of those is either a container this app has no reader for or the
+/// encapsulated PostScript a document was saved as before Illustrator wrote PDFs, and each
+/// reader answers for what a file is rather than for what it is called.
+///
+/// A file none of them will answer for reports no size, which is how a design document
+/// this app has no reader for comes to show nothing at all rather than a picture of some
+/// other format's making.
 fn design_dimensions(path: &Path) -> Option<(u32, u32)> {
     if psd_image::is_psd_file(path) {
-        psd_image::dimensions(path)
-    } else {
-        project_image::dimensions(path)
+        return psd_image::dimensions(path);
     }
+
+    project_image::dimensions(path).or_else(|| eps_image::dimensions(path))
+}
+
+/// The drawing a vector file is previewed from.
+///
+/// Two readers answer for these files and both hand back a frame of the same kind: the
+/// records an `.eps` carries, and the records a `.wmf` or an `.emf` is. Both ask the file
+/// itself what it is rather than trusting its name, so which is asked first is only a
+/// question of which is cheaper to turn down — the metafile reader is asked first for the
+/// two names it is written as, and the encapsulated PostScript reader first for everything
+/// else, since either of them refuses a file that is not its own after a header.
+///
+/// What comes back is the drawing replayed at the box the layout planned rather than a
+/// picture resampled into it, which is what makes a preview of one sharp at any size the
+/// display has. A file carrying a picture instead — a TIFF preview, which is what some
+/// writers leave in an `.eps` — is resampled the way every other picture is.
+fn load_vector_preview(
+    path: &Path,
+    max_width: u32,
+    max_height: u32,
+    preview_scale: PreviewScale,
+) -> Option<MediaData> {
+    let (source_width, source_height) = vector_dimensions(path)?;
+    let (target_width, target_height) = scale_dimensions(
+        source_width,
+        source_height,
+        max_width,
+        max_height,
+        preview_scale,
+    );
+
+    let key = ImageCacheKey {
+        path: path.to_path_buf(),
+        version: file_version(path),
+        width: target_width,
+        height: target_height,
+    };
+
+    if let Some(frame) = image_cache_get(&key) {
+        return Some(static_image_media(frame, MediaType::Vector));
+    }
+
+    let pixels = if metafile_image::is_metafile_name(path) {
+        metafile_image::decode(path, target_width, target_height)
+            .or_else(|| eps_image::decode(path, target_width, target_height))
+    } else {
+        eps_image::decode(path, target_width, target_height)
+            .or_else(|| metafile_image::decode(path, target_width, target_height))
+    }?;
+
+    let frame = ImageFrame {
+        pixels,
+        width: target_width,
+        height: target_height,
+        delay_ms: 0,
+    };
+
+    image_cache_put(key, frame.clone());
+
+    Some(static_image_media(frame, MediaType::Vector))
+}
+
+/// The size a drawing asks to be shown at: what the preview inside an `.eps` is of, or what
+/// a metafile's own header declares.
+fn vector_dimensions(path: &Path) -> Option<(u32, u32)> {
+    if metafile_image::is_metafile_name(path) {
+        return metafile_image::dimensions(path).or_else(|| eps_image::dimensions(path));
+    }
+
+    eps_image::dimensions(path).or_else(|| metafile_image::dimensions(path))
 }
 
 /// Render the first page of a PDF through the PDF engine built into Windows.
@@ -4277,16 +4380,23 @@ fn load_media(
     }
 
     // A design document is read for the picture its own format keeps of the whole
-    // thing, and it is asked where the hook asks it: after the office list, ahead of
-    // the text lists and the picture path — neither of which would have claimed one of
-    // these names anyway. What the reader refuses is refused outright rather than
-    // falling through to the decoder the picture path ends in, because that decoder is
-    // for the names it names and this is not one of them.
+    // thing, and it is asked where the hook asks it: after the office list, ahead of the
+    // text lists and the picture path — neither of which would have claimed one of these
+    // names anyway. What the reader refuses is refused outright rather than falling
+    // through to the decoder the picture path ends in, because that decoder is for the
+    // names it names and this is not one of them.
     //
     // The gate is not asked here, exactly as it is not asked for a PDF or a font: the
     // hook asks it before a hover can reach this path at all.
     if design_formats::is_design_file(path) {
         return load_design_preview(path, max_width, max_height, preview_scale);
+    }
+
+    // A vector drawing is the drawing layer's to replay rather than a decoder's to read,
+    // and it is asked beside the design documents for the same reason they are: what it
+    // is, is its own header's answer rather than its name's.
+    if vector_formats::is_vector_file(path) {
+        return load_vector_preview(path, max_width, max_height, preview_scale);
     }
 
     if text_formats::is_text_file(path) {
@@ -4446,7 +4556,7 @@ fn get_media_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
     // switch for pictures. A file of a kind that is switched off reports no size, which
     // is how the layout drops its preview.
     if svg_preview::is_svg_file(path) {
-        if !PreviewType::Svg.enabled() {
+        if !PreviewType::Vector.enabled() {
             return None;
         }
 
@@ -4482,6 +4592,12 @@ fn get_media_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
     // to show nothing at all rather than a box nothing would be drawn into.
     if design_formats::is_design_preview(path) {
         return design_dimensions(path);
+    }
+
+    // A vector drawing is measured from the records it holds: what an `.eps` keeps a
+    // preview of, or what a metafile's own header declares its drawing to be.
+    if vector_formats::is_vector_preview(path) {
+        return vector_dimensions(path);
     }
 
     // Whatever is left is a picture, so the `Images` gate is what decides it.
@@ -5209,6 +5325,8 @@ unsafe fn render_layered_preview_at(hwnd: HWND, x: i32, y: i32) {
             current_dds_background()
         } else if matches!(media.media_type, MediaType::Design) {
             current_design_background()
+        } else if matches!(media.media_type, MediaType::Vector) {
+            current_vector_background()
         } else {
             current_image_background()
         };
@@ -8309,6 +8427,7 @@ pub fn run_preview_window() {
 mod tests {
     use super::*;
     use crate::config::DEFAULT_FONT_SCALE_PERCENT;
+    use crate::config::DEFAULT_VECTOR_SCALE_PERCENT;
 
     /// A display to place on: 1000 by 800 at its top-left corner.
     fn bounds() -> ScreenBounds {
@@ -8405,11 +8524,11 @@ mod tests {
             picture: PreviewScale::Percent(DEFAULT_PREVIEW_SCALE_PERCENT),
             video: PreviewScale::Percent(DEFAULT_VIDEO_SCALE_PERCENT),
             animated: PreviewScale::Percent(DEFAULT_ANIMATED_SCALE_PERCENT),
-            svg: PreviewScale::Percent(DEFAULT_SVG_SCALE_PERCENT),
             page: DEFAULT_PDF_SCALE,
             office: DEFAULT_OFFICE_SCALE,
             font: DEFAULT_FONT_SCALE,
             design: DEFAULT_DESIGN_SCALE,
+            vector: DEFAULT_VECTOR_SCALE,
         }
     }
 
@@ -8623,7 +8742,7 @@ mod tests {
     #[test]
     fn a_page_takes_the_room_the_display_has() {
         let pdf = PathBuf::from(r"C:\docs\report.pdf");
-        let svg_scale = PreviewScale::Percent(DEFAULT_SVG_SCALE_PERCENT);
+        let vector_scale = DEFAULT_VECTOR_SCALE;
         let office_scale = PreviewScale::Percent(75);
 
         for configured in [
@@ -8638,7 +8757,7 @@ mod tests {
                     HoverScales {
                         picture: configured,
                         page: configured,
-                        svg: svg_scale,
+                        vector: vector_scale,
                         office: office_scale,
                         ..hover_scales()
                     }
@@ -8653,7 +8772,7 @@ mod tests {
                 HoverScales {
                     picture: PreviewScale::Percent(400),
                     page: PreviewScale::Percent(50),
-                    svg: svg_scale,
+                    vector: vector_scale,
                     office: office_scale,
                     ..hover_scales()
                 }
@@ -8666,7 +8785,7 @@ mod tests {
                 HoverScales {
                     picture: PreviewScale::Percent(400),
                     page: PreviewScale::Percent(25),
-                    svg: svg_scale,
+                    vector: vector_scale,
                     office: office_scale,
                     ..hover_scales()
                 }
@@ -8680,7 +8799,7 @@ mod tests {
                 HoverScales {
                     picture: PreviewScale::Percent(400),
                     page: PreviewScale::FitToScreen,
-                    svg: svg_scale,
+                    vector: vector_scale,
                     office: office_scale,
                     ..hover_scales()
                 }
@@ -8705,7 +8824,7 @@ mod tests {
                 &svg,
                 HoverScales {
                     picture: configured,
-                    svg: PreviewScale::FitToScreen,
+                    vector: PreviewScale::FitToScreen,
                     page,
                     ..hover_scales()
                 }
@@ -8718,7 +8837,7 @@ mod tests {
                     &svg,
                     HoverScales {
                         picture: configured,
-                        svg: PreviewScale::Percent(percent),
+                        vector: PreviewScale::Percent(percent),
                         page,
                         ..hover_scales()
                     }
@@ -8733,7 +8852,7 @@ mod tests {
                 &svg,
                 HoverScales {
                     picture: configured,
-                    svg: PreviewScale::Percent(60),
+                    vector: PreviewScale::Percent(60),
                     page,
                     ..hover_scales()
                 }
@@ -8752,7 +8871,7 @@ mod tests {
                     &svg,
                     HoverScales {
                         picture: configured,
-                        svg: PreviewScale::Percent(100),
+                        vector: PreviewScale::Percent(100),
                         page,
                         ..hover_scales()
                     }
@@ -8772,14 +8891,14 @@ mod tests {
         let font = PathBuf::from(r"C:\fonts\Inter-Regular.woff2");
         let picture = PreviewScale::Percent(400);
         let page = PreviewScale::FitToScreen;
-        let svg = PreviewScale::Percent(75);
+        let vector = PreviewScale::Percent(75);
 
         assert_eq!(
             effective_preview_scale(
                 &font,
                 HoverScales {
                     picture,
-                    svg,
+                    vector,
                     page,
                     ..hover_scales()
                 }
@@ -8794,7 +8913,7 @@ mod tests {
                     &font,
                     HoverScales {
                         picture,
-                        svg,
+                        vector,
                         page,
                         font: PreviewScale::Percent(percent),
                         ..hover_scales()
@@ -8815,7 +8934,7 @@ mod tests {
                     &font,
                     HoverScales {
                         picture,
-                        svg,
+                        vector,
                         page,
                         font: configured,
                         ..hover_scales()
@@ -8833,7 +8952,7 @@ mod tests {
                 &png,
                 HoverScales {
                     picture: PreviewScale::Percent(200),
-                    svg,
+                    vector,
                     page,
                     font: PreviewScale::Percent(10),
                     ..hover_scales()
@@ -8856,14 +8975,14 @@ mod tests {
                 &svg,
                 HoverScales {
                     picture,
-                    svg: PreviewScale::Percent(DEFAULT_SVG_SCALE_PERCENT),
+                    vector: DEFAULT_VECTOR_SCALE,
                     page: PreviewScale::Percent(25),
                     office: PreviewScale::Percent(75),
                     font: PreviewScale::Percent(10),
                     ..hover_scales()
                 }
             ),
-            PreviewScale::FitToScreenReduced(DEFAULT_SVG_SCALE_PERCENT),
+            PreviewScale::FitToScreenReduced(DEFAULT_VECTOR_SCALE_PERCENT),
             "a document follows its own share, not a page's"
         );
 
@@ -8875,7 +8994,7 @@ mod tests {
                 &png,
                 HoverScales {
                     picture: PreviewScale::Percent(200),
-                    svg: PreviewScale::FitToScreen,
+                    vector: PreviewScale::FitToScreen,
                     page: PreviewScale::Percent(25),
                     office: PreviewScale::Percent(75),
                     font: PreviewScale::Percent(10),
@@ -9133,7 +9252,7 @@ mod tests {
             &waiting,
             HoverScales {
                 picture: PreviewScale::Percent(400),
-                svg: PreviewScale::Percent(DEFAULT_SVG_SCALE_PERCENT),
+                vector: DEFAULT_VECTOR_SCALE,
                 page: PreviewScale::Percent(25),
                 office: PreviewScale::Percent(10),
                 font: PreviewScale::Percent(DEFAULT_FONT_SCALE_PERCENT),

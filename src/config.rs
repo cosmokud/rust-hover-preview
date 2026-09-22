@@ -22,6 +22,7 @@ use crate::text_formats::{
 };
 use crate::theme_files;
 use crate::tone_map::Curve;
+use crate::vector_formats::{sanitize_vector_extensions, DEFAULT_VECTOR_EXTENSIONS};
 use crate::video_formats::{sanitize_video_extensions, DEFAULT_VIDEO_EXTENSIONS};
 
 const CONFIG_SECTION: &str = "settings";
@@ -41,6 +42,8 @@ const OFFICE_SECTION: &str = "office";
 const FONT_SECTION: &str = "font";
 /// The design extension list lives in its own section for the same reason.
 const DESIGN_SECTION: &str = "design";
+/// The vector extension list lives in its own section for the same reason.
+const VECTOR_SECTION: &str = "vector";
 pub const DEFAULT_WEBP_PLAYBACK_FPS: u32 = 90;
 pub const MAX_WEBP_PLAYBACK_FPS: u32 = 90;
 pub const DEFAULT_PREVIEW_SCALE_PERCENT: u32 = 100;
@@ -59,12 +62,13 @@ pub const DEFAULT_VIDEO_SCALE_PERCENT: u32 = 100;
 /// so the share means the same thing here as it does for one — a percentage of the size
 /// the file asks for — and the setting starts at the same place the picture's does.
 pub const DEFAULT_ANIMATED_SCALE_PERCENT: u32 = 100;
-/// The share of the display an SVG document is drawn at unless asked otherwise.
+/// The share of the display a vector drawing is drawn at unless asked otherwise.
 ///
-/// A document is drawn at whatever size it is asked for, so what it is asked for is
-/// a share of the room the display has rather than a share of the size the file asks
-/// for: half of the room is where a document starts.
-pub const DEFAULT_SVG_SCALE_PERCENT: u32 = 50;
+/// A drawing is drawn at whatever size it is asked for — an SVG document by the browser
+/// that rasterizes nothing until it is told the size, a metafile by the drawing layer
+/// playing its records again — so the room the display has is free quality rather than an
+/// enlargement, and the share is of that room: half of it is where a drawing starts.
+pub const DEFAULT_VECTOR_SCALE_PERCENT: u32 = 50;
 /// The share of the display a font specimen is drawn at unless asked otherwise.
 ///
 /// A font has no size it asks to be drawn at — a file holds outlines, and the text they are
@@ -461,18 +465,19 @@ pub const DEFAULT_PREVIEW_SCALE: PreviewScale =
 pub const DEFAULT_VIDEO_SCALE: PreviewScale = PreviewScale::Percent(DEFAULT_VIDEO_SCALE_PERCENT);
 pub const DEFAULT_ANIMATED_SCALE: PreviewScale =
     PreviewScale::Percent(DEFAULT_ANIMATED_SCALE_PERCENT);
-/// The same for an SVG document, at the share of the display its own setting names rather
-/// than a share of the file.
-pub const DEFAULT_SVG_SCALE: PreviewScale = PreviewScale::Percent(DEFAULT_SVG_SCALE_PERCENT);
-/// The same for a font specimen, at the share rather than the whole of the room: a specimen
-/// is a page of text rather than a document to be studied, and half the display holds the
-/// pangram at a size that can be read at a glance.
-pub const DEFAULT_FONT_SCALE: PreviewScale = PreviewScale::Percent(DEFAULT_FONT_SCALE_PERCENT);
+/// The same for a vector drawing, at the share of the display its own setting names rather
+/// than the whole of it.
+pub const DEFAULT_VECTOR_SCALE: PreviewScale =
+    PreviewScale::Percent(DEFAULT_VECTOR_SCALE_PERCENT);
 /// The same for a design document, at the whole of the room: what a preview of one is made
 /// of is the picture the file keeps of the whole document, so the question the setting
 /// answers is how much of the display to give it, and the answer that asks for nothing in
 /// particular is the room the display has.
 pub const DEFAULT_DESIGN_SCALE: PreviewScale = PreviewScale::FitToScreen;
+/// The same for a font specimen, at the share rather than the whole of the room: a specimen
+/// is a page of text rather than a document to be studied, and half the display holds the
+/// pangram at a size that can be read at a glance.
+pub const DEFAULT_FONT_SCALE: PreviewScale = PreviewScale::Percent(DEFAULT_FONT_SCALE_PERCENT);
 
 /// How long an engine that is kept warm between documents is kept.
 ///
@@ -701,10 +706,6 @@ pub enum PreviewType {
     Pdf,
     Archives,
     Office,
-    /// SVG documents, which are their own kind despite being entries of the image
-    /// list: what draws one is a browser rather than a decoder, so a user who wants
-    /// none of them has a switch for them that is not the switch for pictures.
-    Svg,
     /// Font files, the second kind the browser draws rather than a decoder: a specimen is
     /// a page of this app's own with the font in it, so a machine without the engine has no
     /// font preview either, and a user who wants none of them has this switch.
@@ -714,6 +715,16 @@ pub enum PreviewType {
     /// them has this switch, which is not the switch for pictures even though the
     /// preview is one.
     Design,
+    /// Vector drawings — SVG documents, Windows' metafiles, and the preview an
+    /// encapsulated PostScript file carries — drawn rather than decoded: an SVG by the
+    /// browser engine, the rest by the drawing layer, and none of them by a decoder the
+    /// way a picture is, which is why a drawing is sharp at any size the display has.
+    ///
+    /// SVG is the one kind in this list that is also an entry of the image list — a
+    /// `.svg` is a picture's name to every list that reads names — and what draws one is
+    /// not a decoder but an engine, so its switch is this one rather than the switch for
+    /// pictures; see `svg_preview`.
+    Vector,
 }
 
 impl PreviewType {
@@ -734,9 +745,9 @@ impl PreviewType {
             Self::Pdf => config.pdf_preview_enabled,
             Self::Archives => config.archive_preview_enabled,
             Self::Office => config.office_preview_enabled,
-            Self::Svg => config.svg_preview_enabled,
             Self::Fonts => config.font_preview_enabled,
             Self::Design => config.design_preview_enabled,
+            Self::Vector => config.vector_preview_enabled,
         }
     }
 
@@ -749,9 +760,9 @@ impl PreviewType {
             Self::Pdf => config.pdf_preview_enabled = enabled,
             Self::Archives => config.archive_preview_enabled = enabled,
             Self::Office => config.office_preview_enabled = enabled,
-            Self::Svg => config.svg_preview_enabled = enabled,
             Self::Fonts => config.font_preview_enabled = enabled,
             Self::Design => config.design_preview_enabled = enabled,
+            Self::Vector => config.vector_preview_enabled = enabled,
         }
     }
 }
@@ -888,17 +899,6 @@ pub struct AppConfig {
     /// The backdrop a picture is drawn over — and every other preview that is not a
     /// document: a PDF page, a painted text frame, a page Office rendered.
     pub image_background: TransparentBackground,
-    /// The backdrop an SVG document is drawn over.
-    ///
-    /// It is a setting of its own rather than the one beside it, because what the
-    /// question means is different: the transparency of a picture is the picture's,
-    /// while a document is drawn on a page, and a document's own opacity is not a
-    /// photograph's.
-    ///
-    /// The checkerboard among the four is the page's own: the engine can be given a
-    /// colour and nothing else, and the squares are painted by the page it draws the
-    /// document in rather than by the window around it (see `webview_preview::frame_page`).
-    pub svg_background: TransparentBackground,
     /// The backdrop a font specimen is drawn over.
     ///
     /// A setting of its own for the reason the one above is: a specimen is a page with text
@@ -925,6 +925,16 @@ pub struct AppConfig {
     /// designer saved with its transparency as it is one to be looked at against a page,
     /// so what stands behind it is worth being a setting rather than a guess.
     pub design_background: TransparentBackground,
+    /// The backdrop a vector drawing is drawn over.
+    ///
+    /// A setting of its own because a drawing is made for a page and says nothing about it
+    /// — the records of a metafile are what was drawn and not the sheet under it, and an
+    /// SVG document's own opacity is not a photograph's — so what stands behind the marks
+    /// is this app's answer rather than the file's. For the document half of the kind the
+    /// page is the engine's and this is the colour it is given; the checkerboard among the
+    /// four is the page's own there, since a browser can be handed a colour and nothing
+    /// else (see `webview_preview::frame_page`).
+    pub vector_background: TransparentBackground,
     pub video_volume: u32,
     /// How large a picture is drawn, as a share of its own size: `100%` is the size the
     /// file asks for, `50%` half of it, and `fit` the largest size the room the layout
@@ -952,20 +962,6 @@ pub struct AppConfig {
     /// different reasons: a picture is studied at the size it was written, while an
     /// animation at `50%` is half the pixels to decode and draw for every frame of it.
     pub animated_scale: PreviewScale,
-    /// How large an SVG document is drawn, as a share of the room the display has
-    /// for it.
-    ///
-    /// A document is drawn at whatever size it is asked for, so its scale means
-    /// something else than a picture's does: a picture at `50%` is half of its own
-    /// size, while a document at `50%` is half of the display. `Fit to Screen` is the
-    /// whole of that room, and the setting is written the same way as the picture
-    /// scale because it is the same kind of value — a fit, or a percentage — read
-    /// against a different whole.
-    ///
-    /// It is a setting of its own because the two answer different questions: a
-    /// picture's scale is how much of its own detail to show, while a document's is
-    /// how much of the screen to cover.
-    pub svg_scale: PreviewScale,
     /// How large a PDF page is drawn, as a share of the room the display has for it.
     ///
     /// A page is a vector, so what it is asked for is a size rather than a resample:
@@ -1003,6 +999,16 @@ pub struct AppConfig {
     /// thing, at whatever size that picture is, so the size one wants is a share of the
     /// screen the way a page's is rather than a share of the file's own size.
     pub design_scale: PreviewScale,
+    /// How large a vector drawing is drawn, as a share of the room the display has for it —
+    /// the same question, and the same answers, as the document scales above.
+    ///
+    /// A drawing is not a bitmap: an SVG document is drawn by the browser engine at
+    /// whatever size it is told, and a metafile's records are played again at whatever size
+    /// the preview is, so the room the display has is free quality rather than an
+    /// enlargement — `50%` is half the display, not half of the file. It is a setting of
+    /// its own because a drawing is asked for a share of the screen the way a page is,
+    /// rather than for a share of a size the file asks for.
+    pub vector_scale: PreviewScale,
     /// Which face of a collection a specimen is drawn from, as the menu numbers faces: `1`
     /// (the default) is the first face the file holds.
     ///
@@ -1029,15 +1035,15 @@ pub struct AppConfig {
     pub archive_preview_enabled: bool,
     /// Whether Office documents are previewed at all, ahead of the extension list.
     pub office_preview_enabled: bool,
-    /// Whether SVG documents are previewed at all, ahead of the image list their
-    /// names are entries of.
-    pub svg_preview_enabled: bool,
     /// Whether font files are previewed at all, ahead of the font list their names are
     /// entries of.
     pub font_preview_enabled: bool,
     /// Whether design documents and projects are previewed at all, ahead of the design
     /// list their names are entries of.
     pub design_preview_enabled: bool,
+    /// Whether vector drawings are previewed at all, ahead of the vector list their names
+    /// are entries of, and of the browser engine a document of that kind is drawn by.
+    pub vector_preview_enabled: bool,
     /// Memory the rendered pages may hold, in megabytes, between hovers. A page is
     /// still rendered at `0` — a document has no other source for its preview — it
     /// is simply not kept once the hover it was rendered for is over.
@@ -1097,6 +1103,8 @@ pub struct AppConfig {
     /// Extensions previewed as design documents and projects, already normalized for
     /// lookup.
     pub design_extensions: Vec<String>,
+    /// Extensions previewed as vector drawings, already normalized for lookup.
+    pub vector_extensions: Vec<String>,
 }
 
 impl Default for AppConfig {
@@ -1117,19 +1125,19 @@ impl Default for AppConfig {
             webp_playback_fps: DEFAULT_WEBP_PLAYBACK_FPS,
             image_cache_mb: DEFAULT_IMAGE_CACHE_MB,
             image_background: TransparentBackground::Black,
-            svg_background: TransparentBackground::Black,
             font_background: TransparentBackground::White,
             dds_background: TransparentBackground::Black,
             design_background: TransparentBackground::Black,
+            vector_background: TransparentBackground::Black,
             video_volume: 0, // Mute by default
             preview_scale: PreviewScale::Percent(DEFAULT_PREVIEW_SCALE_PERCENT),
             video_scale: PreviewScale::Percent(DEFAULT_VIDEO_SCALE_PERCENT),
             animated_scale: PreviewScale::Percent(DEFAULT_ANIMATED_SCALE_PERCENT),
-            svg_scale: PreviewScale::Percent(DEFAULT_SVG_SCALE_PERCENT),
             pdf_scale: DEFAULT_PDF_SCALE,
             office_scale: DEFAULT_OFFICE_SCALE,
             font_scale: DEFAULT_FONT_SCALE,
             design_scale: DEFAULT_DESIGN_SCALE,
+            vector_scale: DEFAULT_VECTOR_SCALE,
             ttc_face: DEFAULT_TTC_FACE,
             theme: TextTheme::Light,
             markdown_mode: MarkdownMode::Rendered,
@@ -1139,9 +1147,9 @@ impl Default for AppConfig {
             pdf_preview_enabled: true,
             archive_preview_enabled: true,
             office_preview_enabled: true,
-            svg_preview_enabled: true,
             font_preview_enabled: true,
             design_preview_enabled: true,
+            vector_preview_enabled: true,
             office_cache_mb: DEFAULT_OFFICE_CACHE_MB,
             office_engine_idle: EngineIdle::Seconds(DEFAULT_OFFICE_ENGINE_IDLE_SECS),
             webview_idle: EngineIdle::Seconds(DEFAULT_WEBVIEW_IDLE_SECS),
@@ -1161,6 +1169,7 @@ impl Default for AppConfig {
             office_extensions: sanitize_office_extensions(DEFAULT_OFFICE_EXTENSIONS),
             font_extensions: sanitize_font_extensions(DEFAULT_FONT_EXTENSIONS),
             design_extensions: sanitize_design_extensions(DEFAULT_DESIGN_EXTENSIONS),
+            vector_extensions: sanitize_vector_extensions(DEFAULT_VECTOR_EXTENSIONS),
         }
     }
 }
@@ -1409,11 +1418,6 @@ impl AppConfig {
             );
             ini.set(
                 CONFIG_SECTION,
-                "svg_background",
-                Some(self.svg_background.as_str().to_string()),
-            );
-            ini.set(
-                CONFIG_SECTION,
                 "font_background",
                 Some(self.font_background.as_str().to_string()),
             );
@@ -1426,6 +1430,11 @@ impl AppConfig {
                 CONFIG_SECTION,
                 "design_background",
                 Some(self.design_background.as_str().to_string()),
+            );
+            ini.set(
+                CONFIG_SECTION,
+                "vector_background",
+                Some(self.vector_background.as_str().to_string()),
             );
             ini.set(
                 CONFIG_SECTION,
@@ -1447,7 +1456,6 @@ impl AppConfig {
                 "animated_scale",
                 Some(self.animated_scale.as_str()),
             );
-            ini.set(CONFIG_SECTION, "svg_scale", Some(self.svg_scale.as_str()));
             ini.set(CONFIG_SECTION, "pdf_scale", Some(self.pdf_scale.as_str()));
             ini.set(
                 CONFIG_SECTION,
@@ -1503,11 +1511,6 @@ impl AppConfig {
             );
             ini.set(
                 CONFIG_SECTION,
-                "svg_preview_enabled",
-                Some(self.svg_preview_enabled.to_string()),
-            );
-            ini.set(
-                CONFIG_SECTION,
                 "font_preview_enabled",
                 Some(self.font_preview_enabled.to_string()),
             );
@@ -1515,6 +1518,11 @@ impl AppConfig {
                 CONFIG_SECTION,
                 "design_preview_enabled",
                 Some(self.design_preview_enabled.to_string()),
+            );
+            ini.set(
+                CONFIG_SECTION,
+                "vector_preview_enabled",
+                Some(self.vector_preview_enabled.to_string()),
             );
             ini.set(
                 CONFIG_SECTION,
@@ -1616,6 +1624,11 @@ impl AppConfig {
                 "extensions",
                 Some(sanitize_design_extensions(&self.design_extensions.join(",")).join(",")),
             );
+            ini.set(
+                VECTOR_SECTION,
+                "extensions",
+                Some(sanitize_vector_extensions(&self.vector_extensions.join(",")).join(",")),
+            );
             write_ordered(&ini, &path);
         }
     }
@@ -1700,12 +1713,18 @@ impl AppConfig {
                 self.image_background = background;
             }
         }
+        // The backdrop a vector drawing is drawn over, which is one setting for the two
+        // halves of the kind — the documents the browser draws and the metafiles the
+        // drawing layer replays — and is read from its own key, from the key a document was
+        // written under before the two were one, or from the legacy key a file from before
+        // every kind had its own names them all with.
         if let Some(value) = ini
-            .get(CONFIG_SECTION, "svg_background")
+            .get(CONFIG_SECTION, "vector_background")
+            .or_else(|| ini.get(CONFIG_SECTION, "svg_background"))
             .or(legacy_background)
         {
             if let Some(background) = TransparentBackground::from_str(&value) {
-                self.svg_background = background;
+                self.vector_background = background;
             }
         }
         // A font's backdrop is read apart from the legacy key above rather than through it:
@@ -1765,13 +1784,21 @@ impl AppConfig {
             }
             None => self.animated_scale = self.preview_scale,
         }
-        // A document's scale is written the way a picture's is, but it is read apart
-        // from it: what the number is a percentage of is the room the display has
-        // rather than the size the file asks for.
-        if let Some(value) = ini.get(CONFIG_SECTION, "svg_scale") {
-            if let Some(scale) = PreviewScale::from_str(&value) {
-                self.svg_scale = scale;
+        // A drawing's scale is the one setting an SVG document and a metafile share — they
+        // are one kind in the tray — and it is read from its own key, from the key the
+        // documents were written under before the two were one, or from where a drawing
+        // starts. What the number is a percentage of is the room the display has rather
+        // than a size the file asks for.
+        match ini
+            .get(CONFIG_SECTION, "vector_scale")
+            .or_else(|| ini.get(CONFIG_SECTION, "svg_scale"))
+        {
+            Some(value) => {
+                if let Some(scale) = PreviewScale::from_str(&value) {
+                    self.vector_scale = scale;
+                }
             }
+            None => self.vector_scale = DEFAULT_VECTOR_SCALE,
         }
         // A page's scale is read the same way and against the same whole: what the
         // number is a percentage of is the room the display has, one setting per kind
@@ -1835,14 +1862,26 @@ impl AppConfig {
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "office_preview_enabled") {
             self.office_preview_enabled = value;
         }
-        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "svg_preview_enabled") {
-            self.svg_preview_enabled = value;
-        }
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "font_preview_enabled") {
             self.font_preview_enabled = value;
         }
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "design_preview_enabled") {
             self.design_preview_enabled = value;
+        }
+        // The vector kind's switch is read from its own key, from the one a document was
+        // written under before the two halves of the kind were one, and stays where it is
+        // where neither is written.
+        let vector_enabled = ini
+            .getboolcoerce(CONFIG_SECTION, "vector_preview_enabled")
+            .ok()
+            .flatten()
+            .or_else(|| {
+                ini.getboolcoerce(CONFIG_SECTION, "svg_preview_enabled")
+                    .ok()
+                    .flatten()
+            });
+        if let Some(value) = vector_enabled {
+            self.vector_preview_enabled = value;
         }
         if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "office_cache_mb") {
             if let Ok(value) = u32::try_from(value) {
@@ -1990,6 +2029,18 @@ impl AppConfig {
             sanitize_design_extensions,
         );
         self.design_extensions = list;
+        restored |= defaulted;
+        // And the vector list, new with its kind the same way: an older file has no
+        // section, so the built-in entries come back and the file is written out again
+        // holding them.
+        let (list, defaulted) = configured_list(
+            ini,
+            VECTOR_SECTION,
+            "extensions",
+            DEFAULT_VECTOR_EXTENSIONS,
+            sanitize_vector_extensions,
+        );
+        self.vector_extensions = list;
         restored |= defaulted;
 
         restored
@@ -2140,14 +2191,14 @@ mod tests {
         config.apply_ini(&ini);
 
         assert_eq!(config.image_background, TransparentBackground::White);
-        assert_eq!(config.svg_background, TransparentBackground::White);
+        assert_eq!(config.vector_background, TransparentBackground::White);
     }
 
     /// A file that names the two for itself is what the two settings are, whatever
     /// the name the old one carried says — a key left in the file by hand edits it
     /// no longer governs.
     #[test]
-    fn the_two_backdrops_are_read_from_their_own_keys() {
+    fn the_backdrops_are_read_from_their_own_keys() {
         let mut ini = Ini::new();
         ini.set(
             CONFIG_SECTION,
@@ -2165,18 +2216,18 @@ mod tests {
         config.apply_ini(&ini);
 
         assert_eq!(config.image_background, TransparentBackground::Black);
-        assert_eq!(config.svg_background, TransparentBackground::White);
+        assert_eq!(config.vector_background, TransparentBackground::White);
     }
 
-    /// A document is drawn at half the room the display has unless the file says
+    /// A drawing is drawn at half the room the display has unless the file says
     /// otherwise — which is what the setting starts at, and what a fresh install
     /// writes.
     #[test]
-    fn a_documents_scale_starts_at_half_the_room() {
+    fn a_drawings_scale_starts_at_half_the_room() {
         let config = AppConfig::default();
 
-        assert_eq!(config.svg_scale, PreviewScale::Percent(50));
-        assert_eq!(config.svg_scale.as_str(), "50");
+        assert_eq!(config.vector_scale, PreviewScale::Percent(50));
+        assert_eq!(config.vector_scale.as_str(), "50");
     }
 
     /// A page's scale is a setting of its own as well: a PDF, a page Office rendered
@@ -2195,7 +2246,7 @@ mod tests {
 
         assert_eq!(config.pdf_scale, PreviewScale::Percent(25));
         assert_eq!(config.office_scale, PreviewScale::Percent(10));
-        assert_eq!(config.svg_scale, PreviewScale::Percent(75));
+        assert_eq!(config.vector_scale, PreviewScale::Percent(75));
         assert_eq!(config.preview_scale, PreviewScale::Percent(400));
 
         // The words a person would write are read for a page key the same way they are
@@ -2329,7 +2380,7 @@ mod tests {
     /// would write by hand are the words it reads: `fit`, a number, either with a
     /// percent sign or without.
     #[test]
-    fn a_document_scale_takes_the_words_a_person_would_write() {
+    fn a_drawing_scale_takes_the_words_a_person_would_write() {
         for (written, expected) in [
             ("fit", PreviewScale::FitToScreen),
             ("Fit to Screen", PreviewScale::FitToScreen),
@@ -2338,12 +2389,14 @@ mod tests {
             ("10", PreviewScale::Percent(10)),
         ] {
             let mut ini = Ini::new();
+            // Written under the key a document's scale had before the drawings were one
+            // kind, which is the key a file from then still names it with.
             ini.set(CONFIG_SECTION, "svg_scale", Some(written.to_string()));
 
             let mut config = AppConfig::default();
             config.apply_ini(&ini);
 
-            assert_eq!(config.svg_scale, expected, "`{written}` read back");
+            assert_eq!(config.vector_scale, expected, "`{written}` read back");
         }
     }
 
@@ -2366,7 +2419,7 @@ mod tests {
         config.apply_ini(&ini);
 
         assert_eq!(config.font_scale, PreviewScale::FitToScreen);
-        assert_eq!(config.svg_scale, PreviewScale::Percent(75));
+        assert_eq!(config.vector_scale, PreviewScale::Percent(75));
         assert_eq!(config.pdf_scale, PreviewScale::Percent(25));
         assert_eq!(config.office_scale, PreviewScale::Percent(10));
         assert_eq!(config.preview_scale, PreviewScale::Percent(400));
@@ -2391,7 +2444,7 @@ mod tests {
         config.apply_ini(&ini);
 
         assert_eq!(config.design_scale, PreviewScale::Percent(10));
-        assert_eq!(config.svg_scale, PreviewScale::Percent(75));
+        assert_eq!(config.vector_scale, PreviewScale::Percent(75));
         assert_eq!(config.pdf_scale, PreviewScale::Percent(25));
         assert_eq!(config.office_scale, PreviewScale::FitToScreen);
         assert_eq!(config.font_scale, PreviewScale::Percent(50));
@@ -2477,7 +2530,7 @@ mod tests {
         let mut config = AppConfig::default();
         config.apply_ini(&ini);
         assert_eq!(config.image_background, TransparentBackground::White);
-        assert_eq!(config.svg_background, TransparentBackground::White);
+        assert_eq!(config.vector_background, TransparentBackground::White);
         assert_eq!(config.font_background, TransparentBackground::White);
     }
 
@@ -2549,7 +2602,7 @@ mod tests {
 
         PreviewType::Fonts.set_enabled_in(&mut config, false);
         assert!(!PreviewType::Fonts.enabled_in(&config));
-        assert!(PreviewType::Svg.enabled_in(&config));
+        assert!(PreviewType::Vector.enabled_in(&config));
         assert!(PreviewType::Images.enabled_in(&config));
 
         PreviewType::Fonts.set_enabled_in(&mut config, true);
