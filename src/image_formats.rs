@@ -18,9 +18,7 @@ use std::path::Path;
 ///
 /// `apng` is a name like any other here — an animated PNG is recognized by its own
 /// `acTL` chunk rather than by what it is called — and `gif`, `png` and `webp` are
-/// each both an animated format and a still one. `svg` and `svgz` are pictures as far
-/// as the kind goes — they are behind the same `Images` gate and the same list — while
-/// what draws them is a browser rather than a decoder; see `svg_preview`. `avif`,
+/// each both an animated format and a still one. `avif`,
 /// `heic`, `heif`, `jxl` and a still `webp` are pictures the same way, and what decodes
 /// them is the codec Windows has rather than one this app carries — a `webp` being the
 /// one of them with a second reader behind it, libwebp in the binary, for the machine
@@ -29,7 +27,24 @@ use std::path::Path;
 /// Windows has for it draws one at the size of the preview rather than the size of the
 /// file, and the formats that codec does not read — the uncompressed ones, BC4 and BC5 —
 /// are read by a decoder of this app's own; see `dds_image`.
+///
+/// `svg` and `svgz` are not entries of this list, though they were while the kind they
+/// are under was called SVG: what draws one is a browser rather than a decoder, so they
+/// are entries of the vector list and are gated — and sized, and drawn over — by that
+/// kind; see `vector_formats` and `svg_preview`.
 pub const DEFAULT_IMAGE_EXTENSIONS: &str =
+    "apng,avif,bmp,dds,exr,ff,gif,hdr,heic,heif,ico,jfif,jpe,jpeg,jpg,jxl,pam,pbm,pgm,png,pnm,ppm,qoi,tga,tif,tiff,webp";
+
+/// The built-in image list as it stood while `svg` and `svgz` were entries of it.
+///
+/// A file holding exactly these entries is the app's own older list rather than a
+/// user's edit — nobody has touched it — so it is brought up to the built-in list
+/// rather than kept as written, and the two entries it names are left to the vector
+/// list, which is where a document belongs. A list anyone has edited is kept as it is,
+/// and an `svg` named by one is still drawn by the browser and still gated by the
+/// `Vector` kind, because what a file is, is its own answer rather than the list's (see
+/// `explorer_hook::is_media_file`).
+pub const IMAGE_EXTENSIONS_WITH_SVG: &str =
     "apng,avif,bmp,dds,exr,ff,gif,hdr,heic,heif,ico,jfif,jpe,jpeg,jpg,jxl,pam,pbm,pgm,png,pnm,ppm,qoi,svg,svgz,tga,tif,tiff,webp";
 
 /// The built-in image list as it stood before `dds` was added to it.

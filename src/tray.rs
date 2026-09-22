@@ -154,8 +154,8 @@ const ID_TRAY_DESIGN_SCALE_BASE: u16 = 1445;
 /// The shares of the display every `… Scaling` submenu offers, in the order it lists
 /// them: the whole room a document can be given at the top, then the shares of it a
 /// document is asked for below. What differs between the settings is where they start —
-/// `50`, half the display, for a vector drawing and for a font specimen, and `Fit to
-/// Screen` for a page and for a design document.
+/// `50`, half the display, for a font specimen, and `Fit to Screen` for a drawing, a page
+/// and a design document.
 const DOCUMENT_SCALE_CHOICES: [PreviewScale; 5] = [
     PreviewScale::FitToScreen,
     PreviewScale::Percent(75),
@@ -2857,21 +2857,21 @@ mod tests {
     /// submenu marks as the default is the share its own setting starts at.
     #[test]
     fn every_offered_document_scale_is_one_the_setting_keeps() {
-        let svg_default = DEFAULT_VECTOR_SCALE;
+        let drawing_default = DEFAULT_VECTOR_SCALE;
 
         assert_eq!(
-            DOCUMENT_SCALE_CHOICES.map(|scale| document_scale_label(scale, svg_default)),
+            DOCUMENT_SCALE_CHOICES.map(|scale| document_scale_label(scale, drawing_default)),
             [
-                "Fit to Screen".to_string(),
+                "Fit to Screen (Default)".to_string(),
                 "75%".to_string(),
-                "50% (Default)".to_string(),
+                "50%".to_string(),
                 "25%".to_string(),
                 "10%".to_string(),
             ]
         );
 
         for default in [
-            svg_default,
+            drawing_default,
             DEFAULT_PDF_SCALE,
             DEFAULT_OFFICE_SCALE,
             DEFAULT_FONT_SCALE,

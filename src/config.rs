@@ -16,7 +16,7 @@ use crate::design_formats::{
 use crate::font_formats::{sanitize_font_extensions, DEFAULT_FONT_EXTENSIONS};
 use crate::image_formats::{
     sanitize_image_extensions, DEFAULT_IMAGE_EXTENSIONS, IMAGE_EXTENSIONS_BEFORE_CODEC_FORMATS,
-    IMAGE_EXTENSIONS_BEFORE_DDS, IMAGE_EXTENSIONS_BEFORE_SVG,
+    IMAGE_EXTENSIONS_BEFORE_DDS, IMAGE_EXTENSIONS_BEFORE_SVG, IMAGE_EXTENSIONS_WITH_SVG,
 };
 use crate::office_formats::{sanitize_office_extensions, DEFAULT_OFFICE_EXTENSIONS};
 use crate::text_formats::{
@@ -24,7 +24,9 @@ use crate::text_formats::{
 };
 use crate::theme_files;
 use crate::tone_map::Curve;
-use crate::vector_formats::{sanitize_vector_extensions, DEFAULT_VECTOR_EXTENSIONS};
+use crate::vector_formats::{
+    sanitize_vector_extensions, DEFAULT_VECTOR_EXTENSIONS, VECTOR_EXTENSIONS_BEFORE_SVG,
+};
 use crate::video_formats::{sanitize_video_extensions, DEFAULT_VIDEO_EXTENSIONS};
 
 const CONFIG_SECTION: &str = "settings";
@@ -64,13 +66,6 @@ pub const DEFAULT_VIDEO_SCALE_PERCENT: u32 = 100;
 /// so the share means the same thing here as it does for one — a percentage of the size
 /// the file asks for — and the setting starts at the same place the picture's does.
 pub const DEFAULT_ANIMATED_SCALE_PERCENT: u32 = 100;
-/// The share of the display a vector drawing is drawn at unless asked otherwise.
-///
-/// A drawing is drawn at whatever size it is asked for — an SVG document by the browser
-/// that rasterizes nothing until it is told the size, a metafile by the drawing layer
-/// playing its records again — so the room the display has is free quality rather than an
-/// enlargement, and the share is of that room: half of it is where a drawing starts.
-pub const DEFAULT_VECTOR_SCALE_PERCENT: u32 = 50;
 /// The share of the display a font specimen is drawn at unless asked otherwise.
 ///
 /// A font has no size it asks to be drawn at — a file holds outlines, and the text they are
@@ -467,10 +462,13 @@ pub const DEFAULT_PREVIEW_SCALE: PreviewScale =
 pub const DEFAULT_VIDEO_SCALE: PreviewScale = PreviewScale::Percent(DEFAULT_VIDEO_SCALE_PERCENT);
 pub const DEFAULT_ANIMATED_SCALE: PreviewScale =
     PreviewScale::Percent(DEFAULT_ANIMATED_SCALE_PERCENT);
-/// The same for a vector drawing, at the share of the display its own setting names rather
-/// than the whole of it.
-pub const DEFAULT_VECTOR_SCALE: PreviewScale =
-    PreviewScale::Percent(DEFAULT_VECTOR_SCALE_PERCENT);
+/// The same for a vector drawing, at the whole of the room: a drawing is drawn at whatever
+/// size it is asked for — an SVG document by the browser that rasterizes nothing until it
+/// is told the size, a metafile by the drawing layer playing its records again — so the
+/// room the display has is free quality rather than an enlargement, and the size that asks
+/// for nothing in particular is all of it. A share below it is a size the user picked, and
+/// reduces what the room would have given rather than being ignored.
+pub const DEFAULT_VECTOR_SCALE: PreviewScale = PreviewScale::FitToScreen;
 /// The same for a design document, at the whole of the room: what a preview of one is made
 /// of is the picture the file keeps of the whole document, so the question the setting
 /// answers is how much of the display to give it, and the answer that asks for nothing in
@@ -1458,6 +1456,11 @@ impl AppConfig {
                 "animated_scale",
                 Some(self.animated_scale.as_str()),
             );
+            ini.set(
+                CONFIG_SECTION,
+                "vector_scale",
+                Some(self.vector_scale.as_str()),
+            );
             ini.set(CONFIG_SECTION, "pdf_scale", Some(self.pdf_scale.as_str()));
             ini.set(
                 CONFIG_SECTION,
@@ -1958,6 +1961,7 @@ impl AppConfig {
                 IMAGE_EXTENSIONS_BEFORE_DDS,
                 IMAGE_EXTENSIONS_BEFORE_CODEC_FORMATS,
                 IMAGE_EXTENSIONS_BEFORE_SVG,
+                IMAGE_EXTENSIONS_WITH_SVG,
             ],
             sanitize_image_extensions,
         );
@@ -2035,14 +2039,17 @@ impl AppConfig {
         );
         self.design_extensions = list;
         restored |= defaulted;
-        // And the vector list, new with its kind the same way: an older file has no
-        // section, so the built-in entries come back and the file is written out again
-        // holding them.
-        let (list, defaulted) = configured_list(
+        // And the vector list, new with its kind: an older file has no section at all, so
+        // the key is gone and the built-in entries come back with it. Its entries have
+        // grown since — `svg` and `svgz`, which were entries of the image list until the
+        // kind they belong to was given them — so a file written by the app before that is
+        // brought up to the list of now rather than left holding the older one.
+        let (list, defaulted) = configured_list_over_history(
             ini,
             VECTOR_SECTION,
             "extensions",
             DEFAULT_VECTOR_EXTENSIONS,
+            &[VECTOR_EXTENSIONS_BEFORE_SVG],
             sanitize_vector_extensions,
         );
         self.vector_extensions = list;
@@ -2224,15 +2231,15 @@ mod tests {
         assert_eq!(config.vector_background, TransparentBackground::White);
     }
 
-    /// A drawing is drawn at half the room the display has unless the file says
+    /// A drawing is drawn at the whole room the display has unless the file says
     /// otherwise — which is what the setting starts at, and what a fresh install
     /// writes.
     #[test]
-    fn a_drawings_scale_starts_at_half_the_room() {
+    fn a_drawings_scale_starts_at_the_whole_room() {
         let config = AppConfig::default();
 
-        assert_eq!(config.vector_scale, PreviewScale::Percent(50));
-        assert_eq!(config.vector_scale.as_str(), "50");
+        assert_eq!(config.vector_scale, PreviewScale::FitToScreen);
+        assert_eq!(config.vector_scale.as_str(), "fit");
     }
 
     /// A page's scale is a setting of its own as well: a PDF, a page Office rendered
@@ -2697,6 +2704,59 @@ mod tests {
             assert!(
                 config.image_extensions.contains(&extension.to_string()),
                 "`{extension}` was added to the built-in list"
+            );
+        }
+    }
+
+    /// The same list one move later, the other way round: a file holding the list the app
+    /// shipped while `svg` and `svgz` were entries of it is the app's own older list, so
+    /// those two entries are given up — the kind they belong to names them now — rather
+    /// than left in a list of pictures they were never pictures of.
+    #[test]
+    fn a_list_holding_the_apps_own_image_entries_gives_the_documents_up() {
+        let mut ini = Ini::new();
+        ini.set(
+            IMAGE_SECTION,
+            "extensions",
+            Some(IMAGE_EXTENSIONS_WITH_SVG.to_string()),
+        );
+
+        let mut config = AppConfig::default();
+        config.apply_ini(&ini);
+
+        assert_eq!(
+            config.image_extensions,
+            sanitize_image_extensions(DEFAULT_IMAGE_EXTENSIONS),
+            "the list the app shipped before is read as the list it ships now"
+        );
+        assert!(!config.image_extensions.contains(&"svg".to_string()));
+        assert!(!config.image_extensions.contains(&"svgz".to_string()));
+    }
+
+    /// And the vector list's own version of it: a file holding the list the app shipped
+    /// before the documents were added to it takes them, so an installation that already
+    /// exists keeps previewing an `svg` when the image list gives it up.
+    #[test]
+    fn a_list_holding_the_apps_own_vector_entries_takes_the_documents_added_to_them() {
+        let mut ini = Ini::new();
+        ini.set(
+            VECTOR_SECTION,
+            "extensions",
+            Some(VECTOR_EXTENSIONS_BEFORE_SVG.to_string()),
+        );
+
+        let mut config = AppConfig::default();
+        config.apply_ini(&ini);
+
+        assert_eq!(
+            config.vector_extensions,
+            sanitize_vector_extensions(DEFAULT_VECTOR_EXTENSIONS),
+            "the list the app shipped before is read as the list it ships now"
+        );
+        for extension in ["svg", "svgz"] {
+            assert!(
+                config.vector_extensions.contains(&extension.to_string()),
+                "`{extension}` is a drawing and belongs to the vector list"
             );
         }
     }

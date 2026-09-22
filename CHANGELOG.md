@@ -15,6 +15,8 @@
 
 ### Changed
 
+- `Vector Scaling` now starts at Fit to Screen rather than half the display.
+- `svg` and `svgz` moved from the `[image]` list to the `[vector]` list, where the other drawings are; existing `config.ini` files are updated on the next run.
 - Bump version to 0.2.13 in `Cargo.toml` and `Cargo.lock`.
 
 ### Fixed
