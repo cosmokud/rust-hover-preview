@@ -35,6 +35,7 @@ mod text_theme;
 mod theme_files;
 mod tone_map;
 mod tray;
+mod updates;
 mod vector_formats;
 mod video_formats;
 mod video_player;

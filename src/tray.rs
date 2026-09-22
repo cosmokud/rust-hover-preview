@@ -19,6 +19,7 @@ use crate::preview_window::{refresh_preview, refresh_preview_types, trim_image_c
 use crate::text_preview;
 use crate::text_theme;
 use crate::theme_files;
+use crate::updates;
 use crate::webview_preview;
 use crate::{startup, CONFIG, RUNNING};
 use once_cell::sync::Lazy;
@@ -130,6 +131,10 @@ const ID_TRAY_REHOVER_DELAY_SLOW: u16 = 1037; // 1000ms
 const ID_TRAY_DELAY_FAST_PLUS: u16 = 1038; // 750ms
 const ID_TRAY_REHOVER_DELAY_FAST_PLUS: u16 = 1039; // 750ms
 const ID_TRAY_OPEN_CONFIG: u16 = 1040;
+/// The row above `Run at Startup`, which is in the menu only while a newer release is
+/// waiting: it puts the installer `updates` fetched on, and the app ends itself as the
+/// installer takes over rather than being the copy that has to be terminated.
+const ID_TRAY_UPDATE: u16 = 1007;
 /// The `Scaling → Image Scaling` submenu: one command per share of its own size a
 /// picture is drawn at, in the order it lists them — the first of the two bitmap
 /// submenus, each with a range of its own so a click on one is never read as a click
@@ -342,6 +347,15 @@ unsafe extern "system" fn tray_window_proc(
                 }
                 ID_TRAY_STARTUP => {
                     toggle_startup();
+                }
+                ID_TRAY_UPDATE => {
+                    // The update goes on where the user says so: the installer runs silently,
+                    // replaces this app and starts it again, so the app ends itself here rather
+                    // than waiting to be terminated by the installer it just started.
+                    if updates::install() {
+                        RUNNING.store(false, Ordering::SeqCst);
+                        PostQuitMessage(0);
+                    }
                 }
                 ID_TRAY_ENABLE => {
                     toggle_preview_enabled();
@@ -569,6 +583,13 @@ unsafe fn show_context_menu(hwnd: HWND) {
     if let Ok(mut config) = CONFIG.lock() {
         config.reload_from_disk();
     }
+
+    // The menu is also where the check for a newer release is asked for, and the only
+    // place it is asked from: opening the menu is the one moment a user is looking for
+    // one. It costs nothing here — the check runs on a thread of its own and is answered
+    // at most once an hour — and the row above `Run at Startup` reports what the last one
+    // found, so the answer is on the next opening rather than in front of this one.
+    updates::request_check();
 
     // Add "Enable Preview" with checkmark
     let preview_enabled = CONFIG.lock().map(|c| c.preview_enabled).unwrap_or(true);
@@ -1479,6 +1500,21 @@ unsafe fn show_context_menu(hwnd: HWND) {
     append_codecs_menu(menu);
 
     let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
+
+    // A newer release is offered where the app's own settings are, and only while one is
+    // waiting to be installed: this menu is built from the state of the world every time
+    // it is opened, so the row is there on the first opening after a check found one and
+    // gone while there is nothing to say.
+    if let Some(version) = updates::available() {
+        let label = format!("Update is available! (v{version})");
+        let label_wide: Vec<u16> = label.encode_utf16().chain(std::iter::once(0)).collect();
+        let _ = AppendMenuW(
+            menu,
+            MF_STRING,
+            ID_TRAY_UPDATE as usize,
+            PCWSTR(label_wide.as_ptr()),
+        );
+    }
 
     // Add "Run at Startup" with checkmark
     let startup_enabled = CONFIG.lock().map(|c| c.run_at_startup).unwrap_or(false);

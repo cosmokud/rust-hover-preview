@@ -1,9 +1,10 @@
 # Privacy Policy for Rust Hover Preview
 
-**In short:** this app works fully offline. It collects nothing, sends nothing
-anywhere, has no accounts, no telemetry, no crash reporting, no ads, and no
-update checks. Everything it reads stays on your PC, and everything it keeps is
-listed below.
+**In short:** this app collects nothing and sends nothing about you. It has no
+accounts, no telemetry, no crash reporting, and no ads, and the one thing it ever
+asks the network is whether a newer release of itself has been published — which
+it does only when you open its tray menu, and at most once an hour. Everything
+else it reads stays on your PC, and everything it keeps is listed below.
 
 ## What the app touches, and why
 
@@ -40,10 +41,11 @@ encrypted. Nothing bypasses a password, and no password is ever stored.
 
 ## What the app does not do
 
-- No network connections of any kind. The only URLs in the project are the
-  crate registry (build time) and the release workflow (GitHub servers) — the
-  app binary itself never contacts the internet.
-- No telemetry, analytics, crash reports, or update checks.
+- No network connections except the update check below. Nothing else in the app
+  opens a socket, and nothing is ever sent anywhere: the check asks this
+  project's own GitHub releases for two files, and it carries nothing about you,
+  your machine, or anything you have previewed beyond what any HTTPS request
+  carries. No telemetry, no analytics, no crash reports.
 - No keylogging. The app polls the pressed-or-not state of a few specific
   keys (your trigger key, arrow keys, mouse buttons, Ctrl+C while text is
   selected) to drive previews. Keystrokes are never recorded, stored, or sent.
@@ -54,6 +56,28 @@ encrypted. Nothing bypasses a password, and no password is ever stored.
 - No admin rights, service, or driver. It runs as your user with a per-user
   install.
 
+## Updates
+
+The one question this app asks the network is whether a newer release than the
+one you are running has been published, and it asks it only when you open the
+tray menu. Nothing is checked at startup, nothing is checked while you work, and
+however many times you open the menu, a check is made at most once an hour.
+
+What it asks for is two files at fixed addresses in this project's own GitHub
+releases: `version.txt`, and — where that names a version newer than this one —
+the installer for it. Both are fetched over HTTPS, verified by the certificate
+checks Windows already performs, and sent through the proxy Windows is
+configured with, if any. The request identifies itself as this app and its
+version, and says nothing else.
+
+An installer fetched this way waits in the app's own folder until you click the
+row above **Run at Startup**, which is what installs it: the installer then runs
+silently, replaces the app, and starts it again. Nothing is installed without
+that click.
+
+Nothing is checked unless you open the menu, so a session in which you never open
+it makes no request at all. There is no separate switch for the check yet.
+
 ## What is stored on your PC
 
 | Location | What it holds | How to clear it |
@@ -62,6 +86,7 @@ encrypted. Nothing bypasses a password, and no password is ever stored.
 | `%APPDATA%\rust-hover-preview\theme\` | `.tmTheme` files you drop in yourself. | Delete the files. |
 | `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` value `RustHoverPreview` | Your exe path, only when **Run at Startup** is on. | Turn **Run at Startup** off. |
 | `%TEMP%\rust-hover-preview\` | Transient Office renders: one scratch copy of a long-path or downloaded document, one page file being read back. Each is deleted the moment it is read; leftovers are deleted on next launch. | Delete the folder; exit the app first. |
+| `%LOCALAPPDATA%\rust-hover-preview\update\` | The time of the last update check, and the installer for a newer release once one has been fetched — waiting for the click that installs it. | Delete the folder; it is written again only when a check is made. |
 | RAM only (never written to disk) | Decoded image frames (default 32 MB), rendered Office pages (default 64 MB), rendered PDF pages (default 32 MB), painted text frames (default off), archive listings, failure latches. All keyed by path plus file version, evicted when full, gone on exit. | Set a cache to `0 MB` to keep nothing between hovers; quit to drop everything. |
 
 Error messages (hook install failure, mutex failure) go to stderr only and are
@@ -108,6 +133,11 @@ previews, if you have them), the Windows media engine and the Windows PDF engine
 (video and PDF previews), and the WebView2 runtime (SVG previews, which it is
 given with all network access denied). Their
 own vendor privacy statements apply to them; this app adds no reporting on top.
+
+GitHub is the one service this app talks to at all, and only for the update
+check: it is asked whether a newer release exists, and for the installer when you
+ask to install one. No file you have previewed, and nothing about them, is part
+of that request.
 
 ## If you report a bug
 

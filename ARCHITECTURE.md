@@ -12,11 +12,20 @@ Rust Hover Preview is a Windows 11 tray application that watches File Explorer f
 - Explorer hook thread polls Explorer state with UI Automation and Shell COM APIs, and uses EnumWindows with CabinetWClass/ExplorerWClass class matching to count and classify Explorer browser windows so idle polling never spins up Explorer's shell automation providers.
 - Wheel watcher thread installs a system-wide low-level mouse hook (`WH_MOUSE_LL`) and pumps the messages it needs, publishing a wheel-tick counter that the Explorer hook consumes so wheel scrolling refreshes the hovered item.
 - Config watcher thread reloads `config.ini` when it changes on disk.
+- Update check thread is spawned by an opening of the tray menu and ends with the answer, whichever answer that is; see Update Checks.
 - Office engine thread is spawned by the first render request and ends itself once every engine it holds — one per family — has gone idle. It is the one apartment-threaded, pumped thread in the app — OLE automation marshals calls back into the thread that made them, and a thread that is not pumping them deadlocks — and nothing ever waits on it; see Office Render Engine.
 
 ## Single Instance
 
 The app runs as a single instance per user session. `main` claims a session-local named mutex (`Local\rust-hover-preview-single-instance`) as its first step, before DPI awareness, COM initialization, config loading, and any thread is started. A second launch — from a desktop shortcut, the Start menu, the startup entry, or the `.exe` directly — finds the name already taken, closes its own handle, and returns from `main` without creating a tray icon, Explorer hook, or preview window. The guard handle is held for the lifetime of the process, so the name is released when the app exits, including after a crash or a forced kill, and the next launch becomes the primary instance. The `Local\` prefix scopes the guard to the signed-in session, so a second user signed in over Remote Desktop still gets their own instance and tray icon.
+
+## Update Checks
+
+The app can tell whether a newer release than the one running has been published, and the only thing that asks is the tray menu: building it asks for a check, the check runs on a thread of its own, and the row above **Run at Startup** reports what the last one found — so an update is offered on the opening *after* the check that found it rather than in front of the one that asked. Nothing is checked at startup and nothing is checked on a tick; the answer is rate-limited to one request an hour however often the menu is opened, and the time is recorded whether the check found something, found nothing, or could not reach GitHub, so a machine that is offline does not ask again on the next opening.
+
+The check asks for two files at fixed addresses in this repository's own GitHub releases — `version.txt`, and where that names a newer version, `rust-hover-preview-setup.exe` — which the deploy workflow publishes under names that do not change from release to release. The client is therefore a pair of URLs rather than a query against the releases API: nothing to parse, no API rate limit to spend, and a release published before the workflow emitted these names answers `404`, which is read as there being nothing to offer, the same reading a machine that is offline gets. Both travel over HTTPS through WinHTTP, which is the machine's own certificate store and the proxy the user configured (`WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY`, so a PAC script or WPAD is honoured), rather than a TLS stack compiled in for it: the app carries no HTTP client and no certificate list of its own.
+
+An installer that arrives is written under a partial name and renamed into place only once the whole body has been read and checked against the length the response promised — and for the two bytes every Windows executable opens with, which catches a download that is a page rather than a program. It waits in the app's own folder until the row is clicked, and the click is the whole of the consent: the installer runs silently (`/S`), and with it the switch that starts the app again once the new version is in place (`/R`, which only a silent installer reads). The app ends itself as it hands over rather than waiting to be terminated — the installer terminates a running copy on its own, and the copy that is already leaving is one it does not have to. What is not claimed is a signature of any kind: the download is trusted because it came over a connection to this repository's release, which is the same trust any other download of this app rests on.
 
 ## Core Modules
 
@@ -62,6 +71,7 @@ The app runs as a single instance per user session. `main` claims a session-loca
 - `tray.rs`: tray icon and menu, configuration toggles, exit flow, WM_POWERBROADCAST handling to re-add the icon after DWM/Explorer restart on resume, and the `TaskbarCreated` broadcast that re-adds it when Explorer itself restarts — the restart the Explorer hook is told about, since the Shell objects it resolves through belonged to the process that is gone.
 - `config.rs`: INI-backed configuration with defaults and input sanitization.
 - `startup.rs`: registry integration for the Run-at-startup setting.
+- `updates.rs`: the one thing in the app that asks the network a question — whether a newer release has been published, and the installer for it where one has. Asked for by an opening of the tray menu, answered at most once an hour, and installed only where the row it puts in the menu is clicked; see Update Checks.
 
 ## Media Pipeline
 

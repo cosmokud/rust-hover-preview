@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.3.0]
+
+### Added
+
+- Update checks, asked for by the tray menu and answered at most once an hour: where a newer release exists, its installer is fetched and a row above **Run at Startup** says so, and clicking that row installs it silently and starts the app again. The check asks this repository's own GitHub releases over HTTPS and nowhere else, and nothing is asked at all unless the menu is opened.
+
+### Changed
+
+- Preview for CorelDRAW `cdr` and Procreate `procreate` documents, under the **Design** kind: drawn by LibreOffice where it is installed — the whole page, sharp at any size, converted once and kept beside `config.ini` — and shown from the picture the file carries where it is not. The tray's **Codecs** menu says whether the engine is there.
+
 ## [0.2.14]
 
 ### Changed
@@ -10,7 +20,6 @@
 - Settings that older versions stored under a different name are no longer carried over — `svg_scale`, `svg_background`, `svg_preview_enabled`, `off_trigger_key`, `avoid_filename`, `transparent_background`. Those lines are removed and the settings go back to their defaults, so if you are updating from 0.2.12 or older it is worth a look at the **Placement**, **Scaling** and **Background** menus afterwards. Updating from 0.2.13, nothing changes.
 - The installer no longer writes into `config.ini` and no longer adds the startup entry: the app does both on its first run, at the path it is running from.
 - Bump version to 0.2.14 in `Cargo.toml` and `Cargo.lock`.
-- Preview for CorelDRAW `cdr` and Procreate `procreate` documents, under the **Design** kind: drawn by LibreOffice where it is installed — the whole page, sharp at any size, converted once and kept beside `config.ini` — and shown from the picture the file carries where it is not. The tray's **Codecs** menu says whether the engine is there.
 
 ### Fixed
 

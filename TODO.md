@@ -6,7 +6,6 @@
   - More Design & project files (`.xcf`, ...)
 - Add Office documents fallback using LibreOffice / soffice.
 - Add preview integration for voidtools Everything search.
-- Implement automatic updates.
 
 ## Configuration
 
