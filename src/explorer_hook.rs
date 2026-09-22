@@ -860,6 +860,78 @@ fn explorer_restart_count() -> u64 {
     EXPLORER_RESTARTS.load(Ordering::SeqCst)
 }
 
+/// Whether `RHP_HOOK_TRACE` asks for what the probes cost to be written out.
+///
+/// A run without the variable set writes nothing anywhere. The counters below are
+/// kept either way and this is only what says whether they are ever written down:
+/// what they are for is a run that is being measured, and what a hover costs is
+/// otherwise only reasoned about. One of them in particular — how often the view
+/// that answered last is the answer rather than a walk — is the number a measurement
+/// settles and an argument does not.
+static HOOK_TRACE: Lazy<bool> = Lazy::new(|| std::env::var_os("RHP_HOOK_TRACE").is_some());
+
+/// The crossings into the shell a probe has made since the last line was written:
+/// the window collections walked, the windows those walks passed between them, the
+/// times a walk was not needed, the item walks through the view's provider, and the
+/// points resolved.
+static PROBE_VIEW_WALKS: AtomicU64 = AtomicU64::new(0);
+static PROBE_VIEW_WINDOWS: AtomicU64 = AtomicU64::new(0);
+static PROBE_VIEW_CACHE_HITS: AtomicU64 = AtomicU64::new(0);
+static PROBE_ITEM_WALKS: AtomicU64 = AtomicU64::new(0);
+static PROBE_POINTER_RESOLUTIONS: AtomicU64 = AtomicU64::new(0);
+
+/// Count one of those crossings.
+///
+/// Counted whether or not the trace is on. It is one relaxed add to a counter this
+/// thread owns, set against the crossings the counters are counting, which are calls
+/// into another process — and gating it would buy nothing while making the numbers
+/// depend on when the variable happened to be read.
+fn note_probe(counter: &AtomicU64) {
+    counter.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Where the probe counts are written, or nothing at all when `RHP_HOOK_TRACE` did
+/// not ask for them. Resolved once, since where a file goes does not change under a
+/// run, and read by the loop rather than by every count.
+fn hook_trace_path() -> Option<PathBuf> {
+    HOOK_TRACE.then(|| std::env::temp_dir().join("rhp-hook-trace.log"))
+}
+
+/// Write what the probes have cost since the last line to `path`, at most once a
+/// second.
+///
+/// Once a second rather than once a probe, because this writes a file and a file
+/// written per probe is the one thing a hover must never do — the counters are here
+/// to say what a hover costs, and they must not be what makes it cost more.
+fn flush_probe_counts(now: Instant, last: &mut Instant, path: &Path) {
+    if now.duration_since(*last) < Duration::from_millis(1000) {
+        return;
+    }
+    *last = now;
+
+    let walks = PROBE_VIEW_WALKS.swap(0, Ordering::Relaxed);
+    let windows = PROBE_VIEW_WINDOWS.swap(0, Ordering::Relaxed);
+    let hits = PROBE_VIEW_CACHE_HITS.swap(0, Ordering::Relaxed);
+    let items = PROBE_ITEM_WALKS.swap(0, Ordering::Relaxed);
+    let points = PROBE_POINTER_RESOLUTIONS.swap(0, Ordering::Relaxed);
+
+    if walks == 0 && items == 0 && points == 0 {
+        return;
+    }
+
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        use std::io::Write;
+        let _ = writeln!(
+            file,
+            "points {points}  view walks {walks} (windows {windows}, answered from the last view {hits})  item walks {items}"
+        );
+    }
+}
+
 /// Drop what describes a view: the folder the last probe remembered for a window,
 /// and whether a window is one of Explorer's. The window the pointer is in is
 /// resolved again the next time it is asked about.
@@ -1386,12 +1458,18 @@ fn get_active_shell_view_context(
     unsafe {
         let shell_windows = shell_windows?;
         let count = shell_windows.Count().ok()?;
+        note_probe(&PROBE_VIEW_WALKS);
         let cursor_hwnd = WindowFromPoint(*screen_point);
         let foreground = GetForegroundWindow();
         let mut candidates: Vec<ShellViewCandidate> = Vec::new();
         let mut facts: Vec<ShellViewFacts> = Vec::new();
 
+        // Bounded by `SHELL_WINDOW_LIMIT` as well as by the collection: a desktop
+        // holding more Shell windows than that is not one to walk on every probe, so
+        // past the cap the probe answers from the windows it already has.
         for i in 0..count.min(SHELL_WINDOW_LIMIT) {
+            note_probe(&PROBE_VIEW_WINDOWS);
+
             let variant = VARIANT::from(i);
             let disp = match shell_windows.Item(&variant) {
                 Ok(disp) => disp,
@@ -1664,6 +1742,7 @@ fn uia_item_from_point(
 ) -> Option<HoveredItem> {
     let automation = resolver.automation.as_ref()?;
     let cache = resolver.cache.as_ref()?;
+    note_probe(&PROBE_ITEM_WALKS);
     let element = unsafe { automation.ElementFromPointBuildCache(point, cache) }.ok()?;
 
     walk_to_item(resolver, &element, Some(point), measure_content)
@@ -1674,6 +1753,7 @@ fn uia_item_from_point(
 fn uia_item_from_focus(resolver: &ItemResolver) -> Option<HoveredItem> {
     let automation = resolver.automation.as_ref()?;
     let cache = resolver.cache.as_ref()?;
+    note_probe(&PROBE_ITEM_WALKS);
     let focused = unsafe { automation.GetFocusedElementBuildCache(cache) }.ok()?;
 
     // A view can report the list itself as focused while the focus it draws is on
@@ -2141,6 +2221,7 @@ fn item_file_path(
         if let Some(answered) = resolver.view.as_ref() {
             if answered.browser_hwnd == root_key && answered.is_current() {
                 if let Some(path) = view_item_media_path(&answered.folder_view, index) {
+                    note_probe(&PROBE_VIEW_CACHE_HITS);
                     return Some(path);
                 }
             }
@@ -2306,6 +2387,7 @@ fn get_file_under_cursor(resolver: &mut ItemResolver) -> Option<PathBuf> {
 /// name that nothing can vouch for is left unanswered rather than guessed at — a
 /// search across folders is full of names that belong to more than one file.
 fn resolve_file_under_cursor(resolver: &mut ItemResolver, point: POINT) -> Option<PathBuf> {
+    note_probe(&PROBE_POINTER_RESOLUTIONS);
     let item = uia_item_from_point(resolver, point, false)?;
 
     if let Some(root_key) = root_window_at(point).map(|window| window.0 as isize) {
@@ -3158,8 +3240,15 @@ pub fn run_explorer_hook() {
     // the wait between two asks has grown to.
     let mut last_automation_rebind = Instant::now();
     let mut automation_rebind_interval_ms = UIA_REBIND_RETRY_MS;
+    // When the probe counts were last written out, and where they go — nothing at
+    // all unless `RHP_HOOK_TRACE` asked for them.
+    let mut last_probe_flush = Instant::now();
+    let probe_trace_path = hook_trace_path();
 
     while RUNNING.load(Ordering::SeqCst) {
+        if let Some(path) = probe_trace_path.as_deref() {
+            flush_probe_counts(Instant::now(), &mut last_probe_flush, path);
+        }
         // Explorer restarting is not something the resolver can recover from by
         // itself: the window collection it holds and the view that answered through
         // it are served by explorer.exe, and a proxy into a process that is gone
@@ -4492,5 +4581,131 @@ mod tests {
             winning_shell_view(&[window(false, false, false), window(false, false, false)]),
             None
         );
+    }
+
+    /// The counts a run is measured by are written where it asked for them, once a
+    /// second rather than once a probe, and the line carries the numbers themselves
+    /// rather than only being evidence that something ran — see
+    /// `flush_probe_counts`.
+    ///
+    /// One test rather than two: the counters are process-wide, and two tests adding
+    /// to them at the same time would be asserting about each other's numbers.
+    #[test]
+    fn the_probe_counts_are_written_once_a_second_where_the_trace_asks() {
+        let path = std::env::temp_dir().join(format!("rhp-hook-trace-{}.log", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+
+        PROBE_VIEW_WALKS.fetch_add(2, Ordering::Relaxed);
+        PROBE_VIEW_WINDOWS.fetch_add(7, Ordering::Relaxed);
+        PROBE_VIEW_CACHE_HITS.fetch_add(3, Ordering::Relaxed);
+        PROBE_POINTER_RESOLUTIONS.fetch_add(1, Ordering::Relaxed);
+
+        let now = Instant::now();
+        let mut last = now - Duration::from_secs(5);
+        flush_probe_counts(now, &mut last, &path);
+
+        let first = std::fs::read_to_string(&path).expect("the counts are written");
+        assert!(
+            first.contains("points 1")
+                && first.contains("view walks 2")
+                && first.contains("windows 7")
+                && first.contains("answered from the last view 3"),
+            "the line carries the counts: {first}"
+        );
+
+        // A second flush inside the same second writes nothing more: what a run being
+        // measured costs is a line a second, not a line a tick.
+        PROBE_VIEW_WALKS.fetch_add(1, Ordering::Relaxed);
+        flush_probe_counts(now, &mut last, &path);
+
+        let second = std::fs::read_to_string(&path).expect("the counts are still written");
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(second.lines().count(), 1, "one line a second: {second}");
+    }
+
+    /// The probe against the shell the machine is actually running — the part of this
+    /// no unit test reaches: a real window collection, the choice between the windows
+    /// in it, and what the window that wins is then asked.
+    ///
+    /// Ignored because it needs a desktop, which is the same reason the other probes
+    /// here are. Run by hand: `cargo test -- --ignored the_probe_walks_the_shell`.
+    ///
+    /// What it asserts is about the walk rather than about the answer, because the
+    /// answer is whatever this machine happens to have under its pointer: how many
+    /// windows were passed, that the walk cost no more than the collection had to
+    /// offer, and that an answer can only have come from a window that was walked.
+    /// It is the only coverage the restructured probe has — see
+    /// `winning_shell_view` for the part that is unit tested on its own.
+    #[test]
+    #[ignore = "reads the shell of the desktop it runs on"]
+    fn the_probe_walks_the_shell_of_the_desktop_it_runs_on() {
+        // Every call on this path is a Shell object's, so the thread needs an
+        // apartment before any of it is asked for — the same one the hook thread
+        // takes, which never pumps either.
+        if unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) }.is_err() {
+            println!("no apartment: nothing could be asked of the shell");
+            return;
+        }
+
+        let shell_windows =
+            unsafe { CoCreateInstance::<_, IShellWindows>(&ShellWindows, None, CLSCTX_ALL) }.ok();
+        let Some(shell_windows) = shell_windows else {
+            println!("no Shell window collection: nothing to walk");
+            return;
+        };
+        let Some(count) = (unsafe { shell_windows.Count() }).ok() else {
+            println!("the collection will not say how many windows it holds");
+            return;
+        };
+
+        let walks = PROBE_VIEW_WALKS.load(Ordering::Relaxed);
+        let windows = PROBE_VIEW_WINDOWS.load(Ordering::Relaxed);
+
+        let mut point = POINT::default();
+        if unsafe { GetCursorPos(&mut point) }.is_err() {
+            println!("no pointer to ask about");
+            return;
+        }
+
+        let context = get_active_shell_view_context(Some(&shell_windows), &point, true);
+
+        assert_eq!(
+            PROBE_VIEW_WALKS.load(Ordering::Relaxed),
+            walks + 1,
+            "one walk is one walk"
+        );
+
+        let walked = PROBE_VIEW_WINDOWS.load(Ordering::Relaxed) - windows;
+        let room = count.clamp(0, SHELL_WINDOW_LIMIT) as u64;
+        assert!(
+            walked <= room,
+            "no more windows than the walk had room for: {walked} of {count}"
+        );
+        if count > 0 {
+            assert!(walked > 0, "a walk over windows passes between them");
+        }
+
+        // An answer names a window the walk reached, so an answer with no window
+        // behind it would be one that came from somewhere the walk never went.
+        if let Some(context) = &context {
+            assert!(walked > 0, "an answer comes from a window that was walked");
+            assert_ne!(context.shell_view_hwnd, 0, "an answer names a window");
+        }
+
+        // Said out loud rather than only asserted: a run that answered from a walk
+        // of no windows at all is a run this test passed without testing anything,
+        // and the numbers are how that is told apart from a run that walked.
+        match &context {
+            Some(context) => println!(
+                "walked {walked} of {count} windows; the pointer is in window {} with folder {:?}",
+                context.shell_view_hwnd, context.folder_path
+            ),
+            None => println!(
+                "walked {walked} of {count} windows; the pointer is in none of them"
+            ),
+        }
+
+        unsafe { CoUninitialize() };
     }
 }
