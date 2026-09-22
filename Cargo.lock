@@ -782,7 +782,7 @@ dependencies = [
 
 [[package]]
 name = "rust-hover-preview"
-version = "0.2.12"
+version = "0.2.13"
 dependencies = [
  "brotli",
  "brotli-decompressor",
@@ -1479,6 +1479,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2d04a6b5381502aa6087c94c669499eb1602eb9c5e8198e534de571f7154809b"
 dependencies = [
  "crc32fast",
+ "flate2",
  "indexmap",
  "memchr",
  "typed-path",

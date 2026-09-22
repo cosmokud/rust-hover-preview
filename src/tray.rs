@@ -180,6 +180,8 @@ const ID_TRAY_TYPE_OFFICE: u16 = 1067;
 const ID_TRAY_TYPE_SVG: u16 = 1069; // 1068 is the trigger key's own switch
 /// The `Fonts` gate beside it, under the same `Preview Types` submenu.
 const ID_TRAY_TYPE_FONTS: u16 = 1070;
+/// The `Design` gate beside those, under the same submenu.
+const ID_TRAY_TYPE_DESIGN: u16 = 1071;
 /// The `Cache` submenu: one command per size it offers, in the order it lists
 /// them, for each of the caches it sizes. They start past the range the `theme`
 /// folder's own items occupy (see `ID_TRAY_THEME_CUSTOM_BASE`).
@@ -400,6 +402,7 @@ unsafe extern "system" fn tray_window_proc(
                 ID_TRAY_TYPE_OFFICE => toggle_preview_type(PreviewType::Office),
                 ID_TRAY_TYPE_SVG => toggle_preview_type(PreviewType::Svg),
                 ID_TRAY_TYPE_FONTS => toggle_preview_type(PreviewType::Fonts),
+                ID_TRAY_TYPE_DESIGN => toggle_preview_type(PreviewType::Design),
                 // An Office engine's idle time, by the position it was listed at.
                 cmd if (ID_TRAY_ENGINE_IDLE_BASE
                     ..ID_TRAY_ENGINE_IDLE_BASE + ENGINE_IDLE_CHOICES.len() as u16)
@@ -554,6 +557,7 @@ unsafe fn show_context_menu(hwnd: HWND) {
         (PreviewType::Office, ID_TRAY_TYPE_OFFICE, w!("Office")),
         (PreviewType::Svg, ID_TRAY_TYPE_SVG, w!("SVG")),
         (PreviewType::Fonts, ID_TRAY_TYPE_FONTS, w!("Fonts")),
+        (PreviewType::Design, ID_TRAY_TYPE_DESIGN, w!("Design")),
     ];
     let types_menu = CreatePopupMenu().unwrap();
 

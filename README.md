@@ -12,6 +12,7 @@ A Windows 11 tray app inspired by QTTabBar. Hover a file in File Explorer — or
 
 - Mouse-hover and keyboard-navigation previews in Explorer.
 - Images, including animated GIF, APNG, and WebP.
+- Design documents — Photoshop, Illustrator, Krita, OpenRaster, and more — previewed from the picture their own format saves of the whole document.
 - HEIC, AVIF, and JPEG XL through Windows codec extensions where installed.
 - SVG vectors drawn sharply at preview size.
 - Font specimens: font name plus sample lines covering its own character map.
@@ -39,6 +40,14 @@ Animated GIF/APNG/WebP play. HEIC/HEIF/AVIF/JPEG XL/still WebP usually need Wind
 
 `svg`, `svgz` — drawn by the WebView2 runtime Windows 11 ships with, so they stay sharp when enlarged. Animated SVG documents play too. If WebView2 is missing, SVG previews do not appear.
 
+### Design Documents
+
+`psd`, `psb`, `ai`, `kra`, `ora`, `sketch`, `fig`, `xd`.
+
+A layered document is previewed from the whole picture its own format saves inside it — Photoshop keeps one at the end of the file — so it comes out as it was saved rather than as a flat merge of its visible layers. An Illustrator document is drawn as a PDF, which is what one saved with `Create PDF Compatible File` (the default) actually is. A Krita or OpenRaster project shows the flattened picture it holds; the other containers show the preview picture their application wrote, at the size it is. A document holding no such picture — Photoshop saved with `Maximize Compatibility` off, Illustrator saved as PostScript — shows no preview.
+
+Design previews are sized by **Images Scaling**, and can be switched off with **Design** in **Preview Types**.
+
 ### Fonts
 
 `ttf`, `otf`, `ttc`, `woff`, `woff2` — drawn by WebView2. The preview shows a font specimen: the name the font calls itself and sample lines its character map covers.
@@ -63,7 +72,7 @@ Archive previews show a file tree with sizes, read directly from the archive’s
 
 ### PDF
 
-`pdf` — the first page is rendered by the Windows PDF engine. Password-protected and damaged files are skipped.
+`pdf` — the first page is rendered by the Windows PDF engine. Password-protected and damaged files are skipped. An Illustrator document saved with `Create PDF Compatible File` is a PDF, and its first page is drawn here too.
 
 ### Office Documents
 
@@ -155,7 +164,7 @@ All are free. Windows 11 often has HEIF, AV1, and WebP already. Where one is mis
 ## System Tray Menu
 
 - **Enable Preview** — turn previews on or off.
-- **Preview Types** — Images, Videos, Text, PDF, Archives, Office, SVG, Fonts: gate a kind without touching its file list.
+- **Preview Types** — Images, Videos, Text, PDF, Archives, Office, SVG, Fonts, Design: gate a kind without touching its file list.
 - **Text Preview**
   - **Full Mode** — adds scrolling, selection, and copy; off by default.
   - **Theme** — Atom One Light, One Dark Pro, or any `.tmTheme` in the theme folder.
@@ -222,6 +231,7 @@ archive_preview_enabled=true
 office_preview_enabled=true
 svg_preview_enabled=true
 font_preview_enabled=true
+design_preview_enabled=true
 office_cache_mb=64
 office_engine_idle=600
 pdf_cache_mb=32
@@ -270,6 +280,9 @@ extensions=doc,docm,docx,dot,dotm,dotx,pot,potm,potx,pps,ppsm,ppsx,ppt,pptm,pptx
 
 [font]
 extensions=otf,ttc,ttf,woff,woff2
+
+[design]
+extensions=fig,kra,ora,psb,psd,sketch,xd
 ```
 
 Key settings, in plain terms:
@@ -280,7 +293,7 @@ Key settings, in plain terms:
 - `text_preview_full_mode` — `true` adds scrolling, selection, and copy.
 - `text_font_scale` — a percentage from 1 to 1000, default `125`; archive listings follow it too.
 - `extensions` / `names` — the text-preview gates. Extensions are written without dots. Names match extensionless files.
-- `image_extensions`, `video_extensions`, `archive_extensions`, `office_extensions`, `font_extensions` — per-type preview gates, written without dots. An entry with a dot in it, like `tar.gz`, is matched against the end of the file name.
+- `image_extensions`, `video_extensions`, `archive_extensions`, `office_extensions`, `font_extensions`, `design_extensions` — per-type preview gates, written without dots. An entry with a dot in it, like `tar.gz`, is matched against the end of the file name.
 - `image_cache_mb` — memory for decoded image frames: default `32`, max `2048`; `0` holds nothing.
 - `office_cache_mb` — memory for Office-rendered pages: default `64`, max `2048`; `0` holds nothing between hovers but still renders for the current hover.
 - `pdf_cache_mb` — memory for PDF pages as pixels: default `32`, max `2048`; the same file at two preview sizes is held as two pages.
