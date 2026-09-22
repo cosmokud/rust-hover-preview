@@ -32,24 +32,17 @@ use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-/// The names LibreOffice's own filters import, which are the names it is worth asking it
-/// about: the CorelDRAW family `libcdr` reads, and the other formats the Document
-/// Liberation Project's libraries and LibreOffice's own filters cover. A name outside
-/// this list is answered by this app's own readers without an engine ever starting.
-const IMPORTED_NAMES: &[&str] = &[
-    "cdr", "cmx", "cdt", "wpg", "fh", "fh4", "fh5", "fh7", "fh8", "fh9", "fh10", "fh11", "pub",
-    "vsd", "vss", "vst", "pmd", "dxf",
-];
-
 /// How long a conversion is given before it is ended. A conversion of the documents this
 /// is for takes seconds; the first one after an install also writes the engine's own
 /// profile, which is why the wait is generous rather than short.
 const CONVERSION_TIMEOUT: Duration = Duration::from_secs(60);
 /// How often the wait above looks.
 const CONVERSION_POLL: Duration = Duration::from_millis(100);
-/// How many rendered pages are kept. A document converted once is a read from then on, so
-/// what is kept is the working set of the folders a user previews; the oldest go first.
-const KEPT_PAGES: usize = 64;
+/// What a name is remembered as when the engine would not draw it: the conversion is not
+/// tried again for that version of the document, because a name this app was wrong about —
+/// one in the list the engine has no filter for — would otherwise start an engine on every
+/// hover to reach the same answer.
+const REFUSED_SUFFIX: &str = "none";
 
 /// Where LibreOffice keeps its program, for the two places it installs and for a portable
 /// copy a user may have put beside `config.ini`.
@@ -86,41 +79,55 @@ pub fn available() -> bool {
 /// before: a PDF under the app's own folder, which the PDF path reads the way it reads
 /// any other.
 ///
-/// `None` is the answer for a name the engine does not read, for a machine without the
-/// engine, and for a document it could not convert — each of which leaves the preview to
+/// `None` is the answer for a name the configured list does not hold, for a machine without
+/// the engine, and for a document it could not convert — each of which leaves the preview to
 /// the readers of the picture the file carries.
 pub fn pdf_for(path: &Path) -> Option<PathBuf> {
-    if !imports(path) {
-        return None;
-    }
+    imports(path).then(|| rendered(path)).flatten()
+}
 
+/// The same for a document the `[libre]` list does not hold — one of the Office kind, asked
+/// for here only where the Office engine is not installed. The caller decides that: what a
+/// name means is the lists' business, and this is the engine that draws whatever it is
+/// given.
+pub fn pdf_for_office(path: &Path) -> Option<PathBuf> {
+    rendered(path)
+}
+
+/// Whether the list this app keeps says the engine is the one to draw `path`.
+fn imports(path: &Path) -> bool {
+    crate::libre_formats::is_libre_file(path)
+}
+
+/// The rendered page of a document, converting it if it has not been converted before.
+fn rendered(path: &Path) -> Option<PathBuf> {
     let program = soffice()?;
-    let rendered = rendered_path(path)?;
-    if usable(&rendered) {
-        return Some(rendered);
+    let page = rendered_path(path)?;
+    if usable(&page) {
+        return Some(page);
+    }
+    if refused(&page).is_some() {
+        return None;
     }
 
     // One engine at a time, and the lock is held across the conversion: LibreOffice's
     // profile is a single seat, so a second run beside the first would wait on it anyway.
     let _converting = CONVERTING.lock().ok()?;
-    if usable(&rendered) {
-        return Some(rendered);
+    if usable(&page) {
+        return Some(page);
+    }
+    if refused(&page).is_some() {
+        return None;
     }
 
-    convert(&program, path, &rendered)?;
+    if convert(&program, path, &page).is_none() {
+        // An engine that would not draw this document is not asked again: what it answered
+        // is written down beside the page it did not write.
+        std::fs::write(refused_path(&page), b"").ok();
+        return None;
+    }
 
-    Some(rendered)
-}
-
-/// Whether the engine's own filters read this name.
-fn imports(path: &Path) -> bool {
-    path.extension()
-        .and_then(|extension| extension.to_str())
-        .map(|extension| {
-            let name = extension.to_lowercase();
-            IMPORTED_NAMES.contains(&name.as_str())
-        })
-        .unwrap_or(false)
+    Some(page)
 }
 
 /// Where the rendered page of `path` is kept: named for the document — its path, the
@@ -151,6 +158,18 @@ fn usable(rendered: &Path) -> bool {
     };
     let mut header = [0u8; 5];
     std::io::Read::read_exact(&mut file, &mut header).is_ok() && &header == b"%PDF-"
+}
+
+/// The mark left beside a page that was not written, for the same document and the same
+/// version of it, or nothing when the engine has not been asked about it yet.
+fn refused(page: &Path) -> Option<PathBuf> {
+    let refused = refused_path(page);
+
+    refused.is_file().then_some(refused)
+}
+
+fn refused_path(page: &Path) -> PathBuf {
+    page.with_extension(REFUSED_SUFFIX)
 }
 
 /// Convert `source` into `rendered`, by running the engine the way a user would: headless,
@@ -224,30 +243,46 @@ fn wait(child: &mut Child, limit: Duration) -> bool {
     }
 }
 
-/// Keep the folder to the pages it was told to keep, oldest first: a rendered page is
-/// rebuilt from its document whenever it is wanted again, so nothing here is worth
-/// growing a folder for.
+/// Keep the folder within the size the `Performance → Cache → Libre` setting names, oldest
+/// first: a rendered page is built again from its document whenever it is wanted, so nothing
+/// here is worth growing a folder for. A budget of nothing drops every page, which is what
+/// the setting means — nothing is kept between hovers.
 fn prune(folder: &Path) {
+    let budget = crate::CONFIG
+        .lock()
+        .map(|config| config.libre_cache_mb as u64 * 1024 * 1024)
+        .unwrap_or(0);
     let Ok(entries) = std::fs::read_dir(folder) else {
         return;
     };
 
-    let mut pages: Vec<(std::time::SystemTime, PathBuf)> = entries
+    let mut pages: Vec<(std::time::SystemTime, u64, PathBuf)> = entries
         .flatten()
-        .filter(|entry| entry.path().extension().is_some_and(|extension| extension == "pdf"))
+        .filter(|entry| {
+            entry
+                .path()
+                .extension()
+                .is_some_and(|extension| extension == "pdf" || extension == REFUSED_SUFFIX)
+        })
         .filter_map(|entry| {
-            let modified = entry.metadata().ok()?.modified().ok()?;
-            Some((modified, entry.path()))
+            let metadata = entry.metadata().ok()?;
+            Some((metadata.modified().ok()?, metadata.len(), entry.path()))
         })
         .collect();
 
-    if pages.len() <= KEPT_PAGES {
+    let mut total: u64 = pages.iter().map(|(_, size, _)| size).sum();
+    if total <= budget {
         return;
     }
 
-    pages.sort_by_key(|(modified, _)| *modified);
-    for (_, path) in pages.iter().take(pages.len() - KEPT_PAGES) {
-        std::fs::remove_file(path).ok();
+    pages.sort_by_key(|(modified, _, _)| *modified);
+    for (_, size, path) in pages {
+        if total <= budget {
+            break;
+        }
+        if std::fs::remove_file(&path).is_ok() {
+            total = total.saturating_sub(size);
+        }
     }
 }
 

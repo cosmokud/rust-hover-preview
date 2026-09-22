@@ -1,14 +1,13 @@
 //! Project containers, read for the picture they hold of the whole document.
 //!
-//! A Krita document, an OpenRaster one, a Procreate one and a CorelDRAW one are zip
-//! containers that keep a picture of the finished work beside the layers it is built
-//! from: Krita writes the flattened document as `mergedimage.png` and a small preview as
-//! `preview.png`, OpenRaster writes the same flattened document as `mergedimage.png`
-//! and a file-manager thumbnail under `Thumbnails/`, a Procreate document keeps the
-//! thumbnail a file manager shows on iPad under `QuickLook/`, and CorelDRAW writes a
-//! bitmap of page 1, and the document's own thumbnail beside it, into
-//! `metadata/thumbnails/`. So the preview here is not drawn and not composited: it is
-//! the picture the application itself saved, read out of the container and shown.
+//! A Krita document, an OpenRaster one and a Procreate one are zip containers that keep a
+//! picture of the finished work beside the layers it is built from: Krita writes the
+//! flattened document as `mergedimage.png` and a small preview as `preview.png`,
+//! OpenRaster writes the same flattened document as `mergedimage.png` and a file-manager
+//! thumbnail under `Thumbnails/`, and a Procreate document keeps the thumbnail a file
+//! manager shows on iPad under `QuickLook/`. So the preview here is not drawn and not
+//! composited: it is the picture the application itself saved, read out of the container
+//! and shown.
 //!
 //! What that picture is worth differs from container to container and is worth being
 //! plain about. Some of them hold the *document*: a merged image is the flattened
@@ -17,12 +16,9 @@
 //! pixels the application wrote for a file manager, which is a preview that tells a user
 //! which file this is and no more — and one of those is a small picture laid out at the
 //! share of the display every other design preview is laid out at, so a thumbnail at
-//! `Fit to Screen` is a thumbnail enlarged. That is why the document is preferred by
-//! name wherever a container holds both, and why a container that holds only a thumbnail
-//! is still read: a small picture of the right drawing beats no picture at all. A
-//! thumbnail is preferred over a page rendered on its own for a sharper reason: a page
-//! can be empty — a CorelDRAW document whose drawing sits on a master page has a blank
-//! page 1 — while the thumbnail is a picture of the document by construction.
+//! `Fit to Screen` is a thumbnail enlarged. That is why the document is preferred by name
+//! wherever a container holds both, and why a container that holds only a thumbnail is
+//! still read: a small picture of the right drawing beats no picture at all.
 //!
 //! A container none of those names answers for is a file this app has no reader for,
 //! and its answer is no preview, like any other format that is not read here. Nothing
@@ -53,23 +49,15 @@ use zip::ZipArchive;
 /// the one read, and the comparison is by name whatever case it is written in, since
 /// a container is written by an application rather than by this app.
 ///
-/// A picture of the whole document comes before a page rendered out of it, and both come
-/// before the names a container may keep a picture under without saying what it is: a
-/// CorelDRAW document whose drawing sits on a master page writes a page 1 that is blank
-/// white, while the thumbnail written beside it is the drawing. The thumbnail is what the
-/// application's own file dialogs and the shell show, so it is a picture of the document
-/// rather than of one page of it, and it is read wherever a file holds both.
+/// A picture of the whole document comes before the names a container may keep a picture
+/// under without saying what it is: the flattened document a project keeps is the document
+/// itself, and what is left is the picture the application wrote for a file manager.
 const PREVIEW_MEMBERS: &[&str] = &[
     // The flattened document, at the size the work was made at.
     "mergedimage.png",
     // The picture the application wrote for a file manager.
     "Thumbnails/thumbnail.png",
     "QuickLook/Thumbnail.png",
-    "metadata/thumbnails/thumbnail.bmp",
-    "previews/thumbnail.png",
-    // A page on its own, for the containers that write one of those and nothing else.
-    "metadata/thumbnails/page1.bmp",
-    "previews/page1.png",
     // And the names a container may keep a preview under without saying which it is.
     "previews/preview.png",
     "thumbnail.png",
@@ -265,18 +253,15 @@ mod tests {
     }
 
     /// The names are asked in the order they are worth reading rather than in the order the
-    /// container happens to write them in, and that order puts a document's own picture —
-    /// the flattened document, or the thumbnail its application wrote for a file manager —
-    /// ahead of a page rendered out of it: a CorelDRAW file whose drawing sits on a master
-    /// page writes a page 1 that is blank, and the thumbnail beside it is the drawing.
+    /// container happens to write them in, and that order puts a flattened document ahead of
+    /// every thumbnail a container may hold beside it.
     #[test]
-    fn reads_the_document_rather_than_the_page_or_the_thumbnail() {
+    fn reads_the_document_rather_than_the_thumbnail() {
         let path = std::env::temp_dir().join("rust-hover-preview-container-order");
 
         for (picture, other) in [
-            ("metadata/thumbnails/thumbnail.bmp", "metadata/thumbnails/page1.bmp"),
-            ("previews/thumbnail.png", "previews/page1.png"),
             ("mergedimage.png", "Thumbnails/thumbnail.png"),
+            ("mergedimage.png", "QuickLook/Thumbnail.png"),
             ("mergedimage.png", "previews/preview.png"),
         ] {
             write_container(&path, &[(other, bmp(3, 5)), (picture, bmp(6, 7))]);
