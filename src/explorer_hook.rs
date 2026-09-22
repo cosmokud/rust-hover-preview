@@ -403,12 +403,22 @@ impl ItemResolver {
     ///
     /// A client that could not be bounded is reached through the legacy object the
     /// timeouts are not on, so every probe made through it runs until the shell
-    /// answers. That is worth leaving rather than settling into, and the shell's own
-    /// first moments are the likeliest reason for it: the modern client is asked for
-    /// again on a slow cadence, and the moment it can be created the timeouts are
-    /// back and the wait with them. A resolver that never got a client at all is
-    /// asked for one here too, since a machine where both objects were unavailable
-    /// at startup is a machine that may have them a moment later.
+    /// answers. Two states arrive here and only one of them is expected to leave.
+    ///
+    /// A resolver that never got a client at all is the one this recovers outright,
+    /// and that is the work it is really for: a client that failed once would
+    /// otherwise never be asked for again for the life of the run, and every hover
+    /// after it would have no answer at all.
+    ///
+    /// A resolver holding an unbounded client is asked again on a cadence that
+    /// grows, in case a bounded one can be made later. What that does *not* cover is
+    /// worth being plain about, because it is the whole of what this can do: the
+    /// modern object is served by the UI Automation core in this process rather than
+    /// by the shell, so a machine that cannot create it is not a shell that is slow
+    /// to come up — it is a machine without it, where the ask never succeeds and the
+    /// unbounded client is kept. The timeouts cannot be added to a client that does
+    /// not carry them, and nothing in user mode can interrupt a probe already inside
+    /// one.
     ///
     /// A client no better than the one in hand is not taken. What this is for is an
     /// upgrade, and replacing one unbounded client with another of its kind would
@@ -495,9 +505,11 @@ impl AnsweredView {
 /// leaves an unbounded wait with nothing watching it.
 const UIA_TIMEOUT_MS: u32 = 500;
 
-/// How often a resolver left with a client that could not be bounded asks for one
-/// that can be; see `ItemResolver::rebuild_automation`.
+/// How long a resolver left without a client it could bound waits before it asks
+/// for one again, and the ceiling that wait grows to; see
+/// `ItemResolver::rebuild_automation`.
 const UIA_REBIND_RETRY_MS: u64 = 2000;
+const UIA_REBIND_INTERVAL_MAX_MS: u64 = 60_000;
 
 /// The UI Automation client both paths resolve items with, and whether every call
 /// it makes is bounded.
@@ -1267,19 +1279,67 @@ struct ShellViewCandidate {
 }
 
 impl ShellViewCandidate {
-    /// What the view is showing: the URL it was opened with, and the folder it has
-    /// open, which is what a probe remembers about the place.
-    fn describe(self) -> ActiveShellViewContext {
+    /// What the view is showing: the URL it was opened with, and — where the caller
+    /// wants it — the folder it has open, which is what a probe remembers about the
+    /// place.
+    ///
+    /// The folder is asked for only where it is wanted, because it is not free: it
+    /// is a walk through the view's own objects, out to the Shell's answer for the
+    /// place, with a check that what came back is a directory. One of the two
+    /// callers reads the URL and discards everything else.
+    fn describe(self, want_folder: bool) -> ActiveShellViewContext {
         unsafe {
             let location_url = self.browser.LocationURL().ok().map(|url| url.to_string());
+            let folder_path = if want_folder {
+                get_shell_view_folder_path(&self.shell_view)
+            } else {
+                None
+            };
 
             ActiveShellViewContext {
                 shell_view_hwnd: self.shell_view_hwnd,
                 location_url,
-                folder_path: get_shell_view_folder_path(&self.shell_view),
+                folder_path,
             }
         }
     }
+}
+
+/// What a probe learned about one Shell window before anything of the window was
+/// read: the three facts the choice between windows is made from.
+#[derive(Clone, Copy, Default)]
+struct ShellViewFacts {
+    /// The pointer is inside this window, which is the strongest of the three.
+    holds_cursor: bool,
+    /// The window's rectangle holds the point.
+    holds_point: bool,
+    /// The window is the foreground one.
+    is_foreground: bool,
+}
+
+/// Which of the windows a probe found is the one it is about.
+///
+/// The order the answers are trusted in is the order the evidence is worth: the
+/// window the pointer is inside, then the *first* window the point falls in, then
+/// the *last* window that is the foreground one. The first two are `position` and
+/// the last is `rposition`, which is what makes a window registered twice — the
+/// tabs of one frame answer with the frame's own handle — settle on the last of
+/// them rather than the first.
+///
+/// A window whose rectangle holds the point is not asked whether it is the
+/// foreground one, and cannot be: a point match is taken before any foreground
+/// match, so the two answers never compete and the window that would have carried
+/// both is never the reason for the answer.
+fn winning_shell_view(facts: &[ShellViewFacts]) -> Option<usize> {
+    if let Some(index) = facts.iter().position(|facts| facts.holds_cursor) {
+        return Some(index);
+    }
+
+    if let Some(index) = facts.iter().position(|facts| facts.holds_point) {
+        return Some(index);
+    }
+
+    facts.iter().rposition(|facts| facts.is_foreground)
 }
 
 /// The Shell window a point is in, out of the collection the resolver already holds.
@@ -1294,15 +1354,15 @@ impl ShellViewCandidate {
 fn get_active_shell_view_context(
     shell_windows: Option<&IShellWindows>,
     screen_point: &POINT,
+    want_folder: bool,
 ) -> Option<ActiveShellViewContext> {
     unsafe {
         let shell_windows = shell_windows?;
         let count = shell_windows.Count().ok()?;
         let cursor_hwnd = WindowFromPoint(*screen_point);
-        let mut cursor_candidate: Option<ShellViewCandidate> = None;
-        let mut rect_candidate: Option<ShellViewCandidate> = None;
-        let mut foreground_candidate: Option<ShellViewCandidate> = None;
         let foreground = GetForegroundWindow();
+        let mut candidates: Vec<ShellViewCandidate> = Vec::new();
+        let mut facts: Vec<ShellViewFacts> = Vec::new();
 
         for i in 0..count.min(SHELL_WINDOW_LIMIT) {
             let variant = VARIANT::from(i);
@@ -1339,52 +1399,54 @@ fn get_active_shell_view_context(
                 continue;
             }
 
-            let candidate = ShellViewCandidate {
+            // The window the pointer is in is the answer whatever the others are, so
+            // it ends the walk rather than joining it — and it is the one window that
+            // is not asked for its rectangle, which it does not need: a cursor match
+            // is taken before a point match, so the box could not change the answer.
+            let holds_cursor =
+                !cursor_hwnd.is_invalid() && hwnd_is_same_or_ancestor(cursor_hwnd, shell_view_hwnd);
+
+            let mut holds_point = false;
+            if !holds_cursor {
+                let mut rect = RECT::default();
+                holds_point = GetWindowRect(shell_view_hwnd, &mut rect).is_ok()
+                    && point_in_rect(screen_point, &rect);
+            }
+
+            candidates.push(ShellViewCandidate {
                 shell_view_hwnd: shell_view_hwnd.0 as isize,
                 browser,
                 shell_view,
-            };
+            });
+            facts.push(ShellViewFacts {
+                holds_cursor,
+                holds_point,
+                is_foreground: foreground == HWND(browser_hwnd.0 as *mut _),
+            });
 
-            // The window the pointer is in is the answer whatever the others are, so
-            // it ends the walk rather than joining it.
-            if !cursor_hwnd.is_invalid() && hwnd_is_same_or_ancestor(cursor_hwnd, shell_view_hwnd) {
-                cursor_candidate = Some(candidate);
+            if holds_cursor {
                 break;
-            }
-
-            let mut rect = RECT::default();
-            if GetWindowRect(shell_view_hwnd, &mut rect).is_err() {
-                continue;
-            }
-
-            if point_in_rect(screen_point, &rect) {
-                if rect_candidate.is_none() {
-                    rect_candidate = Some(candidate);
-                }
-                continue;
-            }
-
-            if foreground == HWND(browser_hwnd.0 as *mut _) {
-                foreground_candidate = Some(candidate);
             }
         }
 
-        cursor_candidate
-            .or(rect_candidate)
-            .or(foreground_candidate)
-            .map(ShellViewCandidate::describe)
+        let winner = winning_shell_view(&facts)?;
+        candidates
+            .into_iter()
+            .nth(winner)
+            .map(|candidate| candidate.describe(want_folder))
     }
 }
 
 fn get_active_shell_view_context_at_cursor(
     resolver: &ItemResolver,
+    want_folder: bool,
 ) -> Option<ActiveShellViewContext> {
     unsafe {
         let mut cursor_pos = POINT::default();
         if GetCursorPos(&mut cursor_pos).is_err() {
             return None;
         }
-        get_active_shell_view_context(resolver.shell_windows.as_ref(), &cursor_pos)
+        get_active_shell_view_context(resolver.shell_windows.as_ref(), &cursor_pos, want_folder)
     }
 }
 
@@ -1414,7 +1476,10 @@ fn hwnd_is_same_or_ancestor(child: HWND, ancestor: HWND) -> bool {
 /// same answer, but they are read at the folder probe's cadence: a search opened a
 /// moment ago is seen here before it is seen there.
 fn is_current_search_view_legacy(resolver: &ItemResolver) -> bool {
-    match get_active_shell_view_context_at_cursor(resolver) {
+    // Only the URL is read here, so the folder is not asked for: it is a walk
+    // through the view's own objects, and this check discards everything but the
+    // location.
+    match get_active_shell_view_context_at_cursor(resolver, false) {
         Some(context) => context
             .location_url
             .as_deref()
@@ -1434,7 +1499,7 @@ fn is_current_search_view_legacy(resolver: &ItemResolver) -> bool {
 fn get_current_hover_resolver_hints(resolver: &ItemResolver) -> HoverResolverHints {
     let mut hints = HoverResolverHints::default();
 
-    if let Some(context) = get_active_shell_view_context_at_cursor(resolver) {
+    if let Some(context) = get_active_shell_view_context_at_cursor(resolver, true) {
         hints.current_folder = context.folder_path.clone();
         hints.location_url = context.location_url.clone();
         hints.shell_view_hwnd = Some(context.shell_view_hwnd);
@@ -3037,8 +3102,10 @@ pub fn run_explorer_hook() {
     // is tried again rather than left missing for the rest of the run.
     let mut last_explorer_restarts = explorer_restart_count();
     let mut last_shell_build = Instant::now();
-    // When a client that could not be bounded was last asked for again.
+    // When a client that could not be bounded was last asked for again, and how long
+    // the wait between two asks has grown to.
     let mut last_automation_rebind = Instant::now();
+    let mut automation_rebind_interval_ms = UIA_REBIND_RETRY_MS;
 
     while RUNNING.load(Ordering::SeqCst) {
         // Explorer restarting is not something the resolver can recover from by
@@ -3091,17 +3158,23 @@ pub fn run_explorer_hook() {
             last_state_check = Instant::now();
         }
 
-        // A client that could not be bounded makes a probe that runs until the shell
-        // answers, with nothing watching it, so a resolver left holding one asks for a
-        // bounded client again. What makes the modern client unavailable is as often
-        // the shell's own first moments as it is a machine without it, so this is a
-        // state the app leaves rather than one it settles into — and a resolver that
-        // never got a client at all is asked for one here too.
+        // A resolver that never got a UI Automation client is asked for one again:
+        // a client that failed once would otherwise never be asked for again, and
+        // every hover after it would have no answer at all. A resolver holding a
+        // client that could not be bounded is asked for a bounded one on the same
+        // clock, in case the machine can produce one later.
+        //
+        // The ask is made less and less often. The object either can be created or
+        // it cannot, and nothing about that changes between two seconds apart, so a
+        // run that cannot be upgraded costs one attempt a minute rather than thirty.
         if !resolver.automation_bounded
-            && last_automation_rebind.elapsed() >= Duration::from_millis(UIA_REBIND_RETRY_MS)
+            && last_automation_rebind.elapsed()
+                >= Duration::from_millis(automation_rebind_interval_ms)
         {
             last_automation_rebind = Instant::now();
             resolver.rebuild_automation();
+            automation_rebind_interval_ms =
+                (automation_rebind_interval_ms * 2).min(UIA_REBIND_INTERVAL_MAX_MS);
         }
 
         // The pointer's answer belongs to the tick that produced it: the list under
@@ -4222,6 +4295,80 @@ mod tests {
         assert!(
             listed > stem,
             "the extension takes room of its own: {stem} vs {listed}"
+        );
+    }
+
+    /// One window's facts, from the three answers the choice between windows is made
+    /// from — see `ShellViewFacts`.
+    fn window(holds_cursor: bool, holds_point: bool, is_foreground: bool) -> ShellViewFacts {
+        ShellViewFacts {
+            holds_cursor,
+            holds_point,
+            is_foreground,
+        }
+    }
+
+    /// The window the pointer is inside is the answer whatever the others are: chosen
+    /// over the window the point merely falls in, and over the foreground one, even
+    /// when both come first — see `winning_shell_view`.
+    #[test]
+    fn the_window_the_pointer_is_in_is_the_answer() {
+        let chosen = winning_shell_view(&[
+            window(false, true, true),
+            window(true, false, false),
+            window(false, false, true),
+        ]);
+
+        assert_eq!(chosen, Some(1), "the window the pointer is in");
+    }
+
+    /// The *first* window the point falls in is the answer, not the last. A frame and
+    /// the pane inside it both register and both hold a point that is over the list,
+    /// and the walk reached the frame before the pane.
+    #[test]
+    fn the_first_window_the_point_falls_in_is_the_answer() {
+        let chosen = winning_shell_view(&[
+            window(false, false, true),
+            window(false, true, false),
+            window(false, true, true),
+        ]);
+
+        assert_eq!(chosen, Some(1), "the first window the point is in");
+    }
+
+    /// A window the point falls in is the answer over one that is only the foreground
+    /// window, because a point match is taken before any foreground match: the two
+    /// never compete, which is why a point match is not also asked about the
+    /// foreground.
+    #[test]
+    fn the_point_beats_the_foreground_window() {
+        let chosen = winning_shell_view(&[window(false, false, true), window(false, true, true)]);
+
+        assert_eq!(chosen, Some(1), "the window the point is in");
+    }
+
+    /// With nothing else to go on the *last* window that is the foreground one is the
+    /// answer. One frame registers a window per tab and every one of them answers with
+    /// the frame's own handle, so the last read is the one the answer comes from.
+    #[test]
+    fn the_last_foreground_window_is_the_answer() {
+        let chosen = winning_shell_view(&[
+            window(false, false, true),
+            window(false, false, false),
+            window(false, false, true),
+        ]);
+
+        assert_eq!(chosen, Some(2), "the last window that is the foreground one");
+    }
+
+    /// A probe that matched no window has no answer, which is what leaves the hints
+    /// empty rather than describing a window that is not there.
+    #[test]
+    fn a_probe_that_matched_no_window_has_no_answer() {
+        assert_eq!(winning_shell_view(&[]), None);
+        assert_eq!(
+            winning_shell_view(&[window(false, false, false), window(false, false, false)]),
+            None
         );
     }
 }
