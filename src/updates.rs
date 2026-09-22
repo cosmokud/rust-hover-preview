@@ -28,12 +28,16 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use windows::core::{w, PCWSTR};
+use windows::Win32::Foundation::HWND;
 use windows::Win32::Networking::WinHttp::{
     WinHttpCloseHandle, WinHttpConnect, WinHttpOpen, WinHttpOpenRequest, WinHttpQueryDataAvailable,
     WinHttpQueryHeaders, WinHttpReadData, WinHttpReceiveResponse, WinHttpSendRequest,
     WinHttpSetTimeouts, WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_FLAG_SECURE,
     WINHTTP_QUERY_CONTENT_LENGTH, WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_QUERY_FLAG_NUMBER64,
     WINHTTP_QUERY_STATUS_CODE,
+};
+use windows::Win32::UI::WindowsAndMessaging::{
+    MessageBoxW, IDYES, MB_ICONINFORMATION, MB_SETFOREGROUND, MB_YESNO,
 };
 
 /// Where a release is published, and the two names this app asks for. They are
@@ -81,6 +85,11 @@ static READY: Lazy<Mutex<Option<Ready>>> = Lazy::new(|| Mutex::new(None));
 /// does not start two of them.
 static CHECKING: AtomicBool = AtomicBool::new(false);
 
+/// Whether the confirmation is on screen. The tray asks before it opens its
+/// menu: the dialog is not modal to the menu, so a menu opened over it would be
+/// a second way into the same question.
+static CONFIRMING: AtomicBool = AtomicBool::new(false);
+
 /// Ask for a check, without waiting for one. The tray menu is the only caller:
 /// it is the one moment a user is looking for an update, and the one moment the
 /// answer is worth having.
@@ -98,31 +107,75 @@ pub(crate) fn request_check() {
 /// The version of the update waiting to be installed, where one is: what the
 /// menu row is built from, and `None` where there is nothing to say.
 pub(crate) fn available() -> Option<String> {
-    READY
-        .lock()
-        .ok()
-        .and_then(|ready| ready.as_ref().map(|ready| ready.version.clone()))
+    staged().map(|(version, _)| version)
 }
 
-/// Put the fetched update on. The installer runs silently — `/S` is its own
-/// switch for that, and `/R`, which only a silent installer reads, is what
-/// starts the app again once the new version is in place — and `false` is
-/// answered when there is nothing fetched to run.
-pub(crate) fn install() -> bool {
-    let installer = READY
-        .lock()
-        .ok()
-        .and_then(|ready| ready.as_ref().map(|ready| ready.installer.clone()));
+/// Whether the update is being asked about right now.
+pub(crate) fn is_confirming() -> bool {
+    CONFIRMING.load(Ordering::SeqCst)
+}
 
-    let Some(installer) = installer else {
+/// Put the fetched update on, once the user has said so. The installer runs
+/// silently — `/S` is its own switch for that, and `/R`, which only a silent
+/// installer reads, is what starts the app again once the new version is in
+/// place. `false` is answered where there is nothing fetched to run and where
+/// the user declined, which are one answer to the caller: nothing happens, and
+/// the app stays where it is.
+pub(crate) fn install() -> bool {
+    let Some((version, installer)) = staged() else {
         return false;
     };
+
+    if !confirmed(&version) {
+        return false;
+    }
 
     std::process::Command::new(installer)
         .arg("/S")
         .arg("/R")
         .spawn()
         .is_ok()
+}
+
+/// What is waiting, as its two halves: the version it would install and the
+/// file it would install from.
+fn staged() -> Option<(String, PathBuf)> {
+    READY.lock().ok().and_then(|ready| {
+        ready
+            .as_ref()
+            .map(|ready| (ready.version.clone(), ready.installer.clone()))
+    })
+}
+
+/// Ask, and answer with what the user said. It is the app's only dialog, and it
+/// stands where it does because the click it follows is a click that ends the
+/// app: what a user is agreeing to is an update that puts itself on, and a
+/// window that comes back as the new version.
+///
+/// The dialog is given no owner, and is set to the foreground, for the same
+/// reason: the one window this app owns is the tray's, which is never shown and
+/// has no place on screen for a dialog to be centred over.
+fn confirmed(version: &str) -> bool {
+    let caption = wide("Rust Hover Preview");
+    let text = wide(&format!(
+        "Version {version} is available.\n\nInstall it now? The update downloads and installs \
+         automatically, and the app restarts on the new version."
+    ));
+
+    CONFIRMING.store(true, Ordering::SeqCst);
+
+    let answer = unsafe {
+        MessageBoxW(
+            HWND::default(),
+            PCWSTR(text.as_ptr()),
+            PCWSTR(caption.as_ptr()),
+            MB_YESNO | MB_ICONINFORMATION | MB_SETFOREGROUND,
+        )
+    };
+
+    CONFIRMING.store(false, Ordering::SeqCst);
+
+    answer == IDYES
 }
 
 /// One check, whole: the version the release is published under, the installer

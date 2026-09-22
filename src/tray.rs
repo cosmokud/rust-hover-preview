@@ -333,7 +333,10 @@ unsafe extern "system" fn tray_window_proc(
         }
         WM_TRAYICON => {
             let event = lparam.0 as u32;
-            if event == WM_RBUTTONUP || event == WM_LBUTTONUP {
+            // While the update's confirmation is on screen the tray answers nothing: a menu
+            // opened over it would be a second way into the same question, and the dialog —
+            // which owns no window of this app's — is not modal to anything.
+            if (event == WM_RBUTTONUP || event == WM_LBUTTONUP) && !updates::is_confirming() {
                 show_context_menu(hwnd);
             }
             LRESULT(0)
@@ -349,9 +352,11 @@ unsafe extern "system" fn tray_window_proc(
                     toggle_startup();
                 }
                 ID_TRAY_UPDATE => {
-                    // The update goes on where the user says so: the installer runs silently,
-                    // replaces this app and starts it again, so the app ends itself here rather
-                    // than waiting to be terminated by the installer it just started.
+                    // The update goes on where the user has been asked and has said so: the
+                    // installer runs silently, replaces this app and starts it again, so the
+                    // app ends itself here rather than waiting to be terminated by the
+                    // installer it just started. A declined update is a click that does
+                    // nothing and a menu that stays as it was.
                     if updates::install() {
                         RUNNING.store(false, Ordering::SeqCst);
                         PostQuitMessage(0);
