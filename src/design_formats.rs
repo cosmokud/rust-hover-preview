@@ -28,9 +28,9 @@ use std::path::Path;
 /// its own; `cdr` is CorelDRAW's and `procreate` is Procreate's, which are containers
 /// of the same kind holding the picture the application wrote for a file manager; and
 /// `sketch`, `fig` and `xd` are containers of that kind as well. What each one is
-/// read for is in `psd_image`, `project_image` and `eps_image`, and a container none
-/// of them can open is a file that shows no preview, like any other format this app
-/// has no reader for.
+/// read for is in `psd_image`, `project_image`, `cdr_image` and `eps_image`, and a
+/// container none of them can open is a file that shows no preview, like any other
+/// format this app has no reader for.
 ///
 /// `ai` is the one name here that is usually not this kind's at all: an Illustrator
 /// document saved with `Create PDF Compatible File` is a PDF, and the PDF gate claims
