@@ -33,7 +33,7 @@ You can add or remove formats in `config.ini`. Unsupported formats show no previ
 
 `jpg`, `jpeg`, `png`, `apng`, `gif`, `bmp`, `ico`, `tiff`, `webp`, `tga`, `hdr`, `exr`, `qoi`, `heic`, `heif`, `avif`, `jxl`, `dds`, and more.
 
-Animated GIF, APNG, and WebP files play. HEIC, HEIF, AVIF, JPEG XL, and still WebP usually need Windows codec extensions — except WebP, which the app can also decode on its own. HDR and EXR images are tone-mapped for screen preview. DDS textures preview in every block format they are written in — BC1 through BC7, plus both variants of BC6H — and in the uncompressed formats, the packed HDR ones and depth buffers among them, at the first face and the mip level nearest the preview's own size.
+Animated GIF/APNG/WebP play. HEIC/HEIF/AVIF/JPEG XL/still WebP usually need Windows codecs (WebP also decodes in-app). HDR/EXR tone-map for preview. DDS previews BC1–BC7, both BC6H variants, and uncompressed formats—incl. packed HDR/depth—at first face and nearest-size mip.
 
 ### Vectors
 
@@ -41,17 +41,13 @@ Animated GIF, APNG, and WebP files play. HEIC, HEIF, AVIF, JPEG XL, and still We
 
 ### Fonts
 
-`ttf`, `otf`, `ttc`, `woff`, `woff2` — drawn by WebView2. The preview shows a font specimen: the name the font calls itself and sample lines its character map covers, from Latin through Arabic, Hebrew, Thai, and Devanagari.
+`ttf`, `otf`, `ttc`, `woff`, `woff2` — drawn by WebView2. The preview shows a font specimen: the name the font calls itself and sample lines its character map covers.
 
 ### Videos
 
 `mp4`, `webm`, `mkv`, `avi`, `mov`, `wmv`, `flv`, `m4v`, `ts`, `m2ts`, `mts`, `mpg`, `mpeg`, `vob`, `3gp`, `ogv`, `rmvb`, `asf`, `divx`, `f4v`, `mxf`, `dv`.
 
 With FFmpeg installed, many more containers and codecs work. Without it, videos use the media engine Windows already has, plus any codec extensions you installed. The tray’s **Codecs** menu shows what is available.
-
-### PDF
-
-`pdf` — the first page is rendered by the Windows PDF engine. Password-protected and damaged files are skipped.
 
 ### Text and Code
 
@@ -64,6 +60,10 @@ Extensionless files such as `LICENSE`, `Makefile`, `Dockerfile`, and `.gitignore
 `zip`, `zipx`, `jar`, `apk`, `xpi`, `cbz`, `rar`, `7z`, `tar`, `tgz`, and `tar.gz`.
 
 Archive previews show a file tree with sizes, read directly from the archive’s table of contents — nothing is unpacked.
+
+### PDF
+
+`pdf` — the first page is rendered by the Windows PDF engine. Password-protected and damaged files are skipped.
 
 ### Office Documents
 
