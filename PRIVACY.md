@@ -71,9 +71,10 @@ configured with, if any. The request identifies itself as this app and its
 version, and says nothing else.
 
 An installer fetched this way waits in the app's own folder until you click the
-row above **Run at Startup**, which is what installs it: the installer then runs
-silently, replaces the app, and starts it again. Nothing is installed without
-that click.
+row above **Run at Startup**. That click asks first — a yes/no dialog saying the
+update installs itself and the app restarts — and only a yes runs the installer:
+it replaces the app silently, then starts it again. Nothing is installed without
+that click and that yes.
 
 Nothing is checked unless you open the menu, so a session in which you never open
 it makes no request at all. There is no separate switch for the check yet.
