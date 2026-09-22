@@ -1080,7 +1080,7 @@ impl Default for AppConfig {
             image_cache_mb: DEFAULT_IMAGE_CACHE_MB,
             image_background: TransparentBackground::Black,
             svg_background: TransparentBackground::Black,
-            font_background: TransparentBackground::Black,
+            font_background: TransparentBackground::White,
             dds_background: TransparentBackground::Black,
             video_volume: 0, // Mute by default
             preview_scale: PreviewScale::Percent(DEFAULT_PREVIEW_SCALE_PERCENT),
@@ -2361,7 +2361,7 @@ mod tests {
         config.apply_ini(&ini);
         assert_eq!(config.image_background, TransparentBackground::White);
         assert_eq!(config.svg_background, TransparentBackground::White);
-        assert_eq!(config.font_background, TransparentBackground::Black);
+        assert_eq!(config.font_background, TransparentBackground::White);
     }
 
     /// The font list is the fifth of them and behaves like the rest: a file that has never

@@ -170,6 +170,7 @@ All are free. Windows 11 often has HEIF, AV1, and WebP already. Where one is mis
 - **Placement**
   - **Position** — Follow Cursor or Best Position.
   - **Avoid** — Don’t Avoid, Avoid Filename (default), Avoid Filename Column, or Avoid Details. This keeps a preview off the item it is about.
+- **Scaling**
   - **Images Scaling** — Fit to Screen or 25%–400%, of the image's own size.
   - **Videos Scaling** — the same shares for a video, 100% (default).
   - **Animated Scaling** — the same shares for an animated GIF, WebP, or PNG; a still GIF or PNG keeps Images Scaling. 100% (default).
@@ -237,7 +238,7 @@ follow_cursor=false
 avoid_mode=details
 image_background=black
 svg_background=black
-font_background=black
+font_background=white
 video_volume=0
 preview_scale=100
 video_scale=100
@@ -299,7 +300,7 @@ Key settings, in plain terms:
 - `pdf_scale` / `office_scale` — the same for a PDF page and an Office-rendered page, both `fit` by default as well as a percentage. A workbook’s fallback bitmap follows its own size and is never enlarged.
 - `font_scale` — percentage or `fit`, read against the screen. `50` is default, `fit` is all of it, and `100` or more reads as `fit`. A font has no size of its own, so the share is of the display.
 - `ttc_face` — which face of a `.ttc` collection is drawn: `1` is the first face, and the highest setting is `10`. The heading says which face came out.
-- `font_background` — `black` (default), `white`, `checkerboard`, or `transparent`.
+- `font_background` — `white` (default), `black`, `checkerboard`, or `transparent`.
 - A deleted `extensions=` line or whole section comes back with built-in entries. An `extensions=` line left empty stays empty.
 
 ## Build from Source
