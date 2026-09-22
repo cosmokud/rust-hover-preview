@@ -48,6 +48,8 @@ Animated GIF/APNG/WebP play. HEIC/HEIF/AVIF/JPEG XL/still WebP usually need Wind
 
 These files usually show a preview saved inside them, so you see the design as saved—not a flattened version.
 
+CorelDRAW documents are drawn by LibreOffice where it is installed—the whole page, sharp at any size—and shown from the picture inside the file where it is not. The tray’s **Codecs** menu says whether that engine is there.
+
 ### Fonts
 
 `ttf`, `otf`, `ttc`, `woff`, `woff2` — drawn by WebView2. The preview shows a font specimen: the name the font calls itself and sample lines its character map covers.
