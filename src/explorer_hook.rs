@@ -1,6 +1,7 @@
 use crate::archive_formats::matches_archive_list;
 use crate::cloud_files;
 use crate::config::{AvoidMode, PreviewType, TriggerKeyMode};
+use crate::design_formats::matches_design_list;
 use crate::font_formats::matches_font_list;
 use crate::image_formats::matches_image_list;
 use crate::office_formats::matches_office_list;
@@ -1102,6 +1103,15 @@ fn is_media_file(path: &Path) -> bool {
     if matches_office_list(path, &config.office_extensions) {
         return PreviewType::Office.enabled_in(&config);
     }
+
+    // A design document is a kind of its own — what its preview is made of comes out
+    // of the file itself rather than out of a decoder its extension names — and it is
+    // asked where the renderer asks it: after the office list, ahead of the text and
+    // image lists that would not have claimed a `.psd` anyway.
+    if matches_design_list(path, &config.design_extensions) {
+        return PreviewType::Design.enabled_in(&config);
+    }
+
     if matches_text_lists(path, &config.text_extensions, &config.text_names) {
         return PreviewType::Text.enabled_in(&config);
     }

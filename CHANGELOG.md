@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.2.13]
+
+### Added
+
+- Preview for design documents: Photoshop `psd` and `psb`, Krita `kra`, OpenRaster `ora`, and the project containers other drawing tools save (`sketch`, `fig`, `xd`). A layered document is shown from the finished picture its format keeps inside it, so it arrives as it was saved.
+- Preview for Illustrator `ai` files, drawn as a PDF the same way a PDF is. An `.ai` saved as PostScript has no preview.
+- `Design` under the tray's **Preview Types**, with `design_preview_enabled` and a `[design]` extension list in `config.ini`.
+
+### Changed
+
+- Bump version to 0.2.13 in `Cargo.toml` and `Cargo.lock`.
+
 ## [0.2.12]
 
 ### Changed

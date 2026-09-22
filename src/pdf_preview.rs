@@ -1,3 +1,4 @@
+use crate::cloud_files;
 use crate::config::{
     image_decode_limits, sanitize_pdf_cache_mb, PreviewType, DEFAULT_PDF_CACHE_MB,
 };
@@ -58,11 +59,33 @@ pub fn initialize_apartment() {
     }
 }
 
-pub fn is_pdf_file(path: &Path) -> bool {
+/// Whether `path` is named with `extension`, whatever case it is written in.
+fn named(path: &Path, extension: &str) -> bool {
     path.extension()
         .and_then(|ext| ext.to_str())
-        .map(|ext| ext.to_lowercase() == "pdf")
+        .map(|ext| ext.eq_ignore_ascii_case(extension))
         .unwrap_or(false)
+}
+
+/// Whether a page may be read from `path`.
+///
+/// A `.pdf` is one by its name. A `.ai` is one when Illustrator saved it the way it
+/// saves one by default — with `Create PDF Compatible File` on, which has been the
+/// default since Illustrator 9 — because the document *is* page 1 of a PDF then, and
+/// the private data the application writes beside the artwork is what the OS engine
+/// reads past. Saved without that compatibility the file is PostScript, which is not
+/// a page any engine here can draw, so the bytes are asked rather than believed and a
+/// file that answers no is a file with no preview.
+///
+/// Only the name that needs the question pays for it: a `.pdf` is answered without
+/// opening anything, and a cloud placeholder is not opened to answer either, which is
+/// the rule every gate in this app follows.
+pub fn is_pdf_file(path: &Path) -> bool {
+    if named(path, "pdf") {
+        return true;
+    }
+
+    named(path, "ai") && !cloud_files::needs_download(path) && has_pdf_header(path)
 }
 
 /// Whether a PDF preview may be shown for `path`: the file a page would be read

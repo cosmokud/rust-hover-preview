@@ -10,6 +10,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use crate::archive_formats::{sanitize_archive_extensions, DEFAULT_ARCHIVE_EXTENSIONS};
+use crate::design_formats::{sanitize_design_extensions, DEFAULT_DESIGN_EXTENSIONS};
 use crate::font_formats::{sanitize_font_extensions, DEFAULT_FONT_EXTENSIONS};
 use crate::image_formats::{
     sanitize_image_extensions, DEFAULT_IMAGE_EXTENSIONS, IMAGE_EXTENSIONS_BEFORE_CODEC_FORMATS,
@@ -38,6 +39,8 @@ const ARCHIVE_SECTION: &str = "archive";
 const OFFICE_SECTION: &str = "office";
 /// The font extension list lives in its own section for the same reason.
 const FONT_SECTION: &str = "font";
+/// The design extension list lives in its own section for the same reason.
+const DESIGN_SECTION: &str = "design";
 pub const DEFAULT_WEBP_PLAYBACK_FPS: u32 = 90;
 pub const MAX_WEBP_PLAYBACK_FPS: u32 = 90;
 pub const DEFAULT_PREVIEW_SCALE_PERCENT: u32 = 100;
@@ -701,6 +704,11 @@ pub enum PreviewType {
     /// a page of this app's own with the font in it, so a machine without the engine has no
     /// font preview either, and a user who wants none of them has this switch.
     Fonts,
+    /// Design documents and projects, previewed from the picture their own format keeps
+    /// of the whole document rather than from their layers: a user who wants none of
+    /// them has this switch, which is not the switch for pictures even though the
+    /// preview is one.
+    Design,
 }
 
 impl PreviewType {
@@ -723,6 +731,7 @@ impl PreviewType {
             Self::Office => config.office_preview_enabled,
             Self::Svg => config.svg_preview_enabled,
             Self::Fonts => config.font_preview_enabled,
+            Self::Design => config.design_preview_enabled,
         }
     }
 
@@ -737,6 +746,7 @@ impl PreviewType {
             Self::Office => config.office_preview_enabled = enabled,
             Self::Svg => config.svg_preview_enabled = enabled,
             Self::Fonts => config.font_preview_enabled = enabled,
+            Self::Design => config.design_preview_enabled = enabled,
         }
     }
 }
@@ -1003,6 +1013,9 @@ pub struct AppConfig {
     /// Whether font files are previewed at all, ahead of the font list their names are
     /// entries of.
     pub font_preview_enabled: bool,
+    /// Whether design documents and projects are previewed at all, ahead of the design
+    /// list their names are entries of.
+    pub design_preview_enabled: bool,
     /// Memory the rendered pages may hold, in megabytes, between hovers. A page is
     /// still rendered at `0` — a document has no other source for its preview — it
     /// is simply not kept once the hover it was rendered for is over.
@@ -1059,6 +1072,9 @@ pub struct AppConfig {
     pub office_extensions: Vec<String>,
     /// Extensions previewed as fonts, already normalized for lookup.
     pub font_extensions: Vec<String>,
+    /// Extensions previewed as design documents and projects, already normalized for
+    /// lookup.
+    pub design_extensions: Vec<String>,
 }
 
 impl Default for AppConfig {
@@ -1101,6 +1117,7 @@ impl Default for AppConfig {
             office_preview_enabled: true,
             svg_preview_enabled: true,
             font_preview_enabled: true,
+            design_preview_enabled: true,
             office_cache_mb: DEFAULT_OFFICE_CACHE_MB,
             office_engine_idle: EngineIdle::Seconds(DEFAULT_OFFICE_ENGINE_IDLE_SECS),
             webview_idle: EngineIdle::Seconds(DEFAULT_WEBVIEW_IDLE_SECS),
@@ -1119,6 +1136,7 @@ impl Default for AppConfig {
             archive_extensions: sanitize_archive_extensions(DEFAULT_ARCHIVE_EXTENSIONS),
             office_extensions: sanitize_office_extensions(DEFAULT_OFFICE_EXTENSIONS),
             font_extensions: sanitize_font_extensions(DEFAULT_FONT_EXTENSIONS),
+            design_extensions: sanitize_design_extensions(DEFAULT_DESIGN_EXTENSIONS),
         }
     }
 }
@@ -1461,6 +1479,11 @@ impl AppConfig {
             );
             ini.set(
                 CONFIG_SECTION,
+                "design_preview_enabled",
+                Some(self.design_preview_enabled.to_string()),
+            );
+            ini.set(
+                CONFIG_SECTION,
                 "office_cache_mb",
                 Some(sanitize_office_cache_mb(self.office_cache_mb).to_string()),
             );
@@ -1553,6 +1576,11 @@ impl AppConfig {
                 FONT_SECTION,
                 "extensions",
                 Some(sanitize_font_extensions(&self.font_extensions.join(",")).join(",")),
+            );
+            ini.set(
+                DESIGN_SECTION,
+                "extensions",
+                Some(sanitize_design_extensions(&self.design_extensions.join(",")).join(",")),
             );
             write_ordered(&ini, &path);
         }
@@ -1764,6 +1792,9 @@ impl AppConfig {
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "font_preview_enabled") {
             self.font_preview_enabled = value;
         }
+        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "design_preview_enabled") {
+            self.design_preview_enabled = value;
+        }
         if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "office_cache_mb") {
             if let Ok(value) = u32::try_from(value) {
                 self.office_cache_mb = sanitize_office_cache_mb(value);
@@ -1898,6 +1929,18 @@ impl AppConfig {
             sanitize_font_extensions,
         );
         self.font_extensions = list;
+        restored |= defaulted;
+        // The design list is new with the kind itself, the way the font list above is:
+        // an older file has no section at all, so the key is gone, the built-in entries
+        // come back with it, and the file is written out again holding them.
+        let (list, defaulted) = configured_list(
+            ini,
+            DESIGN_SECTION,
+            "extensions",
+            DEFAULT_DESIGN_EXTENSIONS,
+            sanitize_design_extensions,
+        );
+        self.design_extensions = list;
         restored |= defaulted;
 
         restored
