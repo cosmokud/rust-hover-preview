@@ -8325,7 +8325,7 @@ mod tests {
         );
     }
 
-    /// With nothing kept off — `Don't Avoid` — a row is placed by the position mode
+    /// With nothing kept off — `Avoid Nothing` — a row is placed by the position mode
     /// alone: it is anchored at its middle, the way a hover over it is read, and the
     /// preview is allowed to cover it.
     #[test]
