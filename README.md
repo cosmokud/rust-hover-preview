@@ -44,11 +44,11 @@ Animated GIF/APNG/WebP play. HEIC/HEIF/AVIF/JPEG XL/still WebP usually need Wind
 
 ### Design Documents
 
-`psd`, `psb`, `ai`, `kra`, `ora`, `cdr`, `procreate`, `sketch`, `fig`, `xd`.
+`psd`, `psb`, `ai`, `kra`, `ora`, `procreate`, `sketch`, `fig`, `xd`.
 
 These files usually show a preview saved inside them, so you see the design as saved—not a flattened version.
 
-CorelDRAW documents are drawn by LibreOffice where it is installed—the whole page, sharp at any size—and shown from the picture inside the file where it is not. The tray’s **Codecs** menu says whether that engine is there.
+CorelDRAW documents (`.cdr`) need **LibreOffice**: where it is installed the drawing itself is drawn by it and the preview is sharp at any size, and where it is not a `.cdr` shows no preview at all. The picture a CorelDRAW file keeps inside itself is 96 to 256 pixels, which is not worth showing.
 
 ### Fonts
 
@@ -191,7 +191,7 @@ The item a setting starts at carries `(Default)` after its name, so a menu says 
   - **PDF Scaling** — Fit to Screen (default), or the same shares of the display.
   - **Office Scaling** — the same for a page Office rendered; a workbook’s fallback bitmap is never enlarged.
   - **Font Scaling** — the same shares for a font specimen, 50% by default.
-  - **Design Scaling** — the same shares of the display for a design document (Photoshop, Illustrator, Krita, OpenRaster, CorelDRAW, Procreate); Fit to Screen by default.
+  - **Design Scaling** — the same shares of the display for a design document (Photoshop, Illustrator, Krita, OpenRaster, Procreate); Fit to Screen by default.
 - **Background**
   - **Image Background** — Transparent, Black, White, or Checkerboard; Checkerboard by default.
   - **Vector Background** — the same backdrops for a drawing: an SVG document, or a metafile; Checkerboard by default.

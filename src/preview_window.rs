@@ -1,6 +1,5 @@
 use crate::archive_formats;
 use crate::archive_preview::{self, ArchivePreviewOptions};
-use crate::cdr_image;
 use crate::cloud_files;
 use crate::codecs;
 use crate::config::{
@@ -8,6 +7,7 @@ use crate::config::{
     sanitize_spinner_delay_ms, sanitize_webp_playback_fps, MarkdownMode, PreviewScale, PreviewType,
     TextTheme, TransparentBackground, DEFAULT_ANIMATED_SCALE_PERCENT, DEFAULT_DDS_BACKGROUND,
     DEFAULT_DESIGN_BACKGROUND, DEFAULT_DESIGN_SCALE, DEFAULT_FONT_BACKGROUND, DEFAULT_FONT_SCALE,
+    DEFAULT_LIBRE_SCALE,
     DEFAULT_IMAGE_BACKGROUND, DEFAULT_IMAGE_CACHE_MB, DEFAULT_OFFICE_SCALE, DEFAULT_PDF_SCALE,
     DEFAULT_PREVIEW_SCALE_PERCENT, DEFAULT_SPINNER_DELAY_MS, DEFAULT_TEXT_FONT_SCALE_PERCENT,
     DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS, DEFAULT_VECTOR_BACKGROUND, DEFAULT_VECTOR_SCALE,
@@ -19,6 +19,7 @@ use crate::engine_processes;
 use crate::eps_image;
 use crate::font_formats;
 use crate::font_preview;
+use crate::libre_formats;
 use crate::libreoffice_render;
 use crate::metafile_image;
 use crate::office_formats;
@@ -417,6 +418,11 @@ enum MediaType {
     /// records are replayed at whatever box the preview is shown at, so a drawing is
     /// sharp at any size the display has.
     Vector,
+    /// A document drawn by a render engine rather than read here — CorelDRAW above all:
+    /// what comes back is a page, which is sharp at whatever size the preview is shown at,
+    /// and what such a file keeps of itself is a thumbnail this app does not show. See
+    /// `libre_formats` and `libreoffice_render`.
+    Libre,
     Loading,
 }
 
@@ -441,6 +447,8 @@ impl MediaType {
             // over it is its own: the picture *is* what the file keeps of the document,
             // but a user who wants none of them is not asking for pictures to be off.
             Self::Design => Some(PreviewType::Design),
+            // The same for a document an engine drew, at the gate over the engine's kind.
+            Self::Libre => Some(PreviewType::Libre),
             Self::Vector => Some(PreviewType::Vector),
             Self::Loading => None,
         }
@@ -1540,6 +1548,7 @@ fn current_hover_scales() -> HoverScales {
             office: cfg.office_scale,
             font: cfg.font_scale,
             design: cfg.design_scale,
+            libre: cfg.libre_scale,
             vector: cfg.vector_scale,
         })
         .unwrap_or(HoverScales {
@@ -1550,6 +1559,7 @@ fn current_hover_scales() -> HoverScales {
             office: DEFAULT_OFFICE_SCALE,
             font: DEFAULT_FONT_SCALE,
             design: DEFAULT_DESIGN_SCALE,
+            libre: DEFAULT_LIBRE_SCALE,
             vector: DEFAULT_VECTOR_SCALE,
         })
 }
@@ -1703,6 +1713,10 @@ struct HoverScales {
     animated: PreviewScale,
     /// The share of the display a PDF page is drawn at.
     page: PreviewScale,
+    /// The share of the display a document an engine drew is shown at: what the engine hands
+    /// back is a page, so the share is of the room the display has rather than of a size the
+    /// file asks for, exactly as a PDF page's is.
+    libre: PreviewScale,
     /// The share of the display the page an Office document is drawn as is shown at.
     office: PreviewScale,
     /// The share of the display a font specimen is drawn at.
@@ -1812,6 +1826,11 @@ fn effective_preview_scale(path: &Path, scales: HoverScales) -> PreviewScale {
             source if source.may_be_enlarged() => fit_reduced(scales.office),
             _ => bitmap_at_display_scale(scales.office),
         }
+    } else if libre_formats::is_libre_file(path) {
+        // A document an engine draws follows a scale of its own, and the share is of the
+        // display the way a PDF page's is: what the engine hands back is a page, not a
+        // picture with a size of its own to be scaled from.
+        fit_reduced(scales.libre)
     } else if design_formats::is_design_file(path) {
         // A design document is a document for this question rather than a picture: what is
         // previewed is the picture the file keeps of the whole of itself, at whatever size
@@ -3227,7 +3246,6 @@ fn load_design_preview(
             psd_image::decode(path, target_width, target_height)
         } else {
             project_image::decode(path, target_width, target_height)
-                .or_else(|| cdr_image::decode(path, target_width, target_height))
                 .or_else(|| eps_image::decode(path, target_width, target_height))
         }?;
 
@@ -3270,9 +3288,37 @@ fn design_dimensions(path: &Path) -> Option<(u32, u32)> {
         return psd_image::dimensions(path);
     }
 
-    project_image::dimensions(path)
-        .or_else(|| cdr_image::dimensions(path))
-        .or_else(|| eps_image::dimensions(path))
+    project_image::dimensions(path).or_else(|| eps_image::dimensions(path))
+}
+
+/// The page a render engine drew for a document, as a frame of `kind`.
+///
+/// What the engine hands back is a PDF, and this is the whole of what is asked of it: the
+/// page's own size, the box the layout would place that size in, and page 1 rendered into
+/// it — drawn at the size it is shown at rather than scaled up from a picture, which is the
+/// reason a document an engine drew is worth asking for at all. The pages are cached by the
+/// PDF path itself, under the size they were drawn at.
+fn load_engine_page(
+    page: &Path,
+    kind: MediaType,
+    max_width: u32,
+    max_height: u32,
+    preview_scale: PreviewScale,
+) -> Option<MediaData> {
+    let (page_width, page_height) = pdf_preview::page_dimensions(page)?;
+    let (target_width, target_height) =
+        scale_dimensions(page_width, page_height, max_width, max_height, preview_scale);
+    let (pixels, width, height) = pdf_preview::render_first_page(page, target_width, target_height)?;
+
+    Some(static_image_media(
+        ImageFrame {
+            pixels,
+            width,
+            height,
+            delay_ms: 0,
+        },
+        kind,
+    ))
 }
 
 /// The drawing a vector file is previewed from.
@@ -4422,7 +4468,15 @@ fn load_media(
     }
 
     if office_formats::is_office_file(path) {
-        return load_office_preview(path, max_width, max_height, preview_scale, &cancel);
+        // Where no Office is installed to draw a page, the render engine beside it draws one
+        // instead: the same page, shown as an Office document rather than as a document of
+        // the engine's own kind — the file is what it is, whichever engine drew it.
+        return load_office_preview(path, max_width, max_height, preview_scale, &cancel).or_else(
+            || {
+                let page = libreoffice_render::pdf_for_office(path)?;
+                load_engine_page(&page, MediaType::Office, max_width, max_height, preview_scale)
+            },
+        );
     }
 
     // A design document is read for the picture its own format keeps of the whole
@@ -4434,6 +4488,15 @@ fn load_media(
     //
     // The gate is not asked here, exactly as it is not asked for a PDF or a font: the
     // hook asks it before a hover can reach this path at all.
+    // A document this app hands to a render engine is the engine's to draw, and there is
+    // nothing behind it: what such a file keeps of itself is a thumbnail, and a thumbnail is
+    // not shown — see `libre_formats` — so a machine without the engine shows nothing at all.
+    if libre_formats::is_libre_file(path) {
+        return libreoffice_render::pdf_for(path).and_then(|page| {
+            load_engine_page(&page, MediaType::Libre, max_width, max_height, preview_scale)
+        });
+    }
+
     if design_formats::is_design_file(path) {
         return load_design_preview(path, max_width, max_height, preview_scale);
     }
@@ -4690,6 +4753,12 @@ fn get_media_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
 /// can fit it into the space beside the cursor, and the text renderer is handed
 /// the box that comes out of that.
 fn media_dimensions(path: &PathBuf, bounds: ScreenBounds, dpi: u32) -> Option<(u32, u32)> {
+    // A document an engine draws is measured from the page it drew, which is the size the
+    // layout places before the scale is applied to it — the same reading a PDF's page gets.
+    if libre_formats::is_libre_file(path) {
+        return pdf_preview::page_dimensions(&libreoffice_render::pdf_for(path)?);
+    }
+
     if is_text_preview(path) {
         let cap_width = (bounds.right - bounds.left).max(1) as u32;
         let cap_height = bounds.height().max(1) as u32;
@@ -8591,6 +8660,7 @@ mod tests {
             office: DEFAULT_OFFICE_SCALE,
             font: DEFAULT_FONT_SCALE,
             design: DEFAULT_DESIGN_SCALE,
+            libre: DEFAULT_LIBRE_SCALE,
             vector: DEFAULT_VECTOR_SCALE,
         }
     }

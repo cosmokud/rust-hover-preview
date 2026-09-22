@@ -1112,6 +1112,14 @@ fn is_media_file(path: &Path) -> bool {
     // of the file itself rather than out of a decoder its extension names — and it is
     // asked where the renderer asks it: after the office list, ahead of the text and
     // image lists that would not have claimed a `.psd` anyway.
+    // A document this app hands to a render engine — CorelDRAW above all — is a kind of its
+    // own, and it is asked before the design list because a name can sit in both: what
+    // draws such a file is the engine, and what this app reads of one by itself is a
+    // thumbnail rather than a preview; see `libre_formats`.
+    if crate::libre_formats::matches_libre_list(path, &config.libre_extensions) {
+        return PreviewType::Libre.enabled_in(&config);
+    }
+
     if matches_design_list(path, &config.design_extensions) {
         return PreviewType::Design.enabled_in(&config);
     }
