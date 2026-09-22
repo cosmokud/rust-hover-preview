@@ -21,14 +21,23 @@ use std::path::Path;
 /// The extensions written to `config.ini` on first run: the drawings a hover is expected
 /// to meet.
 ///
-/// `wmf` and `emf` are Windows' two metafiles — a list of drawing records that the
-/// drawing layer plays back, which is why a preview of one is sharp at any size — and
+/// `svg` and `svgz` are the documents the browser engine draws, and both spellings of the
+/// same format; `wmf` and `emf` are Windows' two metafiles — a list of drawing records that
+/// the drawing layer plays back, which is why a preview of one is sharp at any size — and
 /// `eps` and `epsi` are the two spellings of an encapsulated PostScript file, read here
 /// for the preview picture a writer leaves inside it rather than for the PostScript
-/// itself: nothing in this app interprets PostScript. `svg` and `svgz` are vector
-/// documents too and are not in this list, because they are entries of the image list
-/// with a gate of their own (see `svg_preview`).
-pub const DEFAULT_VECTOR_EXTENSIONS: &str = "emf,eps,epsi,wmf";
+/// itself: nothing in this app interprets PostScript.
+pub const DEFAULT_VECTOR_EXTENSIONS: &str = "emf,eps,epsi,svg,svgz,wmf";
+
+/// The built-in vector list as it stood before `svg` and `svgz` were added to it — which
+/// is to say the list the kind had when it was written.
+///
+/// A file holding exactly these entries is the app's own older list rather than a user's
+/// edit — nobody has touched it — so it is brought up to the built-in list rather than kept
+/// as written. Without that, the two documents would be left out of every `config.ini`
+/// already written, and a list that differs is otherwise the user's own (see
+/// `config::configured_list_over_history`).
+pub const VECTOR_EXTENSIONS_BEFORE_SVG: &str = "emf,eps,epsi,wmf";
 
 /// Whether the configured list claims `path`.
 pub fn matches_vector_list(path: &Path, extensions: &[String]) -> bool {

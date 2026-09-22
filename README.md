@@ -183,7 +183,7 @@ All are free. Windows 11 often has HEIF, AV1, and WebP already. Where one is mis
   - **Image Scaling** — Fit to Screen or 25%–400%, of the image's own size.
   - **Video Scaling** — the same shares for a video, 100% (default).
   - **Animated Scaling** — the same shares for an animated GIF, WebP, or PNG; a still GIF or PNG keeps Image Scaling. 100% (default).
-  - **Vector Scaling** — Fit to Screen, or 75%, 50% (default), 25%, 10% of the display.
+  - **Vector Scaling** — Fit to Screen (default), or 75%, 50%, 25%, 10% of the display.
   - **PDF Scaling** — Fit to Screen (default), or the same shares of the display.
   - **Office Scaling** — the same for a page Office rendered; a workbook’s fallback bitmap is never enlarged.
   - **Font Scaling** — the same shares for a font specimen, 50% by default.
@@ -256,7 +256,7 @@ video_volume=0
 preview_scale=100
 video_scale=100
 animated_scale=100
-vector_scale=50
+vector_scale=fit
 pdf_scale=fit
 office_scale=fit
 font_scale=50
@@ -267,7 +267,7 @@ text_preview_full_mode=false
 text_font_scale=125
 
 [image]
-extensions=apng,avif,bmp,dds,exr,ff,gif,hdr,heic,heif,ico,jfif,jpe,jpeg,jpg,jxl,pam,pbm,pgm,png,pnm,ppm,qoi,svg,svgz,tga,tif,tiff,webp
+extensions=apng,avif,bmp,dds,exr,ff,gif,hdr,heic,heif,ico,jfif,jpe,jpeg,jpg,jxl,pam,pbm,pgm,png,pnm,ppm,qoi,tga,tif,tiff,webp
 
 [video]
 extensions=264,265,266,3g2,3gp,3gpp,apv,asf,av1,avc,avi,avs,avs2,avs3,bik,bk2,c93,cavs,cdg,cdxl,cin,cpk,dav,...
@@ -289,7 +289,7 @@ extensions=otf,ttc,ttf,woff,woff2
 extensions=ai,fig,kra,ora,psb,psd,sketch,xd
 
 [vector]
-extensions=emf,eps,epsi,wmf
+extensions=emf,eps,epsi,svg,svgz,wmf
 ```
 
 Key settings, in plain terms:
@@ -300,7 +300,7 @@ Key settings, in plain terms:
 - `text_preview_full_mode` — `true` adds scrolling, selection, and copy.
 - `text_font_scale` — a percentage from 1 to 1000, default `125`; archive listings follow it too.
 - `extensions` / `names` — the text-preview gates. Extensions are written without dots. Names match extensionless files.
-- `image_extensions`, `video_extensions`, `archive_extensions`, `office_extensions`, `font_extensions`, `design_extensions`, `vector_extensions` — per-type preview gates, written without dots. An entry with a dot in it, like `tar.gz`, is matched against the end of the file name. `svg` and `svgz` are entries of the image list and are gated by **Vector**, not by **Images**.
+- `image_extensions`, `video_extensions`, `archive_extensions`, `office_extensions`, `font_extensions`, `design_extensions`, `vector_extensions` — per-type preview gates, written without dots. An entry with a dot in it, like `tar.gz`, is matched against the end of the file name.
 - `image_cache_mb` — memory for decoded image frames: default `32`, max `2048`; `0` holds nothing.
 - `office_cache_mb` — memory for Office-rendered pages: default `64`, max `2048`; `0` holds nothing between hovers but still renders for the current hover.
 - `pdf_cache_mb` — memory for PDF pages as pixels: default `32`, max `2048`; the same file at two preview sizes is held as two pages.
@@ -316,7 +316,7 @@ Key settings, in plain terms:
 - `preview_scale` — percentage or `fit`, read against the picture's own size.
 - `video_scale` — the same for a video, `100` by default; a file written before the two were split gets its video scale from `preview_scale`.
 - `animated_scale` — the same for an animated GIF, WebP, or PNG, `100` by default; a still GIF or PNG follows `preview_scale`, and a file written before the two were split gets this one from `preview_scale` too.
-- `vector_scale` — percentage or `fit`, read against the screen. `50` is default, `fit` is all of it, and `100` or more reads as `fit`. It covers both halves of the Vector kind, and a file written before they were one names it with `svg_scale`, which is still read.
+- `vector_scale` — percentage or `fit`, read against the screen. `fit` is default, is all of the room, and `100` or more reads as it. It covers every drawing the Vector kind holds, and a file written before they were one kind names it with `svg_scale`, which is still read.
 - `pdf_scale` / `office_scale` — the same for a PDF page and an Office-rendered page, both `fit` by default as well as a percentage. A workbook’s fallback bitmap follows its own size and is never enlarged.
 - `font_scale` — percentage or `fit`, read against the screen. `50` is default, `fit` is all of it, and `100` or more reads as `fit`. A font has no size of its own, so the share is of the display.
 - `design_scale` — the same for a design document, `fit` by default. A design preview is the picture the file keeps of the whole document, so the share is of the screen the way a page’s is rather than of the document’s own size.

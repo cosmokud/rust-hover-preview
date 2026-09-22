@@ -8427,7 +8427,6 @@ pub fn run_preview_window() {
 mod tests {
     use super::*;
     use crate::config::DEFAULT_FONT_SCALE_PERCENT;
-    use crate::config::DEFAULT_VECTOR_SCALE_PERCENT;
 
     /// A display to place on: 1000 by 800 at its top-left corner.
     fn bounds() -> ScreenBounds {
@@ -8982,7 +8981,7 @@ mod tests {
                     ..hover_scales()
                 }
             ),
-            PreviewScale::FitToScreenReduced(DEFAULT_VECTOR_SCALE_PERCENT),
+            PreviewScale::FitToScreen,
             "a document follows its own share, not a page's"
         );
 
