@@ -224,6 +224,9 @@ Example, trimmed:
 
 ```ini
 [settings]
+; File
+config_version=1
+
 ; General
 preview_enabled=true
 run_at_startup=true
@@ -325,6 +328,7 @@ Key settings, in plain terms:
 - `dds_background` — `white` (default) or `black`, and only those two: a texture's alpha channel is as often a mask, a height or a roughness as it is transparency, so the backdrops that show what stands behind a preview are not offered for one, and a file that names one of them is read as `white`.
 - `vector_background` — `checkerboard` (default), `white`, `black`, or `transparent`: what an SVG document's page, or a metafile drawing, is drawn over. A file written before the two were one names it with `svg_background`, which is still read.
 - `design_background` — `checkerboard` (default), `white`, `black`, or `transparent`.
+- `config_version` — the version of the app that wrote the file, stamped on every write. A file written by an older version is brought up to date and written back on the next run; a file written by a newer one is read for what the running version knows and left exactly as it is.
 - A deleted `extensions=` line or whole section comes back with built-in entries. An `extensions=` line left empty stays empty.
 
 ## Build from Source

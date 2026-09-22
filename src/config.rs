@@ -48,6 +48,23 @@ const FONT_SECTION: &str = "font";
 const DESIGN_SECTION: &str = "design";
 /// The vector extension list lives in its own section for the same reason.
 const VECTOR_SECTION: &str = "vector";
+/// The shape of the file this build writes, as the number stamped into it.
+///
+/// It counts the file rather than the release: it moves when a file written by an older
+/// build needs something done to it before this one can read it, and it stays where it is
+/// through any number of releases that leave the shape of the file alone. A setting added
+/// to the file moves it — a file stamped at the version before the setting was added is
+/// written out again, which is what puts the setting into files that already exist — and so
+/// does a key renamed, a section moved, a list whose built-in entries are brought up to the
+/// list of now, or a step added to `migrate`. Nothing that changes a value a user has — a
+/// default this app has changed its mind about — is a reason to move it: a file is stamped
+/// so that what this app wrote can be told from what a person wrote, and moving a default
+/// would use the stamp for the opposite (see `migrate`).
+///
+/// `0` is not a version this app ever stamped: it is a file with no stamp in it, which is
+/// every file written before the stamp existed, and the answer for one is to bring it up to
+/// the shape of now.
+const CONFIG_VERSION: u32 = 1;
 pub const DEFAULT_WEBP_PLAYBACK_FPS: u32 = 90;
 pub const MAX_WEBP_PLAYBACK_FPS: u32 = 90;
 /// The volume a video is played at unless the file says otherwise: silent, so a hover
@@ -1272,6 +1289,11 @@ fn same_entries(list: &[String], canonical: &[String]) -> bool {
 /// menus: the menu a setting is changed from is the menu it is found under, so the file
 /// reads the way the tray does rather than as one alphabetical run of fifty keys.
 ///
+/// `File` is the one heading that is not a menu. It holds the version of this app that
+/// wrote the file, which is what a build reads before it decides what to do with what it
+/// has opened (see `migrate`), and it stands first so that a file whose shape cannot be
+/// read by the build in front of it says so before it says anything else.
+///
 /// The file lists keep sections of their own below it — `[image]`, `[video]` and the rest
 /// — because a list of extensions is a collection rather than a setting, and a section is
 /// what the format has for a collection. A heading is a comment instead, which is all the
@@ -1281,6 +1303,7 @@ fn same_entries(list: &[String], canonical: &[String]) -> bool {
 /// not — and a setting `save` writes that is missing from the table is written last of
 /// all under `; Ungrouped`, which is where a heading that was forgotten shows up.
 const SETTING_GROUPS: &[(&str, &[&str])] = &[
+    ("File", &["config_version"]),
     ("General", &["preview_enabled", "run_at_startup"]),
     (
         "Preview Types",
@@ -1466,12 +1489,12 @@ fn ordered_text(ini: &Ini) -> String {
 /// when the key is gone. The flag says which of the two it was, so the caller knows
 /// the file has to be written out again.
 ///
-/// A list that still holds exactly the built-in entries is read as the built-in
-/// list, order and all, which is how a file written before those entries were put
-/// in alphabetical order is brought into line without touching a list anyone has
-/// edited. The order is compared as well as the entries: a file that already agrees
-/// with the built-in list is left alone rather than written out again on every
-/// reload.
+/// What is read here is what the file says: a list anyone has edited keeps its own
+/// entries and its own order, and an empty value is a list with nothing in it rather than
+/// a missing one. A list the app itself wrote and has since added entries to was dealt
+/// with before this ran, by the migration step that reads a file older than this build
+/// (see `adopt_older_lists`), so by the time a list is read here it is either the user's
+/// or the list of now.
 fn configured_list(
     ini: &Ini,
     section: &str,
@@ -1479,49 +1502,137 @@ fn configured_list(
     defaults: &str,
     sanitize: fn(&str) -> Vec<String>,
 ) -> (Vec<String>, bool) {
-    configured_list_over_history(ini, section, key, defaults, &[], sanitize)
+    match ini.get(section, key) {
+        Some(value) => (sanitize(&value), false),
+        None => (sanitize(defaults), true),
+    }
 }
 
-/// The same, for a list whose built-in entries have changed since the file may have
-/// been written.
+/// What a file that has just been read needs done to it.
 ///
-/// A value holding exactly one of `previous` is the app's own older list rather than
-/// a user's edit — an installation that has never touched the list — so it is read as
-/// the current built-in list, entries and all, and the file is written out again with
-/// what was added to it. Without that, an entry added to a built-in list would reach
-/// a fresh installation only: every file already written holds the list as it was,
-/// and a list that differs from the built-in one is otherwise the user's own. A list
-/// with any one entry changed — added, removed or spelled differently — matches
-/// neither and is kept exactly as it is.
-fn configured_list_over_history(
-    ini: &Ini,
-    section: &str,
-    key: &str,
-    defaults: &str,
-    previous: &[&str],
-    sanitize: fn(&str) -> Vec<String>,
-) -> (Vec<String>, bool) {
-    let canonical = sanitize(defaults);
+/// The stamp is the file's own record of the build that wrote it, and it is the one thing a
+/// build can know about a file it did not write: what the file holds says nothing about
+/// whether a value in it is a setting somebody chose or a default some older version wrote
+/// out, and reading it more closely does not change that.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FileState {
+    /// Written by this build, or by one whose file shape is the same: read it, and write
+    /// nothing back.
+    Current,
+    /// Written by an older build — or by one that predates the stamp, which is the same
+    /// answer read as far as it can be — so the steps between that version and this one are
+    /// run over it. A step that has already been done is a step that does nothing, which is
+    /// what makes this safe to reach twice: a file restored from a backup carries its old
+    /// stamp with it.
+    Older(u32),
+    /// Written by a newer build than this one. It is read for what this build knows and
+    /// written back by nothing: what this build cannot read in it is a newer build's
+    /// business, and a downgrade that saved over the file would take those settings with it.
+    FromTheFuture,
+}
 
-    match ini.get(section, key) {
-        Some(value) => {
-            let list = sanitize(&value);
-            if list == canonical {
-                return (list, false);
-            }
+/// What the file just read is, by the version stamped into it. A file with no stamp at all
+/// is the oldest version there is, which is what every file written before the stamp
+/// existed is.
+fn file_state(ini: &Ini) -> FileState {
+    let stamped = ini
+        .get(CONFIG_SECTION, "config_version")
+        .and_then(|value| value.trim().parse::<u32>().ok())
+        .unwrap_or(0);
 
-            let written_by_the_app = same_entries(&list, &canonical)
-                || previous
-                    .iter()
-                    .any(|older| same_entries(&list, &sanitize(older)));
+    if stamped > CONFIG_VERSION {
+        return FileState::FromTheFuture;
+    }
+    if stamped == CONFIG_VERSION {
+        return FileState::Current;
+    }
 
-            if written_by_the_app {
-                (canonical, true)
-            } else {
-                (list, false)
-            }
+    FileState::Older(stamped)
+}
+
+/// Bring a file written by an older version up to the shape this one reads.
+///
+/// A step is for a change the file carries no evidence of: something this app wrote that has
+/// to be written again because the app has changed its mind about what it writes. What a step
+/// is not is a way to move a default — a value in the file is a value the user has, whether
+/// they typed it or this app wrote it there, and a build that prefers another one writes it
+/// where there is nothing to overwrite, which is a fresh installation and nowhere else (see
+/// `AppConfig::load`).
+///
+/// The reads `apply_ini` does for a key that has been renamed — `off_trigger_key`,
+/// `svg_scale`, the backdrops' older names — are not steps here, because they are reads
+/// rather than rewrites: one costs nothing on a load, leaves a file that names the current
+/// key untouched, and is deleted when the name it reads stops appearing in files people
+/// have. A step is added here only for a change that has to be *written*.
+fn migrate(ini: &mut Ini, from: u32) {
+    if from < 1 {
+        // The first step, and the one every file written before the stamp needs: the
+        // built-in lists have grown since such a file was written, and the lists it holds
+        // are the app's own where they hold exactly what the app shipped then.
+        adopt_older_lists(ini);
+    }
+}
+
+/// The built-in lists this app shipped and then changed, as the step that brings a file
+/// holding one of them up to the list of now.
+///
+/// A list is only ever read out of a file — nothing in the tray edits one — so a list that
+/// differs from the built-in one is either this app's own older list, written before an
+/// entry was added to it or before its entries were put in alphabetical order, or an edit
+/// somebody made by hand. The two are told apart by their entries, and only one of them is
+/// rewritten: a list holding exactly the entries of a list this app shipped is this app's
+/// own — nobody typed it — so it is replaced with the built-in list, while a list with any
+/// one entry added, removed or spelled differently is the user's and is kept exactly as it
+/// is. Without this, an entry added to a built-in list would reach a fresh installation
+/// only, since every file already written holds the list as it was.
+///
+/// This runs for a file older than the stamp, which is the only file whose list can hold
+/// the app's own older entries. A file carrying the current stamp and holding a list without
+/// `dds` in it has had that entry taken out by hand — the app of that version wrote it — and
+/// putting it back on every load would be an edit undone rather than honored.
+fn adopt_older_lists(ini: &mut Ini) {
+    for (section, defaults, previous, sanitize) in [
+        (
+            IMAGE_SECTION,
+            DEFAULT_IMAGE_EXTENSIONS,
+            &[
+                IMAGE_EXTENSIONS_BEFORE_DDS,
+                IMAGE_EXTENSIONS_BEFORE_CODEC_FORMATS,
+                IMAGE_EXTENSIONS_BEFORE_SVG,
+                IMAGE_EXTENSIONS_WITH_SVG,
+            ][..],
+            sanitize_image_extensions as fn(&str) -> Vec<String>,
+        ),
+        (
+            DESIGN_SECTION,
+            DEFAULT_DESIGN_EXTENSIONS,
+            &[DESIGN_EXTENSIONS_BEFORE_AI][..],
+            sanitize_design_extensions as fn(&str) -> Vec<String>,
+        ),
+        (
+            VECTOR_SECTION,
+            DEFAULT_VECTOR_EXTENSIONS,
+            &[VECTOR_EXTENSIONS_BEFORE_SVG][..],
+            sanitize_vector_extensions as fn(&str) -> Vec<String>,
+        ),
+    ] {
+        let Some(value) = ini.get(section, "extensions") else {
+            continue;
+        };
+
+        let list = sanitize(&value);
+        let canonical = sanitize(defaults);
+        let written_by_the_app = same_entries(&list, &canonical)
+            || previous
+                .iter()
+                .any(|older| same_entries(&list, &sanitize(older)));
+
+        // A list that already agrees with the built-in one, entry for entry and in order,
+        // is left alone rather than written out again: a write moves the mtime, and the
+        // watcher would read the file back for a change that was not one.
+        if written_by_the_app && list != canonical {
+            ini.set(section, "extensions", Some(canonical.join(",")));
         }
-        None => (canonical, true),
     }
 }
 
@@ -1541,6 +1652,17 @@ impl AppConfig {
         Self::folder().map(|folder| folder.join("theme"))
     }
 
+    /// The configuration as the file has it, brought up to the shape this build reads.
+    ///
+    /// What happens to the file is decided by the version stamped in it rather than by what
+    /// it holds (see [`FileState`]), and it is written back in three cases: there was no
+    /// file, because a fresh installation has to be created; the file is older than this
+    /// build, so the steps between the two are run over it and the stamp is brought up; or
+    /// something the file was missing — a list whose key was deleted, with it the whole
+    /// section — had to be put back, since the file is what the user edits and a key left
+    /// missing would be repaired again on every load. A file this build wrote is read and
+    /// nothing more, and a file a newer build wrote is read for what this build knows and
+    /// written over by nothing.
     pub fn load() -> Self {
         let mut config = Self::default();
 
@@ -1548,19 +1670,52 @@ impl AppConfig {
         // dropping a file into a path the app can name rather than creating one.
         theme_files::ensure();
 
-        if let Some(path) = Self::config_path() {
-            config.is_first_run = !path.exists();
+        let Some(path) = Self::config_path() else {
+            return config;
+        };
+
+        config.is_first_run = !path.exists();
+        if !config.is_first_run {
             let mut ini = Ini::new();
-            if ini.load(path.to_string_lossy().as_ref()).is_ok() {
-                // Whatever the file is missing — a list whose key was deleted, a
-                // whole section — comes back with its built-in entries, and the save
-                // below writes them out again.
-                config.apply_ini(&ini);
+
+            match ini.load(path.to_string_lossy().as_ref()) {
+                Ok(_) => match file_state(&ini) {
+                    // A file from a newer build: read it, and let nothing this build does
+                    // reach the disk. What it holds that this build cannot read is that
+                    // build's, and a downgrade is no reason to lose it.
+                    FileState::FromTheFuture => {
+                        config.apply_ini(&ini);
+                    }
+                    FileState::Current => {
+                        if config.apply_ini(&ini) {
+                            config.save();
+                        }
+                    }
+                    FileState::Older(from) => {
+                        // Nothing more is asked: a file older than this build is written out
+                        // whether or not a step and the reads changed anything. The stamp
+                        // being out of date is itself the reason — the write is what brings
+                        // it up to the version that has now been applied, and what puts a
+                        // setting this build has that the file has never held into a file
+                        // that already exists.
+                        migrate(&mut ini, from);
+                        config.apply_ini(&ini);
+                        config.save();
+                    }
+                },
+                // A file that cannot be read is left exactly where it is, and what it holds
+                // is not guessed at: writing the defaults over it would be a write with
+                // nothing to do with the file, which is the one kind of write this app does
+                // not make. A file that is missing by then — or was never there — is the
+                // fresh installation below.
+                Err(_) => {}
             }
         }
 
-        // Always save to ensure new fields are written to config file
-        config.save();
+        if config.is_first_run {
+            config.save();
+        }
+
         config
     }
 
@@ -1584,6 +1739,14 @@ impl AppConfig {
                 let _ = fs::create_dir_all(parent);
             }
             let mut ini = Ini::new();
+            // The file's own record of the build that wrote it, and the first key in it:
+            // what a build does with a file it has opened is settled by this before
+            // anything else is read, and every write of the file brings it up to date.
+            ini.set(
+                CONFIG_SECTION,
+                "config_version",
+                Some(CONFIG_VERSION.to_string()),
+            );
             ini.set(
                 CONFIG_SECTION,
                 "run_at_startup",
@@ -2189,21 +2352,15 @@ impl AppConfig {
         // thing — it is a list the user emptied, and it is kept as written.
         let mut restored = false;
 
-        // The image list is the one whose built-in entries have changed since a file
-        // may have been written — `svg` and `svgz` were added to it, then the
-        // formats Windows has a codec for, then `dds` — so it is read through the
-        // history beside the app's own older lists.
-        let (list, defaulted) = configured_list_over_history(
+        // The image list is read as the file has it. What an older file's list needs —
+        // `svg` and `svgz` given up to the vector list, the formats Windows has a codec
+        // for, `dds`, and the order the entries are written in — was seen to by
+        // `adopt_older_lists`, which ran over the file before this did.
+        let (list, defaulted) = configured_list(
             ini,
             IMAGE_SECTION,
             "extensions",
             DEFAULT_IMAGE_EXTENSIONS,
-            &[
-                IMAGE_EXTENSIONS_BEFORE_DDS,
-                IMAGE_EXTENSIONS_BEFORE_CODEC_FORMATS,
-                IMAGE_EXTENSIONS_BEFORE_SVG,
-                IMAGE_EXTENSIONS_WITH_SVG,
-            ],
             sanitize_image_extensions,
         );
         self.image_extensions = list;
@@ -2268,14 +2425,13 @@ impl AppConfig {
         // The design list is new with the kind itself, the way the font list above is: an
         // older file has no section at all, so the key is gone, the built-in entries come
         // back with it, and the file is written out again holding them. Its entries have
-        // grown since — `ai` is the one that did — so a file written by the app before that
-        // is brought up to the list of now rather than left holding the older one.
-        let (list, defaulted) = configured_list_over_history(
+        // grown since — `ai` is the one that did — and that is `adopt_older_lists`' business
+        // rather than this read's.
+        let (list, defaulted) = configured_list(
             ini,
             DESIGN_SECTION,
             "extensions",
             DEFAULT_DESIGN_EXTENSIONS,
-            &[DESIGN_EXTENSIONS_BEFORE_AI],
             sanitize_design_extensions,
         );
         self.design_extensions = list;
@@ -2283,14 +2439,13 @@ impl AppConfig {
         // And the vector list, new with its kind: an older file has no section at all, so
         // the key is gone and the built-in entries come back with it. Its entries have
         // grown since — `svg` and `svgz`, which were entries of the image list until the
-        // kind they belong to was given them — so a file written by the app before that is
-        // brought up to the list of now rather than left holding the older one.
-        let (list, defaulted) = configured_list_over_history(
+        // kind they belong to was given them — and that, too, is `adopt_older_lists`'
+        // business rather than this read's.
+        let (list, defaulted) = configured_list(
             ini,
             VECTOR_SECTION,
             "extensions",
             DEFAULT_VECTOR_EXTENSIONS,
-            &[VECTOR_EXTENSIONS_BEFORE_SVG],
             sanitize_vector_extensions,
         );
         self.vector_extensions = list;
@@ -2862,6 +3017,17 @@ mod tests {
         assert!(PreviewType::Fonts.enabled_in(&config));
     }
 
+    /// A file as `load` reads one: the steps an older file needs are run over it first, and
+    /// what the configuration then reads is what the file says. Every test that reads a file
+    /// this app once wrote goes through this, because it is what happens to one.
+    fn read_an_older_file(ini: &mut Ini) -> AppConfig {
+        migrate(ini, 0);
+
+        let mut config = AppConfig::default();
+        config.apply_ini(ini);
+        config
+    }
+
     /// A file holding the built-in list of an earlier version has never been edited,
     /// so the entries added to the list since then are put into it. Without this, a
     /// format added to a built-in list would preview on a fresh installation only.
@@ -2874,14 +3040,140 @@ mod tests {
             Some(IMAGE_EXTENSIONS_BEFORE_SVG.to_string()),
         );
 
-        let mut config = AppConfig::default();
-        config.apply_ini(&ini);
+        let config = read_an_older_file(&mut ini);
 
         assert_eq!(
             config.image_extensions,
             sanitize_image_extensions(DEFAULT_IMAGE_EXTENSIONS),
             "the list the app shipped before is read as the list it ships now"
         );
+    }
+
+    /// What a build makes of a file is what is stamped in it: a file with no stamp is the
+    /// oldest version there is, a file at this build's own version needs nothing done to it,
+    /// and a file from a build that knows more than this one is left to that build.
+    #[test]
+    fn a_file_is_read_by_the_version_stamped_in_it() {
+        let state = |stamped: Option<&str>| {
+            let mut ini = Ini::new();
+            if let Some(value) = stamped {
+                ini.set(CONFIG_SECTION, "config_version", Some(value.to_string()));
+            }
+
+            file_state(&ini)
+        };
+
+        for unstamped in [None, Some(""), Some("not a version"), Some("0")] {
+            assert_eq!(
+                state(unstamped),
+                FileState::Older(0),
+                "`{unstamped:?}` is not a version this app writes, so the file is the oldest one there is"
+            );
+        }
+
+        assert_eq!(
+            state(Some(&(CONFIG_VERSION - 1).to_string())),
+            FileState::Older(CONFIG_VERSION - 1),
+            "a file from the version before this one has the steps between the two to run"
+        );
+        assert_eq!(
+            state(Some(&CONFIG_VERSION.to_string())),
+            FileState::Current,
+            "the file this build writes is the one it has nothing to do to"
+        );
+        assert_eq!(
+            state(Some(&(CONFIG_VERSION + 1).to_string())),
+            FileState::FromTheFuture,
+            "a file from a build that knows more than this one is read and not written"
+        );
+        assert_eq!(state(Some("999999")), FileState::FromTheFuture);
+    }
+
+    /// A step is run over a file older than the stamp, and a file that has been through it is
+    /// not that file any more: a file restored from a backup carries its old stamp with it,
+    /// and a step run over it a second time must find nothing left to do.
+    #[test]
+    fn migrating_a_file_twice_changes_nothing_the_second_time() {
+        let mut ini = Ini::new();
+        ini.set(
+            IMAGE_SECTION,
+            "extensions",
+            Some(IMAGE_EXTENSIONS_BEFORE_SVG.to_string()),
+        );
+
+        migrate(&mut ini, 0);
+        assert_eq!(
+            ini.get(IMAGE_SECTION, "extensions"),
+            Some(sanitize_image_extensions(DEFAULT_IMAGE_EXTENSIONS).join(",")),
+            "the app's own older list was brought up to the built-in one"
+        );
+
+        let once = ordered_text(&ini);
+        migrate(&mut ini, 0);
+
+        assert_eq!(
+            ordered_text(&ini),
+            once,
+            "a step that has already been done writes nothing"
+        );
+    }
+
+    /// The stamp is the first thing in the file, under a heading of its own: what a build
+    /// does with a file it opens is settled by the version in it before anything else is
+    /// read, so it stands where a person reading the file also finds it first.
+    #[test]
+    fn the_version_is_written_first_under_its_own_heading() {
+        let mut ini = Ini::new();
+        ini.set(
+            CONFIG_SECTION,
+            "config_version",
+            Some(CONFIG_VERSION.to_string()),
+        );
+        ini.set(CONFIG_SECTION, "preview_enabled", Some("true".to_string()));
+
+        assert_eq!(
+            ordered_text(&ini),
+            format!(
+                "\
+[settings]
+; File
+config_version={CONFIG_VERSION}
+
+; General
+preview_enabled=true
+"
+            )
+        );
+    }
+
+    /// The other side of the stamp: the same list in a file this build wrote is the user's
+    /// own, so an entry taken out of it stays out. `dds` is the one to take out — it is the
+    /// newest entry of the image list, and a list without it is exactly the list this app
+    /// shipped before it was added, which is what the check above matches on. A file at the
+    /// current version says the app of that version wrote the list with `dds` in it, so a
+    /// list without it was edited by hand.
+    #[test]
+    fn a_stamped_file_keeps_the_list_it_has() {
+        let trimmed = sanitize_image_extensions(IMAGE_EXTENSIONS_BEFORE_DDS);
+
+        let mut ini = Ini::new();
+        ini.set(
+            CONFIG_SECTION,
+            "config_version",
+            Some(CONFIG_VERSION.to_string()),
+        );
+        ini.set(IMAGE_SECTION, "extensions", Some(trimmed.join(",")));
+
+        assert_eq!(file_state(&ini), FileState::Current);
+
+        let mut config = AppConfig::default();
+        config.apply_ini(&ini);
+
+        assert_eq!(
+            config.image_extensions, trimmed,
+            "a list a stamped file holds is the user's, however much it looks like an older one"
+        );
+        assert!(!config.image_extensions.contains(&"dds".to_string()));
     }
 
     /// The design list's own version of the same: a file holding the list the app shipped
@@ -2897,8 +3189,7 @@ mod tests {
             Some(DESIGN_EXTENSIONS_BEFORE_AI.to_string()),
         );
 
-        let mut config = AppConfig::default();
-        config.apply_ini(&ini);
+        let config = read_an_older_file(&mut ini);
 
         assert_eq!(
             config.design_extensions,
@@ -2910,8 +3201,7 @@ mod tests {
         let mut ini = Ini::new();
         ini.set(DESIGN_SECTION, "extensions", Some(edited.clone()));
 
-        let mut config = AppConfig::default();
-        config.apply_ini(&ini);
+        let config = read_an_older_file(&mut ini);
 
         assert_eq!(
             config.design_extensions,
@@ -2933,8 +3223,7 @@ mod tests {
             Some(IMAGE_EXTENSIONS_BEFORE_CODEC_FORMATS.to_string()),
         );
 
-        let mut config = AppConfig::default();
-        config.apply_ini(&ini);
+        let config = read_an_older_file(&mut ini);
 
         assert_eq!(
             config.image_extensions,
@@ -2962,8 +3251,7 @@ mod tests {
             Some(IMAGE_EXTENSIONS_WITH_SVG.to_string()),
         );
 
-        let mut config = AppConfig::default();
-        config.apply_ini(&ini);
+        let config = read_an_older_file(&mut ini);
 
         assert_eq!(
             config.image_extensions,
@@ -2986,8 +3274,7 @@ mod tests {
             Some(VECTOR_EXTENSIONS_BEFORE_SVG.to_string()),
         );
 
-        let mut config = AppConfig::default();
-        config.apply_ini(&ini);
+        let config = read_an_older_file(&mut ini);
 
         assert_eq!(
             config.vector_extensions,
