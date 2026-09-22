@@ -1,6 +1,9 @@
 use crate::archive_formats::matches_archive_list;
 use crate::cloud_files;
-use crate::config::{AvoidMode, PreviewType, TriggerKeyMode};
+use crate::config::{
+    AvoidMode, PreviewType, TriggerKeyMode, DEFAULT_HOVER_DELAY_MS,
+    DEFAULT_SAME_FILE_REHOVER_DELAY_MS,
+};
 use crate::design_formats::matches_design_list;
 use crate::font_formats::matches_font_list;
 use crate::image_formats::matches_image_list;
@@ -3304,7 +3307,16 @@ pub fn run_explorer_hook() {
             let vk = off_trigger_key_to_vk(&c.trigger_key);
             (snapshot, vk)
         })
-        .unwrap_or(((true, 0, TriggerKeyMode::Disable, 750, true), Some(0x12)));
+        .unwrap_or((
+            (
+                true,
+                DEFAULT_HOVER_DELAY_MS,
+                TriggerKeyMode::Disable,
+                DEFAULT_SAME_FILE_REHOVER_DELAY_MS,
+                true,
+            ),
+            Some(0x12),
+        ));
     let mut slow_explorer_probe_count = 0u32;
     let mut explorer_probe_backoff_until: Option<Instant> = None;
     let mut last_display_signature = current_display_signature();

@@ -163,6 +163,8 @@ All are free. Windows 11 often has HEIF, AV1, and WebP already. Where one is mis
 
 ## System Tray Menu
 
+The item a setting starts at carries `(Default)` after its name, so a menu says both what is set now — the check or radio mark — and what a setting nobody has touched would be.
+
 - **Enable Preview** — turn previews on or off.
 - **Preview Types** — Images, Videos, Text, PDF, Archives, Office, Vector, Fonts, Design: gate a kind without touching its file list.
 - **Text Preview**
@@ -174,10 +176,10 @@ All are free. Windows 11 often has HEIF, AV1, and WebP already. Where one is mis
   - **Trigger Key (Alt)** — the key is named in the item itself.
     - **Enable Trigger Key** — whether the key is watched at all.
     - **Hold to Disable Preview** / **Hold to Enable Preview** — what holding it does.
-  - **Delay** — Instant, Fast, Medium, Relaxed, Slow: 0 ms to 1000 ms.
-  - **Rehover Delay** — the same steps, before the same file can preview again.
+  - **Delay** — Instant, Fast, Medium, Relaxed, Slow: 0 ms to 1000 ms, Instant (0 ms) by default.
+  - **Rehover Delay** — the same steps, before the same file can preview again; Fast (200 ms) by default.
 - **Placement**
-  - **Position** — Follow Cursor or Best Position.
+  - **Position** — Follow Cursor or Best Position; Best Position by default.
   - **Avoid** — Avoid Nothing, Avoid Filename (default), Avoid Filename Column, or Avoid Details. This keeps a preview off the item it is about.
 - **Scaling**
   - **Image Scaling** — Fit to Screen or 25%–400%, of the image's own size.
@@ -189,11 +191,11 @@ All are free. Windows 11 often has HEIF, AV1, and WebP already. Where one is mis
   - **Font Scaling** — the same shares for a font specimen, 50% by default.
   - **Design Scaling** — the same shares of the display for a design document (Photoshop, Illustrator, Krita, OpenRaster); Fit to Screen by default.
 - **Background**
-  - **Image Background** — Transparent, Black, White, or Checkerboard.
-  - **Vector Background** — the same backdrops for a drawing: an SVG document, or a metafile.
-  - **Font Background** — the same backdrops for a font specimen.
-  - **DDS Background** — the same backdrops for `.dds` textures, whose alpha channel is as often a mask or an unused channel as it is transparency.
-  - **Design Background** — the same backdrops for a design document.
+  - **Image Background** — Transparent, Black, White, or Checkerboard; Checkerboard by default.
+  - **Vector Background** — the same backdrops for a drawing: an SVG document, or a metafile; Checkerboard by default.
+  - **Font Background** — the same backdrops for a font specimen; White by default.
+  - **DDS Background** — Black or White for `.dds` textures, whose alpha channel is as often a mask or an unused channel as it is transparency; White by default. The two backdrops that show what stands behind a texture are not offered for one.
+  - **Design Background** — the same backdrops as a picture's, for a design document; Checkerboard by default.
 - **Volume** — Max, High, Medium, Low, Very Low, Mute: 100% down to 0%.
 - **Performance**
   - **Confirm File Type** — validate file content against the extension.
@@ -216,80 +218,77 @@ Settings are stored at:
 
 The file is watched, and changes apply without a restart.
 
+The settings are grouped under the headings of the tray's own menus — the menu a setting is changed from is the menu it is found under — and within a heading they run alphabetically. A heading is a comment, written with a leading `;`, and carries no value of its own; the file lists each keep a section of their own after the settings.
+
 Example, trimmed:
 
 ```ini
 [settings]
-run_at_startup=true
-hover_delay_ms=0
-same_file_rehover_delay_ms=750
-spinner_delay_ms=250
+; General
 preview_enabled=true
-image_preview_enabled=true
-video_preview_enabled=true
-text_preview_enabled=true
-pdf_preview_enabled=true
+run_at_startup=true
+
+; Preview Types
 archive_preview_enabled=true
-office_preview_enabled=true
-vector_preview_enabled=true
-font_preview_enabled=true
 design_preview_enabled=true
+font_preview_enabled=true
+image_preview_enabled=true
+office_preview_enabled=true
+pdf_preview_enabled=true
+text_preview_enabled=true
+vector_preview_enabled=true
+video_preview_enabled=true
+
+; Text Preview
+markdown_mode=rendered
+text_font_scale=125
+text_preview_full_mode=false
+theme=light
+
+; Timing
+hover_delay_ms=0
+same_file_rehover_delay_ms=200
+spinner_delay_ms=250
+trigger_key=alt
+trigger_key_enabled=true
+trigger_key_mode=disable
+
+; Placement
+avoid_mode=filename
+follow_cursor=false
+
+; Scaling
+animated_scale=100
+design_scale=fit
+font_scale=50
+office_scale=fit
+pdf_scale=fit
+preview_scale=100
+vector_scale=fit
+video_scale=100
+
+; Background
+dds_background=white
+design_background=checkerboard
+font_background=white
+image_background=checkerboard
+vector_background=checkerboard
+
+; Volume
+video_volume=0
+
+; Performance
+confirm_file_type=false
+decode_budget_gb=1
+image_cache_mb=32
 office_cache_mb=64
 office_engine_idle=600
 pdf_cache_mb=32
 text_cache_mb=0
-image_cache_mb=32
-decode_budget_gb=1
-hdr_tone_map=reinhard
+
+; Advanced
 hdr_exposure=0
-trigger_key=alt
-trigger_key_mode=disable
-trigger_key_enabled=true
-confirm_file_type=false
-follow_cursor=false
-avoid_mode=details
-image_background=black
-vector_background=black
-font_background=white
-design_background=black
-video_volume=0
-preview_scale=100
-video_scale=100
-animated_scale=100
-vector_scale=fit
-pdf_scale=fit
-office_scale=fit
-font_scale=50
-design_scale=fit
-theme=light
-markdown_mode=rendered
-text_preview_full_mode=false
-text_font_scale=125
-
-[image]
-extensions=apng,avif,bmp,dds,exr,ff,gif,hdr,heic,heif,ico,jfif,jpe,jpeg,jpg,jxl,pam,pbm,pgm,png,pnm,ppm,qoi,tga,tif,tiff,webp
-
-[video]
-extensions=264,265,266,3g2,3gp,3gpp,apv,asf,av1,avc,avi,avs,avs2,avs3,bik,bk2,c93,cavs,cdg,cdxl,cin,cpk,dav,...
-
-[text]
-extensions=txt,text,log,nfo,md,markdown,json,toml,yaml,py,js,ts,rs,...
-names=license,notice,makefile,dockerfile,gitignore,.gitattributes,...
-
-[archive]
-extensions=7z,apk,cbz,jar,rar,tar,tar.gz,tgz,xpi,zip,zipx
-
-[office]
-extensions=doc,docm,docx,dot,dotm,dotx,pot,potm,potx,pps,ppsm,ppsx,ppt,pptm,pptx,xls,xlsb,xlsm,xlsx,xlt,xltm,xltx
-
-[font]
-extensions=otf,ttc,ttf,woff,woff2
-
-[design]
-extensions=ai,fig,kra,ora,psb,psd,sketch,xd
-
-[vector]
-extensions=emf,eps,epsi,svg,svgz,wmf
+hdr_tone_map=reinhard
 ```
 
 Key settings, in plain terms:
@@ -321,9 +320,11 @@ Key settings, in plain terms:
 - `font_scale` — percentage or `fit`, read against the screen. `50` is default, `fit` is all of it, and `100` or more reads as `fit`. A font has no size of its own, so the share is of the display.
 - `design_scale` — the same for a design document, `fit` by default. A design preview is the picture the file keeps of the whole document, so the share is of the screen the way a page’s is rather than of the document’s own size.
 - `ttc_face` — which face of a `.ttc` collection is drawn: `1` is the first face, and the highest setting is `10`. The heading says which face came out.
+- `image_background` — `checkerboard` (default), `black`, `white`, or `transparent`: what a picture is drawn over, and with it a PDF page, a painted text frame and a page Office rendered. A file written before each kind had a backdrop of its own names it with `transparent_background`, which is still read.
 - `font_background` — `white` (default), `black`, `checkerboard`, or `transparent`.
-- `vector_background` — `black` (default), `white`, `checkerboard`, or `transparent`: what an SVG document's page, or a metafile drawing, is drawn over. A file written before the two were one names it with `svg_background`, which is still read.
-- `design_background` — `black` (default), `white`, `checkerboard`, or `transparent`.
+- `dds_background` — `white` (default) or `black`, and only those two: a texture's alpha channel is as often a mask, a height or a roughness as it is transparency, so the backdrops that show what stands behind a preview are not offered for one, and a file that names one of them is read as `white`.
+- `vector_background` — `checkerboard` (default), `white`, `black`, or `transparent`: what an SVG document's page, or a metafile drawing, is drawn over. A file written before the two were one names it with `svg_background`, which is still read.
+- `design_background` — `checkerboard` (default), `white`, `black`, or `transparent`.
 - A deleted `extensions=` line or whole section comes back with built-in entries. An `extensions=` line left empty stays empty.
 
 ## Build from Source

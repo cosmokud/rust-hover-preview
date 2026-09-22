@@ -5,12 +5,12 @@ use crate::codecs;
 use crate::config::{
     frame_bytes_within_budget, image_decode_limits, read_within_budget, sanitize_image_cache_mb,
     sanitize_spinner_delay_ms, sanitize_webp_playback_fps, MarkdownMode, PreviewScale, PreviewType,
-    TextTheme, TransparentBackground, DEFAULT_ANIMATED_SCALE_PERCENT, DEFAULT_DESIGN_SCALE,
-    DEFAULT_FONT_SCALE, DEFAULT_VECTOR_SCALE,
-    DEFAULT_IMAGE_CACHE_MB, DEFAULT_OFFICE_SCALE, DEFAULT_PDF_SCALE, DEFAULT_PREVIEW_SCALE_PERCENT,
-    DEFAULT_SPINNER_DELAY_MS, DEFAULT_TEXT_FONT_SCALE_PERCENT,
-    DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS, DEFAULT_VIDEO_SCALE_PERCENT,
-    DEFAULT_WEBP_PLAYBACK_FPS,
+    TextTheme, TransparentBackground, DEFAULT_ANIMATED_SCALE_PERCENT, DEFAULT_DDS_BACKGROUND,
+    DEFAULT_DESIGN_BACKGROUND, DEFAULT_DESIGN_SCALE, DEFAULT_FONT_BACKGROUND, DEFAULT_FONT_SCALE,
+    DEFAULT_IMAGE_BACKGROUND, DEFAULT_IMAGE_CACHE_MB, DEFAULT_OFFICE_SCALE, DEFAULT_PDF_SCALE,
+    DEFAULT_PREVIEW_SCALE_PERCENT, DEFAULT_SPINNER_DELAY_MS, DEFAULT_TEXT_FONT_SCALE_PERCENT,
+    DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS, DEFAULT_VECTOR_BACKGROUND, DEFAULT_VECTOR_SCALE,
+    DEFAULT_VIDEO_SCALE_PERCENT, DEFAULT_WEBP_PLAYBACK_FPS,
 };
 use crate::dds_image;
 use crate::design_formats;
@@ -1433,7 +1433,7 @@ fn current_image_background() -> TransparentBackground {
     CONFIG
         .lock()
         .map(|cfg| cfg.image_background)
-        .unwrap_or(TransparentBackground::Transparent)
+        .unwrap_or(DEFAULT_IMAGE_BACKGROUND)
 }
 
 /// The backdrop a font specimen is drawn over, which is a page of its own: a document's
@@ -1442,7 +1442,7 @@ fn current_font_background() -> TransparentBackground {
     CONFIG
         .lock()
         .map(|cfg| cfg.font_background)
-        .unwrap_or(TransparentBackground::Transparent)
+        .unwrap_or(DEFAULT_FONT_BACKGROUND)
 }
 
 /// The backdrop a `.dds` texture is drawn over, which the tray keeps apart from a
@@ -1452,7 +1452,7 @@ fn current_dds_background() -> TransparentBackground {
     CONFIG
         .lock()
         .map(|cfg| cfg.dds_background)
-        .unwrap_or(TransparentBackground::Transparent)
+        .unwrap_or(DEFAULT_DDS_BACKGROUND)
 }
 
 /// The backdrop a design document is drawn over, which the tray keeps apart from a
@@ -1462,7 +1462,7 @@ fn current_design_background() -> TransparentBackground {
     CONFIG
         .lock()
         .map(|cfg| cfg.design_background)
-        .unwrap_or(TransparentBackground::Transparent)
+        .unwrap_or(DEFAULT_DESIGN_BACKGROUND)
 }
 
 /// The backdrop a vector drawing is drawn over, which the tray keeps apart from a
@@ -1476,7 +1476,7 @@ fn current_vector_background() -> TransparentBackground {
     CONFIG
         .lock()
         .map(|cfg| cfg.vector_background)
-        .unwrap_or(TransparentBackground::Transparent)
+        .unwrap_or(DEFAULT_VECTOR_BACKGROUND)
 }
 
 /// How loud a video is played, which is read when one is started rather than when the

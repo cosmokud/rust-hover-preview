@@ -3,12 +3,14 @@ use crate::config::{
     sanitize_decode_budget_gb, sanitize_image_cache_mb, sanitize_office_cache_mb,
     sanitize_pdf_cache_mb, sanitize_text_cache_mb, sanitize_text_font_scale_percent, AvoidMode,
     EngineIdle, MarkdownMode, PreviewScale, PreviewType, TextTheme, TransparentBackground,
-    TriggerKeyMode, DEFAULT_ANIMATED_SCALE, DEFAULT_DECODE_BUDGET_GB, DEFAULT_DESIGN_SCALE,
-    DEFAULT_FONT_SCALE, DEFAULT_VECTOR_SCALE,
-    DEFAULT_IMAGE_CACHE_MB, DEFAULT_OFFICE_CACHE_MB, DEFAULT_OFFICE_ENGINE_IDLE_SECS,
-    DEFAULT_OFFICE_SCALE, DEFAULT_PDF_CACHE_MB, DEFAULT_PDF_SCALE, DEFAULT_PREVIEW_SCALE,
-    DEFAULT_TEXT_CACHE_MB, DEFAULT_TEXT_FONT_SCALE_PERCENT,
-    DEFAULT_VIDEO_SCALE, DEFAULT_WEBVIEW_IDLE_SECS,
+    TriggerKeyMode, DEFAULT_ANIMATED_SCALE, DEFAULT_AVOID_MODE, DEFAULT_DDS_BACKGROUND,
+    DEFAULT_DECODE_BUDGET_GB, DEFAULT_DESIGN_BACKGROUND, DEFAULT_DESIGN_SCALE,
+    DEFAULT_FOLLOW_CURSOR, DEFAULT_FONT_BACKGROUND, DEFAULT_FONT_SCALE, DEFAULT_HOVER_DELAY_MS,
+    DEFAULT_IMAGE_BACKGROUND, DEFAULT_IMAGE_CACHE_MB, DEFAULT_OFFICE_CACHE_MB,
+    DEFAULT_OFFICE_ENGINE_IDLE_SECS, DEFAULT_OFFICE_SCALE, DEFAULT_PDF_CACHE_MB, DEFAULT_PDF_SCALE,
+    DEFAULT_PREVIEW_SCALE, DEFAULT_SAME_FILE_REHOVER_DELAY_MS, DEFAULT_TEXT_CACHE_MB,
+    DEFAULT_TEXT_FONT_SCALE_PERCENT, DEFAULT_VECTOR_BACKGROUND, DEFAULT_VECTOR_SCALE,
+    DEFAULT_VIDEO_SCALE, DEFAULT_VIDEO_VOLUME, DEFAULT_WEBVIEW_IDLE_SECS,
 };
 use crate::explorer_hook;
 use crate::office_render;
@@ -34,11 +36,11 @@ use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CheckMenuRadioItem, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu,
     DispatchMessageW, GetCursorPos, LoadImageW, PeekMessageW, PostQuitMessage, RegisterClassExW,
     RegisterWindowMessageW, SetForegroundWindow, TrackPopupMenu, TranslateMessage, CS_HREDRAW,
-    CS_VREDRAW, HICON, HMENU, IMAGE_ICON, LR_DEFAULTSIZE, LR_SHARED, MF_BYCOMMAND, MF_CHECKED,
-    MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MSG, PBT_APMRESUMEAUTOMATIC,
-    PBT_APMRESUMESUSPEND, PM_REMOVE, SW_SHOWNORMAL, TPM_BOTTOMALIGN, TPM_LEFTALIGN, WM_COMMAND,
-    WM_DESTROY, WM_LBUTTONUP, WM_POWERBROADCAST, WM_RBUTTONUP, WM_USER, WNDCLASSEXW,
-    WS_EX_TOOLWINDOW, WS_POPUP,
+    CS_VREDRAW, HICON, HMENU, IMAGE_ICON, LR_DEFAULTSIZE, LR_SHARED, MENU_ITEM_FLAGS, MF_BYCOMMAND,
+    MF_CHECKED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MSG,
+    PBT_APMRESUMEAUTOMATIC, PBT_APMRESUMESUSPEND, PM_REMOVE, SW_SHOWNORMAL, TPM_BOTTOMALIGN,
+    TPM_LEFTALIGN, WM_COMMAND, WM_DESTROY, WM_LBUTTONUP, WM_POWERBROADCAST, WM_RBUTTONUP, WM_USER,
+    WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_POPUP,
 };
 
 const WM_TRAYICON: u32 = WM_USER + 1;
@@ -86,6 +88,15 @@ const BACKGROUND_CHOICES: [TransparentBackground; 4] = [
     TransparentBackground::White,
     TransparentBackground::Checkerboard,
 ];
+/// The backdrops the `DDS Background` half offers, which are two of the four rather than all
+/// of them: a texture's alpha channel is as often a mask, a height or a roughness as it is
+/// transparency (see `dds_image`), so what is drawn behind one is a page to read the channels
+/// against rather than a hole to look through — and the two backdrops that show what stands
+/// behind a preview are the two that page has no use for. A file that names one of them
+/// anyway, from when this half listed all four, is read as the backdrop the setting starts at
+/// rather than kept as a value the menu has no item for (see `sanitize_dds_background`).
+const DDS_BACKGROUND_CHOICES: [TransparentBackground; 2] =
+    [TransparentBackground::Black, TransparentBackground::White];
 const ID_TRAY_VOLUME_MAX: u16 = 1010; // 100%
 const ID_TRAY_VOLUME_HIGH: u16 = 1011; // 80%
 const ID_TRAY_VOLUME_MEDIUM: u16 = 1012; // 50%
@@ -356,7 +367,7 @@ unsafe extern "system" fn tray_window_proc(
                     set_font_background(cmd - ID_TRAY_FONT_BACKGROUND_BASE)
                 }
                 cmd if (ID_TRAY_DDS_BACKGROUND_BASE
-                    ..ID_TRAY_DDS_BACKGROUND_BASE + BACKGROUND_CHOICES.len() as u16)
+                    ..ID_TRAY_DDS_BACKGROUND_BASE + DDS_BACKGROUND_CHOICES.len() as u16)
                     .contains(&cmd) =>
                 {
                     set_dds_background(cmd - ID_TRAY_DDS_BACKGROUND_BASE)
@@ -868,7 +879,10 @@ unsafe fn show_context_menu(hwnd: HWND) {
     );
 
     // Add the Delay submenu
-    let hover_delay_ms = CONFIG.lock().map(|c| c.hover_delay_ms).unwrap_or(0);
+    let hover_delay_ms = CONFIG
+        .lock()
+        .map(|c| c.hover_delay_ms)
+        .unwrap_or(DEFAULT_HOVER_DELAY_MS);
     let delay_menu = CreatePopupMenu().unwrap();
 
     let delay_flag = |delay: u64| {
@@ -879,36 +893,22 @@ unsafe fn show_context_menu(hwnd: HWND) {
                 MF_UNCHECKED
             }
     };
-    let _ = AppendMenuW(
-        delay_menu,
-        delay_flag(0),
-        ID_TRAY_DELAY_INSTANT as usize,
-        w!("Instant (0 ms)"),
-    );
-    let _ = AppendMenuW(
-        delay_menu,
-        delay_flag(200),
-        ID_TRAY_DELAY_VERY_FAST as usize,
-        w!("Fast (200 ms)"),
-    );
-    let _ = AppendMenuW(
-        delay_menu,
-        delay_flag(500),
-        ID_TRAY_DELAY_MEDIUM as usize,
-        w!("Medium (500 ms)"),
-    );
-    let _ = AppendMenuW(
-        delay_menu,
-        delay_flag(750),
-        ID_TRAY_DELAY_FAST_PLUS as usize,
-        w!("Relaxed (750 ms)"),
-    );
-    let _ = AppendMenuW(
-        delay_menu,
-        delay_flag(1000),
-        ID_TRAY_DELAY_SLOW as usize,
-        w!("Slow (1000 ms)"),
-    );
+    // One item per delay, with the one the setting starts at carrying the default mark —
+    // which is read from the setting rather than written into the label, so a delay that
+    // becomes the default, or stops being it, moves the mark with it.
+    let delay_item = |delay: u64, id: u16, label: &str| {
+        append_labeled_item(
+            delay_menu,
+            delay_flag(delay),
+            id,
+            &default_label(label, delay == DEFAULT_HOVER_DELAY_MS),
+        );
+    };
+    delay_item(0, ID_TRAY_DELAY_INSTANT, "Instant (0 ms)");
+    delay_item(200, ID_TRAY_DELAY_VERY_FAST, "Fast (200 ms)");
+    delay_item(500, ID_TRAY_DELAY_MEDIUM, "Medium (500 ms)");
+    delay_item(750, ID_TRAY_DELAY_FAST_PLUS, "Relaxed (750 ms)");
+    delay_item(1000, ID_TRAY_DELAY_SLOW, "Slow (1000 ms)");
 
     let _ = AppendMenuW(
         timing_menu,
@@ -920,7 +920,7 @@ unsafe fn show_context_menu(hwnd: HWND) {
     let same_file_rehover_delay_ms = CONFIG
         .lock()
         .map(|c| c.same_file_rehover_delay_ms)
-        .unwrap_or(750);
+        .unwrap_or(DEFAULT_SAME_FILE_REHOVER_DELAY_MS);
     let rehover_delay_menu = CreatePopupMenu().unwrap();
 
     let rehover_delay_flag = |delay: u64| {
@@ -931,36 +931,20 @@ unsafe fn show_context_menu(hwnd: HWND) {
                 MF_UNCHECKED
             }
     };
-    let _ = AppendMenuW(
-        rehover_delay_menu,
-        rehover_delay_flag(0),
-        ID_TRAY_REHOVER_DELAY_INSTANT as usize,
-        w!("Instant (0 ms)"),
-    );
-    let _ = AppendMenuW(
-        rehover_delay_menu,
-        rehover_delay_flag(200),
-        ID_TRAY_REHOVER_DELAY_FAST as usize,
-        w!("Fast (200 ms)"),
-    );
-    let _ = AppendMenuW(
-        rehover_delay_menu,
-        rehover_delay_flag(500),
-        ID_TRAY_REHOVER_DELAY_MEDIUM as usize,
-        w!("Medium (500 ms)"),
-    );
-    let _ = AppendMenuW(
-        rehover_delay_menu,
-        rehover_delay_flag(750),
-        ID_TRAY_REHOVER_DELAY_FAST_PLUS as usize,
-        w!("Relaxed (750 ms)"),
-    );
-    let _ = AppendMenuW(
-        rehover_delay_menu,
-        rehover_delay_flag(1000),
-        ID_TRAY_REHOVER_DELAY_SLOW as usize,
-        w!("Slow (1000 ms)"),
-    );
+    // The same, with the default mark read from the rehover setting's own default.
+    let rehover_delay_item = |delay: u64, id: u16, label: &str| {
+        append_labeled_item(
+            rehover_delay_menu,
+            rehover_delay_flag(delay),
+            id,
+            &default_label(label, delay == DEFAULT_SAME_FILE_REHOVER_DELAY_MS),
+        );
+    };
+    rehover_delay_item(0, ID_TRAY_REHOVER_DELAY_INSTANT, "Instant (0 ms)");
+    rehover_delay_item(200, ID_TRAY_REHOVER_DELAY_FAST, "Fast (200 ms)");
+    rehover_delay_item(500, ID_TRAY_REHOVER_DELAY_MEDIUM, "Medium (500 ms)");
+    rehover_delay_item(750, ID_TRAY_REHOVER_DELAY_FAST_PLUS, "Relaxed (750 ms)");
+    rehover_delay_item(1000, ID_TRAY_REHOVER_DELAY_SLOW, "Slow (1000 ms)");
     let _ = AppendMenuW(
         timing_menu,
         MF_STRING | MF_POPUP,
@@ -981,21 +965,25 @@ unsafe fn show_context_menu(hwnd: HWND) {
 
     // Add the Position submenu: which side a preview takes. The two placements are one
     // setting shown two ways, so they carry a radio mark each.
-    let follow_cursor = CONFIG.lock().map(|c| c.follow_cursor).unwrap_or(false);
+    let follow_cursor = CONFIG
+        .lock()
+        .map(|c| c.follow_cursor)
+        .unwrap_or(DEFAULT_FOLLOW_CURSOR);
     let position_menu = CreatePopupMenu().unwrap();
 
-    let _ = AppendMenuW(
-        position_menu,
-        MF_STRING,
-        ID_TRAY_POSITION_FOLLOW as usize,
-        w!("Follow Cursor"),
-    );
-    let _ = AppendMenuW(
-        position_menu,
-        MF_STRING,
-        ID_TRAY_POSITION_BEST as usize,
-        w!("Best Position"),
-    );
+    // The two placements are one setting shown two ways, so the one it starts at carries
+    // the default mark — read from that setting, which is what puts it on `Best Position`
+    // while `follow_cursor` is false.
+    let position_item = |id: u16, label: &str, follows_cursor: bool| {
+        append_labeled_item(
+            position_menu,
+            MF_STRING,
+            id,
+            &default_label(label, follows_cursor == DEFAULT_FOLLOW_CURSOR),
+        );
+    };
+    position_item(ID_TRAY_POSITION_FOLLOW, "Follow Cursor", true);
+    position_item(ID_TRAY_POSITION_BEST, "Best Position", false);
     let _ = CheckMenuRadioItem(
         position_menu,
         ID_TRAY_POSITION_FOLLOW as u32,
@@ -1021,7 +1009,7 @@ unsafe fn show_context_menu(hwnd: HWND) {
     let avoid_mode = CONFIG
         .lock()
         .map(|c| c.avoid_mode)
-        .unwrap_or(AvoidMode::Filename);
+        .unwrap_or(DEFAULT_AVOID_MODE);
 
     append_avoid_menu(placement_menu, w!("Avoid"), ID_TRAY_AVOID_BASE, avoid_mode);
 
@@ -1158,43 +1146,56 @@ unsafe fn show_context_menu(hwnd: HWND) {
                 )
             })
             .unwrap_or((
-                TransparentBackground::Transparent,
-                TransparentBackground::Transparent,
-                TransparentBackground::Transparent,
-                TransparentBackground::Transparent,
-                TransparentBackground::Transparent,
+                DEFAULT_IMAGE_BACKGROUND,
+                DEFAULT_VECTOR_BACKGROUND,
+                DEFAULT_FONT_BACKGROUND,
+                DEFAULT_DDS_BACKGROUND,
+                DEFAULT_DESIGN_BACKGROUND,
             ));
     let background_menu = CreatePopupMenu().unwrap();
 
+    // Each half is handed its own default, since the four backdrops a half offers are not
+    // the same four everywhere: a picture, a drawing and a document start at the squares, a
+    // specimen and a texture start at a page — and a texture is offered only the two pages.
     append_background_menu(
         background_menu,
         w!("Image Background"),
         ID_TRAY_IMAGE_BACKGROUND_BASE,
+        &BACKGROUND_CHOICES,
         image_background,
+        DEFAULT_IMAGE_BACKGROUND,
     );
     append_background_menu(
         background_menu,
         w!("Vector Background"),
         ID_TRAY_VECTOR_BACKGROUND_BASE,
+        &BACKGROUND_CHOICES,
         vector_background,
+        DEFAULT_VECTOR_BACKGROUND,
     );
     append_background_menu(
         background_menu,
         w!("Font Background"),
         ID_TRAY_FONT_BACKGROUND_BASE,
+        &BACKGROUND_CHOICES,
         font_background,
+        DEFAULT_FONT_BACKGROUND,
     );
     append_background_menu(
         background_menu,
         w!("DDS Background"),
         ID_TRAY_DDS_BACKGROUND_BASE,
+        &DDS_BACKGROUND_CHOICES,
         dds_background,
+        DEFAULT_DDS_BACKGROUND,
     );
     append_background_menu(
         background_menu,
         w!("Design Background"),
         ID_TRAY_DESIGN_BACKGROUND_BASE,
+        &BACKGROUND_CHOICES,
         design_background,
+        DEFAULT_DESIGN_BACKGROUND,
     );
 
     let _ = AppendMenuW(
@@ -1205,7 +1206,10 @@ unsafe fn show_context_menu(hwnd: HWND) {
     );
 
     // Add the Volume submenu
-    let current_volume = CONFIG.lock().map(|c| c.video_volume).unwrap_or(0);
+    let current_volume = CONFIG
+        .lock()
+        .map(|c| c.video_volume)
+        .unwrap_or(DEFAULT_VIDEO_VOLUME);
     let volume_menu = CreatePopupMenu().unwrap();
 
     let vol_flag = |vol: u32| {
@@ -1216,42 +1220,22 @@ unsafe fn show_context_menu(hwnd: HWND) {
                 MF_UNCHECKED
             }
     };
-    let _ = AppendMenuW(
-        volume_menu,
-        vol_flag(100),
-        ID_TRAY_VOLUME_MAX as usize,
-        w!("Max (100%)"),
-    );
-    let _ = AppendMenuW(
-        volume_menu,
-        vol_flag(80),
-        ID_TRAY_VOLUME_HIGH as usize,
-        w!("High (80%)"),
-    );
-    let _ = AppendMenuW(
-        volume_menu,
-        vol_flag(50),
-        ID_TRAY_VOLUME_MEDIUM as usize,
-        w!("Medium (50%)"),
-    );
-    let _ = AppendMenuW(
-        volume_menu,
-        vol_flag(25),
-        ID_TRAY_VOLUME_LOW as usize,
-        w!("Low (25%)"),
-    );
-    let _ = AppendMenuW(
-        volume_menu,
-        vol_flag(10),
-        ID_TRAY_VOLUME_VERY_LOW as usize,
-        w!("Very Low (10%)"),
-    );
-    let _ = AppendMenuW(
-        volume_menu,
-        vol_flag(0),
-        ID_TRAY_VOLUME_MUTE as usize,
-        w!("Mute (0%)"),
-    );
+    // The same as the two delay menus: the volume a video starts at carries the default
+    // mark, which is the silent one.
+    let volume_item = |vol: u32, id: u16, label: &str| {
+        append_labeled_item(
+            volume_menu,
+            vol_flag(vol),
+            id,
+            &default_label(label, vol == DEFAULT_VIDEO_VOLUME),
+        );
+    };
+    volume_item(100, ID_TRAY_VOLUME_MAX, "Max (100%)");
+    volume_item(80, ID_TRAY_VOLUME_HIGH, "High (80%)");
+    volume_item(50, ID_TRAY_VOLUME_MEDIUM, "Medium (50%)");
+    volume_item(25, ID_TRAY_VOLUME_LOW, "Low (25%)");
+    volume_item(10, ID_TRAY_VOLUME_VERY_LOW, "Very Low (10%)");
+    volume_item(0, ID_TRAY_VOLUME_MUTE, "Mute (0%)");
 
     let _ = AppendMenuW(
         menu,
@@ -1625,7 +1609,7 @@ fn set_font_background(index: u16) {
 /// And for a texture, which is a picture like any other on this side of the answer: its
 /// frame is composited by this app, so the preview on screen only needs compositing again.
 fn set_dds_background(index: u16) {
-    let Some(background) = background_at(index) else {
+    let Some(background) = dds_background_at(index) else {
         return;
     };
 
@@ -1722,6 +1706,31 @@ fn toggle_preview_type(kind: PreviewType) {
     refresh_preview_types();
 }
 
+/// A label with the item the setting starts at marked as the default.
+///
+/// Every value menu in this tray says two things: which of its items the setting is on,
+/// which is the check or radio mark, and which of them a setting nobody has changed would
+/// be. The second is not written into the words — a `(Default)` typed into a label is a
+/// mark that goes stale the next time the default moves, and a default is a thing this app
+/// has moved more than once — so it is derived here from the value the setting itself
+/// starts at, which is the `DEFAULT_*` constant every menu hands in.
+fn default_label(label: &str, is_default: bool) -> String {
+    if is_default {
+        format!("{label} (Default)")
+    } else {
+        label.to_string()
+    }
+}
+
+/// Append one item whose label is built rather than written into the code, which is what a
+/// label carrying a default mark is: the text is encoded here and handed over, and the
+/// buffer outlives the call it is handed to.
+fn append_labeled_item(menu: HMENU, flags: MENU_ITEM_FLAGS, id: u16, label: &str) {
+    let label: Vec<u16> = label.encode_utf16().chain(std::iter::once(0)).collect();
+
+    let _ = unsafe { AppendMenuW(menu, flags, id as usize, PCWSTR(label.as_ptr())) };
+}
+
 /// What a cache size is called in the menu: the size, with the one the cache starts
 /// at marked as the default — the caches do not all start at the same one, which is
 /// why the default is passed in rather than written into the label. The two sizes at
@@ -1733,11 +1742,7 @@ fn cache_size_label(megabytes: u32, default_mb: u32) -> String {
         other => format!("{other} MB"),
     };
 
-    if megabytes == default_mb {
-        format!("{label} (Default)")
-    } else {
-        label
-    }
+    default_label(&label, megabytes == default_mb)
 }
 
 /// The label a `Decode Budget` item carries: the ceiling it stands for, in the unit
@@ -1749,11 +1754,7 @@ fn decode_budget_label(gigabytes: f32) -> String {
         format!("{gigabytes} GB")
     };
 
-    if gigabytes == DEFAULT_DECODE_BUDGET_GB {
-        format!("{label} (Default)")
-    } else {
-        label
-    }
+    default_label(&label, gigabytes == DEFAULT_DECODE_BUDGET_GB)
 }
 
 /// The `Avoid` submenu: how far a preview is kept off the item it is about, with the
@@ -1803,42 +1804,47 @@ fn append_avoid_menu(parent: HMENU, label: PCWSTR, base: u16, avoid_mode: AvoidM
 }
 
 /// What a way of keeping a preview off an item is called in the menu: the words the
-/// tray lists it under.
-fn avoid_label(mode: AvoidMode) -> &'static str {
-    match mode {
+/// tray lists it under, with the way this setting starts at marked as the default.
+fn avoid_label(mode: AvoidMode) -> String {
+    let label = match mode {
         AvoidMode::Off => "Avoid Nothing",
         AvoidMode::Filename => "Avoid Filename",
         AvoidMode::FilenameColumn => "Avoid Filename Column",
         AvoidMode::Details => "Avoid Details",
-    }
+    };
+
+    default_label(label, mode == DEFAULT_AVOID_MODE)
 }
 
 /// One half of the `Background` submenu: the backdrops a preview can be drawn over,
-/// with the one that half is on marked. The three halves a picture, a document and a
-/// specimen get list the same choices, which is why one builder is handed the base of the
-/// ids and the backdrop to mark rather than the items themselves.
+/// with the one that half is on marked and the one it starts at marked as the default.
+/// The halves list the same choices, which is why one builder is handed the base of the
+/// ids, the choices and the backdrop to mark rather than the items themselves — the
+/// texture's half excepted, which lists two of the four (see `DDS_BACKGROUND_CHOICES`).
 fn append_background_menu(
     parent: HMENU,
     label: PCWSTR,
     base: u16,
+    choices: &[TransparentBackground],
     background: TransparentBackground,
+    default: TransparentBackground,
 ) {
     let menu = unsafe { CreatePopupMenu().unwrap() };
 
     // The labels are kept for as long as the menu is being filled out, for the same
     // reason the cache labels are: `AppendMenuW` is handed a pointer, so the wide
     // strings have to outlive the call that lists them.
-    let labels: Vec<Vec<u16>> = BACKGROUND_CHOICES
+    let labels: Vec<Vec<u16>> = choices
         .iter()
         .map(|choice| {
-            background_label(*choice)
+            background_label(*choice, default)
                 .encode_utf16()
                 .chain(std::iter::once(0))
                 .collect()
         })
         .collect();
 
-    for (index, choice) in BACKGROUND_CHOICES.iter().enumerate() {
+    for (index, choice) in choices.iter().enumerate() {
         let flags = MF_STRING
             | if *choice == background {
                 MF_CHECKED
@@ -1858,14 +1864,19 @@ fn append_background_menu(
     let _ = unsafe { AppendMenuW(parent, MF_STRING | MF_POPUP, menu.0 as usize, label) };
 }
 
-/// What a backdrop is called in the menu: the spelling `config.ini` uses, capitalized.
-fn background_label(background: TransparentBackground) -> &'static str {
-    match background {
+/// What a backdrop is called in the menu: the spelling `config.ini` uses, capitalized, with
+/// the one the setting starts at marked as the default. Which of the four a setting starts
+/// at is the setting's own — a picture's is the squares, a specimen's is white — which is why
+/// the one to mark is handed in rather than written into the words.
+fn background_label(background: TransparentBackground, default: TransparentBackground) -> String {
+    let label = match background {
         TransparentBackground::Transparent => "Transparent",
         TransparentBackground::Black => "Black",
         TransparentBackground::White => "White",
         TransparentBackground::Checkerboard => "Checkerboard",
-    }
+    };
+
+    default_label(label, background == default)
 }
 
 /// The backdrop an item of the `Background` submenu stands for, by the position it
@@ -1873,6 +1884,12 @@ fn background_label(background: TransparentBackground) -> &'static str {
 /// there.
 fn background_at(index: u16) -> Option<TransparentBackground> {
     BACKGROUND_CHOICES.get(index as usize).copied()
+}
+
+/// And the same for an item of the texture's half, which is the one half that offers two
+/// backdrops of the four rather than all of them.
+fn dds_background_at(index: u16) -> Option<TransparentBackground> {
+    DDS_BACKGROUND_CHOICES.get(index as usize).copied()
 }
 
 /// One `… Scaling` submenu: the shares of the display a document is drawn at, with the
@@ -1980,11 +1997,7 @@ fn bitmap_scale_label(scale: PreviewScale, default: PreviewScale) -> String {
         _ => "Fit to Screen".to_string(),
     };
 
-    if scale == default {
-        format!("{label} (Default)")
-    } else {
-        label
-    }
+    default_label(&label, scale == default)
 }
 
 /// What a share of the display is called in the menu: the percentage itself, with the
@@ -1996,11 +2009,7 @@ fn document_scale_label(scale: PreviewScale, default: PreviewScale) -> String {
         _ => "Fit to Screen".to_string(),
     };
 
-    if scale == default {
-        format!("{label} (Default)")
-    } else {
-        label
-    }
+    default_label(&label, scale == default)
 }
 
 /// The share of the display an item of a `… Scaling` submenu stands for, by the
@@ -2160,11 +2169,7 @@ fn engine_idle_label(idle: EngineIdle, default_seconds: u64) -> String {
         EngineIdle::Seconds(seconds) => format!("{} minutes", seconds / 60),
     };
 
-    if idle == EngineIdle::Seconds(default_seconds) {
-        format!("{label} (Default)")
-    } else {
-        label
-    }
+    default_label(&label, idle == EngineIdle::Seconds(default_seconds))
 }
 
 /// The idle time an item of an `… Engine TTL` submenu stands for, by the position it
@@ -2710,15 +2715,44 @@ mod tests {
         );
     }
 
-    /// Both halves of the `Background` submenu list the same four choices, in the
-    /// order the ids are handed out in, and each id resolves back to the backdrop its
-    /// item was listed for — which is what makes a click select what it named.
+    /// The halves of the `Background` submenu list the backdrops their settings hold, in the
+    /// order the ids are handed out in, and each id resolves back to the backdrop its item was
+    /// listed for — which is what makes a click select what it named. Every half marks the
+    /// backdrop its own setting starts at, which is not the same one for every half, and the
+    /// texture's half offers two of the four rather than all of them.
     #[test]
     fn every_offered_background_is_one_the_setting_keeps() {
         assert_eq!(
-            BACKGROUND_CHOICES.map(background_label),
-            ["Transparent", "Black", "White", "Checkerboard"]
+            BACKGROUND_CHOICES.map(|choice| background_label(choice, DEFAULT_IMAGE_BACKGROUND)),
+            [
+                "Transparent".to_string(),
+                "Black".to_string(),
+                "White".to_string(),
+                "Checkerboard (Default)".to_string(),
+            ]
         );
+
+        // The mark is the setting's own answer: one backdrop per half carries it, and which
+        // one it is is read from the constant that half's setting starts at.
+        for (choices, default) in [
+            (&BACKGROUND_CHOICES[..], DEFAULT_IMAGE_BACKGROUND),
+            (&BACKGROUND_CHOICES[..], DEFAULT_VECTOR_BACKGROUND),
+            (&BACKGROUND_CHOICES[..], DEFAULT_FONT_BACKGROUND),
+            (&BACKGROUND_CHOICES[..], DEFAULT_DESIGN_BACKGROUND),
+            (&DDS_BACKGROUND_CHOICES[..], DEFAULT_DDS_BACKGROUND),
+        ] {
+            let marked: Vec<TransparentBackground> = choices
+                .iter()
+                .copied()
+                .filter(|choice| background_label(*choice, default).ends_with(" (Default)"))
+                .collect();
+
+            assert_eq!(
+                marked,
+                [default],
+                "the backdrop a half starts at is the one it marks"
+            );
+        }
 
         for (index, background) in BACKGROUND_CHOICES.iter().enumerate() {
             assert_eq!(background_at(index as u16), Some(*background));
@@ -2729,6 +2763,17 @@ mod tests {
             None,
             "an id past the last item is not one the menu offered"
         );
+
+        // The texture's half is a range and a table of its own, two backdrops wide.
+        for (index, background) in DDS_BACKGROUND_CHOICES.iter().enumerate() {
+            assert_eq!(dds_background_at(index as u16), Some(*background));
+        }
+
+        assert_eq!(
+            dds_background_at(DDS_BACKGROUND_CHOICES.len() as u16),
+            None,
+            "a backdrop the texture's half does not offer is not one of its items"
+        );
     }
 
     /// An item of one half of the submenu is never an item of another, whatever it was
@@ -2737,22 +2782,39 @@ mod tests {
     /// preview's `Full Mode` item were one id, and the backdrop was read first.
     #[test]
     fn the_five_halves_of_the_background_submenu_carry_different_ids() {
-        let width = BACKGROUND_CHOICES.len() as u16;
-        let bases = [
-            ID_TRAY_IMAGE_BACKGROUND_BASE,
-            ID_TRAY_FONT_BACKGROUND_BASE,
-            ID_TRAY_DDS_BACKGROUND_BASE,
-            ID_TRAY_DESIGN_BACKGROUND_BASE,
-            ID_TRAY_VECTOR_BACKGROUND_BASE,
+        // Each half is as wide as the choices it offers, which is two for the texture's half
+        // and four for the rest: a range that were wider than the items in it would take an
+        // id from the half beside it.
+        let halves = [
+            (
+                ID_TRAY_IMAGE_BACKGROUND_BASE,
+                BACKGROUND_CHOICES.len() as u16,
+            ),
+            (
+                ID_TRAY_FONT_BACKGROUND_BASE,
+                BACKGROUND_CHOICES.len() as u16,
+            ),
+            (
+                ID_TRAY_DDS_BACKGROUND_BASE,
+                DDS_BACKGROUND_CHOICES.len() as u16,
+            ),
+            (
+                ID_TRAY_DESIGN_BACKGROUND_BASE,
+                BACKGROUND_CHOICES.len() as u16,
+            ),
+            (
+                ID_TRAY_VECTOR_BACKGROUND_BASE,
+                BACKGROUND_CHOICES.len() as u16,
+            ),
         ];
 
-        for (index, base) in bases.iter().enumerate() {
-            for other in &bases[index + 1..] {
-                let ours = *base..*base + width;
-                let theirs = *other..*other + width;
+        for (index, half) in halves.iter().enumerate() {
+            for other in &halves[index + 1..] {
+                let ours = half.0..half.0 + half.1;
+                let theirs = other.0..other.0 + other.1;
 
                 assert!(
-                    !ours.contains(other) && !theirs.contains(base),
+                    !ours.contains(&other.0) && !theirs.contains(&half.0),
                     "the ranges {ours:?} and {theirs:?} overlap"
                 );
             }
@@ -2769,8 +2831,8 @@ mod tests {
             ID_TRAY_TYPE_IMAGES,
             ID_TRAY_TRIGGER_ENABLED,
         ] {
-            for base in bases {
-                let ours = base..base + width;
+            for half in halves {
+                let ours = half.0..half.0 + half.1;
 
                 assert!(
                     !ours.contains(&elsewhere),
@@ -2788,11 +2850,23 @@ mod tests {
         assert_eq!(
             AVOID_CHOICES.map(avoid_label),
             [
-                "Avoid Nothing",
-                "Avoid Filename",
-                "Avoid Filename Column",
-                "Avoid Details"
+                "Avoid Nothing".to_string(),
+                "Avoid Filename (Default)".to_string(),
+                "Avoid Filename Column".to_string(),
+                "Avoid Details".to_string()
             ]
+        );
+
+        let marked: Vec<AvoidMode> = AVOID_CHOICES
+            .iter()
+            .copied()
+            .filter(|mode| avoid_label(*mode).ends_with(" (Default)"))
+            .collect();
+
+        assert_eq!(
+            marked,
+            [DEFAULT_AVOID_MODE],
+            "the way the setting starts at is the way the menu marks"
         );
 
         for (index, mode) in AVOID_CHOICES.iter().enumerate() {
