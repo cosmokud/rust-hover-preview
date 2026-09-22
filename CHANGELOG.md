@@ -14,6 +14,7 @@
 
 ### Fixed
 
+- A CorelDRAW document shows its drawing instead of a blank white page, and the shape that keeps its pictures under `previews/` shows one at all: the picture the program wrote for a file manager is read ahead of a page rendered on its own, which can come out empty.
 - Editing `config.ini` by hand now takes effect as soon as you save it, and a value the app cannot read — a misspelled tone map, a delay past its limit — is written back as the value in use instead of staying in the file.
 
 ## [0.2.13]
