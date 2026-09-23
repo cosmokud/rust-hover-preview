@@ -59,7 +59,7 @@ The containers and codecs the table above lists are the ones Windows plays on it
 
 ### Needs Microsoft Office, or LibreOffice
 
-Office documents — `doc` `docm` `docx` `dot` `dotm` `dotx` `xls` `xlsb` `xlsm` `xlsx` `xlt` `xltm` `xltx` `ppt` `pptm` `pptx` `pps` `ppsm` `ppsx` `pot` `potm` `potx` — are drawn in the background by an installed Office so previews appear quickly after the first hover. Excel needs a print queue to export a page — **Microsoft Print to PDF** is enough, and the Print Spooler service must be enabled; without one, Excel falls back to the sheet’s top-left corner. Where no Office is installed, an installed LibreOffice draws them instead.
+Office documents — `doc` `docm` `docx` `dot` `dotm` `dotx` `xls` `xlsb` `xlsm` `xlsx` `xlt` `xltm` `xltx` `ppt` `pptm` `pptx` `pps` `ppsm` `ppsx` `pot` `potm` `potx` — are drawn in the background by an installed Office so previews appear quickly after the first hover. Excel needs a print queue to export a page — **Microsoft Print to PDF** is enough, and the Print Spooler service must be enabled; without one, Excel falls back to the sheet’s top-left corner. Where no Office is installed, an installed LibreOffice draws them instead. To have LibreOffice draw them all — with Microsoft Office installed as well — use **Performance → Select Engine → Office** and pick **LibreOffice**.
 
 ### Needs LibreOffice
 
@@ -197,6 +197,7 @@ The item a setting starts at carries `(Default)` after its name, so a menu says 
   - **Design Background** — the same backdrops as a picture's, for a design document; Checkerboard by default.
 - **Volume** — Max, High, Medium, Low, Very Low, Mute: 100% down to 0%.
 - **Performance**
+  - **Select Engine → Office** — which engine an Office document’s page is asked of: **Microsoft Office** (default) draws it with the application that owns the format and keeps LibreOffice as the fallback for a family this machine has no application for, while **LibreOffice** draws every Office document whether Microsoft Office is installed or not. The LibreOffice row is greyed out where it is not installed.
   - **Confirm File Type** — check a file's content against its name before it is previewed: a file whose bytes are another kind is previewed as that kind, and one whose content is a format this app has no reader for shows nothing. On by default.
   - **Office Engine TTL** — how long a family’s Office app is kept warm: Indefinitely, 1 hour, 30 minutes, 10 minutes (default), 5 minutes, 1 minute, 0 seconds.
   - **SVG Engine TTL** — how long the browser that draws SVG documents is kept warm; greyed out where WebView2 is missing.
@@ -279,6 +280,7 @@ confirm_file_type=true
 decode_budget_gb=1
 image_cache_mb=32
 office_cache_mb=64
+office_engine=microsoft_office
 office_engine_idle=600
 pdf_cache_mb=32
 text_cache_mb=0
@@ -306,6 +308,7 @@ Key settings, in plain terms:
 - `hdr_tone_map` — how HDR/EXR light values become screen values: `reinhard` (default), `aces` (filmic), `srgb` (clips), or `off` (bare clamp). Pictures already in screen values, like PNG or JPEG, are never affected.
 - `hdr_exposure` — how many stops those pictures are shifted before that curve: default `0`, clamped to `-10`–`10`.
 - `spinner_delay_ms` — how long a hover’s load may run before the waiting spinner is put up, in milliseconds: default `250`, and `0` puts it up with the load. One delay answers every kind of preview — a decode, a page Office is rendering, a browser that has to start — and there is no tray entry for it.
+- `office_engine` — which engine draws an Office document’s page: `microsoft_office` (default) asks the application that owns the format and falls back to LibreOffice for a family this machine has no application for, while `libreoffice` asks the render engine for every Office document whether Microsoft Office is installed or not. With no LibreOffice installed the second falls back to the first, and the tray row is greyed out.
 - `office_engine_idle` — seconds an Office engine is kept after its last page, or `indefinitely`; default `600`. `0` lets it go as soon as it has drawn a page.
 - `trigger_key` / `trigger_key_mode` / `trigger_key_enabled` — the key (`alt`, `ctrl`, `shift`, `win`), what it does (`disable` or `enable`), and whether it is watched at all; `true` by default.
 - `follow_cursor` — `true` for Follow Cursor, `false` for Best Position.
