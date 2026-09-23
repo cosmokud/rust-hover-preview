@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.3.1] - 2026-09-24
+
+### Added
+
+- Third-party attribution. [`THIRD-PARTY.md`](THIRD-PARTY.md) lists every crate the app links, grouped by licence, with each one's copyright holders and a link to the text that applies; [`LICENSES/`](LICENSES) holds those texts. Both are generated from the dependency tree by `cargo tribute` and refreshed by `generate-attribution.ps1`. Nothing about the app itself changes.
+- `tribute.toml`, which is what that generator reads: the licences this project accepts, and the entries for the two dependencies whose own declarations do not describe what they ship — `onig_sys`, which declares MIT for the Oniguruma sources it vendors and compiles in, and `unrar_sys`, which declares MIT for the UnRAR sources README already carries the terms of.
+
+### Changed
+
+- The README's License section points at `THIRD-PARTY.md` instead of carrying the UnRAR terms alone.
+- Bump version to 0.3.1 in `Cargo.toml` and `Cargo.lock`.
+
+### Fixed
+
+- A preview no longer blinks on hover — closing and coming straight back. A frame that landed just after the pointer left is dropped instead of putting the preview up again.
+
 ## [0.3.0] - 2026-09-23
 
 ### Added
