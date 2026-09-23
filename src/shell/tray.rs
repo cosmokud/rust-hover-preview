@@ -1324,90 +1324,10 @@ unsafe fn show_context_menu(hwnd: HWND) {
         w!("Volume"),
     );
 
-    // Add the "Engine" submenu: which engine a preview is asked of, and how long each
-    // engine this app starts is kept — the choice of engine where a kind of document has
-    // two of them, and a TTL apiece for the applications this app leaves running between
-    // hovers. It is the block above `Performance`: the engines it names are the ones that
-    // block's rows are about, and what it sets is whether an engine is asked for rather
-    // than what it costs while it is up.
-    let engine_menu = CreatePopupMenu().unwrap();
-
-    // Add the "Select Engine" submenu: which engine each kind of document is asked of,
-    // where there is a choice to make. It is the first of the four rows here, above the
-    // three that say how long each engine this app starts is kept — the applications it
-    // names are the ones those are about. Office is the only kind with two engines to
-    // choose between.
-    append_select_engine_menu(engine_menu);
-
-    // Microsoft Office TTL: how long the Office engine a family started is kept after
-    // that family's last page. Nothing is asked of an engine while it is being kept
-    // — it is a process that has already been paid for, and the document it drew a
-    // page of is closed — so what the setting buys is the next document of that
-    // family not paying for an Office start, and what it costs is an Office
-    // application in the process list. It is listed longest first, with the engine
-    // that is never let go at the top.
-    let office_idle = CONFIG
-        .lock()
-        .map(|c| c.office_engine_idle)
-        .unwrap_or(EngineIdle::Seconds(DEFAULT_OFFICE_ENGINE_IDLE_SECS));
-
-    append_engine_idle_menu(
-        engine_menu,
-        w!("Microsoft Office TTL"),
-        ID_TRAY_ENGINE_IDLE_BASE,
-        office_idle,
-        DEFAULT_OFFICE_ENGINE_IDLE_SECS,
-        true,
-    );
-
-    // LibreOffice TTL: the same question about the engine the documents beside Office are
-    // drawn by, and it is the same shape: what is kept is the application, and what the
-    // setting buys is the next document converted without paying for an engine start. The
-    // engine holds a stub document of this app's own while it is kept, which is what makes
-    // it a running instance a conversion can be handed to (see `libreoffice_render`).
-    // Greyed out where no LibreOffice is installed, since there is nothing there to keep.
-    let libreoffice_idle = CONFIG
-        .lock()
-        .map(|c| c.libreoffice_idle)
-        .unwrap_or(EngineIdle::Seconds(DEFAULT_LIBREOFFICE_IDLE_SECS));
-
-    append_engine_idle_menu(
-        engine_menu,
-        w!("LibreOffice TTL"),
-        ID_TRAY_LIBREOFFICE_IDLE_BASE,
-        libreoffice_idle,
-        DEFAULT_LIBREOFFICE_IDLE_SECS,
-        libreoffice_render::available(),
-    );
-
-    // WebView2 TTL: the same question about the browser that draws a document — every
-    // document, still or not. It is greyed out on a machine with no WebView2 runtime, since
-    // there is nothing there to keep.
-    let webview_idle = CONFIG
-        .lock()
-        .map(|c| c.webview_idle)
-        .unwrap_or(EngineIdle::Seconds(DEFAULT_WEBVIEW_IDLE_SECS));
-
-    append_engine_idle_menu(
-        engine_menu,
-        w!("WebView2 TTL"),
-        ID_TRAY_WEBVIEW_IDLE_BASE,
-        webview_idle,
-        DEFAULT_WEBVIEW_IDLE_SECS,
-        webview_preview::is_available(),
-    );
-
-    let _ = AppendMenuW(
-        menu,
-        MF_STRING | MF_POPUP,
-        engine_menu.0 as usize,
-        w!("Engine"),
-    );
-
-    // Add the "Performance" submenu: what the app costs while it is working — the memory
-    // it holds on to between hovers — with the one setting here that is about what a
-    // preview is read as rather than what it costs above it. The engines this app starts
-    // and keeps are named in `Engine` above, each of them with the TTL that bounds it.
+    // Add the "Performance" submenu: what the app costs while it is working — the memory it
+    // holds on to between hovers — with the one setting here that is about what a preview is
+    // read as rather than what it costs. It is the block above `Engine`, where the engines
+    // themselves are named: what is here is what is spent while they work.
     let performance_menu = CreatePopupMenu().unwrap();
 
     // Add "Confirm File Type" with checkmark (content/header sniffing)
@@ -1596,6 +1516,83 @@ unsafe fn show_context_menu(hwnd: HWND) {
         MF_STRING | MF_POPUP,
         performance_menu.0 as usize,
         w!("Performance"),
+    );
+
+    // Add the "Engine" submenu: which engine a preview is asked of, and how long each engine
+    // this app starts is kept — the choice of engine where a kind of document has two of them,
+    // and a TTL apiece for the applications this app leaves running between hovers. It is the
+    // block below `Performance`, which is about what those engines cost while they are up.
+    let engine_menu = CreatePopupMenu().unwrap();
+
+    // Add the "Select Engine" submenu: which engine each kind of document is asked of, where
+    // there is a choice to make. It is the first of the four rows here, above the three that
+    // say how long each engine this app starts is kept — the applications it names are the
+    // ones those are about. Office is the only kind with two engines to choose between.
+    append_select_engine_menu(engine_menu);
+
+    // Microsoft Office TTL: how long the Office engine a family started is kept after
+    // that family's last page. Nothing is asked of an engine while it is being kept
+    // — it is a process that has already been paid for, and the document it drew a
+    // page of is closed — so what the setting buys is the next document of that
+    // family not paying for an Office start, and what it costs is an Office
+    // application in the process list. It is listed longest first, with the engine
+    // that is never let go at the top.
+    let office_idle = CONFIG
+        .lock()
+        .map(|c| c.office_engine_idle)
+        .unwrap_or(EngineIdle::Seconds(DEFAULT_OFFICE_ENGINE_IDLE_SECS));
+
+    append_engine_idle_menu(
+        engine_menu,
+        w!("Microsoft Office TTL"),
+        ID_TRAY_ENGINE_IDLE_BASE,
+        office_idle,
+        DEFAULT_OFFICE_ENGINE_IDLE_SECS,
+        true,
+    );
+
+    // LibreOffice TTL: the same question about the engine the documents beside Office are
+    // drawn by, and it is the same shape: what is kept is the application, and what the
+    // setting buys is the next document converted without paying for an engine start. The
+    // engine holds a stub document of this app's own while it is kept, which is what makes
+    // it a running instance a conversion can be handed to (see `libreoffice_render`).
+    // Greyed out where no LibreOffice is installed, since there is nothing there to keep.
+    let libreoffice_idle = CONFIG
+        .lock()
+        .map(|c| c.libreoffice_idle)
+        .unwrap_or(EngineIdle::Seconds(DEFAULT_LIBREOFFICE_IDLE_SECS));
+
+    append_engine_idle_menu(
+        engine_menu,
+        w!("LibreOffice TTL"),
+        ID_TRAY_LIBREOFFICE_IDLE_BASE,
+        libreoffice_idle,
+        DEFAULT_LIBREOFFICE_IDLE_SECS,
+        libreoffice_render::available(),
+    );
+
+    // WebView2 TTL: the same question about the browser that draws a document — every
+    // document, still or not. It is greyed out on a machine with no WebView2 runtime, since
+    // there is nothing there to keep.
+    let webview_idle = CONFIG
+        .lock()
+        .map(|c| c.webview_idle)
+        .unwrap_or(EngineIdle::Seconds(DEFAULT_WEBVIEW_IDLE_SECS));
+
+    append_engine_idle_menu(
+        engine_menu,
+        w!("WebView2 TTL"),
+        ID_TRAY_WEBVIEW_IDLE_BASE,
+        webview_idle,
+        DEFAULT_WEBVIEW_IDLE_SECS,
+        webview_preview::is_available(),
+    );
+
+    let _ = AppendMenuW(
+        menu,
+        MF_STRING | MF_POPUP,
+        engine_menu.0 as usize,
+        w!("Engine"),
     );
 
     // Add the "Codecs" submenu: every engine and every codec extension a preview can lean
