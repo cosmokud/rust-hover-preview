@@ -73,10 +73,12 @@ jobs:
         shell: pwsh
         run: .\build-installers.ps1
 
-      # The two names a running app asks for; see the deploy workflow for what they are
-      # for. A manual build is published with `make_latest: false` below, so it does not
-      # become the release the running app is pointed at — the assets are here for the
-      # release to be complete, not to offer an update from.
+      # The version a running app reads; see the deploy workflow for what the address is for.
+      # The installer is not copied out beside it: what a release carries is the one the
+      # packager built, under the name it gave that file, and the app asks for it in the
+      # release its own version names. A manual build is published with `make_latest: false`
+      # below, so it does not become the release the running app is pointed at — the assets
+      # are here for the release to be complete, not to offer an update from.
       - name: Prepare update assets
         shell: pwsh
         env:
@@ -84,14 +86,13 @@ jobs:
         run: |
           $version = $env:TAG -replace '^v', ''
           Set-Content -Path target/packager/version.txt -NoNewline -Value $version
-          Copy-Item target/packager/*.exe target/packager/rust-hover-preview-setup.exe
 
       - name: Upload installer artifacts
         uses: actions/upload-artifact@v4
         with:
           name: rust-hover-preview-installers-${{ inputs.tag_to_build }}
           path: |
-            target/packager/*.exe
+            target/packager/rust-hover-preview_*-setup.exe
             target/packager/version.txt
             target/github/rust-hover-preview.exe
           if-no-files-found: error
@@ -116,6 +117,6 @@ jobs:
           fail_on_unmatched_files: true
           make_latest: false
           files: |
-            target/packager/*.exe
+            target/packager/rust-hover-preview_*-setup.exe
             target/packager/version.txt
             target/github/rust-hover-preview.exe
