@@ -12,7 +12,7 @@ A Windows 11 tray app inspired by QTTabBar. Hover a file in File Explorer — or
 
 - Mouse-hover and keyboard-navigation previews in Explorer.
 - Images, including animated GIF, APNG, and WebP.
-- What a file really holds decides its preview: a video named as a document is played, a document named as a picture is drawn, and a file whose content no reader here answers for is left alone.
+- What a file really holds decides its preview: a video named as a document is played, a document named as a picture is drawn, and a file whose content no reader here answers for is left alone. A format whose bytes carry no signature — WordPerfect `wpd`, Lotus `wk4`, a RoQ video — is routed to the engine that reads it by extension, and a name that means two formats is settled by content: a `.pdb` is handed to LibreOffice only when it is a Palm OS ebook, never when it is a compiler's program database.
 - Design documents — Photoshop, Illustrator, Krita, OpenRaster, and more — previewed from the picture their own format saves of the whole document.
 - HEIC, AVIF, and JPEG XL through Windows codec extensions where installed.
 - Vector drawings — SVG, Windows metafiles, and Illustrator `.eps` — drawn sharply at preview size.

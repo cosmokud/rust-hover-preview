@@ -12,7 +12,7 @@
 //! here reads — is answered with no preview, which is the answer that leaves every engine
 //! unstarted.
 //!
-//! Two tables answer what the bytes are, and what is in each of them is what it is for.
+//! Three tables answer what a file is, and what is in each of them is what it is for.
 //! The common formats — the pictures, the containers a video arrives in, a PDF, the fonts,
 //! the archives — are the [`infer`] crate's: a small table of the signatures every tool
 //! agrees on, no dependencies of its own, and the same answer any file manager would give.
@@ -24,9 +24,32 @@
 //! PDF, and one of them, the transport stream, is asked of `video_formats` rather than
 //! written again.
 //!
-//! What is deliberately in neither table matters as much as what is. **A container is not
-//! a kind**, so nothing here answers with a box: a zip is what an OpenDocument, an iWork
-//! document and an Office package all arrive in, the OLE compound file is what every
+//! What neither of those names — a container whose header is not one of the common ones,
+//! a document whose bytes are a proprietary format no reader here reads — is answered by
+//! the name the file carries, which is the third table: everything FFmpeg demuxes and
+//! everything the render engine imports, crossed with the formats [`infer`] carries a
+//! signature for, because a format `infer` can name is a format the first table has
+//! already answered for. Its names come from the `file_type` data theseus-rs maintains
+//! (<https://github.com/theseus-rs/file-type>), which is where a name like `.wpg` or
+//! `.ty+` is written down beside the format it is written for, and each entry is a kind of
+//! this app's own — see [`KIND_BY_NAME`] for what is in it and what each half of it is.
+//!
+//! A table of names is a weaker answer than a table of signatures, and it is asked where
+//! the strong ones have nothing to say. What it can answer is only what a name says, so a
+//! file that carries one of its names and is not the format that name is written for would
+//! be routed by it wrongly — which is why a name whose format is *two* formats, with the
+//! engine reading one of them and nothing here previewing the other, is asked a question
+//! of its own before it is answered: `.pdb` is a Palm OS database, which the render
+//! engine's filters read as an ebook, and it is also the Microsoft program database a
+//! compiler writes beside its binaries, which is no document at all — see
+//! `palm_ebook_or_program_database` for what is asked of the bytes there. **An engine is
+//! handed a file of such a name only where its own header says it is the format that
+//! engine reads**, and a file that is the other one shows nothing rather than starting an
+//! engine it is not for.
+//!
+//! What is deliberately in none of the tables matters as much as what is. **A container
+//! is not a kind**, so nothing here answers with a box: a zip is what an OpenDocument, an
+//! iWork document and an Office package all arrive in, the OLE compound file is what every
 //! `.doc`, `.xls` and `.ppt` is, and the file's own name is a better answer than the box
 //! is — which is also why a `.docx` that is really a `.doc` is still handed to an engine.
 //! A format whose signature *is* its text — an SVG, an HTML page, a JSON file — is left
@@ -40,15 +63,19 @@
 //! What the tables answer is read as one of three things:
 //!
 //! * A kind, where the format is one this app's lists claim and it is not the kind the
-//!   name claimed: that kind is what the file is previewed as.
+//!   name claimed: that kind is what the file is previewed as. The third table answers a
+//!   kind outright, because there is nothing for a name to disagree with — the name is the
+//!   question — which is what makes a format with no signature worth writing down at all.
 //! * [`Content::Foreign`], where the format is one no list claims — an executable, an
-//!   audio file, a box of some kind this app has no preview for. Nothing is shown and no
-//!   engine is started.
+//!   audio file, a box of some kind this app has no preview for — or where the third
+//!   table's name turned out to be the other format's: a `.pdb` that is not the ebook the
+//!   engine reads is a file with nothing to show, and no engine is started for it.
 //! * [`Content::Unknown`], which is "no opinion" and is the answer in three cases: nothing
-//!   in the tables matched (a raw stream, an exotic container, a text file), the format is
-//!   one the file's own name already names (the two agree, so there is nothing to
-//!   override), and a file with no extension at all, whose name has nothing to disagree
-//!   with. The name decides, as it always has.
+//!   in the tables matched and the name is not one of the third table's either (a raw
+//!   stream, an exotic container, a text file), the format is one the file's own name
+//!   already names (the two agree, so there is nothing to override), and a file with no
+//!   extension at all, whose name has nothing to disagree with. The name decides, as it
+//!   always has.
 //!
 //! The answer is held between hovers, keyed by the file and the version of it that was
 //! read, because one hover asks this three times — the hook that raises it, the loader
@@ -78,15 +105,18 @@ const PROBE_BYTES: usize = 4096;
 /// app's shape answers that.
 const ANSWERS_MAX_ENTRIES: usize = 512;
 
-/// What a file's content says it is.
+/// What a file is, where the answer is not what its name says it is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Content {
-    /// The content is a format one of this app's kinds previews, and it is not the kind
-    /// the name claimed: this is the kind that should have it.
+    /// The format the file holds — or, where no table named the bytes, the format its name
+    /// is written for — is one of this app's kinds. Where the two disagree this is the kind
+    /// that should have the file; where they do not, it is the kind the name already gave
+    /// it.
     Kind(PreviewType),
     /// The content is a format no kind of this app previews — an executable, an audio
-    /// file, a format this app has no reader for. There is nothing to show, and no engine
-    /// of this app's is the engine for it.
+    /// file, a format this app has no reader for, or the other format a guarded name is
+    /// written under (see [`GUARDS`]). There is nothing to show, and no engine of this
+    /// app's is the engine for it.
     Foreign,
     /// No opinion: nothing was recognized, or what was recognized is what the name
     /// already said, or the name has no extension to disagree with. The name decides, as
@@ -141,6 +171,11 @@ pub fn is_confirmed() -> bool {
 }
 
 /// What the file holds, read once and not held.
+///
+/// The tables are asked in the order they can answer in: the bytes first, through the
+/// formats every tool agrees on and then through the ones an engine here reads that no
+/// such table carries, and the name the file is under last, for the formats whose own head
+/// is nothing either table knows — see [`KIND_BY_NAME`] for what is in that one.
 fn read(path: &Path) -> Content {
     // A file whose content is still in the cloud is not opened, because the open is what
     // starts the transfer: the same rule the hook and every reader follow.
@@ -152,15 +187,20 @@ fn read(path: &Path) -> Content {
         return Content::Unknown;
     };
 
-    let Some(names) = detected_names(&probe) else {
-        return Content::Unknown;
-    };
+    if let Some(names) = detected_names(&probe) {
+        let Ok(config) = CONFIG.lock() else {
+            return Content::Unknown;
+        };
 
-    let Ok(config) = CONFIG.lock() else {
-        return Content::Unknown;
-    };
+        return classify(path, names, &config);
+    }
 
-    classify(path, names, &config)
+    // Neither table named the front of the file, so the name it carries is what is left to
+    // ask. A file with no name to ask about — one with no extension at all — has nothing
+    // here to disagree with either, and is left to the lists.
+    own_extension(path)
+        .and_then(|extension| kind_by_name(&extension, &probe))
+        .unwrap_or(Content::Unknown)
 }
 
 /// The front of the file, or nothing where it could not be read.
@@ -379,6 +419,302 @@ fn contains(probe: &[u8], needle: &[u8]) -> bool {
     probe.windows(needle.len()).any(|window| window == needle)
 }
 
+/// One of FFmpeg's own formats: a name the video list carries that no signature above
+/// names — a container whose header is not one of the common ones, a raw stream, a
+/// capture, game or camera format.
+const fn video(extension: &'static str) -> (&'static str, PreviewType) {
+    (extension, PreviewType::Videos)
+}
+
+/// One of the documents the render engine draws: a name the `[libre]` list carries that
+/// no signature above names.
+const fn engine(extension: &'static str) -> (&'static str, PreviewType) {
+    (extension, PreviewType::Libre)
+}
+
+/// The names the tables above have nothing to say about, and the kind each of them belongs
+/// to.
+///
+/// What is in it is the two lists of engines this app drives — `video_formats`'s built-in
+/// list, which is what FFmpeg demuxes, and `libre_formats`'s, which is what the render
+/// engine imports — less every name a table above already answers for, which is what makes
+/// this the last of the three tables rather than a fourth list of formats. The names were
+/// read against the file type data theseus-rs maintains
+/// (<https://github.com/theseus-rs/file-type>), which is what says what a name like `.wpg`
+/// or `.ty+` is an extension *of*, and which is where the one name this table cannot answer
+/// by itself is written down under both of the formats it belongs to.
+///
+/// A name belongs here only where no signature names the format it is written for. The
+/// common containers — `mp4`, `mkv`, `avi`, `wmv`, `flv` and the rest — are the first
+/// table's; the raw streams, the transport streams, the drawings and the formats FFmpeg
+/// plays that no file manager names are the second table's; and what is left is a format
+/// whose own head is nothing any table here knows.
+///
+/// What a name here answers is the kind, because the name is the only thing there is to
+/// answer with, and it answers it whether or not a list in `config.ini` still holds the
+/// name: what a format *is* does not change with a setting, and a user who wants none of
+/// these previewed has the kind's own switch in the tray's `Preview Types`. Where a name
+/// is claimed by both engines — `dif` is a DV stream to FFmpeg and a Data Interchange
+/// Format spreadsheet to the engine — the answer is the one the lists are asked in
+/// everywhere else in this app, which is the video.
+static KIND_BY_NAME: &[(&str, PreviewType)] = &[
+    // FFmpeg's own: the containers, the raw video streams, and the capture, camera and
+    // game formats it demuxes, in the names the video list carries them under.
+    video("265"),
+    video("266"),
+    video("3gpp"),
+    video("apv"),
+    video("av1"),
+    video("avs"),
+    video("avs2"),
+    video("avs3"),
+    video("c93"),
+    video("cavs"),
+    video("cdg"),
+    video("cdxl"),
+    video("cin"),
+    video("cpk"),
+    video("dav"),
+    // A DV stream to FFmpeg, and a Data Interchange Format spreadsheet to the engine: the
+    // video is what the lists answer with, which is the order every other question about a
+    // file is asked in.
+    video("dif"),
+    video("drc"),
+    video("dv"),
+    video("evc"),
+    video("flm"),
+    video("gxf"),
+    video("h261"),
+    video("h263"),
+    video("h265"),
+    video("h266"),
+    video("hevc"),
+    video("ifv"),
+    video("imx"),
+    video("ismv"),
+    video("ivr"),
+    video("kux"),
+    video("m2p"),
+    video("m2t"),
+    video("mj2"),
+    video("moflex"),
+    video("mpe"),
+    video("mve"),
+    video("mvi"),
+    video("mxg"),
+    video("nsv"),
+    video("obu"),
+    video("pmp"),
+    video("psp"),
+    video("rcv"),
+    video("rm"),
+    video("rmvb"),
+    video("roq"),
+    video("rsd"),
+    video("smk"),
+    video("str"),
+    video("thp"),
+    video("tod"),
+    video("tp"),
+    video("tr"),
+    video("ty"),
+    video("ty+"),
+    video("usm"),
+    video("vc1"),
+    video("vc2"),
+    video("viv"),
+    video("vro"),
+    video("vvc"),
+    video("vw"),
+    video("wtv"),
+    video("xl"),
+    video("xmv"),
+    video("yop"),
+    // The documents the render engine draws: the word processors, spreadsheets,
+    // presentations and drawings of the formats that came before the modern ones and of
+    // the applications beside them, the open formats themselves, and the drawings no
+    // reader here reads — in the names the `[libre]` list carries them under.
+    engine("123"),
+    engine("602"),
+    engine("abw"),
+    engine("cdr"),
+    engine("cgm"),
+    engine("cmx"),
+    engine("cwk"),
+    engine("dbf"),
+    engine("dxf"),
+    engine("fodg"),
+    engine("fodp"),
+    engine("fodt"),
+    engine("gnm"),
+    engine("gnumeric"),
+    engine("hwp"),
+    engine("key"),
+    engine("lwp"),
+    engine("mcw"),
+    engine("met"),
+    engine("mw"),
+    engine("numbers"),
+    engine("odb"),
+    engine("odc"),
+    engine("odf"),
+    engine("odg"),
+    engine("odm"),
+    engine("oth"),
+    engine("otg"),
+    engine("otm"),
+    engine("otp"),
+    engine("ots"),
+    engine("ott"),
+    engine("pages"),
+    engine("pcd"),
+    engine("pct"),
+    engine("pcx"),
+    engine("pdb"),
+    engine("pm6"),
+    engine("pmd"),
+    engine("psw"),
+    engine("pub"),
+    engine("ras"),
+    engine("sda"),
+    engine("sdc"),
+    engine("sdd"),
+    engine("sdw"),
+    engine("slk"),
+    engine("stc"),
+    engine("std"),
+    engine("sti"),
+    engine("stw"),
+    engine("svm"),
+    engine("sxd"),
+    engine("sxg"),
+    engine("sxi"),
+    engine("sxm"),
+    engine("sxw"),
+    engine("vdx"),
+    engine("vsd"),
+    engine("vsdm"),
+    engine("vsdx"),
+    engine("vstx"),
+    engine("wb2"),
+    engine("wk1"),
+    engine("wk3"),
+    engine("wk4"),
+    engine("wks"),
+    engine("wpg"),
+    engine("wq1"),
+    engine("wq2"),
+    engine("wpd"),
+    engine("wps"),
+    engine("wri"),
+    engine("xlw"),
+    engine("zabw"),
+    engine("zmf"),
+];
+
+/// The names in the table above that are more than one format's, and the question asked of
+/// the bytes before any of them is answered.
+///
+/// A name is here where the format its engine reads shares its spelling with a format
+/// nothing here previews, and where the two can be told apart from the front of the file.
+/// What such a name answers is the format the engine reads, or nothing at all: a file that
+/// is the other format is a file no kind of this app previews, and starting an engine that
+/// can only turn it down is the one thing this is for.
+static GUARDS: &[(&str, Guard)] = &[("pdb", palm_ebook_or_program_database)];
+
+/// The question a name in [`GUARDS`] is asked of the front of a file, answered in the same
+/// three terms the tables answer in: the kind that previews what the bytes hold, nothing
+/// where no kind of this app previews them, and no opinion where the bytes do not say.
+type Guard = fn(&[u8]) -> Content;
+
+/// What a `.pdb` is, which is the one name in the table that holds two formats.
+///
+/// The name is written for two things that share nothing. One is the Palm OS database —
+/// the AportisDoc and its kin, the ebooks the render engine's own filters read, whose
+/// header names the application that wrote them and the records that follow. The other is
+/// the Microsoft program database a compiler writes beside its binaries, which is an *MSF*
+/// container of debug information and no kind of document at all — and which is the one a
+/// developer's folders are full of, and the reason this name is not answered by itself.
+///
+/// What comes back is the ebook where the file's own header is a Palm OS one, and nothing
+/// at all where it is anything else, the program database included. Nothing is left to the
+/// name here, deliberately: a `.pdb` that is neither of the two is a file this app has no
+/// reader for either way, and the engine is not asked about one.
+fn palm_ebook_or_program_database(probe: &[u8]) -> Content {
+    if is_program_database(probe) {
+        return Content::Foreign;
+    }
+
+    if is_palm_database(probe) {
+        Content::Kind(PreviewType::Libre)
+    } else {
+        Content::Foreign
+    }
+}
+
+/// Whether the front of a file is a Microsoft program database: the *MSF* container a
+/// compiler writes, in either of the two versions the format has been written in — the
+/// name of the format opens both, and the bytes after it are the container's own.
+fn is_program_database(probe: &[u8]) -> bool {
+    starts_with(probe, b"Microsoft C/C++ MSF 7.00")
+        || starts_with(probe, b"Microsoft C/C++ program database 2.00")
+}
+
+/// Whether the front of a file is the database header a Palm OS document opens with.
+///
+/// There is no signature to ask: the format is a name, the four-character type and creator
+/// of the application that wrote it, the dates and identifiers of the database, and the
+/// record list that follows — a shape a great many files could be written in. What is
+/// asked instead is that the two fields the format is *defined* by hold what a Palm OS
+/// application writes there: four printable characters each, opening with a letter, which
+/// is what `TEXt` (the AportisDoc and the readers beside it), `BOOK` (a MobiPocket one),
+/// `DATA` (a Plucker one) and every identifier a Palm program is registered under have in
+/// common — and that the database declares at least one record, which is the file's own
+/// account of having something in it.
+///
+/// Which of those applications the engine can read is the engine's business rather than
+/// this one's: what is asked here is only whether the file is a Palm document at all.
+fn is_palm_database(probe: &[u8]) -> bool {
+    // The fixed part of the header: the name and the fields up to the record count.
+    const HEADER_BYTES: usize = 78;
+
+    let Some(header) = probe.get(..HEADER_BYTES) else {
+        return false;
+    };
+
+    let records = u16::from_be_bytes([header[76], header[77]]);
+
+    records > 0 && is_palm_tag(&header[60..64]) && is_palm_tag(&header[64..68])
+}
+
+/// Whether four bytes hold one of the two identifiers a Palm database is described by:
+/// printable ASCII, and opening with a letter.
+fn is_palm_tag(tag: &[u8]) -> bool {
+    tag.first().is_some_and(|byte| byte.is_ascii_alphabetic())
+        && tag.iter().all(|byte| byte.is_ascii_graphic())
+}
+
+/// What the name a file carries answers for it, where the tables above named nothing.
+///
+/// It is the last of the three questions this module asks of a file: the bytes first,
+/// through the two signature tables, and the name after them, through the table above —
+/// whose own exception, a name that is two formats, is asked of the bytes in between (see
+/// [`GUARDS`]). `None` where the name is not one the table holds, which is where a file's
+/// kind is left to the lists, as it has always been.
+fn kind_by_name(extension: &str, probe: &[u8]) -> Option<Content> {
+    if let Some((_, guard)) = GUARDS
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case(extension))
+    {
+        return Some(guard(probe));
+    }
+
+    KIND_BY_NAME
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case(extension))
+        .map(|(_, kind)| Content::Kind(*kind))
+}
+
 /// What the format the bytes named means for this app, for one file.
 fn classify(path: &Path, names: &[&str], config: &AppConfig) -> Content {
     // A file with no extension at all has no name for the content to disagree with, and
@@ -495,13 +831,28 @@ static ANSWERS: Lazy<Mutex<HashMap<AnswerKey, Content>>> = Lazy::new(|| Mutex::n
 mod tests {
     use super::*;
 
-    /// A file of one name holding the front of a format, answered the way a hover asks it.
+    /// A file of one name holding the front of a format, answered the way a hover asks it:
+    /// the bytes through the two signature tables, and the name through the third.
     fn classified(name: &str, content: &[u8]) -> Content {
-        let Some(names) = detected_names(content) else {
-            return Content::Unknown;
-        };
+        if let Some(names) = detected_names(content) {
+            return classify(Path::new(name), names, &AppConfig::default());
+        }
 
-        classify(Path::new(name), names, &AppConfig::default())
+        own_extension(Path::new(name))
+            .and_then(|extension| kind_by_name(&extension, content))
+            .unwrap_or(Content::Unknown)
+    }
+
+    /// The database header a Palm OS document opens with: the name it is filed under, the
+    /// four-character type and creator of the application that wrote it, and the count of
+    /// the records that follow.
+    fn palm_database(name: &str, kind: &[u8; 4], creator: &[u8; 4]) -> Vec<u8> {
+        let mut header = vec![0u8; 78 + 8];
+        header[..name.len()].copy_from_slice(name.as_bytes());
+        header[60..64].copy_from_slice(kind);
+        header[64..68].copy_from_slice(creator);
+        header[76..78].copy_from_slice(&1u16.to_be_bytes());
+        header
     }
 
     /// A name and a content that disagree are answered with the kind the content belongs
@@ -560,12 +911,14 @@ mod tests {
         );
     }
 
-    /// A box is not an answer, which is the half of both tables that is deliberately not
-    /// in them: an OpenDocument, an iWork document and an Office package are all zips, and
-    /// a hover onto one of those names is decided by the name it was given.
+    /// A box is not an answer, which is the half of the signature tables that is
+    /// deliberately not in them: an OpenDocument and an Office package are both zips, and
+    /// neither table answers for one, so the name the file was given is what decides —
+    /// which for a name the third table holds is the engine that draws it, and for every
+    /// other name is the list that claims it.
     #[test]
     fn a_box_is_left_to_the_name() {
-        for name in ["letter.odt", "report.docx", "notes.pages", "bundle.zip"] {
+        for name in ["letter.odt", "report.docx", "bundle.zip"] {
             assert_eq!(
                 classified(name, b"PK\x03\x04\x14\x00\x00\x00"),
                 Content::Unknown,
@@ -579,6 +932,132 @@ mod tests {
             classified("letter.doc", b"\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1"),
             Content::Unknown
         );
+    }
+
+    /// A format whose head is nothing a signature names is answered by the name it is
+    /// written under, which is what the third table is for: a container FFmpeg demuxes and
+    /// a document the render engine draws are both formats a file manager would take for
+    /// anything at all, and a name is all there is to route them by.
+    #[test]
+    fn a_format_no_signature_names_is_answered_by_the_name_it_carries() {
+        // A RoQ file: a signature this app's tables carry nothing for, under a name that
+        // says what it is.
+        assert_eq!(
+            classified("film.roq", &[0x84, 0x10, 0xFF, 0xFF]),
+            Content::Kind(PreviewType::Videos)
+        );
+        assert_eq!(
+            classified("letter.wpd", b"nothing in here is a signature"),
+            Content::Kind(PreviewType::Libre),
+            "and a WordPerfect document is the engine's, by the same question"
+        );
+        assert_eq!(
+            classified("clip.ty+", b"\x00"),
+            Content::Kind(PreviewType::Videos),
+            "a name the lists carry and no signature does is answered as it is written"
+        );
+
+        // A name whose format is a package is a zip in the bytes and a document in the
+        // name — an iWork deck is one — and the table answers with the engine's kind,
+        // which is what the list it is written for would have said.
+        assert_eq!(
+            classified("deck.key", b"PK\x03\x04\x14\x00\x00\x00"),
+            Content::Kind(PreviewType::Libre)
+        );
+    }
+
+    /// The name `.pdb` is two formats, and only one of them is a document: the Palm OS
+    /// database the render engine's own filters read as an ebook, and the Microsoft
+    /// program database a compiler writes beside its binaries. The engine is asked about
+    /// one of them and never about the other.
+    #[test]
+    fn the_two_formats_one_name_holds_are_told_apart() {
+        let ebook = palm_database("Huckleberry Finn", b"TEXt", b"REAd");
+        assert_eq!(
+            classified("book.pdb", &ebook),
+            Content::Kind(PreviewType::Libre),
+            "a Palm OS ebook is the document the engine draws"
+        );
+
+        // The program database is the one a developer's folders are full of, and it is no
+        // kind of document at all: nothing is shown and no engine is started for it.
+        let program_database = {
+            let mut probe = b"Microsoft C/C++ MSF 7.00\r\n\x1aDS\x00\x00\x00".to_vec();
+            probe.resize(1024, 0);
+            probe
+        };
+        assert_eq!(
+            classified("app.pdb", &program_database),
+            Content::Foreign,
+            "a program database starts no engine"
+        );
+        assert_eq!(
+            classified("app.pdb", b"Microsoft C/C++ program database 2.00\r\n\x1aJG"),
+            Content::Foreign,
+            "and neither does one of the version before it"
+        );
+
+        // What the engine reads is the Palm document, and a file of the name that is
+        // nothing of the sort is not left to the name to decide: it is a file this app has
+        // no reader for, which is the answer to the program database as well.
+        assert_eq!(classified("data.pdb", b"\x00\x01\x02\x03"), Content::Foreign);
+        assert_eq!(
+            classified("data.pdb", b"not a database of any kind"),
+            Content::Foreign
+        );
+    }
+
+    /// And a name the signature tables *do* answer is not in the table of names: `.ts` and
+    /// `.mts` are the two a text list shares, and a file of one of those names that is not
+    /// the transport stream is the TypeScript source it is named as — which is a question
+    /// only the bytes can settle.
+    #[test]
+    fn a_name_a_signature_answers_is_not_answered_by_its_name() {
+        for (extension, _) in KIND_BY_NAME {
+            for signature in SIGNATURES {
+                assert!(
+                    !signature
+                        .names
+                        .iter()
+                        .any(|name| name.eq_ignore_ascii_case(extension)),
+                    "`{extension}` is answered by a signature, so the name must not answer"
+                );
+            }
+        }
+
+        assert_eq!(
+            classified("app.ts", b"const x: number = 1;\n"),
+            Content::Unknown,
+            "a TypeScript file is left to the text list it is named under"
+        );
+    }
+
+    /// What is in the table is the two engines' own lists, and the kind beside a name is
+    /// the kind the lists themselves give it: a video name is a video, a name of the
+    /// render engine's is the engine's, and a name neither list carries is not in the
+    /// table at all. It is what keeps the table from drifting away from the lists — a name
+    /// taken out of `libre_formats`, the way `swf` was, has to be taken out of here with
+    /// it — and what keeps `dif`, which both lists carry, answered in the order every
+    /// other question about a file is asked in.
+    #[test]
+    fn the_table_holds_the_names_the_lists_hold() {
+        let config = AppConfig::default();
+
+        for (extension, kind) in KIND_BY_NAME {
+            let named = PathBuf::from(format!("content.{extension}"));
+
+            if crate::video_formats::claims_video_name(&named, &config.video_extensions) {
+                assert_eq!(*kind, PreviewType::Videos, "`{extension}` is FFmpeg's name");
+                continue;
+            }
+
+            if crate::libre_formats::matches_libre_list(&named, &config.libre_extensions) {
+                assert_eq!(*kind, PreviewType::Libre, "`{extension}` is the engine's name");
+                continue;
+            }
+
+            panic!("`{extension}` is not a name either list carries");
+        }
     }
 
     /// A format no kind of this app previews is a file with nothing to show, and no engine
@@ -622,15 +1101,17 @@ mod tests {
         );
     }
 
-    /// A front nothing in either table names is left to the name it has, which is the
-    /// state every format this app reads for itself is in.
+    /// A front nothing in either table names, under a name the third table does not hold
+    /// either, is left to the name it has — which is the state a text file is in, and
+    /// every format this app reads for itself and confirms nothing about.
     #[test]
     fn what_has_no_signature_is_left_to_the_name_it_has() {
         assert_eq!(
             classified("stream.h264", b"\x00\x01\x02\x03 not a format at all"),
-            Content::Unknown
+            Content::Unknown,
+            "a `.h264` that is not one is answered by its name like any other file"
         );
-        assert_eq!(classified("film.roq", &[0x84, 0x10, 0xFF, 0xFF]), Content::Unknown);
+        assert_eq!(classified("notes.txt", b"just some text\n"), Content::Unknown);
         assert_eq!(
             classified("drawing.svg", b"<svg xmlns=\"http://www.w3.org/2000/svg\">"),
             Content::Unknown,
