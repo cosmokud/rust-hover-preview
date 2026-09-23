@@ -431,6 +431,120 @@ const SIGNATURES: &[Signature] = &[
         names: &["pct"],
         matches: Matcher::Test(is_quickdraw_pict),
     },
+    // ------------------------------------------------- pictures an engine develops
+    // The formats the ImageMagick engine reads that nothing else on a machine opens, and
+    // that this app's own tables do not carry. What is asked of each is what the format
+    // writes at the front of a file and nothing else, the way every entry above is asked —
+    // and a format whose head says nothing, or says something another format says as well,
+    // is answered by its name instead, which is what `magick_formats` is for.
+    //
+    // A camera raw is not in this block: the ones that are TIFFs are answered by the name
+    // they carry (see `names_the_container_of_a_raw`), and the ones that are not — the
+    // Olympus, Panasonic, Fuji and Sigma containers — are entries of their own below.
+    //
+    // Nor are the four names whose head is nothing to ask about. A `.xbm` and an `.xpm` are
+    // C source — the text lists would have them if a user wanted them read as text — and a
+    // `.wbmp` is four bytes of type, header, width and height that any little picture could
+    // write. A `.cur` is the one worth saying out loud: its header is the icon format's with
+    // a two where the icon writes a one, which is *also* the six bytes a Lotus 1-2-3
+    // spreadsheet opens with — so a signature for it would take a `.wk1` away from the render
+    // engine, which is a trade a picture nobody hovers is not worth.
+    //
+    // The JPEG 2000 family, in both of the shapes the format is written in: the file format,
+    // whose first box is the signature box four bytes into the file, and the bare code
+    // stream, which is the same picture with none of the boxes around it.
+    Signature {
+        names: &["j2c", "j2k", "jp2", "jpc", "jpm", "jpt"],
+        matches: Matcher::Test(is_jpeg2000),
+    },
+    // The two halves of the PNG family's animated kin: a JPEG Network Graphic, which is a
+    // PNG carrying JPEG data, and a Multiple-image Network Graphic, which is several PNGs in
+    // one stream. Each opens with the eight bytes every PNG-family file opens with, with its
+    // own three letters after the first.
+    Signature {
+        names: &["jng"],
+        matches: Matcher::Test(|probe| starts_with(probe, &[0x8B, b'J', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A])),
+    },
+    Signature {
+        names: &["mng"],
+        matches: Matcher::Test(|probe| starts_with(probe, &[0x8A, b'M', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A])),
+    },
+    // A GIMP document, which opens with the program's own name and the version letter the
+    // format is written under.
+    Signature {
+        names: &["xcf"],
+        matches: Matcher::Test(|probe| starts_with(probe, b"gimp xcf ")),
+    },
+    // ImageMagick's own interchange format, which names itself in the header it opens with —
+    // the one format here that is the engine's rather than a camera's or an application's,
+    // and the one whose magic is a word rather than a number.
+    Signature {
+        names: &["miff"],
+        matches: Matcher::Test(|probe| starts_with(probe, b"id=ImageMagick")),
+    },
+    // A JPEG Network Graphic's cousin in the film world: the Kodak/SMPTE frame, in either of
+    // the two byte orders the format is written in.
+    Signature {
+        names: &["dpx"],
+        matches: Matcher::Test(|probe| starts_with(probe, b"SDPX") || starts_with(probe, b"XPDS")),
+    },
+    // The astronomer's picture, whose header is an ASCII card image: the record it opens
+    // with, and the card a picture of which no other format writes.
+    Signature {
+        names: &["fit", "fits", "fts"],
+        matches: Matcher::Test(is_fits),
+    },
+    // The film compositor's picture: a two-byte magic, the storage the samples are held in,
+    // and the bytes to a channel — one of each of the pairs the format defines.
+    Signature {
+        names: &["sgi"],
+        matches: Matcher::Test(is_silicon_graphics),
+    },
+    // The medical scanner's image: a hundred and twenty-eight bytes of preamble that may be
+    // anything at all, and the four characters the format puts after it.
+    Signature {
+        names: &["dcm"],
+        matches: Matcher::Test(|probe| at(probe, 128, b"DICM")),
+    },
+    // A multi-page Paintbrush picture: the 0x3ADE68B1 the format is defined by, written
+    // little-endian.
+    Signature {
+        names: &["dcx"],
+        matches: Matcher::Test(|probe| starts_with(probe, &[0xB1, 0x68, 0xDE, 0x3A])),
+    },
+    // A portable float map, which is a Netpbm header with a scale rather than a maximum
+    // after the size: the two characters, the separator, and the digit that has to follow.
+    Signature {
+        names: &["pfm"],
+        matches: Matcher::Test(|probe| {
+            matches!(probe.get(0..3), Some([b'P', b'F' | b'f', b'\n']))
+                && probe.get(3).is_some_and(|byte| byte.is_ascii_digit())
+        }),
+    },
+    // A planetary image from JPL: the header every one opens with names its own length.
+    Signature {
+        names: &["vicar"],
+        matches: Matcher::Test(|probe| starts_with(probe, b"LBLSIZE=")),
+    },
+    // The camera raws that are not TIFFs: the Olympus and Panasonic containers, which are a
+    // TIFF header with a magic of their own in place of the format's, and the Fuji, Sigma and
+    // old Canon containers, which say what they are in their first bytes.
+    Signature {
+        names: &["orf", "rw2"],
+        matches: Matcher::Test(is_raw_tiff_variant),
+    },
+    Signature {
+        names: &["raf"],
+        matches: Matcher::Test(|probe| starts_with(probe, b"FUJIFILMCCD-RAW")),
+    },
+    Signature {
+        names: &["x3f"],
+        matches: Matcher::Test(|probe| starts_with(probe, b"FOVb")),
+    },
+    Signature {
+        names: &["crw"],
+        matches: Matcher::Test(|probe| at(probe, 6, b"HEAPCCDR")),
+    },
     // ------------------------------------------------------------------------ drawings
     // Windows' two metafiles. Neither is a picture this app decodes: both are replayed by
     // the drawing layer, and what tells them apart is the second word — an enhanced
@@ -1030,6 +1144,72 @@ fn is_pcx(probe: &[u8]) -> bool {
 /// drawing, which an on-disk file carries five hundred and twenty-two bytes in.
 fn is_quickdraw_pict(probe: &[u8]) -> bool {
     at(probe, 522, &[0x00, 0x11, 0x02, 0xFF]) || at(probe, 522, &[0x11, 0x01])
+}
+
+/// Whether the front of a file is a JPEG 2000 picture, in either of the two shapes the
+/// format is written in.
+///
+/// The file format is a box structure, and its first box is the signature box — twelve
+/// bytes long, so it announces itself at four rather than at the front of the file. What the
+/// code stream is instead is the picture with none of the boxes: the marker every codestream
+/// opens with, which is the same thing a JPEG 2000 file's `jp2c` box holds.
+fn is_jpeg2000(probe: &[u8]) -> bool {
+    at(probe, 4, &[b'j', b'P', b' ', b' ', 0x0D, 0x0A, 0x87, 0x0A])
+        || starts_with(probe, &[0xFF, 0x4F, 0xFF, 0x51])
+}
+
+/// Whether the front of a file is a Flexible Image Transport System picture.
+///
+/// The header is ASCII card images of eighty bytes each, and the first of them is the record
+/// that says a picture starts here. The card that has to follow it is asked for as well: a
+/// text file that happens to open with `SIMPLE  =` is not a picture of the sky.
+fn is_fits(probe: &[u8]) -> bool {
+    starts_with(probe, b"SIMPLE  =") && contains(probe, b"BITPIX")
+}
+
+/// Whether the front of a file is a Silicon Graphics picture: the two-byte magic, the
+/// storage the picture is held in, and the bytes to a channel — in either byte order, since
+/// the format is written both ways.
+fn is_silicon_graphics(probe: &[u8]) -> bool {
+    let magic = probe.get(0..2);
+
+    if !matches!(magic, Some([0x01, 0xDA]) | Some([0xDA, 0x01])) {
+        return false;
+    }
+
+    matches!(probe.get(2), Some(0x00 | 0x01)) && matches!(probe.get(3), Some(0x01 | 0x02))
+}
+
+/// Whether the front of a file is a camera raw written as a TIFF with a magic of its own.
+///
+/// The two formats that do this are Olympus's and Panasonic's: both are the TIFF container —
+/// the byte order, the number of the format's first version, and the offset of the first
+/// directory — with the format's own answer written where that number would be, so what
+/// tells them from a picture is the two pairs of characters in place of it. The other
+/// direction round, a TIFF is a picture: the number is the number, and the name decides.
+fn is_raw_tiff_variant(probe: &[u8]) -> bool {
+    matches!(
+        probe.get(0..4),
+        Some([0x49, 0x49, 0x52, 0x4F])
+            | Some([0x4D, 0x4D, 0x4F, 0x52])
+            | Some([0x49, 0x49, 0x52, 0x53])
+            | Some([0x49, 0x49, 0x55, 0x00])
+    )
+}
+
+/// Whether the names a file's bytes answered with are the container a camera raw is written
+/// in rather than a picture of its own.
+///
+/// Every raw format from Canon, Nikon, Sony, Pentax, Samsung and Adobe is a TIFF — the
+/// reading, the recipe beside it and a JPEG preview of what it comes out as, in a set of
+/// IFDs — so the common table names the box and not what is inside it, and what the box
+/// holds is a `.nef`, a `.cr2`, an `.arw`, a `.dng` or a `.pef` whose own name says which.
+/// The test is those two names as a whole: a `.tif` is a picture like any other, and a name
+/// the `[magick]` list carries is one no reader here opens at all.
+fn names_the_container_of_a_raw(names: &[&str]) -> bool {
+    names
+        .iter()
+        .any(|name| name.eq_ignore_ascii_case("tif") || name.eq_ignore_ascii_case("tiff"))
 }
 
 /// Whether the front of a file is a RIFF container of one of Corel's formats, which say
@@ -1860,6 +2040,18 @@ fn classify(path: &Path, names: &[&str], config: &AppConfig) -> Content {
         return Content::Unknown;
     }
 
+    // A name the ImageMagick engine is asked about is answered as that kind where the bytes
+    // named the container its format is written in rather than a picture of its own: a
+    // camera raw that is a TIFF is a `.nef`, a `.cr2`, an `.arw`, a `.dng` or a `.pef`, and
+    // the name is the camera's own answer about what is inside the box (see
+    // `names_the_container_of_a_raw`). Every other name is answered below, which is where a
+    // `.tif` is taken for the picture it is.
+    if names_the_container_of_a_raw(names)
+        && crate::formats::magick_formats::matches_magick_list(path, &config.magick_extensions)
+    {
+        return Content::Kind(PreviewType::Magick);
+    }
+
     match kind_claiming(names, config) {
         Some(kind) => Content::Kind(kind),
         None => Content::Foreign,
@@ -1898,6 +2090,10 @@ fn kind_claiming(names: &[&str], config: &AppConfig) -> Option<PreviewType> {
 
         if crate::formats::libre_formats::matches_libre_list(&named, &config.libre_extensions) {
             return Some(PreviewType::Libre);
+        }
+
+        if crate::formats::magick_formats::matches_magick_list(&named, &config.magick_extensions) {
+            return Some(PreviewType::Magick);
         }
 
         if crate::formats::design_formats::matches_design_list(&named, &config.design_extensions) {

@@ -1,5 +1,21 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- **ImageMagick previews.** Niche pictures this app has no reader for are developed by an installed ImageMagick and drawn as the pictures they are — **camera raw above all**, which nothing else on a Windows machine opens: `nef`, `cr2`, `cr3`, `arw`, `dng`, `raf`, `orf`, `rw2`, `pef`, `x3f` and the rest of the raws a camera writes, plus the formats the engine has a coder of its own for and no other list claims (`xcf`, `sgi`, `jp2`, `j2k`, `jng`, `mng`, `dpx`, `fits`, `dcm`, `dcx`, `miff`, `pfm`, `vicar`, `wbmp`, `xbm`, `xpm`, `cur`). Nothing is bundled: the engine is the user's own installation, looked for where it installs and beside `config.ini` for a portable copy.
+- A **Magick** gate in the tray's **Preview Types** submenu, below **Libre**: the raw formats are a kind of their own, so a user who wants them left alone has one switch for them and it is not the switch for pictures.
+- `[magick] extensions` in `config.ini`: the list of names the engine is asked about, written from the built-in list on first run and read back from there, so a format the engine reads can be added by hand and one that is not wanted can be taken out. A name the engine cannot read costs one conversion and is then remembered.
+- **Engine → ImageMagick TTL**: how long the picture the engine developed is kept after the last hover that read it — Indefinitely, 1 hour, 30 minutes, 10 minutes, 5 minutes, 1 minute, 0 seconds, and 10 minutes by default — written to `config.ini` as `magick_idle`. It is the one engine of the four with no process to keep, because `magick.exe` reads a file, writes one and exits: what the setting bounds is the picture it wrote, kept beside `config.ini`, so a raw developed once and hovered again is a read rather than a second development. `0 seconds` converts every time, and the row is greyed out where ImageMagick is not installed.
+- **ImageMagick** in the tray's **Codecs → Engines** list, marked with whether this machine has it.
+- The camera raw formats are recognized by their own bytes as well as by their names, so a raw renamed to something else is still developed by the engine: the Olympus and Panasonic containers by the magic they write in place of the TIFF one, the Fuji, Sigma and old Canon containers by their own, and a raw that is a TIFF — a `.nef`, a `.cr2`, an `.arw`, a `.dng`, a `.pef` — by the name the camera wrote it under, since the bytes there name the box rather than the picture in it. The other formats the engine reads and no table carried are recognized the same way: `xcf`, `miff`, `dpx`, `fits`, `sgi`, `jng`, `mng`, the JPEG 2000 family, `dcm`, `dcx`, `pfm` and `vicar`. What is read of a conversion is a picture of this app's, and once one has been developed the preview follows the picture scaling and the picture background like any other picture — and a raw is turned the right way up, which is the one place this app applies the orientation a camera writes beside its reading.
+
+### Fixed
+
+- `[libre]` was written to `config.ini` but never read back, so an entry added to it by hand or taken out of it by hand changed nothing: the app went on using the built-in list. The list is now read the way every other list is, which is what its own documentation has promised. A file holding the built-in list is unaffected, since reading it back gives what the app was already using.
+- **Preview Types → Libre** did nothing. The row carried the command id the first item of the **Theme** submenu carries, and that item is matched first, so clicking the row switched the text theme instead of the kind — or did nothing at all, on a machine with no `.tmTheme` files. It now carries an id of its own, beside the new **Magick** row.
+
 ## [0.3.1] - 2026-09-24
 
 ### Added

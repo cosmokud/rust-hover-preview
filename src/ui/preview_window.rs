@@ -21,7 +21,9 @@ use crate::readers::eps_image;
 use crate::formats::font_formats;
 use crate::readers::font_preview;
 use crate::formats::libre_formats;
+use crate::engines::imagemagick_render;
 use crate::engines::libreoffice_render;
+use crate::formats::magick_formats;
 use crate::readers::metafile_image;
 use crate::formats::office_formats;
 use crate::readers::office_preview;
@@ -395,6 +397,16 @@ pub enum PreviewMessage {
         path: PathBuf,
         generation: u64,
     },
+    /// The ImageMagick engine is done with a file: the picture it developed is waiting in
+    /// the folder the engine keeps its pictures in, or there is none — a file it cannot read
+    /// is marked as one it will not draw again. The generation is the hover that was waiting
+    /// on it, so a conversion landing after the pointer has moved on is ignored; the picture
+    /// is kept for the next hover either way (see `magick_render_is_due`).
+    MagickReady {
+        path: PathBuf,
+        generation: u64,
+        ok: bool,
+    },
 }
 
 /// Represents different types of media we can display
@@ -457,6 +469,13 @@ enum MediaType {
     /// and what such a file keeps of itself is a thumbnail this app does not show. See
     /// `libre_formats` and `libreoffice_render`.
     Libre,
+    /// A picture an installed ImageMagick developed for this app — a camera raw above all:
+    /// what comes back is a PNG, which is decoded and drawn like the picture it is, over the
+    /// backdrop a picture is drawn over and at the share of its own size a picture is drawn
+    /// at. It is a kind of its own for the gate alone: the switch over these previews is not
+    /// the switch for pictures, so a user who wants their raws left alone has one. See
+    /// `magick_formats` and `imagemagick_render`.
+    Magick,
     Loading,
 }
 
@@ -483,6 +502,10 @@ impl MediaType {
             Self::Design => Some(PreviewType::Design),
             // The same for a document an engine drew, at the gate over the engine's kind.
             Self::Libre => Some(PreviewType::Libre),
+            // And for a picture one developed: it is a picture in every way that matters —
+            // a frame of this app's own, drawn like any other — and only the switch over it
+            // is a switch of its own.
+            Self::Magick => Some(PreviewType::Magick),
             Self::Vector => Some(PreviewType::Vector),
             Self::Loading => None,
         }
@@ -986,6 +1009,22 @@ fn notify_video_probed(path: &Path, generation: u64) {
             let _ = tx.send(PreviewMessage::VideoProbed {
                 path: path.to_path_buf(),
                 generation,
+            });
+        }
+    }
+}
+
+/// The ImageMagick engine is done with a file. Sent from the engine's own thread, through the
+/// same channel every other answer arrives on, so the hover that was waiting is replayed the
+/// moment there is a picture to place it with — or taken down, where the answer is that the
+/// file is not one the engine can read.
+pub fn notify_magick_ready(path: &Path, generation: u64, ok: bool) {
+    if let Ok(sender) = PREVIEW_SENDER.lock() {
+        if let Some(ref tx) = *sender {
+            let _ = tx.send(PreviewMessage::MagickReady {
+                path: path.to_path_buf(),
+                generation,
+                ok,
             });
         }
     }
@@ -1815,6 +1854,48 @@ fn request_libre_render(path: &Path, generation: u64) -> Option<(PathBuf, u64)> 
     Some((path.to_path_buf(), generation))
 }
 
+/// Whether this hover is owed a picture by the ImageMagick engine: a file the engine develops,
+/// with an engine installed to develop it and nothing converted for this version of it yet.
+///
+/// It is the same question `libre_render_is_due` is, asked of an engine that is a converter
+/// rather than an application — one that reads a file, writes one and exits, which is why
+/// there is a process to wait for and nothing to keep. Three things ask it: the layout,
+/// which measures a file like this as the wait for a picture; the loader, which answers with
+/// it that a hover is still waiting rather than failed; and the loop, which asks the engine
+/// for the picture only where there is one to ask for.
+fn magick_render_is_due(path: &Path) -> bool {
+    // The file's own bytes first, the name after them, exactly as the render engine's own
+    // question asks it: a picture renamed to a name no list holds is still the engine's to
+    // develop, and one whose bytes are another kind is not a file to start it for (see
+    // `magick_formats::is_engine_picture`).
+    magick_formats::is_engine_picture(path)
+        && PreviewType::Magick.enabled()
+        && imagemagick_render::available()
+        && imagemagick_render::converted(path).is_none()
+        && !imagemagick_render::refused(path)
+}
+
+/// Ask the engine for the picture this hover needs, and answer what is now being waited on.
+///
+/// The same answer, and for the same reason, as `request_libre_render`: the picture does not
+/// exist until the engine has developed one, and asking late is waiting twice. Nothing is
+/// waited on here either — the conversion runs on the engine's own thread — so what comes
+/// back is the wait, and the hover is replayed when the engine answers. The room is part of
+/// the request rather than of the wait: what the engine is told is how large a picture it may
+/// write, which is the box the preview may take.
+fn request_magick_render(
+    path: &Path,
+    generation: u64,
+    room: (u32, u32),
+) -> Option<(PathBuf, u64)> {
+    if !magick_render_is_due(path) {
+        return None;
+    }
+
+    imagemagick_render::request(path, room, generation);
+    Some((path.to_path_buf(), generation))
+}
+
 /// Every scale a hover is laid out by, read from the configuration together so that the
 /// measure of a file and the render that follows it cannot disagree about the size.
 #[derive(Debug, Clone, Copy)]
@@ -1946,6 +2027,11 @@ fn effective_preview_scale(path: &Path, scales: HoverScales) -> PreviewScale {
         scale_of_kind(PreviewType::Office, path, scales)
     } else if libre_formats::is_libre_file(path) {
         scale_of_kind(PreviewType::Libre, path, scales)
+    } else if magick_formats::is_magick_file(path) {
+        // A picture an engine develops is a picture for this question: what the engine hands
+        // back is a PNG, so the share of its own size that `preview_scale` names is the share
+        // it is drawn at — the picture's rule rather than a document's.
+        scale_of_kind(PreviewType::Magick, path, scales)
     } else if design_formats::is_design_file(path) {
         scale_of_kind(PreviewType::Design, path, scales)
     } else if svg_preview::is_svg_file(path) || vector_formats::is_vector_file(path) {
@@ -1993,6 +2079,13 @@ fn scale_of_kind(kind: PreviewType, path: &Path, scales: HoverScales) -> Preview
         // display the way a PDF page's is: what the engine hands back is a page, not a
         // picture with a size of its own to be scaled from.
         PreviewType::Libre => fit_reduced(scales.libre),
+
+        // A picture an engine developed is the picture's rule: what comes back is a PNG,
+        // which is a bitmap with a size of its own — the size the engine wrote it at — so
+        // the share is of that size rather than of the display. It is asked here rather than
+        // left to the arm below so that a `.nef` the content named and one the name named
+        // come out at the same size (see `effective_preview_scale`).
+        PreviewType::Magick => scales.picture,
 
         // A design document is a document for this question rather than a picture: what is
         // previewed is the picture the file keeps of the whole of itself, at whatever size
@@ -3544,6 +3637,40 @@ fn load_engine_page_for_office(
     load_engine_page(&page, MediaType::Office, max_width, max_height, preview_scale)
 }
 
+/// The picture the ImageMagick engine developed for a file, drawn as the picture it is.
+///
+/// Nothing is converted here, and nothing is waited on: a file the engine has not read yet is
+/// answered with nothing, which is the wait the hover is already in — the loop has asked the
+/// engine for the picture, and the hover is replayed when the answer lands (see
+/// `magick_render_is_due`). What is there is a PNG under the app's own folder, and what is
+/// done with it is what is done with any picture: decoded into the box the layout planned,
+/// held in the image cache under the file, its version and that box, and composited over
+/// `image_background`.
+///
+/// Reading it is also what says it has been used, which is the moment `ImageMagick TTL`
+/// counts from: a picture that has just been hovered is not one the engine thread lets go of
+/// (see `imagemagick_render`).
+fn load_magick_picture(
+    path: &Path,
+    max_width: u32,
+    max_height: u32,
+    preview_scale: PreviewScale,
+    cancel: &Arc<AtomicBool>,
+) -> Option<MediaData> {
+    let picture = imagemagick_render::converted(path)?;
+    imagemagick_render::touch(&picture);
+
+    // The engine's picture is a picture to everything below this line — it is decoded,
+    // resampled and cached like any other, and a raw is a photograph at the size it is
+    // written rather than a page to be fitted to the screen — and a kind of its own to what
+    // draws it: the switch over it is the one about the formats an engine develops rather
+    // than the one about pictures, exactly as a texture's is.
+    let mut media = load_picture(&picture, max_width, max_height, preview_scale, cancel)?;
+    media.media_type = MediaType::Magick;
+
+    Some(media)
+}
+
 /// The drawing a vector file is previewed from.
 ///
 /// Two readers answer for these files and both hand back a frame of the same kind: the
@@ -4786,6 +4913,19 @@ fn load_media(
         return load_design_preview(path, max_width, max_height, preview_scale);
     }
 
+    // A picture an installed ImageMagick develops is the engine's to convert and this
+    // window's to draw: what comes back is a PNG, which is loaded and composited like any
+    // other picture — the picture scale, the picture backdrop, the picture cache — and shown
+    // under the `Magick` kind, whose switch is the one that is about it.
+    //
+    // Nothing is converted here. A file the engine has not read yet is a wait rather than a
+    // failure — the loop has asked for it, and the hover is replayed when the answer lands
+    // (see `magick_render_is_due`) — so what it gets here is nothing, which is the spinner it
+    // is already showing.
+    if magick_formats::is_magick_file(path) {
+        return load_magick_picture(path, max_width, max_height, preview_scale, &cancel);
+    }
+
     // A vector drawing is the drawing layer's to replay rather than a decoder's to read,
     // and it is asked beside the design documents for the same reason they are: what it
     // is, is its own header's answer rather than its name's.
@@ -4870,6 +5010,9 @@ fn load_media_of_kind(
         PreviewType::Libre => libreoffice_render::rendered_page(path).and_then(|page| {
             load_engine_page(&page, MediaType::Libre, max_width, max_height, preview_scale)
         }),
+        PreviewType::Magick => {
+            load_magick_picture(path, max_width, max_height, preview_scale, &cancel)
+        }
         PreviewType::Design => load_design_preview(path, max_width, max_height, preview_scale),
         // Which half of the drawing kind this is, is the name's to say here rather than the
         // content's: a document is drawn by the browser engine and a metafile by the drawing
@@ -5070,6 +5213,14 @@ fn get_media_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
         return libre_box(path);
     }
 
+    // And a picture the ImageMagick engine develops, measured where the hook asks it: after
+    // the documents an engine draws, ahead of the design, vector, font and image lists, none
+    // of which would have claimed a `.nef` anyway. What is measured is the picture the engine
+    // wrote, and one it has not written yet is the wait for it (see `magick_box`).
+    if magick_formats::is_magick_preview(path) {
+        return magick_box(path);
+    }
+
     // A design document is measured from the picture it is previewed from — the merged
     // image at the end of a Photoshop file, or the picture a project container holds —
     // and a file neither reader will answer for reports no size, which is how it comes
@@ -5157,6 +5308,7 @@ fn media_dimensions_of_kind(kind: PreviewType, path: &PathBuf) -> Option<(u32, u
         PreviewType::Archives | PreviewType::Text => None,
         PreviewType::Office => office_preview::measure(path),
         PreviewType::Libre => libre_box(path),
+        PreviewType::Magick => magick_box(path),
         PreviewType::Design => design_dimensions(path),
         PreviewType::Vector => {
             if svg_preview::is_svg_file(path) {
@@ -5202,6 +5354,36 @@ fn libre_box(path: &Path) -> Option<(u32, u32)> {
     Some((office_preview::WAITING_BOX, office_preview::WAITING_BOX))
 }
 
+/// The box a picture the ImageMagick engine develops is placed at: the one it has already
+/// converted for this version of the file, the wait for one that is on its way, and nothing
+/// at all for a file the engine has turned down or for a machine with no engine to develop
+/// one with.
+///
+/// What the engine hands back is a PNG, so what is measured here is a picture's own size
+/// rather than a page's — the size the engine wrote it at, which is the size the preview is
+/// drawn at under the picture scale. Nothing is converted here: a file the engine has not
+/// read yet is the wait, and the loop asks for the picture the moment there is a hover to ask
+/// for it (see `request_magick_render`).
+fn magick_box(path: &Path) -> Option<(u32, u32)> {
+    if !imagemagick_render::available() {
+        // Nothing to develop it with, so there is nothing to show: a machine without the
+        // engine shows no preview for these names rather than the picture the camera left
+        // inside the file, which is what the shell's own thumbnail is for.
+        return None;
+    }
+
+    if let Some(picture) = imagemagick_render::converted(path) {
+        return image_dimensions_with_header_check(&picture);
+    }
+
+    // A file the engine has already turned down is not one to wait for.
+    if imagemagick_render::refused(path) {
+        return None;
+    }
+
+    Some((office_preview::WAITING_BOX, office_preview::WAITING_BOX))
+}
+
 /// A picture's own size, read the way this app reads one: the file's header where its
 /// content is confirmed, and its name where it is not.
 fn picture_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
@@ -5238,7 +5420,7 @@ fn page_is_on_the_way(path: &Path) -> bool {
             office_preview::SourceKind::None
         );
 
-    office || libre_render_is_due(path)
+    office || libre_render_is_due(path) || magick_render_is_due(path)
 }
 
 /// The size the layout should place and scale a preview from.
@@ -5648,7 +5830,8 @@ fn spawn_load_worker(
 
             let awaiting_render = media.is_none()
                 && (office_render_is_due(&request.path, request.max_width)
-                    || libre_render_is_due(&request.path));
+                    || libre_render_is_due(&request.path)
+                    || magick_render_is_due(&request.path));
 
             let _ = result_tx.send(LoadResult {
                 generation: request.generation,
@@ -8178,13 +8361,22 @@ pub fn run_preview_window() {
                             // way, and in the same breath: neither page exists until an
                             // engine has drawn it, and this is the one hover that is
                             // waiting for one.
+                            //
+                            // And a picture the image converter develops is the same wait
+                            // once more — the engine's answer arrives as a message rather
+                            // than as a page in a folder, and what is asked of it is the
+                            // room the preview may take, since what it writes is a picture
+                            // at the size it is shown rather than at the size of the file.
                             page_render_pending = request_office_render(
                                 &result.path,
                                 result.generation,
                                 width,
                                 height,
                             )
-                            .or_else(|| request_libre_render(&result.path, result.generation));
+                            .or_else(|| request_libre_render(&result.path, result.generation))
+                            .or_else(|| {
+                                request_magick_render(&result.path, result.generation, (width, height))
+                            });
                         }
                         None => {
                             // Loading failed, hide window
@@ -8365,6 +8557,19 @@ pub fn run_preview_window() {
                         // act on but an answer about the one that is waiting.
                         if latest_preview_msg.is_none() && video_probed.is_none() {
                             video_probed = Some((path, generation));
+                        }
+                    }
+                    PreviewMessage::MagickReady {
+                        path,
+                        generation,
+                        ok,
+                    } => {
+                        // The engine's answer, held apart for the reason the render tier's
+                        // is: what the hover that asked is waiting for is a picture to be
+                        // placed with, not another hover — and an engine that will not draw
+                        // the file is the same wait answered, with nothing in it.
+                        if latest_preview_msg.is_none() && page_ready.is_none() {
+                            page_ready = Some((path, generation, ok));
                         }
                     }
                     other => {
@@ -8723,6 +8928,10 @@ pub fn run_preview_window() {
                     // And a probe's answer, which replays the hover that was waiting
                     // on it the same way.
                     PreviewMessage::VideoProbed { .. } => {}
+                    // And an engine's, which is the page-shaped answer of a picture
+                    // rather than of a page: it replays the hover that was waiting on
+                    // it exactly as the render tier's answer does.
+                    PreviewMessage::MagickReady { .. } => {}
                 }
 
                 // Shared load/display logic for Show and ShowKeyboard

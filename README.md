@@ -15,6 +15,7 @@ A Windows 11 tray app inspired by QTTabBar. Hover a file in File Explorer — or
 - What a file really holds decides its preview: a video named as a document is played, a document named as a picture is drawn, and a file whose content no reader here answers for is left alone. A format whose bytes carry no signature — WordPerfect `wpd`, Lotus `wk4`, a RoQ video — is routed to the engine that reads it by extension, and a name that means two formats is settled by content: a `.pdb` is handed to LibreOffice only when it is a Palm OS ebook, never when it is a compiler's program database.
 - Design documents — Photoshop, Illustrator, Krita, OpenRaster, and more — previewed from the picture their own format saves of the whole document.
 - HEIC, AVIF, and JPEG XL through Windows codec extensions where installed.
+- Camera raw and the pictures nothing else opens — the raws of every camera, plus `xcf`, `sgi`, `jp2`, `dpx`, `fits` and the rest — developed by ImageMagick where it is installed.
 - Vector drawings — SVG, Windows metafiles, and Illustrator `.eps` — drawn sharply at preview size.
 - Font specimens: font name plus sample lines covering its own character map.
 - Videos through FFmpeg if installed, otherwise through Windows’ own media engine.
@@ -31,7 +32,7 @@ A Windows 11 tray app inspired by QTTabBar. Hover a file in File Explorer — or
 
 You can add or remove formats in `config.ini`. Unsupported formats show no preview, except text, which the app will try to force-read.
 
-Almost everything is previewed by **Windows 11 and this app alone** — a codec Windows ships, WebView2, the drawing layer that plays metafiles, the Windows PDF engine, or a reader written into the app. Three things are not, and they are the app’s largest optional dependencies:
+Almost everything is previewed by **Windows 11 and this app alone** — a codec Windows ships, WebView2, the drawing layer that plays metafiles, the Windows PDF engine, or a reader written into the app. Four things are not, and they are the app’s largest optional dependencies:
 
 ### Runs on Windows 11 alone
 
@@ -66,6 +67,14 @@ Office documents — `doc` `docm` `docx` `dot` `dotm` `dotx` `xls` `xlsb` `xlsm`
 The documents this app has no reader of its own for, drawn by an installed LibreOffice and sharp at any size, all of them: `123` `602` `abw` `cdr` `cgm` `cmx` `cwk` `dbf` `dif` `dxf` `fodg` `fodp` `fodt` `gnm` `gnumeric` `hwp` `key` `lwp` `mcw` `met` `mw` `numbers` `odb` `odc` `odf` `odg` `odm` `odp` `ods` `odt` `oth` `otg` `otm` `otp` `ots` `ott` `pages` `pcd` `pct` `pcx` `pdb` `pm6` `pmd` `psw` `pub` `ras` `sda` `sdc` `sdd` `sdw` `slk` `stc` `std` `sti` `stw` `svm` `sxd` `sxg` `sxi` `sxm` `sxw` `vdx` `vsd` `vsdm` `vsdx` `vstx` `wb2` `wk1` `wk3` `wk4` `wks` `wpg` `wq1` `wq2` `wpd` `wps` `wri` `xlw` `zabw` `zmf`.
 
 Every name in it is one that a filter of the engine declares as something it imports, checked against the engine's own filter list rather than against the formats the engine is said to support. A name that no filter declares is a launch that answers nothing, which is why names an earlier version listed — `epub`, `qxp`, PageMaker before 6, the Visio stencils and templates, and a Flash file above all — are not in it, and a name added to it by hand is asked about from the next read.
+
+### Needs ImageMagick
+
+The pictures nothing else on the machine opens — **camera raw above all** — are developed by an installed ImageMagick, and what comes back is a picture this app draws like any other, at the picture scaling and over the picture background: `3fr` `arw` `cr2` `cr3` `crw` `cur` `dcm` `dcr` `dcx` `dng` `dpx` `erf` `fff` `fit` `fits` `fts` `iiq` `j2c` `j2k` `jng` `jp2` `jpc` `jpm` `jpt` `k25` `kdc` `mdc` `mef` `miff` `mng` `mos` `mrw` `nef` `nrw` `orf` `pef` `pfm` `raf` `raw` `rmf` `rw2` `rwl` `sgi` `sr2` `srf` `srw` `vicar` `wbmp` `x3f` `xbm` `xcf` `xpm`.
+
+The camera names are the point: a `.nef`, a `.cr3`, a `.dng` or a `.raf` is a raw sensor reading with a picture wrapped around it, the shell shows only the thumbnail the camera left inside the file, and a hover onto one shows nothing at all rather than the photograph. ImageMagick is asked for a picture at the size the preview is shown at, with the rotation the file asks for applied — so a raw held sideways is previewed the right way up — and what it writes is kept beside `config.ini`, which is what **Engine → ImageMagick TTL** bounds. Every other name in the list is a format the engine has a coder of its own for and no other list claims.
+
+Every name in it was checked against an installed engine's own registry — `magick -list format` — rather than against the formats ImageMagick is said to support, and the pictures with no head to read (`rgb`, `rgba`, `gray`, `cmyk` and the rest of the raw sample formats), the documents that need Ghostscript (`ps`, `xps`, `djvu`) and the engine's own pseudo-formats (`xc`, `canvas`, `label`) are deliberately not in it. A name added to it by hand is asked about from the next read, and a name the engine cannot read costs one conversion and is remembered.
 
 ### Themes
 
@@ -151,6 +160,16 @@ winget install -e --id TheDocumentFoundation.LibreOffice
 
 If `winget` reports an error, the package sources are usually why: run `winget source reset --force`, and if that is refused as well, open **Terminal as administrator** (right-click the Start button → _Terminal (Admin)_) and run the same command from there. Then hover a `.cdr`: the first hover converts that document and takes a moment, and every hover after it is instant, because the converted page is kept beside `config.ini`. The engine itself is kept too, for ten minutes by default — **Engine → LibreOffice TTL** — so the next document does not pay for a start again.
 
+### Optional: Enable Camera Raw and More Pictures (ImageMagick)
+
+`nef` and everything else in the `[magick]` list is developed by **ImageMagick**, which this app runs where it finds it — nothing is bundled with the app and there is nothing to configure. Install it once:
+
+```text
+winget install -e --id ImageMagick.ImageMagick
+```
+
+Then hover a raw: the first hover converts that picture — a fraction of a second to a second — and every hover after it is instant, because the picture the engine developed is kept beside `config.ini`. **Engine → ImageMagick TTL** says how long it is kept, ten minutes by default, and `0 seconds` converts every time. A raw is developed at the size the preview is shown at rather than at the size of the sensor, so hovering a forty-megapixel file costs the preview and not the file.
+
 ## Usage
 
 1. Start the app — a tray icon appears.
@@ -163,7 +182,7 @@ If `winget` reports an error, the package sources are usually why: run `winget s
 The item a setting starts at carries `(Default)` after its name, so a menu says both what is set now — the check or radio mark — and what a setting nobody has touched would be.
 
 - **Enable Preview** — turn previews on or off.
-- **Preview Types** — Images, Videos, Text, PDF, Archives, Office, Vector, Fonts, Design: gate a kind without touching its file list.
+- **Preview Types** — Images, Videos, Text, PDF, Archives, Office, Vector, Fonts, Design, Libre, Magick: gate a kind without touching its file list.
 - **Text Preview**
   - **Full Mode** — adds scrolling, selection, and copy; off by default.
   - **Theme** — Atom One Light, One Dark Pro, or any `.tmTheme` in the theme folder.
@@ -205,6 +224,7 @@ The item a setting starts at carries `(Default)` after its name, so a menu says 
   - **Microsoft Office TTL** — how long a family’s Office app is kept warm: Indefinitely, 1 hour, 30 minutes, 10 minutes (default), 5 minutes, 1 minute, 0 seconds.
   - **LibreOffice TTL** — the same for the engine that draws CorelDRAW and the documents beside it: how long it is kept after the last document it converted. A kept engine converts the next document without starting up again — measured on one document, 1.2 s cold against 0.2 s — and while it is kept it is a LibreOffice with a small document of this app's own open, which is a few hundred megabytes. `0 seconds` keeps none, which is an engine per document. Greyed out where LibreOffice is not installed.
   - **WebView2 TTL** — how long the browser that draws SVG documents is kept warm; greyed out where WebView2 is missing.
+  - **ImageMagick TTL** — how long the picture ImageMagick developed is kept before the next hover of that file converts it again: the same times, 10 minutes by default and `0 seconds` converting every time. It is the one engine of the four with no process to keep — `magick.exe` reads a file, writes one and exits — so what the setting bounds is what it wrote rather than an engine left running. Greyed out where ImageMagick is not installed.
 - **Codecs** — what this machine has: Videos, Images, and Engines. Missing ones are greyed out.
 - **Run at Startup** — add or remove the Windows startup entry.
 - **Config.ini** — open the configuration file; the item is named for the running version.
@@ -233,6 +253,7 @@ archive_preview_enabled=true
 design_preview_enabled=true
 font_preview_enabled=true
 image_preview_enabled=true
+magick_preview_enabled=true
 office_preview_enabled=true
 pdf_preview_enabled=true
 text_preview_enabled=true
@@ -287,6 +308,7 @@ text_cache_mb=0
 
 ; Engine
 libreoffice_idle=600
+magick_idle=600
 office_engine=microsoft_office
 office_engine_idle=600
 
@@ -304,7 +326,7 @@ Key settings, in plain terms:
 - `text_preview_full_mode` — `true` adds scrolling, selection, and copy.
 - `text_font_scale` — a percentage from 1 to 1000, default `125`; archive listings follow it too.
 - `extensions` / `names` — the text-preview gates. Extensions are written without dots. Names match extensionless files.
-- `image_extensions`, `video_extensions`, `archive_extensions`, `office_extensions`, `font_extensions`, `design_extensions`, `vector_extensions` — per-type preview gates, written without dots. An entry with a dot in it, like `tar.gz`, is matched against the end of the file name.
+- `image_extensions`, `video_extensions`, `archive_extensions`, `office_extensions`, `font_extensions`, `design_extensions`, `vector_extensions` — per-type preview gates, written without dots. An entry with a dot in it, like `tar.gz`, is matched against the end of the file name. `libre_extensions` and `magick_extensions`, in their own sections, are the documents LibreOffice draws and the pictures ImageMagick develops.
 - `image_cache_mb` — memory for decoded image frames: default `32`, max `2048`; `0` holds nothing.
 - `office_cache_mb` — memory for Office-rendered pages: default `64`, max `2048`; `0` holds nothing between hovers but still renders for the current hover.
 - `pdf_cache_mb` — memory for PDF pages as pixels: default `32`, max `2048`; the same file at two preview sizes is held as two pages.
@@ -326,6 +348,8 @@ Key settings, in plain terms:
 - `libre_scale` — the same for a document LibreOffice draws, `fit` by default: the engine hands back a page, so the share is of the display the way a PDF page’s is.
 - `libre_cache_mb` — megabytes of converted pages kept on disk, `32` by default; `0` keeps nothing between hovers. A page whose budget gave it up is converted again the next time it is hovered.
 - `libre_preview_enabled` — whether documents LibreOffice can draw are previewed at all; `true` by default.
+- `magick_preview_enabled` — whether pictures ImageMagick develops, camera raw above all, are previewed at all; `true` by default. The list behind it is `[magick] extensions`.
+- `magick_idle` — seconds the picture ImageMagick developed is kept after the last hover that read it, or `indefinitely`; default `600`. It differs from the three engine TTLs beside it in what it bounds rather than in what it means: ImageMagick is a converter that exits with the file it was given, so there is no process to keep and what is kept is the picture it wrote. `0` converts the picture every time it is hovered, and a picture nothing has hovered for longer than this is dropped by the engine.
 - `pdf_scale` / `office_scale` — the same for a PDF page and an Office-rendered page, both `fit` by default as well as a percentage. A workbook’s fallback bitmap follows its own size and is never enlarged.
 - `font_scale` — percentage or `fit`, read against the screen. `50` is default, `fit` is all of it, and `100` or more reads as `fit`. A font has no size of its own, so the share is of the display.
 - `design_scale` — the same for a design document, `fit` by default. A design preview is the picture the file keeps of the whole document, so the share is of the screen the way a page’s is rather than of the document’s own size.
@@ -350,7 +374,7 @@ The release binary is written to `target/release/rust-hover-preview.exe`. A rele
 
 ## Architecture
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the full system overview. In short: Windows accessibility APIs and Shell COM identify the hovered or focused Explorer item. GDI paints the preview into a topmost layered window. Text and code are highlighted with TextMate-style themes, Markdown is rendered, archive contents are listed from the archives’ own tables of contents, Office documents are drawn from a page Office renders in the background, WebView2 draws SVG documents and font specimens, and video is played by FFmpeg where installed and by Windows’ own media engine where it is not.
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the full system overview. In short: Windows accessibility APIs and Shell COM identify the hovered or focused Explorer item. GDI paints the preview into a topmost layered window. Text and code are highlighted with TextMate-style themes, Markdown is rendered, archive contents are listed from the archives’ own tables of contents, Office documents are drawn from a page Office renders in the background, WebView2 draws SVG documents and font specimens, camera raw and the pictures beside it are developed by ImageMagick, and video is played by FFmpeg where installed and by Windows’ own media engine where it is not.
 
 ## TODO
 
@@ -358,7 +382,7 @@ See [TODO.md](TODO.md) for planned work, known bugs, and other issues.
 
 ## Privacy
 
-Rust Hover Preview works fully offline — no telemetry, analytics, ads, accounts, or crash reporting. It reads only the item you hover or focus in Explorer, locally and only for enabled preview types. Cloud-only placeholders are skipped on purpose; password-protected files are never bypassed. Settings and themes live under `%APPDATA%\rust-hover-preview`; optional previews use your local FFmpeg if installed, Microsoft Office, Windows’ own media engine, and the Windows PDF engine. Caches are in-memory and bounded by `config.ini`. The only network request is an update check, which runs only when you open the tray menu and at most once an hour. See `PRIVACY.md` for full details.
+Rust Hover Preview works fully offline — no telemetry, analytics, ads, accounts, or crash reporting. It reads only the item you hover or focus in Explorer, locally and only for enabled preview types. Cloud-only placeholders are skipped on purpose; password-protected files are never bypassed. Settings and themes live under `%APPDATA%\rust-hover-preview`; optional previews use your local FFmpeg, LibreOffice or ImageMagick if installed, Microsoft Office, Windows’ own media engine, and the Windows PDF engine. Caches are in-memory and bounded by `config.ini`. The only network request is an update check, which runs only when you open the tray menu and at most once an hour. See `PRIVACY.md` for full details.
 
 ## License
 

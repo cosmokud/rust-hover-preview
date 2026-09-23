@@ -23,6 +23,7 @@ use crate::formats::libre_formats::{
     sanitize_libre_extensions, DEFAULT_LIBRE_EXTENSIONS,
     LIBRE_EXTENSIONS_WITH_THE_NAMES_THE_ENGINE_CANNOT_READ,
 };
+use crate::formats::magick_formats::{sanitize_magick_extensions, DEFAULT_MAGICK_EXTENSIONS};
 use crate::formats::office_formats::{sanitize_office_extensions, DEFAULT_OFFICE_EXTENSIONS};
 use crate::formats::text_formats::{
     sanitize_extensions, sanitize_names, DEFAULT_TEXT_EXTENSIONS, DEFAULT_TEXT_NAMES,
@@ -56,6 +57,9 @@ const VECTOR_SECTION: &str = "vector";
 /// The list of documents the render engine is asked about lives in its own section for the
 /// same reason: what this app hands to LibreOffice rather than reading itself.
 const LIBRE_SECTION: &str = "libre";
+/// And the list of pictures the ImageMagick engine is asked about, for the same reason:
+/// what this app hands to it rather than reading itself.
+const MAGICK_SECTION: &str = "magick";
 pub const DEFAULT_WEBP_PLAYBACK_FPS: u32 = 90;
 pub const MAX_WEBP_PLAYBACK_FPS: u32 = 90;
 /// The volume a video is played at unless the file says otherwise: silent, so a hover
@@ -232,6 +236,17 @@ pub const DEFAULT_WEBVIEW_IDLE_SECS: u64 = 600;
 /// of what keeping it saves. What it costs is the application itself — a few hundred
 /// megabytes while it is held — which is what the setting is for.
 pub const DEFAULT_LIBREOFFICE_IDLE_SECS: u64 = 600;
+/// How long a picture the ImageMagick engine converted is kept after the last hover that
+/// read it, by default: ten minutes, the same as every other engine's, because what the
+/// setting is about is the same thing — not paying twice for work that has already been
+/// done.
+///
+/// What it bounds is a little different, and the engine says why: ImageMagick is a
+/// converter that exits with the file it was given, so there is no process to keep. What it
+/// leaves behind is the picture it wrote, and that is what this keeps or drops — a raw
+/// developed once and hovered again is a read rather than a second development (see
+/// `imagemagick_render`).
+pub const DEFAULT_MAGICK_IDLE_SECS: u64 = 600;
 /// The ceiling a hand-edited number of seconds is reduced to. Past a day there is
 /// nothing a number says that `indefinitely` does not say better.
 pub const MAX_OFFICE_ENGINE_IDLE_SECS: u64 = 86_400;
@@ -893,6 +908,12 @@ pub enum PreviewType {
     /// what comes back is a page; see `libre_formats` for what is listed and
     /// `libreoffice_render` for how it is drawn.
     Libre,
+    /// Pictures this app hands to an installed ImageMagick rather than decoding — the camera
+    /// raw formats above all, which nothing else on a Windows machine opens at all. What
+    /// comes back is a PNG, and it is drawn as the picture it is: the picture scale and the
+    /// picture backdrop, held in the picture cache. See `magick_formats` for what is listed
+    /// and `imagemagick_render` for how one is converted.
+    Magick,
 }
 
 impl PreviewType {
@@ -917,6 +938,7 @@ impl PreviewType {
             Self::Design => config.design_preview_enabled,
             Self::Vector => config.vector_preview_enabled,
             Self::Libre => config.libre_preview_enabled,
+            Self::Magick => config.magick_preview_enabled,
         }
     }
 
@@ -933,6 +955,7 @@ impl PreviewType {
             Self::Design => config.design_preview_enabled = enabled,
             Self::Vector => config.vector_preview_enabled = enabled,
             Self::Libre => config.libre_preview_enabled = enabled,
+            Self::Magick => config.magick_preview_enabled = enabled,
         }
     }
 }
@@ -1239,6 +1262,10 @@ pub struct AppConfig {
     /// for `[libre]`, and the switch a user who wants their CorelDRAW files left alone
     /// reaches for.
     pub libre_preview_enabled: bool,
+    /// Whether a picture the ImageMagick engine develops may be previewed at all. It is the
+    /// gate for `[magick]`, and the switch a user who wants their camera raw files left
+    /// alone reaches for; see `magick_formats`.
+    pub magick_preview_enabled: bool,
     /// Whether vector drawings are previewed at all, ahead of the vector list their names
     /// are entries of, and of the browser engine a document of that kind is drawn by.
     pub vector_preview_enabled: bool,
@@ -1269,6 +1296,16 @@ pub struct AppConfig {
     /// never let go of is a process this app holds for the rest of the run (see
     /// `libreoffice_render`).
     pub libreoffice_idle: EngineIdle,
+    /// How long a picture the ImageMagick engine converted is kept after the last hover
+    /// that read it, which is the tray's `Engine → ImageMagick TTL` setting.
+    ///
+    /// It is the same setting as the three above it and it counts from the same place —
+    /// the moment the engine last produced something — but what it is counting over is a
+    /// file rather than a process, because the engine is a converter rather than an
+    /// application: `magick.exe` reads a file, writes one and exits. `0 seconds` is a
+    /// picture that is converted every time it is hovered, and `indefinitely` is one that is
+    /// kept until the folder is swept by something else (see `imagemagick_render`).
+    pub magick_idle: EngineIdle,
     /// Memory the pages PDF previews were drawn as may hold, in megabytes, between
     /// hovers. A page is rendered at `0` like at any other size; it is simply not
     /// kept once the hover that asked for it is over.
@@ -1321,6 +1358,10 @@ pub struct AppConfig {
     /// extensions` in `config.ini`: the formats LibreOffice reads and this app has no
     /// reader of its own for. See `libre_formats`.
     pub libre_extensions: Vec<String>,
+    /// The names of the pictures the ImageMagick engine is asked about, as `[magick]
+    /// extensions` in `config.ini`: the formats ImageMagick reads and this app has no
+    /// reader of its own for — the camera raw formats above all. See `magick_formats`.
+    pub magick_extensions: Vec<String>,
     /// Extensions previewed as vector drawings, already normalized for lookup.
     pub vector_extensions: Vec<String>,
 }
@@ -1370,6 +1411,7 @@ impl Default for AppConfig {
             font_preview_enabled: true,
             design_preview_enabled: true,
             libre_preview_enabled: true,
+            magick_preview_enabled: true,
             vector_preview_enabled: true,
             office_cache_mb: DEFAULT_OFFICE_CACHE_MB,
             libre_cache_mb: DEFAULT_LIBRE_CACHE_MB,
@@ -1377,6 +1419,7 @@ impl Default for AppConfig {
             office_engine_idle: EngineIdle::Seconds(DEFAULT_OFFICE_ENGINE_IDLE_SECS),
             webview_idle: EngineIdle::Seconds(DEFAULT_WEBVIEW_IDLE_SECS),
             libreoffice_idle: EngineIdle::Seconds(DEFAULT_LIBREOFFICE_IDLE_SECS),
+            magick_idle: EngineIdle::Seconds(DEFAULT_MAGICK_IDLE_SECS),
             pdf_cache_mb: DEFAULT_PDF_CACHE_MB,
             text_cache_mb: DEFAULT_TEXT_CACHE_MB,
             decode_budget_gb: DEFAULT_DECODE_BUDGET_GB,
@@ -1394,6 +1437,7 @@ impl Default for AppConfig {
             font_extensions: sanitize_font_extensions(DEFAULT_FONT_EXTENSIONS),
             design_extensions: sanitize_design_extensions(DEFAULT_DESIGN_EXTENSIONS),
             libre_extensions: sanitize_libre_extensions(DEFAULT_LIBRE_EXTENSIONS),
+            magick_extensions: sanitize_magick_extensions(DEFAULT_MAGICK_EXTENSIONS),
             vector_extensions: sanitize_vector_extensions(DEFAULT_VECTOR_EXTENSIONS),
         }
     }
@@ -1436,6 +1480,7 @@ const SETTING_GROUPS: &[(&str, &[&str])] = &[
             "font_preview_enabled",
             "image_preview_enabled",
             "libre_preview_enabled",
+            "magick_preview_enabled",
             "office_preview_enabled",
             "pdf_preview_enabled",
             "text_preview_enabled",
@@ -1505,6 +1550,7 @@ const SETTING_GROUPS: &[(&str, &[&str])] = &[
         "Engine",
         &[
             "libreoffice_idle",
+            "magick_idle",
             "office_engine",
             "office_engine_idle",
             "webview_idle",
@@ -2085,6 +2131,11 @@ impl AppConfig {
         );
         ini.set(
             CONFIG_SECTION,
+            "magick_preview_enabled",
+            Some(self.magick_preview_enabled.to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
             "vector_preview_enabled",
             Some(self.vector_preview_enabled.to_string()),
         );
@@ -2117,6 +2168,11 @@ impl AppConfig {
             CONFIG_SECTION,
             "libreoffice_idle",
             Some(self.libreoffice_idle.as_str()),
+        );
+        ini.set(
+            CONFIG_SECTION,
+            "magick_idle",
+            Some(self.magick_idle.as_str()),
         );
         ini.set(
             CONFIG_SECTION,
@@ -2205,6 +2261,11 @@ impl AppConfig {
             LIBRE_SECTION,
             "extensions",
             Some(sanitize_libre_extensions(&self.libre_extensions.join(",")).join(",")),
+        );
+        ini.set(
+            MAGICK_SECTION,
+            "extensions",
+            Some(sanitize_magick_extensions(&self.magick_extensions.join(",")).join(",")),
         );
         ini.set(
             VECTOR_SECTION,
@@ -2466,6 +2527,11 @@ impl AppConfig {
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "libre_preview_enabled") {
             self.libre_preview_enabled = value;
         }
+        // The ImageMagick kind's switch is read from its own name, and stays where it is
+        // where the name is not written at all.
+        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "magick_preview_enabled") {
+            self.magick_preview_enabled = value;
+        }
         // The vector kind's switch is read from its own name, and stays where it is where the
         // name is not written at all.
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "vector_preview_enabled") {
@@ -2499,6 +2565,11 @@ impl AppConfig {
         if let Some(value) = ini.get(CONFIG_SECTION, "libreoffice_idle") {
             if let Some(idle) = EngineIdle::from_str(&value) {
                 self.libreoffice_idle = idle;
+            }
+        }
+        if let Some(value) = ini.get(CONFIG_SECTION, "magick_idle") {
+            if let Some(idle) = EngineIdle::from_str(&value) {
+                self.magick_idle = idle;
             }
         }
         if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "pdf_cache_mb") {
@@ -2621,6 +2692,30 @@ impl AppConfig {
             sanitize_design_extensions,
         );
         self.design_extensions = list;
+        // The render engine's list, new with its kind: an older file has no section at all, so
+        // the key is gone and the built-in entries come back with it. What a file holds is read
+        // back like every other list — a name a user added is asked about from the next read, and
+        // one they took out is not — and the entries the engine has no filter for, which an
+        // earlier list carried, are taken out of a file by `repair_older_lists` before this runs.
+        let list = configured_list(
+            ini,
+            LIBRE_SECTION,
+            "extensions",
+            DEFAULT_LIBRE_EXTENSIONS,
+            sanitize_libre_extensions,
+        );
+        self.libre_extensions = list;
+        // And the ImageMagick engine's, the same shape once more: the camera raw formats above
+        // all, written from the built-in list on the first run and read back from there, so a
+        // user can add a format the engine reads and this app does not know.
+        let list = configured_list(
+            ini,
+            MAGICK_SECTION,
+            "extensions",
+            DEFAULT_MAGICK_EXTENSIONS,
+            sanitize_magick_extensions,
+        );
+        self.magick_extensions = list;
         // And the vector list, new with its kind: an older file has no section at all, so
         // the key is gone and the built-in entries come back with it. Its entries have
         // grown since — `svg` and `svgz`, which were entries of the image list until the
@@ -3088,6 +3183,65 @@ mod tests {
 
         PreviewType::Fonts.set_enabled_in(&mut config, true);
         assert!(PreviewType::Fonts.enabled_in(&config));
+    }
+
+    /// The pictures the ImageMagick engine is asked about are a list of their own in a section
+    /// of their own — written from the built-in list on first run, normalized on the way in
+    /// and out, and read back from the file — and the kind they belong to has a gate of its
+    /// own under `Preview Types`.
+    #[test]
+    fn the_pictures_the_magick_engine_is_asked_about_are_a_list_and_a_gate_of_their_own() {
+        let config = AppConfig::default();
+        assert_eq!(
+            config.magick_extensions,
+            sanitize_magick_extensions(DEFAULT_MAGICK_EXTENSIONS)
+        );
+        assert_eq!(
+            config.magick_idle,
+            EngineIdle::Seconds(DEFAULT_MAGICK_IDLE_SECS),
+            "and the engine starts at the idle time the app starts at"
+        );
+        assert_eq!(DEFAULT_MAGICK_IDLE_SECS, 600, "which is ten minutes");
+
+        let mut ini = Ini::new();
+        ini.set(MAGICK_SECTION, "extensions", Some(".NEF, cr3".to_string()));
+        ini.set(CONFIG_SECTION, "magick_idle", Some("900".to_string()));
+
+        let config = read_file(&mut ini);
+        assert_eq!(config.magick_extensions, vec!["nef", "cr3"]);
+        assert_eq!(config.magick_idle, EngineIdle::Seconds(900));
+
+        // A section that is gone is answered with the built-in list, and the file is one to
+        // write out again with it, since a key that is gone is not what the app is using.
+        let mut ini = Ini::new();
+        ini.set(CONFIG_SECTION, "run_at_startup", Some("true".to_string()));
+
+        let config = read_file(&mut ini);
+        assert_eq!(
+            config.magick_extensions,
+            sanitize_magick_extensions(DEFAULT_MAGICK_EXTENSIONS)
+        );
+        assert!(
+            config.differs(&ini),
+            "and the file, which has no such section, is one to write"
+        );
+
+        // The gate is a switch of its own: switching it leaves every other kind and the list
+        // where they were.
+        let mut config = AppConfig::default();
+        assert!(PreviewType::Magick.enabled_in(&config));
+
+        PreviewType::Magick.set_enabled_in(&mut config, false);
+        assert!(!PreviewType::Magick.enabled_in(&config));
+        assert!(PreviewType::Libre.enabled_in(&config));
+        assert!(PreviewType::Images.enabled_in(&config));
+        assert_eq!(
+            config.magick_extensions,
+            sanitize_magick_extensions(DEFAULT_MAGICK_EXTENSIONS)
+        );
+
+        PreviewType::Magick.set_enabled_in(&mut config, true);
+        assert!(PreviewType::Magick.enabled_in(&config));
     }
 
     /// A file as the app reads one: what it has wrong or missing is put right first, and then
@@ -3646,6 +3800,7 @@ extensions=png,jpg
         let under_engine = &written[engine..advanced];
         for key in [
             "libreoffice_idle",
+            "magick_idle",
             "office_engine",
             "office_engine_idle",
             "webview_idle",

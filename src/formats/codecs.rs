@@ -158,7 +158,8 @@ pub fn images() -> Vec<Row> {
 }
 
 /// The engines a preview leans on rather than a codec: the ones that draw a document, a
-/// specimen or a page, and the ones that draw a page of a document Office owns.
+/// specimen or a page, the one that develops a picture, and the ones that draw a page of a
+/// document Office owns.
 pub fn engines() -> Vec<Row> {
     vec![
         Row {
@@ -168,6 +169,10 @@ pub fn engines() -> Vec<Row> {
         Row {
             name: "LibreOffice",
             available: crate::engines::libreoffice_render::available(),
+        },
+        Row {
+            name: "ImageMagick",
+            available: crate::engines::imagemagick_render::available(),
         },
         Row {
             name: "Microsoft Word",
