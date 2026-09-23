@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.3.0]
+## [0.3.0] - 2026-09-23
 
 ### Added
 
@@ -16,7 +16,8 @@
 - Cleaned up the `[libre]` list: removed 25 file types LibreOffice does not support, including EPUB, older QuarkXPress, early PageMaker, and some Visio stencils and templates. `config.ini` updates on the next run; supported names can be added back by hand.
 - `.swf` is now video-only and removed from the `[libre]` list. Previously it could launch LibreOffice first. `config.ini` updates on the next run; custom lists are left alone.
 - Previews follow a file's content rather than its extension: a video named as a document is played, a document named as a picture is drawn, and a file whose content no reader here answers for shows nothing instead of starting an engine for it.
-- File types whose bytes carry no signature — a WordPerfect `wpd`, an old Lotus `wk4`, a RoQ video, an AbiWord `abw` — are routed to the engine that reads them by extension, from the formats FFmpeg and LibreOffice are known to read. `.pdb` is one name for two formats: a Palm OS ebook is drawn by LibreOffice, and a compiler's program database is left alone.
+- File types whose bytes carry no signature are routed to the engine that reads them by extension, from the formats FFmpeg and LibreOffice are known to read. `.pdb` is one name for two formats: a Palm OS ebook is drawn by LibreOffice, and a compiler's program database is left alone.
+- Formats the common signature table does not carry are now recognized by their own bytes as well: the pictures this app decodes itself (`dds`, `exr`, `hdr`, `ff`, `qoi`, the Netpbm family, `pcx`, `ras`, `pcd`, `pct`), the drawings Windows replays (`emf`, `wmf`), the documents LibreOffice imports (`wpd`, `wpg`, `wk1`/`wk3`/`wk4`/`123`, `wb2`, `wq1`/`wq2`, `wks`, `dbf`, `dxf`, `hwp`, `lwp`, `cwk`, `mcw`, `wri`, `slk`, `602`, `pm6`/`pmd`, and the type an OpenDocument, a StarOffice XML document or a Krita project declares inside itself), and FFmpeg's containers and raw streams (`rm`, `wtv`, `nsv`, `smk`, `thp`, `roq`, `dv`, `mxg`'s neighbours such as `c93`, `cdg`, `cdxl`, `moflex`, `rcv`, `viv`, `yop`, `xmv`, `dav`, `m2t`/`tp`/`tr`/`tod`, `vro`, and a raw H.265, H.266, AV1, AVS, VC-1, VC-2, Dirac or EVC stream). A file whose bytes are one of these is previewed as what it is whatever it is called. What is still routed by name is what the bytes cannot settle: a zip, an OLE compound file or a gzip stream that names nothing, a format whose signature is its own text, and a name no demuxer reads.
 - `Confirm File Type` is on by default; an installation that already exists keeps the value its `config.ini` holds.
 - Building from source now needs Rust 1.98.1 or newer.
 - Source files are organized into folders by role. No behavior change.
@@ -26,7 +27,7 @@
 - Flash animations (`.swf`) no longer hang previews. They were in both the video and LibreOffice lists, so hovering could start LibreOffice, which cannot render Flash and froze the app. Now `.swf` previews as a video.
 - File types are checked in the same order everywhere, so videos are no longer mistaken for documents.
 
-## [0.2.14]
+## [0.2.14] - 2026-09-22
 
 ### Changed
 
@@ -42,7 +43,7 @@
 - A CorelDRAW document shows its drawing instead of a blank white page, and the shape that keeps its pictures under `previews/` shows one at all: the picture the program wrote for a file manager is read ahead of a page rendered on its own, which can come out empty.
 - Editing `config.ini` by hand now takes effect as soon as you save it, and a value the app cannot read — a misspelled tone map, a delay past its limit — is written back as the value in use instead of staying in the file.
 
-## [0.2.13]
+## [0.2.13] - 2026-09-22
 
 ### Added
 
@@ -68,7 +69,7 @@
 - A Photoshop document smaller than the screen shows a preview again: it was refused whenever the preview was enlarged past the document's own size.
 - EPS files whose preview is a palette picture — the shape Photoshop writes into an EPS — now preview. That shape is read by the app itself, since the picture decoder turns it down.
 
-## [0.2.12]
+## [0.2.12] - 2026-09-22
 
 ### Changed
 
@@ -83,7 +84,7 @@
 - A failed startup of the Explorer lookup could leave hover previews off for the rest of the run; it is now retried until it works.
 - The internal timeout that stops a stalled Explorer from blocking the app is now verified instead of assumed, and refreshes itself if a newer one is ever needed.
 
-## [0.2.11]
+## [0.2.11] - 2026-09-22
 
 ### Added
 
@@ -129,7 +130,7 @@
 - Animations with a long frame in them no longer freeze on that frame. Any frame held for a whole second or more — which a GIF is free to ask for, and one of these asks for 1.2 seconds on its first frame — was unreachable: the playhead was treated as having fallen behind once a second had passed, and its clock was reset every tick, so the wait could never end. The frame's own delay is now part of what "behind" means, and a long hold is simply a long hold.
 - An animation that fits the memory it is kept in stays whole instead of being taken apart frame by frame: it is decoded once, plays through, and wraps back into the frame it started on rather than being read from disk again on every pass.
 
-## [0.2.10]
+## [0.2.10] - 2026-09-10
 
 ### Added
 
@@ -155,7 +156,7 @@
 - Paint `Checkerboard` for `svg_background` in the engine page so SVG previews keep the standard backdrop.
 - Bump version to 0.2.10 in `Cargo.toml` and `Cargo.lock`.
 
-## [0.2.9]
+## [0.2.9] - 2026-09-10
 
 ### Added
 
@@ -172,7 +173,7 @@
 - Tray menu regrouped: `Text Preview` sits below `Preview Types`, `Trigger Key` moved into `Timing` above `Delay`, `Confirm File Type` moved into `Performance`, and the two engine idle-time submenus are named for what they set — `Office Engine TTL` and `SVG Engine TTL`.
 - Bumped version to 0.2.9 in Cargo.toml and Cargo.lock.
 
-## [0.2.8]
+## [0.2.8] - 2026-08-24
 
 ### Added
 
@@ -195,7 +196,7 @@
 - Screen zoom is now read from the window under the point, with the monitor as backup.
 - PDF and Office-exported pages now fit inside the preview box instead of running off-screen.
 
-## [0.2.7]
+## [0.2.7] - 2026-07-03
 
 ### Added
 
@@ -228,7 +229,7 @@
 - One engine per Office family is enforced rather than assumed: a family's engine is started only when nothing this app began for it is still running, and a replacement waits for the process it replaces to be gone. Exiting while a document is mid-render no longer leaves the engine behind either.
 - Pictures over 40 megapixels preview again: the pixel cap is gone, and every reader — pictures, animated GIF/APNG/WebP, SVG documents, Office exports, themes — now asks the decode budget above before it allocates.
 
-## [0.2.6]
+## [0.2.6] - 2026-07-01
 
 ### Added
 
