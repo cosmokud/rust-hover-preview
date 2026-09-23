@@ -11,6 +11,14 @@
 - Preview for the documents LibreOffice reads and this app has no reader of its own for, under a new **Libre** kind: CorelDRAW `cdr` above all, and the older word processors, spreadsheets, presentations and drawings beside it. The page is drawn by an installed LibreOffice and shown sharp at any size, with `Libre Scaling`, `Cache → Libre` (32 MB by default, kept on disk beside `config.ini`) and a `[libre]` extension list to add or remove names.
 - CorelDRAW `cdr` previews no longer come from the picture such a file carries: it is 96 to 256 pixels, so where LibreOffice is not installed a `.cdr` now shows nothing at all. The name has left the design list for `[libre]`, and `config.ini` is updated on the next run.
 - Office documents are drawn by LibreOffice when no Microsoft Office is installed, under the same **Office** kind and its own scaling.
+- A document LibreOffice draws is converted on a thread of its own rather than on the preview thread, and a hover waits for it the way it waits for an Office page: the spinner at the pointer, and the preview drawn as soon as the page lands. A conversion no longer holds the preview, the tray and the pointer for as long as the engine takes, and a page that arrives after its hover has gone is kept, so the next hover of that document is a read.
+- An engine that has stopped answering is now ended rather than waited on: a conversion that has run longer than any document takes — a render filter can spin on a file it cannot read instead of failing — is ended by name and id the next time a document is asked for, which frees the engine's one seat and the core it was holding, and the document it was on is remembered as one the engine will not draw. This is what keeps one unreadable document from costing every document after it.
+- `swf` is out of the built-in `[libre]` list and is a video name alone. It was in both lists, and the measuring path asked LibreOffice before it asked the video path, which is what made a Flash animation a launch of the engine rather than a preview. `config.ini` is updated on the next run, and a list you have edited yourself is left exactly as it is.
+
+### Fixed
+
+- A Flash animation (`.swf`) no longer hangs the preview. The name was in the video list and the `[libre]` list at once, and the path that measures a preview asked the render engine before it asked the video path — so hovering one started LibreOffice, which does not draw a Flash file: its filters spin with a core at a hundred percent and never write a page, the preview thread was held inside that launch, and nothing on screen answered a hover again until the engine was killed by hand. One of the two lists now settles it, the engine is never asked, and a `.swf` previews as the video FFmpeg reads it as.
+- The order the kinds are asked in is the same in both halves of the app for every name two lists hold, which is the disagreement that let a video be measured as a document.
 
 ## [0.2.14]
 
