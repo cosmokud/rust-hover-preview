@@ -1,10 +1,16 @@
 //! What this machine has: every engine and every codec extension a preview leans on.
 //!
-//! Two callers ask. The tray's `Codecs` submenu asks for the whole list, once, when the
-//! menu is built — that is the moment a user is looking at what is installed, and the
-//! moment an answer is allowed to change. The video path asks the one question of its
-//! own, which engine plays a video, and asks it once per hover — which is what the cache
-//! below is for.
+//! Two answers are asked of the machine as a whole, and one question is asked per hover.
+//! The tray's `Codecs` submenu asks for the whole list, once, when the menu is built —
+//! that is the moment a user is looking at what is installed, and the moment an answer is
+//! allowed to change. The video path asks the question of its own, which engine plays a
+//! video, and asks it once per hover — which is what the cache below is for. And the
+//! question of whether a document's own application is installed is asked per hover as
+//! well: it is what decides where an Office document's page comes from, whether from
+//! Office or from the render engine beside it (see `office_formats::app_installed`). It is
+//! a registry read like every other probe here, cheap enough to be asked per hover, and
+//! asking it again is also what lets an application installed while the app is running be
+//! used by the next hover rather than by the next restart.
 //!
 //! Nothing here starts anything. An Office engine is asked for by its ProgID, which is a
 //! registry read rather than a process; a decoder is asked for by enumerating what is
@@ -412,7 +418,12 @@ fn component_reports(info: &IWICBitmapCodecInfo, mime: &str) -> bool {
 /// Whether an application that answers to `prog_id` is registered, which is the same
 /// question the render tier asks before it drives one — and, unlike asking for an engine,
 /// it does not start one.
-fn prog_id_installed(prog_id: &str) -> bool {
+///
+/// It is asked about the Office applications by the tray's menu and by the question that
+/// decides where a document's page comes from: one whose own application is here is drawn
+/// by it, and one whose application is missing is drawn by the render engine beside it
+/// (see `office_formats::app_installed`).
+pub(crate) fn prog_id_installed(prog_id: &str) -> bool {
     let wide: Vec<u16> = prog_id
         .encode_utf16()
         .chain(std::iter::once(0))

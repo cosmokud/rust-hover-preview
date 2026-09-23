@@ -8,6 +8,15 @@
 //! is not there yet is answered with a spinner in a box of its own, and the page
 //! itself the moment it arrives.
 //!
+//! One document is drawn by the render engine beside Office rather than by an
+//! application of its own: one whose own application is not installed, where there is
+//! no Word, Excel or PowerPoint to ask for a page. That engine writes a PDF under the
+//! app's own folder rather than holding anything in memory, and it is a page like any
+//! other here — measured from its own first page, laid out beside the cursor, and drawn
+//! at whatever size the layout asks for — which is what `engine_page` reads and what
+//! `measure` and `source_kind` ask about before they answer with the wait (see
+//! `libre_formats::engine_page_kind` for which documents those are).
+//!
 //! Nothing is kept *here*: the page belongs to the render tier, which holds it up to
 //! the memory the user configured and drops it when that hover is over. What this
 //! module does with it is cheap either way — a page already in memory costs a header
@@ -15,10 +24,11 @@
 //! page itself, so it cannot outlive the page it was read from.
 
 use crate::config::config::image_decode_limits;
+use crate::engines::libreoffice_render;
 use crate::engines::office_render::{self, CachedRender, RenderedKind};
 use crate::readers::pdf_preview;
 use std::io::Cursor;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// The box a preview is placed in while its page is being rendered: the spinner's
@@ -57,17 +67,35 @@ impl SourceKind {
 /// Which of the document's sources a preview would be drawn from, asked by the
 /// layout before it decides how large the preview may be.
 pub(crate) fn source_kind(path: &Path) -> SourceKind {
-    let Some(cached) = usable_render(path) else {
-        return SourceKind::None;
-    };
-
-    // A page Office exported is drawn at whatever size it is asked for; the picture
-    // a workbook is answered with on a machine that cannot export a page is a screen
-    // bitmap, and enlarging that would only stretch it.
-    match cached.kind {
-        RenderedKind::Pdf | RenderedKind::Png => SourceKind::Page,
-        RenderedKind::Bmp => SourceKind::Raster,
+    if let Some(cached) = usable_render(path) {
+        // A page Office exported is drawn at whatever size it is asked for; the picture
+        // a workbook is answered with on a machine that cannot export a page is a screen
+        // bitmap, and enlarging that would only stretch it.
+        return match cached.kind {
+            RenderedKind::Pdf | RenderedKind::Png => SourceKind::Page,
+            RenderedKind::Bmp => SourceKind::Raster,
+        };
     }
+
+    // The page the render engine beside Office drew is a page like any other, and for the
+    // same reason: it is a PDF, and it is drawn at whatever size it is asked for — which is
+    // what the layout has to know before it places one, or the page would be laid out as the
+    // wait for it and shown at the spinner's own size. The document it was drawn for is one
+    // whose own application is not installed (see `libreoffice_render`), so there is no other
+    // source coming that the layout could be waiting for instead.
+    if engine_page(path).is_some() {
+        return SourceKind::Page;
+    }
+
+    SourceKind::None
+}
+
+/// The page the render engine beside Office has drawn for this document, where it has drawn
+/// one: a PDF under the app's own folder, named for the document and the version of it that
+/// was converted. Nothing is started and nothing is waited on — whether there is a page is a
+/// read of that folder (see `libreoffice_render`).
+fn engine_page(path: &Path) -> Option<PathBuf> {
+    libreoffice_render::rendered_page(path)
 }
 
 /// The page waiting for this document, if there is one and it can be read.
@@ -99,6 +127,16 @@ fn usable_render(path: &Path) -> Option<CachedRender> {
 pub(crate) fn measure(path: &Path) -> Option<(u32, u32)> {
     if let Some(cached) = usable_render(path) {
         if let Some(dimensions) = rendered_dimensions(&cached) {
+            return Some(dimensions);
+        }
+    }
+
+    // Nothing of Office's has been drawn, but the render engine beside it may have drawn a
+    // page for a document whose own application is not installed: that page is a page, so the
+    // hover is measured from it and placed beside the cursor at the size it will be shown at,
+    // rather than laid out as the wait for itself (see `source_kind`).
+    if let Some(page) = engine_page(path) {
+        if let Some(dimensions) = pdf_preview::page_dimensions(&page) {
             return Some(dimensions);
         }
     }

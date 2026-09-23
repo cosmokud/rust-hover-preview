@@ -1681,6 +1681,15 @@ fn office_render_is_due(path: &Path, width: u32) -> bool {
         return false;
     }
 
+    // A document whose own application is not installed has no engine to ask, so its page is
+    // the render engine's to draw rather than one this tier could produce: the request goes
+    // there instead of to an application that is not on the machine (see
+    // `libre_render_is_due`, and `libre_formats::engine_page_kind` for the question both
+    // sides ask).
+    if !office_formats::app_installed(path) {
+        return false;
+    }
+
     match office_render::cached_render(path) {
         Some(cached) => office_render::page_is_narrower_than(&cached, width),
         None => true,
@@ -1725,25 +1734,24 @@ fn request_office_render(
     Some((path.to_path_buf(), generation))
 }
 
-/// Whether this hover is owed a page by the render engine: a document the `[libre]` list
-/// holds, an engine installed to draw it, and no page drawn for this version of it yet.
+/// Whether this hover is owed a page by the render engine: a document the engine draws — one
+/// of its own lists, or an Office document whose own application is not installed — with an
+/// engine installed to draw it and no page drawn for this version of it yet.
 ///
-/// It is the question `office_render_is_due` asks of an Office document, asked of the
-/// documents whose engine is a whole application rather than an automation server. Three
-/// things ask it: the layout, which measures a document like this as the wait for a page;
-/// the loader, which answers with it that a hover is still waiting rather than failed; and
-/// the loop, which asks the engine for the page only where there is one to ask for.
+/// It is the question `office_render_is_due` asks of a document whose application is there,
+/// asked of the documents whose engine is a whole application rather than an automation
+/// server. Three things ask it: the layout, which measures a document like this as the wait
+/// for a page; the loader, which answers with it that a hover is still waiting rather than
+/// failed; and the loop, which asks the engine for the page only where there is one to ask
+/// for.
+///
+/// Which kind the page is shown under is part of the answer rather than a second question:
+/// a document of the engine's own is shown under `Libre`, and an Office document the engine
+/// draws where Office cannot is shown under `Office`, at that kind's scale and over that
+/// kind's backdrop — the file is what it is whichever engine drew it (see
+/// `libre_formats::engine_page_kind`).
 fn libre_render_is_due(path: &Path) -> bool {
-    // A document whose content is one of the engine's is due for a page whether or not its
-    // name is one the `[libre]` list holds: the kind its content named is the kind Libre is
-    // (see `content_type`), and a page is what that kind is previewed from. The name is
-    // asked where the content had nothing to say, which is every other file.
-    let named_by_content = matches!(
-        crate::formats::content_type::of(path),
-        crate::formats::content_type::Content::Kind(PreviewType::Libre)
-    );
-
-    (libre_formats::is_libre_preview(path) || (named_by_content && PreviewType::Libre.enabled()))
+    libre_formats::engine_page_kind(path).is_some_and(PreviewType::enabled)
         && libreoffice_render::available()
         && libreoffice_render::rendered_page(path).is_none()
         && !libreoffice_render::refused(path)
@@ -3464,6 +3472,25 @@ fn load_engine_page(
     ))
 }
 
+/// The page the render engine has drawn for an Office document — the fallback for a document
+/// whose own application is not installed, shown as the Office document it is.
+///
+/// Nothing is converted here, and nothing is waited on: a document the engine has not drawn
+/// yet is answered with nothing, which is the wait the hover is already in — the loop has
+/// asked the engine for the page, and the hover is replayed when it lands (see
+/// `libre_render_is_due`). The page that *is* there is read at the share the layout measured
+/// it for, and that share is the Office kind's: the file is what it is whichever engine drew
+/// it (see `effective_preview_scale`).
+fn load_engine_page_for_office(
+    path: &Path,
+    max_width: u32,
+    max_height: u32,
+    preview_scale: PreviewScale,
+) -> Option<MediaData> {
+    let page = libreoffice_render::rendered_page(path)?;
+    load_engine_page(&page, MediaType::Office, max_width, max_height, preview_scale)
+}
+
 /// The drawing a vector file is previewed from.
 ///
 /// Two readers answer for these files and both hand back a frame of the same kind: the
@@ -3578,10 +3605,13 @@ fn load_pdf_first_page(
 
 /// Render a page of an Office document into the box the layout planned.
 ///
-/// Two sources are tried in the order of what they are worth: the page Office
-/// rendered in the background, when there is one, and the picture the document
-/// saved inside itself. The renderer is asked for the source's own aspect ratio
-/// inside the box, so a page that is not the shape the layout assumed is
+/// One source, and it is one this side reads rather than produces: the page the render tier
+/// is holding in memory for the document — drawn by Office itself, or by the render engine
+/// beside it where the document's own application is not installed, and shown under this
+/// kind either way. A document with no page yet is answered with nothing, which is the wait
+/// the hover is in, and the page is asked for by the loop the moment the hover is up (see
+/// `request_office_render` and `libre_render_is_due`). The source's own aspect ratio is
+/// preserved inside the box, so a page that is not the shape the layout assumed is
 /// letterboxed instead of stretched.
 fn load_office_preview(
     path: &Path,
@@ -4633,19 +4663,12 @@ fn load_media(
     if office_formats::is_office_file(path) {
         // Where no Office is installed to draw a page, the render engine beside it draws one
         // instead: the same page, shown as an Office document rather than as a document of
-        // the engine's own kind — the file is what it is, whichever engine drew it.
-        return load_office_preview(path, max_width, max_height, preview_scale, &cancel).or_else(
-            || {
-                let page = libreoffice_render::pdf_for_office(path)?;
-                load_engine_page(
-                    &page,
-                    MediaType::Office,
-                    max_width,
-                    max_height,
-                    preview_scale,
-                )
-            },
-        );
+        // the engine's own kind — the file is what it is, whichever engine drew it. What is
+        // read is the page that engine has already drawn and nothing else: a document it has
+        // not drawn yet is the wait the loop is watching for, like any other page an engine
+        // owes a hover, so nothing is converted on this thread (see `libre_render_is_due`).
+        return load_office_preview(path, max_width, max_height, preview_scale, &cancel)
+            .or_else(|| load_engine_page_for_office(path, max_width, max_height, preview_scale));
     }
 
     // A design document is read for the picture its own format keeps of the whole
@@ -4759,14 +4782,7 @@ fn load_media_of_kind(
         ),
         PreviewType::Office => {
             load_office_preview(path, max_width, max_height, preview_scale, &cancel).or_else(|| {
-                let page = libreoffice_render::pdf_for_office(path)?;
-                load_engine_page(
-                    &page,
-                    MediaType::Office,
-                    max_width,
-                    max_height,
-                    preview_scale,
-                )
+                load_engine_page_for_office(path, max_width, max_height, preview_scale)
             })
         }
         PreviewType::Libre => libreoffice_render::rendered_page(path).and_then(|page| {
@@ -4949,10 +4965,10 @@ fn get_media_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
         return pdf_preview::page_dimensions(path);
     }
 
-    // An Office document is measured from the page that has been rendered for it,
-    // or from the picture the document saved. A document with neither is measured
-    // as the page it is about to get — while the render tier is on, which is the
-    // only case where one is coming.
+    // An Office document is measured from the page that has been drawn for it — by Office
+    // where its own application is installed, and by the render engine beside it where it is
+    // not. A document with neither is measured as the page it is about to get — while a page
+    // is coming, which is the only case where one is.
     if office_formats::is_office_preview(path) {
         return office_preview::measure(path);
     }
@@ -8235,10 +8251,16 @@ pub fn run_preview_window() {
             // draw the document at all — is a read of that folder rather than a message
             // from a thread. What comes of it is the answer an Office page gives, and the
             // same code below takes it up: it is the same wait, in the same box.
+            //
+            // Which documents are watched for is asked of the place the request was made
+            // from, so a hover is never watched for a page nothing was asked to draw: an
+            // Office document whose own application is here has a page asked of that
+            // application's tier, and is answered by a message rather than by this read (see
+            // `libre_render_is_due`).
             if page_ready.is_none() {
                 if let Some((path, generation)) = page_render_pending
                     .as_ref()
-                    .filter(|(path, _)| libre_formats::is_libre_file(path))
+                    .filter(|(path, _)| libre_formats::engine_page_kind(path).is_some())
                 {
                     let drawn = libreoffice_render::rendered_page(path).is_some();
                     let refused = libreoffice_render::refused(path);
@@ -9257,6 +9279,74 @@ mod tests {
         assert!(
             is_text_preview(&renamed),
             "and the bytes are text, so text is what draws it"
+        );
+
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    /// An Office document is asked of one engine and not the other: the application that owns
+    /// the format draws the page where it is installed, and the render engine beside it draws
+    /// one where it is not.
+    ///
+    /// Both drawing it is what a **smaller version** of a preview in front of the right one
+    /// was: the engine's page is a page of the document's own size, and the hover it arrived
+    /// in had been laid out as the wait for a page — the spinner's box at the pointer — so it
+    /// was drawn at the spinner's share of the display and shown there for the second or two
+    /// the application took to draw the real page over it. Neither drawing it is a hover
+    /// waiting for a page nothing was asked to draw.
+    ///
+    /// Which application is installed is the machine's answer rather than this app's, so the
+    /// expectation is written from it; the rule is this app's, and it is what is asserted.
+    #[test]
+    fn an_office_document_is_asked_of_one_engine_and_not_the_other() {
+        if let Ok(mut config) = CONFIG.lock() {
+            config.confirm_file_type = true;
+            config.office_preview_enabled = true;
+            config.office_extensions =
+                office_formats::sanitize_office_extensions(office_formats::DEFAULT_OFFICE_EXTENSIONS);
+        }
+
+        let folder = std::env::temp_dir().join("rust-hover-preview-office-engines");
+        std::fs::create_dir_all(&folder).expect("a test folder");
+
+        // A document its own application draws, on a machine that has one: the tier is asked
+        // for the page, and the render engine is not — it would be a second rendering of the
+        // same document, at a size and a place the layout had never measured a page for.
+        let named = folder.join("report.docx");
+        std::fs::write(&named, b"PK\x03\x04\x00\x00\x00\x00").expect("a written document");
+        let installed = office_formats::app_installed(&named);
+
+        assert!(
+            office_formats::is_office_preview(&named),
+            "the name is the document list's, which is what a document is known by: every \
+             format of Office's is a container, and a container says nothing about itself"
+        );
+        assert_eq!(
+            office_render_is_due(&named, 800),
+            installed,
+            "the application that owns the format is asked for a page exactly where it is here"
+        );
+        assert_eq!(
+            libre_formats::engine_page_kind(&named).is_some(),
+            !installed,
+            "and the render engine beside it is what draws one exactly where it is not, so a \
+             document is never drawn twice and never left undrawn"
+        );
+
+        // And a name no family claims is nobody's: an application that could not be resolved
+        // from it is not asked for a page, and the render engine draws a document of its own
+        // kinds rather than one whose name it was never shown (see `engine_page_kind`).
+        let unclaimed = folder.join("report.bin");
+        std::fs::write(&unclaimed, b"PK\x03\x04\x00\x00\x00\x00").expect("a written document");
+
+        assert!(
+            !office_formats::app_installed(&unclaimed),
+            "no family answers for a name like this one"
+        );
+        assert_eq!(
+            libre_formats::engine_page_kind(&unclaimed),
+            None,
+            "and the render engine is not asked about it either"
         );
 
         let _ = std::fs::remove_dir_all(&folder);
@@ -10925,6 +11015,24 @@ mod tests {
         {
             let path = PathBuf::from(path);
             println!("\n--- {} ---", path.display());
+
+            // Which engine draws a page for this document, which is the question a preview
+            // that arrives smaller than it should turn on: a page the render engine beside
+            // Office drew is a page of the document's own size, and a hover laid out as the
+            // wait for one places it at the spinner's box (see `libre_formats`).
+            println!(
+                "engines: office tier = {}, render engine = {:?}, application installed = {}",
+                office_render_is_due(&path, 800),
+                libre_formats::engine_page_kind(&path),
+                office_formats::app_installed(&path),
+            );
+            println!(
+                "render engine page: {}, refused = {}",
+                libreoffice_render::rendered_page(&path)
+                    .map(|page| page.display().to_string())
+                    .unwrap_or_else(|| "none".to_string()),
+                libreoffice_render::refused(&path)
+            );
 
             let configured = current_hover_scales().picture;
             let scale = effective_preview_scale(&path, current_hover_scales());

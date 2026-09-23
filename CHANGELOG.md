@@ -27,6 +27,7 @@
 
 ### Fixed
 
+- A preview of an Office document no longer shows a smaller version of itself first on a machine that also has LibreOffice installed. The render engine was asked to draw a page for every document, at the size and place of the waiting spinner, and the page the document's own application drew replaced it a moment later. An Office document is asked of the render engine only where its own application is not installed, and a page that engine draws is measured from the page itself and shown at the Office kind's scale, like any other page of the kind.
 - Flash animations (`.swf`) no longer hang previews. They were in both the video and LibreOffice lists, so hovering could start LibreOffice, which cannot render Flash and froze the app. Now `.swf` previews as a video.
 - File types are checked in the same order everywhere, so videos are no longer mistaken for documents.
 - A file renamed to another type's extension is now drawn by the whole of the type its content belongs to, size rules included: a picture named `.mp4` or `.docx` follows the picture scaling rather than the video's or the document's, and one named `.txt` shows at all instead of being read as a page of text that it is not.
