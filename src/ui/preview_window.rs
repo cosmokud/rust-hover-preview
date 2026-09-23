@@ -3828,7 +3828,11 @@ const VIDEO_CROP_MAX_ASYMMETRY_PX: i32 = 12;
 
 /// Get video dimensions using ffprobe
 fn get_video_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
-    let output = Command::new("ffprobe")
+    // Spawned rather than run through `Command::output`, which is these two calls
+    // under one name, so that the probe is in the job before it is waited on: a
+    // probe left behind by a crash would otherwise go on reading a file that nobody
+    // is waiting for. Nothing else about it differs.
+    let child = Command::new("ffprobe")
         .args([
             "-v",
             "error",
@@ -3847,8 +3851,12 @@ fn get_video_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .creation_flags(CREATE_NO_WINDOW) // Hide the console window
-        .output()
+        .spawn()
         .ok()?;
+
+    engine_processes::adopt(child.id());
+
+    let output = child.wait_with_output().ok()?;
 
     let output_str = String::from_utf8_lossy(&output.stdout);
     let mut parts = output_str.trim().split('x').filter(|part| !part.is_empty());
@@ -3923,7 +3931,10 @@ fn collect_video_crop_candidates(path: &PathBuf) -> HashMap<(u32, u32, u32, u32)
         VIDEO_CROPDETECT_LIMIT, VIDEO_CROPDETECT_ROUND
     );
 
-    let output = match Command::new("ffmpeg")
+    // Spawned rather than run through `Command::output` for the same reason the
+    // ffprobe next to it is: a probe that is in the job is one a crash cannot leave
+    // reading a file with nobody waiting for it.
+    let child = match Command::new("ffmpeg")
         .args([
             "-v",
             "info",
@@ -3946,8 +3957,15 @@ fn collect_video_crop_candidates(path: &PathBuf) -> HashMap<(u32, u32, u32, u32)
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .creation_flags(CREATE_NO_WINDOW)
-        .output()
+        .spawn()
     {
+        Ok(child) => child,
+        Err(_) => return HashMap::new(),
+    };
+
+    engine_processes::adopt(child.id());
+
+    let output = match child.wait_with_output() {
         Ok(output) => output,
         Err(_) => return HashMap::new(),
     };
@@ -4347,10 +4365,14 @@ fn start_video_playback(path: &PathBuf, x: i32, y: i32, width: i32, height: i32)
     if let Some(ref child_process) = child {
         set_noactivate_for_process(child_process.id());
 
-        // The player is this app's own child, so it goes in the job with the engines:
-        // a video preview that is up when the app is killed, or crashes, is not left
-        // playing with nothing to close it.
-        engine_processes::adopt(child_process.id());
+        // The player is this app's own child, and it is taken charge of the way the
+        // engines are: one that is up when the app is killed, or crashes, is not left
+        // playing with nothing to close it — the job ends it there and then, and the
+        // record is what answers for the run that never got to end it. It is recorded
+        // as the player rather than as an engine, because what ends a player is its
+        // hover ending: a tier being let go of — a preview type switched off, a worker
+        // given up on — is not its to receive; see `engine_processes`.
+        engine_processes::record_player(VIDEO_PROCESS_IMAGE_NAME, child_process.id());
     }
 
     child
@@ -4442,9 +4464,13 @@ fn is_video_process_running() -> bool {
             if let Some(ref mut process) = media.video_process {
                 match process.try_wait() {
                     Ok(Some(_)) => {
+                        let pid = process.id();
                         media.video_process = None;
                         VIDEO_HWND.store(0, Ordering::SeqCst);
                         VIDEO_PID.store(0, Ordering::SeqCst);
+                        // The player is confirmed gone, so the record of it goes with
+                        // it rather than being left for the next run to look for.
+                        engine_processes::forget(pid);
                         return false;
                     }
                     Ok(None) => return true,
@@ -4521,6 +4547,9 @@ fn clear_video_process_state(pid: u32) {
         .is_ok()
     {
         VIDEO_HWND.store(0, Ordering::SeqCst);
+        // The player is confirmed gone, so the record of it goes with it rather than
+        // being left for the next run to look for.
+        engine_processes::forget(pid);
     }
 }
 
