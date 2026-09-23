@@ -20,7 +20,8 @@ use crate::image_formats::{
     IMAGE_EXTENSIONS_BEFORE_DDS, IMAGE_EXTENSIONS_BEFORE_SVG, IMAGE_EXTENSIONS_WITH_SVG,
 };
 use crate::libre_formats::{
-    sanitize_libre_extensions, DEFAULT_LIBRE_EXTENSIONS, LIBRE_EXTENSIONS_WITH_SWF,
+    sanitize_libre_extensions, DEFAULT_LIBRE_EXTENSIONS,
+    LIBRE_EXTENSIONS_WITH_THE_NAMES_THE_ENGINE_CANNOT_READ,
 };
 use crate::office_formats::{sanitize_office_extensions, DEFAULT_OFFICE_EXTENSIONS};
 use crate::text_formats::{
@@ -1593,7 +1594,7 @@ fn repair_older_lists(ini: &mut Ini) -> bool {
         (
             LIBRE_SECTION,
             DEFAULT_LIBRE_EXTENSIONS,
-            &[LIBRE_EXTENSIONS_WITH_SWF][..],
+            &[LIBRE_EXTENSIONS_WITH_THE_NAMES_THE_ENGINE_CANNOT_READ][..],
             sanitize_libre_extensions as fn(&str) -> Vec<String>,
         ),
         (
@@ -2941,17 +2942,17 @@ mod tests {
         );
     }
 
-    /// A name taken out of a built-in list leaves the files already written with it: the
-    /// list the app shipped with that name is this app's own — nobody typed it — so it is
-    /// read as the list of now, and a name the engine cannot draw stops being asked about
-    /// on an installation that has been running since before it was removed.
+    /// Names taken out of a built-in list leave the files already written with them: the
+    /// list the app shipped with those names is this app's own — nobody typed it — so it is
+    /// read as the list of now, and a name the engine cannot read stops being asked about
+    /// on an installation that has been running since before they were taken out.
     #[test]
-    fn a_list_holding_the_name_the_engine_cannot_draw_loses_it() {
+    fn a_list_holding_the_names_the_engine_cannot_read_loses_them() {
         let mut ini = Ini::new();
         ini.set(
             LIBRE_SECTION,
             "extensions",
-            Some(LIBRE_EXTENSIONS_WITH_SWF.to_string()),
+            Some(LIBRE_EXTENSIONS_WITH_THE_NAMES_THE_ENGINE_CANNOT_READ.to_string()),
         );
 
         let config = read_file(&mut ini);
@@ -2961,10 +2962,12 @@ mod tests {
             sanitize_libre_extensions(DEFAULT_LIBRE_EXTENSIONS),
             "the list the app shipped before is read as the list it ships now"
         );
-        assert!(
-            !config.libre_extensions.iter().any(|name| name == "swf"),
-            "and the Flash name is the one that left it"
-        );
+        for name in ["swf", "epub", "qxp", "pm3", "vssm", "uof"] {
+            assert!(
+                !config.libre_extensions.iter().any(|entry| entry == name),
+                "`{name}` is one of the names that left it"
+            );
+        }
     }
 
     /// A name this app no longer writes is a key it does not write, and that is all it is: the

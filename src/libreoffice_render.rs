@@ -36,10 +36,12 @@
 //! document the engine cannot really read do not always fail: they can spin — measured on
 //! a Flash file, one core at a hundred percent, no page, past every bound — and a
 //! conversion like that holds the seat, burns a core and would cost every document after
-//! it. A conversion that has run longer than any conversion takes is therefore ended, by
-//! name and id, from whichever thread asks the engine for the next document, and the
-//! document it was on is remembered as one the engine will not draw so that the launch is
-//! paid for once and never again.
+//! it. A conversion that has run longer than any conversion takes is therefore ended by
+//! name and id, from both sides of it: the engine thread gives up on the process it is
+//! waiting on, and a document asked for in the meantime ends that same process rather than
+//! queueing behind it. The document it was on is remembered as one the engine will not
+//! draw, so the launch is paid for once and never again, and the preview that asked for it
+//! is answered rather than left spinning.
 
 use crate::config::AppConfig;
 use once_cell::sync::Lazy;
@@ -51,20 +53,17 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Condvar, Mutex};
 use std::time::{Duration, Instant};
 
-/// How long a conversion is given before it is ended. A conversion of the documents this
-/// is for takes seconds; the first one after an install also writes the engine's own
-/// profile, which is why the wait is generous rather than short. It is the engine's own
-/// bound — what is left when nothing else asks — while [`CONVERSION_GIVE_UP`] is the
-/// point at which a conversion in flight is called hung.
-const CONVERSION_TIMEOUT: Duration = Duration::from_secs(60);
-/// How long a conversion may run before the engine is called hung, and a document asked
-/// for behind it ends it rather than queueing behind it.
+/// How long a conversion is given, and the point past which the engine is a stopped one
+/// rather than a busy one: the conversion is ended where it stands, and the document it
+/// was on is remembered as one the engine will not draw.
 ///
 /// A conversion of an ordinary document is one to three seconds on the machine this was
-/// measured on, cold profile included, so this is an order of magnitude past anything a
-/// document the engine can draw costs — and a document it cannot draw never finishes at
-/// all. What the number buys is that one such document does not hold the engine, and the
-/// seat it is drawing in, for the minute the bound below allows.
+/// measured on, the profile's first one included, so this is an order of magnitude past
+/// anything a document the engine can draw costs — and a document it cannot draw does not
+/// finish at all, whether it fails or spins. One number rather than two, because a
+/// document waiting behind a hung engine is waiting on the same question, and the answer
+/// is not a longer wait: it is that engine being ended. Waiting the longer of two bounds
+/// would mean a hover that came after the stuck one paying the difference for nothing.
 const CONVERSION_GIVE_UP: Duration = Duration::from_secs(30);
 /// How often the wait above looks.
 const CONVERSION_POLL: Duration = Duration::from_millis(100);
@@ -196,6 +195,10 @@ fn running_source() -> Option<PathBuf> {
 /// the page would have been, and releases the seat for the document behind it. What the
 /// caller here is left with is a hung engine that costs nothing — no core, no seat — and
 /// the answer it would have reached anyway.
+///
+/// The engine thread holds the same bound over the conversion it is inside, so this is the
+/// same rule reached from the other side: a document asked for behind a hung engine ends it
+/// at the moment it is asked for rather than waiting for the thread to notice.
 fn end_hung_engine() {
     let hung = RUNNING.lock().ok().and_then(|running| {
         running
@@ -231,8 +234,11 @@ fn start_engine() {
         while let Some(source) = next_request() {
             // Whatever the engine answers — a page, or a conversion that wrote none — it is
             // answered in the folder the pages are kept in, which is what the hover waiting
-            // on this document is watching.
-            let _ = rendered(&source);
+            // on this document is watching. A panic is contained here for the same reason
+            // the loader contains one: one document's failure is that document's, and the
+            // thread goes on to the next hover — a thread that died on one document would
+            // take every document after it with it, in silence.
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| rendered(&source)));
         }
     });
 }
@@ -386,7 +392,10 @@ fn convert(program: &Path, source: &Path, rendered: &Path) -> Option<()> {
         started: Instant::now(),
     }));
 
-    let drawn = wait(&mut child, CONVERSION_TIMEOUT);
+    // The conversion's own bound, which is the same give-up every other thread reads: a
+    // document still being drawn and an engine that has stopped drawing look the same from
+    // the outside, and time is what tells them apart.
+    let drawn = wait(&mut child, CONVERSION_GIVE_UP);
 
     publish_running(None);
     crate::engine_processes::forget(child.id());
@@ -588,6 +597,44 @@ mod tests {
 
         publish_running(None);
         let _ = engine.wait();
+    }
+
+    /// And the bound the engine thread holds over its own conversion: a process that ends
+    /// inside it is answered as it always was, and one that outlasts it is ended there
+    /// rather than waited on — which is what makes the give-up a bound on the engine rather
+    /// than only on a document that happens to be asked for after it.
+    #[test]
+    fn ends_a_conversion_rather_than_waiting_past_its_bound() {
+        let mut quick = std::process::Command::new("ping")
+            .args(["-n", "1", "127.0.0.1"])
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .expect("a process that ends on its own");
+        assert!(
+            wait(&mut quick, CONVERSION_GIVE_UP),
+            "a conversion that finishes inside its bound is answered as it always was"
+        );
+
+        let mut engine = std::process::Command::new("ping")
+            .args(["-n", "30", "127.0.0.1"])
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .expect("a process to stand in for the engine");
+        let pid = engine.id();
+        let started = Instant::now();
+
+        assert!(
+            !wait(&mut engine, Duration::from_millis(300)),
+            "a conversion that has outrun its bound is ended, not waited on"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "and the wait ends at the bound it was given rather than when the process would have"
+        );
+        assert!(
+            !crate::engine_processes::is_running(pid),
+            "the engine is gone with it"
+        );
     }
 
     /// What the give-up is decided from: a conversion that has just started is not hung —

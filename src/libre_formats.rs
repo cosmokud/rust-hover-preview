@@ -35,17 +35,38 @@ use std::path::Path;
 /// Nothing here is a picture, a drawing, a video, an archive, a font or a text file — those
 /// are this app's own kinds — and nothing here is a PDF. What is here is what those kinds
 /// leave: the word processors that came before the modern one and the ones beside it
-/// (`wpd`, `wps`, `abw`, `lwp`, `cwk`, `hwp`, `602`, `wri`, `qxp`, `pm*`, `p65`), the older
-/// spreadsheets (`123`, `wk1`, `wk3`, `wk4`, `wks`, `slk`, `dif`, `dbf`, `wb2`, `wq1`,
-/// `wq2`, `gnumeric`, `xlw`), the presentations (`sda`, `sdd`, `sdp`, `sxi`, `sti`), the
-/// drawings whose own format this app does not read (`cdr`, `cmx`, `dxf`, `wpg`, `sxd`,
-/// `std`, `pub`, `vsd` and the Visio family, `fh*` under its `agd`, `fhd` and `zmf`,
-/// `cgm`, `pct`, `plt`, `met`, `svm`, `sgf`) — and the open formats themselves, `odt`,
-/// `ods`, `odp`, `odg`, `odc`, `odb`, `odf` and their friends, which no other list claims
-/// and which the engine reads exactly.
+/// (`wpd`, `wps`, `abw`, `lwp`, `cwk`, `hwp`, `602`, `wri`), the older spreadsheets (`123`,
+/// `wk1`, `wk3`, `wk4`, `wks`, `slk`, `dif`, `dbf`, `wb2`, `wq1`, `wq2`, `gnumeric`, `xlw`),
+/// the presentations (`sda`, `sdc`, `sdd`, `sdw`, `sxi`, `sti`), the drawings whose own
+/// format this app does not read (`cdr`, `cmx`, `dxf`, `wpg`, `pub`, `zmf`, `cgm`, `pct`,
+/// `met`, `svm`, and the Visio names the engine's filter declares) — and the open formats
+/// themselves, `odt`, `ods`, `odp`, `odg`, `odc`, `odb`, `odf` and their friends, which no
+/// other list claims and which the engine reads exactly.
 ///
-/// The engine imports a few names that are deliberately not here, because there is nothing
-/// in them to preview — each is a file *about* a document rather than one:
+/// What a name is asked about is settled by the engine's own filter registry rather than by
+/// the list of formats the engine is *said* to support, and those two are not the same list.
+/// A name belongs here only where a filter that imports declares that very extension — read
+/// one name at a time out of an installed engine's `share/registry/*.xcd` — because a name
+/// no filter declares is a launch that answers nothing: what the engine falls back to is the
+/// file's own content, where a filter it cannot use may spin rather than answer (see `swf`),
+/// and where it answers at all it answers with nothing. Four groups an earlier list held
+/// came out that way:
+///
+/// * `qxp` is the older QuarkXPress document. The filter reads `qxd` and `qxt`.
+/// * `pm3`, `pm4` and `pm5` are PageMaker before 6. The filter reads `pm`, `p65`, `pm6` and
+///   `pmd`.
+/// * `vssm`, `vst`, `vstm`, `vtx` and `vsx` are Visio stencils and templates. The filter
+///   reads `vdx`, `vsd`, `vsdm`, `vsdx` and `vstx`.
+/// * `epub` is a name the engine *writes* rather than reads — the one filter that declares
+///   it is an export filter, which is the wrong direction for a preview — and `agd`, `fhd`,
+///   `jtd`, `jtt`, `plt`, `pxl`, `rl`, `sdp`, `sgf`, `sgl`, `uof`, `uop`, `uos`, `uot` and
+///   `vor` are declared by no filter at all.
+///
+/// A machine whose engine does read one of those can have the name back by adding it: the
+/// list is what the user edits, and a name added to it is asked about from the next read.
+///
+/// The engine imports a few names that are deliberately not here as well, because there is
+/// nothing in them to preview — each is a file *about* a document rather than one:
 ///
 /// * `ase` and `gpl` are colour palettes. LibreOffice reads them to fill a colour picker,
 ///   and what a page would be drawn from one is nothing at all.
@@ -63,16 +84,17 @@ use std::path::Path;
 ///   for as long as the engine was left to it. What reads a Flash file is FFmpeg's own
 ///   SWF demuxer — the drawings, the sounds and the timeline of one — so the name is in
 ///   the video list, which is where it belongs, and is not here (see `video_formats`).
-pub const DEFAULT_LIBRE_EXTENSIONS: &str = "123,602,abw,agd,cdr,cgm,cmx,cwk,dbf,dif,dxf,epub,fhd,fodg,fodp,fodt,gnm,gnumeric,hwp,jtd,jtt,key,lwp,mcw,met,mw,numbers,odb,odc,odf,odg,odm,odp,ods,odt,oth,otg,otm,otp,ots,ott,pages,pcd,pct,pcx,pdb,plt,pm3,pm4,pm5,pm6,pmd,psw,pub,pxl,qxp,ras,rl,sda,sdc,sdd,sdp,sdw,sgf,sgl,slk,stc,std,sti,stw,svm,sxd,sxg,sxi,sxm,sxw,uof,uop,uos,uot,vdx,vor,vsd,vsdm,vsdx,vssm,vst,vstm,vstx,vtx,vsx,wb2,wk1,wk3,wk4,wks,wpg,wq1,wq2,wpd,wps,wri,xlw,zabw,zmf";
+pub const DEFAULT_LIBRE_EXTENSIONS: &str = "123,602,abw,cdr,cgm,cmx,cwk,dbf,dif,dxf,fodg,fodp,fodt,gnm,gnumeric,hwp,key,lwp,mcw,met,mw,numbers,odb,odc,odf,odg,odm,odp,ods,odt,oth,otg,otm,otp,ots,ott,pages,pcd,pct,pcx,pdb,pm6,pmd,psw,pub,ras,sda,sdc,sdd,sdw,slk,stc,std,sti,stw,svm,sxd,sxg,sxi,sxm,sxw,vdx,vsd,vsdm,vsdx,vstx,wb2,wk1,wk3,wk4,wks,wpg,wq1,wq2,wpd,wps,wri,xlw,zabw,zmf";
 
-/// The built-in `[libre]` list as it stood while `swf` was an entry of it.
+/// The built-in `[libre]` list as it stood before the names the engine cannot read were
+/// taken out of it: the one `swf` was in, and the four groups above with it.
 ///
 /// A file holding exactly these entries is the app's own older list rather than a user's
 /// edit — nobody has touched it — so it is brought up to the built-in list rather than kept
-/// as written, which is what takes the name out of every `config.ini` already written. What
-/// it takes out is a name the engine was never able to draw: a Flash file sent to it does
-/// not fail, it spins, so the entry cost a launch, a core and a preview that never came.
-pub const LIBRE_EXTENSIONS_WITH_SWF: &str = "123,602,abw,agd,cdr,cgm,cmx,cwk,dbf,dif,dxf,epub,fhd,fodg,fodp,fodt,gnm,gnumeric,hwp,jtd,jtt,key,lwp,mcw,met,mw,numbers,odb,odc,odf,odg,odm,odp,ods,odt,oth,otg,otm,otp,ots,ott,pages,pcd,pct,pcx,pdb,plt,pm3,pm4,pm5,pm6,pmd,psw,pub,pxl,qxp,ras,rl,sda,sdc,sdd,sdp,sdw,sgf,sgl,slk,stc,std,sti,stw,svm,swf,sxd,sxg,sxi,sxm,sxw,uof,uop,uos,uot,vdx,vor,vsd,vsdm,vsdx,vssm,vst,vstm,vstx,vtx,vsx,wb2,wk1,wk3,wk4,wks,wpg,wq1,wq2,wpd,wps,wri,xlw,zabw,zmf";
+/// as written, which is what takes those names out of every `config.ini` already written.
+/// What each of them cost is written beside it in the list above: a launch that answered
+/// nothing, and for `swf` a launch that never ended at all.
+pub const LIBRE_EXTENSIONS_WITH_THE_NAMES_THE_ENGINE_CANNOT_READ: &str = "123,602,abw,agd,cdr,cgm,cmx,cwk,dbf,dif,dxf,epub,fhd,fodg,fodp,fodt,gnm,gnumeric,hwp,jtd,jtt,key,lwp,mcw,met,mw,numbers,odb,odc,odf,odg,odm,odp,ods,odt,oth,otg,otm,otp,ots,ott,pages,pcd,pct,pcx,pdb,plt,pm3,pm4,pm5,pm6,pmd,psw,pub,pxl,qxp,ras,rl,sda,sdc,sdd,sdp,sdw,sgf,sgl,slk,stc,std,sti,stw,svm,swf,sxd,sxg,sxi,sxm,sxw,uof,uop,uos,uot,vdx,vor,vsd,vsdm,vsdx,vssm,vst,vstm,vstx,vtx,vsx,wb2,wk1,wk3,wk4,wks,wpg,wq1,wq2,wpd,wps,wri,xlw,zabw,zmf";
 
 /// Whether the configured list claims `path`.
 pub fn matches_libre_list(path: &Path, extensions: &[String]) -> bool {
@@ -211,11 +233,60 @@ mod tests {
             "sheet.ods",
             "slides.odp",
             "drawing.odg",
-            "book.epub",
+            "letter.pages",
+            "book.odb",
+            "drawing.wpg",
+            "drawing.vstx",
+            "drawing.pm6",
+            "drawing.pmd",
         ] {
             assert!(
                 matches_libre_list(std::path::Path::new(name), &list),
                 "`{name}` is one of the engine's documents"
+            );
+        }
+    }
+
+    /// And the names the engine has no filter of its own for are not handed to it: a name
+    /// like that is a launch that answers nothing, and one of them — a Flash file — is a
+    /// launch that does not end. Each of these was read out of an installed engine's own
+    /// filter registry, which is the only thing that settles what it answers for; the case
+    /// that made it worth checking is beside them.
+    #[test]
+    fn hands_over_no_name_the_engine_has_no_filter_for() {
+        let list = sanitize_libre_extensions(DEFAULT_LIBRE_EXTENSIONS);
+
+        for name in [
+            "book.swf",
+            "book.epub",
+            "poster.qxp",
+            "poster.pm3",
+            "poster.pm4",
+            "poster.pm5",
+            "plan.vssm",
+            "plan.vst",
+            "plan.vstm",
+            "plan.vtx",
+            "plan.vsx",
+            "note.agd",
+            "note.fhd",
+            "letter.jtd",
+            "letter.jtt",
+            "plot.plt",
+            "picture.pxl",
+            "text.rl",
+            "talk.sdp",
+            "drawing.sgf",
+            "drawing.sgl",
+            "letter.uof",
+            "sheet.uop",
+            "sheet.uos",
+            "letter.uot",
+            "drawing.vor",
+        ] {
+            assert!(
+                !matches_libre_list(std::path::Path::new(name), &list),
+                "`{name}` is a name no filter of the engine's declares"
             );
         }
     }
