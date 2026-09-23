@@ -1,10 +1,10 @@
 //! The processes this app starts, and how they are made to go with it.
 //!
-//! Three things this app starts would otherwise outlive it: the Office application
-//! that draws a document's page, the browser that draws an SVG document, and
-//! the player a video preview runs in. Each of them is ended where it is ended
-//! deliberately — an engine let go for idle, a player stopped — and what this
-//! module is for is the ways an app does not get to choose: ended from Task
+//! What this app starts would otherwise outlive it: the Office application that
+//! draws a document's page, the browser that draws an SVG document, the player a
+//! video preview runs in, and the probes that size one. Each of them is ended where
+//! it is ended deliberately — an engine let go for idle, a player stopped — and what
+//! this module is for is the ways an app does not get to choose: ended from Task
 //! Manager, taken down by a crash, closed by a logoff.
 //!
 //! Two mechanisms, covering different halves of that.
@@ -114,10 +114,10 @@ fn create_job() -> Option<usize> {
 /// Best effort, and only ever a process this app started: a refusal — a process
 /// already inside a job that will not nest is the way that happens — costs the
 /// immediate end and leaves the record to do it on the next start, so nothing here
-/// is reported. What is adopted without being recorded is the video player, which
-/// is a child of this app that nothing else needs to know again: it is ended by its
-/// own supervision while the app runs, and by the job when the app does not get to
-/// end it.
+/// is reported. What is adopted without being recorded is a probe — the `ffprobe`
+/// and the cropdetect `ffmpeg` a video's geometry is read by — which lives a few
+/// dozen milliseconds and has no window to leave behind: writing one down would be a
+/// record made and struck off again inside the hover that started it.
 pub fn adopt(pid: u32) -> bool {
     let Some(job) = job() else {
         return false;
@@ -137,6 +137,17 @@ pub fn adopt(pid: u32) -> bool {
 
 // --------------------------------------------------------------- the records
 
+/// What a recorded process is, which is what decides how far an ending reaches.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    /// An engine: a process that draws something for this app, ended with its tier
+    /// when that tier is let go of — including every one of them at once.
+    Engine,
+    /// The player a video preview runs in. It is the picture the user is watching,
+    /// so what ends it is its hover ending and not a tier going away.
+    Player,
+}
+
 /// A process this app started, and what it takes to know it again later.
 struct Owned {
     /// The image it runs, by file name, which is also what says what it is: Word,
@@ -146,13 +157,35 @@ struct Owned {
     /// When the process started, in the ticks the state file carries. Zero when that
     /// could not be read, which is a record that can only be matched by name.
     created: u64,
+    kind: Kind,
 }
 
 static OWNED: Lazy<Mutex<Vec<Owned>>> = Lazy::new(|| Mutex::new(Vec::new()));
 
-/// Take charge of a process this app started: put it in the job, hold it, and write
+/// Take charge of an engine this app started: put it in the job, hold it, and write
 /// it down.
 pub fn record(image: &str, pid: u32) {
+    record_as(Kind::Engine, image, pid);
+}
+
+/// Take charge of the player a video preview runs in.
+///
+/// Written down the way an engine is, so that a run which never got to end it —
+/// killed, crashed, or closed with the player still up — is answered for by the next
+/// one. It is the record that makes this worth doing where the job alone was not:
+/// the job takes the player with the app, but a process the job would not take is a
+/// looping player left on screen, and the only thing that reaches one of those is
+/// the next run.
+///
+/// The kind is the difference that matters: the player is held in the same list as
+/// the engines and is kept out of `terminate_all_owned`, because a preview type
+/// switched off or a worker given up on is nothing to do with a video that is
+/// playing.
+pub fn record_player(image: &str, pid: u32) {
+    record_as(Kind::Player, image, pid);
+}
+
+fn record_as(kind: Kind, image: &str, pid: u32) {
     if pid == 0 {
         return;
     }
@@ -166,6 +199,7 @@ pub fn record(image: &str, pid: u32) {
             image: image.to_string(),
             pid,
             created,
+            kind,
         });
     }
 
@@ -202,9 +236,16 @@ pub fn terminate_owned(pid: u32) -> bool {
     requested || gone
 }
 
-/// End every process this app started that is still recorded.
+/// End every engine this app started that is still recorded.
+///
+/// Engines and not everything held: the player a video preview runs in is recorded
+/// too, and it is the one process in this list the user is looking at. What this is
+/// called for is a tier being let go of — a preview type switched off in the tray, a
+/// worker given up on — and a video that is playing has nothing to do with either.
+/// What ends a player is its hover ending, and what answers for one this app never
+/// got to end is the record.
 pub fn terminate_all_owned() {
-    for pid in recorded_pids(None) {
+    for pid in recorded_pids(None, Some(Kind::Engine)) {
         terminate_owned(pid);
     }
 }
@@ -218,7 +259,7 @@ pub fn terminate_all_owned() {
 /// end — a preview that does not render this time, which is nothing next to two
 /// Office processes on the machine.
 pub fn end_recorded(image: &str) -> bool {
-    let pids = recorded_pids(Some(image));
+    let pids = recorded_pids(Some(image), None);
     if pids.is_empty() {
         return true;
     }
@@ -253,8 +294,9 @@ fn record_of(pid: u32) -> Option<(String, u64)> {
         .map(|owned| (owned.image.clone(), owned.created))
 }
 
-/// The ids this app is holding, for one image or for all of them.
-fn recorded_pids(image: Option<&str>) -> Vec<u32> {
+/// The ids this app is holding, for one image or for all of them, and for one kind of
+/// process or for both.
+fn recorded_pids(image: Option<&str>, kind: Option<Kind>) -> Vec<u32> {
     OWNED
         .lock()
         .map(|owned| {
@@ -264,6 +306,7 @@ fn recorded_pids(image: Option<&str>) -> Vec<u32> {
                     Some(image) => owned.image.eq_ignore_ascii_case(image),
                     None => true,
                 })
+                .filter(|owned| kind.is_none_or(|kind| owned.kind == kind))
                 .map(|owned| owned.pid)
                 .collect()
         })
