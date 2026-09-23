@@ -62,7 +62,9 @@ Office documents — `doc` `docm` `docx` `dot` `dotm` `dotx` `xls` `xlsb` `xlsm`
 
 ### Needs LibreOffice
 
-The documents this app has no reader of its own for, drawn by an installed LibreOffice and sharp at any size, all of them: `123`, `602`, `abw`, `agd`, `cdr`, `cgm`, `cmx`, `cwk`, `dbf`, `dif`, `dxf`, `epub`, `fhd`, `fodg`, `fodp`, `fodt`, `gnm`, `gnumeric`, `hwp`, `jtd`, `jtt`, `key`, `lwp`, `mcw`, `met`, `mw`, `numbers`, `odb`, `odc`, `odf`, `odg`, `odm`, `odp`, `ods`, `odt`, `oth`, `otg`, `otm`, `otp`, `ots`, `ott`, `pages`, `pcd`, `pct`, `pcx`, `pdb`, `plt`, `pm3`, `pm4`, `pm5`, `pm6`, `pmd`, `psw`, `pub`, `pxl`, `qxp`, `ras`, `rl`, `sda`, `sdc`, `sdd`, `sdp`, `sdw`, `sgf`, `sgl`, `slk`, `stc`, `std`, `sti`, `stw`, `svm`, `sxd`, `sxg`, `sxi`, `sxm`, `sxw`, `uof`, `uop`, `uos`, `uot`, `vdx`, `vor`, `vsd`, `vsdm`, `vsdx`, `vssm`, `vst`, `vstm`, `vstx`, `vtx`, `vsx`, `wb2`, `wk1`, `wk3`, `wk4`, `wks`, `wpg`, `wq1`, `wq2`, `wpd`, `wps`, `wri`, `xlw`, `zabw`, `zmf`.
+The documents this app has no reader of its own for, drawn by an installed LibreOffice and sharp at any size, all of them: `123` `602` `abw` `cdr` `cgm` `cmx` `cwk` `dbf` `dif` `dxf` `fodg` `fodp` `fodt` `gnm` `gnumeric` `hwp` `key` `lwp` `mcw` `met` `mw` `numbers` `odb` `odc` `odf` `odg` `odm` `odp` `ods` `odt` `oth` `otg` `otm` `otp` `ots` `ott` `pages` `pcd` `pct` `pcx` `pdb` `pm6` `pmd` `psw` `pub` `ras` `sda` `sdc` `sdd` `sdw` `slk` `stc` `std` `sti` `stw` `svm` `sxd` `sxg` `sxi` `sxm` `sxw` `vdx` `vsd` `vsdm` `vsdx` `vstx` `wb2` `wk1` `wk3` `wk4` `wks` `wpg` `wq1` `wq2` `wpd` `wps` `wri` `xlw` `zabw` `zmf`.
+
+Every name in it is one that a filter of the engine declares as something it imports, checked against the engine's own filter list rather than against the formats the engine is said to support. A name that no filter declares is a launch that answers nothing, which is why names an earlier version listed — `epub`, `qxp`, PageMaker before 6, the Visio stencils and templates, and a Flash file above all — are not in it, and a name added to it by hand is asked about from the next read.
 
 ### Themes
 
@@ -344,7 +346,7 @@ See [TODO.md](TODO.md) for planned work, known bugs, and other issues.
 
 ## Privacy
 
-Rust Hover Preview works fully offline — no telemetry, analytics, ads, update checks, or accounts. It reads only the item you hover or focus in Explorer, locally and only for enabled preview types. Cloud-only placeholders are skipped; password-protected files are never bypassed. Settings and themes live under `%APPDATA%\rust-hover-preview`; optional previews use your local FFmpeg if installed, Microsoft Office, Windows’ own media engine, and the Windows PDF engine. Caches are in-memory and bounded by `config.ini`. See [PRIVACY.md](PRIVACY.md) for full details.
+Rust Hover Preview works fully offline — no telemetry, analytics, ads, accounts, or crash reporting. It reads only the item you hover or focus in Explorer, locally and only for enabled preview types. Cloud-only placeholders are skipped on purpose; password-protected files are never bypassed. Settings and themes live under `%APPDATA%\rust-hover-preview`; optional previews use your local FFmpeg if installed, Microsoft Office, Windows’ own media engine, and the Windows PDF engine. Caches are in-memory and bounded by `config.ini`. The only network request is an update check, which runs only when you open the tray menu and at most once an hour. See `PRIVACY.md` for full details.
 
 ## License
 
