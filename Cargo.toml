@@ -6,7 +6,7 @@ description = "Windows 11 system tray app that shows image, video, PDF, text, an
 authors = ["Rust Hover Preview Contributors"]
 license = "MIT"
 readme = "README.md"
-rust-version = "1.88"
+rust-version = "1.98.1"
 build = "build.rs"
 
 [dependencies]
@@ -149,6 +149,22 @@ two-face = { version = "0.4.3", default-features = false, features = ["syntect-o
 
 # CommonMark parsing for the rendered Markdown preview mode
 pulldown-cmark = { version = "0.10.0", default-features = false }
+
+# What a file's own bytes say it is, asked before a file is handed to one of the engines
+# this app drives: a `.docx` whose content is an MP4 is played by FFmpeg rather than
+# offered to Word or LibreOffice, and a `.cdr` that is really a picture is previewed as
+# one (see `content_type`). The common formats are this crate's — a small table of the
+# signatures every tool agrees on — and the formats it does not carry but FFmpeg and
+# LibreOffice do (a transport stream, an MXF, a raw H.264 stream, the PostScript a drawing
+# is) are this app's own, in the shape the rest of it already asks signatures in.
+#
+# The default features are off, which is what keeps `cfb`, `uuid` and `fnv` out of the
+# graph: they are there for reading an OLE compound file to tell a `.doc` from an `.xls`,
+# and a box of that kind is not a kind this module answers with — what every `.doc`,
+# `.xls` and `.ppt` is, is decided by its name, and by the container probe the Office tier
+# already asks before it starts anything. Nothing else changes: measured against the same
+# files, the answers are the same with the feature on and off.
+infer = { version = "0.22", default-features = false, features = ["alloc"] }
 
 # Archive listings and project containers. A listing decompresses nothing, which is
 # what a listing needs, and the 7z codecs stay off for it; a project container is
