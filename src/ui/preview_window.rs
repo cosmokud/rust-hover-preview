@@ -54,7 +54,7 @@ use std::process::{Child, Command, Stdio};
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, Ordering};
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant, SystemTime};
 use windows::core::{w, PCWSTR, PWSTR};
 use windows::Win32::Foundation::{
@@ -136,6 +136,39 @@ pub static PREVIEW_SENDER: Lazy<Mutex<Option<Sender<PreviewMessage>>>> =
 
 // Use AtomicIsize for the HWND pointer (thread-safe)
 static PREVIEW_HWND: AtomicIsize = AtomicIsize::new(0);
+
+/// The number of times the window has been taken down, and the lock that makes a
+/// take-down and the reveal it races one step rather than two threads writing the
+/// window's visibility at once.
+///
+/// `hide_preview` takes the window down there and then, on the Explorer hook's
+/// thread, while the frame that puts it up is installed here when a load lands. A
+/// load that lands in the moment after the pointer left would otherwise put the
+/// preview back up for a file nobody is on any more, to be taken down again by the
+/// next tick: the preview that blinks. A load carries the count it was started
+/// under, and a hide moves it, so a reveal whose count has moved is refused. It is
+/// a comparison and not a wait — nothing here ever holds a preview back from going
+/// up.
+static HIDDEN_EPOCH: Mutex<u64> = Mutex::new(0);
+
+/// The hide count a load starting now is under.
+fn hidden_epoch() -> u64 {
+    match HIDDEN_EPOCH.lock() {
+        Ok(epoch) => *epoch,
+        Err(poisoned) => *poisoned.into_inner(),
+    }
+}
+
+/// Whether a load is still the one the pointer asked for, `hidden` being the guard
+/// the caller is holding the answer under (see `HIDDEN_EPOCH`): a hide that has run
+/// since the load started is the pointer having left it, and the frame it lands
+/// with is not to be shown.
+fn hover_still_wanted(hidden: &Option<MutexGuard<'static, u64>>, pl: &PendingLoad) -> bool {
+    hidden
+        .as_ref()
+        .map(|epoch| **epoch == pl.hide_epoch)
+        .unwrap_or(true)
+}
 
 /// Lines one wheel notch moves a text preview. Three is the step a text editor
 /// takes, and it keeps a screenful to a few notches.
@@ -876,10 +909,19 @@ pub fn show_preview_keyboard(
 }
 
 pub fn hide_preview() {
-    unsafe {
-        let hwnd = HWND(PREVIEW_HWND.load(Ordering::SeqCst) as *mut _);
-        if !hwnd.is_invalid() {
-            let _ = ShowWindow(hwnd, SW_HIDE);
+    // The window coming down and the count of its coming down are written under
+    // one lock, so a load that is still running — started under the count from
+    // before this — cannot put the preview back up after it (see `HIDDEN_EPOCH`).
+    {
+        let mut hidden = HIDDEN_EPOCH.lock().ok();
+        if let Some(hidden) = hidden.as_mut() {
+            **hidden += 1;
+        }
+        unsafe {
+            let hwnd = HWND(PREVIEW_HWND.load(Ordering::SeqCst) as *mut _);
+            if !hwnd.is_invalid() {
+                let _ = ShowWindow(hwnd, SW_HIDE);
+            }
         }
     }
 
@@ -5682,6 +5724,11 @@ struct Followed {
 /// Tracks a pending background load so we can show the spinner while it runs.
 struct PendingLoad {
     generation: u64,
+    /// The hide count this load was started under. A hide after it is the pointer
+    /// having left the file while the load ran, and is what the load's reveal is
+    /// checked against so the frame it lands with is dropped rather than shown
+    /// (see `HIDDEN_EPOCH`).
+    hide_epoch: u64,
     /// The file this load is for, which is what decides whether the engine plays it
     /// and what the engine is pointed at.
     path: PathBuf,
@@ -6011,6 +6058,16 @@ unsafe fn render_layered_preview_at(hwnd: HWND, x: i32, y: i32) {
 /// at the new place. It is also what moves a spinner whose box has changed size
 /// while it was up: the frame is drawn at the size of the box it goes into.
 unsafe fn show_loading_spinner(hwnd: HWND, pl: &PendingLoad) {
+    // A wait for a hover the pointer has left is not put up, and nothing of the
+    // spinner is built for it — no media, no frame, no window — so a load the hook
+    // has already dismissed cannot blink a box on screen in the meantime. The
+    // guard is held for the rest of the function, which is what makes this check
+    // and the window it writes one step (see `HIDDEN_EPOCH`).
+    let hidden = HIDDEN_EPOCH.lock().ok();
+    if !hover_still_wanted(&hidden, pl) {
+        return;
+    }
+
     let (x, y) = pl.spinner_pos;
     let side = pl.spinner_side as i32;
 
@@ -7898,6 +7955,20 @@ pub fn run_preview_window() {
 
             // Check for completed background loads
             while let Ok(result) = load_rx.try_recv() {
+                // A load the pointer has left since it was started is not this
+                // loop's to take up: the hide that took the window down moved the
+                // count it carries (see `HIDDEN_EPOCH`), so the answer is dropped
+                // here rather than built — no frame installed, no engine window
+                // put up, no player started — for a hover that has already gone.
+                if pending_load
+                    .as_ref()
+                    .is_some_and(|pl| pl.hide_epoch != hidden_epoch())
+                {
+                    pending_load = None;
+                    pending_load_cancel = None;
+                    continue;
+                }
+
                 if result.generation == current_generation {
                     match result.media {
                         // A document the engine draws. There is no frame of this app's to
@@ -8040,22 +8111,40 @@ pub fn run_preview_window() {
                             // paint the new frame before revealing the window.
                             // Showing first would flash the previous preview at
                             // the new position and size.
-                            match pending.as_ref().filter(|_| visible) {
-                                Some(pl) => render_layered_preview_at(hwnd, pl.pos_x, pl.pos_y),
-                                None => render_layered_preview(hwnd),
-                            }
+                            //
+                            // The frame and the window it goes into are written
+                            // under the hide count's own lock, so a hide cannot
+                            // land between the two — and a load the pointer has
+                            // left in the meantime is neither painted nor shown
+                            // (see `HIDDEN_EPOCH`).
+                            {
+                                let hidden = HIDDEN_EPOCH.lock().ok();
+                                let wanted = pending
+                                    .as_ref()
+                                    .map(|pl| hover_still_wanted(&hidden, pl))
+                                    .unwrap_or(true);
 
-                            if let Some(pl) = pending {
-                                let _ = SetWindowPos(
-                                    hwnd,
-                                    HWND_TOPMOST,
-                                    pl.pos_x,
-                                    pl.pos_y,
-                                    mw,
-                                    mh,
-                                    SWP_NOACTIVATE | SWP_SHOWWINDOW,
-                                );
-                                let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+                                if wanted {
+                                    match pending.as_ref().filter(|_| visible) {
+                                        Some(pl) => {
+                                            render_layered_preview_at(hwnd, pl.pos_x, pl.pos_y)
+                                        }
+                                        None => render_layered_preview(hwnd),
+                                    }
+
+                                    if let Some(pl) = pending {
+                                        let _ = SetWindowPos(
+                                            hwnd,
+                                            HWND_TOPMOST,
+                                            pl.pos_x,
+                                            pl.pos_y,
+                                            mw,
+                                            mh,
+                                            SWP_NOACTIVATE | SWP_SHOWWINDOW,
+                                        );
+                                        let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+                                    }
+                                }
                             }
 
                             // A page for this document is one Office start away,
@@ -8743,6 +8832,7 @@ pub fn run_preview_window() {
 
                         pending_load = Some(PendingLoad {
                             generation: gen,
+                            hide_epoch: hidden_epoch(),
                             path: path.clone(),
                             started,
                             pos_x,
@@ -8845,6 +8935,7 @@ pub fn run_preview_window() {
                                     });
                                     pending_load = Some(PendingLoad {
                                         generation: current_generation,
+                                        hide_epoch: hidden_epoch(),
                                         path: path.clone(),
                                         started: Instant::now(),
                                         pos_x,
@@ -8916,6 +9007,7 @@ pub fn run_preview_window() {
                         pending_load_cancel = Some(Arc::clone(&load_cancel));
                         pending_load = Some(PendingLoad {
                             generation: gen,
+                            hide_epoch: hidden_epoch(),
                             path: path.clone(),
                             started: Instant::now(),
                             pos_x,
@@ -10230,6 +10322,7 @@ mod tests {
     fn puts_the_spinner_up_once_the_load_has_run_for_the_delay() {
         let load = |age: Duration, delay: Duration, upgrade: bool| PendingLoad {
             generation: 1,
+            hide_epoch: 0,
             path: PathBuf::new(),
             started: Instant::now() - age,
             pos_x: 0,
@@ -10277,6 +10370,7 @@ mod tests {
     fn a_pending_preview_follows_the_pointer() {
         let pending = |placement: Option<HoverPlacement>| PendingLoad {
             generation: 1,
+            hide_epoch: 0,
             path: PathBuf::new(),
             started: Instant::now(),
             pos_x: 0,
