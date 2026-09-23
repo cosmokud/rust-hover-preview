@@ -213,6 +213,10 @@ pub const DEFAULT_HDR_TONE_MAP: Curve = Curve::Reinhard;
 pub const DEFAULT_HDR_EXPOSURE: f32 = 0.0;
 pub const MIN_HDR_EXPOSURE: f32 = -10.0;
 pub const MAX_HDR_EXPOSURE: f32 = 10.0;
+/// Which engine draws an Office document's page by default: the application that owns the
+/// format, with the render engine beside it as the fallback for a family this machine has
+/// no application for.
+pub const DEFAULT_OFFICE_ENGINE: OfficeEngine = OfficeEngine::MicrosoftOffice;
 /// How long the Office engine a family started is kept after that family's last
 /// page. Producing a page costs an Office start, and an engine still warm is what
 /// makes the next document of that family cheap, so one is kept for a while by
@@ -537,6 +541,46 @@ pub const DEFAULT_LIBRE_SCALE: PreviewScale = PreviewScale::FitToScreen;
 /// is a page of text rather than a document to be studied, and half the display holds the
 /// pangram at a size that can be read at a glance.
 pub const DEFAULT_FONT_SCALE: PreviewScale = PreviewScale::Percent(DEFAULT_FONT_SCALE_PERCENT);
+
+/// Which engine an Office document's page is asked of, as the tray's
+/// `Performance → Select Engine → Office` lists it.
+///
+/// There are two engines to ask, and the choice between them is one setting: the application
+/// that owns the format, which is what a page of one has always been drawn by, and the render
+/// engine beside it — an installed LibreOffice — which draws every Office document whether the
+/// application is here or not. What the second is for is a machine where the application
+/// draws a page badly or not at all, or one whose user would rather every document of the
+/// kind came out of the engine they know (see `office_formats::page_engine`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OfficeEngine {
+    /// Word, Excel or PowerPoint, and the render engine as the fallback for a family this
+    /// machine has no application for.
+    MicrosoftOffice,
+    /// The render engine for every Office document, where one is installed to be asked.
+    LibreOffice,
+}
+
+impl OfficeEngine {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::MicrosoftOffice => "microsoft_office",
+            Self::LibreOffice => "libreoffice",
+        }
+    }
+
+    /// The engine a `config.ini` value names, or `None` for one that is neither: a value the
+    /// app cannot read leaves the setting where it is, and the file is written back with the
+    /// value the app is actually using (see `differs`).
+    pub(crate) fn from_str(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "microsoft_office" | "microsoft office" | "msoffice" | "office" => {
+                Some(Self::MicrosoftOffice)
+            }
+            "libreoffice" | "libre" | "soffice" => Some(Self::LibreOffice),
+            _ => None,
+        }
+    }
+}
 
 /// How long an engine that is kept warm between documents is kept.
 ///
@@ -1201,6 +1245,9 @@ pub struct AppConfig {
     /// is kept is the converted pages themselves, written under the app's own folder; see
     /// `Performance → Cache → Libre` in the tray.
     pub libre_cache_mb: u32,
+    /// Which engine draws an Office document's page, which is the tray's
+    /// `Performance → Select Engine → Office` setting.
+    pub office_engine: OfficeEngine,
     /// How long the Office engine a family started is kept after that family's
     /// last page, which is the tray's `Performance → Office Engine TTL` setting.
     pub office_engine_idle: EngineIdle,
@@ -1312,6 +1359,7 @@ impl Default for AppConfig {
             vector_preview_enabled: true,
             office_cache_mb: DEFAULT_OFFICE_CACHE_MB,
             libre_cache_mb: DEFAULT_LIBRE_CACHE_MB,
+            office_engine: DEFAULT_OFFICE_ENGINE,
             office_engine_idle: EngineIdle::Seconds(DEFAULT_OFFICE_ENGINE_IDLE_SECS),
             webview_idle: EngineIdle::Seconds(DEFAULT_WEBVIEW_IDLE_SECS),
             pdf_cache_mb: DEFAULT_PDF_CACHE_MB,
@@ -1429,6 +1477,7 @@ const SETTING_GROUPS: &[(&str, &[&str])] = &[
             "image_cache_mb",
             "libre_cache_mb",
             "office_cache_mb",
+            "office_engine",
             "office_engine_idle",
             "pdf_cache_mb",
             "text_cache_mb",
@@ -1967,6 +2016,11 @@ impl AppConfig {
         );
         ini.set(
             CONFIG_SECTION,
+            "office_engine",
+            Some(self.office_engine.as_str().to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
             "office_engine_idle",
             Some(self.office_engine_idle.as_str()),
         );
@@ -2336,6 +2390,11 @@ impl AppConfig {
         if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "libre_cache_mb") {
             if let Ok(value) = u32::try_from(value) {
                 self.libre_cache_mb = sanitize_libre_cache_mb(value);
+            }
+        }
+        if let Some(value) = ini.get(CONFIG_SECTION, "office_engine") {
+            if let Some(engine) = OfficeEngine::from_str(&value) {
+                self.office_engine = engine;
             }
         }
         if let Some(value) = ini.get(CONFIG_SECTION, "office_engine_idle") {

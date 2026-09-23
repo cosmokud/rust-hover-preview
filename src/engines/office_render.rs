@@ -2582,6 +2582,12 @@ mod tests {
     #[test]
     #[ignore = "starts the installed Office"]
     fn office_render_probe() {
+        // What the app's own `config.ini` holds is not what this probe is about: it measures
+        // this tier, so the setting that asks the tier is the one it runs under.
+        if let Ok(mut config) = crate::CONFIG.lock() {
+            config.office_engine = crate::config::config::OfficeEngine::MicrosoftOffice;
+        }
+
         unsafe {
             let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
         }
@@ -2750,6 +2756,12 @@ mod tests {
     #[test]
     #[ignore = "starts the installed Office and writes sample documents"]
     fn office_render_smoke_test() {
+        // What the app's own `config.ini` holds is not what this probe is about: it measures
+        // this tier, so the setting that asks the tier is the one it runs under.
+        if let Ok(mut config) = crate::CONFIG.lock() {
+            config.office_engine = crate::config::config::OfficeEngine::MicrosoftOffice;
+        }
+
         unsafe {
             let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
         }

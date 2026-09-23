@@ -4,7 +4,8 @@ use crate::shell::cloud_files;
 use crate::formats::codecs;
 use crate::config::config::{
     frame_bytes_within_budget, image_decode_limits, read_within_budget, sanitize_image_cache_mb,
-    sanitize_spinner_delay_ms, sanitize_webp_playback_fps, MarkdownMode, PreviewScale, PreviewType,
+    sanitize_spinner_delay_ms, sanitize_webp_playback_fps, MarkdownMode, OfficeEngine, PreviewScale,
+    PreviewType,
     TextTheme, TransparentBackground, DEFAULT_ANIMATED_SCALE_PERCENT, DEFAULT_DDS_BACKGROUND,
     DEFAULT_DESIGN_BACKGROUND, DEFAULT_DESIGN_SCALE, DEFAULT_FONT_BACKGROUND, DEFAULT_FONT_SCALE,
     DEFAULT_IMAGE_BACKGROUND, DEFAULT_IMAGE_CACHE_MB, DEFAULT_LIBRE_SCALE, DEFAULT_OFFICE_SCALE,
@@ -1681,12 +1682,12 @@ fn office_render_is_due(path: &Path, width: u32) -> bool {
         return false;
     }
 
-    // A document whose own application is not installed has no engine to ask, so its page is
-    // the render engine's to draw rather than one this tier could produce: the request goes
-    // there instead of to an application that is not on the machine (see
-    // `libre_render_is_due`, and `libre_formats::engine_page_kind` for the question both
-    // sides ask).
-    if !office_formats::app_installed(path) {
+    // Where the render engine is the one that draws this document's page — because the tray
+    // has asked it for every Office document, or because the family's application is not
+    // installed — there is no engine of this tier's to ask, and the request goes there
+    // instead (see `libre_render_is_due`, and `office_formats::page_engine` for the question
+    // both sides ask).
+    if office_formats::page_engine(path) != Some(OfficeEngine::MicrosoftOffice) {
         return false;
     }
 
@@ -3473,7 +3474,8 @@ fn load_engine_page(
 }
 
 /// The page the render engine has drawn for an Office document — the fallback for a document
-/// whose own application is not installed, shown as the Office document it is.
+/// whose own application is not installed, and the page itself where the tray has asked the
+/// engine for every Office document. Shown as the Office document it is either way.
 ///
 /// Nothing is converted here, and nothing is waited on: a document the engine has not drawn
 /// yet is answered with nothing, which is the wait the hover is already in — the loop has
@@ -3481,12 +3483,21 @@ fn load_engine_page(
 /// `libre_render_is_due`). The page that *is* there is read at the share the layout measured
 /// it for, and that share is the Office kind's: the file is what it is whichever engine drew
 /// it (see `effective_preview_scale`).
+///
+/// A page the engine drew while it was the one being asked is not read once the choice is the
+/// application's: a page is what the engine that is drawn by is asked for, and a document the
+/// application is drawing is not shown the other engine's page until it is ready (see
+/// `office_formats::page_engine`).
 fn load_engine_page_for_office(
     path: &Path,
     max_width: u32,
     max_height: u32,
     preview_scale: PreviewScale,
 ) -> Option<MediaData> {
+    if office_formats::page_engine(path) != Some(OfficeEngine::LibreOffice) {
+        return None;
+    }
+
     let page = libreoffice_render::rendered_page(path)?;
     load_engine_page(&page, MediaType::Office, max_width, max_height, preview_scale)
 }
@@ -9302,6 +9313,9 @@ mod tests {
         if let Ok(mut config) = CONFIG.lock() {
             config.confirm_file_type = true;
             config.office_preview_enabled = true;
+            // What the app's own `config.ini` holds is not what this test is about: it asks
+            // the machine, and the setting is pinned to the one that asks the machine.
+            config.office_engine = OfficeEngine::MicrosoftOffice;
             config.office_extensions =
                 office_formats::sanitize_office_extensions(office_formats::DEFAULT_OFFICE_EXTENSIONS);
         }
@@ -11021,8 +11035,10 @@ mod tests {
             // Office drew is a page of the document's own size, and a hover laid out as the
             // wait for one places it at the spinner's box (see `libre_formats`).
             println!(
-                "engines: office tier = {}, render engine = {:?}, application installed = {}",
+                "engines: office tier = {}, chosen engine = {:?}, render engine = {:?}, \
+                 application installed = {}",
                 office_render_is_due(&path, 800),
+                office_formats::page_engine(&path),
                 libre_formats::engine_page_kind(&path),
                 office_formats::app_installed(&path),
             );
