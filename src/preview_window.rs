@@ -10535,6 +10535,22 @@ mod tests {
             return;
         };
 
+        // A name the app would not hand the engine can be forced into this run's list,
+        // which is how the give-up itself is watched: the files that show it are the ones
+        // the engine cannot draw at all, and no name it answers for does that. This is the
+        // list as it is held in memory, so the file on disk is not touched.
+        if let Ok(forced) = std::env::var("RHP_LIBRE_PROBE_FORCE") {
+            if let Ok(mut config) = crate::CONFIG.lock() {
+                for name in forced.split(',').map(str::trim).filter(|name| !name.is_empty()) {
+                    let name = name.trim_start_matches('.').to_lowercase();
+                    if !config.libre_extensions.contains(&name) {
+                        config.libre_extensions.push(name.clone());
+                    }
+                    println!("forced `{name}` into [libre] for this run");
+                }
+            }
+        }
+
         let bounds = ScreenBounds {
             left: 0,
             top: 0,
