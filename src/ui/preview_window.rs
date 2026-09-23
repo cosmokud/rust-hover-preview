@@ -1833,10 +1833,21 @@ struct HoverScales {
 ///
 /// Every other format keeps the picture scale.
 fn effective_preview_scale(path: &Path, scales: HoverScales) -> PreviewScale {
+    // What the file's own bytes say it is comes first, as it does for the loader that draws
+    // it and for the box the layout places it at: a picture under a video's name is laid out
+    // at the picture's share, and one under a document's name at the picture's share too.
+    // Where the bytes have nothing to say the name decides below, which is every file that
+    // is called what it is.
+    if let crate::formats::content_type::Content::Kind(kind) =
+        crate::formats::content_type::of(path)
+    {
+        return scale_of_kind(kind, path, scales);
+    }
+
     if pdf_preview::is_pdf_file(path) {
-        fit_reduced(scales.page)
+        scale_of_kind(PreviewType::Pdf, path, scales)
     } else if is_text_preview(path) || archive_formats::is_archive_file(path) {
-        PreviewScale::Percent(100)
+        scale_of_kind(PreviewType::Text, path, scales)
     } else if video_probe_due(path) {
         // A video that has not been probed yet is a hover that is waiting, and what is on
         // screen for one is the waiting spinner: a wait is placed at the size it is rather
@@ -1844,47 +1855,87 @@ fn effective_preview_scale(path: &Path, scales: HoverScales) -> PreviewScale {
         // follows it is laid out at (see `video_probe_due`).
         PreviewScale::Percent(100)
     } else if office_formats::is_office_file(path) {
-        // A page Office rendered is vector, so the room the display has is free
-        // quality — the rule a PDF follows, at the share `office_scale` names. The
-        // raster picture a workbook is answered with where no printer can export a
-        // page is the exception: it is only as good as the pixels it holds, so it
-        // follows the configured share the way an image does rather than being
-        // enlarged to fit.
-        match office_preview::source_kind(path) {
-            // Nothing to draw and a page on the way: what is on screen is the
-            // spinner in a box of its own, and a box that small is placed at the
-            // size it is rather than fitted to the display the way a page is.
+        scale_of_kind(PreviewType::Office, path, scales)
+    } else if libre_formats::is_libre_file(path) {
+        scale_of_kind(PreviewType::Libre, path, scales)
+    } else if design_formats::is_design_file(path) {
+        scale_of_kind(PreviewType::Design, path, scales)
+    } else if svg_preview::is_svg_file(path) || vector_formats::is_vector_file(path) {
+        scale_of_kind(PreviewType::Vector, path, scales)
+    } else if font_formats::is_font_file(path) {
+        scale_of_kind(PreviewType::Fonts, path, scales)
+    } else if is_video_file(path) {
+        scale_of_kind(PreviewType::Videos, path, scales)
+    } else {
+        scale_of_kind(PreviewType::Images, path, scales)
+    }
+}
+
+/// The share a preview of one kind is drawn at.
+///
+/// It is one place per kind rather than a share written into each arm of the chain above,
+/// because two questions arrive here now — what the name says a file is, and what its bytes
+/// say — and both have to come out at the same share for the same kind: a picture is drawn
+/// at the picture's share whether it is called `tomcat.png` or `tomcat.mp4`, or the same
+/// bytes would be two sizes depending on the name they were left under.
+fn scale_of_kind(kind: PreviewType, path: &Path, scales: HoverScales) -> PreviewScale {
+    match kind {
+        // A page is a vector, so the room the display has is free quality: the setting is
+        // the whole of that room unless it asks for less (see `fit_reduced`).
+        PreviewType::Pdf => fit_reduced(scales.page),
+
+        // Text is drawn at a fixed, display-scaled font size and a listing is painted to
+        // the frame it is given, so neither is enlarged or reduced by a setting: the size
+        // the box came out at is the size they are drawn at.
+        PreviewType::Text | PreviewType::Archives => PreviewScale::Percent(100),
+
+        // A page Office rendered is the PDF rule at the share `office_scale` names. The
+        // raster picture a workbook is answered with where no printer can export a page is
+        // the exception: it is only as good as the pixels it holds, so it follows the
+        // configured share the way an image does rather than being enlarged to fit. And a
+        // document with nothing drawn for it yet is placed at the spinner's own size, since
+        // a page on the way has no shape to fit.
+        PreviewType::Office => match office_preview::source_kind(path) {
             office_preview::SourceKind::None => PreviewScale::Percent(100),
             source if source.may_be_enlarged() => fit_reduced(scales.office),
             _ => bitmap_at_display_scale(scales.office),
-        }
-    } else if libre_formats::is_libre_file(path) {
+        },
+
         // A document an engine draws follows a scale of its own, and the share is of the
         // display the way a PDF page's is: what the engine hands back is a page, not a
         // picture with a size of its own to be scaled from.
-        fit_reduced(scales.libre)
-    } else if design_formats::is_design_file(path) {
+        PreviewType::Libre => fit_reduced(scales.libre),
+
         // A design document is a document for this question rather than a picture: what is
         // previewed is the picture the file keeps of the whole of itself, at whatever size
         // that is, so the share is of the display the way a page's or a specimen's is.
-        //
-        // It is asked ahead of the kind below it because the gate asks it ahead of that
-        // kind as well: a name written into both lists is a design document, and the share
-        // the vector list would give it is not the share its own setting names.
-        fit_reduced(scales.design)
-    } else if svg_preview::is_svg_file(path) || vector_formats::is_vector_file(path) {
-        // Both halves of the kind, asked as one: what a document costs to draw and what a
+        PreviewType::Design => fit_reduced(scales.design),
+
+        // Both halves of the drawing kind: what a document costs to draw and what a
         // drawing costs to replay are the same question, and the setting is the same one.
-        fit_reduced(scales.vector)
-    } else if font_formats::is_font_file(path) {
-        fit_reduced(scales.font)
-    } else if is_video_file(path) {
-        scales.video
-    } else {
-        // The animated arm is asked last because asking it is the one thing here that
-        // reads the file, and a file that has already answered as another kind never
-        // pays for it (see `image_is_animated`).
-        animated_scale_for(path, scales).unwrap_or(scales.picture)
+        PreviewType::Vector => fit_reduced(scales.vector),
+
+        // And the specimen once more: the glyphs are sized from the window the engine draws
+        // it in, so a share of the room is a share of the type.
+        PreviewType::Fonts => fit_reduced(scales.font),
+
+        // A video that is still being probed is a wait rather than a video, and a wait is
+        // placed at the size it is; one that has been probed keeps the share of its own
+        // size `video_scale` names, which is the picture's rule — what a video's preview is
+        // until the player's window is over it is its first frame, a bitmap.
+        PreviewType::Videos => {
+            if video_probe_due(path) {
+                PreviewScale::Percent(100)
+            } else {
+                scales.video
+            }
+        }
+
+        // A picture keeps the share of its own size, and an animation one of its own. The
+        // animated arm is asked last because asking it is the one thing here that reads the
+        // file, and a file that has already answered as another kind never pays for it (see
+        // `image_is_animated`).
+        PreviewType::Images => animated_scale_for(path, scales).unwrap_or(scales.picture),
     }
 }
 
@@ -5026,25 +5077,56 @@ fn page_is_on_the_way(path: &Path) -> bool {
 /// can fit it into the space beside the cursor, and the text renderer is handed
 /// the box that comes out of that.
 fn media_dimensions(path: &PathBuf, bounds: ScreenBounds, dpi: u32) -> Option<(u32, u32)> {
+    // What the file's own bytes say it is comes first, as it does for the loader that draws
+    // it and for the share it is laid out at: a `.txt` whose bytes are a picture is measured
+    // as the picture it is rather than read as a page of text it is not — which for a file
+    // whose bytes are not text is no measurement at all, and a preview that never appears
+    // for a file that would otherwise be drawn.
+    if let crate::formats::content_type::Content::Kind(kind) =
+        crate::formats::content_type::of(path)
+    {
+        return match kind {
+            // The two kinds measured against the room they are drawn in, which is a question
+            // this side has the answer to and `media_dimensions_of_kind` does not.
+            PreviewType::Text => text_box(path, bounds, dpi),
+            PreviewType::Archives => archive_box(path, bounds, dpi),
+            _ => media_dimensions_of_kind(kind, path),
+        };
+    }
+
     if is_text_preview(path) {
-        let cap_width = (bounds.right - bounds.left).max(1) as u32;
-        let cap_height = bounds.height().max(1) as u32;
-        return text_preview::measure(path, cap_width, cap_height, dpi, current_text_options());
+        return text_box(path, bounds, dpi);
     }
 
     if archive_formats::is_archive_preview(path) {
-        let cap_width = (bounds.right - bounds.left).max(1) as u32;
-        let cap_height = bounds.height().max(1) as u32;
-        return archive_preview::measure(
-            path,
-            cap_width,
-            cap_height,
-            dpi,
-            current_archive_options(),
-        );
+        return archive_box(path, bounds, dpi);
     }
 
     get_media_dimensions(path)
+}
+
+/// The box a page of text asks for: as many lines and columns as the room the display has
+/// holds, at the font size its DPI gives them.
+fn text_box(path: &Path, bounds: ScreenBounds, dpi: u32) -> Option<(u32, u32)> {
+    let cap_width = (bounds.right - bounds.left).max(1) as u32;
+    let cap_height = bounds.height().max(1) as u32;
+
+    text_preview::measure(path, cap_width, cap_height, dpi, current_text_options())
+}
+
+/// And the box a listing asks for, which is the same shape of question asked of an archive's
+/// own table of contents.
+fn archive_box(path: &Path, bounds: ScreenBounds, dpi: u32) -> Option<(u32, u32)> {
+    let cap_width = (bounds.right - bounds.left).max(1) as u32;
+    let cap_height = bounds.height().max(1) as u32;
+
+    archive_preview::measure(
+        path,
+        cap_width,
+        cap_height,
+        dpi,
+        current_archive_options(),
+    )
 }
 
 /// A text preview's box, placed for the width it came out with.
@@ -5064,7 +5146,17 @@ fn text_preview_layout(
     dpi: u32,
     place: impl FnOnce((u32, u32)) -> Option<PreviewLayout>,
 ) -> PreviewLayout {
-    if !is_text_preview(path) {
+    // A file is drawn as text where the text lists claim it, and where its own bytes say it
+    // is text under a name another kind would have taken: the measure and the render have to
+    // agree about which of the two a file is, or the box the lines are painted into is the
+    // one the name asked for rather than the one they came out at.
+    let drawn_as_text = is_text_preview(path)
+        || matches!(
+            crate::formats::content_type::of(path),
+            crate::formats::content_type::Content::Kind(PreviewType::Text)
+        );
+
+    if !drawn_as_text {
         return layout;
     }
 
@@ -8957,6 +9049,84 @@ mod tests {
             libre: DEFAULT_LIBRE_SCALE,
             vector: DEFAULT_VECTOR_SCALE,
         }
+    }
+
+    /// What a file's bytes say it is decides the share it is drawn at, the way they decide
+    /// the loader that draws it and the box it is placed in: a picture left under a video's
+    /// name is drawn at the picture's share, and one left under a document's name or a text
+    /// name's at the picture's share too. The shares are given values of their own so that
+    /// the answer says which of them was read, and the files are real ones because the
+    /// question is asked of the file's own header.
+    #[test]
+    fn a_share_follows_the_content_rather_than_the_name() {
+        if let Ok(mut config) = CONFIG.lock() {
+            config.confirm_file_type = true;
+        }
+
+        let folder = std::env::temp_dir().join("rust-hover-preview-content-share");
+        std::fs::create_dir_all(&folder).expect("a test folder");
+
+        let scales = HoverScales {
+            picture: PreviewScale::Percent(100),
+            video: PreviewScale::Percent(50),
+            animated: PreviewScale::Percent(100),
+            office: PreviewScale::FitToScreen,
+            libre: PreviewScale::FitToScreen,
+            page: PreviewScale::FitToScreen,
+            design: PreviewScale::Percent(25),
+            vector: PreviewScale::Percent(25),
+            font: PreviewScale::Percent(25),
+        };
+
+        for name in ["tomcat.mp4", "tomcat.docx", "tomcat.txt"] {
+            let path = folder.join(name);
+            write_test_png(&path, false);
+
+            assert_eq!(
+                effective_preview_scale(&path, scales),
+                PreviewScale::Percent(100),
+                "`{name}` holds a picture, so the picture's share is what it is drawn at"
+            );
+        }
+
+        // And a name with nothing behind it keeps the share its name asks for, which is
+        // every file this module's other tests are about.
+        assert_eq!(
+            effective_preview_scale(Path::new(r"C:\docs\report.pdf"), scales),
+            PreviewScale::FitToScreen,
+            "a page is still laid out at the page's share of the room"
+        );
+
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    /// And the box it is placed in is the picture's too: a picture under a text name is
+    /// measured as the picture it is rather than read as a page of text — which for bytes
+    /// that are not text is no measurement at all, and a hover that never appears for a file
+    /// that would otherwise be drawn.
+    #[test]
+    fn a_box_follows_the_content_rather_than_the_name() {
+        if let Ok(mut config) = CONFIG.lock() {
+            config.confirm_file_type = true;
+        }
+
+        let folder = std::env::temp_dir().join("rust-hover-preview-content-box");
+        std::fs::create_dir_all(&folder).expect("a test folder");
+
+        let path = folder.join("tomcat.txt");
+        write_test_png(&path, false);
+
+        assert!(
+            picture_dimensions(&path).is_some(),
+            "the fixture is a picture the header reader can measure"
+        );
+        assert_eq!(
+            media_dimensions(&path, bounds(), TEST_DPI),
+            picture_dimensions(&path),
+            "so the box is the picture's rather than the text measure's nothing"
+        );
+
+        let _ = std::fs::remove_dir_all(&folder);
     }
 
     /// A little GIF of one pixel, written with `frames` frame blocks in it: an

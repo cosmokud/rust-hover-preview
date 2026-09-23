@@ -3,36 +3,57 @@
 ## Features
 
 - **File Format Support:**
-  - More Design & project files (`.xcf`, ...)
-  - CAD files (`.dxf`, `.dwg`, `.step`, `.stl`, ...)
+  - More design & project files (`.xcf`, ...)
+  - CAD files (`.dwg`, `.step`, `.stl`, ...)
   - 3D files (`.obj`, `.fbx`, `.gltf`, `.glb`, ...)
 - Add preview integration for voidtools Everything search.
 
 ## Unsupported File Format
 
-- The `[libre]` names no filter of an installed LibreOffice declares, which the engine is
-  no longer asked about: each was a launch that answered nothing when a file of that name
-  was hovered. They were read out of the engine's own registry (`share/registry/*.xcd`),
-  one name at a time, and each is kept here with what it was mistaken for:
-  - `qxp` — older QuarkXPress. The filter reads `qxd` and `qxt`.
-  - `pm3` `pm4` `pm5` — PageMaker before 6. The filter reads `pm`, `p65`, `pm6`, `pmd`.
-  - `vssm` `vst` `vstm` `vtx` `vsx` — Visio stencils and templates. The filter reads `vdx`,
-    `vsd`, `vsdm`, `vsdx`, `vstx`.
-  - `epub` — the engine writes EPUB and does not read one; a preview needs an ebook reader
-    of this app's own.
-  - `agd` `fhd` `jtd` `jtt` `plt` `pxl` `rl` `sdp` `sgf` `sgl` `uof` `uop` `uos` `uot`
-    `vor` — declared by no filter at all. A reader for one of them is a piece of work of
-    its own (Ichitaro, the uniform office formats) with nothing here to test it against.
-  - `swf` came out of the same list a step earlier, for the worst of the reasons: the
-    engine does not fail on a Flash file, it spins — which is what the give-up in
-    `libreoffice_render` now ends — and the name is FFmpeg's to play, in the video list.
-  - What brings any of them back is a reader, or an engine that has the filter: a machine
-    whose LibreOffice reads one can have the name back by adding it to the list.
-- And the other half of that pass, for completeness: the engine reads names the list has
-  never held, because the list was written from the formats the engine _says_ it supports
-  rather than from its filters. QuarkXPress `qxd`/`qxt` and PageMaker `p65` are three of
-  them, no other kind claims any of the three, and each could be added to `[libre]` as the
-  list stands — what is missing is a file of that format to settle that it converts.
+Two gaps. The first is a file that is shown only when its name is right, because nothing
+in the file itself says what it is. The second is a file the app cannot show at all.
+Beside each name is the one thing that would change that.
+
+**Nothing in the file confirms what it is**
+
+- **A container with no label inside it.** A zip (`.apk` `.cbz` `.jar` `.xpi` `.zipx`, and
+  the `.fig` `.procreate` `.sketch` `.xd` design projects), an Office package (`.docm`
+  `.dotm` `.dotx` `.potm` `.potx` `.ppsm` `.ppsx` `.pptm` `.xlsm` `.xlsb` `.xltm` `.xltx`),
+  an iWork document (`.key` `.numbers` `.pages`), an older Office, Visio or Publisher file
+  (`.dot` `.pot` `.pps` `.xlt` `.vsd` `.pub`) or a newer Visio one (`.vsdm` `.vsdx` `.vstx`),
+  a StarOffice 5 document (`.sda` `.sdc` `.sdd` `.sdw`), a Pocket Word `.psw`, a Zoner
+  `.zmf`, or a gzip stream (`.tar.gz` `.tgz` `.gnumeric` `.gnm` `.abw` `.zabw`). The bytes
+  are the same whatever the box holds, so a renamed file cannot be sorted out.
+  OpenDocuments, StarOffice XML documents and Krita projects are the exception: each writes
+  its own type inside itself, and that is what they are read by.
+- **A format whose marker sits at the end of the file, or past what is read.** `.tga` (its
+  marker is the last 18 bytes), `.flm` (36 bytes from the end), a TiVo `.ty` or `.ty+` (its
+  markers repeat every 128 KB). Only the first 4 KB of a file is read.
+- **A format whose signature is its own text.** `.svg` `.svgz`, a flat OpenDocument
+  (`.fodt` `.fodg` `.fodp`), a Visio `.vdx`. Text is left to the text preview: guessing a
+  format from text would misread ordinary documents.
+- **A format with no marker at all, or none FFmpeg reads.** `.mvi` `.mxg` `.psp` `.vw`, and
+  `.cin`, whose FFmpeg demuxer is gone. These preview only when the name is right.
+- **A marker too weak to trust.** `.mw` (MacWrite): its header is two bytes that any file
+  could have, so a guess from them would mislabel ordinary files as documents.
+
+**A file was offered to an engine that could not read it**
+
+- `qxp` (older QuarkXPress), `pm3` `pm4` `pm5` (PageMaker before 6), `vssm` `vst` `vstm`
+  `vtx` `vsx` (Visio stencils and templates), `epub` — LibreOffice was asked, answered
+  nothing, and each cost a launch and showed nothing, so they are out of the `[libre]` list.
+  What its filters do read are the neighbouring names `qxd` `qxt`, `pm` `p65` `pm6` `pmd`,
+  and `vdx` `vsd` `vsdm` `vsdx` `vstx`.
+- `agd` `fhd` `jtd` `jtt` `plt` `pxl` `rl` `sdp` `sgf` `sgl` `uof` `uop` `uos` `uot` `vor` —
+  no LibreOffice filter claims them at all. A reader for one is a piece of work of its own
+  (Ichitaro, the uniform office formats), with nothing here to test it against.
+- `swf` — a Flash animation. The engine did not fail on it, it froze, so the name was taken
+  out a step earlier and is played as a video instead.
+- Any of them comes back with a reader, or an engine that has the filter: add the name to
+  `[libre]` in `config.ini` on a machine whose LibreOffice reads it.
+- The engine also reads names the list has never held — `qxd` `qxt` (QuarkXPress) and `p65`
+  (PageMaker) — which could be added just as the list stands; what is missing is a file of
+  one to settle that it converts.
 
 ## Configuration
 
