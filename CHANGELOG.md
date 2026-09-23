@@ -19,6 +19,7 @@
 - File types whose bytes carry no signature — a WordPerfect `wpd`, an old Lotus `wk4`, a RoQ video, an AbiWord `abw` — are routed to the engine that reads them by extension, from the formats FFmpeg and LibreOffice are known to read. `.pdb` is one name for two formats: a Palm OS ebook is drawn by LibreOffice, and a compiler's program database is left alone.
 - `Confirm File Type` is on by default; an installation that already exists keeps the value its `config.ini` holds.
 - Building from source now needs Rust 1.98.1 or newer.
+- Source files are organized into folders by role. No behavior change.
 
 ### Fixed
 
