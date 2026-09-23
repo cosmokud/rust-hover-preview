@@ -2,7 +2,7 @@ use crate::formats::archive_formats::matches_archive_list;
 use crate::shell::cloud_files;
 use crate::config::config::{
     AvoidMode, PreviewType, TriggerKeyMode, DEFAULT_HOVER_DELAY_MS,
-    DEFAULT_SAME_FILE_REHOVER_DELAY_MS,
+    DEFAULT_SAME_FILE_REHOVER_DELAY_MS, DEFAULT_SETTLING_DELAY_MS,
 };
 use crate::formats::design_formats::matches_design_list;
 use crate::formats::font_formats::matches_font_list;
@@ -3327,6 +3327,7 @@ pub fn run_explorer_hook() {
                 c.hover_delay_ms,
                 c.trigger_key_mode,
                 c.same_file_rehover_delay_ms,
+                c.settling_delay_ms,
                 c.trigger_key_enabled,
             );
             // Resolved once per config change instead of once per tick.
@@ -3339,6 +3340,7 @@ pub fn run_explorer_hook() {
                 DEFAULT_HOVER_DELAY_MS,
                 TriggerKeyMode::Disable,
                 DEFAULT_SAME_FILE_REHOVER_DELAY_MS,
+                DEFAULT_SETTLING_DELAY_MS,
                 true,
             ),
             Some(0x12),
@@ -3554,6 +3556,7 @@ pub fn run_explorer_hook() {
                 config.hover_delay_ms,
                 config.trigger_key_mode,
                 config.same_file_rehover_delay_ms,
+                config.settling_delay_ms,
                 config.trigger_key_enabled,
             );
             trigger_key_vk = off_trigger_key_to_vk(&config.trigger_key);
@@ -3563,7 +3566,8 @@ pub fn run_explorer_hook() {
         let hover_delay_ms = config_snapshot.1;
         let trigger_key_mode = config_snapshot.2;
         let same_file_rehover_delay_ms = config_snapshot.3;
-        let trigger_key_enabled = config_snapshot.4;
+        let settling_delay_ms = config_snapshot.4;
+        let trigger_key_enabled = config_snapshot.5;
 
         // One question, two settings: the key either stops previews while it is
         // held, or is the only thing that lets them happen. Either way, what is left
@@ -3606,6 +3610,7 @@ pub fn run_explorer_hook() {
         }
 
         let hover_delay = Duration::from_millis(hover_delay_ms);
+        let settling_delay = Duration::from_millis(settling_delay_ms);
 
         // Determine sleep duration and whether to recheck state based on current state
         let (sleep_ms, state_recheck_ms) = match current_state {
@@ -4129,8 +4134,18 @@ pub fn run_explorer_hook() {
                         video_hover_guard_until = None;
                     }
                 }
+                // The clock the hover below is measured against is restarted by the move,
+                // so what the file under the pointer has to outlast starts here. A
+                // settling delay is the setting that asks for a pointer which has stopped,
+                // and this is where a moving one waits it out: with it on, the hover below
+                // is not reached at all. With it off — 0, which is where the app starts —
+                // a move falls through instead, so the new file under the cursor has a
+                // preview put up for it even while the hand is still on its way to it.
                 hover_start = Some(Instant::now());
-                continue;
+
+                if settling_delay_ms > 0 {
+                    continue;
+                }
             }
 
             // The wheel is still turning, so any preview on screen belongs to a
@@ -4145,8 +4160,14 @@ pub fn run_explorer_hook() {
             }
 
             // Mouse is stationary - check for keyboard navigation
-            // Only when Explorer is the foreground window (keyboard input goes there)
-            if should_probe_keyboard_focus(last_keyboard_navigation_input_at.map(|at| at.elapsed()))
+            // Only when Explorer is the foreground window (keyboard input goes there).
+            // A move that fell through to here is still a move: it has just handed the
+            // screen to the mouse and dropped the focus baseline, and the item the
+            // keyboard is on is not read again until the pointer has stopped.
+            if !moved
+                && should_probe_keyboard_focus(
+                    last_keyboard_navigation_input_at.map(|at| at.elapsed()),
+                )
                 && is_foreground_explorer()
                 && last_keyboard_focus_probe.elapsed()
                     >= Duration::from_millis(KEYBOARD_FOCUS_PROBE_MS)
@@ -4307,9 +4328,13 @@ pub fn run_explorer_hook() {
                 continue;
             }
 
-            // Check if we've hovered long enough (mouse hover)
+            // Check if we've hovered long enough (mouse hover). The settling delay is
+            // asked first and it is the pointer's own: it is measured off the same clock,
+            // which a move restarts, so it is how long the hand has been still — a
+            // pointer that has only just stopped is held back for its length even with no
+            // hover delay in front of it, and 0 asks nothing of the pointer at all.
             if let Some(start) = hover_start {
-                if start.elapsed() >= hover_delay {
+                if start.elapsed() >= hover_delay && start.elapsed() >= settling_delay {
                     if !should_probe_stationary_hover(stationary_hover_probe_done) {
                         if let Some(miss_started) = stationary_search_miss_started_at {
                             if miss_started.elapsed()

@@ -5,6 +5,7 @@
 ### Added
 
 - Opening the tray menu can check for updates at most once an hour. If a newer version exists, the installer downloads and a row appears above Run at Startup. Clicking it asks whether to install; yes installs quietly and restarts the app. No check happens unless the menu is opened.
+- `Timing → Settling Delay`: how long the pointer must be still before a preview may open for anything, 0 ms at the top down to 1000 ms. 0 ms by default, which is the requirement switched off. Written to `config.ini` as `settling_delay_ms`.
 
 ### Changed
 
@@ -21,6 +22,8 @@
 - `Confirm File Type` is on by default; an installation that already exists keeps the value its `config.ini` holds.
 - Building from source now needs Rust 1.98.1 or newer.
 - Source files are organized into folders by role. No behavior change.
+- A new file under the cursor gets its preview while the mouse is still moving, instead of waiting for the pointer to stop first. Every delay is still a delay from the last movement, so the preview appears as the cursor reaches the file rather than after it settles. `Timing → Settling Delay` asks for the old behavior, at any length.
+- `Timing → Delay` and `Timing → Rehover Delay` offer more steps — 0, 25, 50, 100, 150, 200, 250, 300, 400, 500, 600, 700, 800, 900 and 1000 ms — in place of Instant, Fast, Medium, Relaxed and Slow. The 750 ms step is gone: a `config.ini` holding it keeps the value, and the menu shows nothing marked until another step is picked.
 
 ### Fixed
 

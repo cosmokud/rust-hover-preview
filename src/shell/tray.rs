@@ -10,7 +10,8 @@ use crate::config::config::{
     DEFAULT_IMAGE_BACKGROUND, DEFAULT_IMAGE_CACHE_MB, DEFAULT_LIBRE_CACHE_MB, DEFAULT_LIBRE_SCALE,
     DEFAULT_OFFICE_CACHE_MB,
     DEFAULT_OFFICE_ENGINE_IDLE_SECS, DEFAULT_OFFICE_SCALE, DEFAULT_PDF_CACHE_MB, DEFAULT_PDF_SCALE,
-    DEFAULT_PREVIEW_SCALE, DEFAULT_SAME_FILE_REHOVER_DELAY_MS, DEFAULT_TEXT_CACHE_MB,
+    DEFAULT_PREVIEW_SCALE, DEFAULT_SAME_FILE_REHOVER_DELAY_MS, DEFAULT_SETTLING_DELAY_MS,
+    DEFAULT_TEXT_CACHE_MB,
     DEFAULT_TEXT_FONT_SCALE_PERCENT, DEFAULT_VECTOR_BACKGROUND, DEFAULT_VECTOR_SCALE,
     DEFAULT_VIDEO_SCALE, DEFAULT_VIDEO_VOLUME, DEFAULT_WEBVIEW_IDLE_SECS,
 };
@@ -122,16 +123,20 @@ const AVOID_CHOICES: [AvoidMode; 4] = [
     AvoidMode::FilenameColumn,
     AvoidMode::Details,
 ];
-const ID_TRAY_DELAY_INSTANT: u16 = 1030; // 0ms
-const ID_TRAY_DELAY_VERY_FAST: u16 = 1031; // 200ms
-const ID_TRAY_DELAY_MEDIUM: u16 = 1032; // 500ms
-const ID_TRAY_DELAY_SLOW: u16 = 1033; // 1000ms
-const ID_TRAY_REHOVER_DELAY_INSTANT: u16 = 1034; // 0ms
-const ID_TRAY_REHOVER_DELAY_FAST: u16 = 1035; // 200ms
-const ID_TRAY_REHOVER_DELAY_MEDIUM: u16 = 1036; // 500ms
-const ID_TRAY_REHOVER_DELAY_SLOW: u16 = 1037; // 1000ms
-const ID_TRAY_DELAY_FAST_PLUS: u16 = 1038; // 750ms
-const ID_TRAY_REHOVER_DELAY_FAST_PLUS: u16 = 1039; // 750ms
+/// The `Timing` submenus that list a delay each — `Delay`, `Rehover Delay` and
+/// `Settling Delay`, in the order the menu lists them — one range apiece, each as wide
+/// as the delays it offers. They sit past every other range the app hands out, so a
+/// delay is never read as a size, a share or a backdrop.
+const ID_TRAY_DELAY_BASE: u16 = 1455;
+const ID_TRAY_REHOVER_DELAY_BASE: u16 = 1470;
+const ID_TRAY_SETTLING_DELAY_BASE: u16 = 1485;
+/// The delays those three submenus offer, in the order they list them: no wait at all
+/// at the top, where the app starts, and a whole second at the bottom. A delay a
+/// hand-edited `config.ini` holds that is not one of these is shown with nothing checked
+/// rather than rounded to the nearest.
+const TIMING_DELAY_CHOICES_MS: [u64; 15] = [
+    0, 25, 50, 100, 150, 200, 250, 300, 400, 500, 600, 700, 800, 900, 1000,
+];
 const ID_TRAY_OPEN_CONFIG: u16 = 1040;
 /// The row above `Run at Startup`, which is in the menu only while a newer release is
 /// waiting: it puts the installer `updates` fetched on, and the app ends itself as the
@@ -430,16 +435,27 @@ unsafe extern "system" fn tray_window_proc(
                 {
                     set_avoid_mode(cmd - ID_TRAY_AVOID_BASE)
                 }
-                ID_TRAY_DELAY_INSTANT => set_hover_delay(0),
-                ID_TRAY_DELAY_VERY_FAST => set_hover_delay(200),
-                ID_TRAY_DELAY_MEDIUM => set_hover_delay(500),
-                ID_TRAY_DELAY_FAST_PLUS => set_hover_delay(750),
-                ID_TRAY_DELAY_SLOW => set_hover_delay(1000),
-                ID_TRAY_REHOVER_DELAY_INSTANT => set_same_file_rehover_delay(0),
-                ID_TRAY_REHOVER_DELAY_FAST => set_same_file_rehover_delay(200),
-                ID_TRAY_REHOVER_DELAY_MEDIUM => set_same_file_rehover_delay(500),
-                ID_TRAY_REHOVER_DELAY_FAST_PLUS => set_same_file_rehover_delay(750),
-                ID_TRAY_REHOVER_DELAY_SLOW => set_same_file_rehover_delay(1000),
+                // A delay of one of the three `Timing` submenus, by the position it was
+                // listed at. The three offer the same delays, so one table answers for
+                // all of them and each range is what says which setting was meant.
+                cmd if (ID_TRAY_DELAY_BASE
+                    ..ID_TRAY_DELAY_BASE + TIMING_DELAY_CHOICES_MS.len() as u16)
+                    .contains(&cmd) =>
+                {
+                    set_hover_delay(cmd - ID_TRAY_DELAY_BASE)
+                }
+                cmd if (ID_TRAY_REHOVER_DELAY_BASE
+                    ..ID_TRAY_REHOVER_DELAY_BASE + TIMING_DELAY_CHOICES_MS.len() as u16)
+                    .contains(&cmd) =>
+                {
+                    set_same_file_rehover_delay(cmd - ID_TRAY_REHOVER_DELAY_BASE)
+                }
+                cmd if (ID_TRAY_SETTLING_DELAY_BASE
+                    ..ID_TRAY_SETTLING_DELAY_BASE + TIMING_DELAY_CHOICES_MS.len() as u16)
+                    .contains(&cmd) =>
+                {
+                    set_settling_delay(cmd - ID_TRAY_SETTLING_DELAY_BASE)
+                }
                 ID_TRAY_OPEN_CONFIG => open_config_file(),
                 // How large a picture is drawn, by the position its item was listed at.
                 cmd if (ID_TRAY_SCALE_BASE
@@ -855,8 +871,9 @@ unsafe fn show_context_menu(hwnd: HWND) {
     let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
 
     // Add the "Timing" submenu: how long a hover waits before its preview opens, how
-    // long the same file is held off after its preview was dismissed, and what the
-    // trigger key does.
+    // long the same file is held off after its preview was dismissed, how long the
+    // pointer must be still before anything previews at all, and what the trigger key
+    // does.
     let timing_menu = CreatePopupMenu().unwrap();
 
     // Add the "Trigger Key (Alt)" submenu: whether the key is watched at all, the
@@ -930,37 +947,13 @@ unsafe fn show_context_menu(hwnd: HWND) {
         PCWSTR(trigger_label_wide.as_ptr()),
     );
 
-    // Add the Delay submenu
+    // Add the Delay submenu: how long the pointer rests on a file before a preview is
+    // put up for it.
     let hover_delay_ms = CONFIG
         .lock()
         .map(|c| c.hover_delay_ms)
         .unwrap_or(DEFAULT_HOVER_DELAY_MS);
-    let delay_menu = CreatePopupMenu().unwrap();
-
-    let delay_flag = |delay: u64| {
-        MF_STRING
-            | if hover_delay_ms == delay {
-                MF_CHECKED
-            } else {
-                MF_UNCHECKED
-            }
-    };
-    // One item per delay, with the one the setting starts at carrying the default mark —
-    // which is read from the setting rather than written into the label, so a delay that
-    // becomes the default, or stops being it, moves the mark with it.
-    let delay_item = |delay: u64, id: u16, label: &str| {
-        append_labeled_item(
-            delay_menu,
-            delay_flag(delay),
-            id,
-            &default_label(label, delay == DEFAULT_HOVER_DELAY_MS),
-        );
-    };
-    delay_item(0, ID_TRAY_DELAY_INSTANT, "Instant (0 ms)");
-    delay_item(200, ID_TRAY_DELAY_VERY_FAST, "Fast (200 ms)");
-    delay_item(500, ID_TRAY_DELAY_MEDIUM, "Medium (500 ms)");
-    delay_item(750, ID_TRAY_DELAY_FAST_PLUS, "Relaxed (750 ms)");
-    delay_item(1000, ID_TRAY_DELAY_SLOW, "Slow (1000 ms)");
+    let delay_menu = timing_delay_menu(ID_TRAY_DELAY_BASE, hover_delay_ms, DEFAULT_HOVER_DELAY_MS);
 
     let _ = AppendMenuW(
         timing_menu,
@@ -969,39 +962,43 @@ unsafe fn show_context_menu(hwnd: HWND) {
         w!("Delay"),
     );
 
+    // Add the Rehover Delay submenu: how long the same file waits before a preview of it
+    // is put up again.
     let same_file_rehover_delay_ms = CONFIG
         .lock()
         .map(|c| c.same_file_rehover_delay_ms)
         .unwrap_or(DEFAULT_SAME_FILE_REHOVER_DELAY_MS);
-    let rehover_delay_menu = CreatePopupMenu().unwrap();
+    let rehover_delay_menu = timing_delay_menu(
+        ID_TRAY_REHOVER_DELAY_BASE,
+        same_file_rehover_delay_ms,
+        DEFAULT_SAME_FILE_REHOVER_DELAY_MS,
+    );
 
-    let rehover_delay_flag = |delay: u64| {
-        MF_STRING
-            | if same_file_rehover_delay_ms == delay {
-                MF_CHECKED
-            } else {
-                MF_UNCHECKED
-            }
-    };
-    // The same, with the default mark read from the rehover setting's own default.
-    let rehover_delay_item = |delay: u64, id: u16, label: &str| {
-        append_labeled_item(
-            rehover_delay_menu,
-            rehover_delay_flag(delay),
-            id,
-            &default_label(label, delay == DEFAULT_SAME_FILE_REHOVER_DELAY_MS),
-        );
-    };
-    rehover_delay_item(0, ID_TRAY_REHOVER_DELAY_INSTANT, "Instant (0 ms)");
-    rehover_delay_item(200, ID_TRAY_REHOVER_DELAY_FAST, "Fast (200 ms)");
-    rehover_delay_item(500, ID_TRAY_REHOVER_DELAY_MEDIUM, "Medium (500 ms)");
-    rehover_delay_item(750, ID_TRAY_REHOVER_DELAY_FAST_PLUS, "Relaxed (750 ms)");
-    rehover_delay_item(1000, ID_TRAY_REHOVER_DELAY_SLOW, "Slow (1000 ms)");
     let _ = AppendMenuW(
         timing_menu,
         MF_STRING | MF_POPUP,
         rehover_delay_menu.0 as usize,
         w!("Rehover Delay"),
+    );
+
+    // Add the Settling Delay submenu: how long the pointer must be still before a
+    // preview may open for anything. It is what a hand crossing a list waits out before
+    // the file it comes to rest on is answered, and 0 is that requirement switched off.
+    let settling_delay_ms = CONFIG
+        .lock()
+        .map(|c| c.settling_delay_ms)
+        .unwrap_or(DEFAULT_SETTLING_DELAY_MS);
+    let settling_delay_menu = timing_delay_menu(
+        ID_TRAY_SETTLING_DELAY_BASE,
+        settling_delay_ms,
+        DEFAULT_SETTLING_DELAY_MS,
+    );
+
+    let _ = AppendMenuW(
+        timing_menu,
+        MF_STRING | MF_POPUP,
+        settling_delay_menu.0 as usize,
+        w!("Settling Delay"),
     );
 
     let _ = AppendMenuW(
@@ -1788,6 +1785,37 @@ fn toggle_preview_type(kind: PreviewType) {
     }
 
     refresh_preview_types();
+}
+
+/// One `Timing` submenu: an item per delay the setting offers, in the order the table
+/// lists them, with the delay the setting is on checked and the one it starts at marked
+/// as the default — which is read from the settings rather than written into the labels,
+/// so a delay that becomes a default, or stops being one, moves the mark with it.
+///
+/// The three submenus differ only in what they select, so they are built here rather
+/// than one by one: they list the same delays, and a delay added to the table is one
+/// every one of them offers.
+fn timing_delay_menu(base_id: u16, selected_ms: u64, default_ms: u64) -> HMENU {
+    let menu = unsafe { CreatePopupMenu().unwrap() };
+
+    for (index, delay_ms) in TIMING_DELAY_CHOICES_MS.iter().enumerate() {
+        let flags = MF_STRING
+            | if *delay_ms == selected_ms {
+                MF_CHECKED
+            } else {
+                MF_UNCHECKED
+            };
+        let label = format!("{delay_ms} ms");
+
+        append_labeled_item(
+            menu,
+            flags,
+            base_id + index as u16,
+            &default_label(&label, *delay_ms == default_ms),
+        );
+    }
+
+    menu
 }
 
 /// A label with the item the setting starts at marked as the default.
@@ -2607,16 +2635,49 @@ fn bitmap_scale_at(index: u16) -> Option<PreviewScale> {
     BITMAP_SCALE_CHOICES.get(index as usize).copied()
 }
 
-fn set_hover_delay(hover_delay_ms: u64) {
+/// The delay an item of a `Timing` submenu stands for, by the position it was listed at.
+/// The three submenus list the same delays, so one table answers for all of them — and
+/// each submenu's own range is what says which setting the click was meant for. An id
+/// past the last item is not one the menu offered.
+fn timing_delay_at(index: u16) -> Option<u64> {
+    TIMING_DELAY_CHOICES_MS.get(index as usize).copied()
+}
+
+/// How long the pointer must rest on a file before a preview is put up for it, by the
+/// position its item was listed at.
+fn set_hover_delay(index: u16) {
+    let Some(delay_ms) = timing_delay_at(index) else {
+        return;
+    };
+
     if let Ok(mut config) = CONFIG.lock() {
-        config.hover_delay_ms = hover_delay_ms;
+        config.hover_delay_ms = delay_ms;
         config.save();
     }
 }
 
-fn set_same_file_rehover_delay(delay_ms: u64) {
+/// How long the same file waits before a preview of it is put up again, by the position
+/// its item was listed at.
+fn set_same_file_rehover_delay(index: u16) {
+    let Some(delay_ms) = timing_delay_at(index) else {
+        return;
+    };
+
     if let Ok(mut config) = CONFIG.lock() {
         config.same_file_rehover_delay_ms = delay_ms;
+        config.save();
+    }
+}
+
+/// How long the pointer must be still before a preview may open for anything, by the
+/// position its item was listed at.
+fn set_settling_delay(index: u16) {
+    let Some(delay_ms) = timing_delay_at(index) else {
+        return;
+    };
+
+    if let Ok(mut config) = CONFIG.lock() {
+        config.settling_delay_ms = delay_ms;
         config.save();
     }
 }
@@ -2946,6 +3007,71 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// The three `Timing` submenus list the same delays, one range apiece, and a range
+    /// that were wider than the items in it would take an id from the submenu below it —
+    /// which is a click selecting a delay that was never listed, for a setting nobody
+    /// asked for.
+    #[test]
+    fn the_three_timing_submenus_carry_a_range_apiece() {
+        let bases = [
+            ID_TRAY_DELAY_BASE,
+            ID_TRAY_REHOVER_DELAY_BASE,
+            ID_TRAY_SETTLING_DELAY_BASE,
+        ];
+        let width = TIMING_DELAY_CHOICES_MS.len() as u16;
+
+        // The table is the steps themselves: no wait at all at the top, a whole second at
+        // the bottom, and every delay larger than the one above it.
+        assert_eq!(TIMING_DELAY_CHOICES_MS[0], 0, "the topmost item is no wait");
+        assert_eq!(
+            *TIMING_DELAY_CHOICES_MS.last().expect("a last delay"),
+            1000,
+            "the bottom one is a whole second"
+        );
+        assert!(
+            TIMING_DELAY_CHOICES_MS
+                .windows(2)
+                .all(|pair| pair[0] < pair[1]),
+            "every delay is larger than the one above it: {TIMING_DELAY_CHOICES_MS:?}"
+        );
+
+        // Every value a default mark is read from is one of the items: a default the menu
+        // does not offer would leave the setting starting at nothing marked.
+        for default_ms in [
+            DEFAULT_HOVER_DELAY_MS,
+            DEFAULT_SAME_FILE_REHOVER_DELAY_MS,
+            DEFAULT_SETTLING_DELAY_MS,
+        ] {
+            assert!(
+                TIMING_DELAY_CHOICES_MS.contains(&default_ms),
+                "{default_ms} ms is marked as a default and is no item of the menu"
+            );
+        }
+
+        for (index, base) in bases.iter().enumerate() {
+            for above in &bases[..index] {
+                assert!(
+                    above + width <= *base,
+                    "the range at {base} overlaps the one at {above}"
+                );
+            }
+        }
+
+        for (position, delay_ms) in TIMING_DELAY_CHOICES_MS.iter().enumerate() {
+            assert_eq!(
+                timing_delay_at(position as u16),
+                Some(*delay_ms),
+                "an item resolves back to the delay it was listed for"
+            );
+        }
+
+        assert_eq!(
+            timing_delay_at(width),
+            None,
+            "an id past the last item is not one the menu offered"
+        );
     }
 
     /// The `Avoid` submenu lists every way the setting can be in, in the order the ids
