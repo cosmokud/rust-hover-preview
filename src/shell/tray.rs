@@ -9,7 +9,7 @@ use crate::config::config::{
     DEFAULT_DECODE_BUDGET_GB, DEFAULT_DESIGN_BACKGROUND, DEFAULT_DESIGN_SCALE,
     DEFAULT_FOLLOW_CURSOR, DEFAULT_FONT_BACKGROUND, DEFAULT_FONT_SCALE, DEFAULT_HOVER_DELAY_MS,
     DEFAULT_IMAGE_BACKGROUND, DEFAULT_IMAGE_CACHE_MB, DEFAULT_LIBRE_CACHE_MB, DEFAULT_LIBRE_SCALE,
-    DEFAULT_LIBREOFFICE_IDLE_SECS, DEFAULT_OFFICE_CACHE_MB,
+    DEFAULT_LIBREOFFICE_IDLE_SECS, DEFAULT_MAGICK_IDLE_SECS, DEFAULT_OFFICE_CACHE_MB,
     DEFAULT_OFFICE_ENGINE, DEFAULT_OFFICE_ENGINE_IDLE_SECS, DEFAULT_OFFICE_SCALE,
     DEFAULT_PDF_CACHE_MB, DEFAULT_PDF_SCALE,
     DEFAULT_PREVIEW_SCALE, DEFAULT_SAME_FILE_REHOVER_DELAY_MS, DEFAULT_SETTLING_DELAY_MS,
@@ -18,6 +18,7 @@ use crate::config::config::{
     DEFAULT_VIDEO_SCALE, DEFAULT_VIDEO_VOLUME, DEFAULT_WEBVIEW_IDLE_SECS,
 };
 use crate::shell::explorer_hook;
+use crate::engines::imagemagick_render;
 use crate::engines::libreoffice_render;
 use crate::engines::office_render;
 use crate::readers::pdf_preview;
@@ -231,7 +232,20 @@ const ID_TRAY_TYPE_FONTS: u16 = 1070;
 const ID_TRAY_TYPE_DESIGN: u16 = 1071;
 /// The `Libre` gate, under the same submenu: the documents drawn by an installed render
 /// engine rather than read by this app — CorelDRAW above all.
-const ID_TRAY_TYPE_LIBRE: u16 = 1100;
+///
+/// It sits here with the `Magick` gate below it rather than beside the other kinds: 1062 to
+/// 1071 is every one of those, 1072 to 1082 are the font sizes and 1083 to 1097 are the
+/// engine idle times, so these two — the kinds that are engines rather than readers — are the
+/// last pair before the `theme` folder's block.
+///
+/// It carried 1100 until then, which is where the first file in the `theme` folder's submenu
+/// is drawn, and that item is matched first: the row switched the text theme rather than the
+/// kind, so what a user saw was a switch that did nothing. `Magick` is here with it so that
+/// the two are one block, and so that neither is anywhere near the theme folder's range.
+const ID_TRAY_TYPE_LIBRE: u16 = 1098;
+/// The `Magick` gate, under the same submenu: the pictures an installed ImageMagick develops
+/// rather than this app decoding — the camera raw formats above all. See `magick_formats`.
+const ID_TRAY_TYPE_MAGICK: u16 = 1099;
 /// The `Vector` gate, for the drawings that are not pictures: SVG documents, which are the
 /// kind SVG documents have always had — the id is the one this gate carried under that name
 /// — and the metafiles and encapsulated PostScript files the same kind grew to hold.
@@ -307,7 +321,13 @@ const ID_TRAY_WEBVIEW_IDLE_BASE: u16 = 1090;
 /// one font size at 1097, and the `theme` folder's items begin at 1100 — so its range is the
 /// widest run left between the image backdrop's four ids at 1023 and the config row at 1040.
 const ID_TRAY_LIBREOFFICE_IDLE_BASE: u16 = 1027;
-/// The idle times the three `… TTL` submenus offer, longest first — the
+/// The `Engine → ImageMagick TTL` submenu, the fourth of them. It sits past every range the
+/// app hands out rather than in the slack the other three fit into — 1499 is where the last
+/// of the `Timing` delays ends — since what it bounds is not a process at all: the engine is
+/// a converter that exits with the file it was given, and what the setting keeps is the
+/// picture it wrote (see `imagemagick_render`).
+const ID_TRAY_MAGICK_IDLE_BASE: u16 = 1500;
+/// The idle times the four `… TTL` submenus offer, longest first — the
 /// order the menus list them in, so an engine that is never let go is the topmost
 /// item and one that is let go as soon as it has drawn a page is the bottom one. A
 /// value a hand-edited `config.ini` asks for that is not one of these is shown with
@@ -498,6 +518,7 @@ unsafe extern "system" fn tray_window_proc(
                 ID_TRAY_TYPE_FONTS => toggle_preview_type(PreviewType::Fonts),
                 ID_TRAY_TYPE_DESIGN => toggle_preview_type(PreviewType::Design),
                 ID_TRAY_TYPE_LIBRE => toggle_preview_type(PreviewType::Libre),
+                ID_TRAY_TYPE_MAGICK => toggle_preview_type(PreviewType::Magick),
                 ID_TRAY_TYPE_VECTOR => toggle_preview_type(PreviewType::Vector),
                 // An Office engine's idle time, by the position it was listed at.
                 cmd if (ID_TRAY_ENGINE_IDLE_BASE
@@ -519,6 +540,13 @@ unsafe extern "system" fn tray_window_proc(
                     .contains(&cmd) =>
                 {
                     set_libreoffice_idle(cmd - ID_TRAY_LIBREOFFICE_IDLE_BASE)
+                }
+                // And the image converter's, in the range of its own.
+                cmd if (ID_TRAY_MAGICK_IDLE_BASE
+                    ..ID_TRAY_MAGICK_IDLE_BASE + ENGINE_IDLE_CHOICES.len() as u16)
+                    .contains(&cmd) =>
+                {
+                    set_magick_idle(cmd - ID_TRAY_MAGICK_IDLE_BASE)
                 }
                 // A cache size, by the position it was listed at.
                 cmd if (ID_TRAY_IMAGE_CACHE_BASE..ID_TRAY_OFFICE_CACHE_BASE).contains(&cmd) => {
@@ -689,6 +717,7 @@ unsafe fn show_context_menu(hwnd: HWND) {
         (PreviewType::Fonts, ID_TRAY_TYPE_FONTS, w!("Fonts")),
         (PreviewType::Design, ID_TRAY_TYPE_DESIGN, w!("Design")),
         (PreviewType::Libre, ID_TRAY_TYPE_LIBRE, w!("Libre")),
+        (PreviewType::Magick, ID_TRAY_TYPE_MAGICK, w!("Magick")),
     ];
     let types_menu = CreatePopupMenu().unwrap();
 
@@ -1569,6 +1598,26 @@ unsafe fn show_context_menu(hwnd: HWND) {
         libreoffice_idle,
         DEFAULT_LIBREOFFICE_IDLE_SECS,
         libreoffice_render::available(),
+    );
+
+    // ImageMagick TTL: the same row for the engine the pictures beside Office are developed
+    // by, and the same idle times — but it is the one engine of the four that has no process
+    // to keep: `magick.exe` reads a file, writes one and exits, so what the setting bounds is
+    // how long the picture it wrote is kept before the next hover of that file converts it
+    // again (see `imagemagick_render`). Greyed out where ImageMagick is not installed, since
+    // there is nothing there to keep anything.
+    let magick_idle = CONFIG
+        .lock()
+        .map(|c| c.magick_idle)
+        .unwrap_or(EngineIdle::Seconds(DEFAULT_MAGICK_IDLE_SECS));
+
+    append_engine_idle_menu(
+        engine_menu,
+        w!("ImageMagick TTL"),
+        ID_TRAY_MAGICK_IDLE_BASE,
+        magick_idle,
+        DEFAULT_MAGICK_IDLE_SECS,
+        imagemagick_render::available(),
     );
 
     // WebView2 TTL: the same question about the browser that draws a document — every
@@ -2495,6 +2544,26 @@ fn set_libreoffice_idle(index: u16) {
 
     if let Ok(mut config) = CONFIG.lock() {
         config.libreoffice_idle = idle;
+        config.save();
+    }
+}
+
+/// How long a picture the ImageMagick engine converted is kept after the last hover that
+/// read it.
+///
+/// Nothing is rebuilt here either, and nothing has to be: the engine thread reads the
+/// setting every second while it waits for files, so a shorter time applies to the pictures
+/// that are already converted — they are let go at the next look — and `0 seconds`, the
+/// bottom of the list, is every picture converted every time it is hovered. A picture that
+/// is being hovered is not one of them: a read of it moves the moment the setting counts
+/// from, so what is dropped is what nothing has asked for (see `imagemagick_render`).
+fn set_magick_idle(index: u16) {
+    let Some(idle) = engine_idle_at(index) else {
+        return;
+    };
+
+    if let Ok(mut config) = CONFIG.lock() {
+        config.magick_idle = idle;
         config.save();
     }
 }

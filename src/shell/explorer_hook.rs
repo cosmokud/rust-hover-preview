@@ -1093,6 +1093,15 @@ fn is_media_file(path: &Path) -> bool {
         return PreviewType::Libre.enabled_in(&config);
     }
 
+    // A picture an image converter develops — a camera raw above all — is a kind of its own
+    // as well, asked where the renderer asks it: after the documents an engine draws, ahead
+    // of the design, text, font and image lists, none of which would have claimed a `.nef`
+    // anyway. What such a file keeps of itself is nothing a reader here opens, which is the
+    // whole reason the name is in that list; see `magick_formats`.
+    if crate::formats::magick_formats::matches_magick_list(path, &config.magick_extensions) {
+        return PreviewType::Magick.enabled_in(&config);
+    }
+
     if matches_design_list(path, &config.design_extensions) {
         return PreviewType::Design.enabled_in(&config);
     }
