@@ -1421,6 +1421,11 @@ fn same_entries(list: &[String], canonical: &[String]) -> bool {
 /// the tray has no menu item for are kept — the ones a hand edit reaches and a menu does
 /// not — and a setting `save` writes that is missing from the table is written last of
 /// all under `; Ungrouped`, which is where a heading that was forgotten shows up.
+///
+/// Nothing reads a heading back, and a file grouped by an earlier arrangement of the tray
+/// holds exactly the settings of one grouped this way — so a heading a file has not got is
+/// the one thing that tells the two apart, and the one thing that brings such a file to be
+/// written again (see `headings_are_old`).
 const SETTING_GROUPS: &[(&str, &[&str])] = &[
     ("General", &["preview_enabled", "run_at_startup"]),
     (
@@ -1485,19 +1490,24 @@ const SETTING_GROUPS: &[(&str, &[&str])] = &[
     ),
     ("Volume", &["video_volume"]),
     (
+        "Engine",
+        &[
+            "libreoffice_idle",
+            "office_engine",
+            "office_engine_idle",
+            "webview_idle",
+        ],
+    ),
+    (
         "Performance",
         &[
             "confirm_file_type",
             "decode_budget_gb",
             "image_cache_mb",
             "libre_cache_mb",
-            "libreoffice_idle",
             "office_cache_mb",
-            "office_engine",
-            "office_engine_idle",
             "pdf_cache_mb",
             "text_cache_mb",
-            "webview_idle",
         ],
     ),
     (
@@ -1710,6 +1720,32 @@ fn repair_older_lists(ini: &mut Ini) -> bool {
     repaired
 }
 
+/// Whether a file is one whose settings were grouped the way an earlier build grouped them.
+///
+/// A heading is a comment, so a file grouped by one arrangement holds exactly the settings of a
+/// file grouped by another: nothing is read back from the difference and every key is read the
+/// same either way. What a heading the file has not got does say is that it was written before
+/// a heading was added or a setting moved out of another one — and the grouping is the app's to
+/// write, so such a file is written again rather than left with the shape it happens to have.
+///
+/// One write puts every heading back at once, so a file this has been through has all of them
+/// and is left alone the next time it is read. That is the whole point of asking the question
+/// about the text rather than about the parse: the file is read once a second while it is being
+/// watched, and a file the app has just written must not be a file there is something to write.
+/// The question is asked of the text for that reason too — a heading is a comment, and a parse
+/// keeps everything about a file except the comments (`load`, `reload_from_disk`).
+fn headings_are_old(text: &str) -> bool {
+    SETTING_GROUPS.iter().any(|(heading, _)| {
+        let heading_line = format!("; {heading}");
+
+        // Compared against the whole line rather than searched for in the file, so a key named
+        // after a heading — or a heading written inside a value — is not read as one. A line's
+        // own trailing space is not part of the comparison: an editor that leaves one is not a
+        // reason to write the file out again.
+        !text.lines().any(|line| line.trim_end() == heading_line)
+    })
+}
+
 impl AppConfig {
     /// The app's own folder under the roaming profile, holding `config.ini` and
     /// the `theme` folder beside it.
@@ -1738,11 +1774,13 @@ impl AppConfig {
     ///
     /// The file is read in one of two ways: there is none, so a fresh installation is written —
     /// or there is one, and the lists it holds that are this app's own older ones are brought up
-    /// before anything is read from it (`repair_older_lists`), since the file is what the user
-    /// edits and a key left missing would be repaired again on every load. It is written back
-    /// where that left something to write, and where it did not, the file on disk is left exactly
-    /// as it is: a file this build wrote, with nothing deleted from it and nothing added to it
-    /// since, is one there is nothing to say about.
+    /// before anything is read from it (`repair_older_lists`), and the settings it holds under
+    /// headings an older build wrote are grouped again the way this build groups them
+    /// (`headings_are_old`) — since the file is what the user edits and a key left missing would
+    /// be repaired again on every load. It is written back where that left something to write,
+    /// and where it did not, the file on disk is left exactly as it is: a file this build wrote,
+    /// with nothing deleted from it and nothing added to it since, is one there is nothing to say
+    /// about.
     pub fn load() -> Self {
         let mut config = Self::default();
 
@@ -1762,17 +1800,27 @@ impl AppConfig {
             // guessed at: writing the defaults over it would be a write with nothing to do with
             // the file, which is the one kind of write this app does not make. A file that is
             // missing by then — or was never there — is the fresh installation below.
-            if ini.load(path.to_string_lossy().as_ref()).is_ok() {
-                let repaired = repair_older_lists(&mut ini);
-                config.apply_ini(&ini);
+            //
+            // The text is read here rather than by `Ini::load`, which reads and parses the same
+            // file: a parse keeps nothing of the comments, and whether the settings sit under the
+            // headings this build writes them under is a question about the text (see
+            // `headings_are_old`).
+            if let Ok(text) = fs::read_to_string(&path) {
+                let old_headings = headings_are_old(&text);
 
-                // The file is written again where the repair had a list to bring up, and where
-                // it does not hold what this app writes: a setting the file does not have, one
-                // whose value is not the value the app reads it back as — which is every value
-                // the app could not read at all — and any key that is not one the app writes,
-                // which is where a name this app no longer uses goes.
-                if repaired || config.differs(&ini) {
-                    config.save();
+                if ini.read(text).is_ok() {
+                    let repaired = repair_older_lists(&mut ini) || old_headings;
+                    config.apply_ini(&ini);
+
+                    // The file is written again where the repair had a list to bring up or a
+                    // heading to put back, and where it does not hold what this app writes: a
+                    // setting the file does not have, one whose value is not the value the app
+                    // reads it back as — which is every value the app could not read at all —
+                    // and any key that is not one the app writes, which is where a name this
+                    // app no longer uses goes.
+                    if repaired || config.differs(&ini) {
+                        config.save();
+                    }
                 }
             }
         }
@@ -1784,23 +1832,28 @@ impl AppConfig {
         config
     }
 
-    /// Read the file again, after the watcher saw it change, with the same repair a start puts
+    /// Read the file again, after the watcher saw it change, with the same repairs a start puts
     /// it through and the same question about whether it says what the app is using.
     ///
     /// Both belong here as much as they do at a start: the file is what the user edits, and an
     /// edit that writes a value the app cannot read, adds a key of their own, or names a setting
     /// the way an older build named it, is one to put right there and then rather than at the
-    /// next start. It settles the same way a start does — what it writes is a file that needs
-    /// nothing, so the write the watcher sees after it is a file nothing further is done to.
+    /// next start — as is a file an older build wrote and this one has not read since. It settles
+    /// the same way a start does — what it writes is a file that needs nothing, so the write the
+    /// watcher sees after it is a file nothing further is done to.
     pub fn reload_from_disk(&mut self) {
         if let Some(path) = Self::config_path() {
             let mut ini = Ini::new();
-            if ini.load(path.to_string_lossy().as_ref()).is_ok() {
-                let repaired = repair_older_lists(&mut ini);
-                self.apply_ini(&ini);
+            if let Ok(text) = fs::read_to_string(&path) {
+                let old_headings = headings_are_old(&text);
 
-                if repaired || self.differs(&ini) {
-                    self.save();
+                if ini.read(text).is_ok() {
+                    let repaired = repair_older_lists(&mut ini) || old_headings;
+                    self.apply_ini(&ini);
+
+                    if repaired || self.differs(&ini) {
+                        self.save();
+                    }
                 }
             }
         }
@@ -3550,6 +3603,79 @@ video_volume=50
 [image]
 extensions=png,jpg
 "
+        );
+    }
+
+    /// The engine settings are written under a heading of their own, above the one the caches
+    /// and the budget are under, which is where the tray lists them.
+    #[test]
+    fn the_engine_settings_are_written_under_a_heading_of_their_own() {
+        let written = ordered_text(&AppConfig::default().to_ini());
+
+        let engine = written
+            .find("; Engine\n")
+            .expect("the settings are grouped under a heading for the engines");
+        let performance = written
+            .find("; Performance\n")
+            .expect("and under one for what the app costs while it works");
+
+        assert!(
+            engine < performance,
+            "the engines are listed above the caches"
+        );
+
+        let under_engine = &written[engine..performance];
+        for key in [
+            "libreoffice_idle",
+            "office_engine",
+            "office_engine_idle",
+            "webview_idle",
+        ] {
+            assert!(under_engine.contains(key), "`{key}` is under `Engine`");
+        }
+        for key in ["confirm_file_type", "decode_budget_gb", "image_cache_mb"] {
+            assert!(!under_engine.contains(key), "`{key}` is not under `Engine`");
+        }
+
+        // A file this build wrote is a file there is nothing to write again, which is what keeps
+        // the watcher from writing the file it has just read back.
+        assert!(
+            !headings_are_old(&written),
+            "a file this build wrote needs nothing done to it"
+        );
+    }
+
+    /// A file grouped the way an older build grouped it is written again under the headings of
+    /// this one. A heading is a comment, so what such a file holds is read exactly as any other
+    /// file is: the grouping is the one thing about it that is not what this build writes, and
+    /// the one thing that a write puts right.
+    #[test]
+    fn a_file_written_before_the_settings_were_regrouped_is_written_again() {
+        let written = ordered_text(&AppConfig::default().to_ini());
+
+        // The same file as an older build wrote it: the engines had no heading of their own, so
+        // the settings they are named by sat among the caches and the budget.
+        let older = written.replace("; Engine\n", "");
+        assert!(
+            headings_are_old(&older),
+            "a file with no heading for the engines is one to write again"
+        );
+
+        // An editor that saves the file with the other line ending leaves one there is nothing
+        // to write either: the heading is still the line it was, and what an editor adds to the
+        // end of it is not the app's business.
+        assert!(
+            !headings_are_old(&written.replace('\n', "\r\n")),
+            "a heading is not read by the line ending it happens to have"
+        );
+
+        // And the keys are read the same either way, which is why the grouping can be put right
+        // without anything being migrated: what moved is the comment, not the setting.
+        let mut read_back = Ini::new();
+        assert!(read_back.read(older).is_ok());
+        assert_eq!(
+            read_back.get(CONFIG_SECTION, "office_engine"),
+            Some("microsoft_office".to_string())
         );
     }
 
