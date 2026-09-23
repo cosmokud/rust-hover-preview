@@ -175,7 +175,7 @@ The item a setting starts at carries `(Default)` after its name, so a menu says 
     - **Hold to Disable Preview** / **Hold to Enable Preview** — what holding it does.
   - **Delay** — how long the pointer rests on a file before its preview opens: 0 ms at the top down to 1000 ms at the bottom. 0 ms by default.
   - **Rehover Delay** — the same steps, before the same file can preview again; 200 ms by default.
-  - **Settling Delay** — the same steps, how long the pointer must have been still before anything previews at all: 0 ms, the default, is a new file previewed while the hand is still moving to it.
+  - **Settling Delay** — the same steps, how long the pointer must have been still before it will preview what it is on: 0 ms, the default, is a new file previewed while the hand is still moving to it. The keyboard's own previews are not gated by it.
 - **Placement**
   - **Position** — Follow Cursor or Best Position; Best Position by default.
   - **Avoid** — Avoid Nothing, Avoid Filename (default), Avoid Filename Column, or Avoid Details. This keeps a preview off the item it is about.

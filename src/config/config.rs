@@ -114,8 +114,8 @@ pub const DEFAULT_HOVER_DELAY_MS: u64 = 0;
 /// while a hand that turns back is answered before the wait is over. `0` is a file that
 /// previews again the moment it is hovered.
 pub const DEFAULT_SAME_FILE_REHOVER_DELAY_MS: u64 = 200;
-/// How long the pointer must be still before a preview may open for anything, in
-/// milliseconds.
+/// How long the pointer must be still before a preview is put up for what it is on,
+/// in milliseconds.
 ///
 /// A pointer crossing a list is on a new file every few dozen milliseconds, and what a
 /// hover is about is the file the hand comes to rest on: while it is still moving, the
@@ -123,7 +123,8 @@ pub const DEFAULT_SAME_FILE_REHOVER_DELAY_MS: u64 = 200;
 /// wait this names is that one, and `0` is the setting that asks for none of it — a
 /// preview is put up for a new file even while the hand is still on its way to it, which
 /// is where the app starts — so the machine that would rather see nothing until the
-/// pointer has settled is the one that gives this a value.
+/// pointer has settled is the one that gives this a value. The pointer is the whole of
+/// its subject: a keyboard preview is the keyboard's own and is not gated by it.
 pub const DEFAULT_SETTLING_DELAY_MS: u64 = 0;
 /// How long a hover's load may run before the waiting spinner is put up for it.
 ///
@@ -1018,8 +1019,8 @@ pub struct AppConfig {
     /// putting the preview back up on its way past (see
     /// `DEFAULT_SAME_FILE_REHOVER_DELAY_MS`).
     pub same_file_rehover_delay_ms: u64,
-    /// How long the pointer must be still before a preview may open for anything, in
-    /// milliseconds: what keeps a pointer crossing a list from answering every file it
+    /// How long the pointer must be still before a preview is put up for what it is on,
+    /// in milliseconds: what keeps a pointer crossing a list from answering every file it
     /// passes on its way (see `DEFAULT_SETTLING_DELAY_MS`).
     pub settling_delay_ms: u64,
     /// How long a hover's load may run before the waiting spinner is put up for it,
