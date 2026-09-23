@@ -63,9 +63,10 @@ one you are running has been published, and it asks it only when you open the
 tray menu. Nothing is checked at startup, nothing is checked while you work, and
 however many times you open the menu, a check is made at most once an hour.
 
-What it asks for is two files at fixed addresses in this project's own GitHub
-releases: `version.txt`, and — where that names a version newer than this one —
-the installer for it. Both are fetched over HTTPS, verified by the certificate
+What it asks for is two files in this project's own GitHub releases:
+`version.txt` at the newest release's stable address, and — where that names a
+version newer than this one — that release's installer. Both are fetched over
+HTTPS, verified by the certificate
 checks Windows already performs, and sent through the proxy Windows is
 configured with, if any. The request identifies itself as this app and its
 version, and says nothing else.

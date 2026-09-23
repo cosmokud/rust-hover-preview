@@ -60,11 +60,15 @@ jobs:
         shell: pwsh
         run: .\build-installers.ps1
 
-      # The two names a running app asks for. `releases/latest/download/<name>` is GitHub's
-      # stable address for an asset of the newest release, so the installer is copied out
-      # under a name that does not change from version to version, and the version itself is
-      # published as a file of its own. The check inside the app is then a fixed pair of URLs
-      # instead of a query to the releases API: nothing to parse, and no rate limit to spend.
+      # The version a running app reads. `releases/latest/download/version.txt` is GitHub's
+      # stable address for an asset of the newest release, so the check inside the app is a
+      # fixed address instead of a query to the releases API: nothing to parse, and no rate
+      # limit to spend.
+      #
+      # The installer is not copied out beside it. What a release carries is the one the
+      # packager built, under the name it gave that file, and the app asks for it in the
+      # release its own version names — one installer rather than two copies of the same
+      # bytes, which is what a copy out under a second name left in the release.
       - name: Prepare update assets
         shell: pwsh
         env:
@@ -72,14 +76,13 @@ jobs:
         run: |
           $version = $env:TAG -replace '^v', ''
           Set-Content -Path target/packager/version.txt -NoNewline -Value $version
-          Copy-Item target/packager/*.exe target/packager/rust-hover-preview-setup.exe
 
       - name: Upload installer artifacts
         uses: actions/upload-artifact@v4
         with:
           name: rust-hover-preview-installers-${{ github.ref_name }}
           path: |
-            target/packager/*.exe
+            target/packager/rust-hover-preview_*-setup.exe
             target/packager/version.txt
             target/github/rust-hover-preview.exe
           if-no-files-found: error
@@ -103,6 +106,6 @@ jobs:
           generate_release_notes: true
           fail_on_unmatched_files: true
           files: |
-            target/packager/*.exe
+            target/packager/rust-hover-preview_*-setup.exe
             target/packager/version.txt
             target/github/rust-hover-preview.exe
