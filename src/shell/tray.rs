@@ -9,7 +9,7 @@ use crate::config::config::{
     DEFAULT_DECODE_BUDGET_GB, DEFAULT_DESIGN_BACKGROUND, DEFAULT_DESIGN_SCALE,
     DEFAULT_FOLLOW_CURSOR, DEFAULT_FONT_BACKGROUND, DEFAULT_FONT_SCALE, DEFAULT_HOVER_DELAY_MS,
     DEFAULT_IMAGE_BACKGROUND, DEFAULT_IMAGE_CACHE_MB, DEFAULT_LIBRE_CACHE_MB, DEFAULT_LIBRE_SCALE,
-    DEFAULT_OFFICE_CACHE_MB,
+    DEFAULT_LIBREOFFICE_IDLE_SECS, DEFAULT_OFFICE_CACHE_MB,
     DEFAULT_OFFICE_ENGINE, DEFAULT_OFFICE_ENGINE_IDLE_SECS, DEFAULT_OFFICE_SCALE,
     DEFAULT_PDF_CACHE_MB, DEFAULT_PDF_SCALE,
     DEFAULT_PREVIEW_SCALE, DEFAULT_SAME_FILE_REHOVER_DELAY_MS, DEFAULT_SETTLING_DELAY_MS,
@@ -295,16 +295,21 @@ const FONT_SIZE_CHOICES: [(u32, u16); 12] = [
     (80, ID_TRAY_FONT_80),
     (70, ID_TRAY_FONT_70),
 ];
-/// The `Performance → Office Engine TTL` submenu: one command per idle time it
+/// The `Performance → Microsoft Office TTL` submenu: one command per idle time it
 /// offers, in the order it lists them. The IDs the app used before this ended at
 /// 1082 and the `theme` folder's items start at 1100, so this range is the slack
 /// between the two.
 const ID_TRAY_ENGINE_IDLE_BASE: u16 = 1083;
-/// The `Performance → SVG Engine TTL` submenu, the same shape as the Office
+/// The `Performance → WebView2 TTL` submenu, the same shape as the Microsoft Office
 /// one and in the range after it.
 const ID_TRAY_WEBVIEW_IDLE_BASE: u16 = 1090;
-/// The idle times the `Office Engine TTL` submenu offers, longest first — the
-/// order the menu lists them in, so an engine that is never let go is the topmost
+/// The `Performance → LibreOffice TTL` submenu, the third of them. It sits in the slack the
+/// backdrop halves leave rather than in the block the other two share — 1083 to 1096 is full,
+/// one font size at 1097, and the `theme` folder's items begin at 1100 — so its range is the
+/// widest run left between the image backdrop's four ids at 1023 and the config row at 1040.
+const ID_TRAY_LIBREOFFICE_IDLE_BASE: u16 = 1027;
+/// The idle times the three `… TTL` submenus offer, longest first — the
+/// order the menus list them in, so an engine that is never let go is the topmost
 /// item and one that is let go as soon as it has drawn a page is the bottom one. A
 /// value a hand-edited `config.ini` asks for that is not one of these is shown with
 /// nothing marked rather than rounded to the nearest.
@@ -508,6 +513,13 @@ unsafe extern "system" fn tray_window_proc(
                     .contains(&cmd) =>
                 {
                     set_webview_idle(cmd - ID_TRAY_WEBVIEW_IDLE_BASE)
+                }
+                // And the render engine's, in the range of its own.
+                cmd if (ID_TRAY_LIBREOFFICE_IDLE_BASE
+                    ..ID_TRAY_LIBREOFFICE_IDLE_BASE + ENGINE_IDLE_CHOICES.len() as u16)
+                    .contains(&cmd) =>
+                {
+                    set_libreoffice_idle(cmd - ID_TRAY_LIBREOFFICE_IDLE_BASE)
                 }
                 // A cache size, by the position it was listed at.
                 cmd if (ID_TRAY_IMAGE_CACHE_BASE..ID_TRAY_OFFICE_CACHE_BASE).contains(&cmd) => {
@@ -1318,12 +1330,6 @@ unsafe fn show_context_menu(hwnd: HWND) {
     // what a preview looks like.
     let performance_menu = CreatePopupMenu().unwrap();
 
-    // Add the "Select Engine" submenu: which engine each kind of document is asked of,
-    // where there is a choice to make. It is the first row here because it is what the
-    // rows below are about — the applications this app starts, and how long it keeps
-    // them — and Office is the only kind with two engines to choose between.
-    append_select_engine_menu(performance_menu);
-
     // Add "Confirm File Type" with checkmark (content/header sniffing)
     let confirm_file_type = CONFIG.lock().map(|c| c.confirm_file_type).unwrap_or(false);
     let confirm_flags = MF_STRING
@@ -1339,7 +1345,14 @@ unsafe fn show_context_menu(hwnd: HWND) {
         w!("Confirm File Type"),
     );
 
-    // Office Engine TTL: how long the Office engine a family started is kept after
+    // Add the "Select Engine" submenu: which engine each kind of document is asked of,
+    // where there is a choice to make. It is the row below the one setting that is about
+    // what a preview shows rather than what it costs, and above the three rows that say
+    // how long each engine this app starts is kept — the applications it names are the
+    // ones those are about. Office is the only kind with two engines to choose between.
+    append_select_engine_menu(performance_menu);
+
+    // Microsoft Office TTL: how long the Office engine a family started is kept after
     // that family's last page. Nothing is asked of an engine while it is being kept
     // — it is a process that has already been paid for, and the document it drew a
     // page of is closed — so what the setting buys is the next document of that
@@ -1353,16 +1366,36 @@ unsafe fn show_context_menu(hwnd: HWND) {
 
     append_engine_idle_menu(
         performance_menu,
-        w!("Office Engine TTL"),
+        w!("Microsoft Office TTL"),
         ID_TRAY_ENGINE_IDLE_BASE,
         office_idle,
         DEFAULT_OFFICE_ENGINE_IDLE_SECS,
         true,
     );
 
-    // SVG Engine TTL: the same question about the browser that draws a document —
-    // every document, still or not. It is greyed out on a machine with no WebView2
-    // runtime, since there is nothing there to keep.
+    // LibreOffice TTL: the same question about the engine the documents beside Office are
+    // drawn by, and it is the same shape: what is kept is the application, and what the
+    // setting buys is the next document converted without paying for an engine start. The
+    // engine holds a stub document of this app's own while it is kept, which is what makes
+    // it a running instance a conversion can be handed to (see `libreoffice_render`).
+    // Greyed out where no LibreOffice is installed, since there is nothing there to keep.
+    let libreoffice_idle = CONFIG
+        .lock()
+        .map(|c| c.libreoffice_idle)
+        .unwrap_or(EngineIdle::Seconds(DEFAULT_LIBREOFFICE_IDLE_SECS));
+
+    append_engine_idle_menu(
+        performance_menu,
+        w!("LibreOffice TTL"),
+        ID_TRAY_LIBREOFFICE_IDLE_BASE,
+        libreoffice_idle,
+        DEFAULT_LIBREOFFICE_IDLE_SECS,
+        libreoffice_render::available(),
+    );
+
+    // WebView2 TTL: the same question about the browser that draws a document — every
+    // document, still or not. It is greyed out on a machine with no WebView2 runtime, since
+    // there is nothing there to keep.
     let webview_idle = CONFIG
         .lock()
         .map(|c| c.webview_idle)
@@ -1370,7 +1403,7 @@ unsafe fn show_context_menu(hwnd: HWND) {
 
     append_engine_idle_menu(
         performance_menu,
-        w!("SVG Engine TTL"),
+        w!("WebView2 TTL"),
         ID_TRAY_WEBVIEW_IDLE_BASE,
         webview_idle,
         DEFAULT_WEBVIEW_IDLE_SECS,
@@ -2432,6 +2465,24 @@ fn set_webview_idle(index: u16) {
 
     if let Ok(mut config) = CONFIG.lock() {
         config.webview_idle = idle;
+        config.save();
+    }
+}
+
+/// How long the LibreOffice engine is kept after the last page it drew.
+///
+/// Nothing is rebuilt here either, and nothing has to be: the engine thread reads the setting
+/// every second while it waits for documents, so a shorter time applies to the engine that is
+/// already running, and `0 seconds` — the bottom of the list — lets go of one within the
+/// second. An engine that is kept is a process this app holds and ends itself; a setting of
+/// `indefinitely` keeps it for the rest of the run (see `libreoffice_render`).
+fn set_libreoffice_idle(index: u16) {
+    let Some(idle) = engine_idle_at(index) else {
+        return;
+    };
+
+    if let Ok(mut config) = CONFIG.lock() {
+        config.libreoffice_idle = idle;
         config.save();
     }
 }
