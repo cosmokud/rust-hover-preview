@@ -1294,13 +1294,6 @@ fn webp_has_animation(path: &Path) -> bool {
     false
 }
 
-fn is_confirm_file_type_enabled() -> bool {
-    CONFIG
-        .lock()
-        .map(|cfg| cfg.confirm_file_type)
-        .unwrap_or(false)
-}
-
 /// Guess image format from header bytes instead of file extension.
 fn guessed_image_format(path: &PathBuf) -> Option<image::ImageFormat> {
     image::ImageReader::open(path)
@@ -1704,7 +1697,16 @@ fn request_office_render(
 /// the loader, which answers with it that a hover is still waiting rather than failed; and
 /// the loop, which asks the engine for the page only where there is one to ask for.
 fn libre_render_is_due(path: &Path) -> bool {
-    libre_formats::is_libre_preview(path)
+    // A document whose content is one of the engine's is due for a page whether or not its
+    // name is one the `[libre]` list holds: the kind its content named is the kind Libre is
+    // (see `content_type`), and a page is what that kind is previewed from. The name is
+    // asked where the content had nothing to say, which is every other file.
+    let named_by_content = matches!(
+        crate::content_type::of(path),
+        crate::content_type::Content::Kind(PreviewType::Libre)
+    );
+
+    (libre_formats::is_libre_preview(path) || (named_by_content && PreviewType::Libre.enabled()))
         && libreoffice_render::available()
         && libreoffice_render::rendered_page(path).is_none()
         && !libreoffice_render::refused(path)
@@ -3173,7 +3175,7 @@ fn load_static_image(
 
         (pixels, width, height)
     } else {
-        let img = if is_confirm_file_type_enabled() {
+        let img = if crate::content_type::is_confirmed() {
             decode_image_with_header_check(path)?
         } else {
             decode_image_by_extension(path)?
@@ -4488,6 +4490,26 @@ fn load_media(
         return None;
     }
 
+    // What the file's content says it is comes ahead of what its name does, where the two
+    // disagree: a `.docx` whose bytes are an MP4 is loaded as the video it is, and a format
+    // no kind of this app previews is loaded as nothing at all — see `content_type` for
+    // what settles that, and `load_media_of_kind` for where the kind is handed on.
+    match crate::content_type::of(path) {
+        crate::content_type::Content::Kind(kind) => {
+            return load_media_of_kind(
+                kind,
+                path,
+                max_width,
+                max_height,
+                preview_scale,
+                dpi,
+                cancel,
+            )
+        }
+        crate::content_type::Content::Foreign => return None,
+        crate::content_type::Content::Unknown => {}
+    }
+
     if is_video_file(path) {
         return load_video_thumbnail(path, max_width, max_height, preview_scale);
     }
@@ -4602,7 +4624,88 @@ fn load_media(
             .then(engine_font_media);
     }
 
-    let guessed_format = if is_confirm_file_type_enabled() {
+    load_picture(path, max_width, max_height, preview_scale, &cancel)
+}
+
+/// The loader for a file whose content named a kind of its own — see `content_type`.
+///
+/// It is the arm the chain above would have taken had the file been named what its
+/// content says it is, reached by the kind rather than by the name: the same loaders, and
+/// the same one for each kind. What every one of them reads is the file itself and never
+/// the name it is under, which is what makes this a routing rather than a rename.
+///
+/// The gates are not asked here, exactly as they are not asked by the chain: the hook
+/// asked them before a hover could reach this path at all.
+fn load_media_of_kind(
+    kind: PreviewType,
+    path: &PathBuf,
+    max_width: u32,
+    max_height: u32,
+    preview_scale: PreviewScale,
+    dpi: u32,
+    cancel: Arc<AtomicBool>,
+) -> Option<MediaData> {
+    match kind {
+        PreviewType::Videos => load_video_thumbnail(path, max_width, max_height, preview_scale),
+        PreviewType::Pdf => load_pdf_first_page(path, max_width, max_height, preview_scale),
+        PreviewType::Archives => load_archive_preview(
+            path,
+            max_width,
+            max_height,
+            dpi,
+            current_archive_options(),
+            &cancel,
+        ),
+        PreviewType::Office => {
+            load_office_preview(path, max_width, max_height, preview_scale, &cancel).or_else(|| {
+                let page = libreoffice_render::pdf_for_office(path)?;
+                load_engine_page(
+                    &page,
+                    MediaType::Office,
+                    max_width,
+                    max_height,
+                    preview_scale,
+                )
+            })
+        }
+        PreviewType::Libre => libreoffice_render::rendered_page(path).and_then(|page| {
+            load_engine_page(&page, MediaType::Libre, max_width, max_height, preview_scale)
+        }),
+        PreviewType::Design => load_design_preview(path, max_width, max_height, preview_scale),
+        // Which half of the drawing kind this is, is the name's to say here rather than the
+        // content's: a document is drawn by the browser engine and a metafile by the drawing
+        // layer, and the content has already answered that the file is a drawing at all.
+        PreviewType::Vector => {
+            if svg_preview::is_svg_file(path) {
+                webview_preview::draws(path).then(engine_svg_media)
+            } else {
+                load_vector_preview(path, max_width, max_height, preview_scale)
+            }
+        }
+        PreviewType::Text => {
+            load_text_preview(path, max_width, max_height, dpi, current_text_options())
+        }
+        PreviewType::Fonts => (font_preview::probe(path).is_some() && webview_preview::draws(path))
+            .then(engine_font_media),
+        PreviewType::Images => load_picture(path, max_width, max_height, preview_scale, &cancel),
+    }
+}
+
+/// The picture path: the animated formats tried first, and everything else as the still
+/// picture it is.
+///
+/// It is where the chain above ends for every name that reaches it, and the arm a picture
+/// the content named is loaded by. Which of the animated formats is asked about is settled
+/// by the file's own header where the content is confirmed — see `guessed_image_format` —
+/// and by the name where it is not.
+fn load_picture(
+    path: &PathBuf,
+    max_width: u32,
+    max_height: u32,
+    preview_scale: PreviewScale,
+    cancel: &Arc<AtomicBool>,
+) -> Option<MediaData> {
+    let guessed_format = if crate::content_type::is_confirmed() {
         guessed_image_format(path)
     } else {
         None
@@ -4615,7 +4718,7 @@ fn load_media(
             max_width,
             max_height,
             preview_scale,
-            Arc::clone(&cancel),
+            Arc::clone(cancel),
         ) {
             return Some(media);
         }
@@ -4633,7 +4736,7 @@ fn load_media(
             max_width,
             max_height,
             preview_scale,
-            Arc::clone(&cancel),
+            Arc::clone(cancel),
         ) {
             return Some(media);
         }
@@ -4653,7 +4756,7 @@ fn load_media(
             max_width,
             max_height,
             preview_scale,
-            Arc::clone(&cancel),
+            Arc::clone(cancel),
         ) {
             return Some(media);
         }
@@ -4707,6 +4810,15 @@ fn video_probe_due(path: &Path) -> bool {
 
 /// Get original dimensions of media for positioning calculations
 fn get_media_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
+    // What the file's content says it is comes ahead of what its name does, where the two
+    // disagree: the box a file is placed at is the box of the kind its content belongs to,
+    // and a format no kind previews is placed nowhere at all — see `content_type`.
+    match crate::content_type::of(path) {
+        crate::content_type::Content::Kind(kind) => return media_dimensions_of_kind(kind, path),
+        crate::content_type::Content::Foreign => return None,
+        crate::content_type::Content::Unknown => {}
+    }
+
     if video_formats::is_video_preview(path) {
         return video_box(path);
     }
@@ -4737,23 +4849,7 @@ fn get_media_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
     // — because a name can sit in two lists: CorelDRAW is a design document to this app and
     // a drawing to the engine, and it is the engine that draws it (see `libre_formats`).
     if libre_formats::is_libre_preview(path) {
-        if !libreoffice_render::available() {
-            // Nothing to draw it with, so there is nothing to show: a machine without the
-            // engine shows no preview for these names rather than the thumbnail the file
-            // carries, which is the whole reason the name is in this list.
-            return None;
-        }
-
-        if let Some(page) = libreoffice_render::rendered_page(path) {
-            return pdf_preview::page_dimensions(&page);
-        }
-
-        // A document the engine has already turned down is not one to wait for.
-        if libreoffice_render::refused(path) {
-            return None;
-        }
-
-        return Some((office_preview::WAITING_BOX, office_preview::WAITING_BOX));
+        return libre_box(path);
     }
 
     // A design document is measured from the picture it is previewed from — the merged
@@ -4820,17 +4916,88 @@ fn get_media_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
         return None;
     }
 
-    if is_confirm_file_type_enabled() {
-        image_dimensions_with_header_check(path)
-    } else {
-        // The same two readers, asked the way this path asks them: the name first,
-        // since a file whose content is not confirmed is taken for what it is called,
-        // and then the codec Windows has — which is the only reader there is for the
-        // picture formats this app's decoder cannot read at all.
-        image::image_dimensions(path)
-            .ok()
-            .or_else(|| codec_dimensions(path))
+    picture_dimensions(path)
+}
+
+/// The box for one of the kinds a file's content answered with — see `content_type`.
+///
+/// It is the arm the chain above would have taken had the file been named what its content
+/// says it is, and each arm is what that arm measures: the same reader, asked of the file
+/// itself rather than of the name it is under. The gate is asked here as the chain asks it
+/// per kind, so a kind switched off has no box and comes down the way it always does.
+///
+/// Two kinds have no size of their own: an archive listing and a text preview are both laid
+/// out from the frame the loader paints rather than from anything their file says.
+fn media_dimensions_of_kind(kind: PreviewType, path: &PathBuf) -> Option<(u32, u32)> {
+    if !kind.enabled() {
+        return None;
     }
+
+    match kind {
+        PreviewType::Videos => video_box(path),
+        PreviewType::Pdf => pdf_preview::page_dimensions(path),
+        PreviewType::Archives | PreviewType::Text => None,
+        PreviewType::Office => office_preview::measure(path),
+        PreviewType::Libre => libre_box(path),
+        PreviewType::Design => design_dimensions(path),
+        PreviewType::Vector => {
+            if svg_preview::is_svg_file(path) {
+                webview_preview::can_draw().then(|| svg_preview::measure(path)).flatten()
+            } else {
+                vector_dimensions(path)
+            }
+        }
+        PreviewType::Fonts => webview_preview::can_draw()
+            .then(|| font_preview::probe(path))
+            .flatten()
+            .map(|_| {
+                (
+                    font_preview::SPECIMEN_WIDTH,
+                    font_preview::SPECIMEN_HEIGHT,
+                )
+            }),
+        PreviewType::Images => picture_dimensions(path),
+    }
+}
+
+/// The box a document the render engine draws is placed at: the page it has already drawn
+/// for this version of the document, the wait for one that is on its way, and nothing at
+/// all for a document the engine has turned down or for a machine with no engine to draw
+/// one with.
+fn libre_box(path: &Path) -> Option<(u32, u32)> {
+    if !libreoffice_render::available() {
+        // Nothing to draw it with, so there is nothing to show: a machine without the
+        // engine shows no preview for these names rather than the thumbnail the file
+        // carries, which is the whole reason the name is in this list.
+        return None;
+    }
+
+    if let Some(page) = libreoffice_render::rendered_page(path) {
+        return pdf_preview::page_dimensions(&page);
+    }
+
+    // A document the engine has already turned down is not one to wait for.
+    if libreoffice_render::refused(path) {
+        return None;
+    }
+
+    Some((office_preview::WAITING_BOX, office_preview::WAITING_BOX))
+}
+
+/// A picture's own size, read the way this app reads one: the file's header where its
+/// content is confirmed, and its name where it is not.
+fn picture_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
+    if crate::content_type::is_confirmed() {
+        return image_dimensions_with_header_check(path);
+    }
+
+    // The same two readers, asked the way this path asks them: the name first, since a
+    // file whose content is not confirmed is taken for what it is called, and then the
+    // codec Windows has — which is the only reader there is for the picture formats this
+    // app's decoder cannot read at all.
+    image::image_dimensions(path)
+        .ok()
+        .or_else(|| codec_dimensions(path))
 }
 
 /// Whether this hover is the wait for a page rather than a preview of one: an Office

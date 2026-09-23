@@ -31,7 +31,7 @@ You don't need to write code to help. Useful contributions include:
 
 ## Getting set up
 
-Requirements: Windows 11, Rust 1.88+, Visual Studio Build Tools (MSVC / C++),
+Requirements: Windows 11, Rust 1.98.1+, Visual Studio Build Tools (MSVC / C++),
 and the Windows SDK.
 
 ```bash

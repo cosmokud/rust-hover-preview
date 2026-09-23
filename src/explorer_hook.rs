@@ -1090,10 +1090,28 @@ fn should_probe_preview_hover(
 /// does not is the TypeScript source the text lists claim. The lists come from the
 /// configuration this already holds rather than from the gates' own lookups, which
 /// would take the same lock again.
+///
+/// What the file's content says it is comes ahead of all of that, where it disagrees
+/// with the name: a `.docx` whose bytes are an MP4 is a video, and the engine it is
+/// handed to is the one that plays videos (see `content_type`). It is asked before the
+/// configuration is taken, because `content_type` reads the setting it is gated by
+/// through the same lock and a lock taken twice on one thread is a deadlock.
 fn is_media_file(path: &Path) -> bool {
+    let content = crate::content_type::of(path);
+
     let Ok(config) = CONFIG.lock() else {
         return false;
     };
+
+    match content {
+        crate::content_type::Content::Kind(kind) => return kind.enabled_in(&config),
+        // A format no kind of this app previews is no preview at all: nothing is shown
+        // and no engine of this app's is started for it.
+        crate::content_type::Content::Foreign => return false,
+        // Nothing was recognized, or the content and the name agree: the name decides,
+        // which is what the lists below are for.
+        crate::content_type::Content::Unknown => {}
+    }
 
     if matches_video_list(path, &config.video_extensions) {
         return PreviewType::Videos.enabled_in(&config);

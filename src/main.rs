@@ -7,6 +7,7 @@ mod bcn;
 mod cloud_files;
 mod codecs;
 mod config;
+mod content_type;
 mod dds_image;
 mod design_formats;
 mod engine_processes;

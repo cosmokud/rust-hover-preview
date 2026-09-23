@@ -1,6 +1,6 @@
 # Rust Hover Preview
 
-![Rust](https://img.shields.io/badge/Rust-1.88+-orange?logo=rust)
+![Rust](https://img.shields.io/badge/Rust-1.98.1+-orange?logo=rust)
 ![Windows](https://img.shields.io/badge/Platform-Windows-blue?logo=windows)
 ![License](https://img.shields.io/badge/License-MIT-green)
 
@@ -12,6 +12,7 @@ A Windows 11 tray app inspired by QTTabBar. Hover a file in File Explorer — or
 
 - Mouse-hover and keyboard-navigation previews in Explorer.
 - Images, including animated GIF, APNG, and WebP.
+- What a file really holds decides its preview: a video named as a document is played, a document named as a picture is drawn, and a file whose content no reader here answers for is left alone.
 - Design documents — Photoshop, Illustrator, Krita, OpenRaster, and more — previewed from the picture their own format saves of the whole document.
 - HEIC, AVIF, and JPEG XL through Windows codec extensions where installed.
 - Vector drawings — SVG, Windows metafiles, and Illustrator `.eps` — drawn sharply at preview size.
@@ -195,7 +196,7 @@ The item a setting starts at carries `(Default)` after its name, so a menu says 
   - **Design Background** — the same backdrops as a picture's, for a design document; Checkerboard by default.
 - **Volume** — Max, High, Medium, Low, Very Low, Mute: 100% down to 0%.
 - **Performance**
-  - **Confirm File Type** — validate file content against the extension.
+  - **Confirm File Type** — check a file's content against its name before it is previewed: a file whose bytes are another kind is previewed as that kind, and one whose content is a format this app has no reader for shows nothing. On by default.
   - **Office Engine TTL** — how long a family’s Office app is kept warm: Indefinitely, 1 hour, 30 minutes, 10 minutes (default), 5 minutes, 1 minute, 0 seconds.
   - **SVG Engine TTL** — how long the browser that draws SVG documents is kept warm; greyed out where WebView2 is missing.
   - **Cache** — memory held between hovers, 2 GB down to 0 MB: Image, Text, PDF, Office caches.
@@ -273,7 +274,7 @@ vector_background=checkerboard
 video_volume=0
 
 ; Performance
-confirm_file_type=false
+confirm_file_type=true
 decode_budget_gb=1
 image_cache_mb=32
 office_cache_mb=64
@@ -327,7 +328,7 @@ Key settings, in plain terms:
 
 ## Build from Source
 
-Requirements: Windows 11, Rust 1.88+, Visual Studio Build Tools (MSVC / C++), and the Windows SDK.
+Requirements: Windows 11, Rust 1.98.1+, Visual Studio Build Tools (MSVC / C++), and the Windows SDK.
 
 ```bash
 cargo build            # debug

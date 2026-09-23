@@ -53,11 +53,7 @@ pub fn sanitize_video_extensions(list: &str) -> Vec<String> {
 /// list says it is, and a file without one falls through to the text preview of the
 /// TypeScript source it is.
 pub fn matches_video_list(path: &Path, extensions: &[String]) -> bool {
-    let Some(extension) = path
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .map(|ext| ext.to_lowercase())
-    else {
+    let Some(extension) = lookup_extension(path) else {
         return false;
     };
 
@@ -70,6 +66,25 @@ pub fn matches_video_list(path: &Path, extensions: &[String]) -> bool {
     }
 
     true
+}
+
+/// Whether the list claims a file by its name alone: the half of [`matches_video_list`]
+/// that asks nothing of the file.
+///
+/// It is what a caller that already has its own answer about the content asks. The two
+/// extensions this list shares with the text lists are settled by their content — the
+/// question this half does not ask — and a caller holding the content's own answer has
+/// already had it settled (see `content_type`).
+pub fn claims_video_name(path: &Path, extensions: &[String]) -> bool {
+    lookup_extension(path).is_some_and(|extension| extensions.contains(&extension))
+}
+
+/// The extension a file is named by, in the form the list carries: lowercase, and with
+/// the dot stripped.
+fn lookup_extension(path: &Path) -> Option<String> {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.to_lowercase())
 }
 
 /// Whether the configured list claims `path`, without asking whether video previews
@@ -105,7 +120,7 @@ fn looks_like_mpegts(path: &Path) -> bool {
     }
 }
 
-fn has_mpegts_packets(probe: &[u8]) -> bool {
+pub(crate) fn has_mpegts_packets(probe: &[u8]) -> bool {
     MPEGTS_PACKET_SIZES.iter().any(|&size| {
         let span = size * (MPEGTS_SYNC_RUN - 1);
         if probe.len() <= span {
