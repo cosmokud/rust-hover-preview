@@ -16,6 +16,7 @@
 - Cleaned up the `[libre]` list: removed 25 file types LibreOffice does not support, including EPUB, older QuarkXPress, early PageMaker, and some Visio stencils and templates. `config.ini` updates on the next run; supported names can be added back by hand.
 - `.swf` is now video-only and removed from the `[libre]` list. Previously it could launch LibreOffice first. `config.ini` updates on the next run; custom lists are left alone.
 - Previews follow a file's content rather than its extension: a video named as a document is played, a document named as a picture is drawn, and a file whose content no reader here answers for shows nothing instead of starting an engine for it.
+- File types whose bytes carry no signature — a WordPerfect `wpd`, an old Lotus `wk4`, a RoQ video, an AbiWord `abw` — are routed to the engine that reads them by extension, from the formats FFmpeg and LibreOffice are known to read. `.pdb` is one name for two formats: a Palm OS ebook is drawn by LibreOffice, and a compiler's program database is left alone.
 - `Confirm File Type` is on by default; an installation that already exists keeps the value its `config.ini` holds.
 - Building from source now needs Rust 1.98.1 or newer.
 
