@@ -13,6 +13,7 @@
 
 - `Performance → Office Engine TTL` is now `Microsoft Office TTL`, and `SVG Engine TTL` is now `WebView2 TTL`: the same settings under the names of the engines they are about. No `config.ini` key changed and no value moved.
 - `Select Engine` and the three engine TTLs sit in a new `Engine` section above `Performance`, which keeps `Confirm File Type`, `Cache` and `Decode Budget`.
+- `config.ini` is grouped the same way, under an `Engine` heading above `Performance`. A file written before that heading existed is written again under it the next time the app reads it — a heading is a comment, so no key changes and no value moves — and a file already written under it is left as it is.
 - New Libre preview type for documents LibreOffice can read but this app cannot, such as CorelDRAW `cdr` and older office formats. Previews are drawn by an installed LibreOffice, stay sharp when resized, and use new scaling and a 32 MB cache stored beside `config.ini`.
 - CorelDRAW `cdr` previews no longer use the small embedded image. Without LibreOffice installed, `cdr` files show no preview. `cdr` moved to the `[libre]` list; `config.ini` updates on the next run.
 - Office documents use LibreOffice when Microsoft Office is not installed, under the same Office type.
