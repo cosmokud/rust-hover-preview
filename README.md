@@ -277,14 +277,16 @@ vector_background=checkerboard
 ; Volume
 video_volume=0
 
+; Engine
+libreoffice_idle=600
+office_engine=microsoft_office
+office_engine_idle=600
+
 ; Performance
 confirm_file_type=true
 decode_budget_gb=1
 image_cache_mb=32
-libreoffice_idle=600
 office_cache_mb=64
-office_engine=microsoft_office
-office_engine_idle=600
 pdf_cache_mb=32
 text_cache_mb=0
 
