@@ -52,9 +52,30 @@
 //! waiting on, and a document asked for in the meantime ends that same process rather than
 //! queueing behind it. The document it was on is remembered as one the engine will not
 //! draw, so the launch is paid for once and never again, and the preview that asked for it
-//! is answered rather than left spinning.
+//! is answered rather than left spinning. What is ended is the engine itself rather than
+//! the process that asked it for a page: a conversion handed to an engine that is being
+//! kept runs *inside* it (see below), so a run that has stopped answering is ended by
+//! letting the engine go, which is also what tells the next document it has a fresh one.
+//!
+//! What a launch costs is an application start — filter chains, fonts, the libraries above
+//! — and it is paid again for every document, which is what the idle setting is about. An
+//! engine started for one document can be kept for the next: started headless with a
+//! document of this app's own held open, it is a running instance, and a `--convert-to`
+//! issued beside it is handed to *that* instance rather than starting a second one — the
+//! page it writes lands in the folder this side reads, and the process that was spawned to
+//! ask for it does no work at all and exits. Measured on one document, 1.2 s cold against
+//! 0.6 s handed to a kept engine; the work itself is the same either way, and what is
+//! saved is the start. The document it holds is a stub of this app's own — a one-paragraph
+//! flat OpenDocument text file written beside the profile — because an instance holding
+//! nothing is not a running instance at all: started with `--accept` (a UNO socket) or
+//! with `--invisible` and no document, it either takes no work or is evicted by the next
+//! launch, and both were measured. Holding one costs what any LibreOffice costs to keep
+//! open — a few hundred megabytes — which is what the setting is for: `LibreOffice TTL`
+//! names how long past its last conversion the engine is kept, and `0 seconds` is the
+//! setting switched off, which is an engine per document, exactly as it was.
 
-use crate::config::config::AppConfig;
+use crate::config::config::{AppConfig, EngineIdle, DEFAULT_LIBREOFFICE_IDLE_SECS};
+use crate::CONFIG;
 use once_cell::sync::Lazy;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -82,11 +103,44 @@ const CONVERSION_POLL: Duration = Duration::from_millis(100);
 /// The engine's own program, by the name a record carries: what a conversion that is given
 /// up on is ended by, and what the next run's reaper looks for.
 const ENGINE_IMAGE: &str = "soffice.exe";
+/// The engine behind it: the application itself runs as a child of that small launcher, and
+/// it is the half that holds a document open (see `let_go` and `engine_child`).
+const ENGINE_BIN_IMAGE: &str = "soffice.bin";
 /// What a name is remembered as when the engine would not draw it: the conversion is not
 /// tried again for that version of the document, because a name this app was wrong about —
 /// one in the list the engine has no filter for — would otherwise start an engine on every
 /// hover to reach the same answer.
 const REFUSED_SUFFIX: &str = "none";
+
+/// The document the kept engine holds: the name it is written under, beside the profile, and
+/// the document itself — one paragraph of flat OpenDocument text, which is everything an
+/// instance needs to be a running one. What it says does not matter and nothing reads it;
+/// what matters is that the engine has a document open, which is what makes a launch beside
+/// it hand the work over rather than start a second engine (see the module docs).
+const HOLDER_NAME: &str = "holder.fodt";
+const HOLDER_DOCUMENT: &str = concat!(
+    r#"<?xml version="1.0" encoding="UTF-8"?>"#,
+    r#"<office:document xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" "#,
+    r#"xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" "#,
+    r#"office:version="1.3" office:mimetype="application/vnd.oasis.opendocument.text">"#,
+    r#"<office:body><office:text><text:p>rust-hover-preview</text:p></office:text></office:body>"#,
+    r#"</office:document>"#,
+);
+
+/// How long a request waits for a kept engine to have its document open.
+///
+/// A request made before it does starts a second engine beside the first — measured, and the
+/// one thing keeping an engine is not for — so the wait is what a conversion owes the engine
+/// that is starting; what it costs is bounded by the engine start it replaces. An engine
+/// whose process is gone is not waited for at all, so a broken installation costs this once
+/// and never again.
+const READY_WAIT: Duration = Duration::from_secs(3);
+/// How often the wait above looks.
+const READY_POLL: Duration = Duration::from_millis(50);
+/// How often the engine thread wakes to look at the idle setting, which is what lets a kept
+/// engine go while nothing is being asked of it. Nothing else wakes it between documents, and
+/// one look a second is nothing beside the process it is looking at.
+const IDLE_TICK: Duration = Duration::from_secs(1);
 
 /// Where LibreOffice keeps its program, for the two places it installs and for a portable
 /// copy a user may have put beside `config.ini`.
@@ -207,6 +261,13 @@ fn end_hung_engine() {
     });
 
     if let Some(pid) = hung {
+        // What a conversion that has outrun its bound is ended by is the engine rather than
+        // the process that asked it for a page: a page handed to an engine that is being
+        // kept is drawn inside it, so ending the launch alone would leave the engine
+        // spinning on the same document with the seat still held. It is let go of here, and
+        // the document behind it is answered by the engine that starts in its place.
+        let_go();
+
         // Verified by name and start time before anything is ended, like every other
         // process this app holds a record of.
         crate::app::engine_processes::terminate_owned(pid);
@@ -217,6 +278,270 @@ fn end_hung_engine() {
 /// for longer than any document takes is one it is not going to finish.
 fn is_hung(running: &Running) -> bool {
     running.started.elapsed() >= CONVERSION_GIVE_UP
+}
+
+/// The engine this app is keeping, and when it last drew a page: the process holding it,
+/// which is what it is let go by, and the moment the idle setting counts from.
+struct Kept {
+    pid: u32,
+    idle_since: Instant,
+}
+
+static KEPT: Lazy<Mutex<Option<Kept>>> = Lazy::new(|| Mutex::new(None));
+
+/// The profile the engine runs under: one of this app's own, beside the pages, so that a
+/// LibreOffice the user has open is untouched by a conversion and its documents by this
+/// app's engine. One string, made once and used by everything that runs the engine: a
+/// launch only finds the instance to hand its work to when the profile it names is the one
+/// that instance was started with, character for character.
+fn profile_url(folder: &Path) -> String {
+    let profile = folder.join("profile");
+    format!("file:///{}", profile.to_string_lossy().replace('\\', "/"))
+}
+
+/// The document the kept engine holds, written when it is wanted: a stub of this app's own,
+/// beside the profile, which is what makes the instance a running one rather than one that
+/// yields its profile to the next launch (see the module docs).
+fn holder_document() -> Option<PathBuf> {
+    let folder = AppConfig::rendered_dir()?;
+    std::fs::create_dir_all(&folder).ok()?;
+
+    // It is not written over an engine that has it open: what the engine holds is its
+    // business while it holds it, and a file changed under a document is a document that
+    // offers to reload itself.
+    let holder = folder.join(HOLDER_NAME);
+    if !holder.is_file() {
+        write_holder(&holder)?;
+    }
+
+    Some(holder)
+}
+
+/// Write the stub the engine holds, over whatever is there.
+fn write_holder(holder: &Path) -> Option<()> {
+    std::fs::write(holder, HOLDER_DOCUMENT).ok()
+}
+
+/// The lock file LibreOffice keeps beside a document it has open, which is what says the
+/// engine has hold of its own: `.~lock.<name>#`, written where the document is.
+fn lock_file(document: &Path) -> PathBuf {
+    let name = document
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_default();
+
+    document.with_file_name(format!(".~lock.{name}#"))
+}
+
+/// How long past its last page the engine is kept, or `None` for a setting that keeps none
+/// at all — the `0 seconds` of the tray's `LibreOffice TTL`, which is an engine per
+/// document, exactly as every document was drawn before there was a setting.
+fn kept_idle() -> Option<EngineIdle> {
+    let idle = CONFIG
+        .lock()
+        .map(|config| config.libreoffice_idle)
+        .unwrap_or(EngineIdle::Seconds(DEFAULT_LIBREOFFICE_IDLE_SECS));
+
+    (idle != EngineIdle::Seconds(0)).then_some(idle)
+}
+
+/// The process holding the engine being kept, where there is one and it is still running.
+///
+/// An engine that is gone — ended by a user, crashed, or given up on — is not kept: what is
+/// held is struck off and the next document starts another, so a machine that ends the
+/// engine some other way costs a launch and never a preview.
+fn kept_pid() -> Option<u32> {
+    let pid = KEPT
+        .lock()
+        .ok()
+        .and_then(|kept| kept.as_ref().map(|kept| kept.pid))?;
+
+    if crate::app::engine_processes::is_running(pid) {
+        return Some(pid);
+    }
+
+    let_go();
+    None
+}
+
+/// Make sure an engine is being kept, and answer the process holding it.
+///
+/// It is called before a conversion, so that the page is asked of the engine being kept
+/// rather than of a second one started beside it, and what it answers with is the process a
+/// caller waits on before asking (see `wait_until_ready`). A setting that keeps no engine
+/// answers with nothing, and the conversion is the launch it has always been.
+fn keep_engine(program: &Path) -> Option<u32> {
+    kept_idle()?;
+
+    if let Some(pid) = kept_pid() {
+        return Some(pid);
+    }
+
+    start_kept_engine(program)
+}
+
+/// Start the engine the setting keeps, holding this app's own stub document.
+///
+/// The process is recorded the way every engine this app starts is recorded: it is put in
+/// the job that ends with the app, and written down so that a run which never got to end it
+/// is answered for by the next one. It is also left running rather than waited on — what
+/// holds it is the document it has open.
+fn start_kept_engine(program: &Path) -> Option<u32> {
+    let folder = AppConfig::rendered_dir()?;
+    let holder = holder_document()?;
+
+    // One engine at a time is what one profile allows: an engine this app still holds — one
+    // being let go of, or one a run never got to end — is ended and waited for here, so that
+    // the instance about to hold the document is not starting beside another one. It is the
+    // same rule the Office tier keeps a family to, and the same call.
+    crate::app::engine_processes::end_recorded(ENGINE_BIN_IMAGE);
+    crate::app::engine_processes::end_recorded(ENGINE_IMAGE);
+
+    // A lock file left by an engine that was let go of is not this one's, and what a wait
+    // reads is whether *this* engine has the document open: the mark goes before it starts,
+    // so that it means something when it comes back.
+    std::fs::remove_file(lock_file(&holder)).ok();
+
+    let child = Command::new(program)
+        .arg("--headless")
+        .arg("--norestore")
+        .arg(format!("-env:UserInstallation={}", profile_url(&folder)))
+        .arg(&holder)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+
+    crate::app::engine_processes::record(ENGINE_IMAGE, child.id());
+
+    if let Ok(mut kept) = KEPT.lock() {
+        *kept = Some(Kept {
+            pid: child.id(),
+            idle_since: Instant::now(),
+        });
+    }
+
+    Some(child.id())
+}
+
+/// Whether the engine has its own document open yet, waiting for it while it starts.
+///
+/// A conversion asked for before then starts a second engine beside the first rather than
+/// being handed to it, so the wait is what keeps the setting's promise; it is bounded, and
+/// an engine whose process is already gone is not waited for at all. A wait that ends
+/// either way answers with whether the engine is ready, which is what a caller decides
+/// nothing on: the conversion is asked for regardless, and what differs is whether it is
+/// the engine's or a fresh one's.
+fn wait_until_ready(pid: u32) -> bool {
+    let Some(holder) = holder_document() else {
+        return false;
+    };
+
+    let ready = wait_until_ready_for(pid, &holder, READY_WAIT);
+    // Whatever the wait answered, the engine behind the launcher is on the machine now or
+    // soon will be, and what a run that never gets to end it leaves is that one.
+    track_engine_child(pid);
+
+    ready
+}
+
+fn wait_until_ready_for(pid: u32, holder: &Path, bound: Duration) -> bool {
+    let lock = lock_file(holder);
+    let deadline = Instant::now() + bound;
+
+    loop {
+        if lock.is_file() {
+            return true;
+        }
+        if !crate::app::engine_processes::is_running(pid) || Instant::now() >= deadline {
+            return false;
+        }
+
+        std::thread::sleep(READY_POLL);
+    }
+}
+
+/// Say that the engine has just drawn a page, which is what the idle setting counts from.
+fn touch_engine() {
+    if let Ok(mut kept) = KEPT.lock() {
+        if let Some(kept) = kept.as_mut() {
+            kept.idle_since = Instant::now();
+        }
+    }
+}
+
+/// Let the engine go: end it, and stop calling it kept.
+///
+/// Both halves of the instance are ended: the launcher this app started, which is the process
+/// that is recorded and that the job and the next run's reaper answer for, and the engine
+/// behind it, which is what holds the document and what a conversion is handed to. Ending the
+/// launcher alone was measured to leave an engine running with a document open and nothing
+/// holding it, which is a few hundred megabytes kept for a setting that said otherwise.
+///
+/// The engine being let go of is one this app started — an instance the user opened is not
+/// recorded here and is never one of these.
+fn let_go() {
+    let kept = KEPT.lock().ok().and_then(|mut kept| kept.take());
+
+    if let Some(kept) = kept {
+        // The engine behind the launcher goes first, because it is the half that holds the
+        // document and the half the setting is about; the launcher is what carries the record
+        // and what is left of the instance once its engine is gone.
+        if let Some(engine) = engine_child(kept.pid) {
+            crate::app::engine_processes::terminate_verified(engine, ENGINE_BIN_IMAGE, None);
+        }
+
+        crate::app::engine_processes::terminate_owned(kept.pid);
+    }
+}
+
+/// The engine behind the launcher this app started, where it is there: LibreOffice runs the
+/// application itself as a child of the small process that is started, and the child is what
+/// holds the document — the instance a conversion is handed to.
+fn engine_child(launcher: u32) -> Option<u32> {
+    crate::app::engine_processes::processes_named_by_parent(ENGINE_BIN_IMAGE, launcher)
+        .first()
+        .copied()
+}
+
+/// Take the engine behind the launcher into the same record the launcher is in.
+///
+/// The record is what answers for a process a run never got to end — a crash, a kill — and
+/// the launcher alone does not answer for the engine: what holds the document is the child,
+/// and a run that is gone leaves that one running until it is reached. It is written down
+/// beside its launcher as soon as it is there, which is what the wait below is watching for.
+fn track_engine_child(launcher: u32) {
+    if let Some(pid) = engine_child(launcher) {
+        crate::app::engine_processes::record(ENGINE_BIN_IMAGE, pid);
+    }
+}
+
+/// Let the engine go once it has been idle for longer than the setting names.
+///
+/// It is the engine thread that looks, once a second while it waits for documents: nothing
+/// else runs between hovers, and an engine that is never let go of is a process left on the
+/// machine for a setting that said otherwise. A setting of `0 seconds` — the switch the
+/// tray offers as the bottom of the list — lets go of an engine that is already running the
+/// moment it is looked at.
+fn let_go_if_expired() {
+    let Some(idle) = kept_idle() else {
+        let_go();
+        return;
+    };
+
+    let expired = KEPT
+        .lock()
+        .ok()
+        .and_then(|kept| {
+            kept.as_ref()
+                .map(|kept| idle.has_expired(kept.idle_since.elapsed()))
+        })
+        .unwrap_or(false);
+
+    if expired {
+        let_go();
+    }
 }
 
 /// Start the thread conversions run on, once.
@@ -259,10 +584,15 @@ fn next_request() -> Option<PathBuf> {
             return Some(source);
         }
 
-        requested = match ready.wait(requested) {
-            Ok(requested) => requested,
-            Err(poisoned) => poisoned.into_inner(),
+        // The wait is bounded rather than endless, and what a bound that runs out is for is
+        // the engine: one that is kept is let go of by this thread and no other, and the
+        // idle setting is what says when (see `let_go_if_expired`).
+        requested = match ready.wait_timeout(requested, IDLE_TICK) {
+            Ok((requested, _)) => requested,
+            Err(poisoned) => poisoned.into_inner().0,
         };
+
+        let_go_if_expired();
     }
 }
 
@@ -366,6 +696,16 @@ fn convert(program: &Path, source: &Path, rendered: &Path) -> Option<()> {
     let profile = folder.join("profile");
     let profile_url = format!("file:///{}", profile.to_string_lossy().replace('\\', "/"));
 
+    // The engine the setting keeps holds a document of this app's own, and a page asked for
+    // beside it is drawn by it rather than by an engine started for this one document. A
+    // request made before it has that document open starts a second engine beside the first
+    // — the one thing keeping an engine is not for — so what the wait is for is the engine
+    // that is starting. The page is asked for either way: what differs is whose engine draws
+    // it.
+    if let Some(pid) = keep_engine(program) {
+        wait_until_ready(pid);
+    }
+
     let mut child = Command::new(program)
         .arg("--headless")
         .arg("--norestore")
@@ -402,6 +742,10 @@ fn convert(program: &Path, source: &Path, rendered: &Path) -> Option<()> {
 
     publish_running(None);
     crate::app::engine_processes::forget(child.id());
+
+    // Whatever the engine made of the document, it has drawn what it was going to draw: the
+    // idle time the setting names counts from here.
+    touch_engine();
 
     if !drawn {
         return None;
@@ -668,5 +1012,171 @@ mod tests {
         for name in ["logo.cdr", "drawing.CDR", "artwork.cmx", "poster.pub", "plan.vsd"] {
             assert!(imports(Path::new(name)), "`{name}` is one of its formats");
         }
+    }
+
+    /// What a kept engine is waited for is the document it holds being *open* — the lock file
+    /// LibreOffice writes beside it — and a wait answers as soon as that is there.
+    #[test]
+    fn waits_for_a_kept_engine_until_its_document_is_open() {
+        let folder = std::env::temp_dir()
+            .join("rust-hover-preview-libre-tests")
+            .join("ready");
+        std::fs::create_dir_all(&folder).expect("a test folder");
+
+        let holder = folder.join(HOLDER_NAME);
+        write_holder(&holder).expect("a written stub");
+        assert_eq!(
+            std::fs::read_to_string(&holder).expect("the stub"),
+            HOLDER_DOCUMENT,
+            "and what it holds is the document the engine is given"
+        );
+
+        // The lock file is what says the engine has its document open: with one there the
+        // wait is answered at once rather than at its bound. The wait is on this process,
+        // which is running, so what is measured is the lock file and nothing else.
+        std::fs::write(lock_file(&holder), b"").expect("a written lock file");
+        let started = Instant::now();
+        assert!(wait_until_ready_for(
+            std::process::id(),
+            &holder,
+            Duration::from_secs(30)
+        ));
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "the wait ends when the engine is ready rather than at the bound"
+        );
+
+        // Without it, the wait is the bound and no more — an engine that has not opened its
+        // document yet is waited for, and one that never does is not waited for forever.
+        std::fs::remove_file(lock_file(&holder)).expect("the lock file removed");
+        let started = Instant::now();
+        assert!(!wait_until_ready_for(
+            std::process::id(),
+            &holder,
+            Duration::from_millis(200)
+        ));
+        assert!(started.elapsed() >= Duration::from_millis(200));
+
+        // And a process that is gone is not waited for at all: what that costs is a launch
+        // for the document at hand, which is what a machine without an engine pays anyway.
+        let mut gone = std::process::Command::new("ping")
+            .args(["-n", "30", "127.0.0.1"])
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .expect("a process to stand in for an engine that is gone");
+        let pid = gone.id();
+        let _ = gone.kill();
+        let _ = gone.wait();
+
+        let started = Instant::now();
+        assert!(!wait_until_ready_for(
+            pid,
+            &holder,
+            Duration::from_secs(30)
+        ));
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "an engine whose process is gone is not waited for, and the bound is not paid"
+        );
+
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    /// The idle setting is what says whether an engine is kept at all, and `0 seconds` — the
+    /// bottom of the tray's list — is the setting that keeps none: every document is the
+    /// launch it has always been. It is read through the app's own configuration, so what is
+    /// asserted here is the shape of the answer rather than the value a machine holds.
+    #[test]
+    fn a_setting_of_no_seconds_keeps_no_engine() {
+        let keep = kept_idle().is_some();
+        let configured = CONFIG
+            .lock()
+            .map(|config| config.libreoffice_idle)
+            .expect("the configuration");
+
+        assert_eq!(
+            keep,
+            configured != EngineIdle::Seconds(0),
+            "an engine is kept exactly where the idle setting is not `0 seconds`"
+        );
+    }
+
+    /// What the idle setting buys, measured: the same document converted with nothing kept,
+    /// and then again with the engine the first one started. Ignored because it starts the
+    /// installed LibreOffice, and run when that setting is being looked at:
+    /// `cargo test -- --ignored --nocapture engine_warmth_probe`.
+    #[test]
+    #[ignore = "starts the installed LibreOffice"]
+    fn engine_warmth_probe() {
+        let Some(program) = soffice() else {
+            println!("no LibreOffice installed: nothing to measure");
+            return;
+        };
+        let Some(holder) = holder_document() else {
+            println!("no folder for the stub document");
+            return;
+        };
+        let Some(folder) = AppConfig::rendered_dir() else {
+            return;
+        };
+
+        let source = folder.join("probe-source.fodt");
+        std::fs::write(&source, HOLDER_DOCUMENT).ok();
+        let page = folder.join("probe-page.pdf");
+
+        // Nothing is kept to begin with, so the first row is the launch every document paid
+        // for on its own before there was a setting.
+        let_go();
+        let started = Instant::now();
+        let first = convert(&program, &source, &page);
+        println!(
+            "first document: {first:?} in {:?} — the engine started and handed the page",
+            started.elapsed()
+        );
+
+        // And the same document again, with the engine the first one started.
+        std::fs::remove_file(&page).ok();
+        let started = Instant::now();
+        let next = convert(&program, &source, &page);
+        println!(
+            "next document: {next:?} in {:?} — the engine kept, the page handed to it",
+            started.elapsed()
+        );
+
+        let launcher = kept_pid();
+        let child = launcher.and_then(engine_child);
+        println!("kept launcher {launcher:?}, engine behind it {child:?}");
+
+        let_go();
+
+        // A process that has been terminated is still in the process table for a moment, so
+        // what is reported is the check that matters: whether it is still running.
+        let gone = |pid: u32| !crate::app::engine_processes::is_running(pid);
+        println!(
+            "left after letting go: launcher gone {}, engine gone {}",
+            launcher.map(gone).unwrap_or(true),
+            child.map(gone).unwrap_or(true),
+        );
+
+        // And the bottom row of the setting: `0 seconds` keeps no engine, so one that is
+        // running when it is chosen is let go of at the next look — which is this call, made
+        // from the engine thread once a second while it waits for documents.
+        let Some(pid) = keep_engine(&program) else {
+            println!("no engine started for the last check");
+            return;
+        };
+        wait_until_ready(pid);
+        if let Ok(mut config) = CONFIG.lock() {
+            config.libreoffice_idle = EngineIdle::Seconds(0);
+        }
+        let_go_if_expired();
+        println!("0 seconds: engine gone {}", gone(pid));
+        if let Ok(mut config) = CONFIG.lock() {
+            config.libreoffice_idle = EngineIdle::Seconds(DEFAULT_LIBREOFFICE_IDLE_SECS);
+        }
+
+        std::fs::remove_file(&source).ok();
+        std::fs::remove_file(&page).ok();
+        std::fs::remove_file(lock_file(&holder)).ok();
     }
 }

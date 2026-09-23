@@ -2483,6 +2483,13 @@ mod tests {
     fn forgets_a_page_it_cannot_read() {
         use crate::readers::office_preview::{measure, source_kind, SourceKind};
 
+        // The test is about a page this tier produced, and what a hover asks of it: what the
+        // app's own `config.ini` holds is not what it is about, so the engine choice is the
+        // one that asks the tier (see `office_formats::page_engine`).
+        if let Ok(mut config) = crate::CONFIG.lock() {
+            config.office_engine = crate::config::config::OfficeEngine::MicrosoftOffice;
+        }
+
         let folder = std::env::temp_dir()
             .join("rust-hover-preview-office-tests")
             .join("pages");
