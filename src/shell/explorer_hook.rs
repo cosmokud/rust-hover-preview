@@ -3651,6 +3651,12 @@ pub fn run_explorer_hook() {
                     || (keyboard_owns_pointer && cursor_preview_hover().any()));
             if wheel_scroll {
                 scroll_since_move = true;
+                // The list moves under a parked cursor, so the file under the pointer
+                // is a new question: the probe latch is reopened and the hover clock
+                // restarted, or a pointer that never moves would never be asked about
+                // the file that scrolled under it.
+                stationary_hover_probe_done = false;
+                hover_start = Some(loop_now);
 
                 if keyboard_owns_pointer {
                     // The wheel is the mouse taking over from the keyboard: close
