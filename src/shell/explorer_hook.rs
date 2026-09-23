@@ -742,57 +742,6 @@ impl KeyboardPointerPause {
     }
 }
 
-/// Wheel-scroll settle probe. A scroll moves the list under a parked pointer,
-/// and Explorer can still be animating the scroll when the loop looks, so a
-/// scroll-driven probe only acts on an item that survives a second observation —
-/// the same rule the keyboard preview box uses. Without a scroll in flight the
-/// probe is pass-through and the single-probe-per-parked-cursor behavior stands.
-#[derive(Default)]
-struct ScrollSettleProbe {
-    pending: bool,
-    last: Option<PathBuf>,
-}
-
-impl ScrollSettleProbe {
-    /// A wheel tick arrived: the next stationary probes belong to this gesture.
-    fn arm(&mut self) {
-        self.pending = true;
-        self.last = None;
-    }
-
-    /// A real mouse move supersedes the gesture.
-    fn disarm(&mut self) {
-        self.pending = false;
-        self.last = None;
-    }
-
-    fn is_pending(&self) -> bool {
-        self.pending
-    }
-
-    /// Records the item resolved under the cursor and reports whether the probe
-    /// may act on it. A miss settles immediately: it can only dismiss, and the
-    /// mouse-move path dismisses on a miss just the same.
-    fn observe(&mut self, resolved: Option<&PathBuf>) -> bool {
-        if !self.pending {
-            return true;
-        }
-
-        let settled = match (self.last.as_ref(), resolved) {
-            (Some(previous), Some(current)) => same_path(previous, current),
-            (None, None) => true,
-            _ => false,
-        };
-
-        self.last = resolved.cloned();
-        if settled {
-            self.pending = false;
-        }
-        settled
-    }
-}
-
-const EXPLORER_PROBE_SLOW_MS: u64 = 700;
 const EXPLORER_WINDOW_CACHE_TTL_MS: u64 = 1000;
 const EXPLORER_REAL_FOLDER_CACHE_MAX_ENTRIES: usize = 256;
 const FOLDER_PROBE_MS: u64 = 200;
@@ -808,7 +757,6 @@ const DISPLAY_CHANGE_BACKOFF_MS: u64 = 1500;
 const DISPLAY_CHECK_MS: u64 = 200;
 const KEYBOARD_FOCUS_INPUT_GRACE_MS: u64 = 500;
 const HOVER_RESOLVER_INPUT_GRACE_MS: u64 = 1500;
-const WHEEL_SCROLL_SETTLE_MS: u64 = 150;
 /// How far the pointer has to move before it counts as moved at all, in logical
 /// pixels — and the wider distance that counts while the keyboard owns the screen, so
 /// a pointer resting on a desk cannot cancel a keyboard preview. Logical distances,
@@ -2527,22 +2475,6 @@ fn resolve_file_under_cursor(resolver: &mut ItemResolver, point: POINT) -> Optio
     None
 }
 
-fn get_file_under_cursor_checked(
-    resolver: &mut ItemResolver,
-    slow_probe_count: &mut u32,
-) -> Option<PathBuf> {
-    let started = Instant::now();
-    let result = get_file_under_cursor(resolver);
-
-    if started.elapsed() >= Duration::from_millis(EXPLORER_PROBE_SLOW_MS) {
-        *slow_probe_count = slow_probe_count.saturating_add(1);
-    } else {
-        *slow_probe_count = 0;
-    }
-
-    result
-}
-
 /// The region a preview of the file under the pointer is kept off, as the `Avoid`
 /// setting has it for the item that file is: the name the item draws at `Filename`,
 /// that name with the columns beside it at `Details`, or the item's own box at either
@@ -3266,12 +3198,13 @@ pub fn run_explorer_hook() {
     // press and kept across the keyboard previews that follow, cleared only by
     // deliberate pointer input — a move past the pointer tolerance or a wheel
     // tick — or by a reset that ends the keyboard's turn outright (previews
-    // switched off, a display change, Explorer leaving the foreground). While
-    // it holds, the parked pointer may neither raise a preview nor take one
-    // over, which is what keeps the two previews from fighting over a list the
-    // keyboard is walking: a focused item with no preview to give must not hand
-    // the pointer the screen. It shows worst on a large search-result view,
-    // where the items the keyboard walks are the ones still being resolved.
+    // switched off, a display change, Explorer leaving the foreground). What it
+    // holds is the pointer tolerance: for the whole of the keyboard's turn a move
+    // has to clear the wider distance before it counts as the mouse taking over,
+    // because a keyboard preview is placed beside the focused item and can land
+    // under the parked pointer, so jitter must not read as the mouse asking for
+    // the screen. A parked pointer may raise a preview of its own while this
+    // holds; what still needs the move is a keyboard preview that is on screen.
     let mut keyboard_screen_owner = false;
     let mut last_folder_probe = Instant::now();
     let mut last_hover_probe = Instant::now();
@@ -3289,12 +3222,12 @@ pub fn run_explorer_hook() {
     // unconfirmed kill): while nothing is hovered it is re-checked and killed.
     let mut last_video_process_sweep = Instant::now();
 
-    // Wheel scrolling moves the list under a stationary pointer, so the wheel
-    // tick counter is the only signal that the hovered item changed (see
-    // `wheel_input`).
+    // Wheel scrolling moves the list under a stationary pointer, so the wheel tick
+    // counter is the only signal that the hovered item changed (see `wheel_input`).
+    // A scroll the cursor has not moved away from is what says a probe that finds
+    // nothing under the pointer dismisses rather than waits.
     let mut consumed_wheel_ticks = wheel_input::wheel_tick_count();
-    let mut last_wheel_tick_at: Option<Instant> = None;
-    let mut scroll_probe = ScrollSettleProbe::default();
+    let mut scroll_since_move = false;
 
     // State for optimized polling
     let mut last_state_check = Instant::now();
@@ -3306,11 +3239,9 @@ pub fn run_explorer_hook() {
     const MEDIUM_SLEEP_MS: u64 = 150; // Visible but not focused - moderate checking
     const ACTIVE_POLL_MS: u64 = 30; // Active focus - responsive polling
     const VIDEO_HOVER_DISMISS_GRACE_MS: u64 = 350;
-    const HOVER_PROBE_MS: u64 = 60;
+    const HOVER_PROBE_MS: u64 = 30;
     const KEYBOARD_FOCUS_PROBE_MS: u64 = 80;
     const STATIONARY_SEARCH_MISS_HIDE_MS: u64 = 180;
-    const EXPLORER_SLOW_PROBE_LIMIT: u32 = 3;
-    const EXPLORER_PROBE_BACKOFF_MS: u64 = 1500;
     const VIDEO_PROCESS_SWEEP_MS: u64 = 1000;
 
     // How often to re-evaluate the state when in sleep modes
@@ -3345,7 +3276,6 @@ pub fn run_explorer_hook() {
             ),
             Some(0x12),
         ));
-    let mut slow_explorer_probe_count = 0u32;
     let mut explorer_probe_backoff_until: Option<Instant> = None;
     let mut last_display_signature = current_display_signature();
     let mut last_display_check = Instant::now();
@@ -3410,7 +3340,6 @@ pub fn run_explorer_hook() {
             keyboard_screen_owner = false;
             hover_resolver_hints = HoverResolverHints::default();
             last_cursor_location = None;
-            slow_explorer_probe_count = 0;
             explorer_probe_backoff_until =
                 Some(Instant::now() + Duration::from_millis(EXPLORER_RESTART_BACKOFF_MS));
             current_state = get_explorer_state();
@@ -3481,32 +3410,12 @@ pub fn run_explorer_hook() {
                     keyboard_screen_owner = false;
                     hover_resolver_hints = HoverResolverHints::default();
                     last_cursor_location = None;
-                    slow_explorer_probe_count = 0;
                     explorer_probe_backoff_until =
                         Some(Instant::now() + Duration::from_millis(DISPLAY_CHANGE_BACKOFF_MS));
                 } else {
                     last_display_signature = Some(display_signature);
                 }
             }
-        }
-
-        // The shell answered too slowly, too often: stop asking it about the file
-        // under the cursor for a moment. What the pause must not do is what it used
-        // to — take the preview away and clear everything with it. At the size
-        // where this fires, in a search view of several hundred results, the probes
-        // are slow *every* time, so the pause re-armed itself before the next
-        // preview could appear and the view looked like it had no previews at all.
-        // What is on screen belongs to the file the cursor was on, and the pause
-        // only stops the asking.
-        if slow_explorer_probe_count >= EXPLORER_SLOW_PROBE_LIMIT
-            && explorer_probe_backoff_until.is_none()
-        {
-            explorer_probe_backoff_until =
-                Some(Instant::now() + Duration::from_millis(EXPLORER_PROBE_BACKOFF_MS));
-            // The slow probe left a hover window half-open; the next probe after
-            // the pause starts one again rather than inheriting it.
-            stationary_search_miss_started_at = None;
-            stationary_hover_probe_done = false;
         }
 
         if let Some(until) = explorer_probe_backoff_until {
@@ -3541,7 +3450,6 @@ pub fn run_explorer_hook() {
             }
 
             explorer_probe_backoff_until = None;
-            slow_explorer_probe_count = 0;
             // The pause is not a place a hover resumes from: whatever the cursor is
             // over when it ends has to be probed as something new.
             hover_start = Some(Instant::now());
@@ -3742,8 +3650,7 @@ pub fn run_explorer_hook() {
                 && (is_cursor_over_explorer_full()
                     || (keyboard_owns_pointer && cursor_preview_hover().any()));
             if wheel_scroll {
-                last_wheel_tick_at = Some(loop_now);
-                scroll_probe.arm();
+                scroll_since_move = true;
 
                 if keyboard_owns_pointer {
                     // The wheel is the mouse taking over from the keyboard: close
@@ -3763,10 +3670,6 @@ pub fn run_explorer_hook() {
                     last_keyboard_navigation_input_at = None;
                 }
             }
-            let scrolling = recent_elapsed_within(
-                last_wheel_tick_at.map(|at| at.elapsed()),
-                WHEEL_SCROLL_SETTLE_MS,
-            );
 
             if moved
                 || keyboard_navigation_input
@@ -3981,7 +3884,7 @@ pub fn run_explorer_hook() {
                     keyboard_navigation_press_seq != keyboard_press_seq_at_suspend;
 
                 // A scroll is deliberate pointer input, so it releases the
-                // suspension exactly like a mouse move. The armed probe is used
+                // suspension exactly like a mouse move. The flag is used
                 // instead of the raw tick because the cooldown above bails out
                 // before this check, which would swallow a one-notch scroll.
                 // A folder opened by a click, Enter or a navigation key is user
@@ -3991,7 +3894,7 @@ pub fn run_explorer_hook() {
                 // releases it as well: that press is the user asking for the
                 // keyboard preview and must not be swallowed as a baseline.
                 if moved
-                    || scroll_probe.is_pending()
+                    || scroll_since_move
                     || folder_change_user_initiated
                     || navigation_press
                 {
@@ -4056,10 +3959,10 @@ pub fn run_explorer_hook() {
                 last_cursor_pos = cursor_pos;
                 stationary_search_miss_started_at = None;
                 stationary_hover_probe_done = false;
-                // A real move hands control back to the mouse and ends any
-                // scroll gesture that was still settling.
+                // A real move hands control back to the mouse and ends the scroll the
+                // cursor was sitting on.
                 pointer_pause.clear();
-                scroll_probe.disarm();
+                scroll_since_move = false;
                 keyboard_screen_owner = false;
 
                 // Mouse movement always takes priority - dismiss keyboard hover.
@@ -4086,9 +3989,7 @@ pub fn run_explorer_hook() {
                 allow_keyboard_preview_on_first_observation = true;
 
                 if let Some(suppressed_file) = suppressed.file.clone() {
-                    if let Some(current_file) =
-                        get_file_under_cursor_checked(&mut resolver, &mut slow_explorer_probe_count)
-                    {
+                    if let Some(current_file) = get_file_under_cursor(&mut resolver) {
                         if same_path(&suppressed_file, &current_file) {
                             hover_start = Some(Instant::now());
                             continue;
@@ -4102,9 +4003,7 @@ pub fn run_explorer_hook() {
                 // resolution and wait until hover is stable before probing media.
                 if last_file.is_some() {
                     let mut keep_while_pointer_held = false;
-                    if let Some(current_file) =
-                        get_file_under_cursor_checked(&mut resolver, &mut slow_explorer_probe_count)
-                    {
+                    if let Some(current_file) = get_file_under_cursor(&mut resolver) {
                         if last_file
                             .as_ref()
                             .map(|last| same_path(last, &current_file))
@@ -4146,17 +4045,6 @@ pub fn run_explorer_hook() {
                 if settling_delay_ms > 0 {
                     continue;
                 }
-            }
-
-            // The wheel is still turning, so any preview on screen belongs to a
-            // file that has scrolled away. Hold the stability window open and
-            // skip the focus/hover probes: the item that lands under the cursor
-            // is resolved below once the list stops moving.
-            if scrolling {
-                hover_start = Some(loop_now);
-                stationary_search_miss_started_at = None;
-                stationary_hover_probe_done = false;
-                continue;
             }
 
             // Mouse is stationary - check for keyboard navigation
@@ -4313,18 +4201,15 @@ pub fn run_explorer_hook() {
             // text preview, or on the spinner it is waiting behind: the file under
             // it is not what the user is looking at, so nothing is hovered over.
             //
-            // A pointer parked since the keyboard last drove is in the same
-            // position for the same reason: the keyboard owns the screen, so a
-            // file it left behind — or one it landed on that has no preview to
-            // give — is not a reason for the pointer to raise a preview of
-            // whatever it happens to sit on. That is the whole of the fight, and
-            // it is worst in a large search-result view, where the file the
-            // keyboard walks away from is still whatever is under the cursor.
-            if is_keyboard_hover
-                || pointer_pause.freezes_pointer()
-                || pointer_hold
-                || keyboard_screen_owner
-            {
+            // A pointer parked since the keyboard last drove is not held back by it:
+            // the keyboard owning the screen means its keys drive, not that the file
+            // under the pointer has gone, so that file previews — which is the case
+            // that used to read as the two previews fighting over a large
+            // search-result view, and the case the pointer is given here. A keyboard
+            // preview that is actually on screen is a different matter and still
+            // wins: the pointer takes the screen from that one by moving, or where
+            // the focused item has no preview of its own to put up.
+            if is_keyboard_hover || pointer_pause.freezes_pointer() || pointer_hold {
                 continue;
             }
 
@@ -4357,21 +4242,16 @@ pub fn run_explorer_hook() {
                     }
                     last_hover_probe = Instant::now();
 
-                    // A scroll gesture that has not settled yet owns the probe.
-                    let scroll_driven = scroll_probe.is_pending();
+                    // A scroll the cursor has not moved away from is what makes a
+                    // probe that finds nothing dismiss rather than wait.
+                    let scroll_driven = scroll_since_move;
 
                     // Try to get file under cursor
-                    let resolved = get_file_under_cursor_checked(
-                        &mut resolver,
-                        &mut slow_explorer_probe_count,
-                    );
-                    // One probe per parked cursor, except while a scroll gesture is
-                    // still settling: there the latch stays open until two
-                    // consecutive probes agree on the item under the cursor.
-                    stationary_hover_probe_done = scroll_probe.observe(resolved.as_ref());
-                    if scroll_driven && !stationary_hover_probe_done {
-                        continue;
-                    }
+                    let resolved = get_file_under_cursor(&mut resolver);
+                    // One probe per parked cursor: this one closes the latch, and the
+                    // events that make the file under the cursor a new question — a
+                    // move, a wheel tick, a folder change — are what reopen it.
+                    stationary_hover_probe_done = true;
 
                     if let Some(file_path) = resolved {
                         if !last_file
@@ -4410,9 +4290,9 @@ pub fn run_explorer_hook() {
                         }
                     } else {
                         if scroll_driven {
-                            // The list settled on something that is not a media
-                            // file: drop the preview that scrolled away, the same
-                            // way the mouse-move path does.
+                            // The scroll left something under the pointer that is not
+                            // a media file: drop the preview that scrolled away, the
+                            // same way the mouse-move path does.
                             match last_file.clone() {
                                 Some(file) => suppressed.suppress(file),
                                 None => suppressed.clear(),
