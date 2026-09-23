@@ -31,6 +31,7 @@
 - File types are checked in the same order everywhere, so videos are no longer mistaken for documents.
 - A file renamed to another type's extension is now drawn by the whole of the type its content belongs to, size rules included: a picture named `.mp4` or `.docx` follows the picture scaling rather than the video's or the document's, and one named `.txt` shows at all instead of being read as a page of text that it is not.
 - A file whose content is not a document no longer starts Office to look for a page, and a video whose name is not in the video list is played rather than left on its first frame.
+- Files preview on one monitor while a maximized or fullscreen window is in front on another. A maximized window anywhere was read as hiding Explorer, so the app slept without asking where the pointer was, and a file on the second monitor previewed only after a click brought Explorer to the front. A window in front now hides Explorer only where it actually covers it.
 
 ## [0.2.14] - 2026-09-23
 
