@@ -1,12 +1,14 @@
 use crate::codecs::{self, refresh as refresh_codecs, Row};
 use crate::config::{
-    sanitize_decode_budget_gb, sanitize_image_cache_mb, sanitize_office_cache_mb,
+    sanitize_decode_budget_gb, sanitize_image_cache_mb, sanitize_libre_cache_mb,
+    sanitize_office_cache_mb,
     sanitize_pdf_cache_mb, sanitize_text_cache_mb, sanitize_text_font_scale_percent, AvoidMode,
     EngineIdle, MarkdownMode, PreviewScale, PreviewType, TextTheme, TransparentBackground,
     TriggerKeyMode, DEFAULT_ANIMATED_SCALE, DEFAULT_AVOID_MODE, DEFAULT_DDS_BACKGROUND,
     DEFAULT_DECODE_BUDGET_GB, DEFAULT_DESIGN_BACKGROUND, DEFAULT_DESIGN_SCALE,
     DEFAULT_FOLLOW_CURSOR, DEFAULT_FONT_BACKGROUND, DEFAULT_FONT_SCALE, DEFAULT_HOVER_DELAY_MS,
-    DEFAULT_IMAGE_BACKGROUND, DEFAULT_IMAGE_CACHE_MB, DEFAULT_OFFICE_CACHE_MB,
+    DEFAULT_IMAGE_BACKGROUND, DEFAULT_IMAGE_CACHE_MB, DEFAULT_LIBRE_CACHE_MB, DEFAULT_LIBRE_SCALE,
+    DEFAULT_OFFICE_CACHE_MB,
     DEFAULT_OFFICE_ENGINE_IDLE_SECS, DEFAULT_OFFICE_SCALE, DEFAULT_PDF_CACHE_MB, DEFAULT_PDF_SCALE,
     DEFAULT_PREVIEW_SCALE, DEFAULT_SAME_FILE_REHOVER_DELAY_MS, DEFAULT_TEXT_CACHE_MB,
     DEFAULT_TEXT_FONT_SCALE_PERCENT, DEFAULT_VECTOR_BACKGROUND, DEFAULT_VECTOR_SCALE,
@@ -167,6 +169,9 @@ const ID_TRAY_ANIMATED_SCALE_BASE: u16 = 1435;
 /// from a picture the file keeps of the whole of itself, so it is asked for a share of the
 /// display the way a page is rather than for a share of its own size.
 const ID_TRAY_DESIGN_SCALE_BASE: u16 = 1445;
+/// `Libre Scaling`, in the range after it: a document the render engine drew is handed back
+/// as a page, so the share is of the display the way a PDF page's is.
+const ID_TRAY_LIBRE_SCALE_BASE: u16 = 1450;
 /// The shares of the display every `… Scaling` submenu offers, in the order it lists
 /// them: the whole room a document can be given at the top, then the shares of it a
 /// document is asked for below. What differs between the settings is where they start —
@@ -210,6 +215,9 @@ const ID_TRAY_TYPE_OFFICE: u16 = 1067;
 const ID_TRAY_TYPE_FONTS: u16 = 1070;
 /// The `Design` gate beside those, under the same submenu.
 const ID_TRAY_TYPE_DESIGN: u16 = 1071;
+/// The `Libre` gate, under the same submenu: the documents drawn by an installed render
+/// engine rather than read by this app — CorelDRAW above all.
+const ID_TRAY_TYPE_LIBRE: u16 = 1100;
 /// The `Vector` gate, for the drawings that are not pictures: SVG documents, which are the
 /// kind SVG documents have always had — the id is the one this gate carried under that name
 /// — and the metafiles and encapsulated PostScript files the same kind grew to hold.
@@ -221,6 +229,10 @@ const ID_TRAY_IMAGE_CACHE_BASE: u16 = 1300;
 const ID_TRAY_OFFICE_CACHE_BASE: u16 = 1320;
 const ID_TRAY_PDF_CACHE_BASE: u16 = 1340;
 const ID_TRAY_TEXT_CACHE_BASE: u16 = 1360;
+/// The `Cache → Libre` sizes: how much of what the render engine drew is kept between
+/// hovers. The pages are files under the app's own folder rather than memory, which is what
+/// makes this the one cache a size is measured in bytes of something on disk.
+const ID_TRAY_LIBRE_CACHE_BASE: u16 = 1390;
 /// The `Performance → Decode Budget` submenu: one command per ceiling it offers, in
 /// the order it lists them. It sits in the slack between the `Cache` sizes and the
 /// document scale's own range.
@@ -454,6 +466,7 @@ unsafe extern "system" fn tray_window_proc(
                 ID_TRAY_TYPE_OFFICE => toggle_preview_type(PreviewType::Office),
                 ID_TRAY_TYPE_FONTS => toggle_preview_type(PreviewType::Fonts),
                 ID_TRAY_TYPE_DESIGN => toggle_preview_type(PreviewType::Design),
+                ID_TRAY_TYPE_LIBRE => toggle_preview_type(PreviewType::Libre),
                 ID_TRAY_TYPE_VECTOR => toggle_preview_type(PreviewType::Vector),
                 // An Office engine's idle time, by the position it was listed at.
                 cmd if (ID_TRAY_ENGINE_IDLE_BASE
@@ -475,6 +488,12 @@ unsafe extern "system" fn tray_window_proc(
                 }
                 cmd if (ID_TRAY_OFFICE_CACHE_BASE..ID_TRAY_PDF_CACHE_BASE).contains(&cmd) => {
                     set_office_cache_mb(cmd - ID_TRAY_OFFICE_CACHE_BASE)
+                }
+                cmd if (ID_TRAY_LIBRE_CACHE_BASE
+                    ..ID_TRAY_LIBRE_CACHE_BASE + CACHE_SIZE_CHOICES_MB.len() as u16)
+                    .contains(&cmd) =>
+                {
+                    set_libre_cache_mb(cmd - ID_TRAY_LIBRE_CACHE_BASE)
                 }
                 cmd if (ID_TRAY_PDF_CACHE_BASE..ID_TRAY_TEXT_CACHE_BASE).contains(&cmd) => {
                     set_pdf_cache_mb(cmd - ID_TRAY_PDF_CACHE_BASE)
@@ -529,6 +548,12 @@ unsafe extern "system" fn tray_window_proc(
                     .contains(&cmd) =>
                 {
                     set_design_scale(cmd - ID_TRAY_DESIGN_SCALE_BASE)
+                }
+                cmd if (ID_TRAY_LIBRE_SCALE_BASE
+                    ..ID_TRAY_LIBRE_SCALE_BASE + DOCUMENT_SCALE_CHOICES.len() as u16)
+                    .contains(&cmd) =>
+                {
+                    set_libre_scale(cmd - ID_TRAY_LIBRE_SCALE_BASE)
                 }
                 // How large a video is drawn, by the position its item was listed at: the
                 // same shares the pictures above it are offered, in a range of their own
@@ -625,6 +650,7 @@ unsafe fn show_context_menu(hwnd: HWND) {
         (PreviewType::Vector, ID_TRAY_TYPE_VECTOR, w!("Vector")),
         (PreviewType::Fonts, ID_TRAY_TYPE_FONTS, w!("Fonts")),
         (PreviewType::Design, ID_TRAY_TYPE_DESIGN, w!("Design")),
+        (PreviewType::Libre, ID_TRAY_TYPE_LIBRE, w!("Libre")),
     ];
     let types_menu = CreatePopupMenu().unwrap();
 
@@ -1093,7 +1119,7 @@ unsafe fn show_context_menu(hwnd: HWND) {
     // each is a submenu of its own because the answers are not the same answers: a picture's
     // percentage is of its own size, a document's is of the display — and a document and a
     // page do not start at the same share of it either.
-    let (pdf_scale, office_scale, font_scale, design_scale, vector_scale) = CONFIG
+    let (pdf_scale, office_scale, font_scale, design_scale, vector_scale, libre_scale) = CONFIG
         .lock()
         .map(|c| {
             (
@@ -1102,6 +1128,7 @@ unsafe fn show_context_menu(hwnd: HWND) {
                 c.font_scale,
                 c.design_scale,
                 c.vector_scale,
+                c.libre_scale,
             )
         })
         .unwrap_or((
@@ -1110,6 +1137,7 @@ unsafe fn show_context_menu(hwnd: HWND) {
             DEFAULT_FONT_SCALE,
             DEFAULT_DESIGN_SCALE,
             DEFAULT_VECTOR_SCALE,
+            DEFAULT_LIBRE_SCALE,
         ));
 
     append_document_scale_menu(
@@ -1146,6 +1174,13 @@ unsafe fn show_context_menu(hwnd: HWND) {
         ID_TRAY_DESIGN_SCALE_BASE,
         design_scale,
         DEFAULT_DESIGN_SCALE,
+    );
+    append_document_scale_menu(
+        scaling_menu,
+        w!("Libre Scaling"),
+        ID_TRAY_LIBRE_SCALE_BASE,
+        libre_scale,
+        DEFAULT_LIBRE_SCALE,
     );
 
     let _ = AppendMenuW(
@@ -1334,7 +1369,7 @@ unsafe fn show_context_menu(hwnd: HWND) {
     // rendered — each of them listed largest first, with the size its own cache
     // starts at marked. All of it is held in memory and nowhere else, and nothing is
     // written to disk.
-    let (image_cache_mb, office_cache_mb, pdf_cache_mb, text_cache_mb) = CONFIG
+    let (image_cache_mb, office_cache_mb, pdf_cache_mb, text_cache_mb, libre_cache_mb) = CONFIG
         .lock()
         .map(|c| {
             (
@@ -1342,6 +1377,7 @@ unsafe fn show_context_menu(hwnd: HWND) {
                 c.office_cache_mb,
                 c.pdf_cache_mb,
                 c.text_cache_mb,
+                c.libre_cache_mb,
             )
         })
         .unwrap_or((
@@ -1349,6 +1385,7 @@ unsafe fn show_context_menu(hwnd: HWND) {
             DEFAULT_OFFICE_CACHE_MB,
             DEFAULT_PDF_CACHE_MB,
             DEFAULT_TEXT_CACHE_MB,
+            DEFAULT_LIBRE_CACHE_MB,
         ));
 
     let cache_menu = CreatePopupMenu().unwrap();
@@ -1381,6 +1418,12 @@ unsafe fn show_context_menu(hwnd: HWND) {
             ID_TRAY_OFFICE_CACHE_BASE,
             office_cache_mb,
             DEFAULT_OFFICE_CACHE_MB,
+        ),
+        (
+            w!("Libre"),
+            ID_TRAY_LIBRE_CACHE_BASE,
+            libre_cache_mb,
+            DEFAULT_LIBRE_CACHE_MB,
         ),
     ] {
         let sizes_menu = CreatePopupMenu().unwrap();
@@ -2510,6 +2553,28 @@ fn set_font_scale(index: u16) {
 /// the picture its own format keeps of the whole thing, so the share is of the display
 /// rather than of the document, and it applies to the next hover rather than resizing a
 /// preview that is already up.
+/// Select the share of the display a document the render engine drew is shown at, by the
+/// position its item was listed at.
+fn set_libre_scale(index: u16) {
+    if let Some(scale) = document_scale_at(index) {
+        if let Ok(mut config) = CONFIG.lock() {
+            config.libre_scale = scale;
+            config.save();
+        }
+    }
+}
+
+/// Select how much of what the render engine drew is kept between hovers, by the position
+/// its item was listed at.
+fn set_libre_cache_mb(index: u16) {
+    if let Some(megabytes) = CACHE_SIZE_CHOICES_MB.get(index as usize).copied() {
+        if let Ok(mut config) = CONFIG.lock() {
+            config.libre_cache_mb = sanitize_libre_cache_mb(megabytes);
+            config.save();
+        }
+    }
+}
+
 fn set_design_scale(index: u16) {
     let Some(scale) = document_scale_at(index) else {
         return;
@@ -2933,6 +2998,7 @@ mod tests {
             ID_TRAY_OFFICE_SCALE_BASE,
             ID_TRAY_FONT_SCALE_BASE,
             ID_TRAY_DESIGN_SCALE_BASE,
+            ID_TRAY_LIBRE_SCALE_BASE,
         ]
         .map(|base| base..base + DOCUMENT_SCALE_CHOICES.len() as u16);
 
@@ -3046,6 +3112,7 @@ mod tests {
             ID_TRAY_OFFICE_SCALE_BASE,
             ID_TRAY_FONT_SCALE_BASE,
             ID_TRAY_DESIGN_SCALE_BASE,
+            ID_TRAY_LIBRE_SCALE_BASE,
         ] {
             let scales = base..base + DOCUMENT_SCALE_CHOICES.len() as u16;
 
@@ -3083,6 +3150,10 @@ mod tests {
             ID_TRAY_DESIGN_SCALE_BASE,
             ID_TRAY_DESIGN_SCALE_BASE + DOCUMENT_SCALE_CHOICES.len() as u16,
         );
+        let libre_scales = (
+            ID_TRAY_LIBRE_SCALE_BASE,
+            ID_TRAY_LIBRE_SCALE_BASE + DOCUMENT_SCALE_CHOICES.len() as u16,
+        );
         let vector_scales = (
             ID_TRAY_VECTOR_SCALE_BASE,
             ID_TRAY_VECTOR_SCALE_BASE + DOCUMENT_SCALE_CHOICES.len() as u16,
@@ -3101,7 +3172,7 @@ mod tests {
                 );
             }
 
-            for document in [font_scales, design_scales, vector_scales] {
+            for document in [font_scales, design_scales, libre_scales, vector_scales] {
                 assert_eq!(
                     overlaps(*range, document),
                     None,

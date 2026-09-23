@@ -8,7 +8,9 @@
 
 ### Changed
 
-- Preview for CorelDRAW `cdr` and Procreate `procreate` documents, under the **Design** kind: drawn by LibreOffice where it is installed — the whole page, sharp at any size, converted once and kept beside `config.ini` — and shown from the picture the file carries where it is not. The tray's **Codecs** menu says whether the engine is there.
+- Preview for the documents LibreOffice reads and this app has no reader of its own for, under a new **Libre** kind: CorelDRAW `cdr` above all, and the older word processors, spreadsheets, presentations and drawings beside it. The page is drawn by an installed LibreOffice and shown sharp at any size, with `Libre Scaling`, `Cache → Libre` (32 MB by default, kept on disk beside `config.ini`) and a `[libre]` extension list to add or remove names.
+- CorelDRAW `cdr` previews no longer come from the picture such a file carries: it is 96 to 256 pixels, so where LibreOffice is not installed a `.cdr` now shows nothing at all. The name has left the design list for `[libre]`, and `config.ini` is updated on the next run.
+- Office documents are drawn by LibreOffice when no Microsoft Office is installed, under the same **Office** kind and its own scaling.
 
 ## [0.2.14]
 

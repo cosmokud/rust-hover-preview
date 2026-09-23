@@ -25,7 +25,6 @@
 //! cannot read is answered with no preview — once, and then remembered, so a name that was
 //! put in this list by mistake costs one conversion and never another.
 
-use crate::config::PreviewType;
 use crate::text_formats;
 use crate::CONFIG;
 use std::path::Path;
@@ -90,19 +89,12 @@ pub fn sanitize_libre_extensions(list: &str) -> Vec<String> {
 }
 
 /// Whether the configured list claims `path`, without asking whether these previews are
-/// switched on.
+/// switched on. The gate is asked beside it by the hook, the way every other kind's is.
 pub fn is_libre_file(path: &Path) -> bool {
     CONFIG
         .lock()
         .map(|config| matches_libre_list(path, &config.libre_extensions))
         .unwrap_or(false)
-}
-
-/// Whether the file is previewed by the engine under the current configuration. The
-/// `Libre` gate is checked on top of the list, so turning these previews off leaves the
-/// list alone and turning them back on restores it.
-pub fn is_libre_preview(path: &Path) -> bool {
-    is_libre_file(path) && PreviewType::Libre.enabled()
 }
 
 #[cfg(test)]
