@@ -227,6 +227,11 @@ pub const DEFAULT_OFFICE_ENGINE_IDLE_SECS: u64 = 600;
 /// browser is what draws every SVG document this app previews, so what this buys is
 /// every hover after the first one in a while.
 pub const DEFAULT_WEBVIEW_IDLE_SECS: u64 = 600;
+/// How long the LibreOffice engine is kept after the last page it drew, by default: ten
+/// minutes, the same as the other two engines this app keeps, because the start is the whole
+/// of what keeping it saves. What it costs is the application itself — a few hundred
+/// megabytes while it is held — which is what the setting is for.
+pub const DEFAULT_LIBREOFFICE_IDLE_SECS: u64 = 600;
 /// The ceiling a hand-edited number of seconds is reduced to. Past a day there is
 /// nothing a number says that `indefinitely` does not say better.
 pub const MAX_OFFICE_ENGINE_IDLE_SECS: u64 = 86_400;
@@ -1249,12 +1254,21 @@ pub struct AppConfig {
     /// `Performance → Select Engine → Office` setting.
     pub office_engine: OfficeEngine,
     /// How long the Office engine a family started is kept after that family's
-    /// last page, which is the tray's `Performance → Office Engine TTL` setting.
+    /// last page, which is the tray's `Performance → Microsoft Office TTL` setting.
     pub office_engine_idle: EngineIdle,
     /// How long the WebView2 engine is kept after the last document it drew. Beginning
     /// one is a browser start, and pointing a warm one at another document is a few
     /// milliseconds, so what this buys is every hover after the first.
     pub webview_idle: EngineIdle,
+    /// How long the LibreOffice engine is kept after the last page it drew, which is the
+    /// tray's `Performance → LibreOffice TTL` setting.
+    ///
+    /// The engine is kept the way the other two are — a process left running rather than a
+    /// launch paid per document — and the idle time is what bounds it: `0 seconds` keeps no
+    /// engine at all and is every document launched for itself, while an engine that is
+    /// never let go of is a process this app holds for the rest of the run (see
+    /// `libreoffice_render`).
+    pub libreoffice_idle: EngineIdle,
     /// Memory the pages PDF previews were drawn as may hold, in megabytes, between
     /// hovers. A page is rendered at `0` like at any other size; it is simply not
     /// kept once the hover that asked for it is over.
@@ -1362,6 +1376,7 @@ impl Default for AppConfig {
             office_engine: DEFAULT_OFFICE_ENGINE,
             office_engine_idle: EngineIdle::Seconds(DEFAULT_OFFICE_ENGINE_IDLE_SECS),
             webview_idle: EngineIdle::Seconds(DEFAULT_WEBVIEW_IDLE_SECS),
+            libreoffice_idle: EngineIdle::Seconds(DEFAULT_LIBREOFFICE_IDLE_SECS),
             pdf_cache_mb: DEFAULT_PDF_CACHE_MB,
             text_cache_mb: DEFAULT_TEXT_CACHE_MB,
             decode_budget_gb: DEFAULT_DECODE_BUDGET_GB,
@@ -1476,6 +1491,7 @@ const SETTING_GROUPS: &[(&str, &[&str])] = &[
             "decode_budget_gb",
             "image_cache_mb",
             "libre_cache_mb",
+            "libreoffice_idle",
             "office_cache_mb",
             "office_engine",
             "office_engine_idle",
@@ -2031,6 +2047,11 @@ impl AppConfig {
         );
         ini.set(
             CONFIG_SECTION,
+            "libreoffice_idle",
+            Some(self.libreoffice_idle.as_str()),
+        );
+        ini.set(
+            CONFIG_SECTION,
             "pdf_cache_mb",
             Some(sanitize_pdf_cache_mb(self.pdf_cache_mb).to_string()),
         );
@@ -2405,6 +2426,11 @@ impl AppConfig {
         if let Some(value) = ini.get(CONFIG_SECTION, "webview_idle") {
             if let Some(idle) = EngineIdle::from_str(&value) {
                 self.webview_idle = idle;
+            }
+        }
+        if let Some(value) = ini.get(CONFIG_SECTION, "libreoffice_idle") {
+            if let Some(idle) = EngineIdle::from_str(&value) {
+                self.libreoffice_idle = idle;
             }
         }
         if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "pdf_cache_mb") {

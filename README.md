@@ -149,7 +149,7 @@ All are free. Windows 11 often has HEIF, AV1, and WebP already. Where one is mis
 winget install -e --id TheDocumentFoundation.LibreOffice
 ```
 
-If `winget` reports an error, the package sources are usually why: run `winget source reset --force`, and if that is refused as well, open **Terminal as administrator** (right-click the Start button → _Terminal (Admin)_) and run the same command from there. Then hover a `.cdr`: the first hover converts that document and takes a moment, and every hover after it is instant, because the converted page is kept beside `config.ini`.
+If `winget` reports an error, the package sources are usually why: run `winget source reset --force`, and if that is refused as well, open **Terminal as administrator** (right-click the Start button → _Terminal (Admin)_) and run the same command from there. Then hover a `.cdr`: the first hover converts that document and takes a moment, and every hover after it is instant, because the converted page is kept beside `config.ini`. The engine itself is kept too, for ten minutes by default — **Performance → LibreOffice TTL** — so the next document does not pay for a start again.
 
 ## Usage
 
@@ -197,10 +197,11 @@ The item a setting starts at carries `(Default)` after its name, so a menu says 
   - **Design Background** — the same backdrops as a picture's, for a design document; Checkerboard by default.
 - **Volume** — Max, High, Medium, Low, Very Low, Mute: 100% down to 0%.
 - **Performance**
-  - **Select Engine → Office** — which engine an Office document’s page is asked of: **Microsoft Office** (default) draws it with the application that owns the format and keeps LibreOffice as the fallback for a family this machine has no application for, while **LibreOffice** draws every Office document whether Microsoft Office is installed or not. The LibreOffice row is greyed out where it is not installed.
   - **Confirm File Type** — check a file's content against its name before it is previewed: a file whose bytes are another kind is previewed as that kind, and one whose content is a format this app has no reader for shows nothing. On by default.
-  - **Office Engine TTL** — how long a family’s Office app is kept warm: Indefinitely, 1 hour, 30 minutes, 10 minutes (default), 5 minutes, 1 minute, 0 seconds.
-  - **SVG Engine TTL** — how long the browser that draws SVG documents is kept warm; greyed out where WebView2 is missing.
+  - **Select Engine → Office** — which engine an Office document’s page is asked of: **Microsoft Office** (default) draws it with the application that owns the format and keeps LibreOffice as the fallback for a family this machine has no application for, while **LibreOffice** draws every Office document whether Microsoft Office is installed or not. The LibreOffice row is greyed out where it is not installed.
+  - **Microsoft Office TTL** — how long a family’s Office app is kept warm: Indefinitely, 1 hour, 30 minutes, 10 minutes (default), 5 minutes, 1 minute, 0 seconds.
+  - **LibreOffice TTL** — the same for the engine that draws CorelDRAW and the documents beside it: how long it is kept after the last document it converted. A kept engine converts the next document without starting up again — measured on one document, 1.2 s cold against 0.2 s — and while it is kept it is a LibreOffice with a small document of this app's own open, which is a few hundred megabytes. `0 seconds` keeps none, which is an engine per document. Greyed out where LibreOffice is not installed.
+  - **WebView2 TTL** — how long the browser that draws SVG documents is kept warm; greyed out where WebView2 is missing.
   - **Cache** — memory held between hovers, 2 GB down to 0 MB: Image, Text, PDF, Office caches.
   - **Decode Budget** — 16 GB down to 512 MB, 1 GB default: a file past it gets no preview.
 - **Codecs** — what this machine has: Videos, Images, and Engines. Missing ones are greyed out.
@@ -279,6 +280,7 @@ video_volume=0
 confirm_file_type=true
 decode_budget_gb=1
 image_cache_mb=32
+libreoffice_idle=600
 office_cache_mb=64
 office_engine=microsoft_office
 office_engine_idle=600
@@ -309,6 +311,7 @@ Key settings, in plain terms:
 - `hdr_exposure` — how many stops those pictures are shifted before that curve: default `0`, clamped to `-10`–`10`.
 - `spinner_delay_ms` — how long a hover’s load may run before the waiting spinner is put up, in milliseconds: default `250`, and `0` puts it up with the load. One delay answers every kind of preview — a decode, a page Office is rendering, a browser that has to start — and there is no tray entry for it.
 - `office_engine` — which engine draws an Office document’s page: `microsoft_office` (default) asks the application that owns the format and falls back to LibreOffice for a family this machine has no application for, while `libreoffice` asks the render engine for every Office document whether Microsoft Office is installed or not. With no LibreOffice installed the second falls back to the first, and the tray row is greyed out.
+- `libreoffice_idle` — seconds the LibreOffice engine is kept after the last page it drew, or `indefinitely`; default `600`. `0` keeps no engine at all, which is a launch per document; while one is kept it is a LibreOffice with a small document of this app's own open, and it is ended by the app when the time is up.
 - `office_engine_idle` — seconds an Office engine is kept after its last page, or `indefinitely`; default `600`. `0` lets it go as soon as it has drawn a page.
 - `trigger_key` / `trigger_key_mode` / `trigger_key_enabled` — the key (`alt`, `ctrl`, `shift`, `win`), what it does (`disable` or `enable`), and whether it is watched at all; `true` by default.
 - `follow_cursor` — `true` for Follow Cursor, `false` for Best Position.
