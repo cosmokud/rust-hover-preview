@@ -3240,7 +3240,7 @@ pub fn run_explorer_hook() {
     const ACTIVE_POLL_MS: u64 = 30; // Active focus - responsive polling
     const VIDEO_HOVER_DISMISS_GRACE_MS: u64 = 350;
     const HOVER_PROBE_MS: u64 = 30;
-    const KEYBOARD_FOCUS_PROBE_MS: u64 = 80;
+    const KEYBOARD_FOCUS_PROBE_MS: u64 = 30;
     const STATIONARY_SEARCH_MISS_HIDE_MS: u64 = 180;
     const VIDEO_PROCESS_SWEEP_MS: u64 = 1000;
 
