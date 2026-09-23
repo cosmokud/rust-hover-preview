@@ -19,7 +19,9 @@ use crate::image_formats::{
     sanitize_image_extensions, DEFAULT_IMAGE_EXTENSIONS, IMAGE_EXTENSIONS_BEFORE_CODEC_FORMATS,
     IMAGE_EXTENSIONS_BEFORE_DDS, IMAGE_EXTENSIONS_BEFORE_SVG, IMAGE_EXTENSIONS_WITH_SVG,
 };
-use crate::libre_formats::{sanitize_libre_extensions, DEFAULT_LIBRE_EXTENSIONS};
+use crate::libre_formats::{
+    sanitize_libre_extensions, DEFAULT_LIBRE_EXTENSIONS, LIBRE_EXTENSIONS_WITH_SWF,
+};
 use crate::office_formats::{sanitize_office_extensions, DEFAULT_OFFICE_EXTENSIONS};
 use crate::text_formats::{
     sanitize_extensions, sanitize_names, DEFAULT_TEXT_EXTENSIONS, DEFAULT_TEXT_NAMES,
@@ -1591,7 +1593,7 @@ fn repair_older_lists(ini: &mut Ini) -> bool {
         (
             LIBRE_SECTION,
             DEFAULT_LIBRE_EXTENSIONS,
-            &[][..],
+            &[LIBRE_EXTENSIONS_WITH_SWF][..],
             sanitize_libre_extensions as fn(&str) -> Vec<String>,
         ),
         (
@@ -2936,6 +2938,32 @@ mod tests {
             config.image_extensions,
             sanitize_image_extensions(DEFAULT_IMAGE_EXTENSIONS),
             "the list the app shipped before is read as the list it ships now"
+        );
+    }
+
+    /// A name taken out of a built-in list leaves the files already written with it: the
+    /// list the app shipped with that name is this app's own — nobody typed it — so it is
+    /// read as the list of now, and a name the engine cannot draw stops being asked about
+    /// on an installation that has been running since before it was removed.
+    #[test]
+    fn a_list_holding_the_name_the_engine_cannot_draw_loses_it() {
+        let mut ini = Ini::new();
+        ini.set(
+            LIBRE_SECTION,
+            "extensions",
+            Some(LIBRE_EXTENSIONS_WITH_SWF.to_string()),
+        );
+
+        let config = read_file(&mut ini);
+
+        assert_eq!(
+            config.libre_extensions,
+            sanitize_libre_extensions(DEFAULT_LIBRE_EXTENSIONS),
+            "the list the app shipped before is read as the list it ships now"
+        );
+        assert!(
+            !config.libre_extensions.iter().any(|name| name == "swf"),
+            "and the Flash name is the one that left it"
         );
     }
 

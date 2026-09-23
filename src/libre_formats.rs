@@ -56,7 +56,23 @@ use std::path::Path;
 ///   would be a launch that answers nothing, every time, for a name that is not this app's.
 /// * `kth` is a Keynote theme and `iqy` is a web query: the first is a preset, the second
 ///   is a line of text naming a URL, and neither is a document.
-pub const DEFAULT_LIBRE_EXTENSIONS: &str = "123,602,abw,agd,cdr,cgm,cmx,cwk,dbf,dif,dxf,epub,fhd,fodg,fodp,fodt,gnm,gnumeric,hwp,jtd,jtt,key,lwp,mcw,met,mw,numbers,odb,odc,odf,odg,odm,odp,ods,odt,oth,otg,otm,otp,ots,ott,pages,pcd,pct,pcx,pdb,plt,pm3,pm4,pm5,pm6,pmd,psw,pub,pxl,qxp,ras,rl,sda,sdc,sdd,sdp,sdw,sgf,sgl,slk,stc,std,sti,stw,svm,swf,sxd,sxg,sxi,sxm,sxw,uof,uop,uos,uot,vdx,vor,vsd,vsdm,vsdx,vssm,vst,vstm,vstx,vtx,vsx,wb2,wk1,wk3,wk4,wks,wpg,wq1,wq2,wpd,wps,wri,xlw,zabw,zmf";
+/// * `swf` is a Flash animation rather than a document, and the engine does not draw one:
+///   asked to convert one, its filter chain spins with a core at a hundred percent and
+///   never writes a page — measured on real files, and past every bound a conversion is
+///   given. It was in this list once, and a file of that name cost a launch and a core
+///   for as long as the engine was left to it. What reads a Flash file is FFmpeg's own
+///   SWF demuxer — the drawings, the sounds and the timeline of one — so the name is in
+///   the video list, which is where it belongs, and is not here (see `video_formats`).
+pub const DEFAULT_LIBRE_EXTENSIONS: &str = "123,602,abw,agd,cdr,cgm,cmx,cwk,dbf,dif,dxf,epub,fhd,fodg,fodp,fodt,gnm,gnumeric,hwp,jtd,jtt,key,lwp,mcw,met,mw,numbers,odb,odc,odf,odg,odm,odp,ods,odt,oth,otg,otm,otp,ots,ott,pages,pcd,pct,pcx,pdb,plt,pm3,pm4,pm5,pm6,pmd,psw,pub,pxl,qxp,ras,rl,sda,sdc,sdd,sdp,sdw,sgf,sgl,slk,stc,std,sti,stw,svm,sxd,sxg,sxi,sxm,sxw,uof,uop,uos,uot,vdx,vor,vsd,vsdm,vsdx,vssm,vst,vstm,vstx,vtx,vsx,wb2,wk1,wk3,wk4,wks,wpg,wq1,wq2,wpd,wps,wri,xlw,zabw,zmf";
+
+/// The built-in `[libre]` list as it stood while `swf` was an entry of it.
+///
+/// A file holding exactly these entries is the app's own older list rather than a user's
+/// edit — nobody has touched it — so it is brought up to the built-in list rather than kept
+/// as written, which is what takes the name out of every `config.ini` already written. What
+/// it takes out is a name the engine was never able to draw: a Flash file sent to it does
+/// not fail, it spins, so the entry cost a launch, a core and a preview that never came.
+pub const LIBRE_EXTENSIONS_WITH_SWF: &str = "123,602,abw,agd,cdr,cgm,cmx,cwk,dbf,dif,dxf,epub,fhd,fodg,fodp,fodt,gnm,gnumeric,hwp,jtd,jtt,key,lwp,mcw,met,mw,numbers,odb,odc,odf,odg,odm,odp,ods,odt,oth,otg,otm,otp,ots,ott,pages,pcd,pct,pcx,pdb,plt,pm3,pm4,pm5,pm6,pmd,psw,pub,pxl,qxp,ras,rl,sda,sdc,sdd,sdp,sdw,sgf,sgl,slk,stc,std,sti,stw,svm,swf,sxd,sxg,sxi,sxm,sxw,uof,uop,uos,uot,vdx,vor,vsd,vsdm,vsdx,vssm,vst,vstm,vstx,vtx,vsx,wb2,wk1,wk3,wk4,wks,wpg,wq1,wq2,wpd,wps,wri,xlw,zabw,zmf";
 
 /// Whether the configured list claims `path`.
 pub fn matches_libre_list(path: &Path, extensions: &[String]) -> bool {
@@ -97,6 +113,17 @@ pub fn is_libre_file(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+/// Whether a preview may be shown for `path`: the file the configured list claims, and
+/// the `Libre` gate in the tray's `Preview Types` submenu.
+///
+/// Both halves ask it where a kind can be switched off under a preview that is already
+/// on screen: a hover is not sent for a kind that is off, and a layout finds no size for
+/// a file whose kind is off, which is how a preview of that kind comes down when the
+/// switch does. See `PreviewType::enabled`.
+pub fn is_libre_preview(path: &Path) -> bool {
+    is_libre_file(path) && crate::config::PreviewType::Libre.enabled()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -129,11 +156,13 @@ mod tests {
             "slides.pptx",
             "font.ttf",
             "bundle.zip",
+            "animation.swf",
         ] {
             let path = std::path::Path::new(name);
             let claimed = crate::image_formats::matches_image_list(&path, &config.image_extensions)
                 || crate::vector_formats::matches_vector_list(&path, &config.vector_extensions)
                 || crate::office_formats::matches_office_list(&path, &config.office_extensions)
+                || crate::video_formats::matches_video_list(&path, &config.video_extensions)
                 || crate::text_formats::matches_text_lists(
                     &path,
                     &config.text_extensions,

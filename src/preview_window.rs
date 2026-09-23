@@ -7,11 +7,11 @@ use crate::config::{
     sanitize_spinner_delay_ms, sanitize_webp_playback_fps, MarkdownMode, PreviewScale, PreviewType,
     TextTheme, TransparentBackground, DEFAULT_ANIMATED_SCALE_PERCENT, DEFAULT_DDS_BACKGROUND,
     DEFAULT_DESIGN_BACKGROUND, DEFAULT_DESIGN_SCALE, DEFAULT_FONT_BACKGROUND, DEFAULT_FONT_SCALE,
-    DEFAULT_LIBRE_SCALE,
-    DEFAULT_IMAGE_BACKGROUND, DEFAULT_IMAGE_CACHE_MB, DEFAULT_OFFICE_SCALE, DEFAULT_PDF_SCALE,
-    DEFAULT_PREVIEW_SCALE_PERCENT, DEFAULT_SPINNER_DELAY_MS, DEFAULT_TEXT_FONT_SCALE_PERCENT,
-    DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS, DEFAULT_VECTOR_BACKGROUND, DEFAULT_VECTOR_SCALE,
-    DEFAULT_VIDEO_SCALE_PERCENT, DEFAULT_WEBP_PLAYBACK_FPS,
+    DEFAULT_IMAGE_BACKGROUND, DEFAULT_IMAGE_CACHE_MB, DEFAULT_LIBRE_SCALE, DEFAULT_OFFICE_SCALE,
+    DEFAULT_PDF_SCALE, DEFAULT_PREVIEW_SCALE_PERCENT, DEFAULT_SPINNER_DELAY_MS,
+    DEFAULT_TEXT_FONT_SCALE_PERCENT, DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS,
+    DEFAULT_VECTOR_BACKGROUND, DEFAULT_VECTOR_SCALE, DEFAULT_VIDEO_SCALE_PERCENT,
+    DEFAULT_WEBP_PLAYBACK_FPS,
 };
 use crate::dds_image;
 use crate::design_formats;
@@ -1695,6 +1695,36 @@ fn request_office_render(
     Some((path.to_path_buf(), generation))
 }
 
+/// Whether this hover is owed a page by the render engine: a document the `[libre]` list
+/// holds, an engine installed to draw it, and no page drawn for this version of it yet.
+///
+/// It is the question `office_render_is_due` asks of an Office document, asked of the
+/// documents whose engine is a whole application rather than an automation server. Three
+/// things ask it: the layout, which measures a document like this as the wait for a page;
+/// the loader, which answers with it that a hover is still waiting rather than failed; and
+/// the loop, which asks the engine for the page only where there is one to ask for.
+fn libre_render_is_due(path: &Path) -> bool {
+    libre_formats::is_libre_preview(path)
+        && libreoffice_render::available()
+        && libreoffice_render::rendered_page(path).is_none()
+        && !libreoffice_render::refused(path)
+}
+
+/// Ask the engine for the page this hover needs, and answer what is now being waited on.
+///
+/// The same answer, and for the same reason, as `request_office_render`: a page does not
+/// exist until an engine has drawn it, and asking late is waiting twice. Nothing is waited
+/// on here either — the conversion runs on the engine's own thread — so what comes back is
+/// the wait, and the loop watches the folder the page lands in for it.
+fn request_libre_render(path: &Path, generation: u64) -> Option<(PathBuf, u64)> {
+    if !libre_render_is_due(path) {
+        return None;
+    }
+
+    libreoffice_render::request(path);
+    Some((path.to_path_buf(), generation))
+}
+
 /// Every scale a hover is laid out by, read from the configuration together so that the
 /// measure of a file and the render that follows it cannot disagree about the size.
 #[derive(Debug, Clone, Copy)]
@@ -1954,10 +1984,17 @@ fn is_text_preview(path: &Path) -> bool {
         return false;
     }
 
+    // Every kind the hook asks ahead of the text lists is asked ahead of them here too, so
+    // that a name in two lists is measured as the kind the hook called it: the text lists
+    // reach further than the others — a `.md` in the `[libre]` list is a Markdown document
+    // the engine would be asked to draw — and a preview measured as text would be placed
+    // as one and drawn as the other. A name in the video, PDF, archive or office list is
+    // excluded the same way, and `libre` is the newest of them.
     !is_video_file(path)
         && !pdf_preview::is_pdf_file(path)
         && !archive_formats::is_archive_file(path)
         && !office_formats::is_office_file(path)
+        && !libre_formats::is_libre_file(path)
         && !design_formats::is_design_file(path)
         && !vector_formats::is_vector_file(path)
 }
@@ -3235,11 +3272,13 @@ fn load_design_preview(
         return Some(static_image_media(frame, MediaType::Design));
     }
 
-    // The engine is asked first, where it is installed; the readers below are the fallback
-    // for a machine without it and for a document it will not read. What it drew comes
-    // back at the size the page fitted into the box rather than at the box, so the frame
-    // is built from what was drawn.
-    let (pixels, width, height) = if let Some(page) = libreoffice_render::pdf_for(path) {
+    // The page the engine drew comes first, where there is one; the readers below are the
+    // fallback for a machine without the engine and for a document it has not drawn — a
+    // name this list and the `[libre]` list both hold is drawn by the engine, and this is
+    // only reached for one of those where these previews are what is being asked for. What
+    // the engine drew comes back at the size the page fitted into the box rather than at
+    // the box, so the frame is built from what was drawn.
+    let (pixels, width, height) = if let Some(page) = libreoffice_render::rendered_page(path) {
         pdf_preview::render_first_page(&page, target_width, target_height)?
     } else {
         let pixels = if psd_image::is_psd_file(path) {
@@ -3277,10 +3316,11 @@ fn load_design_preview(
 /// this app has no reader for comes to show nothing at all rather than a picture of some
 /// other format's making.
 fn design_dimensions(path: &Path) -> Option<(u32, u32)> {
-    // The engine is asked first, where it is installed: what it answers is the document
-    // drawn — a page, sharp at whatever size the preview is shown at — rather than a
-    // picture of the document that its application kept at some smaller size.
-    if let Some(page) = libreoffice_render::pdf_for(path) {
+    // The page the engine drew is measured first, where there is one: what it holds is the
+    // document drawn — a page, sharp at whatever size the preview is shown at — rather than
+    // a picture of the document that its application kept at some smaller size. Nothing is
+    // asked of the engine here: a page it has not drawn is the preview loop's to ask for.
+    if let Some(page) = libreoffice_render::rendered_page(path) {
         return pdf_preview::page_dimensions(&page);
     }
 
@@ -4474,7 +4514,13 @@ fn load_media(
         return load_office_preview(path, max_width, max_height, preview_scale, &cancel).or_else(
             || {
                 let page = libreoffice_render::pdf_for_office(path)?;
-                load_engine_page(&page, MediaType::Office, max_width, max_height, preview_scale)
+                load_engine_page(
+                    &page,
+                    MediaType::Office,
+                    max_width,
+                    max_height,
+                    preview_scale,
+                )
             },
         );
     }
@@ -4492,8 +4538,19 @@ fn load_media(
     // nothing behind it: what such a file keeps of itself is a thumbnail, and a thumbnail is
     // not shown — see `libre_formats` — so a machine without the engine shows nothing at all.
     if libre_formats::is_libre_file(path) {
-        return libreoffice_render::pdf_for(path).and_then(|page| {
-            load_engine_page(&page, MediaType::Libre, max_width, max_height, preview_scale)
+        // The page is the engine's to draw and it is not drawn here: what is loaded is the
+        // page that engine has already written. A document without one is a wait rather
+        // than a failure — the loop has asked for it, and the hover is replayed when the
+        // page lands (see `libre_render_is_due`) — so what it gets here is nothing, which
+        // is the spinner it is already showing.
+        return libreoffice_render::rendered_page(path).and_then(|page| {
+            load_engine_page(
+                &page,
+                MediaType::Libre,
+                max_width,
+                max_height,
+                preview_scale,
+            )
         });
     }
 
@@ -4668,6 +4725,37 @@ fn get_media_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
         return office_preview::measure(path);
     }
 
+    // A document this app hands to a render engine is measured from the page that engine
+    // drew, and a page not drawn yet is the wait for one: the layout places the spinner's
+    // own box, the preview loop asks the engine for the document, and the hover is replayed
+    // when the page lands (see `libre_render_is_due`). Nothing is converted here, and
+    // nothing is waited on — a launch on this thread is a preview, a tray and a pointer
+    // held for as long as the engine takes, which is what a document the engine cannot draw
+    // never ends.
+    //
+    // It is asked where the hook asks it — after the office list, ahead of the design list
+    // — because a name can sit in two lists: CorelDRAW is a design document to this app and
+    // a drawing to the engine, and it is the engine that draws it (see `libre_formats`).
+    if libre_formats::is_libre_preview(path) {
+        if !libreoffice_render::available() {
+            // Nothing to draw it with, so there is nothing to show: a machine without the
+            // engine shows no preview for these names rather than the thumbnail the file
+            // carries, which is the whole reason the name is in this list.
+            return None;
+        }
+
+        if let Some(page) = libreoffice_render::rendered_page(path) {
+            return pdf_preview::page_dimensions(&page);
+        }
+
+        // A document the engine has already turned down is not one to wait for.
+        if libreoffice_render::refused(path) {
+            return None;
+        }
+
+        return Some((office_preview::WAITING_BOX, office_preview::WAITING_BOX));
+    }
+
     // A design document is measured from the picture it is previewed from — the merged
     // image at the end of a Photoshop file, or the picture a project container holds —
     // and a file neither reader will answer for reports no size, which is how it comes
@@ -4745,6 +4833,24 @@ fn get_media_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
     }
 }
 
+/// Whether this hover is the wait for a page rather than a preview of one: an Office
+/// document or a document the render engine draws, with nothing drawn for it yet and a page
+/// on the way.
+///
+/// A hover like that is placed by the spinner's own box, flush at the pointer, rather than
+/// by the size a preview would take: it is the wait for the file under the hand, which
+/// belongs at the hand. The page is laid out again by the replay that arrives with it, so
+/// nothing here has to guess how large it will be.
+fn page_is_on_the_way(path: &Path) -> bool {
+    let office = office_formats::is_office_preview(path)
+        && matches!(
+            office_preview::source_kind(path),
+            office_preview::SourceKind::None
+        );
+
+    office || libre_render_is_due(path)
+}
+
 /// The size the layout should place and scale a preview from.
 ///
 /// A text file has no size of its own, so the box its first screenful wants is
@@ -4753,12 +4859,6 @@ fn get_media_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
 /// can fit it into the space beside the cursor, and the text renderer is handed
 /// the box that comes out of that.
 fn media_dimensions(path: &PathBuf, bounds: ScreenBounds, dpi: u32) -> Option<(u32, u32)> {
-    // A document an engine draws is measured from the page it drew, which is the size the
-    // layout places before the scale is applied to it — the same reading a PDF's page gets.
-    if libre_formats::is_libre_file(path) {
-        return pdf_preview::page_dimensions(&libreoffice_render::pdf_for(path)?);
-    }
-
     if is_text_preview(path) {
         let cap_width = (bounds.right - bounds.left).max(1) as u32;
         let cap_height = bounds.height().max(1) as u32;
@@ -5125,8 +5225,9 @@ fn spawn_load_worker(
             }))
             .unwrap_or(None);
 
-            let awaiting_render =
-                media.is_none() && office_render_is_due(&request.path, request.max_width);
+            let awaiting_render = media.is_none()
+                && (office_render_is_due(&request.path, request.max_width)
+                    || libre_render_is_due(&request.path));
 
             let _ = result_tx.send(LoadResult {
                 generation: request.generation,
@@ -7230,12 +7331,13 @@ pub fn run_preview_window() {
         let mut pending_load: Option<PendingLoad> = None;
         let mut pending_load_cancel: Option<Arc<AtomicBool>> = None;
         let mut last_stream_overlay_repaint = Instant::now();
-        // The page the render tier owes the preview on screen, and whether one
-        // has been asked for and is being waited on.
-        let mut office_render_pending: Option<(PathBuf, u64)> = None;
+        // The page an engine owes the preview on screen — Office's render tier where the
+        // document is one of its own, the render engine where it is one of `[libre]`'s —
+        // and whether one has been asked for and is being waited on.
+        let mut page_render_pending: Option<(PathBuf, u64)> = None;
         // A page that arrived for the hover already on screen, and is being loaded
         // to replace what is there rather than to open a new preview.
-        let mut office_upgrade: Option<PathBuf> = None;
+        let mut page_upgrade: Option<PathBuf> = None;
         // The video whose probe a hover is waiting on, and the generation of the hover
         // that is waiting: the geometry is measured on a thread of its own and the hover
         // is replayed when the answer lands (see `VideoProbed`).
@@ -7580,7 +7682,7 @@ pub fn run_preview_window() {
                             // A page for this document is one Office start away,
                             // so it is asked for as soon as the hover is up rather
                             // than after the pointer has rested on it.
-                            office_render_pending = request_office_render(
+                            page_render_pending = request_office_render(
                                 &result.path,
                                 result.generation,
                                 render_box.0,
@@ -7604,12 +7706,17 @@ pub fn run_preview_window() {
                                 .as_ref()
                                 .map(|pl| pl.room)
                                 .unwrap_or_else(|| office_formats::default_page_size(&result.path));
-                            office_render_pending = request_office_render(
+                            // A document the render engine draws is asked for the same
+                            // way, and in the same breath: neither page exists until an
+                            // engine has drawn it, and this is the one hover that is
+                            // waiting for one.
+                            page_render_pending = request_office_render(
                                 &result.path,
                                 result.generation,
                                 width,
                                 height,
-                            );
+                            )
+                            .or_else(|| request_libre_render(&result.path, result.generation));
                         }
                         None => {
                             // Loading failed, hide window
@@ -7718,9 +7825,11 @@ pub fn run_preview_window() {
             // layouts for files the cursor has already left.
             let mut latest_preview_msg: Option<PreviewMessage> = None;
             let mut refresh_requested = false;
-            // The render tier's own message, held apart from the hovers: it is
-            // not a hover to act on but an answer about the one on screen.
-            let mut office_render_ready: Option<(PathBuf, u64, bool)> = None;
+            // A page an engine has finished with, held apart from the hovers: it is
+            // not a hover to act on but an answer about the one on screen. Office's
+            // tier is the one that sends it; a page the render engine draws is read
+            // from the folder it lands in, below, and lands in the same place.
+            let mut page_ready: Option<(PathBuf, u64, bool)> = None;
             // A probe's answer, held apart the same way and for the same reason.
             let mut video_probed: Option<(PathBuf, u64)> = None;
             let mut next_preview_msg = carried_preview_msg.take();
@@ -7779,8 +7888,8 @@ pub fn run_preview_window() {
                         // The newest hover wins, as it does over every other
                         // message: a page that lands in the same tick as a new
                         // hover is not the answer to it.
-                        if latest_preview_msg.is_none() && office_render_ready.is_none() {
-                            office_render_ready = Some((path, generation, ok));
+                        if latest_preview_msg.is_none() && page_ready.is_none() {
+                            page_ready = Some((path, generation, ok));
                         }
                     }
                     PreviewMessage::VideoProbed { path, generation } => {
@@ -7797,12 +7906,32 @@ pub fn run_preview_window() {
                 }
             }
 
+            // A page the render engine draws is not messaged about the way an Office page
+            // is: what that engine writes is a file under the app's own folder, so whether
+            // the page has arrived — or whether the engine has answered that it will not
+            // draw the document at all — is a read of that folder rather than a message
+            // from a thread. What comes of it is the answer an Office page gives, and the
+            // same code below takes it up: it is the same wait, in the same box.
+            if page_ready.is_none() {
+                if let Some((path, generation)) = page_render_pending
+                    .as_ref()
+                    .filter(|(path, _)| libre_formats::is_libre_file(path))
+                {
+                    let drawn = libreoffice_render::rendered_page(path).is_some();
+                    let refused = libreoffice_render::refused(path);
+
+                    if drawn || refused {
+                        page_ready = Some((path.clone(), *generation, drawn));
+                    }
+                }
+            }
+
             // A page the render tier has finished with, for the hover that asked
             // for it: that hover is replayed, which measures the page itself and
             // draws it in place of the spinner it supersedes. A payload from an
             // older hover is dropped here — the page it wrote is kept as far as the
             // cache budget allows, and no further.
-            if let Some((ready_path, ready_generation, ready_ok)) = office_render_ready {
+            if let Some((ready_path, ready_generation, ready_ok)) = page_ready {
                 let shown = current_show.as_ref().and_then(show_path);
                 let hovered = ready_generation == current_generation
                     && shown.map(|path| path.as_path()) == Some(ready_path.as_path());
@@ -7811,14 +7940,14 @@ pub fn run_preview_window() {
                     if latest_preview_msg.is_none() {
                         // The wait is over, so the request stops being the pending
                         // one here — where the page is actually taken up.
-                        office_render_pending = None;
+                        page_render_pending = None;
                         // The page is there, so the hover is replayed: that measures
                         // the page itself, moves the window to its size and loads it.
                         // It is an upgrade rather than a new preview, though, and what
                         // is on screen stays while it happens — hiding the spinner for
                         // the second a large picture takes to decode is a blink the
                         // user sees and reads as the preview failing.
-                        office_upgrade = Some(ready_path.clone());
+                        page_upgrade = Some(ready_path.clone());
                         // A mouse hover is replayed where the pointer is now: the
                         // spinner it replaces was kept with the pointer while the
                         // render ran, and a page that jumped back to where the
@@ -7832,7 +7961,7 @@ pub fn run_preview_window() {
                     // on waiting keeps something to measure and the spinner comes down
                     // when its time is up instead of hanging there for good.
                 } else if hovered {
-                    office_render_pending = None;
+                    page_render_pending = None;
                     // Nothing was drawn and nothing is coming. A preview that is
                     // not a spinner is kept — it is a preview like any other —
                     // while a spinner has nothing left to stand in for.
@@ -7853,7 +7982,7 @@ pub fn run_preview_window() {
                         }
                     }
                 } else {
-                    office_render_pending = None;
+                    page_render_pending = None;
                     // The hover this page was rendered for is over: it landed after
                     // the pointer had moved on, so nothing is waiting for it. What was
                     // rendered is kept as far as the budget allows and no further — at
@@ -7953,16 +8082,13 @@ pub fn run_preview_window() {
 
                         // A document with no page rendered for it yet has nothing to
                         // measure but the wait, so its preview is laid out as the
-                        // spinner's own box (see `office_preview::measure`) and that
-                        // box is placed flush at the pointer rather than a margin away
-                        // from it: the page it waits for is laid out again by the
-                        // replay that arrives with it, so until then the hover is the
-                        // wait for the file under the hand, which belongs at the hand.
-                        let waiting_spinner = office_formats::is_office_preview(&path)
-                            && matches!(
-                                office_preview::source_kind(&path),
-                                office_preview::SourceKind::None
-                            );
+                        // spinner's own box (see `office_preview::measure` and the
+                        // `libre` arm of `get_media_dimensions`) and that box is placed
+                        // flush at the pointer rather than a margin away from it: the
+                        // page it waits for is laid out again by the replay that arrives
+                        // with it, so until then the hover is the wait for the file under
+                        // the hand, which belongs at the hand.
+                        let waiting_spinner = page_is_on_the_way(&path);
 
                         // A video whose shape the probe has not answered for yet is the
                         // same kind of wait, and for the same reason: there is nothing to
@@ -8107,8 +8233,8 @@ pub fn run_preview_window() {
                         }
 
                         current_show = None;
-                        office_render_pending = None;
-                        office_upgrade = None;
+                        page_render_pending = None;
+                        page_upgrade = None;
                     }
                     PreviewMessage::Refresh => {
                         render_layered_preview(hwnd);
@@ -8150,9 +8276,9 @@ pub fn run_preview_window() {
                     // is loaded, and is replaced when it lands. A hover replayed for a
                     // video's probe is the same thing reached another way: it is the
                     // wait it was already in, carried on.
-                    let upgrading = office_upgrade.as_deref() == Some(path.as_path())
+                    let upgrading = page_upgrade.as_deref() == Some(path.as_path())
                         || video_replay.as_deref() == Some(path.as_path());
-                    office_upgrade = None;
+                    page_upgrade = None;
                     video_replay = None;
 
                     // A text or archive preview is rendered at the size the
@@ -8456,8 +8582,8 @@ pub fn run_preview_window() {
                     current_video_path = None;
                     video_pos = (0, 0, 0, 0);
                     current_show = None;
-                    office_render_pending = None;
-                    office_upgrade = None;
+                    page_render_pending = None;
+                    page_upgrade = None;
                 }
             } else if refresh_requested {
                 render_layered_preview(hwnd);
@@ -8473,10 +8599,11 @@ pub fn run_preview_window() {
 
             // The cap on waiting for a page is read against the hover on screen
             // rather than remembered: a render that outlives its hover is dropped
-            // here and its page left in the cache.
+            // here and its page left in the cache — for Office's tier as much as for
+            // the render engine, whose conversion runs on and is kept the same way.
             let shown_path = current_show.as_ref().and_then(show_path).cloned();
 
-            let render_wait = office_render_pending.as_ref().map(|(path, generation)| {
+            let render_wait = page_render_pending.as_ref().map(|(path, generation)| {
                 let hovered = *generation == current_generation
                     && shown_path.as_deref() == Some(path.as_path());
                 let waited = pending_load
@@ -8488,7 +8615,7 @@ pub fn run_preview_window() {
             });
 
             match render_wait {
-                Some((false, _)) => office_render_pending = None,
+                Some((false, _)) => page_render_pending = None,
                 Some((true, true)) => {
                     // The preview has waited as long as it waits — a page that has
                     // not arrived by now may still be coming, a very large document
@@ -8497,7 +8624,7 @@ pub fn run_preview_window() {
                     // it runs on and its page is cached, so the next hover of that
                     // file shows it. Only the engine itself can say a render failed,
                     // and it remembers that for the file.
-                    let abandoned = office_render_pending
+                    let abandoned = page_render_pending
                         .take()
                         .map(|(path, _)| path)
                         .filter(|path| shown_path.as_deref() == Some(path.as_path()));
@@ -10364,6 +10491,142 @@ mod tests {
                 layout.max_width,
                 layout.max_height
             );
+
+            let cancel = Arc::new(AtomicBool::new(false));
+            let started = Instant::now();
+            match load_media(
+                &path,
+                layout.max_width,
+                layout.max_height,
+                scale,
+                dpi,
+                Arc::clone(&cancel),
+            ) {
+                Some(media) => println!(
+                    "loaded: {}x{}, {} frame(s), in {:?}",
+                    media.current_width(),
+                    media.current_height(),
+                    media.frames.len(),
+                    started.elapsed()
+                ),
+                None => println!(
+                    "loaded: nothing — the hover blinks, in {:?}",
+                    started.elapsed()
+                ),
+            }
+        }
+    }
+
+    /// The whole path a hover takes for a document an installed render engine draws, which
+    /// is the one path with a wait in the middle of it: measured as the wait for a page, the
+    /// page asked for, the wait watched, and then — when the engine has drawn it — measured
+    /// and loaded from the page. It also answers the order of the lists, which is what
+    /// decides whether the engine is asked about a file at all. Ignored, and driven by
+    /// `RHP_LIBRE_PROBE` —
+    /// `$env:RHP_LIBRE_PROBE = "C:\art\logo.cdr"; cargo test -- --ignored --nocapture libre_hover_probe`
+    /// — for a document whose preview does not appear.
+    #[test]
+    #[ignore = "reads the files named in RHP_LIBRE_PROBE and starts the installed LibreOffice"]
+    fn libre_hover_probe() {
+        pdf_preview::initialize_apartment();
+
+        let Ok(list) = std::env::var("RHP_LIBRE_PROBE") else {
+            println!("set RHP_LIBRE_PROBE to one or more paths, separated by ';'");
+            return;
+        };
+
+        let bounds = ScreenBounds {
+            left: 0,
+            top: 0,
+            right: 1920,
+            bottom: 1080,
+        };
+        let dpi = 96;
+        let (cursor_x, cursor_y) = (900, 500);
+
+        for path in list
+            .split(';')
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+        {
+            let path = PathBuf::from(path);
+            println!("\n--- {} ---", path.display());
+            println!("engine available: {}", libreoffice_render::available());
+            println!(
+                "kinds: video = {}, pdf = {}, office = {}, libre = {}, design = {}, vector = {}, text = {}",
+                is_video_file(&path),
+                pdf_preview::is_pdf_file(&path),
+                office_formats::is_office_file(&path),
+                libre_formats::is_libre_file(&path),
+                design_formats::is_design_file(&path),
+                vector_formats::is_vector_file(&path),
+                text_formats::is_text_file(&path),
+            );
+
+            let scale = effective_preview_scale(&path, current_hover_scales());
+            println!("scale: {scale:?}");
+            println!("render due: {}", libre_render_is_due(&path));
+            println!(
+                "measure before the page: {:?} — the spinner's own box is {}",
+                media_dimensions(&path, bounds, dpi),
+                office_preview::WAITING_BOX
+            );
+
+            // The hover the page is asked for, which is what the loop does the moment a
+            // document like this is missed. A file this kind does not hold — one another
+            // list reads, or one the engine has already turned down — has nothing to ask
+            // for and nothing to wait on.
+            let Some(_waiting) = request_libre_render(&path, 0) else {
+                println!("request: nothing — the engine is not asked about this file");
+                continue;
+            };
+
+            let started = Instant::now();
+            let mut page = None;
+            while page.is_none()
+                && !libreoffice_render::refused(&path)
+                && started.elapsed() < Duration::from_secs(90)
+            {
+                std::thread::sleep(Duration::from_millis(250));
+                page = libreoffice_render::rendered_page(&path);
+            }
+            println!(
+                "engine: page = {}, refused = {}, after {:?}",
+                page.as_ref()
+                    .map(|page| page.display().to_string())
+                    .unwrap_or_else(|| "none".to_string()),
+                libreoffice_render::refused(&path),
+                started.elapsed()
+            );
+
+            if page.is_none() {
+                continue;
+            }
+
+            // The replay, which is what the loop does when the page lands: the hover is
+            // measured again — this time from the page — placed, and loaded.
+            let Some(dimensions) = media_dimensions(&path, bounds, dpi) else {
+                println!("measure after the page: nothing — the hover shows no preview");
+                continue;
+            };
+            println!("measure after the page: {dimensions:?}");
+
+            let Some(layout) = compute_mouse_layout(
+                cursor_x,
+                cursor_y,
+                HoverPlacement {
+                    orig_dims: dimensions,
+                    avoid: None,
+                    follow_cursor: false,
+                    preview_scale: scale,
+                    flush_at_cursor: false,
+                },
+                bounds,
+                dpi,
+            ) else {
+                println!("layout: none — the hover shows no preview");
+                continue;
+            };
 
             let cancel = Arc::new(AtomicBool::new(false));
             let started = Instant::now();
