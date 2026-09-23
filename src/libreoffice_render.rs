@@ -22,6 +22,24 @@
 //! The engine is asked about the names its filters read and no others — the formats of
 //! the libraries above, CorelDRAW's and the rest — so a Photoshop document, a Krita
 //! project or a Procreate file never pays for a launch that could not answer.
+//!
+//! A conversion is seconds, and it is not one a preview can wait on: the caller is the
+//! preview loop, and a loop held inside a launch is a hover that does not come up, a tray
+//! that does not answer and a pointer that cannot leave the file it is on. So the engine
+//! runs on a thread of its own. What the loop asks is [`request`], which returns at once,
+//! and what it waits on is the page appearing under [`rendered_page`] — the same wait an
+//! Office document has, in the same box, with the hover replayed when the page lands.
+//! The engine draws one document at a time, because one profile is one seat, and the
+//! document waiting behind it is the newest one asked for.
+//!
+//! An engine that has stopped answering is the other half of that. The filters of a
+//! document the engine cannot really read do not always fail: they can spin — measured on
+//! a Flash file, one core at a hundred percent, no page, past every bound — and a
+//! conversion like that holds the seat, burns a core and would cost every document after
+//! it. A conversion that has run longer than any conversion takes is therefore ended, by
+//! name and id, from whichever thread asks the engine for the next document, and the
+//! document it was on is remembered as one the engine will not draw so that the launch is
+//! paid for once and never again.
 
 use crate::config::AppConfig;
 use once_cell::sync::Lazy;
@@ -29,15 +47,31 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 /// How long a conversion is given before it is ended. A conversion of the documents this
 /// is for takes seconds; the first one after an install also writes the engine's own
-/// profile, which is why the wait is generous rather than short.
+/// profile, which is why the wait is generous rather than short. It is the engine's own
+/// bound — what is left when nothing else asks — while [`CONVERSION_GIVE_UP`] is the
+/// point at which a conversion in flight is called hung.
 const CONVERSION_TIMEOUT: Duration = Duration::from_secs(60);
+/// How long a conversion may run before the engine is called hung, and a document asked
+/// for behind it ends it rather than queueing behind it.
+///
+/// A conversion of an ordinary document is one to three seconds on the machine this was
+/// measured on, cold profile included, so this is an order of magnitude past anything a
+/// document the engine can draw costs — and a document it cannot draw never finishes at
+/// all. What the number buys is that one such document does not hold the engine, and the
+/// seat it is drawing in, for the minute the bound below allows.
+const CONVERSION_GIVE_UP: Duration = Duration::from_secs(30);
 /// How often the wait above looks.
 const CONVERSION_POLL: Duration = Duration::from_millis(100);
+
+/// The engine's own program, by the name a record carries: what a conversion that is given
+/// up on is ended by, and what the next run's reaper looks for.
+const ENGINE_IMAGE: &str = "soffice.exe";
 /// What a name is remembered as when the engine would not draw it: the conversion is not
 /// tried again for that version of the document, because a name this app was wrong about —
 /// one in the list the engine has no filter for — would otherwise start an engine on every
@@ -75,23 +109,156 @@ pub fn available() -> bool {
     soffice().is_some()
 }
 
-/// The rendered page of `path`, converting the document if it has not been converted
-/// before: a PDF under the app's own folder, which the PDF path reads the way it reads
-/// any other.
+/// The page already drawn for this version of the document, if there is one: a PDF under
+/// the app's own folder, which the PDF path reads the way it reads any other.
 ///
-/// `None` is the answer for a name the configured list does not hold, for a machine without
-/// the engine, and for a document it could not convert — each of which leaves the preview to
-/// the readers of the picture the file carries.
-pub fn pdf_for(path: &Path) -> Option<PathBuf> {
-    imports(path).then(|| rendered(path)).flatten()
+/// Nothing is started and nothing is waited on here. This is the question "has the engine
+/// answered yet?" asked of the folder the answers are kept in — a preview is laid out from
+/// what it finds, and a hover that is waiting for one keeps asking it until the answer is
+/// there (see [`request`]).
+pub fn rendered_page(path: &Path) -> Option<PathBuf> {
+    let page = rendered_path(path)?;
+
+    usable(&page).then_some(page)
 }
 
-/// The same for a document the `[libre]` list does not hold — one of the Office kind, asked
-/// for here only where the Office engine is not installed. The caller decides that: what a
-/// name means is the lists' business, and this is the engine that draws whatever it is
-/// given.
+/// Whether the engine has already turned this version of the document down: the mark a
+/// conversion that wrote no page leaves where a page would have been.
+///
+/// It is what a hover waiting on that document reads as "nothing is coming" — the spinner
+/// comes down rather than running out its wait — and what keeps the launch from being paid
+/// for a second time.
+pub fn refused(path: &Path) -> bool {
+    rendered_path(path).is_some_and(|page| refused_marker(&page).is_some())
+}
+
+/// Ask the engine for a page for `path`.
+///
+/// Nothing is waited on and nothing is answered: the conversion runs on the engine thread
+/// below, and what a caller watches for is the page appearing in the folder it is kept in,
+/// or the mark that says it is not coming. A hover that asked for one is replayed when it
+/// is there.
+pub fn request(path: &Path) {
+    if !imports(path) || !available() {
+        return;
+    }
+    if rendered_page(path).is_some() || refused(path) {
+        return;
+    }
+
+    // An engine that has been inside one conversion for longer than any of them takes has
+    // stopped answering, so it is ended here rather than queued behind: what that frees is
+    // the seat this request needs, and the core the stuck one was holding.
+    end_hung_engine();
+
+    // A request for the document already being drawn is that request. One that arrives
+    // while another waits replaces it, the way the loader's slot does: the newest hover is
+    // the one the pointer is on, and a document whose hover has gone is one nobody is
+    // waiting for.
+    if running_source().as_deref() == Some(path) {
+        return;
+    }
+
+    let (slot, ready) = &*REQUESTED;
+    if let Ok(mut requested) = slot.lock() {
+        *requested = Some(path.to_path_buf());
+    }
+    ready.notify_all();
+
+    start_engine();
+}
+
+/// The same as [`rendered_page`] for a document the `[libre]` list does not hold — one of
+/// the Office kind, asked for here only where the Office engine is not installed. The
+/// caller decides that: what a name means is the lists' business, and this is the engine
+/// that draws whatever it is given.
+///
+/// The conversion is this call's own, which is the one place a page is still drawn on a
+/// caller's thread: the Office fallback is asked for by the loader, whose wait is a hover's
+/// wait like any other, and whose page is measured from the file the moment it exists.
 pub fn pdf_for_office(path: &Path) -> Option<PathBuf> {
     rendered(path)
+}
+
+/// The document the engine is drawing now, if it is drawing one.
+fn running_source() -> Option<PathBuf> {
+    RUNNING
+        .lock()
+        .ok()?
+        .as_ref()
+        .map(|running| running.source.clone())
+}
+
+/// End a conversion that has outrun the engine's give-up.
+///
+/// Ending the process a conversion is waiting on is what ends the wait: the engine thread
+/// reads it as a conversion that wrote no page, writes the mark that says so beside where
+/// the page would have been, and releases the seat for the document behind it. What the
+/// caller here is left with is a hung engine that costs nothing — no core, no seat — and
+/// the answer it would have reached anyway.
+fn end_hung_engine() {
+    let hung = RUNNING.lock().ok().and_then(|running| {
+        running
+            .as_ref()
+            .filter(|running| is_hung(running))
+            .map(|running| running.pid)
+    });
+
+    if let Some(pid) = hung {
+        // Verified by name and start time before anything is ended, like every other
+        // process this app holds a record of.
+        crate::engine_processes::terminate_owned(pid);
+    }
+}
+
+/// Whether a conversion in flight has had its chance: a document the engine has been drawing
+/// for longer than any document takes is one it is not going to finish.
+fn is_hung(running: &Running) -> bool {
+    running.started.elapsed() >= CONVERSION_GIVE_UP
+}
+
+/// Start the thread conversions run on, once.
+///
+/// It is one of the app's threads rather than one per document: what it does between
+/// conversions is wait on its own slot, which costs nothing, and what it is asked for is
+/// one document at a time because the engine's profile is one seat.
+fn start_engine() {
+    if ENGINE_STARTED.swap(true, Ordering::AcqRel) {
+        return;
+    }
+
+    std::thread::spawn(|| {
+        while let Some(source) = next_request() {
+            // Whatever the engine answers — a page, or a conversion that wrote none — it is
+            // answered in the folder the pages are kept in, which is what the hover waiting
+            // on this document is watching.
+            let _ = rendered(&source);
+        }
+    });
+}
+
+/// The next document to draw, waiting for one.
+///
+/// The wait is on the slot itself, so a request is taken up the moment it is made; a lock
+/// poisoned by a panic on another thread is still the same slot, and a conversion queue is
+/// not worth standing down over.
+fn next_request() -> Option<PathBuf> {
+    let (slot, ready) = &*REQUESTED;
+    let mut requested = match slot.lock() {
+        Ok(requested) => requested,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+
+    loop {
+        if let Some(source) = requested.take() {
+            return Some(source);
+        }
+
+        requested = match ready.wait(requested) {
+            Ok(requested) => requested,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+    }
 }
 
 /// Whether the list this app keeps says the engine is the one to draw `path`.
@@ -106,17 +273,21 @@ fn rendered(path: &Path) -> Option<PathBuf> {
     if usable(&page) {
         return Some(page);
     }
-    if refused(&page).is_some() {
+    if refused_marker(&page).is_some() {
         return None;
     }
 
-    // One engine at a time, and the lock is held across the conversion: LibreOffice's
+    // One engine at a time, and the seat is held across the conversion: LibreOffice's
     // profile is a single seat, so a second run beside the first would wait on it anyway.
-    let _converting = CONVERTING.lock().ok()?;
+    // A conversion in flight has had its chance by the give-up, so the seat is waited for
+    // with the conversion ended rather than for as long as the bound below allows.
+    end_hung_engine();
+
+    let _seat = CONVERTING.lock().ok()?;
     if usable(&page) {
         return Some(page);
     }
-    if refused(&page).is_some() {
+    if refused_marker(&page).is_some() {
         return None;
     }
 
@@ -162,7 +333,7 @@ fn usable(rendered: &Path) -> bool {
 
 /// The mark left beside a page that was not written, for the same document and the same
 /// version of it, or nothing when the engine has not been asked about it yet.
-fn refused(page: &Path) -> Option<PathBuf> {
+fn refused_marker(page: &Path) -> Option<PathBuf> {
     let refused = refused_path(page);
 
     refused.is_file().then_some(refused)
@@ -201,11 +372,26 @@ fn convert(program: &Path, source: &Path, rendered: &Path) -> Option<()> {
         .spawn()
         .ok()?;
 
-    // A process this app started is put in the job every other engine is put in, so one
-    // that outlives the app does not outlive it by much.
-    crate::engine_processes::adopt(child.id());
+    // A process this app started is put in the job every other engine is put in, and held
+    // in a record beside it: one that outlives the app does not outlive it by much, one
+    // that is given up on is ended by name and id wherever it is asked about from, and one
+    // a run never got to end is answered for by the next run's reaper.
+    crate::engine_processes::record(ENGINE_IMAGE, child.id());
 
-    if !wait(&mut child, CONVERSION_TIMEOUT) {
+    // What the engine is drawing, published for the threads that may decide it has stopped
+    // answering while this one waits (see `end_hung_engine`).
+    publish_running(Some(Running {
+        source: source.to_path_buf(),
+        pid: child.id(),
+        started: Instant::now(),
+    }));
+
+    let drawn = wait(&mut child, CONVERSION_TIMEOUT);
+
+    publish_running(None);
+    crate::engine_processes::forget(child.id());
+
+    if !drawn {
         return None;
     }
 
@@ -286,8 +472,35 @@ fn prune(folder: &Path) {
     }
 }
 
+/// Say what the engine is drawing now, or that it has stopped.
+fn publish_running(running: Option<Running>) {
+    if let Ok(mut published) = RUNNING.lock() {
+        *published = running;
+    }
+}
+
 /// The one conversion running at a time, for the reason the engine has one profile.
 static CONVERTING: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+
+/// The conversion in flight: the document being drawn, the process drawing it, and since
+/// when. It is what tells a busy engine from one that has stopped answering, and it is the
+/// id a conversion that has to be ended is ended by.
+struct Running {
+    source: PathBuf,
+    pid: u32,
+    started: Instant,
+}
+
+static RUNNING: Lazy<Mutex<Option<Running>>> = Lazy::new(|| Mutex::new(None));
+
+/// The document waiting to be drawn, and the signal that one is there: a queue of one, for
+/// the reason there is one seat.
+static REQUESTED: Lazy<(Mutex<Option<PathBuf>>, Condvar)> =
+    Lazy::new(|| (Mutex::new(None), Condvar::new()));
+
+/// Whether the engine thread has been started. It is one of the app's threads rather than
+/// one per document, so it is started once and waits on its slot for the rest of the run.
+static ENGINE_STARTED: AtomicBool = AtomicBool::new(false);
 
 #[cfg(test)]
 mod tests {
@@ -296,13 +509,106 @@ mod tests {
     /// The engine is never started for a name its own filters do not read. A Photoshop
     /// document, a Krita project, a Sketch file and a Procreate document are this app's
     /// own readers' business, and asking an office suite about one would cost a launch and
-    /// answer nothing.
+    /// answer nothing. A Flash animation is the case that made the rule worth stating: the
+    /// engine spins on one rather than failing, so a name like that must not reach it at
+    /// all (see `libre_formats`).
     #[test]
     fn asks_the_engine_only_about_the_names_it_reads() {
-        for name in ["poster.psd", "painting.kra", "design.sketch", "art.procreate", "icon.svg"]
-        {
-            assert_eq!(pdf_for(Path::new(name)), None, "`{name}` is not one of its formats");
+        for name in [
+            "poster.psd",
+            "painting.kra",
+            "design.sketch",
+            "art.procreate",
+            "icon.svg",
+            "animation.swf",
+        ] {
+            assert!(!imports(Path::new(name)), "`{name}` is not one of its formats");
         }
+    }
+
+    /// And a name it does not read is not queued either: nothing about a document is asked
+    /// of the engine that its list has not claimed.
+    #[test]
+    fn queues_nothing_for_a_name_it_does_not_read() {
+        let (slot, _) = &*REQUESTED;
+        if let Ok(mut requested) = slot.lock() {
+            *requested = None;
+        }
+
+        request(Path::new("animation.swf"));
+
+        assert!(
+            slot.lock()
+                .map(|requested| requested.is_none())
+                .unwrap_or(false),
+            "the engine is not asked about a name no list of its own holds"
+        );
+    }
+
+    /// And the give-up is not a decision on its own: what it names is ended, which is what
+    /// frees the seat and the core the engine was holding and lets the document behind it be
+    /// drawn. A process that stays up stands in for the engine — a test is not going to make
+    /// LibreOffice spin on a file — recorded the way the engine is, by image name, which is
+    /// the check that keeps an id from being acted on by itself.
+    #[test]
+    fn ends_the_engine_only_once_its_conversion_has_outrun_the_give_up() {
+        let mut engine = std::process::Command::new("ping")
+            .args(["-n", "30", "127.0.0.1"])
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .expect("a process to stand in for the engine");
+        let pid = engine.id();
+        let running = |started: Instant| Running {
+            source: PathBuf::from("drawing.cdr"),
+            pid,
+            started,
+        };
+
+        assert!(
+            crate::engine_processes::processes_named("ping.exe").contains(&pid),
+            "the stand-in runs the image the record below names it by"
+        );
+        crate::engine_processes::record("ping.exe", pid);
+
+        // A conversion that has just started is a document being drawn, and is left to it.
+        publish_running(Some(running(Instant::now())));
+        end_hung_engine();
+        assert!(
+            crate::engine_processes::is_running(pid),
+            "a conversion that has just started is not an engine to end"
+        );
+
+        // One that has outrun the give-up is an engine that has stopped answering.
+        publish_running(Some(running(Instant::now() - CONVERSION_GIVE_UP)));
+        end_hung_engine();
+        assert!(
+            !crate::engine_processes::is_running(pid),
+            "the engine a conversion has outrun is ended"
+        );
+
+        publish_running(None);
+        let _ = engine.wait();
+    }
+
+    /// What the give-up is decided from: a conversion that has just started is not hung —
+    /// a document the engine can draw is seconds, and the profile's first one is a few of
+    /// them — and one that has run past the give-up is.
+    #[test]
+    fn a_conversion_is_hung_only_once_it_has_outrun_the_give_up() {
+        let running = |elapsed: Duration| Running {
+            source: PathBuf::from("drawing.cdr"),
+            pid: std::process::id(),
+            started: Instant::now() - elapsed,
+        };
+
+        assert!(!is_hung(&running(Duration::from_secs(0))));
+        assert!(!is_hung(&running(
+            CONVERSION_GIVE_UP - Duration::from_secs(1)
+        )));
+        assert!(is_hung(&running(CONVERSION_GIVE_UP)));
+        assert!(is_hung(&running(
+            CONVERSION_GIVE_UP + Duration::from_secs(30)
+        )));
     }
 
     /// And the names it does read are the CorelDRAW family and the formats of the same

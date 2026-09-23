@@ -56,15 +56,13 @@ Videos the table does not already cover need FFmpeg, and these are all of them: 
 
 The containers and codecs the table above lists are the ones Windows plays on its own, and they play better with FFmpeg installed — more codecs inside the same container, and seeking rather than a still frame. The tray's **Codecs** menu shows what this machine can play.
 
-### Needs Microsoft Office, or LibreOffice without it
+### Needs Microsoft Office, or LibreOffice
 
 Office documents — `doc` `docm` `docx` `dot` `dotm` `dotx` `xls` `xlsb` `xlsm` `xlsx` `xlt` `xltm` `xltx` `ppt` `pptm` `pptx` `pps` `ppsm` `ppsx` `pot` `potm` `potx` — are drawn in the background by an installed Office so previews appear quickly after the first hover. Excel needs a print queue to export a page — **Microsoft Print to PDF** is enough, and the Print Spooler service must be enabled; without one, Excel falls back to the sheet’s top-left corner. Where no Office is installed, an installed LibreOffice draws them instead.
 
 ### Needs LibreOffice
 
-The documents this app has no reader of its own for, drawn by an installed LibreOffice and sharp at any size, all of them: `123`, `602`, `abw`, `agd`, `cdr`, `cgm`, `cmx`, `cwk`, `dbf`, `dif`, `dxf`, `epub`, `fhd`, `fodg`, `fodp`, `fodt`, `gnm`, `gnumeric`, `hwp`, `jtd`, `jtt`, `key`, `lwp`, `mcw`, `met`, `mw`, `numbers`, `odb`, `odc`, `odf`, `odg`, `odm`, `odp`, `ods`, `odt`, `oth`, `otg`, `otm`, `otp`, `ots`, `ott`, `pages`, `pcd`, `pct`, `pcx`, `pdb`, `plt`, `pm3`, `pm4`, `pm5`, `pm6`, `pmd`, `psw`, `pub`, `pxl`, `qxp`, `ras`, `rl`, `sda`, `sdc`, `sdd`, `sdp`, `sdw`, `sgf`, `sgl`, `slk`, `stc`, `std`, `sti`, `stw`, `svm`, `swf`, `sxd`, `sxg`, `sxi`, `sxm`, `sxw`, `uof`, `uop`, `uos`, `uot`, `vdx`, `vor`, `vsd`, `vsdm`, `vsdx`, `vssm`, `vst`, `vstm`, `vstx`, `vtx`, `vsx`, `wb2`, `wk1`, `wk3`, `wk4`, `wks`, `wpg`, `wq1`, `wq2`, `wpd`, `wps`, `wri`, `xlw`, `zabw`, `zmf`.
-
-That list is `[libre]` in `config.ini`, where you can add names the engine reads and this app does not know.
+The documents this app has no reader of its own for, drawn by an installed LibreOffice and sharp at any size, all of them: `123`, `602`, `abw`, `agd`, `cdr`, `cgm`, `cmx`, `cwk`, `dbf`, `dif`, `dxf`, `epub`, `fhd`, `fodg`, `fodp`, `fodt`, `gnm`, `gnumeric`, `hwp`, `jtd`, `jtt`, `key`, `lwp`, `mcw`, `met`, `mw`, `numbers`, `odb`, `odc`, `odf`, `odg`, `odm`, `odp`, `ods`, `odt`, `oth`, `otg`, `otm`, `otp`, `ots`, `ott`, `pages`, `pcd`, `pct`, `pcx`, `pdb`, `plt`, `pm3`, `pm4`, `pm5`, `pm6`, `pmd`, `psw`, `pub`, `pxl`, `qxp`, `ras`, `rl`, `sda`, `sdc`, `sdd`, `sdp`, `sdw`, `sgf`, `sgl`, `slk`, `stc`, `std`, `sti`, `stw`, `svm`, `sxd`, `sxg`, `sxi`, `sxm`, `sxw`, `uof`, `uop`, `uos`, `uot`, `vdx`, `vor`, `vsd`, `vsdm`, `vsdx`, `vssm`, `vst`, `vstm`, `vstx`, `vtx`, `vsx`, `wb2`, `wk1`, `wk3`, `wk4`, `wks`, `wpg`, `wq1`, `wq2`, `wpd`, `wps`, `wri`, `xlw`, `zabw`, `zmf`.
 
 ### Themes
 
