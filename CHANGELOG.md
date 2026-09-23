@@ -4,22 +4,25 @@
 
 ### Added
 
-- Update checks, asked for by the tray menu and answered at most once an hour: where a newer release exists, its installer is fetched and a row above **Run at Startup** says so. Clicking that row asks whether to install it, and a yes installs it silently and starts the app again. The check asks this repository's own GitHub releases over HTTPS and nowhere else, and nothing is asked at all unless the menu is opened.
+- Opening the tray menu can check for updates at most once an hour. If a newer version exists, the installer downloads and a row appears above Run at Startup. Clicking it asks whether to install; yes installs quietly and restarts the app. No check happens unless the menu is opened.
 
 ### Changed
 
-- Preview for the documents LibreOffice reads and this app has no reader of its own for, under a new **Libre** kind: CorelDRAW `cdr` above all, and the older word processors, spreadsheets, presentations and drawings beside it. The page is drawn by an installed LibreOffice and shown sharp at any size, with `Libre Scaling`, `Cache → Libre` (32 MB by default, kept on disk beside `config.ini`) and a `[libre]` extension list to add or remove names.
-- CorelDRAW `cdr` previews no longer come from the picture such a file carries: it is 96 to 256 pixels, so where LibreOffice is not installed a `.cdr` now shows nothing at all. The name has left the design list for `[libre]`, and `config.ini` is updated on the next run.
-- Office documents are drawn by LibreOffice when no Microsoft Office is installed, under the same **Office** kind and its own scaling.
-- A document LibreOffice draws is converted on a thread of its own rather than on the preview thread, and a hover waits for it the way it waits for an Office page: the spinner at the pointer, and the preview drawn as soon as the page lands. A conversion no longer holds the preview, the tray and the pointer for as long as the engine takes, and a page that arrives after its hover has gone is kept, so the next hover of that document is a read.
-- An engine that has stopped answering is now ended rather than waited on: a conversion that has run longer than any document takes — a render filter can spin on a file it cannot read instead of failing — is ended by name and id from both sides of it, by the engine thread that is waiting on it and by a document asked for behind it, which frees the engine's one seat and the core it was holding, and the document it was on is remembered as one the engine will not draw. This is what keeps one unreadable document from costing every document after it.
-- The `[libre]` list was gone through against the engine's own filter registry, one name at a time, and twenty-five names no filter of it declares are out: EPUB (the engine writes one and does not read one), the older QuarkXPress (`qxp` where the filter reads `qxd` and `qxt`), PageMaker before 6 (`pm3`, `pm4`, `pm5` where the filter reads `pm`, `p65`, `pm6` and `pmd`), the Visio stencils and templates (`vssm`, `vst`, `vstm`, `vtx`, `vsx` where the filter reads `vdx`, `vsd`, `vsdm`, `vsdx`, `vstx`) and fifteen names no filter declares at all. Each of them was a launch that answered nothing when a file of that name was hovered; `config.ini` is updated on the next run, and a name your engine does read can be added back by hand.
-- `swf` is out of the built-in `[libre]` list and is a video name alone. It was in both lists, and the measuring path asked LibreOffice before it asked the video path, which is what made a Flash animation a launch of the engine rather than a preview. `config.ini` is updated on the next run, and a list you have edited yourself is left exactly as it is.
+- New Libre preview type for documents LibreOffice can read but this app cannot, such as CorelDRAW `cdr` and older office formats. Previews are drawn by an installed LibreOffice, stay sharp when resized, and use new scaling and a 32 MB cache stored beside `config.ini`.
+- CorelDRAW `cdr` previews no longer use the small embedded image. Without LibreOffice installed, `cdr` files show no preview. `cdr` moved to the `[libre]` list; `config.ini` updates on the next run.
+- Office documents use LibreOffice when Microsoft Office is not installed, under the same Office type.
+- LibreOffice conversions run in the background. Hovering no longer freezes the preview, tray, or pointer. A spinner appears while waiting, and the preview appears when ready. Late results are kept for the next hover.
+- A stuck LibreOffice conversion is ended instead of blocking everything. One bad file no longer breaks later previews; that document is remembered as unsupported.
+- Cleaned up the `[libre]` list: removed 25 file types LibreOffice does not support, including EPUB, older QuarkXPress, early PageMaker, and some Visio stencils and templates. `config.ini` updates on the next run; supported names can be added back by hand.
+- `.swf` is now video-only and removed from the `[libre]` list. Previously it could launch LibreOffice first. `config.ini` updates on the next run; custom lists are left alone.
+- Previews follow a file's content rather than its extension: a video named as a document is played, a document named as a picture is drawn, and a file whose content no reader here answers for shows nothing instead of starting an engine for it.
+- `Confirm File Type` is on by default; an installation that already exists keeps the value its `config.ini` holds.
+- Building from source now needs Rust 1.98.1 or newer.
 
 ### Fixed
 
-- A Flash animation (`.swf`) no longer hangs the preview. The name was in the video list and the `[libre]` list at once, and the path that measures a preview asked the render engine before it asked the video path — so hovering one started LibreOffice, which does not draw a Flash file: its filters spin with a core at a hundred percent and never write a page, the preview thread was held inside that launch, and nothing on screen answered a hover again until the engine was killed by hand. One of the two lists now settles it, the engine is never asked, and a `.swf` previews as the video FFmpeg reads it as.
-- The order the kinds are asked in is the same in both halves of the app for every name two lists hold, which is the disagreement that let a video be measured as a document.
+- Flash animations (`.swf`) no longer hang previews. They were in both the video and LibreOffice lists, so hovering could start LibreOffice, which cannot render Flash and froze the app. Now `.swf` previews as a video.
+- File types are checked in the same order everywhere, so videos are no longer mistaken for documents.
 
 ## [0.2.14]
 

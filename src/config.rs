@@ -1258,7 +1258,7 @@ impl Default for AppConfig {
             trigger_key: "alt".to_string(),
             trigger_key_mode: TriggerKeyMode::Disable,
             trigger_key_enabled: true,
-            confirm_file_type: false,
+            confirm_file_type: true,
             follow_cursor: DEFAULT_FOLLOW_CURSOR,
             avoid_mode: DEFAULT_AVOID_MODE,
             same_file_rehover_delay_ms: DEFAULT_SAME_FILE_REHOVER_DELAY_MS,
