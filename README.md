@@ -196,15 +196,15 @@ The item a setting starts at carries `(Default)` after its name, so a menu says 
   - **DDS Background** — Black or White for `.dds` textures, whose alpha channel is as often a mask or an unused channel as it is transparency; White by default. The two backdrops that show what stands behind a texture are not offered for one.
   - **Design Background** — the same backdrops as a picture's, for a design document; Checkerboard by default.
 - **Volume** — Max, High, Medium, Low, Very Low, Mute: 100% down to 0%.
+- **Performance**
+  - **Confirm File Type** — check a file's content against its name before it is previewed: a file whose bytes are another kind is previewed as that kind, and one whose content is a format this app has no reader for shows nothing. On by default.
+  - **Cache** — memory held between hovers, 2 GB down to 0 MB: Image, Text, PDF, Office caches.
+  - **Decode Budget** — 16 GB down to 512 MB, 1 GB default: a file past it gets no preview.
 - **Engine**
   - **Select Engine → Office** — which engine an Office document’s page is asked of: **Microsoft Office** (default) draws it with the application that owns the format and keeps LibreOffice as the fallback for a family this machine has no application for, while **LibreOffice** draws every Office document whether Microsoft Office is installed or not. The LibreOffice row is greyed out where it is not installed.
   - **Microsoft Office TTL** — how long a family’s Office app is kept warm: Indefinitely, 1 hour, 30 minutes, 10 minutes (default), 5 minutes, 1 minute, 0 seconds.
   - **LibreOffice TTL** — the same for the engine that draws CorelDRAW and the documents beside it: how long it is kept after the last document it converted. A kept engine converts the next document without starting up again — measured on one document, 1.2 s cold against 0.2 s — and while it is kept it is a LibreOffice with a small document of this app's own open, which is a few hundred megabytes. `0 seconds` keeps none, which is an engine per document. Greyed out where LibreOffice is not installed.
   - **WebView2 TTL** — how long the browser that draws SVG documents is kept warm; greyed out where WebView2 is missing.
-- **Performance**
-  - **Confirm File Type** — check a file's content against its name before it is previewed: a file whose bytes are another kind is previewed as that kind, and one whose content is a format this app has no reader for shows nothing. On by default.
-  - **Cache** — memory held between hovers, 2 GB down to 0 MB: Image, Text, PDF, Office caches.
-  - **Decode Budget** — 16 GB down to 512 MB, 1 GB default: a file past it gets no preview.
 - **Codecs** — what this machine has: Videos, Images, and Engines. Missing ones are greyed out.
 - **Run at Startup** — add or remove the Windows startup entry.
 - **Config.ini** — open the configuration file; the item is named for the running version.
@@ -277,11 +277,6 @@ vector_background=checkerboard
 ; Volume
 video_volume=0
 
-; Engine
-libreoffice_idle=600
-office_engine=microsoft_office
-office_engine_idle=600
-
 ; Performance
 confirm_file_type=true
 decode_budget_gb=1
@@ -289,6 +284,11 @@ image_cache_mb=32
 office_cache_mb=64
 pdf_cache_mb=32
 text_cache_mb=0
+
+; Engine
+libreoffice_idle=600
+office_engine=microsoft_office
+office_engine_idle=600
 
 ; Advanced
 hdr_exposure=0

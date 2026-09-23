@@ -1423,9 +1423,9 @@ fn same_entries(list: &[String], canonical: &[String]) -> bool {
 /// all under `; Ungrouped`, which is where a heading that was forgotten shows up.
 ///
 /// Nothing reads a heading back, and a file grouped by an earlier arrangement of the tray
-/// holds exactly the settings of one grouped this way — so a heading a file has not got is
-/// the one thing that tells the two apart, and the one thing that brings such a file to be
-/// written again (see `headings_are_old`).
+/// holds exactly the settings of one grouped this way — so the headings a file lists, and the
+/// order it lists them in, are the one thing that tells the two apart, and the one thing that
+/// brings such a file to be written again (see `headings_are_old`).
 const SETTING_GROUPS: &[(&str, &[&str])] = &[
     ("General", &["preview_enabled", "run_at_startup"]),
     (
@@ -1490,15 +1490,6 @@ const SETTING_GROUPS: &[(&str, &[&str])] = &[
     ),
     ("Volume", &["video_volume"]),
     (
-        "Engine",
-        &[
-            "libreoffice_idle",
-            "office_engine",
-            "office_engine_idle",
-            "webview_idle",
-        ],
-    ),
-    (
         "Performance",
         &[
             "confirm_file_type",
@@ -1508,6 +1499,15 @@ const SETTING_GROUPS: &[(&str, &[&str])] = &[
             "office_cache_mb",
             "pdf_cache_mb",
             "text_cache_mb",
+        ],
+    ),
+    (
+        "Engine",
+        &[
+            "libreoffice_idle",
+            "office_engine",
+            "office_engine_idle",
+            "webview_idle",
         ],
     ),
     (
@@ -1724,26 +1724,41 @@ fn repair_older_lists(ini: &mut Ini) -> bool {
 ///
 /// A heading is a comment, so a file grouped by one arrangement holds exactly the settings of a
 /// file grouped by another: nothing is read back from the difference and every key is read the
-/// same either way. What a heading the file has not got does say is that it was written before
-/// a heading was added or a setting moved out of another one — and the grouping is the app's to
+/// same either way. What the headings a file does list, and the order it lists them in, do say
+/// is whether it was written before a heading was added, before a setting moved out of another
+/// one, or before the menus themselves were rearranged — and the grouping is the app's to
 /// write, so such a file is written again rather than left with the shape it happens to have.
 ///
-/// One write puts every heading back at once, so a file this has been through has all of them
-/// and is left alone the next time it is read. That is the whole point of asking the question
-/// about the text rather than about the parse: the file is read once a second while it is being
-/// watched, and a file the app has just written must not be a file there is something to write.
-/// The question is asked of the text for that reason too — a heading is a comment, and a parse
-/// keeps everything about a file except the comments (`load`, `reload_from_disk`).
+/// One write puts every heading back at once, in the order of the table, so a file this has been
+/// through lists them as this build lists them and is left alone the next time it is read. That
+/// is the whole point of asking the question about the text rather than about the parse: the
+/// file is read once a second while it is being watched, and a file the app has just written
+/// must not be a file there is something to write. The question is asked of the text for that
+/// reason too — a heading is a comment, and a parse keeps everything about a file except the
+/// comments (`load`, `reload_from_disk`).
 fn headings_are_old(text: &str) -> bool {
-    SETTING_GROUPS.iter().any(|(heading, _)| {
-        let heading_line = format!("; {heading}");
+    // The headings the file lists, in the order it lists them. Compared against the whole line
+    // rather than searched for in the file, so a key named after a heading — or a heading
+    // written inside a value — is not read as one, and a line's own trailing space is not part
+    // of the comparison: an editor that leaves one is not a reason to write the file again.
+    let listed: Vec<&str> = text
+        .lines()
+        .filter_map(|line| {
+            SETTING_GROUPS
+                .iter()
+                .map(|(heading, _)| *heading)
+                .find(|heading| line.trim_end().strip_prefix("; ") == Some(*heading))
+        })
+        .collect();
 
-        // Compared against the whole line rather than searched for in the file, so a key named
-        // after a heading — or a heading written inside a value — is not read as one. A line's
-        // own trailing space is not part of the comparison: an editor that leaves one is not a
-        // reason to write the file out again.
-        !text.lines().any(|line| line.trim_end() == heading_line)
-    })
+    // Every heading the table names, in the order the tray lists them. A file missing one, or
+    // listing them in another order, is a file written before the settings were arranged this
+    // way — and a heading the table does not name at all, `; Ungrouped` among them, is no part
+    // of the question: what is compared is the headings this app writes and the places they
+    // are written in.
+    let written: Vec<&str> = SETTING_GROUPS.iter().map(|(heading, _)| *heading).collect();
+
+    listed != written
 }
 
 impl AppConfig {
@@ -3606,25 +3621,29 @@ extensions=png,jpg
         );
     }
 
-    /// The engine settings are written under a heading of their own, above the one the caches
+    /// The engine settings are written under a heading of their own, below the one the caches
     /// and the budget are under, which is where the tray lists them.
     #[test]
     fn the_engine_settings_are_written_under_a_heading_of_their_own() {
         let written = ordered_text(&AppConfig::default().to_ini());
 
-        let engine = written
-            .find("; Engine\n")
-            .expect("the settings are grouped under a heading for the engines");
         let performance = written
             .find("; Performance\n")
-            .expect("and under one for what the app costs while it works");
+            .expect("the settings are grouped under a heading for what the app costs");
+        let engine = written
+            .find("; Engine\n")
+            .expect("and under one for the engines themselves");
+        let advanced = written
+            .find("; Advanced\n")
+            .expect("and under one for the settings the tray has no item for");
 
         assert!(
-            engine < performance,
-            "the engines are listed above the caches"
+            performance < engine,
+            "the caches are listed above the engines"
         );
+        assert!(engine < advanced, "and the engines above the rest");
 
-        let under_engine = &written[engine..performance];
+        let under_engine = &written[engine..advanced];
         for key in [
             "libreoffice_idle",
             "office_engine",
@@ -3659,6 +3678,25 @@ extensions=png,jpg
         assert!(
             headings_are_old(&older),
             "a file with no heading for the engines is one to write again"
+        );
+
+        // A file with every heading, listed in the order the build before this one listed them —
+        // the engines above the caches — is one to write again as well: the menus were
+        // rearranged, and the headings say so.
+        let (head, rest) = written
+            .split_once("; Performance\n")
+            .expect("a heading for the caches");
+        let (performance, rest) = rest
+            .split_once("; Engine\n")
+            .expect("a heading for the engines");
+        let (engine, tail) = rest
+            .split_once("; Advanced\n")
+            .expect("a heading for the rest");
+        let rearranged =
+            format!("{head}; Engine\n{engine}; Performance\n{performance}; Advanced\n{tail}");
+        assert!(
+            headings_are_old(&rearranged),
+            "a file listing the headings in another order is one to write again"
         );
 
         // An editor that saves the file with the other line ending leaves one there is nothing
