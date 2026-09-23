@@ -142,6 +142,21 @@ pub fn app_for(path: &Path) -> Option<OfficeApp> {
     None
 }
 
+/// Whether the application that draws this document's pages is installed on this machine.
+///
+/// It is the same test the render tier makes before it drives one — the family's ProgID,
+/// which is a registry read rather than a process (see `codecs`) — and it is what decides
+/// where a page comes from: an Office document whose application is here is drawn by it,
+/// while one whose application is missing has no engine of its own to ask, and its page is
+/// drawn by the render engine beside it instead (see `libre_formats::engine_page_kind`).
+///
+/// A name no family claims is answered with no, since there is nothing that could be
+/// started for it: a document of that shape is one the render engine draws or one nobody
+/// does.
+pub fn app_installed(path: &Path) -> bool {
+    app_for(path).is_some_and(|app| crate::formats::codecs::prog_id_installed(app.prog_id()))
+}
+
 /// The box a document's page is measured by when nothing else can measure it, by
 /// the shape that family's pages have: a Word page is a portrait sheet, a workbook's
 /// first printed page is usually a landscape one, and a slide is a slide.

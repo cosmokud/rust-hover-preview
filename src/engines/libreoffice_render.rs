@@ -23,14 +23,25 @@
 //! the libraries above, CorelDRAW's and the rest — so a Photoshop document, a Krita
 //! project or a Procreate file never pays for a launch that could not answer.
 //!
+//! One document of another kind is asked about as well, and it is the one case the list is
+//! not consulted about: an Office document whose own application is not installed. There is
+//! no Word, Excel or PowerPoint on the machine to draw a page for one, and this engine's
+//! filters read the format, so the page is this engine's and the hover shows it as the
+//! Office document the file is, at that kind's own scale (see `libre_formats`). Which files
+//! those are is answered in one place, `libre_formats::engine_page_kind`, and it is asked by
+//! the caller and by [`request`] alike: a page asked for by one side and refused by the
+//! other would be a hover waiting for a conversion nothing was ever asked to make.
+//!
 //! A conversion is seconds, and it is not one a preview can wait on: the caller is the
 //! preview loop, and a loop held inside a launch is a hover that does not come up, a tray
 //! that does not answer and a pointer that cannot leave the file it is on. So the engine
 //! runs on a thread of its own. What the loop asks is [`request`], which returns at once,
 //! and what it waits on is the page appearing under [`rendered_page`] — the same wait an
 //! Office document has, in the same box, with the hover replayed when the page lands.
-//! The engine draws one document at a time, because one profile is one seat, and the
-//! document waiting behind it is the newest one asked for.
+//! Nothing on the drawing side converts a document either: the loader asks for a page that
+//! is there and reads it, and a page that is not there yet is the wait above. The engine
+//! draws one document at a time, because one profile is one seat, and the document waiting
+//! behind it is the newest one asked for.
 //!
 //! An engine that has stopped answering is the other half of that. The filters of a
 //! document the engine cannot really read do not always fail: they can spin — measured on
@@ -167,18 +178,6 @@ pub fn request(path: &Path) {
     start_engine();
 }
 
-/// The same as [`rendered_page`] for a document the `[libre]` list does not hold — one of
-/// the Office kind, asked for here only where the Office engine is not installed. The
-/// caller decides that: what a name means is the lists' business, and this is the engine
-/// that draws whatever it is given.
-///
-/// The conversion is this call's own, which is the one place a page is still drawn on a
-/// caller's thread: the Office fallback is asked for by the loader, whose wait is a hover's
-/// wait like any other, and whose page is measured from the file the moment it exists.
-pub fn pdf_for_office(path: &Path) -> Option<PathBuf> {
-    rendered(path)
-}
-
 /// The document the engine is drawing now, if it is drawing one.
 fn running_source() -> Option<PathBuf> {
     RUNNING
@@ -267,9 +266,13 @@ fn next_request() -> Option<PathBuf> {
     }
 }
 
-/// Whether the list this app keeps says the engine is the one to draw `path`.
+/// Whether the engine is the one that draws this file: a document of its own lists, named
+/// by the configured list or recognized by its own bytes, or an Office document whose own
+/// application is not installed. The question is asked where it is answered for every
+/// caller — see `libre_formats::engine_page_kind` — so that a page one side asks for is a
+/// page the other side will draw.
 fn imports(path: &Path) -> bool {
-    crate::formats::libre_formats::is_libre_file(path)
+    crate::formats::libre_formats::engine_page_kind(path).is_some()
 }
 
 /// The rendered page of a document, converting it if it has not been converted before.

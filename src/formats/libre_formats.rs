@@ -24,7 +24,18 @@
 //! *called*: whether the engine can read it at all is settled by the engine, and a name it
 //! cannot read is answered with no preview — once, and then remembered, so a name that was
 //! put in this list by mistake costs one conversion and never another.
+//!
+//! One document of another kind is asked of the engine as well, and it is the one case the
+//! list above is not asked about: an Office document whose own application is not installed
+//! on this machine. There is no Word, Excel or PowerPoint to draw a page for one, and the
+//! engine beside them reads the format — so its page is what the hover shows, under the
+//! Office kind and at the Office kind's scale rather than this one's, because the file is
+//! what it is whichever engine drew it. `engine_page_kind` is that question, and it is the
+//! one place both the callers and the engine ask it: a page asked for by one side and
+//! refused by the other is a hover that waits for a conversion nothing was ever asked to
+//! make.
 
+use crate::config::config::PreviewType;
 use crate::formats::text_formats;
 use crate::CONFIG;
 use std::path::Path;
@@ -143,7 +154,46 @@ pub fn is_libre_file(path: &Path) -> bool {
 /// a file whose kind is off, which is how a preview of that kind comes down when the
 /// switch does. See `PreviewType::enabled`.
 pub fn is_libre_preview(path: &Path) -> bool {
-    is_libre_file(path) && crate::config::config::PreviewType::Libre.enabled()
+    is_libre_file(path) && PreviewType::Libre.enabled()
+}
+
+/// Which kind a page the render engine draws for this file is shown under, or `None` for a
+/// file the engine is not asked about at all.
+///
+/// Two kinds of document have a page that is the engine's rather than a reader's or an
+/// application's. One is this list's own: the documents whose formats this app has no
+/// reader for, named here or recognized by their own bytes. The other is an Office document
+/// whose own application is not installed — there is no engine of its own to ask for a page,
+/// so the page is this one's, and it is shown as the Office document the file is rather than
+/// as a document of the engine's kind (see `office_formats::app_installed`).
+///
+/// The file's own bytes are asked first, as they are wherever a kind is settled: a picture
+/// left under a document's name is not a document for this engine. Every Office format is a
+/// container — a zip, an OLE compound file — and a container is not a kind here, so the
+/// content never names Office and the name is what settles one, below. What the answer is
+/// *not* is a gate: whether that kind may be shown is the caller's to ask
+/// (`PreviewType::enabled`), because the same question is asked of a preview that is already
+/// on screen when a switch is thrown.
+pub fn engine_page_kind(path: &Path) -> Option<PreviewType> {
+    use crate::formats::content_type::{self, Content};
+
+    match content_type::of(path) {
+        Content::Kind(PreviewType::Libre) => return Some(PreviewType::Libre),
+        Content::Kind(_) | Content::Foreign => return None,
+        Content::Unknown => {}
+    }
+
+    if is_libre_file(path) {
+        return Some(PreviewType::Libre);
+    }
+
+    // An Office document is the engine's only where its own application is not here: a page
+    // that has an application to draw it is that application's, and asking the engine for one
+    // as well would be a second rendering of the same document — the one thing this fallback
+    // is not for.
+    (crate::formats::office_formats::is_office_file(path)
+        && !crate::formats::office_formats::app_installed(path))
+    .then_some(PreviewType::Office)
 }
 
 #[cfg(test)]
@@ -289,5 +339,81 @@ mod tests {
                 "`{name}` is a name no filter of the engine's declares"
             );
         }
+    }
+
+    /// A page the engine draws answers with the kind it is shown under, and the question is
+    /// asked of the file's own bytes before its name: a picture left under a document's name
+    /// is not a document for this engine, while a CorelDRAW drawing — one whose own container
+    /// says what it is, whatever it is called — is.
+    #[test]
+    fn a_page_the_engine_draws_answers_with_the_kind_it_is_shown_under() {
+        if let Ok(mut config) = crate::CONFIG.lock() {
+            config.confirm_file_type = true;
+            config.libre_extensions = sanitize_libre_extensions(DEFAULT_LIBRE_EXTENSIONS);
+        }
+
+        let folder = std::env::temp_dir().join("rust-hover-preview-engine-page-kind");
+        std::fs::create_dir_all(&folder).expect("a test folder");
+
+        // A drawing in CorelDRAW's own RIFF container, under a name no list claims at all:
+        // what settles it is the file.
+        let renamed = folder.join("drawing.bin");
+        std::fs::write(&renamed, b"RIFF\x00\x00\x00\x00CDR6").expect("a written drawing");
+        assert_eq!(
+            engine_page_kind(&renamed),
+            Some(PreviewType::Libre),
+            "a CorelDRAW drawing is the engine's to draw, whatever it is called"
+        );
+
+        // And under the name its own list holds, which is what a real one is.
+        assert_eq!(
+            engine_page_kind(&folder.join("drawing.cdr")),
+            Some(PreviewType::Libre),
+            "a name of the engine's own list is its document too"
+        );
+
+        // A picture under a document's name is a picture: no engine is asked about one.
+        let picture = folder.join("report.docx");
+        std::fs::write(&picture, [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A])
+            .expect("a written picture");
+        assert_eq!(
+            engine_page_kind(&picture),
+            None,
+            "a picture under a document's name is not a document for this engine"
+        );
+
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    /// An Office document is one engine's or the other's, never both and never neither: the
+    /// application that owns the format draws its page where it is installed, and the render
+    /// engine beside it draws one where it is not. Both drawing it is what a **smaller
+    /// version** of a page in front of the right one was: the engine's page was laid out at
+    /// the wait's own size and shown for the second or two the application took to draw the
+    /// real one over it. Neither drawing it is a hover that waits for a page nothing was
+    /// asked to draw.
+    ///
+    /// The machine's own answer is what the expectation is written from — whether an
+    /// application is installed is not something a test can decide — but the rule is one of
+    /// this app's, and it is what this asserts.
+    #[test]
+    fn an_office_document_is_one_engine_or_the_others() {
+        let folder = std::env::temp_dir().join("rust-hover-preview-office-engine-choice");
+        std::fs::create_dir_all(&folder).expect("a test folder");
+
+        for name in ["report.docx", "ledger.xlsx", "talk.pptx"] {
+            let path = folder.join(name);
+            std::fs::write(&path, b"PK\x03\x04\x00\x00\x00\x00").expect("a written document");
+
+            let installed = crate::formats::office_formats::app_installed(&path);
+            assert_eq!(
+                engine_page_kind(&path),
+                (!installed).then_some(PreviewType::Office),
+                "`{name}`: the render engine draws it exactly where the application that owns \
+                 the format is not installed"
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(&folder);
     }
 }
