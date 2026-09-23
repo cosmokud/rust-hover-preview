@@ -68,9 +68,16 @@ use windows::Win32::UI::WindowsAndMessaging::{
     SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, WINDOWPLACEMENT,
 };
 
+/// What the walk over Explorer's own windows found: how many there are, how many are
+/// showing, and how many of those the region the window in front covers does not
+/// hold — the ones a hover can still reach.
 struct ExplorerWindowCounts {
     total: usize,
     visible: usize,
+    reachable: usize,
+    /// The region the window in front hides what is behind, where that window is one
+    /// that hides anything at all — see `foreground_cover_rect`.
+    cover: Option<RECT>,
 }
 
 /// What the desktop looks like from here, which is what decides whether everything
@@ -2563,23 +2570,63 @@ fn is_window_fullscreen(hwnd: HWND) -> bool {
     }
 }
 
-/// Check if foreground window is maximized or fullscreen AND is not Explorer
-/// Returns true if we should sleep (Explorer is hidden behind a maximized/fullscreen window)
-fn is_explorer_hidden_by_foreground() -> bool {
+/// The region the window in front hides what is behind, where that window is one
+/// that hides anything at all: a maximized or fullscreen window that is not
+/// Explorer's. `None` is a foreground window nothing is hidden behind — an ordinary
+/// one, Explorer itself, or no window at all.
+///
+/// What it is for is asking whether an Explorer window is behind it. Taking the
+/// foreground window alone for the answer — a maximized window, so Explorer must be
+/// hidden behind it — is wrong on an extended desktop, and was: a maximized window
+/// hides what is on the display it covers and says nothing about an Explorer window
+/// on the display beside it, so the state went to `HiddenByForeground` — which hides
+/// the preview and never asks where the cursor is — and a pointer that crossed over
+/// to the Explorer window on the second display showed nothing at all until the
+/// click that made Explorer the foreground window. What a window hides is what its
+/// own rectangle holds, which is what the walk over Explorer's windows is asked.
+fn foreground_cover_rect() -> Option<RECT> {
     unsafe {
         let foreground = GetForegroundWindow();
-        if foreground.is_invalid() {
-            return false;
+        if foreground.is_invalid() || is_explorer_window(foreground) {
+            return None;
         }
 
-        // If foreground IS Explorer, it's not hidden
-        if is_explorer_window(foreground) {
-            return false;
+        // Only a maximized or fullscreen window covers anything whole.
+        if !(is_window_maximized(foreground) || is_window_fullscreen(foreground)) {
+            return None;
         }
 
-        // Check if foreground is maximized or fullscreen
-        is_window_maximized(foreground) || is_window_fullscreen(foreground)
+        let mut rect = RECT::default();
+        GetWindowRect(foreground, &mut rect).ok()?;
+        Some(rect)
     }
+}
+
+/// Whether a window is hidden behind the region the window in front covers.
+///
+/// A window with no region over it is hidden by nothing, and one whose own rectangle
+/// cannot be read is answered as reachable for the same reason: what follows from
+/// hidden is a state that stops asking where the cursor is, so where the two cannot
+/// be told apart the answer that keeps the previews is the one to give.
+fn window_is_behind_cover(hwnd: HWND, cover: Option<RECT>) -> bool {
+    let Some(cover) = cover else {
+        return false;
+    };
+
+    let mut rect = RECT::default();
+    if unsafe { GetWindowRect(hwnd, &mut rect) }.is_err() {
+        return false;
+    }
+
+    rect_contains(cover, rect)
+}
+
+/// Whether one rectangle holds another whole.
+fn rect_contains(outer: RECT, inner: RECT) -> bool {
+    inner.left >= outer.left
+        && inner.top >= outer.top
+        && inner.right <= outer.right
+        && inner.bottom <= outer.bottom
 }
 
 /// Check if a window is minimized
@@ -2624,19 +2671,25 @@ unsafe extern "system" fn enum_explorer_windows_callback(hwnd: HWND, lparam: LPA
         counts.total += 1;
         if IsWindowVisible(hwnd).as_bool() && !is_window_minimized(hwnd) {
             counts.visible += 1;
+            if !window_is_behind_cover(hwnd, counts.cover) {
+                counts.reachable += 1;
+            }
         }
     }
 
     BOOL(1)
 }
 
-/// Get count of Explorer windows and count of visible (not minimized) ones.
-/// Uses top-level HWND enumeration instead of ShellWindows COM to avoid
+/// What the walk over Explorer's windows found: how many there are, how many are
+/// showing, and how many of those are out from behind the region the window in front
+/// covers. Uses top-level HWND enumeration instead of ShellWindows COM to avoid
 /// making Explorer's shell automation providers allocate during idle polling.
-fn get_explorer_window_counts() -> (usize, usize) {
+fn get_explorer_window_counts(cover: Option<RECT>) -> ExplorerWindowCounts {
     let mut counts = ExplorerWindowCounts {
         total: 0,
         visible: 0,
+        reachable: 0,
+        cover,
     };
 
     unsafe {
@@ -2646,7 +2699,7 @@ fn get_explorer_window_counts() -> (usize, usize) {
         );
     }
 
-    (counts.total, counts.visible)
+    counts
 }
 
 /// Enum representing the state of Explorer windows for CPU optimization
@@ -2656,7 +2709,8 @@ enum ExplorerState {
     NoExplorerWindows,
     /// All Explorer windows are minimized - long sleep
     AllMinimized,
-    /// A non-Explorer window is maximized/fullscreen, hiding Explorer - long sleep
+    /// Every window Explorer has showing is behind the region a maximized or
+    /// fullscreen window in front of it covers - long sleep
     HiddenByForeground,
     /// Explorer is visible but not in focus - medium sleep
     VisibleNotFocused,
@@ -2671,20 +2725,27 @@ fn get_explorer_state() -> ExplorerState {
         return ExplorerState::ActiveFocus;
     }
 
-    // Check if foreground is maximized/fullscreen (cheap check)
-    if is_explorer_hidden_by_foreground() {
-        return ExplorerState::HiddenByForeground;
-    }
+    // Everything past here is about the Explorer windows themselves: how many there
+    // are, and whether the window in front leaves any of them out from behind itself.
+    let counts = get_explorer_window_counts(foreground_cover_rect());
+    explorer_state_from_counts(&counts)
+}
 
-    // Check Explorer browser windows without ShellWindows COM.
-    let (total, visible) = get_explorer_window_counts();
-
-    if total == 0 {
+/// The state the counts come out as: which sleep the loop takes, and whether the
+/// cursor is asked about at all.
+fn explorer_state_from_counts(counts: &ExplorerWindowCounts) -> ExplorerState {
+    if counts.total == 0 {
         return ExplorerState::NoExplorerWindows;
     }
 
-    if visible == 0 {
+    if counts.visible == 0 {
         return ExplorerState::AllMinimized;
+    }
+
+    // Nothing Explorer has showing is out from behind the region the window in front
+    // covers, on any display, so the pointer cannot reach one of them.
+    if counts.reachable == 0 {
+        return ExplorerState::HiddenByForeground;
     }
 
     // Explorer windows exist and are visible, but not in foreground
@@ -4607,6 +4668,135 @@ mod tests {
         assert_eq!(
             winning_shell_view(&[window(false, false, false), window(false, false, false)]),
             None
+        );
+    }
+
+    /// One state's counts, from the numbers `explorer_state_from_counts` decides by.
+    fn counts(
+        total: usize,
+        visible: usize,
+        reachable: usize,
+        cover: Option<RECT>,
+    ) -> ExplorerWindowCounts {
+        ExplorerWindowCounts {
+            total,
+            visible,
+            reachable,
+            cover,
+        }
+    }
+
+    /// The region a maximized window on the primary display covers, which is what a
+    /// hidden answer is measured against.
+    fn primary_display() -> Option<RECT> {
+        Some(RECT {
+            left: 0,
+            top: 0,
+            right: 1920,
+            bottom: 1080,
+        })
+    }
+
+    /// The case this was fixed for: a maximized window on one display leaves an
+    /// Explorer window on the display beside it reachable, so the state has to be the
+    /// one that keeps asking where the cursor is. Answered as hidden, the loop hides
+    /// the preview and sleeps without ever asking, and a pointer that crossed over to
+    /// the second display shows nothing at all until the click that focuses Explorer.
+    #[test]
+    fn a_window_beside_the_one_in_front_leaves_explorer_reachable() {
+        assert_eq!(
+            explorer_state_from_counts(&counts(1, 1, 1, primary_display())),
+            ExplorerState::VisibleNotFocused
+        );
+    }
+
+    /// Every window Explorer has showing behind the window in front is the one case
+    /// that may sleep without asking: there is nothing left for the pointer to reach.
+    #[test]
+    fn every_window_behind_the_one_in_front_is_hidden() {
+        assert_eq!(
+            explorer_state_from_counts(&counts(2, 2, 0, primary_display())),
+            ExplorerState::HiddenByForeground
+        );
+    }
+
+    /// A foreground window that hides nothing — an ordinary one — leaves every
+    /// Explorer window reachable, whatever display it is on.
+    #[test]
+    fn a_window_that_hides_nothing_leaves_explorer_visible() {
+        assert_eq!(
+            explorer_state_from_counts(&counts(1, 1, 1, None)),
+            ExplorerState::VisibleNotFocused
+        );
+    }
+
+    /// No Explorer window at all is answered before anything the window in front
+    /// does: there is nothing to be hidden and nothing to ask about.
+    #[test]
+    fn no_window_is_answered_before_the_window_in_front() {
+        assert_eq!(
+            explorer_state_from_counts(&counts(0, 0, 0, primary_display())),
+            ExplorerState::NoExplorerWindows
+        );
+    }
+
+    /// Every Explorer window minimized is minimized whatever the window in front is.
+    #[test]
+    fn every_window_minimized_is_answered_as_minimized() {
+        assert_eq!(
+            explorer_state_from_counts(&counts(2, 0, 0, primary_display())),
+            ExplorerState::AllMinimized
+        );
+    }
+
+    /// A region holds a window that is inside it — including one that covers it whole —
+    /// and does not hold one on the display beside it, or one that reaches past its
+    /// edge: what a window in front hides is what its own rectangle holds.
+    #[test]
+    fn a_region_holds_only_what_is_inside_it() {
+        let display = RECT {
+            left: 0,
+            top: 0,
+            right: 1920,
+            bottom: 1080,
+        };
+        let inside = RECT {
+            left: 120,
+            top: 90,
+            right: 900,
+            bottom: 700,
+        };
+        let covering = RECT {
+            left: 0,
+            top: 0,
+            right: 1920,
+            bottom: 1080,
+        };
+        let beside = RECT {
+            left: 1920,
+            top: 0,
+            right: 3840,
+            bottom: 1080,
+        };
+        let reaching = RECT {
+            left: 1600,
+            top: 0,
+            right: 2400,
+            bottom: 1080,
+        };
+
+        assert!(rect_contains(display, inside));
+        assert!(
+            rect_contains(display, covering),
+            "a window covering the region is on it"
+        );
+        assert!(
+            !rect_contains(display, beside),
+            "the display beside it is outside it"
+        );
+        assert!(
+            !rect_contains(display, reaching),
+            "a window reaching past its edge is outside it"
         );
     }
 
