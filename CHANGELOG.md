@@ -26,8 +26,10 @@
 
 - Flash animations (`.swf`) no longer hang previews. They were in both the video and LibreOffice lists, so hovering could start LibreOffice, which cannot render Flash and froze the app. Now `.swf` previews as a video.
 - File types are checked in the same order everywhere, so videos are no longer mistaken for documents.
+- A file renamed to another type's extension is now drawn by the whole of the type its content belongs to, size rules included: a picture named `.mp4` or `.docx` follows the picture scaling rather than the video's or the document's, and one named `.txt` shows at all instead of being read as a page of text that it is not.
+- A file whose content is not a document no longer starts Office to look for a page, and a video whose name is not in the video list is played rather than left on its first frame.
 
-## [0.2.14] - 2026-09-22
+## [0.2.14] - 2026-09-23
 
 ### Changed
 
@@ -84,7 +86,7 @@
 - A failed startup of the Explorer lookup could leave hover previews off for the rest of the run; it is now retried until it works.
 - The internal timeout that stops a stalled Explorer from blocking the app is now verified instead of assumed, and refreshes itself if a newer one is ever needed.
 
-## [0.2.11] - 2026-09-22
+## [0.2.11] - 2026-09-21
 
 ### Added
 
@@ -130,7 +132,7 @@
 - Animations with a long frame in them no longer freeze on that frame. Any frame held for a whole second or more — which a GIF is free to ask for, and one of these asks for 1.2 seconds on its first frame — was unreachable: the playhead was treated as having fallen behind once a second had passed, and its clock was reset every tick, so the wait could never end. The frame's own delay is now part of what "behind" means, and a long hold is simply a long hold.
 - An animation that fits the memory it is kept in stays whole instead of being taken apart frame by frame: it is decoded once, plays through, and wraps back into the frame it started on rather than being read from disk again on every pass.
 
-## [0.2.10] - 2026-09-10
+## [0.2.10] - 2026-09-21
 
 ### Added
 
@@ -156,7 +158,7 @@
 - Paint `Checkerboard` for `svg_background` in the engine page so SVG previews keep the standard backdrop.
 - Bump version to 0.2.10 in `Cargo.toml` and `Cargo.lock`.
 
-## [0.2.9] - 2026-09-10
+## [0.2.9] - 2026-09-21
 
 ### Added
 
@@ -173,7 +175,7 @@
 - Tray menu regrouped: `Text Preview` sits below `Preview Types`, `Trigger Key` moved into `Timing` above `Delay`, `Confirm File Type` moved into `Performance`, and the two engine idle-time submenus are named for what they set — `Office Engine TTL` and `SVG Engine TTL`.
 - Bumped version to 0.2.9 in Cargo.toml and Cargo.lock.
 
-## [0.2.8] - 2026-08-24
+## [0.2.8] - 2026-09-20
 
 ### Added
 
@@ -196,7 +198,7 @@
 - Screen zoom is now read from the window under the point, with the monitor as backup.
 - PDF and Office-exported pages now fit inside the preview box instead of running off-screen.
 
-## [0.2.7] - 2026-07-03
+## [0.2.7] - 2026-09-19
 
 ### Added
 
@@ -229,7 +231,7 @@
 - One engine per Office family is enforced rather than assumed: a family's engine is started only when nothing this app began for it is still running, and a replacement waits for the process it replaces to be gone. Exiting while a document is mid-render no longer leaves the engine behind either.
 - Pictures over 40 megapixels preview again: the pixel cap is gone, and every reader — pictures, animated GIF/APNG/WebP, SVG documents, Office exports, themes — now asks the decode budget above before it allocates.
 
-## [0.2.6] - 2026-07-01
+## [0.2.6] - 2026-09-17
 
 ### Added
 
@@ -397,7 +399,7 @@
 
 - PDF previews now work in normal folder views.
 
-## [0.1.14] - 2026-09-15
+## [0.1.14] - 2026-09-16
 
 ### Added
 
@@ -421,7 +423,7 @@
 
 - Many fixes for animated images, video cleanup, keyboard/mouse switching, and folder changes.
 
-## [0.1.14-rc.10] - 2026-09-15
+## [0.1.14-rc.10] - 2026-09-16
 
 ### Added
 
@@ -538,7 +540,7 @@
 
 - Release 0.1.13: version bump and changelog update.
 
-## [0.1.13-rc.2] - 2026-06-03
+## [0.1.13-rc.2] - 2026-05-13
 
 ### Added
 
@@ -550,7 +552,7 @@
 - Simplified deploy workflow.
 - Version bumped to 0.1.13-rc.2.
 
-## [0.1.13-rc.1] - 2026-06-03
+## [0.1.13-rc.1] - 2026-05-05
 
 ### Added
 
