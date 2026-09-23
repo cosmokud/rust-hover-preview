@@ -8,15 +8,16 @@
 //! what the last one found. Nothing here runs at startup, nothing here is on a
 //! hover's path, and a check that never happens costs a preview nothing.
 //!
-//! What is trusted is this repository's own releases. Both URLs are compiled in
-//! and both are GitHub's, over HTTPS under the machine's own certificate store
-//! and proxy settings — WinHTTP, so nothing is bundled for either — and an
-//! installer that arrives is checked against the length the response promised,
-//! and for the two bytes every Windows executable opens with, before it is kept.
-//! It is then run with the installer's own silent switch, which replaces this
-//! app, and with the switch that starts it again afterwards. The app ends itself
-//! as it hands over, so the copy the installer has to terminate is one that is
-//! already leaving.
+//! What is trusted is this repository's own releases. Both addresses are this
+//! repository's own — the newest release, for the version, and the release that
+//! version names, for its installer — and both are over HTTPS under the
+//! machine's own certificate store and proxy settings, WinHTTP, so nothing is
+//! bundled for either; and an installer that arrives is checked against the
+//! length the response promised, and for the two bytes every Windows executable
+//! opens with, before it is kept. It is then run with the installer's own silent
+//! switch, which replaces this app, and with the switch that starts it again
+//! afterwards. The app ends itself as it hands over, so the copy the installer
+//! has to terminate is one that is already leaving.
 
 use crate::RUNNING;
 use once_cell::sync::Lazy;
@@ -40,18 +41,23 @@ use windows::Win32::UI::WindowsAndMessaging::{
     MessageBoxW, IDYES, MB_ICONINFORMATION, MB_SETFOREGROUND, MB_YESNO,
 };
 
-/// Where a release is published, and the two names this app asks for. They are
-/// the release's *own* assets rather than a query against the releases API:
-/// `releases/latest/download/<name>` is GitHub's stable address for an asset of
-/// the newest release, so the check is a fixed pair of URLs, the answer is a
-/// file the release already carries, and nothing here has to parse a response
-/// format or count against an API rate limit. It is the deploy workflow that
-/// puts both names in every release — a plain version, and the installer copied
-/// out under a name that does not change from version to version.
+/// Where this app's releases are published, and the two files a check asks for.
+/// They are the releases' *own* assets rather than a query against the releases
+/// API: the version is read at `releases/latest/download`, GitHub's stable
+/// address for an asset of the newest release, and the installer is asked for in
+/// the release that version names — by the tag it is published under, and by the
+/// name the packager gave the file there — so the check is two addresses built
+/// here, the answers are files the releases already carry, and nothing has to
+/// parse a response format or count against an API rate limit.
 const RELEASE_HOST: &str = "github.com";
-const RELEASE_PATH: &str = "/cosmokud/rust-hover-preview/releases/latest/download";
+const LATEST_PATH: &str = "/cosmokud/rust-hover-preview/releases/latest/download";
+const RELEASE_PATH: &str = "/cosmokud/rust-hover-preview/releases/download";
 const VERSION_ASSET: &str = "version.txt";
-const INSTALLER_ASSET: &str = "rust-hover-preview-setup.exe";
+
+/// What the installer is called where it waits for the click, which is this
+/// app's own name for it: the file it was fetched from is named for the version
+/// it carries, and nothing outside this app reads the name it is kept under.
+const STAGED_ASSET: &str = "rust-hover-preview-setup.exe";
 
 /// What this app calls itself on the wire. GitHub answers a request without one
 /// with a refusal, and a version in it is what tells a release page's own
@@ -209,11 +215,22 @@ fn check() {
 /// menu has nothing to add.
 fn newer_release() -> Option<String> {
     let body =
-        request(RELEASE_HOST, &format!("{RELEASE_PATH}/{VERSION_ASSET}"))?.read_all(4 * 1024)?;
+        request(RELEASE_HOST, &format!("{LATEST_PATH}/{VERSION_ASSET}"))?.read_all(4 * 1024)?;
     let text = String::from_utf8(body).ok()?;
     let version = text.trim();
 
     (parse_version(version) > parse_version(env!("CARGO_PKG_VERSION"))).then(|| version.to_owned())
+}
+
+/// The address of one release's installer, which is the release the version
+/// names rather than the newest one — the version is read before the download
+/// for exactly this reason. What is asked for is the file the packager built,
+/// under the name it gave it there (`<binary>_<version>_<arch>-setup.exe`), and
+/// a release that carries no such file answers `404`, which is read as there
+/// being nothing to offer, the same reading a release published before this app
+/// asked for one gets.
+fn installer_path(version: &str) -> String {
+    format!("{RELEASE_PATH}/v{version}/rust-hover-preview_{version}_x64-setup.exe")
 }
 
 /// Fetch the installer for a release and keep it where the click will find it.
@@ -223,10 +240,10 @@ fn fetch_installer(version: &str) -> Option<()> {
     let directory = update_dir()?;
     fs::create_dir_all(&directory).ok()?;
 
-    let installer = directory.join(INSTALLER_ASSET);
-    let partial = directory.join(format!("{INSTALLER_ASSET}.part"));
+    let installer = directory.join(STAGED_ASSET);
+    let partial = directory.join(format!("{STAGED_ASSET}.part"));
 
-    if fetch_installer_body(&partial).is_none() {
+    if fetch_installer_body(&partial, version).is_none() {
         // Nothing is left behind for the next check to find: a body that failed
         // is a file that would never be offered and has no reason to be kept.
         let _ = fs::remove_file(&partial);
@@ -252,10 +269,9 @@ fn fetch_installer(version: &str) -> Option<()> {
 /// installer has, and the two bytes a Windows executable opens with — which
 /// together are what tells an installer apart from a truncated download and
 /// from the page a release that carries no such asset answers with.
-fn fetch_installer_body(path: &Path) -> Option<u64> {
+fn fetch_installer_body(path: &Path, version: &str) -> Option<u64> {
     let mut file = File::create(path).ok()?;
-    let written = request(RELEASE_HOST, &format!("{RELEASE_PATH}/{INSTALLER_ASSET}"))?
-        .read_into(&mut file)?;
+    let written = request(RELEASE_HOST, &installer_path(version))?.read_into(&mut file)?;
     file.flush().ok()?;
 
     (written >= MIN_INSTALLER_BYTES && starts_with_mz(path)).then_some(written)
@@ -591,6 +607,19 @@ mod tests {
         assert!(!newer("0.2.13"));
     }
 
+    /// The installer is asked for in the release its version names, under the
+    /// name the packager gave that file there. It is the one address the deploy
+    /// workflow and this app have to agree on, since a release carries no second
+    /// copy of the installer under a name of its own.
+    #[test]
+    fn the_installer_is_addressed_by_the_release_and_its_own_name() {
+        assert_eq!(
+            installer_path("0.3.0"),
+            "/cosmokud/rust-hover-preview/releases/download/v0.3.0/\
+             rust-hover-preview_0.3.0_x64-setup.exe"
+        );
+    }
+
     /// The host answers, and a redirect is followed to the release it names —
     /// which is the request half of every check, and the half a machine with no
     /// connection fails on. Run it by hand: `cargo test -- --ignored`.
@@ -607,7 +636,7 @@ mod tests {
     #[test]
     #[ignore = "asks the network"]
     fn the_published_version_is_a_version() {
-        let body = request(RELEASE_HOST, &format!("{RELEASE_PATH}/{VERSION_ASSET}"))
+        let body = request(RELEASE_HOST, &format!("{LATEST_PATH}/{VERSION_ASSET}"))
             .and_then(|reply| reply.read_all(4 * 1024));
 
         if let Some(body) = body {
