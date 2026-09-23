@@ -73,7 +73,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 const WM_OFFICE_RENDER: u32 = WM_APP + 3;
 
 /// How long the engines are kept after each family's last page, which is the
-/// tray's `Performance → Office Engine TTL` setting.
+/// tray's `Engine → Microsoft Office TTL` setting.
 ///
 /// Read rather than captured, so a change applies to engines that are already
 /// warm: the worker wakes twice a second and asks this of every engine it holds,

@@ -58,10 +58,10 @@ const ID_TRAY_CONFIRM_FILE_TYPE: u16 = 1004;
 const ID_TRAY_TRIGGER_DISABLE: u16 = 1005; // Hold the trigger key to stop previews
 const ID_TRAY_TRIGGER_ENABLE: u16 = 1006; // Hold the trigger key to allow previews
 const ID_TRAY_TRIGGER_ENABLED: u16 = 1068; // Whether the trigger key is watched at all
-/// The `Performance → Select Engine → Office` pair: which engine an Office document's page
-/// is asked of — the application that owns the format, or the render engine beside it. Two
-/// ids rather than a range, the way the trigger key's mode has two, and they sit in the gap
-/// the update row at 1007 leaves before the volume block at 1010.
+/// The `Engine → Select Engine → Office` pair: which engine an Office document's page is
+/// asked of — the application that owns the format, or the render engine beside it. Two ids
+/// rather than a range, the way the trigger key's mode has two, and they sit in the gap the
+/// update row at 1007 leaves before the volume block at 1010.
 const ID_TRAY_ENGINE_OFFICE_MS: u16 = 1008;
 const ID_TRAY_ENGINE_OFFICE_LIBRE: u16 = 1009;
 /// The `Background` submenu: one command per backdrop it offers, in the order it
@@ -295,15 +295,14 @@ const FONT_SIZE_CHOICES: [(u32, u16); 12] = [
     (80, ID_TRAY_FONT_80),
     (70, ID_TRAY_FONT_70),
 ];
-/// The `Performance → Microsoft Office TTL` submenu: one command per idle time it
-/// offers, in the order it lists them. The IDs the app used before this ended at
-/// 1082 and the `theme` folder's items start at 1100, so this range is the slack
-/// between the two.
+/// The `Engine → Microsoft Office TTL` submenu: one command per idle time it offers, in
+/// the order it lists them. The IDs the app used before this ended at 1082 and the
+/// `theme` folder's items start at 1100, so this range is the slack between the two.
 const ID_TRAY_ENGINE_IDLE_BASE: u16 = 1083;
-/// The `Performance → WebView2 TTL` submenu, the same shape as the Microsoft Office
-/// one and in the range after it.
+/// The `Engine → WebView2 TTL` submenu, the same shape as the Microsoft Office one and in
+/// the range after it.
 const ID_TRAY_WEBVIEW_IDLE_BASE: u16 = 1090;
-/// The `Performance → LibreOffice TTL` submenu, the third of them. It sits in the slack the
+/// The `Engine → LibreOffice TTL` submenu, the third of them. It sits in the slack the
 /// backdrop halves leave rather than in the block the other two share — 1083 to 1096 is full,
 /// one font size at 1097, and the `theme` folder's items begin at 1100 — so its range is the
 /// widest run left between the image backdrop's four ids at 1023 and the config row at 1040.
@@ -1325,32 +1324,20 @@ unsafe fn show_context_menu(hwnd: HWND) {
         w!("Volume"),
     );
 
-    // Add the "Performance" submenu: what the app costs while it is working — the
-    // applications it starts and keeps, and the memory it holds on to — rather than
-    // what a preview looks like.
-    let performance_menu = CreatePopupMenu().unwrap();
-
-    // Add "Confirm File Type" with checkmark (content/header sniffing)
-    let confirm_file_type = CONFIG.lock().map(|c| c.confirm_file_type).unwrap_or(false);
-    let confirm_flags = MF_STRING
-        | if confirm_file_type {
-            MF_CHECKED
-        } else {
-            MF_UNCHECKED
-        };
-    let _ = AppendMenuW(
-        performance_menu,
-        confirm_flags,
-        ID_TRAY_CONFIRM_FILE_TYPE as usize,
-        w!("Confirm File Type"),
-    );
+    // Add the "Engine" submenu: which engine a preview is asked of, and how long each
+    // engine this app starts is kept — the choice of engine where a kind of document has
+    // two of them, and a TTL apiece for the applications this app leaves running between
+    // hovers. It is the block above `Performance`: the engines it names are the ones that
+    // block's rows are about, and what it sets is whether an engine is asked for rather
+    // than what it costs while it is up.
+    let engine_menu = CreatePopupMenu().unwrap();
 
     // Add the "Select Engine" submenu: which engine each kind of document is asked of,
-    // where there is a choice to make. It is the row below the one setting that is about
-    // what a preview shows rather than what it costs, and above the three rows that say
-    // how long each engine this app starts is kept — the applications it names are the
-    // ones those are about. Office is the only kind with two engines to choose between.
-    append_select_engine_menu(performance_menu);
+    // where there is a choice to make. It is the first of the four rows here, above the
+    // three that say how long each engine this app starts is kept — the applications it
+    // names are the ones those are about. Office is the only kind with two engines to
+    // choose between.
+    append_select_engine_menu(engine_menu);
 
     // Microsoft Office TTL: how long the Office engine a family started is kept after
     // that family's last page. Nothing is asked of an engine while it is being kept
@@ -1365,7 +1352,7 @@ unsafe fn show_context_menu(hwnd: HWND) {
         .unwrap_or(EngineIdle::Seconds(DEFAULT_OFFICE_ENGINE_IDLE_SECS));
 
     append_engine_idle_menu(
-        performance_menu,
+        engine_menu,
         w!("Microsoft Office TTL"),
         ID_TRAY_ENGINE_IDLE_BASE,
         office_idle,
@@ -1385,7 +1372,7 @@ unsafe fn show_context_menu(hwnd: HWND) {
         .unwrap_or(EngineIdle::Seconds(DEFAULT_LIBREOFFICE_IDLE_SECS));
 
     append_engine_idle_menu(
-        performance_menu,
+        engine_menu,
         w!("LibreOffice TTL"),
         ID_TRAY_LIBREOFFICE_IDLE_BASE,
         libreoffice_idle,
@@ -1402,12 +1389,40 @@ unsafe fn show_context_menu(hwnd: HWND) {
         .unwrap_or(EngineIdle::Seconds(DEFAULT_WEBVIEW_IDLE_SECS));
 
     append_engine_idle_menu(
-        performance_menu,
+        engine_menu,
         w!("WebView2 TTL"),
         ID_TRAY_WEBVIEW_IDLE_BASE,
         webview_idle,
         DEFAULT_WEBVIEW_IDLE_SECS,
         webview_preview::is_available(),
+    );
+
+    let _ = AppendMenuW(
+        menu,
+        MF_STRING | MF_POPUP,
+        engine_menu.0 as usize,
+        w!("Engine"),
+    );
+
+    // Add the "Performance" submenu: what the app costs while it is working — the memory
+    // it holds on to between hovers — with the one setting here that is about what a
+    // preview is read as rather than what it costs above it. The engines this app starts
+    // and keeps are named in `Engine` above, each of them with the TTL that bounds it.
+    let performance_menu = CreatePopupMenu().unwrap();
+
+    // Add "Confirm File Type" with checkmark (content/header sniffing)
+    let confirm_file_type = CONFIG.lock().map(|c| c.confirm_file_type).unwrap_or(false);
+    let confirm_flags = MF_STRING
+        | if confirm_file_type {
+            MF_CHECKED
+        } else {
+            MF_UNCHECKED
+        };
+    let _ = AppendMenuW(
+        performance_menu,
+        confirm_flags,
+        ID_TRAY_CONFIRM_FILE_TYPE as usize,
+        w!("Confirm File Type"),
     );
 
     // Add the "Cache" submenu: how much memory a preview's own data may be held in
@@ -2181,8 +2196,8 @@ fn document_scale_at(index: u16) -> Option<PreviewScale> {
     DOCUMENT_SCALE_CHOICES.get(index as usize).copied()
 }
 
-/// The `Performance → Select Engine → Office` submenu: which engine an Office document's
-/// page is asked of, with the setting's own choice marked.
+/// The `Engine → Select Engine → Office` submenu: which engine an Office document's page
+/// is asked of, with the setting's own choice marked.
 ///
 /// There are two engines to ask and both are listed. The row for one this machine has not got
 /// is greyed out rather than left out: what it names cannot be started, so the app would fall
@@ -2432,7 +2447,7 @@ fn set_office_engine_idle(index: u16) {
     }
 }
 
-/// Which engine Office documents are asked of, from `Performance → Select Engine → Office`.
+/// Which engine Office documents are asked of, from `Engine → Select Engine → Office`.
 ///
 /// Nothing is rebuilt here, and nothing has to be: the choice is read live by the side that
 /// asks an engine for a page and by the side that draws one (see `office_formats::page_engine`),
