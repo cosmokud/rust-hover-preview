@@ -30,6 +30,33 @@ A Windows 11 tray app inspired by QTTabBar. Hover a file in File Explorer — or
 
 You can add or remove formats in `config.ini`. Unsupported formats show no preview, except text, which the app will try to force-read.
 
+Almost everything is previewed by **Windows 11 and this app alone** — a codec Windows ships, WebView2, the drawing layer that plays metafiles, the Windows PDF engine, or a reader written into the app. Three things are not, and they are the app’s largest optional dependencies:
+
+### Runs on Windows 11 alone
+
+| Kind | Extensions |
+|---|---|
+| Pictures | `jpg` `jpeg` `jfif` `jpe` `png` `apng` `gif` `bmp` `ico` `tif` `tiff` `tga` `hdr` `exr` `ff` `qoi` `pnm` `pam` `pbm` `pgm` `ppm` `dds` `webp` |
+| Pictures through a Windows codec extension | `heic` `heif` `avif` `jxl` — the extension packages are listed below; without one, no preview |
+| Drawings | `svg` `svgz` (WebView2) · `wmf` `emf` (the drawing layer) · `eps` `epsi` (the preview the file carries) |
+| Design documents | `psd` `psb` `ai` `kra` `ora` `procreate` `sketch` `fig` `xd` |
+| Fonts | `ttf` `otf` `ttc` `woff` `woff2` (WebView2) |
+| PDFs | `pdf` (the Windows PDF engine) |
+| Text and code | `txt` `md` `markdown` `json` `toml` `yaml` `xml` `ini` `csv` `log` `rtf` `nfo` `py` `js` `ts` `rs` `go` `c` `h` `cpp` `cs` `java` `kt` `swift` `php` `rb` `lua` `sh` `ps1` `bat` `html` `css` and more, plus extensionless names like `LICENSE`, `Makefile` and `.gitignore` |
+| Archives | `7z` `apk` `cbz` `jar` `rar` `tar` `tar.gz` `tgz` `xpi` `zip` `zipx` |
+
+### Needs FFmpeg
+
+Videos, and only videos: `mp4` `webm` `mkv` `avi` `mov` `wmv` `flv` `m4v` `ts` `m2ts` `mts` `mpg` `mpeg` `vob` `3gp` `ogv` `rmvb` `asf` `divx` `f4v` `mxf` `dv`, and many more containers and codecs. Without FFmpeg, videos use the media engine Windows already has plus any codec extensions you installed; the tray’s **Codecs** menu shows what is available.
+
+### Needs LibreOffice
+
+The documents this app has no reader of its own for, drawn by an installed LibreOffice and sharp at any size: `cdr` `cmx` `dxf` `wpg` `sxd` `std` `pub` `vsd` `vsdx` and the Visio family, the older word processors (`wpd` `wps` `abw` `lwp` `cwk` `hwp` `602` `wri` `qxp` `pm*` `p65`), the older spreadsheets (`123` `wk1` `wk3` `wk4` `wks` `slk` `dif` `dbf` `wb2` `wq1` `wq2` `gnumeric` `xlw`), the older presentations (`sda` `sdd` `sdp` `sxi` `sti`), `epub`, the Apple ones (`pages` `numbers` `key`), and the open formats no other kind claims (`odt` `ods` `odp` `odg` `odc` `odb` `odf` and their friends). The list is `[libre]` in `config.ini`, where you can add names the engine reads and this app does not know.
+
+### Needs Microsoft Office, or LibreOffice without it
+
+Office documents (`doc` `docx` `xls` `xlsx` `ppt` `pptx` and the rest of that list) are drawn in the background by an installed Office so previews appear quickly. Where no Office is installed, an installed LibreOffice draws them instead.
+
 ### Images
 
 `jpg`, `jpeg`, `png`, `apng`, `gif`, `bmp`, `ico`, `tiff`, `webp`, `tga`, `hdr`, `exr`, `qoi`, `heic`, `heif`, `avif`, `jxl`, `dds`, and more.
@@ -192,6 +219,7 @@ The item a setting starts at carries `(Default)` after its name, so a menu says 
   - **Office Scaling** — the same for a page Office rendered; a workbook’s fallback bitmap is never enlarged.
   - **Font Scaling** — the same shares for a font specimen, 50% by default.
   - **Design Scaling** — the same shares of the display for a design document (Photoshop, Illustrator, Krita, OpenRaster, Procreate); Fit to Screen by default.
+  - **Libre Scaling** — the same shares of the display for a document LibreOffice draws (CorelDRAW and the older word processors, spreadsheets and presentations); Fit to Screen by default.
 - **Background**
   - **Image Background** — Transparent, Black, White, or Checkerboard; Checkerboard by default.
   - **Vector Background** — the same backdrops for a drawing: an SVG document, or a metafile; Checkerboard by default.
@@ -316,6 +344,9 @@ Key settings, in plain terms:
 - `video_scale` — the same for a video, `100` by default.
 - `animated_scale` — the same for an animated GIF, WebP, or PNG, `100` by default; a still GIF or PNG follows `preview_scale`.
 - `vector_scale` — percentage or `fit`, read against the screen. `fit` is default, is all of the room, and `100` or more reads as it. It covers every drawing the Vector kind holds. The name it used to be written under (`svg_scale`) is not read: a line like that is removed the next time the file is written, and the setting goes back to its default.
+- `libre_scale` — the same for a document LibreOffice draws, `fit` by default: the engine hands back a page, so the share is of the display the way a PDF page’s is.
+- `libre_cache_mb` — megabytes of converted pages kept on disk, `32` by default; `0` keeps nothing between hovers. A page whose budget gave it up is converted again the next time it is hovered.
+- `libre_preview_enabled` — whether documents LibreOffice can draw are previewed at all; `true` by default.
 - `pdf_scale` / `office_scale` — the same for a PDF page and an Office-rendered page, both `fit` by default as well as a percentage. A workbook’s fallback bitmap follows its own size and is never enlarged.
 - `font_scale` — percentage or `fit`, read against the screen. `50` is default, `fit` is all of it, and `100` or more reads as `fit`. A font has no size of its own, so the share is of the display.
 - `design_scale` — the same for a design document, `fit` by default. A design preview is the picture the file keeps of the whole document, so the share is of the screen the way a page’s is rather than of the document’s own size.
