@@ -1509,6 +1509,22 @@ fn engine_background(path: &Path) -> TransparentBackground {
 /// what the loop asks about one it asks about the other — the same way the loader asks the
 /// name gates in one order.
 fn engine_kind_of(path: &Path) -> Option<PreviewType> {
+    // What the file's own bytes say comes first, as it does for the loader that draws it: a
+    // picture left under a font's name is drawn here as the picture it is rather than by the
+    // engine, and a font left under a document's name is the engine's. A drawing is the one
+    // kind whose two halves have to be told apart by the name as well — the browser draws a
+    // document, and the drawing layer replays a metafile or a PostScript program, which is
+    // no engine window at all — so the name answers which half of that kind a file is.
+    if let crate::formats::content_type::Content::Kind(kind) =
+        crate::formats::content_type::of(path)
+    {
+        return match kind {
+            PreviewType::Vector if svg_preview::is_svg_file(path) => Some(PreviewType::Vector),
+            PreviewType::Fonts => Some(PreviewType::Fonts),
+            _ => None,
+        };
+    }
+
     if svg_preview::is_svg_file(path) {
         return Some(PreviewType::Vector);
     }
@@ -1657,10 +1673,31 @@ fn office_render_is_due(path: &Path, width: u32) -> bool {
         return false;
     }
 
+    // A file whose bytes are another kind is not a document to render, whatever it is
+    // called: a picture left under a `.docx` name is drawn as the picture it is, and asking
+    // Office for a page would start an engine for a file that is not its own — which is the
+    // one thing the question of content exists to prevent (see `content_type`).
+    if content_names_another_kind(path, PreviewType::Office) {
+        return false;
+    }
+
     match office_render::cached_render(path) {
         Some(cached) => office_render::page_is_narrower_than(&cached, width),
         None => true,
     }
+}
+
+/// Whether the file's own bytes name one of this app's kinds *other* than `kind`.
+///
+/// It is the question an engine tier asks before it starts anything, and what it says no to
+/// is a file that is called what it is: a name and a content that agree are answered with no
+/// opinion at all, and only a disagreement — a picture under a document's name — is a file
+/// whose engine must not be started.
+fn content_names_another_kind(path: &Path, kind: PreviewType) -> bool {
+    matches!(
+        crate::formats::content_type::of(path),
+        crate::formats::content_type::Content::Kind(named) if named != kind
+    )
 }
 
 /// Ask the render tier for the page a hover needs, at the moment that hover is
@@ -2033,6 +2070,19 @@ fn fit_reduced(preview_scale: PreviewScale) -> PreviewScale {
 /// transport stream that goes by the same name; the rest are bare names, so asking them
 /// costs a lookup each and no read of the file.
 fn is_text_preview(path: &Path) -> bool {
+    // What the file's own bytes say comes first, as it does for the loader that draws it and
+    // the box it is painted into: a file whose content is another kind is not drawn as text
+    // whatever it is called, and one whose content is text is drawn as text even where the
+    // name is a kind the lists would have claimed first.
+    match crate::formats::content_type::of(path) {
+        crate::formats::content_type::Content::Kind(PreviewType::Text) => return true,
+        // Another kind, or a format no kind here previews at all: neither is drawn as text,
+        // and the second is drawn as nothing.
+        crate::formats::content_type::Content::Kind(_)
+        | crate::formats::content_type::Content::Foreign => return false,
+        crate::formats::content_type::Content::Unknown => {}
+    }
+
     if !text_formats::is_text_file(path) {
         return false;
     }
@@ -4856,7 +4906,26 @@ fn video_box(path: &Path) -> Option<(u32, u32)> {
 /// wait, whatever the answer was: an unmeasurable video is a video with a fallback box,
 /// not one to be probed again on every hover.
 fn video_probe_due(path: &Path) -> bool {
-    video_formats::is_video_preview(path) && cached_video_geometry(path).is_none()
+    drawn_as_video(path) && cached_video_geometry(path).is_none()
+}
+
+/// Whether the preview of `path` is a video: the name the video list carries, or the bytes
+/// of a video under a name that list does not have.
+///
+/// Every question about a video goes through this one answer — whether its shape has to be
+/// probed, whether the wait for it is shown, and whether the player takes over the window
+/// rather than this app drawing its frames — because the loader plays the file its bytes
+/// name, and a hover whose picture is played but whose frames are awaited would sit on a
+/// first frame that nothing ever replaces.
+fn drawn_as_video(path: &Path) -> bool {
+    if matches!(
+        crate::formats::content_type::of(path),
+        crate::formats::content_type::Content::Kind(PreviewType::Videos)
+    ) {
+        return PreviewType::Videos.enabled();
+    }
+
+    video_formats::is_video_preview(path)
 }
 
 /// Get original dimensions of media for positioning calculations
@@ -5060,7 +5129,12 @@ fn picture_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
 /// belongs at the hand. The page is laid out again by the replay that arrives with it, so
 /// nothing here has to guess how large it will be.
 fn page_is_on_the_way(path: &Path) -> bool {
+    // A file whose bytes are another kind is not a document a page is coming for, which is
+    // the same question the render tier is asked before it is asked for one: a picture left
+    // under a document's name is drawn here, and placing it at the pointer as the wait for a
+    // page would be a preview waiting for nothing (see `content_names_another_kind`).
     let office = office_formats::is_office_preview(path)
+        && !content_names_another_kind(path, PreviewType::Office)
         && matches!(
             office_preview::source_kind(path),
             office_preview::SourceKind::None
@@ -5146,17 +5220,7 @@ fn text_preview_layout(
     dpi: u32,
     place: impl FnOnce((u32, u32)) -> Option<PreviewLayout>,
 ) -> PreviewLayout {
-    // A file is drawn as text where the text lists claim it, and where its own bytes say it
-    // is text under a name another kind would have taken: the measure and the render have to
-    // agree about which of the two a file is, or the box the lines are painted into is the
-    // one the name asked for rather than the one they came out at.
-    let drawn_as_text = is_text_preview(path)
-        || matches!(
-            crate::formats::content_type::of(path),
-            crate::formats::content_type::Content::Kind(PreviewType::Text)
-        );
-
-    if !drawn_as_text {
+    if !is_text_preview(path) {
         return layout;
     }
 
@@ -8357,7 +8421,7 @@ pub fn run_preview_window() {
                         let probing = video_probe_due(&path);
 
                         if let Some(orig_dims) = media_dimensions(&path, bounds, dpi) {
-                            let is_video = is_video_file(&path);
+                            let is_video = drawn_as_video(&path);
                             let placement = HoverPlacement {
                                 orig_dims,
                                 avoid,
@@ -8411,7 +8475,7 @@ pub fn run_preview_window() {
                         preview_scale = effective_preview_scale(&path, current_hover_scales());
 
                         if let Some(orig_dims) = media_dimensions(&path, bounds, dpi) {
-                            let is_video = is_video_file(&path);
+                            let is_video = drawn_as_video(&path);
                             let placement = KeyboardPlacement {
                                 item_rect: (il, it, ir, ib),
                                 avoid,
@@ -9124,6 +9188,75 @@ mod tests {
             media_dimensions(&path, bounds(), TEST_DPI),
             picture_dimensions(&path),
             "so the box is the picture's rather than the text measure's nothing"
+        );
+
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    /// Every question about a file is asked of what its bytes say, which for these three is
+    /// the difference between an engine being started and one being left alone: no page is
+    /// asked of Office for a picture under a document's name, no wait for one is placed at
+    /// the pointer, the player takes over a video under a picture's name, and text under a
+    /// document's name is drawn as the text it is.
+    #[test]
+    fn a_foreign_engine_is_never_started_for_a_file_that_is_not_its_own() {
+        if let Ok(mut config) = CONFIG.lock() {
+            config.confirm_file_type = true;
+            config.office_preview_enabled = true;
+            config.video_preview_enabled = true;
+        }
+
+        let folder = std::env::temp_dir().join("rust-hover-preview-content-engines");
+        std::fs::create_dir_all(&folder).expect("a test folder");
+
+        // A picture under a document's name: Word is never asked for a page, and the hover
+        // is not placed as the wait for one.
+        let renamed = folder.join("report.docx");
+        write_test_png(&renamed, false);
+
+        assert!(
+            office_formats::is_office_preview(&renamed),
+            "the name is the document list's, which is what answered before this"
+        );
+        assert!(
+            !office_render_is_due(&renamed, 800),
+            "and the bytes are a picture's, so no page is asked of Office"
+        );
+        assert!(
+            !page_is_on_the_way(&renamed),
+            "nor is the hover placed at the pointer as the wait for one"
+        );
+
+        // A video under a picture's name: the probe has an answer to fetch, the wait for it
+        // is shown, and the player takes the window over.
+        let renamed = folder.join("clip.png");
+        std::fs::write(&renamed, b"\x00\x00\x00\x20ftypisom").expect("a written video");
+
+        assert!(
+            !is_video_file(&renamed),
+            "the name is the picture list's, which is what answered before this"
+        );
+        assert!(
+            drawn_as_video(&renamed),
+            "and the bytes are a video's, so a video is what is drawn"
+        );
+        assert!(
+            video_probe_due(&renamed),
+            "whose shape is probed like any other video's"
+        );
+
+        // And text under a document's name, which is the box it is painted into and the
+        // frame its lines wrap in.
+        let renamed = folder.join("letter.docx");
+        std::fs::write(&renamed, b"{\\rtf1\\ansi\\deff0 hello}").expect("a written document");
+
+        assert!(
+            !text_formats::is_text_file(&renamed),
+            "the name is not one the text lists carry"
+        );
+        assert!(
+            is_text_preview(&renamed),
+            "and the bytes are text, so text is what draws it"
         );
 
         let _ = std::fs::remove_dir_all(&folder);
