@@ -12,7 +12,7 @@
 //! that can be answered for but a file that must not be opened, because opening it
 //! is what starts the download.
 
-use crate::config::config::PreviewType;
+use crate::config::config::{AppConfig, OfficeEngine, PreviewType};
 use crate::formats::text_formats;
 use crate::CONFIG;
 use std::fs::File;
@@ -157,6 +157,57 @@ pub fn app_installed(path: &Path) -> bool {
     app_for(path).is_some_and(|app| crate::formats::codecs::prog_id_installed(app.prog_id()))
 }
 
+impl OfficeEngine {
+    /// Which engine is asked for this document's page under `config`, or `None` for a name
+    /// the Office list does not claim, which is nobody's to draw.
+    ///
+    /// The render engine is the answer where the tray has chosen it for every Office
+    /// document, and where an engine is installed to be asked; without one there is nothing
+    /// to ask, so the choice falls back to the application rather than to a preview that
+    /// would wait for an engine that is not here. Everywhere else the application that owns
+    /// the format is the answer where it is installed, and the render engine is the fallback
+    /// for a family this machine has no application for.
+    ///
+    /// The configuration is passed in rather than read here so that the question can be asked
+    /// of a file under any setting — the way `PreviewType::enabled_in` is — and so that what
+    /// is answered does not depend on when it is asked; see `page_engine` for the answer the
+    /// app goes by.
+    pub fn for_document(config: &AppConfig, path: &Path) -> Option<Self> {
+        if !matches_office_list(path, &config.office_extensions) {
+            return None;
+        }
+
+        if config.office_engine == Self::LibreOffice
+            && crate::engines::libreoffice_render::available()
+        {
+            return Some(Self::LibreOffice);
+        }
+
+        Some(if app_installed(path) {
+            Self::MicrosoftOffice
+        } else {
+            Self::LibreOffice
+        })
+    }
+}
+
+/// Which engine this document's page is asked of here and now: the tray's
+/// `Performance → Select Engine → Office` choice and the machine it is made on, read
+/// together.
+///
+/// It is one question with one answer, asked by every side that needs one — the request side
+/// before it asks an engine for a page, the side that reads a page back, and the render
+/// engine's own `imports` — so that a page one side asks for is a page the other side draws,
+/// and a document is never drawn by both engines at once. What a caller does with an answer
+/// it does not like is nothing: where the render engine is the engine, a page it has not
+/// drawn yet is the wait a hover is in, not a reason to ask the application as well.
+pub fn page_engine(path: &Path) -> Option<OfficeEngine> {
+    CONFIG
+        .lock()
+        .ok()
+        .and_then(|config| OfficeEngine::for_document(&config, path))
+}
+
 /// The box a document's page is measured by when nothing else can measure it, by
 /// the shape that family's pages have: a Word page is a portrait sheet, a workbook's
 /// first printed page is usually a landscape one, and a slide is a slide.
@@ -241,6 +292,70 @@ mod tests {
         assert_eq!(container_kind(&ole), Some(OfficeContainer::Ole));
         assert_eq!(container_kind(&other), None);
         assert_eq!(container_kind(Path::new("Z:\\does\\not\\exist.docx")), None);
+
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    /// Which engine a document is asked of is the setting's answer first and the machine's
+    /// second: the render engine where the tray has chosen it and it is installed to be
+    /// asked, and otherwise the application that owns the format where it is here, with the
+    /// render engine as the fallback for a family this machine has no application for.
+    ///
+    /// The machine's own answers are what the expectations are written from — whether an
+    /// application or the render engine is installed is not something a test can decide — but
+    /// the rule is one of this app's, and it is what this asserts. The configuration is built
+    /// here rather than taken from the app's own, so that what a developer's `config.ini`
+    /// holds cannot decide what this test expects.
+    #[test]
+    fn asks_the_engine_the_setting_names_where_it_is_installed() {
+        let folder = std::env::temp_dir()
+            .join("rust-hover-preview-office-tests")
+            .join("engine-choice");
+        std::fs::create_dir_all(&folder).expect("a test folder");
+
+        let document = folder.join("report.docx");
+        std::fs::write(&document, b"PK\x03\x04\x00\x00\x00\x00").expect("a written document");
+
+        let machine_says = if app_installed(&document) {
+            OfficeEngine::MicrosoftOffice
+        } else {
+            OfficeEngine::LibreOffice
+        };
+        let engine_installed = crate::engines::libreoffice_render::available();
+
+        assert_eq!(
+            OfficeEngine::for_document(&AppConfig::default(), &document),
+            Some(machine_says),
+            "the setting the app starts at asks the application, and the render engine only \
+             where the application that owns the format is not here"
+        );
+
+        let chosen = AppConfig {
+            office_engine: OfficeEngine::LibreOffice,
+            ..AppConfig::default()
+        };
+
+        assert_eq!(
+            OfficeEngine::for_document(&chosen, &document),
+            Some(if engine_installed {
+                OfficeEngine::LibreOffice
+            } else {
+                machine_says
+            }),
+            "and the render engine is asked for every Office document where the setting names \
+             it — or the machine's own answer where there is no engine installed to ask, which \
+             is a preview rather than a wait for one that will never come"
+        );
+
+        let unclaimed = folder.join("report.bin");
+        std::fs::write(&unclaimed, b"PK\x03\x04\x00\x00\x00\x00").expect("a written file");
+
+        assert_eq!(
+            OfficeEngine::for_document(&chosen, &unclaimed),
+            None,
+            "while a name the Office list does not claim is nobody's to draw, whichever engine \
+             the setting names"
+        );
 
         let _ = std::fs::remove_dir_all(&folder);
     }

@@ -6,6 +6,7 @@
 
 - Opening the tray menu can check for updates at most once an hour. If a newer version exists, the installer downloads and a row appears above Run at Startup. Clicking it asks whether to install; yes installs quietly and restarts the app. No check happens unless the menu is opened.
 - `Timing → Settling Delay`: how long the pointer must be still before a preview may open for anything, 0 ms at the top down to 1000 ms. 0 ms by default, which is the requirement switched off. Written to `config.ini` as `settling_delay_ms`.
+- `Performance → Select Engine → Office`: which engine an Office document's page is asked of. **Microsoft Office** is the default and asks the application that owns the format, keeping LibreOffice as the fallback for a family this machine has no application for. **LibreOffice** asks the render engine for every Office document, whether Microsoft Office is installed or not — useful where the application draws a page badly, or where every document should come out of one engine. Written to `config.ini` as `office_engine`; the LibreOffice row is greyed out where no LibreOffice is installed, and the app keeps drawing with Office until one is.
 
 ### Changed
 

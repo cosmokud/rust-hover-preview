@@ -3,19 +3,22 @@ use crate::config::config::{
     sanitize_decode_budget_gb, sanitize_image_cache_mb, sanitize_libre_cache_mb,
     sanitize_office_cache_mb,
     sanitize_pdf_cache_mb, sanitize_text_cache_mb, sanitize_text_font_scale_percent, AvoidMode,
-    EngineIdle, MarkdownMode, PreviewScale, PreviewType, TextTheme, TransparentBackground,
+    EngineIdle, MarkdownMode, OfficeEngine, PreviewScale, PreviewType, TextTheme,
+    TransparentBackground,
     TriggerKeyMode, DEFAULT_ANIMATED_SCALE, DEFAULT_AVOID_MODE, DEFAULT_DDS_BACKGROUND,
     DEFAULT_DECODE_BUDGET_GB, DEFAULT_DESIGN_BACKGROUND, DEFAULT_DESIGN_SCALE,
     DEFAULT_FOLLOW_CURSOR, DEFAULT_FONT_BACKGROUND, DEFAULT_FONT_SCALE, DEFAULT_HOVER_DELAY_MS,
     DEFAULT_IMAGE_BACKGROUND, DEFAULT_IMAGE_CACHE_MB, DEFAULT_LIBRE_CACHE_MB, DEFAULT_LIBRE_SCALE,
     DEFAULT_OFFICE_CACHE_MB,
-    DEFAULT_OFFICE_ENGINE_IDLE_SECS, DEFAULT_OFFICE_SCALE, DEFAULT_PDF_CACHE_MB, DEFAULT_PDF_SCALE,
+    DEFAULT_OFFICE_ENGINE, DEFAULT_OFFICE_ENGINE_IDLE_SECS, DEFAULT_OFFICE_SCALE,
+    DEFAULT_PDF_CACHE_MB, DEFAULT_PDF_SCALE,
     DEFAULT_PREVIEW_SCALE, DEFAULT_SAME_FILE_REHOVER_DELAY_MS, DEFAULT_SETTLING_DELAY_MS,
     DEFAULT_TEXT_CACHE_MB,
     DEFAULT_TEXT_FONT_SCALE_PERCENT, DEFAULT_VECTOR_BACKGROUND, DEFAULT_VECTOR_SCALE,
     DEFAULT_VIDEO_SCALE, DEFAULT_VIDEO_VOLUME, DEFAULT_WEBVIEW_IDLE_SECS,
 };
 use crate::shell::explorer_hook;
+use crate::engines::libreoffice_render;
 use crate::engines::office_render;
 use crate::readers::pdf_preview;
 use crate::ui::preview_window::{refresh_preview, refresh_preview_types, trim_image_cache};
@@ -55,6 +58,12 @@ const ID_TRAY_CONFIRM_FILE_TYPE: u16 = 1004;
 const ID_TRAY_TRIGGER_DISABLE: u16 = 1005; // Hold the trigger key to stop previews
 const ID_TRAY_TRIGGER_ENABLE: u16 = 1006; // Hold the trigger key to allow previews
 const ID_TRAY_TRIGGER_ENABLED: u16 = 1068; // Whether the trigger key is watched at all
+/// The `Performance → Select Engine → Office` pair: which engine an Office document's page
+/// is asked of — the application that owns the format, or the render engine beside it. Two
+/// ids rather than a range, the way the trigger key's mode has two, and they sit in the gap
+/// the update row at 1007 leaves before the volume block at 1010.
+const ID_TRAY_ENGINE_OFFICE_MS: u16 = 1008;
+const ID_TRAY_ENGINE_OFFICE_LIBRE: u16 = 1009;
 /// The `Background` submenu: one command per backdrop it offers, in the order it
 /// lists them, for each of the five kinds of preview it keeps apart — a picture's
 /// backdrop, a vector drawing's, a font specimen's, a texture's, and a design
@@ -388,6 +397,8 @@ unsafe extern "system" fn tray_window_proc(
                 ID_TRAY_TRIGGER_DISABLE => set_trigger_key_mode(TriggerKeyMode::Disable),
                 ID_TRAY_TRIGGER_ENABLE => set_trigger_key_mode(TriggerKeyMode::Enable),
                 ID_TRAY_TRIGGER_ENABLED => toggle_trigger_key_enabled(),
+                ID_TRAY_ENGINE_OFFICE_MS => set_office_engine(OfficeEngine::MicrosoftOffice),
+                ID_TRAY_ENGINE_OFFICE_LIBRE => set_office_engine(OfficeEngine::LibreOffice),
                 // A backdrop, by the position it was listed at: an image's or a
                 // document's, whichever half of the `Background` submenu it was in.
                 cmd if (ID_TRAY_IMAGE_BACKGROUND_BASE
@@ -1307,6 +1318,12 @@ unsafe fn show_context_menu(hwnd: HWND) {
     // what a preview looks like.
     let performance_menu = CreatePopupMenu().unwrap();
 
+    // Add the "Select Engine" submenu: which engine each kind of document is asked of,
+    // where there is a choice to make. It is the first row here because it is what the
+    // rows below are about — the applications this app starts, and how long it keeps
+    // them — and Office is the only kind with two engines to choose between.
+    append_select_engine_menu(performance_menu);
+
     // Add "Confirm File Type" with checkmark (content/header sniffing)
     let confirm_file_type = CONFIG.lock().map(|c| c.confirm_file_type).unwrap_or(false);
     let confirm_flags = MF_STRING
@@ -2131,6 +2148,81 @@ fn document_scale_at(index: u16) -> Option<PreviewScale> {
     DOCUMENT_SCALE_CHOICES.get(index as usize).copied()
 }
 
+/// The `Performance → Select Engine → Office` submenu: which engine an Office document's
+/// page is asked of, with the setting's own choice marked.
+///
+/// There are two engines to ask and both are listed. The row for one this machine has not got
+/// is greyed out rather than left out: what it names cannot be started, so the app would fall
+/// back to the other engine for as long as that is so — but the choice is the user's, it is
+/// remembered where it is made, and the day the engine is installed it is the one that draws
+/// (see `office_formats::page_engine`).
+fn append_select_engine_menu(parent: HMENU) {
+    let selected = CONFIG
+        .lock()
+        .map(|config| config.office_engine)
+        .unwrap_or(DEFAULT_OFFICE_ENGINE);
+
+    let select_engine_menu = unsafe { CreatePopupMenu().unwrap() };
+    let office_menu = unsafe { CreatePopupMenu().unwrap() };
+
+    let microsoft_office = default_label(
+        "Microsoft Office",
+        DEFAULT_OFFICE_ENGINE == OfficeEngine::MicrosoftOffice,
+    );
+    append_labeled_item(
+        office_menu,
+        MF_STRING,
+        ID_TRAY_ENGINE_OFFICE_MS,
+        &microsoft_office,
+    );
+
+    // The render engine's row is the one that can be greyed: a document is drawn without
+    // either application on a machine that has no Office at all — the other engine is the
+    // fallback for every family whose application is missing — while a machine with no
+    // LibreOffice has nothing to ask, whatever the setting says.
+    let libre_flags = if libreoffice_render::available() {
+        MF_STRING
+    } else {
+        MF_STRING | MF_GRAYED
+    };
+    append_labeled_item(
+        office_menu,
+        libre_flags,
+        ID_TRAY_ENGINE_OFFICE_LIBRE,
+        "LibreOffice",
+    );
+
+    let _ = unsafe {
+        CheckMenuRadioItem(
+            office_menu,
+            ID_TRAY_ENGINE_OFFICE_MS as u32,
+            ID_TRAY_ENGINE_OFFICE_LIBRE as u32,
+            match selected {
+                OfficeEngine::MicrosoftOffice => ID_TRAY_ENGINE_OFFICE_MS as u32,
+                OfficeEngine::LibreOffice => ID_TRAY_ENGINE_OFFICE_LIBRE as u32,
+            },
+            MF_BYCOMMAND.0,
+        )
+    };
+
+    let _ = unsafe {
+        AppendMenuW(
+            select_engine_menu,
+            MF_STRING | MF_POPUP,
+            office_menu.0 as usize,
+            w!("Office"),
+        )
+    };
+    let _ = unsafe {
+        AppendMenuW(
+            parent,
+            MF_STRING | MF_POPUP,
+            select_engine_menu.0 as usize,
+            w!("Select Engine"),
+        )
+    };
+}
+
 /// One `… Engine TTL` submenu: the idle times every engine this app keeps warm
 /// offers, with the one that engine is on marked, and nothing marked for a time the
 /// menu does not offer — which is what a hand-edited `config.ini` can ask for. An
@@ -2304,6 +2396,29 @@ fn set_office_engine_idle(index: u16) {
     if let Ok(mut config) = CONFIG.lock() {
         config.office_engine_idle = idle;
         config.save();
+    }
+}
+
+/// Which engine Office documents are asked of, from `Performance → Select Engine → Office`.
+///
+/// Nothing is rebuilt here, and nothing has to be: the choice is read live by the side that
+/// asks an engine for a page and by the side that draws one (see `office_formats::page_engine`),
+/// so the setting a click leaves behind is the one the next hover is answered by. A preview
+/// that is already on screen belongs to the engine that drew it and is replaced the next time
+/// a hover is raised — and the pointer has left the file to reach the tray by then.
+///
+/// What is ended here is this app's own Office applications, at the moment the render engine
+/// becomes the one to ask: they were started for pages this choice now takes elsewhere, and
+/// the one thing this menu is not for is a process kept warm for work it will not be given.
+/// A user's own Word or Excel is not one of these and is never touched (see `office_render`).
+fn set_office_engine(engine: OfficeEngine) {
+    if let Ok(mut config) = CONFIG.lock() {
+        config.office_engine = engine;
+        config.save();
+    }
+
+    if engine == OfficeEngine::LibreOffice {
+        office_render::stop_engines();
     }
 }
 

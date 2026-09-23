@@ -26,16 +26,20 @@
 //! put in this list by mistake costs one conversion and never another.
 //!
 //! One document of another kind is asked of the engine as well, and it is the one case the
-//! list above is not asked about: an Office document whose own application is not installed
-//! on this machine. There is no Word, Excel or PowerPoint to draw a page for one, and the
-//! engine beside them reads the format — so its page is what the hover shows, under the
+//! list above is not asked about: an Office document — one whose own application is not
+//! installed on this machine, and one the tray has asked the engine for outright, under
+//! `Performance → Select Engine → Office`. There is no Word, Excel or PowerPoint to draw a
+//! page for the first, and the engine beside them reads the format; the second is a choice
+//! rather than a lack of one, and what it buys is every document of the kind drawn by the
+//! engine a user knows. Either way the page is the engine's, and it is shown under the
 //! Office kind and at the Office kind's scale rather than this one's, because the file is
 //! what it is whichever engine drew it. `engine_page_kind` is that question, and it is the
-//! one place both the callers and the engine ask it: a page asked for by one side and
-//! refused by the other is a hover that waits for a conversion nothing was ever asked to
-//! make.
+//! one place both the callers and the engine ask it — one answer, reached through one
+//! function, for the choice and the machine together (`office_formats::page_engine`): a page
+//! asked for by one side and refused by the other is a hover that waits for a conversion
+//! nothing was ever asked to make.
 
-use crate::config::config::PreviewType;
+use crate::config::config::{OfficeEngine, PreviewType};
 use crate::formats::text_formats;
 use crate::CONFIG;
 use std::path::Path;
@@ -163,9 +167,12 @@ pub fn is_libre_preview(path: &Path) -> bool {
 /// Two kinds of document have a page that is the engine's rather than a reader's or an
 /// application's. One is this list's own: the documents whose formats this app has no
 /// reader for, named here or recognized by their own bytes. The other is an Office document
-/// whose own application is not installed — there is no engine of its own to ask for a page,
-/// so the page is this one's, and it is shown as the Office document the file is rather than
-/// as a document of the engine's kind (see `office_formats::app_installed`).
+/// the engine is the one that draws — one whose own application is not installed, so there
+/// is no engine of its own to ask for a page, and one the tray has asked the engine for
+/// outright, so there is no other engine to ask. Either way the page is shown as the Office
+/// document the file is rather than as a document of the engine's kind, which is what
+/// `office_formats::page_engine` answers — the one place the choice and the machine are
+/// read together, so that both sides here answer the same way.
 ///
 /// The file's own bytes are asked first, as they are wherever a kind is settled: a picture
 /// left under a document's name is not a document for this engine. Every Office format is a
@@ -187,12 +194,14 @@ pub fn engine_page_kind(path: &Path) -> Option<PreviewType> {
         return Some(PreviewType::Libre);
     }
 
-    // An Office document is the engine's only where its own application is not here: a page
-    // that has an application to draw it is that application's, and asking the engine for one
-    // as well would be a second rendering of the same document — the one thing this fallback
-    // is not for.
-    (crate::formats::office_formats::is_office_file(path)
-        && !crate::formats::office_formats::app_installed(path))
+    // An Office document is the engine's only where the engine is the one that draws it: a
+    // page that has an application to draw it is that application's, and asking the engine for
+    // one as well would be a second rendering of the same document — the one thing this
+    // fallback is not for (see `office_formats::page_engine`).
+    matches!(
+        crate::formats::office_formats::page_engine(path),
+        Some(OfficeEngine::LibreOffice)
+    )
     .then_some(PreviewType::Office)
 }
 
@@ -398,6 +407,12 @@ mod tests {
     /// this app's, and it is what this asserts.
     #[test]
     fn an_office_document_is_one_engine_or_the_others() {
+        // What the app's own `config.ini` holds is not what this test is about: it asks the
+        // machine, and the setting is pinned to the one that asks the machine.
+        if let Ok(mut config) = CONFIG.lock() {
+            config.office_engine = OfficeEngine::MicrosoftOffice;
+        }
+
         let folder = std::env::temp_dir().join("rust-hover-preview-office-engine-choice");
         std::fs::create_dir_all(&folder).expect("a test folder");
 

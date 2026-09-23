@@ -10,12 +10,19 @@
 //!
 //! One document is drawn by the render engine beside Office rather than by an
 //! application of its own: one whose own application is not installed, where there is
-//! no Word, Excel or PowerPoint to ask for a page. That engine writes a PDF under the
-//! app's own folder rather than holding anything in memory, and it is a page like any
-//! other here — measured from its own first page, laid out beside the cursor, and drawn
-//! at whatever size the layout asks for — which is what `engine_page` reads and what
-//! `measure` and `source_kind` ask about before they answer with the wait (see
-//! `libre_formats::engine_page_kind` for which documents those are).
+//! no Word, Excel or PowerPoint to ask for a page — and one the tray has asked the
+//! engine for outright, under `Performance → Select Engine → Office`. That engine
+//! writes a PDF under the app's own folder rather than holding anything in memory, and
+//! it is a page like any other here — measured from its own first page, laid out beside
+//! the cursor, and drawn at whatever size the layout asks for — which is what
+//! `engine_page` reads and what `measure` and `source_kind` ask about before they answer
+//! with the wait (see `libre_formats::engine_page_kind` for which documents those are).
+//!
+//! Which of the two sources is the document's own is one question, asked of the
+//! configuration and the machine together (`office_formats::page_engine`), and the
+//! answer is what both sources are read through here: a page the render tier still holds
+//! from before the choice was changed is not the page a document is previewed from now,
+//! and neither is a PDF the engine wrote when it was the one being asked.
 //!
 //! Nothing is kept *here*: the page belongs to the render tier, which holds it up to
 //! the memory the user configured and drops it when that hover is over. What this
@@ -23,9 +30,10 @@
 //! parse to measure and one raster to draw — and the size it reads is kept on the
 //! page itself, so it cannot outlive the page it was read from.
 
-use crate::config::config::image_decode_limits;
+use crate::config::config::{image_decode_limits, OfficeEngine};
 use crate::engines::libreoffice_render;
 use crate::engines::office_render::{self, CachedRender, RenderedKind};
+use crate::formats::office_formats;
 use crate::readers::pdf_preview;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
@@ -94,8 +102,17 @@ pub(crate) fn source_kind(path: &Path) -> SourceKind {
 /// one: a PDF under the app's own folder, named for the document and the version of it that
 /// was converted. Nothing is started and nothing is waited on — whether there is a page is a
 /// read of that folder (see `libreoffice_render`).
+///
+/// It is read only where the engine is the one that draws this document: a PDF the engine
+/// wrote while it was being asked is not the page a hover in the application's mode is shown
+/// or measured from (see `office_formats::page_engine`).
 fn engine_page(path: &Path) -> Option<PathBuf> {
-    libreoffice_render::rendered_page(path)
+    matches!(
+        office_formats::page_engine(path),
+        Some(OfficeEngine::LibreOffice)
+    )
+    .then(|| libreoffice_render::rendered_page(path))
+    .flatten()
 }
 
 /// The page waiting for this document, if there is one and it can be read.
@@ -108,7 +125,17 @@ fn engine_page(path: &Path) -> Option<PathBuf> {
 /// rendered again. This is the side that may ask the PDF engine — its threads are
 /// multithreaded apartments — which is why the check lives here rather than where the
 /// page is held.
+///
+/// It answers with nothing at all where the page held is not one this document is previewed
+/// from any more: a page the render tier produced while it was the engine being asked is not
+/// the page a hover in the engine's mode is shown, and what this side drew would be the other
+/// engine's work under the current choice (see `office_formats::page_engine`). The page is
+/// left where it is rather than dropped, so a choice that comes back to the tier finds it.
 fn usable_render(path: &Path) -> Option<CachedRender> {
+    if office_formats::page_engine(path) != Some(OfficeEngine::MicrosoftOffice) {
+        return None;
+    }
+
     let cached = office_render::cached_render(path)?;
     if rendered_dimensions(&cached).is_some() {
         return Some(cached);
