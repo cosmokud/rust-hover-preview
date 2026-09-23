@@ -173,8 +173,9 @@ The item a setting starts at carries `(Default)` after its name, so a menu says 
   - **Trigger Key (Alt)** — the key is named in the item itself.
     - **Enable Trigger Key** — whether the key is watched at all.
     - **Hold to Disable Preview** / **Hold to Enable Preview** — what holding it does.
-  - **Delay** — Instant, Fast, Medium, Relaxed, Slow: 0 ms to 1000 ms, Instant (0 ms) by default.
-  - **Rehover Delay** — the same steps, before the same file can preview again; Fast (200 ms) by default.
+  - **Delay** — how long the pointer rests on a file before its preview opens: 0 ms at the top down to 1000 ms at the bottom. 0 ms by default.
+  - **Rehover Delay** — the same steps, before the same file can preview again; 200 ms by default.
+  - **Settling Delay** — the same steps, how long the pointer must have been still before anything previews at all: 0 ms, the default, is a new file previewed while the hand is still moving to it.
 - **Placement**
   - **Position** — Follow Cursor or Best Position; Best Position by default.
   - **Avoid** — Avoid Nothing, Avoid Filename (default), Avoid Filename Column, or Avoid Details. This keeps a preview off the item it is about.
@@ -244,7 +245,7 @@ theme=light
 ; Timing
 hover_delay_ms=0
 same_file_rehover_delay_ms=200
-spinner_delay_ms=250
+settling_delay_ms=0
 trigger_key=alt
 trigger_key_enabled=true
 trigger_key_mode=disable
@@ -285,6 +286,7 @@ text_cache_mb=0
 ; Advanced
 hdr_exposure=0
 hdr_tone_map=reinhard
+spinner_delay_ms=250
 ```
 
 Key settings, in plain terms:

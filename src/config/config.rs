@@ -114,6 +114,17 @@ pub const DEFAULT_HOVER_DELAY_MS: u64 = 0;
 /// while a hand that turns back is answered before the wait is over. `0` is a file that
 /// previews again the moment it is hovered.
 pub const DEFAULT_SAME_FILE_REHOVER_DELAY_MS: u64 = 200;
+/// How long the pointer must be still before a preview may open for anything, in
+/// milliseconds.
+///
+/// A pointer crossing a list is on a new file every few dozen milliseconds, and what a
+/// hover is about is the file the hand comes to rest on: while it is still moving, the
+/// file under the cursor is one it is passing rather than the one being asked about. The
+/// wait this names is that one, and `0` is the setting that asks for none of it — a
+/// preview is put up for a new file even while the hand is still on its way to it, which
+/// is where the app starts — so the machine that would rather see nothing until the
+/// pointer has settled is the one that gives this a value.
+pub const DEFAULT_SETTLING_DELAY_MS: u64 = 0;
 /// How long a hover's load may run before the waiting spinner is put up for it.
 ///
 /// The window is hidden while a load runs, so one that finishes inside this has gone
@@ -1007,6 +1018,10 @@ pub struct AppConfig {
     /// putting the preview back up on its way past (see
     /// `DEFAULT_SAME_FILE_REHOVER_DELAY_MS`).
     pub same_file_rehover_delay_ms: u64,
+    /// How long the pointer must be still before a preview may open for anything, in
+    /// milliseconds: what keeps a pointer crossing a list from answering every file it
+    /// passes on its way (see `DEFAULT_SETTLING_DELAY_MS`).
+    pub settling_delay_ms: u64,
     /// How long a hover's load may run before the waiting spinner is put up for it,
     /// in milliseconds. `0` puts it up with the load.
     ///
@@ -1262,6 +1277,7 @@ impl Default for AppConfig {
             follow_cursor: DEFAULT_FOLLOW_CURSOR,
             avoid_mode: DEFAULT_AVOID_MODE,
             same_file_rehover_delay_ms: DEFAULT_SAME_FILE_REHOVER_DELAY_MS,
+            settling_delay_ms: DEFAULT_SETTLING_DELAY_MS,
             spinner_delay_ms: DEFAULT_SPINNER_DELAY_MS,
             webp_playback_fps: DEFAULT_WEBP_PLAYBACK_FPS,
             image_cache_mb: DEFAULT_IMAGE_CACHE_MB,
@@ -1372,6 +1388,7 @@ const SETTING_GROUPS: &[(&str, &[&str])] = &[
         &[
             "hover_delay_ms",
             "same_file_rehover_delay_ms",
+            "settling_delay_ms",
             "trigger_key",
             "trigger_key_enabled",
             "trigger_key_mode",
@@ -1795,6 +1812,11 @@ impl AppConfig {
         );
         ini.set(
             CONFIG_SECTION,
+            "settling_delay_ms",
+            Some(self.settling_delay_ms.to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
             "spinner_delay_ms",
             Some(sanitize_spinner_delay_ms(self.spinner_delay_ms).to_string()),
         );
@@ -2132,6 +2154,9 @@ impl AppConfig {
         }
         if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "same_file_rehover_delay_ms") {
             self.same_file_rehover_delay_ms = value;
+        }
+        if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "settling_delay_ms") {
+            self.settling_delay_ms = value;
         }
         if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "spinner_delay_ms") {
             self.spinner_delay_ms = sanitize_spinner_delay_ms(value);
