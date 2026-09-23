@@ -1,0 +1,15 @@
+pub(crate) mod archive_listing;
+pub(crate) mod bcn;
+pub(crate) mod dds_image;
+pub(crate) mod eps_image;
+pub(crate) mod font_preview;
+pub(crate) mod metafile_image;
+pub(crate) mod office_preview;
+pub(crate) mod pdf_preview;
+pub(crate) mod project_image;
+pub(crate) mod psd_image;
+pub(crate) mod svg_preview;
+pub(crate) mod tone_map;
+pub(crate) mod video_player;
+pub(crate) mod webp_image;
+pub(crate) mod wic_image;

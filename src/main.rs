@@ -1,49 +1,13 @@
 #![windows_subsystem = "windows"]
 
-mod archive_formats;
-mod archive_listing;
-mod archive_preview;
-mod bcn;
-mod cloud_files;
-mod codecs;
+mod app;
 mod config;
-mod content_type;
-mod dds_image;
-mod design_formats;
-mod engine_processes;
-mod eps_image;
-mod explorer_hook;
-mod font_formats;
-mod font_preview;
-mod image_formats;
-mod libre_formats;
-mod libreoffice_render;
-mod metafile_image;
-mod office_formats;
-mod office_preview;
-mod office_render;
-mod pdf_preview;
-mod preview_window;
-mod project_image;
-mod psd_image;
-mod single_instance;
-mod startup;
-mod svg_preview;
-mod text_formats;
-mod text_paint;
-mod text_preview;
-mod text_theme;
-mod theme_files;
-mod tone_map;
-mod tray;
-mod updates;
-mod vector_formats;
-mod video_formats;
-mod video_player;
-mod webp_image;
-mod webview_preview;
-mod wheel_input;
-mod wic_image;
+mod engines;
+mod formats;
+mod readers;
+mod shell;
+mod text;
+mod ui;
 
 use once_cell::sync::Lazy;
 use std::fs;
@@ -58,13 +22,13 @@ use windows::Win32::UI::HiDpi::{
 
 // Global state
 pub static RUNNING: AtomicBool = AtomicBool::new(true);
-pub static CONFIG: Lazy<Mutex<config::AppConfig>> =
-    Lazy::new(|| Mutex::new(config::AppConfig::load()));
+pub static CONFIG: Lazy<Mutex<config::config::AppConfig>> =
+    Lazy::new(|| Mutex::new(config::config::AppConfig::load()));
 
 fn main() {
     // Bail out before any hook, window, or thread is created when the app is
     // already running, so only the first instance stays in the tray.
-    let _instance_guard = match single_instance::acquire() {
+    let _instance_guard = match app::single_instance::acquire() {
         Some(guard) => guard,
         None => return,
     };
@@ -75,7 +39,7 @@ fn main() {
     // A page is held in memory and nowhere else, so whatever an earlier version left
     // in the cache folder — and whatever a render that was ended mid-flight left in
     // the temp folder — is dropped before anything starts writing there again.
-    office_render::discard_old_disk_cache();
+    engines::office_render::discard_old_disk_cache();
 
     // The log an earlier version appended a line to for every video hover is no
     // longer written; the file it left behind goes the same way, as its own user,
@@ -88,21 +52,21 @@ fn main() {
     // and the thing a new engine would be a duplicate of. Only what a run that is
     // gone was holding is ended — a run that is still alive is another session, and
     // its engines are its own.
-    engine_processes::reap_leftovers();
+    app::engine_processes::reap_leftovers();
 
     // And the browsers of the runs that left no record: every profile folder under
     // the engine's own folder is named for the run that made it, so a folder whose
     // browser is still holding it names a browser to end. What the record above
     // catches for the runs that wrote one, this catches for the versions of this app
     // that did not.
-    for pid in webview_preview::stale_profile_pids() {
-        engine_processes::end_browsers_started_by(pid);
+    for pid in engines::webview_preview::stale_profile_pids() {
+        app::engine_processes::end_browsers_started_by(pid);
     }
 
     // The browser that draws a document keeps its state in a folder of its
     // own, one per run; what earlier runs left behind is cleared away here, before this
     // run has a folder for something to hold.
-    webview_preview::clear_stale_profiles();
+    engines::webview_preview::clear_stale_profiles();
 
     // Initialize COM
     unsafe {
@@ -111,12 +75,12 @@ fn main() {
 
     // Start the preview window in a separate thread
     let preview_handle = std::thread::spawn(|| {
-        preview_window::run_preview_window();
+        ui::preview_window::run_preview_window();
     });
 
     // Watch config.ini changes off the hover hot path.
     let config_watch_handle = std::thread::spawn(|| {
-        let config_path = config::AppConfig::config_path();
+        let config_path = config::config::AppConfig::config_path();
         let mut last_modified = config_path
             .as_ref()
             .and_then(|path| fs::metadata(path).ok())
@@ -141,28 +105,28 @@ fn main() {
 
     // Start the explorer hook in a separate thread
     let hook_handle = std::thread::spawn(|| {
-        explorer_hook::run_explorer_hook();
+        shell::explorer_hook::run_explorer_hook();
     });
 
     // Watch system-wide wheel input so scrolling Explorer refreshes the preview
     // of the item that lands under the parked cursor.
-    let wheel_handle = wheel_input::spawn_wheel_watcher();
+    let wheel_handle = shell::wheel_input::spawn_wheel_watcher();
 
     // Run the system tray (this blocks until exit)
-    tray::run_tray();
+    shell::tray::run_tray();
 
     // Signal other threads to stop
     RUNNING.store(false, Ordering::SeqCst);
-    wheel_input::request_stop();
+    shell::wheel_input::request_stop();
 
     // The engine thread is joined only when it is idle: a COM call into Office
     // cannot be cancelled, and the app's exit must not wait on one.
-    office_render::shutdown();
+    engines::office_render::shutdown();
 
     // The browser engine is this app's own process tree rather than an application a
     // user may also be working in, so it is ended here: nothing of it should outlive
     // the app.
-    webview_preview::shutdown();
+    engines::webview_preview::shutdown();
 
     // Wait for threads to finish (with timeout)
     let _ = preview_handle.join();
@@ -192,6 +156,6 @@ fn sync_startup_setting() {
         .unwrap_or(false);
 
     if should_enable_startup {
-        startup::enable_startup();
+        app::startup::enable_startup();
     }
 }
