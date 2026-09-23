@@ -192,7 +192,7 @@ impl OfficeEngine {
 }
 
 /// Which engine this document's page is asked of here and now: the tray's
-/// `Performance → Select Engine → Office` choice and the machine it is made on, read
+/// `Engine → Select Engine → Office` choice and the machine it is made on, read
 /// together.
 ///
 /// It is one question with one answer, asked by every side that needs one — the request side

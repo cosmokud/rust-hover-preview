@@ -8,15 +8,15 @@
 //! is not there yet is answered with a spinner in a box of its own, and the page
 //! itself the moment it arrives.
 //!
-//! One document is drawn by the render engine beside Office rather than by an
-//! application of its own: one whose own application is not installed, where there is
-//! no Word, Excel or PowerPoint to ask for a page — and one the tray has asked the
-//! engine for outright, under `Performance → Select Engine → Office`. That engine
-//! writes a PDF under the app's own folder rather than holding anything in memory, and
-//! it is a page like any other here — measured from its own first page, laid out beside
-//! the cursor, and drawn at whatever size the layout asks for — which is what
-//! `engine_page` reads and what `measure` and `source_kind` ask about before they answer
-//! with the wait (see `libre_formats::engine_page_kind` for which documents those are).
+//! One document is drawn by the render engine beside Office rather than by an application of
+//! its own: one whose own application is not installed, where there is no Word, Excel or
+//! PowerPoint to ask for a page — and one the tray has asked the engine for outright, under
+//! `Engine → Select Engine → Office`. That engine writes a PDF under the app's own folder
+//! rather than holding anything in memory, and it is a page like any other here — measured
+//! from its own first page, laid out beside the cursor, and drawn at whatever size the layout
+//! asks for — which is what `engine_page` reads and what `measure` and `source_kind` ask
+//! about before they answer with the wait (see `libre_formats::engine_page_kind` for which
+//! documents those are).
 //!
 //! Which of the two sources is the document's own is one question, asked of the
 //! configuration and the machine together (`office_formats::page_engine`), and the

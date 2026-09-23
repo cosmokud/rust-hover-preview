@@ -25,19 +25,18 @@
 //! cannot read is answered with no preview — once, and then remembered, so a name that was
 //! put in this list by mistake costs one conversion and never another.
 //!
-//! One document of another kind is asked of the engine as well, and it is the one case the
-//! list above is not asked about: an Office document — one whose own application is not
-//! installed on this machine, and one the tray has asked the engine for outright, under
-//! `Performance → Select Engine → Office`. There is no Word, Excel or PowerPoint to draw a
-//! page for the first, and the engine beside them reads the format; the second is a choice
-//! rather than a lack of one, and what it buys is every document of the kind drawn by the
-//! engine a user knows. Either way the page is the engine's, and it is shown under the
-//! Office kind and at the Office kind's scale rather than this one's, because the file is
-//! what it is whichever engine drew it. `engine_page_kind` is that question, and it is the
-//! one place both the callers and the engine ask it — one answer, reached through one
-//! function, for the choice and the machine together (`office_formats::page_engine`): a page
-//! asked for by one side and refused by the other is a hover that waits for a conversion
-//! nothing was ever asked to make.
+//! One document of another kind is asked of the engine as well, and it is the one case the list
+//! above is not asked about: an Office document — one whose own application is not installed
+//! on this machine, and one the tray has asked the engine for outright, under `Engine → Select
+//! Engine → Office`. There is no Word, Excel or PowerPoint to draw a page for the first, and
+//! the engine beside them reads the format; the second is a choice rather than a lack of one,
+//! and what it buys is every document of the kind drawn by the engine a user knows. Either way
+//! the page is the engine's, and it is shown under the Office kind and at the Office kind's
+//! scale rather than this one's, because the file is what it is whichever engine drew it.
+//! `engine_page_kind` is that question, and it is the one place both the callers and the
+//! engine ask it — one answer, reached through one function, for the choice and the machine
+//! together (`office_formats::page_engine`): a page asked for by one side and refused by the
+//! other is a hover that waits for a conversion nothing was ever asked to make.
 
 use crate::config::config::{OfficeEngine, PreviewType};
 use crate::formats::text_formats;

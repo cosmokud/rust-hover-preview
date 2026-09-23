@@ -548,7 +548,7 @@ pub const DEFAULT_LIBRE_SCALE: PreviewScale = PreviewScale::FitToScreen;
 pub const DEFAULT_FONT_SCALE: PreviewScale = PreviewScale::Percent(DEFAULT_FONT_SCALE_PERCENT);
 
 /// Which engine an Office document's page is asked of, as the tray's
-/// `Performance → Select Engine → Office` lists it.
+/// `Engine → Select Engine → Office` lists it.
 ///
 /// There are two engines to ask, and the choice between them is one setting: the application
 /// that owns the format, which is what a page of one has always been drawn by, and the render
@@ -1251,17 +1251,17 @@ pub struct AppConfig {
     /// `Performance → Cache → Libre` in the tray.
     pub libre_cache_mb: u32,
     /// Which engine draws an Office document's page, which is the tray's
-    /// `Performance → Select Engine → Office` setting.
+    /// `Engine → Select Engine → Office` setting.
     pub office_engine: OfficeEngine,
     /// How long the Office engine a family started is kept after that family's
-    /// last page, which is the tray's `Performance → Microsoft Office TTL` setting.
+    /// last page, which is the tray's `Engine → Microsoft Office TTL` setting.
     pub office_engine_idle: EngineIdle,
     /// How long the WebView2 engine is kept after the last document it drew. Beginning
     /// one is a browser start, and pointing a warm one at another document is a few
     /// milliseconds, so what this buys is every hover after the first.
     pub webview_idle: EngineIdle,
     /// How long the LibreOffice engine is kept after the last page it drew, which is the
-    /// tray's `Performance → LibreOffice TTL` setting.
+    /// tray's `Engine → LibreOffice TTL` setting.
     ///
     /// The engine is kept the way the other two are — a process left running rather than a
     /// launch paid per document — and the idle time is what bounds it: `0 seconds` keeps no
