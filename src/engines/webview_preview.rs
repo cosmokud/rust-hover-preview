@@ -355,6 +355,23 @@ fn note_document_failed() {
     FAILURE_NOTICE.store(true, Ordering::Release);
 }
 
+/// The engine never answered for a document: the wait it belonged to has been given up by
+/// the side that was waiting, and the engine is stood down for a while rather than asked
+/// for the next document as though nothing had happened.
+///
+/// What this is for is the one outcome the engine cannot report for itself. A thread that
+/// has stopped answering — parked on a completion handler, or on a browser that has stopped
+/// taking messages — posts nothing, sets nothing and shows nothing, so from the outside
+/// there is no answer coming at all; there is nothing to notice and nothing to time out,
+/// which is why the wait is bounded where the waiting is done and the answer is said from
+/// there (see `preview_window`'s engine wait). Standing the engine down is what keeps the
+/// hover after that one from queueing behind the same silence: an engine that is not
+/// answering draws nothing, and a hover over a document shows nothing rather than waiting
+/// for it.
+pub fn note_unanswered() {
+    note_failure();
+}
+
 fn note_engine_up() {
     if let Ok(mut failed) = ENGINE_FAILED_AT.lock() {
         *failed = None;
@@ -930,8 +947,13 @@ impl Host {
         ));
         let hwnd = window?;
 
+        // One deadline for the whole attempt at having an engine: what is waited on is the
+        // runtime answering at all, and one that has not answered by then is not going to
+        // (see `HOST_CREATION_TIMEOUT`).
+        let deadline = Instant::now() + HOST_CREATION_TIMEOUT;
+
         let started = Instant::now();
-        let environment = create_environment(&folder);
+        let environment = create_environment(&folder, deadline);
         trace(&format!(
             "host: environment {:?} in {} ms",
             environment.is_some(),
@@ -945,12 +967,15 @@ impl Host {
         // held by another browser — which is what a browser left behind by an earlier
         // run looks like, and it is usually gone within a moment. Asking again a few
         // times is worth more than the wait it costs the engine's own thread, and the
-        // caller falls back to this app's reader if even that comes to nothing.
+        // caller falls back to this app's reader if even that comes to nothing. A
+        // browser that is *silent* rather than refusing spends the deadline of the
+        // attempt instead of being asked again on a fresh clock, which is why the
+        // deadline is one of its own and not a per-call timeout.
         let mut controller = None;
         for attempt in 0..4 {
-            controller = create_controller(environment.clone(), hwnd);
+            controller = create_controller(environment.clone(), hwnd, deadline);
 
-            if controller.is_some() {
+            if controller.is_some() || Instant::now() >= deadline {
                 break;
             }
 
@@ -1172,6 +1197,19 @@ impl Host {
     fn close(&mut self) {
         self.hide();
         self.current = None;
+
+        // A browser that stopped answering is one whose close may never return: the call is
+        // a message to that browser, and a browser that has stopped taking messages is what
+        // a hung host is. So the process is ended first — by the id it was recorded under,
+        // which is the same verified end every other engine of this app gets — and the close
+        // that follows is the close of something that is already gone rather than a wait on
+        // it.
+        if self.hung && self.browser_pid != 0 {
+            if engine_processes::is_running(self.browser_pid) {
+                engine_processes::terminate_owned(self.browser_pid);
+            }
+            engine_processes::forget(self.browser_pid);
+        }
 
         unsafe {
             let _ = self.controller.Close();
@@ -1474,7 +1512,10 @@ pub fn clear_stale_profiles() {
     }
 }
 
-fn create_environment(user_data_folder: &Path) -> Option<ICoreWebView2Environment> {
+fn create_environment(
+    user_data_folder: &Path,
+    deadline: Instant,
+) -> Option<ICoreWebView2Environment> {
     let folder = wide(&user_data_folder.to_string_lossy());
     let (sender, receiver) = mpsc::channel();
 
@@ -1509,12 +1550,32 @@ fn create_environment(user_data_folder: &Path) -> Option<ICoreWebView2Environmen
     )
     .ok()?;
 
-    receiver.recv().ok()?.ok()
+    receiver.recv_timeout(remaining(deadline)).ok()?.ok()
+}
+
+/// How long the engine may take to be had at all — the environment and the controller
+/// together — before the attempt is read as one that will not answer.
+///
+/// Both calls are asynchronous and both of them were waited on without a bound: the
+/// completion handlers this thread parks on are the runtime's to fire, and one that never
+/// fires leaves this thread waiting for the rest of the run — with every document after it
+/// queued behind a wait nobody ends, and no failure notice to take a hover's spinner down
+/// with, because the thread that would post one is the thread that is waiting. Twenty
+/// seconds is far past what having an engine costs (a quarter of a second measured warm,
+/// and the retries a held profile folder asks for are inside it), so what is past it is
+/// silence rather than work.
+const HOST_CREATION_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// What is left of a deadline, as a wait: `recv_timeout` given nothing waits nothing and
+/// answers `Timeout` at once, which is the answer a wait past its deadline wants.
+fn remaining(deadline: Instant) -> Duration {
+    deadline.saturating_duration_since(Instant::now())
 }
 
 fn create_controller(
     environment: ICoreWebView2Environment,
     hwnd: HWND,
+    deadline: Instant,
 ) -> Option<ICoreWebView2Controller> {
     let (sender, receiver) = mpsc::channel();
 
@@ -1538,7 +1599,7 @@ fn create_controller(
     )
     .ok()?;
 
-    receiver.recv().ok()?.ok()
+    receiver.recv_timeout(remaining(deadline)).ok()?.ok()
 }
 
 /// What the engine is and is not allowed to do, all of it the app's own rules rather
