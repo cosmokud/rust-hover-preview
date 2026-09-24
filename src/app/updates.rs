@@ -247,7 +247,29 @@ fn newer_release() -> Option<String> {
     let text = String::from_utf8(body).ok()?;
     let version = text.trim();
 
-    (parse_version(version) > parse_version(env!("CARGO_PKG_VERSION"))).then(|| version.to_owned())
+    is_newer(version, env!("CARGO_PKG_VERSION")).then(|| version.to_owned())
+}
+
+/// Whether a release is one to offer: a version this app reads, newer than the
+/// one running. What is running is read as the release it names and whether it
+/// is a pre-release of it — a build made from a pre-release tag, `0.3.4-rc.1`,
+/// is the release `0.3.4` before it — so the stable release that ends a
+/// pre-release cycle is newer than it and brings it back onto the stable line,
+/// while the release before that one is not offered as a step backwards. A
+/// running version nothing can be read from is read as older than every release
+/// there is, so it is offered whatever is published rather than being left where
+/// it is.
+fn is_newer(published: &str, running: &str) -> bool {
+    let Some(published) = parse_version(published) else {
+        return false;
+    };
+
+    let (release, pre_release) = match running.split_once('-') {
+        Some((release, _)) => (parse_version(release).unwrap_or((0, 0, 0)), true),
+        None => (parse_version(running).unwrap_or((0, 0, 0)), false),
+    };
+
+    published > release || (published == release && pre_release)
 }
 
 /// The address of one release's installer, which is the release the version
@@ -603,6 +625,22 @@ mod tests {
         assert!(newer("1.0.0"));
         assert!(!newer("0.2.14"));
         assert!(!newer("0.2.13"));
+    }
+
+    /// A build made from a pre-release tag is older than the release its own
+    /// version names, which is how it comes back to the stable line: the `0.3.4`
+    /// that ends the `0.3.4-rc.1` cycle is offered to it, and so is anything
+    /// later, while the `0.3.3` before it is not — that would be a step
+    /// backwards rather than a way back.
+    #[test]
+    fn a_pre_release_build_is_brought_back_onto_the_release_it_names() {
+        assert!(is_newer("0.3.4", "0.3.4-rc.1"));
+        assert!(is_newer("0.3.5", "0.3.4-rc.1"));
+        assert!(!is_newer("0.3.3", "0.3.4-rc.1"));
+        assert!(!is_newer("0.3.4-rc.2", "0.3.4-rc.1"));
+
+        assert!(!is_newer("0.3.4", "0.3.4"));
+        assert!(is_newer("0.3.4", "main"));
     }
 
     /// The installer is asked for in the release its version names, under the

@@ -120,6 +120,34 @@ jobs:
             *) echo "::error::unexpected status ${status}"; exit 1 ;;
           esac
 
+      # The same three things `deploy.yml` refuses a release over, read at the tag rather
+      # than from this branch: what a release carries comes from the tag, so the manifest and
+      # the notes there are the ones that have to agree with it.
+      - name: The tag, the manifest and the changelog agree
+        env:
+          TAG: ${{ inputs.tag_to_test }}
+          REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          base="https://raw.githubusercontent.com/${REPO}/${TAG}"
+          curl -sSf "${base}/Cargo.toml" -o cargo-at-tag.toml
+          curl -sSf "${base}/CHANGELOG.md" -o changelog-at-tag.md
+
+          manifest=$(grep -m1 -E '^version = "' cargo-at-tag.toml | cut -d'"' -f2)
+          if [[ "$manifest" != "$VERSION" ]]; then
+            echo "::error::Cargo.toml at ${TAG} says '${manifest}' and the tag says '${VERSION}': the installer would be built under one version and asked for under the other"
+            exit 1
+          fi
+
+          if ! grep -q "^## \[${VERSION}\]" changelog-at-tag.md; then
+            echo "::error::CHANGELOG.md at ${TAG} has no '## [${VERSION}]' section: the release would carry the generated notes instead of it"
+            exit 1
+          fi
+
+          echo "the tag, Cargo.toml and the changelog agree on ${VERSION}"
+
       - name: The changelog section for the tag is the section, and nothing past it
         env:
           TAG: ${{ inputs.tag_to_test }}
@@ -162,18 +190,19 @@ jobs:
           fi
           echo "nothing ran, and nothing was extracted: the tag was read as a name"
 
-      - name: The version the tag names is one the app can read
+      - name: The version the tag names is one the deploy path can publish
         env:
           TAG: ${{ inputs.tag_to_test }}
         shell: bash
         run: |
           VERSION="${TAG#v}"
-          # The app reads a version as three numbers and nothing else — anything after them
-          # is a release it reads as no update at all (see `parse_version` in `updates.rs`).
           if [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "the app would read '${VERSION}'"
+            echo "'${VERSION}' is a stable release: the app is offered it."
+          elif [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-[0-9A-Za-z.]+$ ]]; then
+            echo "'${VERSION}' is a pre-release: published as one, and never offered by the app."
           else
-            echo "::warning::'${VERSION}' is not three numbers: the app would read this release as no update"
+            echo "::error::'${VERSION}' is neither X.Y.Z nor X.Y.Z-rc.1: the deploy path refuses it, and the app would read it as no update"
+            exit 1
           fi
 
       - name: The version file the app reads is the one the release writes
