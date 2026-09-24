@@ -41,16 +41,23 @@ jobs:
             exit 1
           fi
 
+      # SECURITY: Every action is pinned to the commit the tag it is written against
+      # pointed at, not to the tag itself: a tag is its publisher's to move, and these run
+      # with a token that can publish a release. The comment beside each pin names the
+      # release it is, for the bump that moves it.
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Install Rust (MSVC)
-        uses: dtolnay/rust-toolchain@stable
+        # Pinned to a commit in master's history, with the toolchain named in the input:
+        # this action reads its ref as the toolchain otherwise, and a pin outside master
+        # is one that gets garbage-collected.
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
         with:
           toolchain: stable-x86_64-pc-windows-msvc
 
       - name: Rust Cache
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2 (2.9.2)
 
       - name: Install cargo-packager
         shell: pwsh
@@ -78,7 +85,7 @@ jobs:
           Set-Content -Path target/packager/version.txt -NoNewline -Value $version
 
       - name: Upload installer artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: rust-hover-preview-installers-${{ github.ref_name }}
           path: |
@@ -89,15 +96,18 @@ jobs:
 
       - name: Extract Changelog
         shell: bash
+        env:
+          # SECURITY: the tag goes through the environment and is never written into the
+          # script: a ref name may hold `$(…)`, which a shell would run.
+          TAG: ${{ github.ref_name }}
         run: |
-          TAG_NAME="${{ github.ref_name }}"
-          VERSION="${TAG_NAME#v}"
+          VERSION="${TAG#v}"
 
           # Extract changelog section for the current version
-          awk '/^## \['"$VERSION"'\]/{flag=1; next} /^## \[/{flag=0} flag' CHANGELOG.md > release_notes.md
+          awk -v heading="## [$VERSION]" 'index($0, heading) == 1 {flag=1; next} /^## \[/{flag=0} flag' CHANGELOG.md > release_notes.md
 
       - name: Create GitHub release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}

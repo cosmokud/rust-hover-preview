@@ -1,0 +1,282 @@
+name: Test Deploy
+
+# Everything the deploy workflows do, up to and not including the release. The guards are
+# run against tags that must pass and tags that must not, the changelog extraction is
+# asserted, and — where a build is asked for — the installers are built and uploaded as
+# artifacts and checked against the names the app asks for. Nothing here can publish a
+# release, because nothing here is given the permission to.
+#
+# It is a second copy of what `deploy.yml` and `manual-deploy.yml` do rather than a call
+# into them, so that a test failing is never the shared code failing to call itself. What
+# is not shared is asserted instead: the first step reads both workflows and refuses the
+# shape a tag must not be written into a shell in.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag_to_test:
+        description: "The tag the guards run against and a build would be made from; it has to exist"
+        required: true
+        default: "v0.3.2"
+        type: string
+      build:
+        description: "Build the installers as well, as artifacts (no release is made either way)"
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  guards:
+    name: Guards
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      # SECURITY: the shape the injection took — an expression assigned inside a script,
+      # where the shell runs what it holds. `env:` is where an input belongs.
+      - name: No deploy workflow writes an expression into a script
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -nE '=[[:space:]]*\$\{\{' .github/workflows/deploy.yml .github/workflows/manual-deploy.yml; then
+            echo "::error::an expression is assigned inside a script: pass it through env: and read it from there"
+            exit 1
+          fi
+          echo "both deploy workflows pass their tags through the environment"
+
+      - name: The tag shape, against tags that pass and tags that do not
+        env:
+          INPUT_TAG: ${{ inputs.tag_to_test }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          shape() { [[ "$1" =~ ^v[0-9]+\.[0-9]+\.[0-9]+.*$ ]]; }
+
+          if ! shape "$INPUT_TAG"; then
+            echo "::error::${INPUT_TAG} is not the shape the deploy workflows accept"
+            exit 1
+          fi
+          echo "accepted: ${INPUT_TAG}"
+
+          refused=0
+          for bad in main v1.0 1.2.3 latest ""; do
+            if shape "$bad"; then
+              echo "::error::'${bad}' should have been refused"
+              refused=1
+            else
+              echo "refused, as it should be: '${bad}'"
+            fi
+          done
+          exit $refused
+
+      - name: A tag that exists is answered for, one that does not is refused
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag_to_test }}
+          REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag_status() {
+            curl -sS -o /dev/null -w "%{http_code}" \
+              -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${REPO}/git/ref/tags/$1"
+          }
+
+          exists=$(tag_status "$TAG")
+          if [[ "$exists" != "200" ]]; then
+            echo "::error::no tag named ${TAG} in ${REPO}: status ${exists}"
+            exit 1
+          fi
+          echo "${TAG} is a tag that exists"
+
+          missing=$(tag_status "v0.0.0-no-such-tag")
+          if [[ "$missing" != "404" ]]; then
+            echo "::error::a tag that does not exist answered ${missing} rather than 404"
+            exit 1
+          fi
+          echo "a tag that does not exist is refused with ${missing}"
+
+      - name: What the release guard would decide for this tag
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag_to_test }}
+          REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          status=$(curl -sS -o /dev/null -w "%{http_code}" \
+            -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${REPO}/releases/tags/${TAG}")
+          case "${status}" in
+            200) echo "${TAG} already has a release: a deploy would refuse to touch it." ;;
+            404) echo "${TAG} has no release yet: a deploy would go ahead and make one." ;;
+            *) echo "::error::unexpected status ${status}"; exit 1 ;;
+          esac
+
+      - name: The changelog section for the tag is the section, and nothing past it
+        env:
+          TAG: ${{ inputs.tag_to_test }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          awk -v heading="## [$VERSION]" 'index($0, heading) == 1 {flag=1; next} /^## \[/{flag=0} flag' CHANGELOG.md > release_notes.md
+
+          if [[ ! -s release_notes.md ]]; then
+            echo "::error::no changelog section for ${VERSION}"
+            exit 1
+          fi
+          if grep -q '^## \[' release_notes.md; then
+            echo "::error::the extraction ran on past the next version's heading"
+            exit 1
+          fi
+          echo "the section for ${VERSION} is $(wc -l < release_notes.md) lines:"
+          head -n 3 release_notes.md
+
+      # The regression this is here for: a tag carrying shell syntax reached the script as
+      # command substitution. It reaches it as data now, which is what the canary checks.
+      - name: A tag carrying shell syntax is read as a name and nothing else
+        env:
+          TAG: 'v1.0.0$(touch /tmp/rust-hover-preview-injection)'
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f /tmp/rust-hover-preview-injection
+          VERSION="${TAG#v}"
+          awk -v heading="## [$VERSION]" 'index($0, heading) == 1 {flag=1; next} /^## \[/{flag=0} flag' CHANGELOG.md > release_notes.md
+
+          if [[ -e /tmp/rust-hover-preview-injection ]]; then
+            echo "::error::the tag was run as a command"
+            exit 1
+          fi
+          if [[ -s release_notes.md ]]; then
+            echo "::error::a tag naming no section produced notes"
+            exit 1
+          fi
+          echo "nothing ran, and nothing was extracted: the tag was read as a name"
+
+      - name: The version the tag names is one the app can read
+        env:
+          TAG: ${{ inputs.tag_to_test }}
+        shell: bash
+        run: |
+          VERSION="${TAG#v}"
+          # The app reads a version as three numbers and nothing else — anything after them
+          # is a release it reads as no update at all (see `parse_version` in `updates.rs`).
+          if [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "the app would read '${VERSION}'"
+          else
+            echo "::warning::'${VERSION}' is not three numbers: the app would read this release as no update"
+          fi
+
+      - name: The version file the app reads is the one the release writes
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The release publishes `version.txt` beside the installer and the app asks for it
+          # by its own constant; a rename on either side is an update that stops being
+          # offered, and stops being offered quietly.
+          asset=$(sed -n 's/.*VERSION_ASSET: &str = "\([^"]*\)".*/\1/p' src/app/updates.rs | head -n 1)
+          if [[ "$asset" != "version.txt" ]]; then
+            echo "::error::the app names its version asset '${asset}'; the deploy workflows write 'version.txt'"
+            exit 1
+          fi
+          echo "the app reads '${asset}', which is what the workflows publish"
+
+      - name: Summary
+        env:
+          TAG: ${{ inputs.tag_to_test }}
+          BUILD: ${{ inputs.build }}
+        shell: bash
+        run: |
+          {
+            echo "### Test deploy"
+            echo ""
+            echo "- tag: \`${TAG}\`"
+            echo "- a release is never made by this workflow"
+            echo "- installers built: \`${BUILD}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  installers:
+    name: The installers a release would carry
+    needs: guards
+    if: inputs.build
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.tag_to_test }}
+
+      - name: Install Rust (MSVC)
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
+        with:
+          toolchain: stable-x86_64-pc-windows-msvc
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2 (2.9.2)
+
+      - name: Install cargo-packager
+        shell: pwsh
+        run: cargo install cargo-packager --locked --version 0.11.8
+
+      - name: Build Windows installers
+        shell: pwsh
+        run: .\build-installers.ps1
+
+      - name: Prepare update assets
+        shell: pwsh
+        env:
+          TAG: ${{ inputs.tag_to_test }}
+        run: |
+          $version = $env:TAG -replace '^v', ''
+          Set-Content -Path target/packager/version.txt -NoNewline -Value $version
+
+      # What the app does with the release, done the other way round: it is offered the
+      # version in the file, and asks for the installer by the name the packager gives it in
+      # the release that version names. A name it would not ask for is an update nobody is
+      # offered, so it is checked here rather than found out after a release is published.
+      - name: What the release would carry, and whether the app could use it
+        shell: pwsh
+        env:
+          TAG: ${{ inputs.tag_to_test }}
+        run: |
+          $version = $env:TAG -replace '^v', ''
+          $staged = Get-Content -Raw 'target/packager/version.txt'
+          $manifest = (Select-String -Path 'Cargo.toml' -Pattern '^version\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value
+
+          Get-ChildItem 'target/packager', 'target/github' | Select-Object Name, Length | Format-Table -AutoSize | Out-String | Write-Host
+
+          $problems = @()
+          if ($staged -ne $version) {
+            $problems += "version.txt holds '$staged' and the tag names '$version'"
+          }
+          if ($manifest -ne $version) {
+            $problems += "Cargo.toml in this tag says '$manifest': an app installed from it reports a version this release is not, so the update is offered again on every launch"
+          }
+          $installer = "rust-hover-preview_${version}_x64-setup.exe"
+          if (-not (Test-Path "target/packager/$installer")) {
+            $problems += "the app would ask for '$installer' and no such file was built"
+          }
+          if ($problems) {
+            foreach ($problem in $problems) { Write-Host "::error::$problem" }
+            exit 1
+          }
+          Write-Host "the release this tag makes is one the app could install"
+
+      - name: Upload installer artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: rust-hover-preview-dry-run-${{ inputs.tag_to_test }}
+          path: |
+            target/packager/rust-hover-preview_*-setup.exe
+            target/packager/version.txt
+            target/github/rust-hover-preview.exe
+          if-no-files-found: error
