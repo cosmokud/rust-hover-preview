@@ -231,6 +231,21 @@ pub fn pointer_item_holds(x: i32, y: i32) -> bool {
     (*published).map(|region| box_holds(x, y, region)).unwrap_or(true)
 }
 
+/// The box the item under the pointer is drawn in, as the last look at it published, or
+/// nothing when no look has answered with one (see `HOVER_POINTER_BOX`).
+///
+/// The hook asks for it where one look has to be told from another: the box a hover's
+/// preview was resolved from is the item that preview is about, so a look that answered
+/// nothing but left that same box under the pointer is a read that failed, while a look
+/// that found another item publishes another box — an item with no preview of its own
+/// being an item all the same (see `read_failure_is_the_same_item`).
+pub fn pointer_item_box() -> Option<(i32, i32, i32, i32)> {
+    HOVER_POINTER_BOX
+        .lock()
+        .ok()
+        .and_then(|published| *published)
+}
+
 /// Whether the pointer is on that item this moment, read from the cursor: the
 /// reveal's own question. A pointer that cannot be read is not a pointer that has
 /// left, so an answer that could not be had holds nothing back either.
@@ -1810,6 +1825,18 @@ fn current_media_kind() -> Option<PreviewType> {
 /// the picture the document saved — so past this the preview comes down and the
 /// file is left alone.
 const OFFICE_RENDER_WAIT_SECS: u64 = 25;
+
+/// How long a hover waits for a document the engine draws before the wait is read as one
+/// the engine is not going to answer.
+///
+/// The engine bounds its own navigation (see `webview_preview`'s `NAVIGATION_TIMEOUT`), so
+/// what is past this is past the engine's own answer — a page that never arrives, a browser
+/// that never comes up, a thread that has stopped running at all. A wait past it is owed an
+/// ending rather than more waiting: the spinner comes down, and the engine is stood down for
+/// a while rather than asked for the next document as though it had answered (see
+/// `webview_preview::note_unanswered`). It is the outer of the two bounds on purpose, so an
+/// engine that is merely slow is given its own answer first.
+const ENGINE_ANSWER_WAIT_SECS: u64 = 20;
 
 /// The file a hover message is about.
 fn show_path(show: &PreviewMessage) -> Option<&PathBuf> {
@@ -8386,6 +8413,39 @@ pub fn run_preview_window() {
                     }
                     clear_pointer_hold();
                 }
+            }
+
+            // A wait for a document the engine draws ends on the document itself, and if
+            // that document never lands there is nothing else to end it: the engine's own
+            // bound covers a navigation it is running, and a thread that has stopped
+            // answering runs no navigation at all — no page, no answer, no notice, and
+            // nothing of its own to time out. So the wait is bounded from here as well, and
+            // past the time any document takes the spinner comes down and the engine is stood
+            // down rather than asked for the next document as though this one had been drawn
+            // (see `ENGINE_ANSWER_WAIT_SECS` and `webview_preview::note_unanswered`). A
+            // document that *is* on screen is left alone: what is up belongs to a hover the
+            // loop is not waiting for, and the wait here is for one that never came.
+            let engine_answer_overdue = pending_load.as_ref().is_some_and(|pl| {
+                engine_kind_of(&pl.path).is_some()
+                    && pl.started.elapsed() >= Duration::from_secs(ENGINE_ANSWER_WAIT_SECS)
+                    && !webview_preview::is_showing()
+            });
+
+            if engine_answer_overdue {
+                pending_load = None;
+                if let Some(cancel) = pending_load_cancel.take() {
+                    cancel.store(true, Ordering::Release);
+                }
+
+                let _ = ShowWindow(hwnd, SW_HIDE);
+                clear_pointer_hold();
+
+                if let Ok(mut current) = CURRENT_MEDIA.lock() {
+                    *current = None;
+                }
+
+                webview_preview::hide();
+                webview_preview::note_unanswered();
             }
 
             if let Ok(mut media_guard) = CURRENT_MEDIA.lock() {
