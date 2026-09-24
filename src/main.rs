@@ -46,6 +46,12 @@ fn main() {
     // before a video preview could start adding to it again.
     let _ = fs::remove_file(std::env::temp_dir().join("rust-hover-preview-video.log"));
 
+    // The update check keeps nothing on disk any more — the hour is counted in
+    // memory, and the installer is fetched for the click that asks for it — so
+    // what earlier versions left for it goes with the other files those versions
+    // left behind.
+    app::updates::discard_old_files();
+
     // The Office engines and browsers earlier runs started are ended here, before
     // this run can start one of its own: a run that was killed, or crashed, never
     // ends what it started, and a leftover engine is both a process nobody is using
@@ -111,6 +117,12 @@ fn main() {
     // Watch system-wide wheel input so scrolling Explorer refreshes the preview
     // of the item that lands under the parked cursor.
     let wheel_handle = shell::wheel_input::spawn_wheel_watcher();
+
+    // The check for a newer release is asked for here, as the run starts: the row
+    // it may put in the menu should be there the first time the menu is opened
+    // rather than only after an opening of its own asked for a check. It runs on a
+    // thread of its own, so nothing here waits on GitHub.
+    app::updates::request_check();
 
     // Run the system tray (this blocks until exit)
     shell::tray::run_tray();

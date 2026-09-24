@@ -1,12 +1,13 @@
 //! The one thing in this app that asks the network a question: whether a newer
 //! release than the one running has been published, and — where one has — the
-//! installer for it, fetched and kept ready for the click that puts it on.
+//! installer for it, fetched when the click that puts it on asks for it.
 //!
-//! What asks is the tray menu, because that is the one moment a user is looking
-//! for an answer: `show_context_menu` asks for a check as the menu is built, the
-//! check runs on a thread of its own, and the row above `Run at Startup` reports
-//! what the last one found. Nothing here runs at startup, nothing here is on a
-//! hover's path, and a check that never happens costs a preview nothing.
+//! What asks is the app's own start, so that the answer is waiting by the time
+//! anyone looks for it, and the tray menu, because an opening is the one other
+//! moment a user is looking for one: `show_context_menu` asks for a check as the
+//! menu is built, the check runs on a thread of its own, and the row above `Run
+//! at Startup` reports what the last one found. Nothing here is on a hover's
+//! path, and a check that never happens costs a preview nothing.
 //!
 //! What is trusted is this repository's own releases. Both addresses are this
 //! repository's own — the newest release, for the version, and the release that
@@ -14,7 +15,7 @@
 //! machine's own certificate store and proxy settings, WinHTTP, so nothing is
 //! bundled for either; and an installer that arrives is checked against the
 //! length the response promised, and for the two bytes every Windows executable
-//! opens with, before it is kept. It is then run with the installer's own silent
+//! opens with, before it is run. It is run with the installer's own silent
 //! switch, which replaces this app, and with the switch that starts it again
 //! afterwards. The app ends itself as it hands over, so the copy the installer
 //! has to terminate is one that is already leaving.
@@ -27,7 +28,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::HWND;
 use windows::Win32::Networking::WinHttp::{
@@ -38,7 +39,7 @@ use windows::Win32::Networking::WinHttp::{
     WINHTTP_QUERY_STATUS_CODE,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    MessageBoxW, IDYES, MB_ICONINFORMATION, MB_SETFOREGROUND, MB_YESNO,
+    MessageBoxW, IDYES, MB_ICONINFORMATION, MB_ICONWARNING, MB_OK, MB_SETFOREGROUND, MB_YESNO,
 };
 
 /// Where this app's releases are published, and the two files a check asks for.
@@ -54,10 +55,10 @@ const LATEST_PATH: &str = "/cosmokud/rust-hover-preview/releases/latest/download
 const RELEASE_PATH: &str = "/cosmokud/rust-hover-preview/releases/download";
 const VERSION_ASSET: &str = "version.txt";
 
-/// What the installer is called where it waits for the click, which is this
-/// app's own name for it: the file it was fetched from is named for the version
-/// it carries, and nothing outside this app reads the name it is kept under.
-const STAGED_ASSET: &str = "rust-hover-preview-setup.exe";
+/// What the installer is called where it is fetched to, which is this app's own
+/// name for it: the file it was fetched from is named for the version it carries,
+/// and nothing outside this app reads the name it is written under.
+const INSTALLER_FILE: &str = "rust-hover-preview-setup.exe";
 
 /// What this app calls itself on the wire. GitHub answers a request without one
 /// with a refusal, and a version in it is what tells a release page's own
@@ -67,25 +68,30 @@ const USER_AGENT: &str = concat!("RustHoverPreview/", env!("CARGO_PKG_VERSION"))
 /// How often the check may be answered, however many times it is asked for. An
 /// hour is often enough for a release, and an opening of the menu is not a
 /// reason to ask GitHub anything: the check is skipped while the last one is
-/// within this, and the timestamp is written however that one ended, so a
-/// machine that is offline does not ask again on the next menu.
+/// within this, and the hour is counted however that one ended, so a machine
+/// that is offline does not ask again on the next menu. Nothing about it is
+/// written down — a run has no record of the run before it — so the check a run
+/// makes as it starts is always its first.
 const CHECK_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
 /// Nothing smaller than this is this app's installer — the smallest one ever
 /// published is a few megabytes — so a truncated download is refused rather
-/// than offered.
+/// than run.
 const MIN_INSTALLER_BYTES: u64 = 256 * 1024;
 
 const READ_CHUNK_BYTES: u32 = 64 * 1024;
 
-/// The installer fetched for a release newer than the one running, waiting for
-/// the click that puts it on.
-struct Ready {
-    version: String,
-    installer: PathBuf,
-}
+/// The version of the newest release, where it is newer than the one running:
+/// what the menu row is built from, and the whole of what a check keeps. Nothing
+/// is fetched for it — the installer is the click's business — so this is a
+/// version on offer rather than an update waiting to be put on.
+static OFFER: Lazy<Mutex<Option<String>>> = Lazy::new(|| Mutex::new(None));
 
-static READY: Lazy<Mutex<Option<Ready>>> = Lazy::new(|| Mutex::new(None));
+/// When this run last made a check, which is the whole of what the interval is
+/// counted from. It goes with the run that made it: a run that has just started
+/// has asked nothing yet, and what some earlier run found is no reason for this
+/// one to wait a moment before asking.
+static LAST_CHECK: Lazy<Mutex<Option<Instant>>> = Lazy::new(|| Mutex::new(None));
 
 /// Whether a check is running, so that the menu being opened twice in a row
 /// does not start two of them.
@@ -96,9 +102,11 @@ static CHECKING: AtomicBool = AtomicBool::new(false);
 /// a second way into the same question.
 static CONFIRMING: AtomicBool = AtomicBool::new(false);
 
-/// Ask for a check, without waiting for one. The tray menu is the only caller:
-/// it is the one moment a user is looking for an update, and the one moment the
-/// answer is worth having.
+/// Ask for a check, without waiting for one. The app's own start is one caller:
+/// a run that has just started has asked nothing, and the answer is worth having
+/// before anyone opens the menu for it. The tray menu is the other: an opening
+/// is the one moment a user is looking for an update, and the one moment the
+/// answer is worth having again.
 pub(crate) fn request_check() {
     if CHECKING.swap(true, Ordering::SeqCst) {
         return;
@@ -110,10 +118,10 @@ pub(crate) fn request_check() {
     });
 }
 
-/// The version of the update waiting to be installed, where one is: what the
-/// menu row is built from, and `None` where there is nothing to say.
+/// The version of the update on offer, where one is: what the menu row is built
+/// from, and `None` where there is nothing to say.
 pub(crate) fn available() -> Option<String> {
-    staged().map(|(version, _)| version)
+    OFFER.lock().ok().and_then(|offer| offer.clone())
 }
 
 /// Whether the update is being asked about right now.
@@ -121,20 +129,27 @@ pub(crate) fn is_confirming() -> bool {
     CONFIRMING.load(Ordering::SeqCst)
 }
 
-/// Put the fetched update on, once the user has said so. The installer runs
-/// silently — `/S` is its own switch for that, and `/R`, which only a silent
-/// installer reads, is what starts the app again once the new version is in
-/// place. `false` is answered where there is nothing fetched to run and where
-/// the user declined, which are one answer to the caller: nothing happens, and
-/// the app stays where it is.
+/// Put the update on, once the user has said so. The installer is fetched here
+/// rather than ahead of the check that found it: a click is what a download of a
+/// few megabytes is worth, and a row nobody clicked costs the network nothing.
+/// The installer then runs silently — `/S` is its own switch for that, and `/R`,
+/// which only a silent installer reads, is what starts the app again once the new
+/// version is in place. `false` is answered where there is nothing on offer, where
+/// the user declined, and where nothing could be fetched; the three are one answer
+/// to the caller, and only the last is one the user is told about.
 pub(crate) fn install() -> bool {
-    let Some((version, installer)) = staged() else {
+    let Some(version) = available() else {
         return false;
     };
 
     if !confirmed(&version) {
         return false;
     }
+
+    let Some(installer) = fetch_installer(&version) else {
+        download_failed(&version);
+        return false;
+    };
 
     std::process::Command::new(installer)
         .arg("/S")
@@ -143,20 +158,11 @@ pub(crate) fn install() -> bool {
         .is_ok()
 }
 
-/// What is waiting, as its two halves: the version it would install and the
-/// file it would install from.
-fn staged() -> Option<(String, PathBuf)> {
-    READY.lock().ok().and_then(|ready| {
-        ready
-            .as_ref()
-            .map(|ready| (ready.version.clone(), ready.installer.clone()))
-    })
-}
-
-/// Ask, and answer with what the user said. It is the app's only dialog, and it
-/// stands where it does because the click it follows is a click that ends the
-/// app: what a user is agreeing to is an update that puts itself on, and a
-/// window that comes back as the new version.
+/// Ask, and answer with what the user said. It stands where it does because the
+/// click it follows is a click that ends the app: what a user is agreeing to is
+/// an update that puts itself on, and a window that comes back as the new
+/// version. It is the first of the app's two dialogs, and the other is only ever
+/// reached past a yes to this one.
 ///
 /// The dialog is given no owner, and is set to the foreground, for the same
 /// reason: the one window this app owns is the tray's, which is never shown and
@@ -184,28 +190,50 @@ fn confirmed(version: &str) -> bool {
     answer == IDYES
 }
 
-/// One check, whole: the version the release is published under, the installer
-/// for it where that version is newer than this one, and the time the check is
-/// written down as having happened.
+/// What a click that asked for the update and could not have it is told. It is
+/// the app's second dialog and its only one about something going wrong: without
+/// it, a download that failed would be a click that did nothing, and the row it
+/// was clicked on is still there to be clicked again.
+fn download_failed(version: &str) {
+    let caption = wide("Rust Hover Preview");
+    let text = wide(&format!(
+        "Version {version} could not be downloaded.\n\nNothing has changed. Check your \
+         connection and try again."
+    ));
+
+    unsafe {
+        MessageBoxW(
+            HWND::default(),
+            PCWSTR(text.as_ptr()),
+            PCWSTR(caption.as_ptr()),
+            MB_OK | MB_ICONWARNING | MB_SETFOREGROUND,
+        );
+    }
+}
+
+/// One check, whole: the version the release is published under, where that is
+/// newer than the one running, and the time the check is noted as having
+/// happened.
 fn check() {
     if !due_for_check() {
         return;
     }
 
+    // What a check comes back with is a version and nothing else: the installer
+    // for it is the click's business, so a row nobody has clicked costs the
+    // network nothing at all.
     if let Some(version) = newer_release() {
-        // An installer of the same release, or of a newer one, is already what
-        // the menu is offering: fetching it again would be a download nothing
-        // is waiting for.
-        let already = available().map_or(false, |staged| {
-            parse_version(&staged) >= parse_version(&version)
-        });
-
-        if !already {
-            fetch_installer(&version);
+        if let Ok(mut offer) = OFFER.lock() {
+            *offer = Some(version);
         }
     }
 
-    write_last_check();
+    // Noted however this one ended: a check that found nothing, and one that
+    // could not reach GitHub, are both checks that were made, and asking again on
+    // the next opening of the menu is the spam the interval is there to prevent.
+    if let Ok(mut last) = LAST_CHECK.lock() {
+        *last = Some(Instant::now());
+    }
 }
 
 /// The version the newest release is published under, where it is newer than
@@ -226,42 +254,30 @@ fn newer_release() -> Option<String> {
 /// names rather than the newest one — the version is read before the download
 /// for exactly this reason. What is asked for is the file the packager built,
 /// under the name it gave it there (`<binary>_<version>_<arch>-setup.exe`), and
-/// a release that carries no such file answers `404`, which is read as there
-/// being nothing to offer, the same reading a release published before this app
-/// asked for one gets.
+/// a release that carries no such file answers `404`, which is a download that
+/// failed: the click is told so, and the row it was clicked on stays where it was.
 fn installer_path(version: &str) -> String {
     format!("{RELEASE_PATH}/v{version}/rust-hover-preview_{version}_x64-setup.exe")
 }
 
-/// Fetch the installer for a release and keep it where the click will find it.
-/// It is written under a name of its own first and renamed into place once it
-/// has been read whole, so what the menu offers is never half a file.
-fn fetch_installer(version: &str) -> Option<()> {
-    let directory = update_dir()?;
+/// Fetch the installer for a release, answering with the file it is in, ready to
+/// be run. It is written where the app's other transient files go — the folder a
+/// page render in flight is written to, which a startup clears out — because
+/// nothing waits on it once it has been run.
+fn fetch_installer(version: &str) -> Option<PathBuf> {
+    let directory = installer_dir();
     fs::create_dir_all(&directory).ok()?;
 
-    let installer = directory.join(STAGED_ASSET);
-    let partial = directory.join(format!("{STAGED_ASSET}.part"));
+    let installer = directory.join(INSTALLER_FILE);
 
-    if fetch_installer_body(&partial, version).is_none() {
-        // Nothing is left behind for the next check to find: a body that failed
-        // is a file that would never be offered and has no reason to be kept.
-        let _ = fs::remove_file(&partial);
+    if fetch_installer_body(&installer, version).is_none() {
+        // A body that failed is a file that would never be run, and it has no
+        // reason to be left where the next click would find it.
+        let _ = fs::remove_file(&installer);
         return None;
     }
 
-    // A download of an older release already waiting here is replaced: what the
-    // menu is offering is the newest one there is.
-    fs::rename(&partial, &installer).ok()?;
-
-    if let Ok(mut ready) = READY.lock() {
-        *ready = Some(Ready {
-            version: version.to_owned(),
-            installer,
-        });
-    }
-
-    Some(())
+    Some(installer)
 }
 
 /// The body of the installer, written to `path`, answering only where what
@@ -277,56 +293,45 @@ fn fetch_installer_body(path: &Path, version: &str) -> Option<u64> {
     (written >= MIN_INSTALLER_BYTES && starts_with_mz(path)).then_some(written)
 }
 
-/// What the check keeps, which is its own folder rather than the user's: the
-/// time of the last check, and the installer a click is waiting on. It sits
-/// with the app's other per-user folders, beside the browser profiles and the
-/// engine records, and not among the settings a user edits.
-fn update_dir() -> Option<PathBuf> {
-    directories::BaseDirs::new()
-        .map(|dirs| {
-            dirs.data_local_dir()
-                .join("rust-hover-preview")
-                .join("update")
-        })
-        .or_else(|| {
-            Some(
-                std::env::temp_dir()
-                    .join("rust-hover-preview")
-                    .join("update"),
-            )
-        })
+/// Where the installer is written: this app's own folder under the temp folder,
+/// the same one a page render in flight is written to, and one a startup clears
+/// out — so a download that was ended mid-flight is cleared away with it.
+fn installer_dir() -> PathBuf {
+    std::env::temp_dir().join("rust-hover-preview")
 }
 
-fn last_check_path() -> Option<PathBuf> {
-    Some(update_dir()?.join("last-check"))
-}
-
-/// Whether the last check is far enough behind to ask again. A machine with no
-/// record of one — the first menu after this feature arrives — is due.
+/// Whether the last check is far enough behind to ask again. A run with no
+/// record of one — which is every run, until it makes its first — is due.
 fn due_for_check() -> bool {
-    let Some(path) = last_check_path() else {
-        return true;
-    };
-
-    fs::read_to_string(path)
+    LAST_CHECK
+        .lock()
         .ok()
-        .and_then(|text| text.trim().parse::<u64>().ok())
-        .map_or(true, |last| {
-            now_secs().saturating_sub(last) >= CHECK_INTERVAL.as_secs()
-        })
+        .and_then(|last| *last)
+        .map_or(true, |last| last.elapsed() >= CHECK_INTERVAL)
 }
 
-/// Write down that a check happened, whichever way it went. A check that found
-/// nothing, and one that could not reach GitHub, are both checks that were
-/// made: asking again on the next opening of the menu is the spam the interval
-/// is there to prevent.
-fn write_last_check() {
-    let Some(directory) = update_dir() else {
+/// Remove what earlier versions left for the check: the time they wrote down of
+/// when they last asked, and the installer they fetched before any click. Neither
+/// is kept here any more — the hour is the run's own memory, and the installer is
+/// fetched for the click that asks for it — so both go at startup, with the other
+/// files earlier versions left behind.
+pub(crate) fn discard_old_files() {
+    let Some(dirs) = directories::BaseDirs::new() else {
         return;
     };
 
-    let _ = fs::create_dir_all(&directory);
-    let _ = fs::write(directory.join("last-check"), now_secs().to_string());
+    let directory = dirs
+        .data_local_dir()
+        .join("rust-hover-preview")
+        .join("update");
+
+    let _ = fs::remove_file(directory.join("last-check"));
+    let _ = fs::remove_file(directory.join(INSTALLER_FILE));
+    let _ = fs::remove_file(directory.join(format!("{INSTALLER_FILE}.part")));
+
+    // Only where those three were the whole of it: the folder is nothing this
+    // version writes, and an empty one is a folder a user need not have.
+    let _ = fs::remove_dir(&directory);
 }
 
 /// A version as the three numbers it is made of, which is what the tags this
@@ -357,13 +362,6 @@ fn starts_with_mz(path: &Path) -> bool {
         .and_then(|mut file| file.read_exact(&mut signature))
         .is_ok()
         && &signature == b"MZ"
-}
-
-fn now_secs() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|since| since.as_secs())
-        .unwrap_or(0)
 }
 
 fn wide(text: &str) -> Vec<u16> {
