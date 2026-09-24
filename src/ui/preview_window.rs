@@ -1126,16 +1126,21 @@ fn spawn_video_probe(path: PathBuf, generation: u64) {
 pub struct PreviewCursorHover {
     pub image: bool,
     pub video: bool,
+    /// A document the engine draws, in a window of its own: a preview of this app's in every
+    /// way but the window it is drawn in, and one the pointer takes the same way — a
+    /// document is closed by the pointer arriving at it, exactly as a picture is.
+    pub engine: bool,
 }
 
 impl PreviewCursorHover {
     pub const NONE: Self = Self {
         image: false,
         video: false,
+        engine: false,
     };
 
     pub fn any(self) -> bool {
-        self.image || self.video
+        self.image || self.video || self.engine
     }
 }
 
@@ -1146,12 +1151,15 @@ pub fn cursor_preview_hover() -> PreviewCursorHover {
     let preview_hwnd = PREVIEW_HWND.load(Ordering::SeqCst);
     let video_hwnd = VIDEO_HWND.load(Ordering::SeqCst);
     let video_pid = VIDEO_PID.load(Ordering::SeqCst);
+    // A document is drawn by the engine, in a window of its own rather than this app's, so
+    // its surface is asked for by its own handle: it is the same preview to the pointer.
+    let engine_hwnd = webview_preview::showing_hwnd();
 
     // PREVIEW_HWND is created once at startup and never cleared, so visibility
     // is what tells us whether the layered window is actually on screen.
     let preview_visible =
         preview_hwnd != 0 && unsafe { IsWindowVisible(HWND(preview_hwnd as *mut _)).as_bool() };
-    if !preview_visible && video_hwnd == 0 && video_pid == 0 {
+    if !preview_visible && video_hwnd == 0 && video_pid == 0 && engine_hwnd == 0 {
         return PreviewCursorHover::NONE;
     }
 
@@ -1170,6 +1178,7 @@ pub fn cursor_preview_hover() -> PreviewCursorHover {
 
         let hwnd_ptr = hwnd_under_cursor.0 as isize;
         let image = preview_hwnd != 0 && hwnd_ptr == preview_hwnd;
+        let engine = engine_hwnd != 0 && hwnd_ptr == engine_hwnd;
 
         // A hit on the stored HWND is enough; the process-ID fallback covers the
         // race window where ffplay's window exists but VIDEO_HWND isn't stored yet.
@@ -1182,7 +1191,11 @@ pub fn cursor_preview_hover() -> PreviewCursorHover {
             video = window_pid == video_pid;
         }
 
-        PreviewCursorHover { image, video }
+        PreviewCursorHover {
+            image,
+            video,
+            engine,
+        }
     }
 }
 
@@ -8314,13 +8327,22 @@ pub fn run_preview_window() {
             // The engine draws a document in a window of its own, and that window is put
             // up only once the page has arrived: what is underneath it — the spinner the
             // wait was shown as — comes down then, and the wait comes down with it. What
-            // is on screen is the document, and what is shown next is another hover's.
-            if webview_preview::is_showing() {
+            // is on screen is a document, and what is shown next is another hover's.
+            //
+            // What ends a wait is the document the wait is *for*: the engine is handed one
+            // file at a time, and a page that lands names the file it was drawn for — so a
+            // landing for a hover the loop has already left ends nothing, and the wait goes
+            // on for the file the pointer is actually on. Taking any landing as the end of
+            // any wait is what put a file the pointer had left on screen and dropped the
+            // wait for the one it was on (see `webview_preview::showing_path`).
+            if let Some(shown) = webview_preview::showing_path() {
                 if IsWindowVisible(hwnd).as_bool() {
                     let _ = ShowWindow(hwnd, SW_HIDE);
                 }
 
-                if pending_load.take().is_some() {
+                let waiting_for_this = pending_load.as_ref().is_some_and(|pl| pl.path == shown);
+
+                if waiting_for_this && pending_load.take().is_some() {
                     if let Some(cancel) = pending_load_cancel.take() {
                         cancel.store(true, Ordering::Release);
                     }
@@ -8654,18 +8676,20 @@ pub fn run_preview_window() {
                         }
                     }
 
-                    // A wait for an engine-drawn preview takes the engine's window with
-                    // it: the same file asked for again is that window moved rather
-                    // than the page navigated to again, so what it is about to draw in
-                    // is where the wait ended up. Nothing is asked of an engine that
-                    // already has it up — that is the preview itself, and it follows
-                    // nothing.
+                    // A wait for an engine-drawn preview takes the engine's window with it:
+                    // what the engine is asked for is the box the wait has ended up in, and a
+                    // box that moved while the document was on its way is the same document at
+                    // the place the hand is — the want is moved rather than the engine being
+                    // asked again, which is what keeps a moving pointer from asking for the
+                    // same page sixty times a second, and what lets a document that arrives
+                    // before its spinner was due land at the hand anyway. Nothing is moved for
+                    // an engine that already has it up: that is the preview itself, and it
+                    // follows nothing.
                     if followed.preview
-                        && pl.spinner_shown
                         && engine_kind_of(&pl.path).is_some()
                         && !webview_preview::is_showing()
                     {
-                        webview_preview::show(
+                        webview_preview::wanted_here(
                             &pl.path,
                             webview_preview::Area {
                                 x: pl.pos_x,
@@ -8673,7 +8697,6 @@ pub fn run_preview_window() {
                                 width: pl.width as i32,
                                 height: pl.height as i32,
                             },
-                            engine_background(&pl.path),
                         );
                     }
                 }
