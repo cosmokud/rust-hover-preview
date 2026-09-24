@@ -143,8 +143,6 @@ All are free. Windows 11 often has HEIF, AV1, and WebP already. Where one is mis
 winget install -e --id TheDocumentFoundation.LibreOffice
 ```
 
-If `winget` reports an error, the package sources are usually why: run `winget source reset --force`, and if that is refused as well, open **Terminal as administrator** (right-click the Start button → _Terminal (Admin)_) and run the same command from there.
-
 ### Optional: Enable Camera Raw and More Pictures (ImageMagick)
 
 `nef` and everything else in the `[magick]` list is developed by **ImageMagick**, which this app runs where it finds it — nothing is bundled with the app and there is nothing to configure. Install it once:
@@ -152,6 +150,11 @@ If `winget` reports an error, the package sources are usually why: run `winget s
 ```text
 winget install -e --id ImageMagick.ImageMagick
 ```
+
+> [!WARNING]
+> If `winget` reports an error, the package sources are usually why: run `winget source reset --force`.
+>
+> If that is refused as well, open **Terminal as administrator** (right-click the Start button → _Terminal (Admin)_) and run the same command from there.
 
 ## Usage
 
