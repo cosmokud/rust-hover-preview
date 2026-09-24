@@ -686,11 +686,13 @@ unsafe fn show_context_menu(hwnd: HWND) {
         config.reload_from_disk();
     }
 
-    // The menu is also where the check for a newer release is asked for, and the only
-    // place it is asked from: opening the menu is the one moment a user is looking for
-    // one. It costs nothing here — the check runs on a thread of its own and is answered
-    // at most once an hour — and the row above `Run at Startup` reports what the last one
-    // found, so the answer is on the next opening rather than in front of this one.
+    // The menu is also where the check for a newer release is asked for, after the one
+    // the app made as it started: opening the menu is the one moment a user is looking
+    // for one, and a check asked for here keeps what is offered current however long this
+    // run has been up. It costs nothing here — the check runs on a thread of its own and
+    // is answered at most once an hour — and the row above `Run at Startup` reports what
+    // the last one found, so an update published since that check is offered on the
+    // opening after this one.
     updates::request_check();
 
     // Add "Enable Preview" with checkmark

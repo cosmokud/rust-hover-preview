@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.3.3] - 2026-09-24
+
+### Changed
+
+- The update installer is downloaded only after you click the update row and confirm, not as soon as a newer release is found; a check now costs one small request.
+- The update check now runs at every startup as well as when the tray menu is opened, and the hour between checks is counted in memory rather than written to `%LOCALAPPDATA%`.
+- Version bumped to `0.3.3` in `Cargo.toml` and `Cargo.lock`.
+
+### Fixed
+
+- A restart no longer hides an available update until the hour is up.
+- The update row appears whether or not the installer could be fetched, and a download that fails says so instead of leaving no row at all.
+
 ## [0.3.2] - 2026-09-24
 
 ### Added
