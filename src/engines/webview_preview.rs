@@ -36,7 +36,7 @@
 //! way out of the preview.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -54,11 +54,13 @@ use webview2_com::{
 use windows::core::{w, Interface, PCWSTR, PWSTR};
 use windows::Win32::Foundation::{E_POINTER, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::System::Com::{CoInitializeEx, CoTaskMemFree, COINIT_APARTMENTTHREADED};
+use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::System::WinRT::EventRegistrationToken;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, PeekMessageW, RegisterClassW,
-    SetWindowPos, ShowWindow, TranslateMessage, HWND_TOPMOST, MSG, PM_REMOVE, SWP_NOACTIVATE,
-    SWP_SHOWWINDOW, SW_HIDE, SW_SHOWNOACTIVATE, WM_MOUSEACTIVATE, WNDCLASSW, WS_EX_NOACTIVATE,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW, KillTimer,
+    PeekMessageW, PostThreadMessageW, RegisterClassW, SetTimer, SetWindowPos, ShowWindow,
+    TranslateMessage, HWND_TOPMOST, MSG, PM_NOREMOVE, PM_REMOVE, SWP_NOACTIVATE, SWP_SHOWWINDOW,
+    SW_HIDE, SW_SHOWNOACTIVATE, WM_APP, WM_MOUSEACTIVATE, WNDCLASSW, WS_EX_NOACTIVATE,
     WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
@@ -142,6 +144,31 @@ static WANTED: Lazy<Mutex<Option<Wanted>>> = Lazy::new(|| Mutex::new(None));
 /// thread asks of a navigation that is still running, in the middle of pumping a browser's
 /// messages and unable to take a lock the loop may be holding.
 static WANTED_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+/// The engine thread's id, once it is running: what a want published while that thread is
+/// parked on `GetMessage` is posted to, so that the wait a navigation is in the middle of
+/// ends the moment what is wanted is not what it is waiting for.
+static ENGINE_THREAD: AtomicU32 = AtomicU32::new(0);
+
+/// What a wakeup to the engine's thread is: a message the window procedure ignores, whose
+/// whole job is to bring `GetMessage` back so a wait can look at what is wanted now.
+const ENGINE_WAKE: u32 = WM_APP;
+
+/// Wake the engine's thread if it is waiting on something.
+///
+/// A want published while that thread is parked on `GetMessage` would otherwise be noticed
+/// only when the browser happened to say something — which, for a navigation that never
+/// lands, is never. A post is not lost by the thread being between two messages: it waits
+/// in the queue and brings the next `GetMessage` back at once.
+fn wake_engine_thread() {
+    let thread = ENGINE_THREAD.load(Ordering::Acquire);
+
+    if thread != 0 {
+        unsafe {
+            let _ = PostThreadMessageW(thread, ENGINE_WAKE, WPARAM(0), LPARAM(0));
+        }
+    }
+}
 
 /// The document the engine's window is showing, when one is: the file a landed navigation
 /// was for, kept until the window comes down.
@@ -353,23 +380,6 @@ fn note_failure() {
 /// waiting on it, and the notice is what takes that wait down.
 fn note_document_failed() {
     FAILURE_NOTICE.store(true, Ordering::Release);
-}
-
-/// The engine never answered for a document: the wait it belonged to has been given up by
-/// the side that was waiting, and the engine is stood down for a while rather than asked
-/// for the next document as though nothing had happened.
-///
-/// What this is for is the one outcome the engine cannot report for itself. A thread that
-/// has stopped answering — parked on a completion handler, or on a browser that has stopped
-/// taking messages — posts nothing, sets nothing and shows nothing, so from the outside
-/// there is no answer coming at all; there is nothing to notice and nothing to time out,
-/// which is why the wait is bounded where the waiting is done and the answer is said from
-/// there (see `preview_window`'s engine wait). Standing the engine down is what keeps the
-/// hover after that one from queueing behind the same silence: an engine that is not
-/// answering draws nothing, and a hover over a document shows nothing rather than waiting
-/// for it.
-pub fn note_unanswered() {
-    note_failure();
 }
 
 fn note_engine_up() {
@@ -642,6 +652,10 @@ pub fn show(path: &Path, area: Area, background: TransparentBackground) {
             path.display()
         ));
     }
+
+    // A navigation the engine is in the middle of is waiting for a page that is no longer
+    // wanted: the thread is woken rather than left to finish it (see `wake_engine_thread`).
+    wake_engine_thread();
 }
 
 /// Take the engine's window down. The engine itself is kept warm: what it costs to
@@ -664,6 +678,10 @@ pub fn hide() {
     if let Some(engine) = engine.as_ref() {
         let _ = engine.sender.send(Command::Hide);
     }
+
+    // Nothing is wanted any more, so a navigation in the middle of arriving is one nobody
+    // is waiting for: the thread is woken rather than left to finish it.
+    wake_engine_thread();
 }
 
 /// Move a want that is already in hand to the box the wait has ended up in: what a pointer
@@ -763,6 +781,17 @@ fn engine_thread(commands: Receiver<Command>) {
     // The engine's own apartment, and its own thread: WebView2 must be created on a
     // thread that is pumping messages, and this is that thread.
     let _ = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
+
+    // The thread's message queue, made before anything can be posted to it: a wakeup posted
+    // to a thread that has none is dropped, and a want published while this thread is still
+    // bringing its browser up would be the first thing that had to be waited for.
+    {
+        let mut message = MSG::default();
+        unsafe {
+            let _ = PeekMessageW(&mut message, None, WM_APP, WM_APP, PM_NOREMOVE);
+        }
+    }
+    ENGINE_THREAD.store(unsafe { GetCurrentThreadId() }, Ordering::Release);
 
     let mut host: Option<Host> = None;
     let mut idle_since = Instant::now();
@@ -890,6 +919,10 @@ fn engine_thread(commands: Receiver<Command>) {
     if let Some(mut host) = host {
         host.close();
     }
+
+    // The thread is going away, so nothing is posted to it any more: a want published after
+    // this is one the next engine's thread takes up (see `ENGINE_THREAD`).
+    ENGINE_THREAD.store(0, Ordering::Release);
 
     unsafe {
         windows::Win32::System::Com::CoUninitialize();
@@ -1098,12 +1131,12 @@ impl Host {
         }
 
         if self.current.as_ref() != Some(&(path.clone(), background, face)) {
-            // The document on screen is not this one, and what the window is holding is
-            // about to be navigated away from: it comes down first, so that nothing of
-            // another hover stands there while this one's page is on its way — what the
-            // loop shows meanwhile is its own spinner, which is what a wait is.
-            self.hide();
-
+            // What the window is holding is *kept* while the next document is on its way:
+            // a window taken down first would be a preview that vanishes and comes back,
+            // which is worse than the file before it standing there for the few
+            // milliseconds a navigation takes — and the file before it is one the pointer
+            // has left only if the hook has said so, which is a hide of its own that
+            // arrives here and takes the window down without waiting for this navigation.
             let started = Instant::now();
             let arrival = self.navigate(path, background, face, *generation);
             trace(&format!(
@@ -1327,29 +1360,64 @@ const NAVIGATION_TIMEOUT: Duration = Duration::from_secs(15);
 ///
 /// The messages have to be pumped rather than waited on: a controller is created on this
 /// thread and stops drawing when the thread stops retrieving messages, and the event this
-/// waits for arrives through that same queue. What is not done is waiting *without* a
-/// bound, which is what the loop below is: the two ways it ends early are what keep a
-/// hover's answer from being held behind a browser that has stopped answering, and behind a
-/// document nobody is waiting for any more.
+/// waits for arrives through that same queue — so the wait *is* a `GetMessage`, and the
+/// page is noticed the moment it lands, with no interval between and nothing polled. The
+/// two ways the wait ends besides the page are a want that is no longer this one, which
+/// `wake_engine_thread` brings this thread back to look at, and a browser that has not
+/// answered within `NAVIGATION_TIMEOUT`, which is what the timer armed for the length of
+/// the wait is for.
 fn wait_for_navigation(receiver: &Receiver<()>, generation: u64) -> Arrival {
-    let started = Instant::now();
+    const NAVIGATION_TIMER: usize = 1;
 
-    loop {
+    let started = Instant::now();
+    let mut message = MSG::default();
+
+    unsafe {
+        // A timer on the thread rather than on a window: its whole job is to bring
+        // `GetMessage` back once the wait has run longer than any document takes.
+        let _ = SetTimer(
+            HWND::default(),
+            NAVIGATION_TIMER,
+            NAVIGATION_TIMEOUT.as_millis() as u32,
+            None,
+        );
+    }
+
+    let arrival = loop {
         if receiver.try_recv().is_ok() {
-            return Arrival::Arrived;
+            break Arrival::Arrived;
         }
 
         if !is_wanted(generation) {
-            return Arrival::Superseded;
+            break Arrival::Superseded;
         }
 
         if started.elapsed() >= NAVIGATION_TIMEOUT {
-            return Arrival::TimedOut;
+            break Arrival::TimedOut;
         }
 
-        pump_messages();
-        std::thread::sleep(Duration::from_millis(2));
+        let mut answered = false;
+        unsafe {
+            let retrieved = GetMessageW(&mut message, HWND::default(), 0, 0);
+            if retrieved.0 > 0 {
+                let _ = TranslateMessage(&message);
+                DispatchMessageW(&message);
+                answered = true;
+            }
+        }
+
+        if !answered {
+            // `GetMessage` answered -1, an error, or 0, a quit: there is no queue left to
+            // wait on, and a page that has not arrived by then is not coming.
+            break Arrival::Failed;
+        }
+    };
+
+    unsafe {
+        let _ = KillTimer(HWND::default(), NAVIGATION_TIMER);
     }
+
+    arrival
 }
 
 impl Drop for Host {
