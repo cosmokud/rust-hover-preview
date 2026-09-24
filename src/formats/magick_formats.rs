@@ -82,14 +82,19 @@ use std::path::Path;
 /// engine's own `miff`.
 ///
 /// Four names ImageMagick reads are deliberately *not* here, and each is a note about the
-/// format rather than an oversight. `sti` is a Sinar raw capture, and the name is one the
+/// engine rather than about the format. `sti` is a Sinar raw capture, and the name is one the
 /// `[libre]` list already carries for the StarImpress template it means to everything else —
 /// a name sits in one list, and that list is the one that claimed it first. `cin` is a Cineon
 /// film frame, which FFmpeg demuxes and plays, so it is the video list's. `palm` is a Palm
 /// pixmap with no header to be found under any name, which the engine reads by being told
-/// what it is looking at. And `xwd` is a screenshot format this engine has no coder for at
-/// all: `magick -list format` on an installed engine does not name it, and a name no coder of
-/// the engine's declares is a launch that answers nothing.
+/// what it is looking at. And `xwd` is an X11 window dump — a format ImageMagick has a coder
+/// for, registered under the name `_XWD`, that the *Windows* installer's module set does not
+/// ship: asking one of those builds for a `.xwd` fails looking for a coder module that is not
+/// there, and `magick -list format` names the formats whose coders are installed, so it does
+/// not name this one. The distinction matters for a name like this: a list built from the
+/// engine's own registry can only hold what the engine on the machine actually reads, and one
+/// this app put in anyway would be a launch that answers nothing every run. A build that does
+/// ship the coder declares it, and the name can be added to the list by hand like any other.
 pub const DEFAULT_MAGICK_EXTENSIONS: &str = "3fr,arw,cr2,cr3,crw,cur,dcm,dcr,dcx,dng,dpx,erf,fff,fit,fits,fts,iiq,j2c,j2k,jng,jp2,jpc,jpm,jpt,k25,kdc,mdc,mef,miff,mng,mos,mrw,nef,nrw,orf,pef,pfm,raf,raw,rmf,rw2,rwl,sgi,sr2,srf,srw,vicar,wbmp,x3f,xbm,xcf,xpm";
 
 /// Whether the configured list claims `path`.
