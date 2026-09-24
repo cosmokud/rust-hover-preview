@@ -471,6 +471,15 @@ struct Held {
 
 /// Ask the engine for a picture for `path`, at the room the preview may take.
 ///
+/// What that room is, is the room the display has rather than the box the hover's own layout
+/// came out at (see `PendingLoad::room` in `preview_window`): a file like this cannot be
+/// measured before it is converted, so the hover that asks is laid out as the spinner's own
+/// box at the pointer, and the room *that* comes out at says nothing about how large the
+/// picture will be drawn. It matters here more than anywhere, because what comes back is
+/// developed *at* the size it is then shown at: the room is a ceiling on the size the picture
+/// can ever be drawn at, and the layout scales the answer down into the room the preview
+/// really takes — never up.
+///
 /// Nothing is waited on and nothing is answered: the conversion runs on the engine thread
 /// below, and what a caller watches for is the message it sends when it is done — or the
 /// mark that says the picture is not coming. A hover that asked for one is replayed when
@@ -665,11 +674,12 @@ fn develop(path: &Path, room: (u32, u32)) -> Option<Held> {
 ///   picture path — and it is asked here because a raw is the format that always carries one:
 ///   a photograph developed without it is a photograph on its side, and there is no reader of
 ///   this app's behind this engine to disagree with it.
-/// * `-resize {width}x{height}>` is the box the preview is shown in, and the `>` is what
-///   makes it a ceiling rather than a size: a picture smaller than the box keeps the size it
-///   has — which is the size the preview would be drawn at anyway — and one larger than it is
-///   developed at the size it is shown rather than at the size of the sensor, so a
-///   forty-megapixel raw costs the preview and not the file.
+/// * `-resize {width}x{height}>` is the room the preview is drawn in — the room the display
+///   has, which is the most it can ever be, and the one thing here that is not a detail (see
+///   `request`) — and the `>` is what makes it a ceiling rather than a size: a picture smaller
+///   than the box keeps the size it has — which is the size the preview would be drawn at
+///   anyway — and one larger than it is developed at the size it is shown rather than at the
+///   size of the sensor, so a forty-megapixel raw costs the preview and not the file.
 /// * `-depth 8` is the eight bits to the channel a frame is composed in, so the engine gives
 ///   up the sixteen an install is usually built for on this side rather than in the decoder,
 ///   and the bytes it writes are half of what they would otherwise be.
