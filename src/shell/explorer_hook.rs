@@ -4,7 +4,7 @@ use crate::formats::archive_formats::matches_archive_list;
 use crate::shell::cloud_files;
 use crate::config::config::{
     AvoidMode, PreviewType, TriggerKeyMode, DEFAULT_HOVER_DELAY_MS,
-    DEFAULT_SAME_FILE_REHOVER_DELAY_MS, DEFAULT_SETTLING_DELAY_MS,
+    DEFAULT_SAME_FILE_REHOVER_DELAY_MS, DEFAULT_SETTLING_DELAY_MS, DEFAULT_TICK_MS,
 };
 use crate::formats::design_formats::matches_design_list;
 use crate::formats::font_formats::matches_font_list;
@@ -3566,13 +3566,15 @@ pub fn run_explorer_hook() {
     let mut last_state_check = Instant::now();
     let mut current_state = ExplorerState::NoExplorerWindows;
 
-    // Polling intervals based on state
+    // Polling intervals based on state. How fast the loop runs while Explorer has focus
+    // is the `tick_ms` setting rather than a constant here — the one number that trades
+    // how soon a move is answered against what the app costs while it works (see
+    // `DEFAULT_TICK_MS`) — and the stationary probe below is gated by it as well: a file
+    // under a parked pointer is read again no sooner than the loop looks.
     const DEEP_SLEEP_MS: u64 = 1000; // No Explorer windows - check once per second
     const LONG_SLEEP_MS: u64 = 500; // All minimized or hidden - check twice per second
     const MEDIUM_SLEEP_MS: u64 = 150; // Visible but not focused - moderate checking
-    const ACTIVE_POLL_MS: u64 = 30; // Active focus - responsive polling
     const VIDEO_HOVER_DISMISS_GRACE_MS: u64 = 350;
-    const HOVER_PROBE_MS: u64 = 30;
     const KEYBOARD_FOCUS_PROBE_MS: u64 = 30;
     const STATIONARY_SEARCH_MISS_HIDE_MS: u64 = 180;
     const VIDEO_PROCESS_SWEEP_MS: u64 = 1000;
@@ -3593,6 +3595,7 @@ pub fn run_explorer_hook() {
                 c.same_file_rehover_delay_ms,
                 c.settling_delay_ms,
                 c.trigger_key_enabled,
+                c.tick_ms,
             );
             // Resolved once per config change instead of once per tick.
             let vk = off_trigger_key_to_vk(&c.trigger_key);
@@ -3606,6 +3609,7 @@ pub fn run_explorer_hook() {
                 DEFAULT_SAME_FILE_REHOVER_DELAY_MS,
                 DEFAULT_SETTLING_DELAY_MS,
                 true,
+                DEFAULT_TICK_MS,
             ),
             Some(0x12),
         ));
@@ -3816,6 +3820,7 @@ pub fn run_explorer_hook() {
                 config.same_file_rehover_delay_ms,
                 config.settling_delay_ms,
                 config.trigger_key_enabled,
+                config.tick_ms,
             );
             trigger_key_vk = off_trigger_key_to_vk(&config.trigger_key);
         }
@@ -3826,6 +3831,7 @@ pub fn run_explorer_hook() {
         let same_file_rehover_delay_ms = config_snapshot.3;
         let settling_delay_ms = config_snapshot.4;
         let trigger_key_enabled = config_snapshot.5;
+        let tick_ms = config_snapshot.6;
 
         // One question, two settings: the key either stops previews while it is
         // held, or is the only thing that lets them happen. Either way, what is left
@@ -3862,7 +3868,7 @@ pub fn run_explorer_hook() {
             std::thread::sleep(Duration::from_millis(if previews_allowed {
                 LONG_SLEEP_MS
             } else {
-                ACTIVE_POLL_MS
+                tick_ms
             }));
             continue;
         }
@@ -3876,7 +3882,7 @@ pub fn run_explorer_hook() {
             ExplorerState::AllMinimized => (LONG_SLEEP_MS, STATE_RECHECK_LONG_MS),
             ExplorerState::HiddenByForeground => (LONG_SLEEP_MS, STATE_RECHECK_LONG_MS),
             ExplorerState::VisibleNotFocused => (MEDIUM_SLEEP_MS, STATE_RECHECK_MEDIUM_MS),
-            ExplorerState::ActiveFocus => (ACTIVE_POLL_MS, STATE_RECHECK_ACTIVE_MS),
+            ExplorerState::ActiveFocus => (tick_ms, STATE_RECHECK_ACTIVE_MS),
         };
 
         // Periodically re-evaluate the state
@@ -3935,8 +3941,8 @@ pub fn run_explorer_hook() {
             }
         }
 
-        // Explorer is active - use faster polling
-        std::thread::sleep(Duration::from_millis(ACTIVE_POLL_MS));
+        // Explorer is active - use the configured tick
+        std::thread::sleep(Duration::from_millis(tick_ms));
 
         unsafe {
             // Get cursor position
@@ -4668,7 +4674,7 @@ pub fn run_explorer_hook() {
                         }
                         continue;
                     }
-                    if last_hover_probe.elapsed() < Duration::from_millis(HOVER_PROBE_MS) {
+                    if last_hover_probe.elapsed() < Duration::from_millis(tick_ms) {
                         continue;
                     }
                     last_hover_probe = Instant::now();

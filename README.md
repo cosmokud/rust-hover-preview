@@ -221,6 +221,7 @@ The item a setting starts at carries `(Default)` after its name, so a menu says 
   - **Confirm File Type** — check a file's content against its name before it is previewed: a file whose bytes are another kind is previewed as that kind, and one whose content is a format this app has no reader for shows nothing. On by default.
   - **Cache** — memory held between hovers, 2 GB down to 0 MB: Image, Text, PDF, Office caches.
   - **Decode Budget** — 16 GB down to 512 MB, 1 GB default: a file past it gets no preview.
+  - **Tick** — how often the app looks at Explorer while a folder window is in focus: 15 ms (default), 31, 47, 63 or 78 ms, one to five Windows timer ticks. Lower answers a move sooner; higher is lighter on the CPU and on Explorer.
 - **Engine**
   - **Select Engine → Office** — which engine an Office document’s page is asked of: **Microsoft Office** (default) draws it with the application that owns the format and keeps LibreOffice as the fallback for a family this machine has no application for, while **LibreOffice** draws every Office document whether Microsoft Office is installed or not. The LibreOffice row is greyed out where it is not installed.
   - **Microsoft Office TTL** — how long a family’s Office app is kept warm: Indefinitely, 1 hour, 30 minutes, 10 minutes (default), 5 minutes, 1 minute, 0 seconds.
@@ -306,6 +307,7 @@ image_cache_mb=32
 office_cache_mb=64
 pdf_cache_mb=32
 text_cache_mb=0
+tick_ms=15
 
 ; Engine
 libreoffice_idle=600

@@ -2,20 +2,18 @@ use crate::formats::codecs::{self, refresh as refresh_codecs, Row};
 use crate::config::config::{
     sanitize_decode_budget_gb, sanitize_image_cache_mb, sanitize_libre_cache_mb,
     sanitize_office_cache_mb,
-    sanitize_pdf_cache_mb, sanitize_text_cache_mb, sanitize_text_font_scale_percent, AvoidMode,
-    EngineIdle, MarkdownMode, OfficeEngine, PreviewScale, PreviewType, TextTheme,
-    TransparentBackground,
-    TriggerKeyMode, DEFAULT_ANIMATED_SCALE, DEFAULT_AVOID_MODE, DEFAULT_DDS_BACKGROUND,
-    DEFAULT_DECODE_BUDGET_GB, DEFAULT_DESIGN_BACKGROUND, DEFAULT_DESIGN_SCALE,
-    DEFAULT_FOLLOW_CURSOR, DEFAULT_FONT_BACKGROUND, DEFAULT_FONT_SCALE, DEFAULT_HOVER_DELAY_MS,
-    DEFAULT_IMAGE_BACKGROUND, DEFAULT_IMAGE_CACHE_MB, DEFAULT_LIBRE_CACHE_MB, DEFAULT_LIBRE_SCALE,
-    DEFAULT_LIBREOFFICE_IDLE_SECS, DEFAULT_OFFICE_CACHE_MB,
-    DEFAULT_OFFICE_ENGINE, DEFAULT_OFFICE_ENGINE_IDLE_SECS, DEFAULT_OFFICE_SCALE,
-    DEFAULT_PDF_CACHE_MB, DEFAULT_PDF_SCALE,
-    DEFAULT_PREVIEW_SCALE, DEFAULT_SAME_FILE_REHOVER_DELAY_MS, DEFAULT_SETTLING_DELAY_MS,
-    DEFAULT_TEXT_CACHE_MB,
-    DEFAULT_TEXT_FONT_SCALE_PERCENT, DEFAULT_VECTOR_BACKGROUND, DEFAULT_VECTOR_SCALE,
-    DEFAULT_VIDEO_SCALE, DEFAULT_VIDEO_VOLUME, DEFAULT_WEBVIEW_IDLE_SECS,
+    sanitize_pdf_cache_mb, sanitize_text_cache_mb, sanitize_text_font_scale_percent,
+    sanitize_tick_ms, AvoidMode, EngineIdle, MarkdownMode, OfficeEngine, PreviewScale,
+    PreviewType, TextTheme, TransparentBackground, TriggerKeyMode, DEFAULT_ANIMATED_SCALE,
+    DEFAULT_AVOID_MODE, DEFAULT_DDS_BACKGROUND, DEFAULT_DECODE_BUDGET_GB, DEFAULT_DESIGN_BACKGROUND,
+    DEFAULT_DESIGN_SCALE, DEFAULT_FOLLOW_CURSOR, DEFAULT_FONT_BACKGROUND, DEFAULT_FONT_SCALE,
+    DEFAULT_HOVER_DELAY_MS, DEFAULT_IMAGE_BACKGROUND, DEFAULT_IMAGE_CACHE_MB,
+    DEFAULT_LIBRE_CACHE_MB, DEFAULT_LIBRE_SCALE, DEFAULT_LIBREOFFICE_IDLE_SECS,
+    DEFAULT_OFFICE_CACHE_MB, DEFAULT_OFFICE_ENGINE, DEFAULT_OFFICE_ENGINE_IDLE_SECS,
+    DEFAULT_OFFICE_SCALE, DEFAULT_PDF_CACHE_MB, DEFAULT_PDF_SCALE, DEFAULT_PREVIEW_SCALE,
+    DEFAULT_SAME_FILE_REHOVER_DELAY_MS, DEFAULT_SETTLING_DELAY_MS, DEFAULT_TEXT_CACHE_MB,
+    DEFAULT_TEXT_FONT_SCALE_PERCENT, DEFAULT_TICK_MS, DEFAULT_VECTOR_BACKGROUND,
+    DEFAULT_VECTOR_SCALE, DEFAULT_VIDEO_SCALE, DEFAULT_VIDEO_VOLUME, DEFAULT_WEBVIEW_IDLE_SECS,
 };
 use crate::shell::explorer_hook;
 use crate::engines::libreoffice_render;
@@ -146,6 +144,20 @@ const ID_TRAY_SETTLING_DELAY_BASE: u16 = 1485;
 const TIMING_DELAY_CHOICES_MS: [u64; 15] = [
     0, 25, 50, 100, 150, 200, 250, 300, 400, 500, 600, 700, 800, 900, 1000,
 ];
+/// The `Performance → Tick` submenu: one command per rate the loop may run at, in the
+/// order it lists them. It is the app's own rate rather than a delay a hover waits out,
+/// and its range sits past every other range the app hands out so that a tick is never
+/// read as a delay, a size or a share.
+const ID_TRAY_TICK_BASE: u16 = 1500;
+/// The ticks the `Tick` submenu offers, in the order it lists them: one system tick at
+/// the top, where the app starts, and five of them at the bottom.
+///
+/// Whole system ticks rather than round numbers, because that is what a wait is
+/// honoured in — the loop wakes on the system's clock, so a number that falls between
+/// two of its ticks spends the same time as the one below it and reads as a step that
+/// changed nothing. A tick a hand-edited `config.ini` holds that is not one of these is
+/// shown with nothing checked rather than rounded to the nearest.
+const TICK_CHOICES_MS: [u64; 5] = [15, 31, 47, 63, 78];
 const ID_TRAY_OPEN_CONFIG: u16 = 1040;
 /// The row above `Run at Startup`, which is in the menu only while a newer release is
 /// waiting: it puts the installer `updates` fetched on, and the app ends itself as the
@@ -483,6 +495,14 @@ unsafe extern "system" fn tray_window_proc(
                     .contains(&cmd) =>
                 {
                     set_settling_delay(cmd - ID_TRAY_SETTLING_DELAY_BASE)
+                }
+                // How often the loop looks at the pointer's world, by the position its
+                // item was listed at: the one command here that sets the app's own rate
+                // rather than a delay a hover waits out.
+                cmd if (ID_TRAY_TICK_BASE..ID_TRAY_TICK_BASE + TICK_CHOICES_MS.len() as u16)
+                    .contains(&cmd) =>
+                {
+                    set_tick_ms(cmd - ID_TRAY_TICK_BASE)
                 }
                 ID_TRAY_OPEN_CONFIG => open_config_file(),
                 // How large a picture is drawn, by the position its item was listed at.
@@ -1526,6 +1546,14 @@ unsafe fn show_context_menu(hwnd: HWND) {
         w!("Decode Budget"),
     );
 
+    // Add the "Tick" submenu: how often the loop looks at the pointer's world while
+    // Explorer has focus. It is the app's own rate rather than a hover's — the one
+    // number that trades how soon a move is answered against what the app costs while it
+    // works — which is why it is here and not with the delays a hover waits out.
+    let tick_ms = CONFIG.lock().map(|c| c.tick_ms).unwrap_or(DEFAULT_TICK_MS);
+
+    append_tick_menu(performance_menu, w!("Tick"), ID_TRAY_TICK_BASE, tick_ms);
+
     let _ = AppendMenuW(
         menu,
         MF_STRING | MF_POPUP,
@@ -2012,6 +2040,58 @@ fn avoid_label(mode: AvoidMode) -> String {
     };
 
     default_label(label, mode == DEFAULT_AVOID_MODE)
+}
+
+/// The `Tick` submenu: how often the app looks at the pointer's world while Explorer
+/// has focus, with the tick it is at marked.
+fn append_tick_menu(parent: HMENU, label: PCWSTR, base: u16, tick_ms: u64) {
+    let menu = unsafe { CreatePopupMenu().unwrap() };
+
+    // The labels are kept for as long as the menu is being filled out, for the same
+    // reason the `Avoid` labels are: `AppendMenuW` is handed a pointer, so the wide
+    // strings have to outlive the call that lists them.
+    let labels: Vec<Vec<u16>> = TICK_CHOICES_MS
+        .iter()
+        .map(|tick| {
+            tick_label(*tick)
+                .encode_utf16()
+                .chain(std::iter::once(0))
+                .collect()
+        })
+        .collect();
+
+    for (index, label) in labels.iter().enumerate() {
+        let _ = unsafe {
+            AppendMenuW(
+                menu,
+                MF_STRING,
+                (base + index as u16) as usize,
+                PCWSTR(label.as_ptr()),
+            )
+        };
+    }
+
+    // One of the rates is the setting, so one of them carries the radio mark; a tick the
+    // menu does not list is marked by nothing rather than by the nearest one.
+    if let Some(index) = TICK_CHOICES_MS.iter().position(|tick| *tick == tick_ms) {
+        let _ = unsafe {
+            CheckMenuRadioItem(
+                menu,
+                base as u32,
+                (base + TICK_CHOICES_MS.len() as u16 - 1) as u32,
+                (base + index as u16) as u32,
+                MF_BYCOMMAND.0,
+            )
+        };
+    }
+
+    let _ = unsafe { AppendMenuW(parent, MF_STRING | MF_POPUP, menu.0 as usize, label) };
+}
+
+/// What a tick is called in the menu: the wait it stands for, in milliseconds, with the
+/// one the app starts at marked as the default.
+fn tick_label(tick_ms: u64) -> String {
+    default_label(&format!("{tick_ms} ms"), tick_ms == DEFAULT_TICK_MS)
 }
 
 /// One half of the `Background` submenu: the backdrops a preview can be drawn over,
@@ -2684,6 +2764,30 @@ fn set_avoid_mode(index: u16) {
 
     if let Ok(mut config) = CONFIG.lock() {
         config.avoid_mode = mode;
+        config.save();
+    }
+}
+
+/// The tick an item of the `Tick` submenu stands for, by the position it was listed at.
+/// An id past the last tick the menu offered is one that is not there.
+fn tick_ms_at(index: u16) -> Option<u64> {
+    TICK_CHOICES_MS.get(index as usize).copied()
+}
+
+/// How often the app looks at the pointer's world while Explorer has focus.
+///
+/// Nothing on screen changes and nothing is rebuilt: the preview that is up was placed
+/// when it was opened, and the tick is what says when the next look happens — so a
+/// slower tick is a preview that stays a moment longer after the pointer has left it,
+/// and a faster one is an answer that arrives sooner, at the cost of more crossings into
+/// Explorer (see `DEFAULT_TICK_MS`).
+fn set_tick_ms(index: u16) {
+    let Some(tick_ms) = tick_ms_at(index) else {
+        return;
+    };
+
+    if let Ok(mut config) = CONFIG.lock() {
+        config.tick_ms = sanitize_tick_ms(tick_ms);
         config.save();
     }
 }
