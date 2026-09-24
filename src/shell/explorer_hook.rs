@@ -2901,19 +2901,71 @@ fn mouse_press_buttons() -> [windows::Win32::UI::Input::KeyboardAndMouse::VIRTUA
     [VK_LBUTTON, VK_RBUTTON, VK_MBUTTON]
 }
 
-fn hover_location_key(hints: &HoverResolverHints) -> Option<String> {
-    hints
-        .current_folder
-        .as_ref()
-        .map(|folder| format!("folder:{folder}"))
-        .or_else(|| {
-            hints
-                .search_root
-                .as_ref()
-                .map(|root| format!("search:{root}"))
-        })
-        .or_else(|| hints.location_url.as_ref().map(|url| format!("url:{url}")))
-        .or_else(|| hints.shell_view_hwnd.map(|hwnd| format!("view:{hwnd}")))
+/// What a look at the view under the pointer said about the place it is showing, one
+/// fact per field: the folder the view has open, the search root under it, the URL it
+/// was opened with, and the view's own window.
+///
+/// It stands where a single formatted key did — the first fact that answered, written
+/// as a string — and the difference between the two is the whole of it: the facts are
+/// not equally reliable. The URL is the browser object's own and answers every time,
+/// while the folder is a walk out through the shell's objects to a filesystem path,
+/// and a path on a share, on a slow disk or in a library answers nothing to that walk
+/// on some looks and a path on others. Read as one key, the same place came out as
+/// `folder:…` on one look and `url:…` on the next, and each was read as a *change*:
+/// the preview of a file that never moved was taken down, the gate armed, and the same
+/// preview put back a moment later, which is the blink. Kept apart, a fact is compared
+/// only where both looks answered it — see [`hover_location_changed`].
+#[derive(Clone, Default)]
+struct HoverLocation {
+    folder: Option<String>,
+    search_root: Option<String>,
+    location_url: Option<String>,
+    view_hwnd: Option<isize>,
+}
+
+impl HoverLocation {
+    /// The place a look's hints describe, as the facts that look managed to read.
+    fn of(hints: &HoverResolverHints) -> Self {
+        Self {
+            folder: hints.current_folder.clone(),
+            search_root: hints.search_root.clone(),
+            location_url: hints.location_url.clone(),
+            view_hwnd: hints.shell_view_hwnd,
+        }
+    }
+
+    /// Whether the look answered anything about the place at all. A look that read
+    /// none of the four is not a place to compare against: it is a shell that said
+    /// nothing, and nothing follows from it either way.
+    fn was_answered(&self) -> bool {
+        self.folder.is_some()
+            || self.search_root.is_some()
+            || self.location_url.is_some()
+            || self.view_hwnd.is_some()
+    }
+}
+
+/// Whether two looks at the view describe different places.
+///
+/// A fact counts only where *both* looks answered it. A look that could not walk the
+/// folder out of the view leaves that fact unanswered rather than answering another
+/// one, and two places are not told apart by one of them failing to say where it is:
+/// reading a missing answer as a different place is what blinked the preview. Where
+/// both looks did answer, a difference is a move — another folder, another search,
+/// another tab of the same window — and is read as the change it is.
+fn hover_location_changed(previous: &HoverLocation, current: &HoverLocation) -> bool {
+    /// Whether two looks disagree about one fact, where both of them read it.
+    fn differs<T: PartialEq>(previous: &Option<T>, current: &Option<T>) -> bool {
+        match (previous.as_ref(), current.as_ref()) {
+            (Some(previous), Some(current)) => previous != current,
+            _ => false,
+        }
+    }
+
+    differs(&previous.folder, &current.folder)
+        || differs(&previous.search_root, &current.search_root)
+        || differs(&previous.location_url, &current.location_url)
+        || differs(&previous.view_hwnd, &current.view_hwnd)
 }
 
 fn is_pressed_or_down_state(state: u16) -> bool {
@@ -3287,7 +3339,9 @@ pub fn run_explorer_hook() {
     // while ffplay window is still initializing under the cursor.
     let mut video_hover_guard_until: Option<Instant> = None;
     // Folder/input gate state: suppress preview after folder changes until explicit user input.
-    let mut last_cursor_location: Option<String> = None;
+    // The place the last folder probe found the pointer over, as the facts that probe
+    // read — see `HoverLocation`.
+    let mut last_cursor_location: Option<HoverLocation> = None;
     let mut hover_resolver_hints = HoverResolverHints::default();
     let mut suspend_preview_until_user_input = false;
     let mut allow_keyboard_preview_on_first_observation = false;
@@ -3948,52 +4002,64 @@ pub fn run_explorer_hook() {
             {
                 last_folder_probe = Instant::now();
                 hover_resolver_hints = get_current_hover_resolver_hints(&resolver);
-                if let Some(location_key) = hover_location_key(&hover_resolver_hints) {
-                    if last_cursor_location.as_ref() != Some(&location_key) {
-                        // A change that follows recent input is user navigation:
-                        // the file under the parked cursor may preview as soon as
-                        // the new view has settled, without a mouse move.
-                        let user_navigation = recent_elapsed_within(
-                            last_user_input_at.map(|at| at.elapsed()),
-                            HOVER_RESOLVER_INPUT_GRACE_MS,
-                        );
-                        last_cursor_location = Some(location_key);
-                        // The view this location describes is a different one now —
-                        // another folder, or the same window searched again — so what
-                        // was cached about the last one describes the wrong place: a
-                        // folder remembered for the window and the view that answered
-                        // for it. A name looked up against those resolves to something
-                        // that is not there, or to nothing at all.
-                        clear_shell_view_probe_caches();
-                        resolver.forget_view();
-                        suspend_preview_until_user_input = true;
-                        allow_keyboard_preview_on_first_observation = false;
-                        folder_change_user_initiated = user_navigation;
-                        folder_change_time = Some(Instant::now());
-                        suspended_initial_focus = None;
-                        hover_start = None;
-                        last_focused_key = None;
-                        // Reset cursor baseline so we don't mistake stale delta for movement.
-                        last_cursor_pos = cursor_pos;
-                        stationary_hover_probe_done = false;
-                        // Drain stale GetAsyncKeyState flags from prior navigation,
-                        // then remember the press count: only a later navigation key
-                        // press may lift this suspension, so key state left over
-                        // from the navigation that opened the folder cannot.
-                        let _ = keyboard_navigation_input_state();
-                        keyboard_press_seq_at_suspend = keyboard_navigation_press_seq;
+                let location = HoverLocation::of(&hover_resolver_hints);
+                // A look that answered nothing about the place is left alone: it is a
+                // question to ask again, not a change to act on. And a fact is only
+                // read as a change where both looks answered it, so a folder the shell
+                // could not walk out this time is not another place — see
+                // `HoverLocation`.
+                if location.was_answered()
+                    && last_cursor_location
+                        .as_ref()
+                        .map(|previous| hover_location_changed(previous, &location))
+                        // The first look at a place is a change like any other: what
+                        // is under the pointer is asked about as a view that has just
+                        // been opened rather than one that was always there.
+                        .unwrap_or(true)
+                {
+                    // A change that follows recent input is user navigation:
+                    // the file under the parked cursor may preview as soon as
+                    // the new view has settled, without a mouse move.
+                    let user_navigation = recent_elapsed_within(
+                        last_user_input_at.map(|at| at.elapsed()),
+                        HOVER_RESOLVER_INPUT_GRACE_MS,
+                    );
+                    last_cursor_location = Some(location);
+                    // The view this location describes is a different one now —
+                    // another folder, or the same window searched again — so what
+                    // was cached about the last one describes the wrong place: a
+                    // folder remembered for the window and the view that answered
+                    // for it. A name looked up against those resolves to something
+                    // that is not there, or to nothing at all.
+                    clear_shell_view_probe_caches();
+                    resolver.forget_view();
+                    suspend_preview_until_user_input = true;
+                    allow_keyboard_preview_on_first_observation = false;
+                    folder_change_user_initiated = user_navigation;
+                    folder_change_time = Some(Instant::now());
+                    suspended_initial_focus = None;
+                    hover_start = None;
+                    last_focused_key = None;
+                    // Reset cursor baseline so we don't mistake stale delta for movement.
+                    last_cursor_pos = cursor_pos;
+                    stationary_hover_probe_done = false;
+                    // Drain stale GetAsyncKeyState flags from prior navigation,
+                    // then remember the press count: only a later navigation key
+                    // press may lift this suspension, so key state left over
+                    // from the navigation that opened the folder cannot.
+                    let _ = keyboard_navigation_input_state();
+                    keyboard_press_seq_at_suspend = keyboard_navigation_press_seq;
 
-                        if last_file.is_some() || keyboard_file.is_some() || is_keyboard_hover {
-                            hide_preview();
-                        }
-                        last_file = None;
-                        suppressed.clear();
-                        pointer_pause.clear();
-                        stationary_search_miss_started_at = None;
-                        keyboard_file = None;
-                        is_keyboard_hover = false;
-                        video_hover_guard_until = None;
+                    if last_file.is_some() || keyboard_file.is_some() || is_keyboard_hover {
+                        hide_preview();
                     }
+                    last_file = None;
+                    suppressed.clear();
+                    pointer_pause.clear();
+                    stationary_search_miss_started_at = None;
+                    keyboard_file = None;
+                    is_keyboard_hover = false;
+                    video_hover_guard_until = None;
                 }
             }
 
@@ -4553,6 +4619,54 @@ mod tests {
             !pointer_moved_off_the_hovered_item(true, true, false),
             "nor is a pointer the preview itself holds one that has left it"
         );
+    }
+
+    /// Two looks at the view are told apart by the facts *both* of them answered, and
+    /// never by one of them failing to answer: the folder behind a view is a walk out
+    /// through the shell's objects to a filesystem path, and a share, a slow disk or a
+    /// library answers nothing to that walk on some looks and a path on others. Read as
+    /// one key — the first fact that answered — the same place came out as `folder:…` on
+    /// one look and `url:…` on the next, and each was read as a change: the preview of a
+    /// file that never moved was taken down, the gate armed, and the same preview put
+    /// back a moment later, which is the blink. A look that answered nothing at all is
+    /// not a place to compare against — see `HoverLocation`.
+    #[test]
+    fn a_place_is_told_apart_by_the_facts_both_looks_answered() {
+        let view = |folder: Option<&str>, url: Option<&str>, hwnd: isize| HoverLocation {
+            folder: folder.map(str::to_string),
+            search_root: None,
+            location_url: url.map(str::to_string),
+            view_hwnd: Some(hwnd),
+        };
+        let here = view(Some("D:\\Pictures"), Some("file:///D:/Pictures"), 0x1234);
+
+        assert!(
+            !hover_location_changed(&here, &view(None, Some("file:///D:/Pictures"), 0x1234)),
+            "a folder the shell could not walk out this time is the same place"
+        );
+        assert!(
+            !hover_location_changed(&view(None, Some("file:///D:/Pictures"), 0x1234), &here),
+            "and so is reading it again on the next look"
+        );
+        assert!(
+            hover_location_changed(&here, &view(Some("D:\\Videos"), Some("file:///D:/Pictures"), 0x1234)),
+            "another folder is another place"
+        );
+        assert!(
+            hover_location_changed(&here, &view(Some("D:\\Pictures"), Some("file:///D:/Videos"), 0x1234)),
+            "and so is the same window arrived at another URL"
+        );
+        assert!(
+            hover_location_changed(&here, &view(Some("D:\\Pictures"), Some("file:///D:/Pictures"), 0x5678)),
+            "and so is another view of it, in a window of its own"
+        );
+
+        let nothing = HoverLocation::default();
+        assert!(
+            !nothing.was_answered(),
+            "a look that answered nothing is not a place to compare against"
+        );
+        assert!(here.was_answered(), "a look that answered one is");
     }
 
     /// The width a name is drawn at is the name's own: a longer name measures wider

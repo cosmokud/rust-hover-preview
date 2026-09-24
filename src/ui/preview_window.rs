@@ -210,6 +210,15 @@ fn clear_pointer_item_box() {
     }
 }
 
+/// Whether a box on screen holds a point. Half-open, so a point on the box's right or
+/// bottom edge is outside it — which is how a window hit-test reads a rectangle, and
+/// what the dismissal of a mouse preview is decided by.
+fn box_holds(x: i32, y: i32, region: (i32, i32, i32, i32)) -> bool {
+    let (left, top, right, bottom) = region;
+
+    x >= left && x < right && y >= top && y < bottom
+}
+
 /// Whether a point is still on the item the hover on screen is about — the one
 /// question a preview is revealed against, and the one the hook reads a move off (see
 /// `HOVER_POINTER_BOX`). A point outside a published box is a pointer that has left
@@ -219,9 +228,7 @@ pub fn pointer_item_holds(x: i32, y: i32) -> bool {
         return true;
     };
 
-    (*published)
-        .map(|(left, top, right, bottom)| x >= left && x < right && y >= top && y < bottom)
-        .unwrap_or(true)
+    (*published).map(|region| box_holds(x, y, region)).unwrap_or(true)
 }
 
 /// Whether the pointer is on that item this moment, read from the cursor: the
@@ -7275,13 +7282,44 @@ const MIN_AVOID_ROOM_PIXELS: f32 = 64.0;
 /// measured it: the name the file is listed under at `Avoid Filename`, and that name
 /// with the columns a row writes beside it at `Avoid Details`.
 ///
+/// What a placement is kept clear of, and how far: the region the `Avoid` setting
+/// measured off the item, the distance the placement keeps from it, and the pointer a
+/// mouse hover's placement is held clear of as well (see `avoiding_text`).
+struct Clearance {
+    /// The region the `Avoid` setting measured off the hovered item: the name the file
+    /// is listed under, that name with the columns a row writes beside it, or `None`
+    /// where the setting is off or the view reported no text for the item.
+    text: Option<ScreenRegion>,
+    /// The distance the placement keeps from `text`, so the text is stepped off rather
+    /// than touched at its edge. Already in the pixels of the display the placement is
+    /// for — like the least room a way out is worth taking, which `avoiding_text`
+    /// scales from the logical distance it is written as.
+    gap: i32,
+    /// Where the pointer is, for a placement that is a mouse hover's: a way out that
+    /// would put the preview over the pointer is not one the hover can use. A mouse
+    /// preview is dismissed the moment the cursor touches it, so one placed *under* the
+    /// cursor is dismissed the instant it appears — and put back the same way a moment
+    /// later, for as long as the pointer sits there, which is a preview that blinks at
+    /// the hand rather than one that is read. A pointer clear of the preview is what
+    /// makes the dismissal mean what it says: the pointer arriving at the preview is
+    /// the user asking for it to go. So a way out that keeps the pointer clear is
+    /// preferred over one that does not, whatever size the two offer — and a way out
+    /// that covers it is still taken where no other is left, since a preview moved as
+    /// far as the display allows is all there is to give. The keyboard's placements
+    /// carry no pointer: what they clear is the focused item, and a preview over a
+    /// parked pointer is allowed there (see `compute_keyboard_layout`).
+    cursor: Option<(i32, i32)>,
+}
+
 /// A preview is placed beside what it belongs to rather than over it, and the text of
 /// the item it came from is part of what it belongs to: that item stays readable while
 /// its preview is up, which is what the `Avoid` setting asks for. The placement the
 /// position mode chose is therefore moved by the shortest step that clears that region —
 /// past its right edge, past its left, under it or over it, whichever asks the least
 /// of the preview — and only a step the display has room for is taken, so a preview
-/// moved off one edge is never pushed off another.
+/// moved off one edge is never pushed off another. A step that would put the preview
+/// over the pointer is not one a mouse hover can use either, whether or not it is the
+/// shortest: the two rules the ways out are held to are the ones `Clearance` names.
 ///
 /// A preview too large for every one of those rooms is *resized* into the roomiest of
 /// them rather than left where it covers the text. That is the case a preview filling
@@ -7291,21 +7329,16 @@ const MIN_AVOID_ROOM_PIXELS: f32 = 64.0;
 /// that sized it in the first place, applied to the room that is left. A room too small
 /// to be worth having is not taken at all, so a preview is never squeezed into a sliver
 /// to get off a name that a usable preview would have covered anyway.
-///
-/// `gap` is the distance the placement keeps from what it is beside, so the text is
-/// cleared by that much rather than touched at its edge. It is already in the pixels
-/// of the display this placement is for, like the least room a way out is worth
-/// taking, which is scaled here from the logical distance it is written as.
 fn avoiding_text(
     layout: PreviewLayout,
     orig_dims: (u32, u32),
     preview_scale: PreviewScale,
-    avoid: Option<ScreenRegion>,
-    gap: i32,
+    clearance: Clearance,
     bounds: ScreenBounds,
     dpi: u32,
 ) -> PreviewLayout {
-    let Some((text_left, text_top, text_right, text_bottom)) = avoid else {
+    let Clearance { text, gap, cursor } = clearance;
+    let Some((text_left, text_top, text_right, text_bottom)) = text else {
         return layout;
     };
 
@@ -7340,7 +7373,9 @@ fn avoiding_text(
         (over - bounds.top, false, over, true),
     ];
 
-    let mut best: Option<(i64, i32, PreviewLayout)> = None;
+    // The ways out are compared by whether they keep the pointer clear, then by the
+    // preview's own size, then by how short the step is — see the note on `cursor`.
+    let mut best: Option<(bool, i64, i32, PreviewLayout)> = None;
     for (room, along_width, anchor, far_edge) in ways_out {
         let room = room.max(0);
 
@@ -7403,25 +7438,45 @@ fn avoiding_text(
             preview_h,
         };
 
-        // The largest preview wins, and the shortest move breaks a tie: every way out
-        // that fits the preview as it stands offers it the same size, so those are the
-        // ones the move decides between, and only a preview that has to shrink is
-        // chosen between by what the room holds.
+        // A way out that keeps the pointer clear of the preview comes first, then the
+        // largest preview, and the shortest move breaks a tie: every way out that fits
+        // the preview as it stands offers it the same size, so those are the ones the
+        // move decides between, and only a preview that has to shrink is chosen between
+        // by what the room holds. See the note on `cursor` above for why the pointer
+        // comes ahead of both.
+        let clear_of_cursor = cursor.is_none_or(|(x, y)| {
+            !box_holds(
+                x,
+                y,
+                (
+                    placement.pos_x,
+                    placement.pos_y,
+                    placement.pos_x + preview_w as i32,
+                    placement.pos_y + preview_h as i32,
+                ),
+            )
+        });
         let area = preview_w as i64 * preview_h as i64;
         let step = (placement.pos_x - left).abs() + (placement.pos_y - top).abs();
         let better = match &best {
-            Some((best_area, best_step, _)) => {
-                area > *best_area || (area == *best_area && step < *best_step)
+            Some((best_clear, best_area, best_step, _)) => {
+                if clear_of_cursor != *best_clear {
+                    // One of the two keeps the pointer clear and the other does not, and
+                    // that is the whole of the choice between them.
+                    clear_of_cursor
+                } else {
+                    area > *best_area || (area == *best_area && step < *best_step)
+                }
             }
             None => true,
         };
         if better {
-            best = Some((area, step, placement));
+            best = Some((clear_of_cursor, area, step, placement));
         }
     }
 
     match best {
-        Some((_, _, placement)) => placement,
+        Some((_, _, _, placement)) => placement,
         None => layout,
     }
 }
@@ -7574,8 +7629,11 @@ fn compute_mouse_layout(
             layout,
             orig_dims,
             preview_scale,
-            avoid,
-            offset,
+            Clearance {
+                text: avoid,
+                gap: offset,
+                cursor: Some((cursor_x, cursor_y)),
+            },
             bounds,
             dpi,
         ))
@@ -7646,8 +7704,11 @@ fn compute_mouse_layout(
             layout,
             orig_dims,
             preview_scale,
-            avoid,
-            offset,
+            Clearance {
+                text: avoid,
+                gap: offset,
+                cursor: Some((cursor_x, cursor_y)),
+            },
             bounds,
             dpi,
         ))
@@ -7809,8 +7870,11 @@ fn compute_keyboard_layout(
                 layout,
                 orig_dims,
                 preview_scale,
-                avoid,
-                gap,
+                Clearance {
+                    text: avoid,
+                    gap,
+                    cursor: None,
+                },
                 bounds,
                 dpi,
             ));
@@ -7929,8 +7993,11 @@ fn compute_keyboard_layout(
             layout,
             orig_dims,
             preview_scale,
-            avoid,
-            gap,
+            Clearance {
+                text: avoid,
+                gap,
+                cursor: None,
+            },
             bounds,
             dpi,
         ))
@@ -8022,8 +8089,11 @@ fn compute_keyboard_layout(
             layout,
             orig_dims,
             preview_scale,
-            avoid,
-            gap,
+            Clearance {
+                text: avoid,
+                gap,
+                cursor: None,
+            },
             bounds,
             dpi,
         ))
@@ -9629,19 +9699,25 @@ mod tests {
 
     /// A placement kept off `name`, at the size the media's own scale allows — the
     /// arrangement the figures are easy to read in. It is the step a hover makes, so
-    /// the gap is the pointer's standoff at this display's scale.
+    /// the gap is the pointer's standoff at this display's scale, and `cursor` is where
+    /// the pointer is for a placement that is a mouse hover's — which the ways out are
+    /// held clear of, where it is given (see `avoiding_text`).
     fn placed(
         placement: PreviewLayout,
         media: (u32, u32),
         name: (i32, i32, i32, i32),
+        cursor: Option<(i32, i32)>,
         bounds: ScreenBounds,
     ) -> PreviewLayout {
         avoiding_text(
             placement,
             media,
             PreviewScale::Percent(100),
-            Some(name),
-            logical_px(TEST_DPI, POINTER_STANDOFF_PIXELS),
+            Clearance {
+                text: Some(name),
+                gap: logical_px(TEST_DPI, POINTER_STANDOFF_PIXELS),
+                cursor,
+            },
             bounds,
             TEST_DPI,
         )
@@ -10942,7 +11018,7 @@ mod tests {
         // The name is drawn to the left of the cursor's column, so the preview beside
         // the cursor is already off it.
         let name = (100, 300, 400, 320);
-        let placement = placed(layout(420, 300, 300, 300), (300, 300), name, bounds());
+        let placement = placed(layout(420, 300, 300, 300), (300, 300), name, None, bounds());
 
         assert_eq!((placement.pos_x, placement.pos_y), (420, 300));
     }
@@ -10954,10 +11030,76 @@ mod tests {
         // that band. Down is the shortest way out, so it ends up just under the name,
         // where its own column already was.
         let name = (100, 300, 400, 320);
-        let placement = placed(layout(120, 300, 300, 300), (300, 300), name, bounds());
+        let placement = placed(layout(120, 300, 300, 300), (300, 300), name, None, bounds());
 
         assert_eq!((placement.pos_x, placement.pos_y), (120, 340));
         assert_eq!((placement.preview_w, placement.preview_h), (300, 300));
+    }
+
+    /// A way out that would put the preview over the pointer is not one a mouse hover
+    /// can use. A mouse preview is dismissed the moment the cursor touches it, so one
+    /// placed over the cursor is dismissed the instant it appears — and put back the
+    /// same way a moment later, for as long as the pointer sits there, which is a
+    /// preview that blinks at the hand rather than one that is read. The tile figures
+    /// are the case that reaches it: the pointer is on a thumbnail with the label below
+    /// it, and the step that clears the label by rising over it is the thumbnail the
+    /// pointer is standing on — see `avoiding_text`.
+    #[test]
+    fn keeps_a_placement_off_the_pointer_it_is_for() {
+        let label = (400, 600, 700, 620);
+        let thumbnail = (500, 450);
+
+        // With nothing said about the pointer, the shortest step that clears the label
+        // is the one over it — which lands on the thumbnail the pointer is on.
+        let blind = placed(
+            layout(420, 400, 300, 300),
+            (300, 300),
+            label,
+            None,
+            bounds(),
+        );
+        assert_eq!((blind.pos_x, blind.pos_y), (420, 280));
+        assert!(
+            box_holds(
+                thumbnail.0,
+                thumbnail.1,
+                (
+                    blind.pos_x,
+                    blind.pos_y,
+                    blind.pos_x + blind.preview_w as i32,
+                    blind.pos_y + blind.preview_h as i32,
+                ),
+            ),
+            "the step over the label is the thumbnail the pointer is on"
+        );
+
+        // Held to the pointer, the same hover takes the way out that clears both: the
+        // room before the label, which the thumbnail's own column has.
+        let placement = placed(
+            layout(420, 400, 300, 300),
+            (300, 300),
+            label,
+            Some(thumbnail),
+            bounds(),
+        );
+        assert_eq!((placement.pos_x, placement.pos_y), (80, 400));
+        assert!(
+            !box_holds(
+                thumbnail.0,
+                thumbnail.1,
+                (
+                    placement.pos_x,
+                    placement.pos_y,
+                    placement.pos_x + placement.preview_w as i32,
+                    placement.pos_y + placement.preview_h as i32,
+                ),
+            ),
+            "the preview is clear of the pointer"
+        );
+        assert!(
+            placement.pos_x + placement.preview_w as i32 <= label.0,
+            "and still clear of the label it was moved off"
+        );
     }
 
     #[test]
@@ -10970,7 +11112,7 @@ mod tests {
             bottom: 500,
             ..bounds()
         };
-        let placement = placed(layout(120, 300, 300, 300), (300, 300), name, short);
+        let placement = placed(layout(120, 300, 300, 300), (300, 300), name, None, short);
 
         assert_eq!((placement.pos_x, placement.pos_y), (420, 300));
         assert_eq!((placement.preview_w, placement.preview_h), (300, 300));
@@ -10983,7 +11125,7 @@ mod tests {
         // and the roomiest way out is taken. Under the name, that is the full width the
         // mode allowed and the height the display leaves below the row.
         let name = (100, 300, 700, 320);
-        let placement = placed(layout(0, 0, 1000, 800), (1000, 800), name, bounds());
+        let placement = placed(layout(0, 0, 1000, 800), (1000, 800), name, None, bounds());
 
         assert_eq!((placement.pos_x, placement.pos_y), (0, 340));
         assert_eq!((placement.preview_w, placement.preview_h), (575, 460));
@@ -11004,7 +11146,7 @@ mod tests {
             right: 400,
             bottom: 180,
         };
-        let placement = placed(layout(150, 80, 200, 90), (200, 90), name, tight);
+        let placement = placed(layout(150, 80, 200, 90), (200, 90), name, None, tight);
 
         assert_eq!((placement.pos_x, placement.pos_y), (150, 80));
     }
@@ -11019,7 +11161,7 @@ mod tests {
             right: 900,
             ..bounds()
         };
-        let placement = placed(layout(690, 100, 200, 300), (200, 300), name, narrow);
+        let placement = placed(layout(690, 100, 200, 300), (200, 300), name, None, narrow);
 
         // 720 is the name's right edge plus the gap, and 720 + 200 leaves the display;
         // 340 is its bottom plus the gap, and 340 + 300 does not.
