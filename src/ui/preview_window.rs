@@ -54,7 +54,7 @@ use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::ptr;
-use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant, SystemTime};
@@ -87,8 +87,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetCursorPos, GetSystemMetrics, GetWindow, GetWindowLongPtrW, GetWindowRect,
     GetWindowThreadProcessId, IsWindow, IsWindowVisible, LoadCursorW, MoveWindow, PeekMessageW,
     RegisterClassExW, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow,
-    SystemParametersInfoW, TrackPopupMenu, TranslateMessage, UpdateLayeredWindow, CS_HREDRAW,
-    CS_VREDRAW, GWL_EXSTYLE, GW_OWNER, HWND_TOPMOST, IDC_ARROW, MF_STRING, MSG,
+    ShowWindowAsync, SystemParametersInfoW, TrackPopupMenu, TranslateMessage, UpdateLayeredWindow,
+    CS_HREDRAW, CS_VREDRAW, GWL_EXSTYLE, GW_OWNER, HWND_TOPMOST, IDC_ARROW, MF_STRING, MSG,
     PBT_APMRESUMEAUTOMATIC, PBT_APMRESUMESUSPEND, PBT_APMSTANDBY, PBT_APMSUSPEND, PM_REMOVE,
     SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SPI_GETWORKAREA,
     SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SW_HIDE,
@@ -139,18 +139,50 @@ pub static PREVIEW_SENDER: Lazy<Mutex<Option<Sender<PreviewMessage>>>> =
 // Use AtomicIsize for the HWND pointer (thread-safe)
 static PREVIEW_HWND: AtomicIsize = AtomicIsize::new(0);
 
+/// The clock the preview loop's liveness is read on, and when that loop was last
+/// seen running.
+///
+/// One thread owns the answer and another reads it: the Explorer hook is what
+/// decides about a preview loop that has stopped answering — the engines such a loop
+/// is holding warm are ended from there instead (see `PREVIEW_STALL_MS` in
+/// `explorer_hook`) — and it cannot ask the loop itself, because a question put to a
+/// loop that has stopped is the one question that would not be answered. So the loop
+/// notes its own tick and the hook reads how long ago the last one was. One relaxed
+/// store per tick and one relaxed load per look is the whole cost of it.
+static PREVIEW_CLOCK: Lazy<Instant> = Lazy::new(Instant::now);
+static PREVIEW_ALIVE_MS: AtomicU64 = AtomicU64::new(0);
+
+/// Note that the preview loop has run a tick — whether the tick did anything or not,
+/// since a loop waiting on the channel for a hover is a loop that is working (see
+/// `preview_stall_ms`).
+fn note_preview_alive() {
+    PREVIEW_ALIVE_MS.store(PREVIEW_CLOCK.elapsed().as_millis() as u64, Ordering::Relaxed);
+}
+
+/// How long the preview loop has been quiet, in milliseconds: the age of its last
+/// tick, growing for as long as the loop is inside work that has not come back.
+///
+/// A loop that has not ticked since the app started answers with the age of the app,
+/// which is the same answer a loop that is gone is owed — nothing here waits on the
+/// loop or looks for it; it is only ever a number read.
+pub fn preview_stall_ms() -> u64 {
+    let alive = PREVIEW_ALIVE_MS.load(Ordering::Relaxed);
+    (PREVIEW_CLOCK.elapsed().as_millis() as u64).saturating_sub(alive)
+}
+
 /// The number of times the window has been taken down, and the lock that makes a
 /// take-down and the reveal it races one step rather than two threads writing the
 /// window's visibility at once.
 ///
-/// `hide_preview` takes the window down there and then, on the Explorer hook's
-/// thread, while the frame that puts it up is installed here when a load lands. A
+/// `hide_preview` moves the count there and then, on the Explorer hook's thread,
+/// while the frame that puts it up is installed here when a load lands. A
 /// load that lands in the moment after the pointer left would otherwise put the
 /// preview back up for a file nobody is on any more, to be taken down again by the
 /// next tick: the preview that blinks. A load carries the count it was started
 /// under, and a hide moves it, so a reveal whose count has moved is refused. It is
 /// a comparison and not a wait — nothing here ever holds a preview back from going
-/// up.
+/// up, and the window that comes down with the count is posted rather than sent, so
+/// a loop that is busy is never a thread the hide waits on (see `hide_preview`).
 static HIDDEN_EPOCH: Mutex<u64> = Mutex::new(0);
 
 /// The hide count a load starting now is under.
@@ -1034,7 +1066,14 @@ pub fn hide_preview() {
         unsafe {
             let hwnd = HWND(PREVIEW_HWND.load(Ordering::SeqCst) as *mut _);
             if !hwnd.is_invalid() {
-                let _ = ShowWindow(hwnd, SW_HIDE);
+                // Posted and not sent: the window belongs to the preview loop, and a
+                // send to a loop that is busy is this thread — the hook's — held until
+                // it pumps again, which is the one wait a dismissal must not have. What
+                // the hide is *for* is the count above, and that is already moved, so
+                // the window comes down a moment later rather than now; the loop takes
+                // it down itself on the `Hide` below as well, and either of the two is
+                // the same window state (see `HIDDEN_EPOCH` and `preview_stall_ms`).
+                let _ = ShowWindowAsync(hwnd, SW_HIDE);
             }
         }
     }
@@ -8287,6 +8326,12 @@ pub fn run_preview_window() {
         // rather than acted on where it was received.
         let mut carried_preview_msg: Option<PreviewMessage> = None;
         while RUNNING.load(Ordering::SeqCst) {
+            // Every tick is noted, whether it does anything or not: what the note is
+            // for is the Explorer hook telling a loop that is working from one that has
+            // stopped, and a loop waiting on the channel is working (see
+            // `preview_stall_ms`).
+            note_preview_alive();
+
             // Check for Windows messages
             while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
                 let _ = TranslateMessage(&msg);
