@@ -172,6 +172,67 @@ fn hover_still_wanted(hidden: &Option<MutexGuard<'static, u64>>, pl: &PendingLoa
         .unwrap_or(true)
 }
 
+/// The item the hover on screen is about, as the box the view draws it in: the
+/// hook's own answer about the pointer, published with every look at the item under
+/// it and withdrawn with the window.
+///
+/// The count above covers a load that lands after a hide has been *sent*. It cannot
+/// cover the moment before one, and that is where the flash the eye catches lives:
+/// the hook decides a hover on a tick of its own while the frame lands on a tick of
+/// this loop's, and a pointer can cross a whole row of the list in between — a file
+/// previewed, and taken down again by the hook's very next look. So the reveal is
+/// asked one more question, of the pointer itself: the box says which item the hover
+/// was resolved from, a pointer outside it is a hover that has moved on, and the
+/// frame that lands for one is dropped rather than revealed — the hook's next look
+/// answers for whatever the pointer is on instead. The same box is what tells the
+/// hook a pointer that has crossed to another item has moved at all, which is not a
+/// distance to measure (see `pointer_item_holds`).
+///
+/// A box that cannot be told — the view reported no item, the hover is the
+/// keyboard's, nothing at all is on screen — is no constraint, and the reveal is
+/// governed by the count alone.
+static HOVER_POINTER_BOX: Mutex<Option<(i32, i32, i32, i32)>> = Mutex::new(None);
+
+/// Note the item the pointer is on, as the box the view draws it in. Published by the
+/// Explorer hook wherever it reads the item under the pointer, which is what keeps it
+/// the item the pointer is on *now* rather than the one the last preview was for (see
+/// `HOVER_POINTER_BOX`).
+pub fn publish_pointer_item_box(bounds: (i32, i32, i32, i32)) {
+    if let Ok(mut published) = HOVER_POINTER_BOX.lock() {
+        *published = Some(bounds);
+    }
+}
+
+/// Withdraw it: what is on screen is no longer a pointer's hover.
+fn clear_pointer_item_box() {
+    if let Ok(mut published) = HOVER_POINTER_BOX.lock() {
+        *published = None;
+    }
+}
+
+/// Whether a point is still on the item the hover on screen is about — the one
+/// question a preview is revealed against, and the one the hook reads a move off (see
+/// `HOVER_POINTER_BOX`). A point outside a published box is a pointer that has left
+/// the file, and no box at all is nothing to hold a reveal back with.
+pub fn pointer_item_holds(x: i32, y: i32) -> bool {
+    let Ok(published) = HOVER_POINTER_BOX.lock() else {
+        return true;
+    };
+
+    (*published)
+        .map(|(left, top, right, bottom)| x >= left && x < right && y >= top && y < bottom)
+        .unwrap_or(true)
+}
+
+/// Whether the pointer is on that item this moment, read from the cursor: the
+/// reveal's own question. A pointer that cannot be read is not a pointer that has
+/// left, so an answer that could not be had holds nothing back either.
+fn pointer_on_the_hovered_item() -> bool {
+    cursor_position()
+        .map(|cursor| pointer_item_holds(cursor.x, cursor.y))
+        .unwrap_or(true)
+}
+
 /// Lines one wheel notch moves a text preview. Three is the step a text editor
 /// takes, and it keeps a screenful to a few notches.
 const TEXT_SCROLL_LINES_PER_NOTCH: i64 = 3;
@@ -916,6 +977,11 @@ pub fn show_preview_keyboard(
     avoid: Option<ScreenRegion>,
     draws_columns: bool,
 ) {
+    // A keyboard preview is not the pointer's, so the item the pointer was last read
+    // on has nothing to say about it: the box goes rather than gating a preview the
+    // keyboard asked for (see `HOVER_POINTER_BOX`).
+    clear_pointer_item_box();
+
     if let Ok(sender) = PREVIEW_SENDER.lock() {
         if let Some(ref tx) = *sender {
             let _ = tx.send(PreviewMessage::ShowKeyboard(
@@ -932,14 +998,17 @@ pub fn show_preview_keyboard(
 }
 
 pub fn hide_preview() {
-    // The window coming down and the count of its coming down are written under
-    // one lock, so a load that is still running — started under the count from
-    // before this — cannot put the preview back up after it (see `HIDDEN_EPOCH`).
+    // The window coming down, the count of its coming down and the item the pointer
+    // was last read on are written under one lock, so a load that is still running —
+    // started under the count from before this — cannot put the preview back up after
+    // it, and nothing is revealed against a hover that has already gone (see
+    // `HIDDEN_EPOCH` and `HOVER_POINTER_BOX`).
     {
         let mut hidden = HIDDEN_EPOCH.lock().ok();
         if let Some(hidden) = hidden.as_mut() {
             **hidden += 1;
         }
+        clear_pointer_item_box();
         unsafe {
             let hwnd = HWND(PREVIEW_HWND.load(Ordering::SeqCst) as *mut _);
             if !hwnd.is_invalid() {
@@ -6324,9 +6393,12 @@ unsafe fn show_loading_spinner(hwnd: HWND, pl: &PendingLoad) {
     // spinner is built for it — no media, no frame, no window — so a load the hook
     // has already dismissed cannot blink a box on screen in the meantime. The
     // guard is held for the rest of the function, which is what makes this check
-    // and the window it writes one step (see `HIDDEN_EPOCH`).
+    // and the window it writes one step (see `HIDDEN_EPOCH`), and the pointer is
+    // asked the same question the reveal is: a wait belongs at the hand that is
+    // still on the file, and not at one that has crossed to another item
+    // (see `HOVER_POINTER_BOX`).
     let hidden = HIDDEN_EPOCH.lock().ok();
-    if !hover_still_wanted(&hidden, pl) {
+    if !hover_still_wanted(&hidden, pl) || !pointer_on_the_hovered_item() {
         return;
     }
 
@@ -8219,12 +8291,16 @@ pub fn run_preview_window() {
             while let Ok(result) = load_rx.try_recv() {
                 // A load the pointer has left since it was started is not this
                 // loop's to take up: the hide that took the window down moved the
-                // count it carries (see `HIDDEN_EPOCH`), so the answer is dropped
-                // here rather than built — no frame installed, no engine window
-                // put up, no player started — for a hover that has already gone.
+                // count it carries (see `HIDDEN_EPOCH`), and a pointer that has
+                // crossed to another item since the hover was resolved is the same
+                // answer one moment earlier, before any hide has been sent for it
+                // (see `HOVER_POINTER_BOX`). Either way the answer is dropped here
+                // rather than built — no frame installed, no engine window put up,
+                // no player started — for a hover that has already gone.
                 if pending_load
                     .as_ref()
                     .is_some_and(|pl| pl.hide_epoch != hidden_epoch())
+                    || !pointer_on_the_hovered_item()
                 {
                     pending_load = None;
                     pending_load_cancel = None;
@@ -9493,6 +9569,28 @@ mod tests {
         );
 
         clear_pointer_hold();
+    }
+
+    /// A reveal is held to the item the hover was resolved from: the pointer inside
+    /// that item's box is a pointer still on the file, one outside it is a hover that
+    /// has moved on, and a hover whose item was never read holds nothing back — which
+    /// is what keeps a frame from going up for a file the hand has already left, and
+    /// what keeps a keyboard preview or an unknown item from being held to a box that
+    /// is not theirs (see `HOVER_POINTER_BOX`).
+    #[test]
+    fn holds_a_reveal_to_the_item_the_hover_was_resolved_from() {
+        publish_pointer_item_box((100, 200, 300, 220));
+
+        assert!(pointer_item_holds(100, 200), "the item's own corner holds");
+        assert!(pointer_item_holds(299, 219), "and so does its far one");
+        assert!(!pointer_item_holds(99, 210), "a point past its left edge does not");
+        assert!(!pointer_item_holds(150, 220), "nor one a row below it");
+
+        clear_pointer_item_box();
+        assert!(
+            pointer_item_holds(0, 0),
+            "an item nothing was read for holds anything"
+        );
     }
 
     fn layout(pos_x: i32, pos_y: i32, width: u32, height: u32) -> PreviewLayout {
