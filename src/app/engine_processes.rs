@@ -56,6 +56,17 @@ use windows::Win32::System::Threading::{
 /// The browser the animated-document engine runs as, by image name.
 pub const BROWSER_IMAGE: &str = "msedgewebview2.exe";
 
+/// How a console program of this app's is started: without a console window of its own.
+///
+/// Every engine here that is asked for a file rather than for a document — `magick.exe` above
+/// all, and FFmpeg's `ffprobe` and `ffplay` — is a console program, and this app is not: a
+/// console program started by a program that has no console is given one of its own by
+/// Windows, which is a window that appears for as long as the launch lasts. What says no to it
+/// is this flag, on every spawn of one; a program that draws its own window, like the Office
+/// applications and LibreOffice's launcher, is a program of the other kind and is started as
+/// it is.
+pub const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
 /// The longest image path `QueryFullProcessImageNameW` is given room for.
 const MAX_IMAGE_PATH: usize = 260;
 
