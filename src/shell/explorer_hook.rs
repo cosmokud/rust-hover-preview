@@ -2981,6 +2981,24 @@ fn explorer_state_from_counts(counts: &ExplorerWindowCounts) -> ExplorerState {
     ExplorerState::VisibleNotFocused
 }
 
+/// Read the state of Explorer, and record it for the engines' away timer.
+///
+/// Whether an Explorer window is left reachable is the whole of what an engine that is not
+/// marked `Persistent` is let go by (see `app::afk`), and the answer is one this loop already
+/// works out for its own sleeps — so the recording is done here, on the read, rather than
+/// anywhere the state is used: a state this function did not answer is a state the clock has
+/// not been told about, and the engines keep reading the last thing it was told.
+fn read_explorer_state() -> ExplorerState {
+    let state = get_explorer_state();
+
+    crate::app::afk::note_explorer_reachable(matches!(
+        state,
+        ExplorerState::VisibleNotFocused | ExplorerState::ActiveFocus
+    ));
+
+    state
+}
+
 /// Keyboard navigation state: `active` is true while a navigation key is held
 /// or was pressed since the previous poll, and `pressed` is the fresh press
 /// transition alone. A held key keeps reporting `active` forever, so a folder
@@ -3758,7 +3776,7 @@ pub fn run_explorer_hook() {
             last_cursor_location = None;
             explorer_probe_backoff_until =
                 Some(Instant::now() + Duration::from_millis(EXPLORER_RESTART_BACKOFF_MS));
-            current_state = get_explorer_state();
+            current_state = read_explorer_state();
             last_state_check = Instant::now();
         }
 
@@ -3870,7 +3888,7 @@ pub fn run_explorer_hook() {
             // over when it ends has to be probed as something new.
             hover_start = Some(Instant::now());
             stationary_hover_probe_done = false;
-            current_state = get_explorer_state();
+            current_state = read_explorer_state();
             last_state_check = Instant::now();
         }
 
@@ -3949,7 +3967,7 @@ pub fn run_explorer_hook() {
 
         // Periodically re-evaluate the state
         if last_state_check.elapsed() > Duration::from_millis(state_recheck_ms) {
-            current_state = get_explorer_state();
+            current_state = read_explorer_state();
             last_state_check = Instant::now();
         }
 
