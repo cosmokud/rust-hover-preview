@@ -1369,10 +1369,9 @@ fn is_search_ms_url(url_str: &str) -> bool {
 fn normalize_file_url_path(url_str: &str) -> Option<String> {
     let path = if let Some(path) = url_str.strip_prefix("file:///") {
         path.replace('/', "\\")
-    } else if let Some(path) = url_str.strip_prefix("file://") {
-        format!("\\\\{}", path.replace('/', "\\"))
     } else {
-        return None;
+        let path = url_str.strip_prefix("file://")?;
+        format!("\\\\{}", path.replace('/', "\\"))
     };
 
     Some(urlencoding_decode(&path))
@@ -2047,7 +2046,7 @@ fn view_bounds(resolver: &ItemResolver, element: &IUIAutomationElement) -> Optio
     // unexpected must not cost the probe an unbounded one.
     for _ in 0..POINTER_ITEM_ANCESTOR_LIMIT {
         match element_control_type(&current) {
-            Some(UIA_GroupControlTypeId) => {
+            Some(control_type) if control_type == UIA_GroupControlTypeId => {
                 current = unsafe { walker.GetParentElementBuildCache(&current, cache) }.ok()?;
             }
             _ => break,

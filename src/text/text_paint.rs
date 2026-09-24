@@ -340,7 +340,7 @@ impl DibSurface {
     pub(crate) fn pixels(&self) -> Vec<u8> {
         let length = self.width as usize * self.height as usize * 4;
         let mut pixels = unsafe { std::slice::from_raw_parts(self.bits, length) }.to_vec();
-        for pixel in pixels.chunks_exact_mut(4) {
+        for pixel in pixels.as_chunks_mut::<4>().0 {
             pixel[3] = 255;
         }
         pixels

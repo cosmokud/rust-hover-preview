@@ -329,7 +329,7 @@ fn due_for_check() -> bool {
         .lock()
         .ok()
         .and_then(|last| *last)
-        .map_or(true, |last| last.elapsed() >= CHECK_INTERVAL)
+        .is_none_or(|last| last.elapsed() >= CHECK_INTERVAL)
 }
 
 /// Remove what earlier versions left for the check: the time they wrote down of

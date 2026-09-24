@@ -274,7 +274,12 @@ fn is_enhanced(records: &[u8]) -> bool {
 fn recover(dark: &[u8], light: &[u8]) -> Vec<u8> {
     let mut frame = Vec::with_capacity(dark.len());
 
-    for (dark, light) in dark.chunks_exact(4).zip(light.chunks_exact(4)) {
+    for (dark, light) in dark
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(light.as_chunks::<4>().0.iter())
+    {
         let spread: i32 = (0..3)
             .map(|channel| 255 - (light[channel] as i32 - dark[channel] as i32))
             .sum::<i32>();
@@ -365,7 +370,7 @@ impl Surface {
         let count = self.width as usize * self.height as usize;
         let pixels = unsafe { std::slice::from_raw_parts_mut(self.bits, count * 4) };
 
-        for pixel in pixels.chunks_exact_mut(4) {
+        for pixel in pixels.as_chunks_mut::<4>().0 {
             pixel.copy_from_slice(&[value, value, value, 0xff]);
         }
     }

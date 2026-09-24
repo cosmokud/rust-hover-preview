@@ -1641,7 +1641,9 @@ fn is_mostly_control(text: &str) -> bool {
 
 fn decode_utf16(bytes: &[u8], big_endian: bool) -> String {
     let units: Vec<u16> = bytes
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|pair| {
             if big_endian {
                 u16::from_be_bytes([pair[0], pair[1]])
@@ -2991,7 +2993,7 @@ mod tests {
 
     fn write_png(dir: &Path, name: &str, frame: &TextFrame) {
         let mut rgba = frame.pixels.clone();
-        for pixel in rgba.chunks_exact_mut(4) {
+        for pixel in rgba.as_chunks_mut::<4>().0 {
             pixel.swap(0, 2);
         }
         image::save_buffer(
@@ -3041,7 +3043,12 @@ mod tests {
 
             assert!(frame.width > 0 && frame.height > 0, "{name}");
             assert!(
-                frame.pixels.chunks_exact(4).all(|pixel| pixel[3] == 255),
+                frame
+                    .pixels
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .all(|pixel| pixel[3] == 255),
                 "{name} is a page, so every pixel of it is opaque"
             );
 

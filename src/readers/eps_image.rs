@@ -198,7 +198,7 @@ fn comment_preview(path: &Path) -> Option<Preview> {
     }
 
     let mut picture = Vec::with_capacity(digits.len() / 2);
-    for pair in digits.chunks_exact(2) {
+    for pair in digits.as_chunks::<2>().0 {
         let (high, low) = (hex(pair[0])?, hex(pair[1])?);
         picture.push(high << 4 | low);
     }
