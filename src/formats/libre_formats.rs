@@ -239,12 +239,12 @@ mod tests {
             "animation.swf",
         ] {
             let path = std::path::Path::new(name);
-            let claimed = crate::formats::image_formats::matches_image_list(&path, &config.image_extensions)
-                || crate::formats::vector_formats::matches_vector_list(&path, &config.vector_extensions)
-                || crate::formats::office_formats::matches_office_list(&path, &config.office_extensions)
-                || crate::formats::video_formats::matches_video_list(&path, &config.video_extensions)
+            let claimed = crate::formats::image_formats::matches_image_list(path, &config.image_extensions)
+                || crate::formats::vector_formats::matches_vector_list(path, &config.vector_extensions)
+                || crate::formats::office_formats::matches_office_list(path, &config.office_extensions)
+                || crate::formats::video_formats::matches_video_list(path, &config.video_extensions)
                 || crate::formats::text_formats::matches_text_lists(
-                    &path,
+                    path,
                     &config.text_extensions,
                     &config.text_names,
                 );

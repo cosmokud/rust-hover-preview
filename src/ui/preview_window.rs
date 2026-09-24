@@ -1579,7 +1579,7 @@ fn image_dimensions_with_header_check(path: &PathBuf) -> Option<(u32, u32)> {
 /// libwebp's, which is in the binary; see `wic_image` and `webp_image`. A `.dds` of a
 /// format the codec does not read is measured by the decoder this app carries for the
 /// rest of that format; see `dds_image`.
-fn codec_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
+fn codec_dimensions(path: &Path) -> Option<(u32, u32)> {
     wic_image::dimensions(path)
         .or_else(|| dds_image::dimensions(path))
         .or_else(|| webp_image::dimensions(path))
@@ -2466,7 +2466,12 @@ fn compose_preview_row(
 ) {
     match background {
         TransparentBackground::Transparent => {
-            for (px, dst) in src_row.chunks_exact(4).zip(dst_row.chunks_exact_mut(4)) {
+            for (px, dst) in src_row
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .zip(dst_row.as_chunks_mut::<4>().0.iter_mut())
+            {
                 let b = px[0] as u32;
                 let g = px[1] as u32;
                 let r = px[2] as u32;
@@ -2482,19 +2487,31 @@ fn compose_preview_row(
         // cannot change inside the loop, and as a per-pixel match it cost a
         // branch on every pixel of every animation frame.
         TransparentBackground::Black => {
-            for (px, dst) in src_row.chunks_exact(4).zip(dst_row.chunks_exact_mut(4)) {
+            for (px, dst) in src_row
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .zip(dst_row.as_chunks_mut::<4>().0.iter_mut())
+            {
                 blend_pixel_over(px, dst, 0, 0, 0);
             }
         }
         TransparentBackground::White => {
-            for (px, dst) in src_row.chunks_exact(4).zip(dst_row.chunks_exact_mut(4)) {
+            for (px, dst) in src_row
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .zip(dst_row.as_chunks_mut::<4>().0.iter_mut())
+            {
                 blend_pixel_over(px, dst, 255, 255, 255);
             }
         }
         TransparentBackground::Checkerboard => {
             for (x, (px, dst)) in src_row
-                .chunks_exact(4)
-                .zip(dst_row.chunks_exact_mut(4))
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .zip(dst_row.as_chunks_mut::<4>().0.iter_mut())
                 .enumerate()
             {
                 let (r, g, b) = checkerboard_color(x as u32, y);
@@ -3082,7 +3099,7 @@ fn decode_webp_animation_frame_to_image(
         bgra.to_vec()
     } else {
         let mut rgba = Vec::with_capacity(expected_bgra);
-        for chunk in bgra.chunks_exact(4) {
+        for chunk in bgra.as_chunks::<4>().0.iter() {
             rgba.push(chunk[2]);
             rgba.push(chunk[1]);
             rgba.push(chunk[0]);
@@ -8865,10 +8882,7 @@ pub fn run_preview_window() {
             // A probe's answer, held apart the same way and for the same reason.
             let mut video_probed: Option<(PathBuf, u64)> = None;
             let mut next_preview_msg = carried_preview_msg.take();
-            loop {
-                let Some(preview_msg) = next_preview_msg.or_else(|| rx.try_recv().ok()) else {
-                    break;
-                };
+            while let Some(preview_msg) = next_preview_msg.or_else(|| rx.try_recv().ok()) {
                 next_preview_msg = None;
 
                 match preview_msg {
@@ -10902,7 +10916,12 @@ mod tests {
 
         // The arc is drawn, and the halo under it and the arc's own tail are
         // partly there rather than filled in.
-        let alphas: Vec<u8> = frame.chunks_exact(4).map(|pixel| pixel[3]).collect();
+        let alphas: Vec<u8> = frame
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|pixel| pixel[3])
+            .collect();
         assert!(alphas.iter().any(|&alpha| alpha > 200), "the arc is drawn");
         assert!(
             alphas.iter().any(|&alpha| (1..=200).contains(&alpha)),
@@ -10926,7 +10945,7 @@ mod tests {
         for quarter in 0..4 {
             let angle = quarter as f32 * std::f32::consts::FRAC_PI_2;
             let frame = render_loading_frame(side as u32, side as u32, angle);
-            for (index, pixel) in frame.chunks_exact(4).enumerate() {
+            for (index, pixel) in frame.as_chunks::<4>().0.iter().enumerate() {
                 if pixel[3] == 0 {
                     continue;
                 }
@@ -11720,7 +11739,9 @@ mod tests {
                         // plays and a video that does not look different in.
                         media
                             .current_pixels()
-                            .chunks_exact(4)
+                            .as_chunks::<4>()
+                            .0
+                            .iter()
                             .any(|pixel| pixel[..3] != [40, 40, 40]),
                     )
                 })

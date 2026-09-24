@@ -3538,19 +3538,21 @@ mod tests {
     /// rest of the run rewriting a file it had just written.
     #[test]
     fn a_file_the_app_wrote_is_one_it_reads_back_as_itself() {
-        let mut config = AppConfig::default();
-        config.theme = TextTheme::Dark;
-        config.avoid_mode = AvoidMode::Details;
-        config.hdr_tone_map = Curve::Aces;
-        config.hdr_exposure = -2.5;
-        config.decode_budget_gb = 0.5;
-        config.office_engine_idle = EngineIdle::Indefinite;
-        config.webview_idle = EngineIdle::Seconds(60);
-        config.pdf_scale = PreviewScale::Percent(25);
-        config.image_background = TransparentBackground::Transparent;
-        config.text_scroll_far_edge_grace_pixels = 12.5;
-        config.office_cache_mb = 1024;
-        config.tick_ms = 47;
+        let config = AppConfig {
+            theme: TextTheme::Dark,
+            avoid_mode: AvoidMode::Details,
+            hdr_tone_map: Curve::Aces,
+            hdr_exposure: -2.5,
+            decode_budget_gb: 0.5,
+            office_engine_idle: EngineIdle::Indefinite,
+            webview_idle: EngineIdle::Seconds(60),
+            pdf_scale: PreviewScale::Percent(25),
+            image_background: TransparentBackground::Transparent,
+            text_scroll_far_edge_grace_pixels: 12.5,
+            office_cache_mb: 1024,
+            tick_ms: 47,
+            ..Default::default()
+        };
 
         for config in [AppConfig::default(), config] {
             let written = ordered_text(&config.to_ini());

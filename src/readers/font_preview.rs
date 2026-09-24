@@ -997,7 +997,9 @@ fn decode_name(platform: u16, bytes: &[u8]) -> Option<String> {
     match platform {
         0 | 3 => {
             let units: Vec<u16> = bytes
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .map(|pair| u16::from_be_bytes([pair[0], pair[1]]))
                 .collect();
 

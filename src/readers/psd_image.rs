@@ -747,11 +747,15 @@ fn read_counts(
 
     Some(match entry {
         2 => bytes
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|chunk| u16::from_be_bytes([chunk[0], chunk[1]]) as u32)
             .collect(),
         _ => bytes
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|chunk| u32::from_be_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
             .collect(),
     })

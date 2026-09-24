@@ -440,7 +440,7 @@ fn copy_locked(bitmap: &IWICBitmap, pixels: &mut Vec<u8>, width: u32, height: u3
         let to = row * stride;
         pixels[to..to + stride].copy_from_slice(&source[from..from + stride]);
 
-        for pixel in pixels[to..to + stride].chunks_exact_mut(4) {
+        for pixel in pixels[to..to + stride].as_chunks_mut::<4>().0 {
             pixel[3] = 0xFF;
         }
     }

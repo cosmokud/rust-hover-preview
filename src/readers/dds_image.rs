@@ -170,7 +170,7 @@ pub fn decode(path: &Path, width: u32, height: u32) -> Option<Vec<u8>> {
     // alpha channel holds is nothing, whatever the texels happen to say (see the module's
     // own note).
     if header.opaque {
-        for texel in pixels.chunks_exact_mut(4) {
+        for texel in pixels.as_chunks_mut::<4>().0 {
             texel[3] = 255;
         }
     }
