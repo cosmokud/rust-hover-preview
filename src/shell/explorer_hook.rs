@@ -11,8 +11,8 @@ use crate::formats::office_formats::matches_office_list;
 use crate::readers::pdf_preview::is_pdf_file;
 use crate::ui::preview_window::{
     cursor_preview_hover, hide_preview, kill_stray_video_process, monitor_dpi_from_point,
-    pointer_item_holds, preview_pointer_hold, preview_screen_rect, publish_pointer_item_box,
-    show_preview, show_preview_keyboard, PreviewCursorHover,
+    pointer_item_box, pointer_item_holds, preview_pointer_hold, preview_screen_rect,
+    publish_pointer_item_box, show_preview, show_preview_keyboard, PreviewCursorHover,
 };
 use crate::readers::svg_preview;
 use crate::formats::text_formats::matches_text_lists;
@@ -1056,6 +1056,41 @@ fn pointer_moved_off_the_hovered_item(
     pointer_on_the_item: bool,
 ) -> bool {
     preview_active && !pointer_hold && !pointer_on_the_item
+}
+
+/// Whether a look that came back with nothing is a look at the item the preview on screen
+/// is about.
+///
+/// The answer a look gives is a file or nothing, and nothing is two different things. One
+/// is a read that failed — the walk out through the shell that answers nothing on a volume
+/// slow to answer, a view busy drawing the item it was just asked for — where the pointer
+/// is still on the file the preview is about, and what that file is owed is the question
+/// asked again rather than the preview taken down and put back, which is a blink. The
+/// other is an item that is not a file this app previews at all: an application, a folder,
+/// a name no kind claims. That look answered properly and there is nothing to show for it,
+/// and the preview of the file the pointer has left has to go with it.
+///
+/// What tells the two apart is the item rather than the answer. Every look publishes the
+/// box of the item it found, so a look that found the same item leaves that box exactly
+/// where it was, while a look that found another item publishes another box — and an item
+/// with no preview of its own is an item all the same, which is the case that makes the
+/// published box on its own the wrong question (see `HOVER_POINTER_BOX`). A preview is
+/// therefore spared only where the box under the pointer is the box the preview was
+/// resolved from *and* still holds the pointer; another item, another box, no box at all
+/// are all read as the pointer having left, which is the reading that cannot leave a
+/// preview on screen for good.
+fn read_failure_is_the_same_item(
+    hover_box: Option<(i32, i32, i32, i32)>,
+    published_box: Option<(i32, i32, i32, i32)>,
+    point: POINT,
+) -> bool {
+    let Some(hover) = hover_box else {
+        return false;
+    };
+
+    let holds = point.x >= hover.0 && point.x < hover.2 && point.y >= hover.1 && point.y < hover.3;
+
+    published_box == Some(hover) && holds
 }
 
 /// Whether a preview may be shown for `path`: the kind of preview it would get,
@@ -3382,6 +3417,14 @@ pub fn run_explorer_hook() {
     let mut resolver = ItemResolver::new(automation_client());
 
     let mut last_file: Option<PathBuf> = None;
+    // The box the item under the pointer was drawn in where the preview on screen was
+    // resolved from it: the item that preview is about, as the view draws it. What it is
+    // for is telling a read that failed from a pointer that has moved on — a look at the
+    // same item leaves this box where it is, a look at another item publishes another one,
+    // and a look that answered nothing is read against it (see
+    // `read_failure_is_the_same_item`). A hover that never noted a box holds nothing, and
+    // holding nothing is a comparison that fails rather than one that spares.
+    let mut hover_item_box: Option<(i32, i32, i32, i32)> = None;
     let mut suppressed = SuppressedHover::default();
     let mut pointer_pause = KeyboardPointerPause::default();
     let mut hover_start: Option<Instant> = None;
@@ -4136,7 +4179,11 @@ pub fn run_explorer_hook() {
                     let still_on_the_file = last_file.as_ref().is_some_and(|file| {
                         get_file_under_cursor(&mut resolver)
                             .is_some_and(|current| same_path(file, &current))
-                    });
+                    }) || read_failure_is_the_same_item(
+                        hover_item_box,
+                        pointer_item_box(),
+                        cursor_pos,
+                    );
 
                     if !still_on_the_file {
                         // Nothing released the gate yet: the view the place describes is
@@ -4321,16 +4368,20 @@ pub fn run_explorer_hook() {
                         // preview, or on the spinner standing in for one, which is
                         // not the user leaving the file it shows.
                         keep_while_pointer_held = true;
-                    } else if pointer_item_holds(cursor_pos.x, cursor_pos.y) {
-                        // A read that came back with nothing is not the pointer leaving:
-                        // the box the item is drawn in still holds it, so the file the
-                        // preview on screen is about is still the one under the hand, and
-                        // what failed is the asking — a walk out through the shell on a
-                        // volume that is slow to answer, a view busy drawing the item it
-                        // was just asked for. The preview is kept and the question asked
-                        // again; taking it down for a look that failed and putting it
-                        // back a moment later is the blink this reads to avoid (see
-                        // `HOVER_POINTER_BOX`).
+                    } else if read_failure_is_the_same_item(
+                        hover_item_box,
+                        pointer_item_box(),
+                        cursor_pos,
+                    ) {
+                        // A read that came back with nothing, from the item the preview on
+                        // screen is about: what failed is the asking — a walk out through the
+                        // shell on a volume slow to answer, a view busy drawing the item it
+                        // was just asked for — so the preview is kept with the question asked
+                        // again, rather than taken down for a look that failed and put back a
+                        // moment later, which is a blink. A read that came back with nothing
+                        // from *another* item is a look at an item with no preview of its own,
+                        // which is a pointer that has left the file this preview is about: the
+                        // preview goes (see `read_failure_is_the_same_item`).
                         keep_while_pointer_held = true;
                     } else if let Some(file) = last_file.clone() {
                         suppressed.suppress(file);
@@ -4582,6 +4633,11 @@ pub fn run_explorer_hook() {
                             suppressed.clear();
                             stationary_search_miss_started_at = None;
                             last_file = Some(file_path.clone());
+                            // The item this preview is about, as the view drew it: what a
+                            // later read that comes back with nothing is compared against
+                            // (see `read_failure_is_the_same_item`). The look above is the
+                            // one that published it.
+                            hover_item_box = pointer_item_box();
                             video_hover_guard_until = if is_video_file(&file_path) {
                                 Some(
                                     Instant::now()
@@ -4734,6 +4790,43 @@ mod tests {
         assert!(
             !pointer_moved_off_the_hovered_item(true, true, false),
             "nor is a pointer the preview itself holds one that has left it"
+        );
+    }
+
+    /// A look that answered nothing is not a verdict on its own: the item it found says
+    /// which of the two things it was. The same item — the box the preview was resolved
+    /// from, still under the pointer — is a read that failed, and the preview of that file
+    /// is owed the question asked again rather than being taken down and put back. Another
+    /// item's box is a pointer that has moved onto something with no preview of its own —
+    /// an application, a folder — where the look answered properly and the preview of the
+    /// file that was left has to go with it. A hover with no box of its own holds nothing
+    /// back, and a box that no longer holds the pointer is not a box it is still on.
+    #[test]
+    fn a_read_that_failed_is_told_from_an_item_with_no_preview() {
+        let item = (100, 200, 400, 220);
+        let application = (100, 220, 400, 240);
+        let inside = POINT { x: 150, y: 210 };
+        let next_row = POINT { x: 150, y: 230 };
+
+        assert!(
+            read_failure_is_the_same_item(Some(item), Some(item), inside),
+            "the same item, still under the pointer, is a read that failed"
+        );
+        assert!(
+            !read_failure_is_the_same_item(Some(item), Some(application), next_row),
+            "another item is another box, and the preview of the file that was left goes"
+        );
+        assert!(
+            !read_failure_is_the_same_item(Some(item), Some(item), next_row),
+            "nor is a box the pointer has left one it is still on"
+        );
+        assert!(
+            !read_failure_is_the_same_item(None, Some(item), inside),
+            "a hover that noted no box of its own holds nothing back"
+        );
+        assert!(
+            !read_failure_is_the_same_item(Some(item), None, inside),
+            "and a look that published no box is not a look at the same item"
         );
     }
 
