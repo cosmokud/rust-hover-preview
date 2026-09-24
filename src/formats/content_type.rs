@@ -383,7 +383,7 @@ const SIGNATURES: &[Signature] = &[
     // A DirectDraw Surface: the four-character code and the size of the header that
     // follows it, which is what tells a texture from a file that begins with a word.
     Signature {
-        names: &["dds"],
+        names: &["dds", "dxt1", "dxt5"],
         matches: Matcher::Test(is_dds_surface),
     },
     // OpenEXR, whose magic is a version number written as a number.
@@ -414,7 +414,7 @@ const SIGNATURES: &[Signature] = &[
     // A Kodak Photo CD image pac, whose marker sits two kilobytes into a padded header,
     // and the overview pac, which opens with the other one.
     Signature {
-        names: &["pcd"],
+        names: &["pcd", "pcds"],
         matches: Matcher::Test(is_photo_cd),
     },
     Signature {
@@ -422,13 +422,13 @@ const SIGNATURES: &[Signature] = &[
         matches: Matcher::Test(is_pcx),
     },
     Signature {
-        names: &["ras"],
+        names: &["ras", "sun"],
         matches: Matcher::Test(|probe| starts_with(probe, &[0x59, 0xA6, 0x6A, 0x95])),
     },
     // A QuickDraw PICT on disk carries a five-hundred-byte header, so the version operator
     // that opens the picture is at 522 rather than at the front of the file.
     Signature {
-        names: &["pct"],
+        names: &["pct", "pict"],
         matches: Matcher::Test(is_quickdraw_pict),
     },
     // ------------------------------------------------- pictures an engine develops

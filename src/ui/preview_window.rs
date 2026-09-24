@@ -1873,6 +1873,11 @@ fn magick_render_is_due(path: &Path) -> bool {
         && imagemagick_render::available()
         && !imagemagick_render::refused(path)
         && !imagemagick_render::developed(path)
+        // A raw sample dump whose own length does not settle a shape is not a file to ask about:
+        // the engine would answer that it must be told a size, which is a launch spent on nothing
+        // (see `raw_geometry`).
+        && (!imagemagick_render::is_raw_sample(path)
+            || imagemagick_render::raw_geometry(path).is_some())
 }
 
 /// Ask the engine for the picture this hover needs, and answer what is now being waited on.
@@ -5447,6 +5452,14 @@ fn magick_box(path: &Path) -> Option<(u32, u32)> {
         return None;
     }
 
+    // A raw sample dump is the one file the engine cannot measure for itself: what shape it is
+    // comes from its own length rather than from a conversion, which is arithmetic this side can
+    // do — and a dump whose length does not settle a shape is a file with no preview rather than
+    // one to wait for (see `raw_geometry`).
+    if imagemagick_render::is_raw_sample(path) {
+        return imagemagick_render::raw_geometry(path);
+    }
+
     Some((office_preview::WAITING_BOX, office_preview::WAITING_BOX))
 }
 
@@ -8706,7 +8719,6 @@ pub fn run_preview_window() {
                     // on waiting keeps something to measure and the spinner comes down
                     // when its time is up instead of hanging there for good.
                 } else if hovered {
-                    page_render_pending = None;
                     // Nothing was drawn and nothing is coming. A preview that is
                     // not a spinner is kept — it is a preview like any other —
                     // while a spinner has nothing left to stand in for.
@@ -8720,19 +8732,28 @@ pub fn run_preview_window() {
                         })
                         .unwrap_or(false);
                     if showing_spinner {
-                        pending_load = None;
                         let _ = ShowWindow(hwnd, SW_HIDE);
                         if let Ok(mut current) = CURRENT_MEDIA.lock() {
                             *current = None;
                         }
                     }
-                } else {
+                    // The wait is over whether or not its spinner had gone up: an engine
+                    // that turns a file down in less than the spinner's delay — a raw
+                    // file whose length works out to no picture, a converter that finds
+                    // nothing to read — answers before there is anything to take down,
+                    // and the pending load is what the spinner would go up for. Left
+                    // armed it goes up a moment later for a preview that is not coming
+                    // and stays up, which is the one thing the entry above cannot undo:
+                    // the answer it belonged to has been read already.
+                    pending_load = None;
                     page_render_pending = None;
+                } else {
                     // The hover this page was rendered for is over: it landed after
                     // the pointer had moved on, so nothing is waiting for it. What was
                     // rendered is kept as far as the budget allows and no further — at
                     // a size of nothing it is dropped here rather than held for a
                     // hover that has already gone.
+                    page_render_pending = None;
                     office_render::hover_ended(&ready_path);
                 }
             }

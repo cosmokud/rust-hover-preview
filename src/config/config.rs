@@ -16,14 +16,17 @@ use crate::formats::design_formats::{
 };
 use crate::formats::font_formats::{sanitize_font_extensions, DEFAULT_FONT_EXTENSIONS};
 use crate::formats::image_formats::{
-    sanitize_image_extensions, DEFAULT_IMAGE_EXTENSIONS, IMAGE_EXTENSIONS_BEFORE_CODEC_FORMATS,
-    IMAGE_EXTENSIONS_BEFORE_DDS, IMAGE_EXTENSIONS_BEFORE_SVG, IMAGE_EXTENSIONS_WITH_SVG,
+    sanitize_image_extensions, DEFAULT_IMAGE_EXTENSIONS, IMAGE_EXTENSIONS_BEFORE_AVCI,
+    IMAGE_EXTENSIONS_BEFORE_CODEC_FORMATS, IMAGE_EXTENSIONS_BEFORE_DDS,
+    IMAGE_EXTENSIONS_BEFORE_SVG, IMAGE_EXTENSIONS_WITH_SVG,
 };
 use crate::formats::libre_formats::{
     sanitize_libre_extensions, DEFAULT_LIBRE_EXTENSIONS,
     LIBRE_EXTENSIONS_WITH_THE_NAMES_THE_ENGINE_CANNOT_READ,
 };
-use crate::formats::magick_formats::{sanitize_magick_extensions, DEFAULT_MAGICK_EXTENSIONS};
+use crate::formats::magick_formats::{
+    sanitize_magick_extensions, DEFAULT_MAGICK_EXTENSIONS, MAGICK_EXTENSIONS_BEFORE_THE_REST,
+};
 use crate::formats::office_formats::{sanitize_office_extensions, DEFAULT_OFFICE_EXTENSIONS};
 use crate::formats::text_formats::{
     sanitize_extensions, sanitize_names, DEFAULT_TEXT_EXTENSIONS, DEFAULT_TEXT_NAMES,
@@ -31,7 +34,8 @@ use crate::formats::text_formats::{
 use crate::config::theme_files;
 use crate::readers::tone_map::Curve;
 use crate::formats::vector_formats::{
-    sanitize_vector_extensions, DEFAULT_VECTOR_EXTENSIONS, VECTOR_EXTENSIONS_BEFORE_SVG,
+    sanitize_vector_extensions, DEFAULT_VECTOR_EXTENSIONS,
+    VECTOR_EXTENSIONS_BEFORE_THE_EPS_SPELLINGS, VECTOR_EXTENSIONS_BEFORE_SVG,
 };
 use crate::formats::video_formats::{sanitize_video_extensions, DEFAULT_VIDEO_EXTENSIONS};
 
@@ -1690,6 +1694,7 @@ fn repair_older_lists(ini: &mut Ini) -> bool {
             IMAGE_SECTION,
             DEFAULT_IMAGE_EXTENSIONS,
             &[
+                IMAGE_EXTENSIONS_BEFORE_AVCI,
                 IMAGE_EXTENSIONS_BEFORE_DDS,
                 IMAGE_EXTENSIONS_BEFORE_CODEC_FORMATS,
                 IMAGE_EXTENSIONS_BEFORE_SVG,
@@ -1714,9 +1719,18 @@ fn repair_older_lists(ini: &mut Ini) -> bool {
             sanitize_libre_extensions as fn(&str) -> Vec<String>,
         ),
         (
+            MAGICK_SECTION,
+            DEFAULT_MAGICK_EXTENSIONS,
+            &[MAGICK_EXTENSIONS_BEFORE_THE_REST][..],
+            sanitize_magick_extensions as fn(&str) -> Vec<String>,
+        ),
+        (
             VECTOR_SECTION,
             DEFAULT_VECTOR_EXTENSIONS,
-            &[VECTOR_EXTENSIONS_BEFORE_SVG][..],
+            &[
+                VECTOR_EXTENSIONS_BEFORE_SVG,
+                VECTOR_EXTENSIONS_BEFORE_THE_EPS_SPELLINGS,
+            ][..],
             sanitize_vector_extensions as fn(&str) -> Vec<String>,
         ),
     ] {
@@ -3190,6 +3204,28 @@ mod tests {
             "and the file, which has no such section, is one to write"
         );
 
+        // And a file holding the list this app shipped before the names nobody had asked for were
+        // added to it is this app's own rather than a user's edit, so it is brought up to the list
+        // of now — which is how an installation that already exists is given them.
+        let mut ini = Ini::new();
+        ini.set(
+            MAGICK_SECTION,
+            "extensions",
+            Some(MAGICK_EXTENSIONS_BEFORE_THE_REST.to_string()),
+        );
+
+        let config = read_file(&mut ini);
+        assert_eq!(
+            config.magick_extensions,
+            sanitize_magick_extensions(DEFAULT_MAGICK_EXTENSIONS)
+        );
+        for name in ["sun", "pict", "rgb", "ase", "fax"] {
+            assert!(
+                config.magick_extensions.iter().any(|entry| entry == name),
+                "`{name}` is one of the names added since"
+            );
+        }
+
         // The gate is a switch of its own: switching it leaves every other kind and the list
         // where they were.
         let mut config = AppConfig::default();
@@ -3643,6 +3679,53 @@ mod tests {
                 "`{extension}` is a drawing and belongs to the vector list"
             );
         }
+    }
+
+    /// And the spellings of an encapsulated PostScript file, which were added to that list
+    /// after the documents were: a file holding the list as it stood before them takes them
+    /// too, so a `.epsf` or an `.ept` is a drawing an installation already exists previews.
+    #[test]
+    fn a_list_holding_the_apps_own_vector_entries_takes_the_eps_spellings_added_to_them() {
+        let mut ini = Ini::new();
+        ini.set(
+            VECTOR_SECTION,
+            "extensions",
+            Some(VECTOR_EXTENSIONS_BEFORE_THE_EPS_SPELLINGS.to_string()),
+        );
+
+        let config = read_file(&mut ini);
+
+        assert_eq!(
+            config.vector_extensions,
+            sanitize_vector_extensions(DEFAULT_VECTOR_EXTENSIONS)
+        );
+        for extension in ["epsf", "epi", "ept", "ept2", "ept3"] {
+            assert!(
+                config.vector_extensions.contains(&extension.to_string()),
+                "`{extension}` is another spelling of the same drawing"
+            );
+        }
+    }
+
+    /// And the image list's own version: a file holding the list the app shipped before the
+    /// codec's AVC still was added to it takes the name, so a `.avci` is a picture an
+    /// installation that already exists previews.
+    #[test]
+    fn a_list_holding_the_apps_own_image_entries_takes_the_avc_still_added_to_them() {
+        let mut ini = Ini::new();
+        ini.set(
+            IMAGE_SECTION,
+            "extensions",
+            Some(IMAGE_EXTENSIONS_BEFORE_AVCI.to_string()),
+        );
+
+        let config = read_file(&mut ini);
+
+        assert_eq!(
+            config.image_extensions,
+            sanitize_image_extensions(DEFAULT_IMAGE_EXTENSIONS)
+        );
+        assert!(config.image_extensions.contains(&"avci".to_string()));
     }
 
     /// The same list with one entry of the user's own in it is the user's list, not
