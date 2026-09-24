@@ -6,6 +6,9 @@ name: Test Deploy
 # artifacts and checked against the names the app asks for. Nothing here can publish a
 # release, because nothing here is given the permission to.
 #
+# What it tests is the tag named in the input, or — where none is — the newest tag this
+# repository has, so a run with the box left empty is a run against the current release.
+#
 # It is a second copy of what `deploy.yml` and `manual-deploy.yml` do rather than a call
 # into them, so that a test failing is never the shared code failing to call itself. What
 # is not shared is asserted instead: the first step reads both workflows and refuses the
@@ -15,9 +18,8 @@ on:
   workflow_dispatch:
     inputs:
       tag_to_test:
-        description: "The tag the guards run against and a build would be made from; it has to exist"
-        required: true
-        default: "v0.3.2"
+        description: "The tag to test; leave it empty for the newest tag in this repository"
+        required: false
         type: string
       build:
         description: "Build the installers as well, as artifacts (no release is made either way)"
@@ -32,9 +34,38 @@ jobs:
   guards:
     name: Guards
     runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      # A workflow input cannot default to something computed — its `default` is a literal
+      # string — so an empty box is what asks for the newest tag, and that is what the input's
+      # own default is. The tag found here goes into this job's environment, where every step
+      # after this one reads it, and into the job's outputs, for the build job to check out.
+      - name: The tag to test
+        id: tag
+        shell: bash
+        env:
+          INPUT_TAG: ${{ inputs.tag_to_test }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$INPUT_TAG" ]]; then
+            TAG="$INPUT_TAG"
+          else
+            TAG=$(git ls-remote --tags --sort=-v:refname --refs origin 'v*' \
+              | head -n 1 | sed 's|.*refs/tags/||')
+          fi
+
+          if [[ -z "$TAG" ]]; then
+            echo "::error::there is no tag to test: this repository has none, so name one in the input"
+            exit 1
+          fi
+
+          echo "TAG=${TAG}" >> "$GITHUB_ENV"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "testing ${TAG}"
 
       # SECURITY: the shape the injection took — an expression assigned inside a script,
       # where the shell runs what it holds. `env:` is where an input belongs.
@@ -49,18 +80,16 @@ jobs:
           echo "both deploy workflows pass their tags through the environment"
 
       - name: The tag shape, against tags that pass and tags that do not
-        env:
-          INPUT_TAG: ${{ inputs.tag_to_test }}
         shell: bash
         run: |
           set -euo pipefail
           shape() { [[ "$1" =~ ^v[0-9]+\.[0-9]+\.[0-9]+.*$ ]]; }
 
-          if ! shape "$INPUT_TAG"; then
-            echo "::error::${INPUT_TAG} is not the shape the deploy workflows accept"
+          if ! shape "$TAG"; then
+            echo "::error::${TAG} is not the shape the deploy workflows accept"
             exit 1
           fi
-          echo "accepted: ${INPUT_TAG}"
+          echo "accepted: ${TAG}"
 
           refused=0
           for bad in main v1.0 1.2.3 latest ""; do
@@ -76,7 +105,6 @@ jobs:
       - name: A tag that exists is answered for, one that does not is refused
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          TAG: ${{ inputs.tag_to_test }}
           REPO: ${{ github.repository }}
         shell: bash
         run: |
@@ -105,7 +133,6 @@ jobs:
       - name: What the release guard would decide for this tag
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          TAG: ${{ inputs.tag_to_test }}
           REPO: ${{ github.repository }}
         shell: bash
         run: |
@@ -125,7 +152,6 @@ jobs:
       # the notes there are the ones that have to agree with it.
       - name: The tag, the manifest and the changelog agree
         env:
-          TAG: ${{ inputs.tag_to_test }}
           REPO: ${{ github.repository }}
         shell: bash
         run: |
@@ -149,8 +175,6 @@ jobs:
           echo "the tag, Cargo.toml and the changelog agree on ${VERSION}"
 
       - name: The changelog section for the tag is the section, and nothing past it
-        env:
-          TAG: ${{ inputs.tag_to_test }}
         shell: bash
         run: |
           set -euo pipefail
@@ -191,8 +215,6 @@ jobs:
           echo "nothing ran, and nothing was extracted: the tag was read as a name"
 
       - name: The version the tag names is one the deploy path can publish
-        env:
-          TAG: ${{ inputs.tag_to_test }}
         shell: bash
         run: |
           VERSION="${TAG#v}"
@@ -221,7 +243,6 @@ jobs:
 
       - name: Summary
         env:
-          TAG: ${{ inputs.tag_to_test }}
           BUILD: ${{ inputs.build }}
         shell: bash
         run: |
@@ -242,7 +263,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          ref: ${{ inputs.tag_to_test }}
+          ref: ${{ needs.guards.outputs.tag }}
 
       - name: Install Rust (MSVC)
         uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
@@ -263,7 +284,7 @@ jobs:
       - name: Prepare update assets
         shell: pwsh
         env:
-          TAG: ${{ inputs.tag_to_test }}
+          TAG: ${{ needs.guards.outputs.tag }}
         run: |
           $version = $env:TAG -replace '^v', ''
           Set-Content -Path target/packager/version.txt -NoNewline -Value $version
@@ -275,7 +296,7 @@ jobs:
       - name: What the release would carry, and whether the app could use it
         shell: pwsh
         env:
-          TAG: ${{ inputs.tag_to_test }}
+          TAG: ${{ needs.guards.outputs.tag }}
         run: |
           $version = $env:TAG -replace '^v', ''
           $staged = Get-Content -Raw 'target/packager/version.txt'
@@ -303,7 +324,7 @@ jobs:
       - name: Upload installer artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: rust-hover-preview-dry-run-${{ inputs.tag_to_test }}
+          name: rust-hover-preview-dry-run-${{ needs.guards.outputs.tag }}
           path: |
             target/packager/rust-hover-preview_*-setup.exe
             target/packager/version.txt
