@@ -1,24 +1,16 @@
-name: CI
+name: Manual CI
 
-# What CONTRIBUTING asks for before a push, run on the commit rather than left to
-# whoever remembers to: the tree is formatted, lint-free and passing its tests, or the
-# commit is answered with a failure and the log that says what failed. It only checks —
-# no formatting commit, no push, no release — and it is given no permission beyond
-# reading the repository, so there is nothing else it could do.
+# What CONTRIBUTING asks for before a push, run on demand rather than on every commit: the
+# tree is formatted, lint-free and passing its tests, or the run is answered with a failure
+# and the log that says what failed. It only checks — no formatting commit, no push, no
+# release — and it is given no permission beyond reading the repository, so there is nothing
+# else it could do.
+#
+# It runs when it is started by hand from the Actions tab, against whichever branch or commit
+# is chosen there, and never on its own.
 
 on:
-  push:
-    branches:
-      - main
-  pull_request:
-    branches:
-      - main
-
-# One run per reference: a branch pushed twice in a row cancels the run the first push
-# started, so an afternoon of small commits is one run rather than ten.
-concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  workflow_dispatch:
 
 permissions:
   contents: read

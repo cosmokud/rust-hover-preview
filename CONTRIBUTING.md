@@ -70,8 +70,8 @@ for a full system overview.
 
    If a check fails, fix it before opening a pull request. `rust-toolchain.toml` pins
    the toolchain, so cargo, rustfmt and clippy answer the same on every machine as
-   they do in CI — which runs exactly these three commands on every pull request and
-   on `main`.
+   they do in CI — the `manual-ci.yml` workflow, which runs exactly these three
+   commands and is started by hand from the Actions tab.
 4. Write a clear commit message in the present tense, for example
    `Fix preview placement on second monitor` rather than `Fixed...`.
 5. Push your branch and open a pull request against `main`.
