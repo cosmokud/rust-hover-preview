@@ -3,8 +3,9 @@
 **In short:** this app collects nothing and sends nothing about you. It has no
 accounts, no telemetry, no crash reporting, and no ads, and the one thing it ever
 asks the network is whether a newer release of itself has been published — which
-it does only when you open its tray menu, and at most once an hour. Everything
-else it reads stays on your PC, and everything it keeps is listed below.
+it does when it starts and when you open its tray menu, and at most once an hour.
+Everything else it reads stays on your PC, and everything it keeps is listed
+below.
 
 ## What the app touches, and why
 
@@ -59,26 +60,30 @@ encrypted. Nothing bypasses a password, and no password is ever stored.
 ## Updates
 
 The one question this app asks the network is whether a newer release than the
-one you are running has been published, and it asks it only when you open the
-tray menu. Nothing is checked at startup, nothing is checked while you work, and
-however many times you open the menu, a check is made at most once an hour.
+one you are running has been published, and it asks it when it starts and when
+you open its tray menu. Nothing is checked while you work, and however often you
+open the menu, a check is made at most once an hour — the hour is counted in
+memory, so nothing about it is written to disk.
 
-What it asks for is two files in this project's own GitHub releases:
-`version.txt` at the newest release's stable address, and — where that names a
-version newer than this one — that release's installer. Both are fetched over
-HTTPS, verified by the certificate
-checks Windows already performs, and sent through the proxy Windows is
-configured with, if any. The request identifies itself as this app and its
-version, and says nothing else.
+What it asks for is two files in this project's own GitHub releases: `version.txt`
+at the newest release's stable address, and — where that names a version newer than
+this one, and only once you have clicked the row it puts in the tray menu and
+answered yes to the dialog that asks — that release's installer. Both are fetched
+over HTTPS, verified by the certificate checks Windows already performs, and sent
+through the proxy Windows is configured with, if any. The request identifies itself
+as this app and its version, and says nothing else.
 
-An installer fetched this way waits in the app's own folder until you click the
-row above **Run at Startup**. That click asks first — a yes/no dialog saying the
-update installs itself and the app restarts — and only a yes runs the installer:
-it replaces the app silently, then starts it again. Nothing is installed without
-that click and that yes.
+Nothing is downloaded until you click the row above **Run at Startup** and answer
+the dialog that follows: the check itself is a request for one small file. That
+click asks first — a yes/no dialog saying the update installs itself and the app
+restarts — and only a yes downloads the installer and then runs it: it replaces
+the app silently, then starts it again. A download that does not arrive, or that
+is not a whole program, is deleted and reported; nothing is installed without that
+click and that yes.
 
-Nothing is checked unless you open the menu, so a session in which you never open
-it makes no request at all. There is no separate switch for the check yet.
+A run makes one check as it starts, and at most one more an hour after that, so a
+session you leave alone asks nothing beyond that first check. There is no
+separate switch for the check yet.
 
 ## What is stored on your PC
 
@@ -87,8 +92,7 @@ it makes no request at all. There is no separate switch for the check yet.
 | `%APPDATA%\rust-hover-preview\config.ini` | Your preferences only (toggles, delays, scales, theme name, extension lists). No file contents, no history. | Edit or delete it; a fresh one is recreated. |
 | `%APPDATA%\rust-hover-preview\theme\` | `.tmTheme` files you drop in yourself. | Delete the files. |
 | `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` value `RustHoverPreview` | Your exe path, only when **Run at Startup** is on. | Turn **Run at Startup** off. |
-| `%TEMP%\rust-hover-preview\` | Transient Office renders: one scratch copy of a long-path or downloaded document, one page file being read back. Each is deleted the moment it is read; leftovers are deleted on next launch. | Delete the folder; exit the app first. |
-| `%LOCALAPPDATA%\rust-hover-preview\update\` | The time of the last update check, and the installer for a newer release once one has been fetched — waiting for the click that installs it. | Delete the folder; it is written again only when a check is made. |
+| `%TEMP%\rust-hover-preview\` | Transient Office renders — one scratch copy of a long-path or downloaded document, one page file being read back — and the installer of an update you clicked, while it installs. Each render is deleted the moment it is read; leftovers are deleted on next launch. | Delete the folder; exit the app first. |
 | RAM only (never written to disk) | Decoded image frames (default 32 MB), rendered Office pages (default 64 MB), rendered PDF pages (default 32 MB), painted text frames (default off), archive listings, failure latches. All keyed by path plus file version, evicted when full, gone on exit. | Set a cache to `0 MB` to keep nothing between hovers; quit to drop everything. |
 
 Error messages (hook install failure, mutex failure) go to stderr only and are
