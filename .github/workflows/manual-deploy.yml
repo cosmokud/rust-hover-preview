@@ -82,6 +82,48 @@ jobs:
         with:
           ref: ${{ inputs.tag_to_build }}
 
+      # The three things a release must not get wrong, checked before anything is built. A
+      # release that fails any of them is one the app is never offered, or one with no notes,
+      # and neither is visible from the release page afterwards.
+      - name: The tag, the manifest and the changelog agree
+        id: version
+        shell: bash
+        env:
+          TAG: ${{ inputs.tag_to_build }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+
+          # What the app reads: three numbers, and a suffix after them for a pre-release.
+          # Anything else is a version `parse_version` turns down, which reads as no update.
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
+            echo "::error::${TAG} names '${VERSION}': a release is X.Y.Z, or X.Y.Z-rc.1"
+            exit 1
+          fi
+
+          manifest=$(grep -m1 -E '^version = "' Cargo.toml | cut -d'"' -f2)
+          if [[ "$manifest" != "$VERSION" ]]; then
+            echo "::error::Cargo.toml in this tag says '${manifest}' and the tag says '${VERSION}': the installer is built under one version and asked for under the other, so this release would never be offered"
+            exit 1
+          fi
+
+          if ! grep -q "^## \[${VERSION}\]" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md has no '## [${VERSION}]' section: the release would carry the generated notes instead of it"
+            exit 1
+          fi
+
+          echo "the tag, Cargo.toml and the changelog agree on ${VERSION}"
+
+          # A pre-release is published as one. This build is not the release the app is
+          # pointed at either way — `make_latest: false` is what does that — but the badge is
+          # what tells a reader of the releases page that this one is not a stable release.
+          if [[ "$VERSION" == *-* ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+            echo "${VERSION} is a pre-release"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Install Rust (MSVC)
         # Pinned to a commit in master's history, with the toolchain named in the input:
         # this action reads its ref as the toolchain otherwise, and a pin outside master
@@ -143,7 +185,8 @@ jobs:
           tag_name: ${{ inputs.tag_to_build }}
           name: ${{ inputs.tag_to_build }}
           body_path: release_notes.md
-          prerelease: false
+          # Set by the check above: a version carrying a suffix goes out as a pre-release.
+          prerelease: ${{ steps.version.outputs.prerelease }}
           generate_release_notes: true
           fail_on_unmatched_files: true
           make_latest: false

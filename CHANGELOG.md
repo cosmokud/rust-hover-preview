@@ -12,6 +12,7 @@
 
 - A restart no longer hides an available update until the hour is up.
 - The update row appears whether or not the installer could be fetched, and a download that fails says so instead of leaving no row at all.
+- An installation made from a pre-release is offered the stable release its version names, instead of never being offered an update again.
 
 ## [0.3.2] - 2026-09-24
 
