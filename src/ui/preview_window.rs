@@ -1179,7 +1179,7 @@ pub fn cursor_preview_hover() -> PreviewCursorHover {
     }
 
     unsafe {
-        use windows::Win32::UI::WindowsAndMessaging::{GetCursorPos, WindowFromPoint};
+        use windows::Win32::UI::WindowsAndMessaging::{GetCursorPos, IsChild, WindowFromPoint};
 
         let mut cursor_pos = POINT::default();
         if GetCursorPos(&mut cursor_pos).is_err() {
@@ -1193,7 +1193,15 @@ pub fn cursor_preview_hover() -> PreviewCursorHover {
 
         let hwnd_ptr = hwnd_under_cursor.0 as isize;
         let image = preview_hwnd != 0 && hwnd_ptr == preview_hwnd;
-        let engine = engine_hwnd != 0 && hwnd_ptr == engine_hwnd;
+        // A document is drawn by a browser inside the engine's window, so what the pointer
+        // is over is a window of the browser's — a child of the engine's, one or two levels
+        // down — and not the engine's own window at all. The engine's window is what the
+        // preview is, so the question is whether the window under the pointer is that
+        // window or one inside it: comparing the two handles alone never matched, and the
+        // touch that closes a document was the one thing that never came from here.
+        let engine = engine_hwnd != 0
+            && (hwnd_ptr == engine_hwnd
+                || IsChild(HWND(engine_hwnd as *mut _), hwnd_under_cursor).as_bool());
 
         // A hit on the stored HWND is enough; the process-ID fallback covers the
         // race window where ffplay's window exists but VIDEO_HWND isn't stored yet.
@@ -6506,6 +6514,17 @@ unsafe fn show_loading_spinner(hwnd: HWND, pl: &PendingLoad) {
 /// and the spinner a page is being rendered behind, which has nothing under it to
 /// hand the pointer back to and no page yet to be shown in its place.
 unsafe fn publish_pointer_hold(hwnd: HWND) {
+    // The pointer can only be on a window that is on screen, and while this one is not —
+    // a document is drawn by the engine, in a window of its own — nothing of this app's is
+    // under the pointer and there is nothing for a hold to keep alive. Asking the window
+    // rather than the media is what keeps the hold from outliving the spinner it was
+    // published for: a hold left standing over a document is a preview the pointer can
+    // never close, because the pointer arriving at it is exactly what the hold refuses.
+    if !IsWindowVisible(hwnd).as_bool() {
+        clear_pointer_hold();
+        return;
+    }
+
     let (text, waiting) = CURRENT_MEDIA
         .lock()
         .ok()
