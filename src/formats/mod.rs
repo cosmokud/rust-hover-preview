@@ -7,6 +7,7 @@ pub(crate) mod image_formats;
 pub(crate) mod libre_formats;
 pub(crate) mod magick_formats;
 pub(crate) mod office_formats;
+pub(crate) mod peazip_formats;
 pub(crate) mod text_formats;
 pub(crate) mod vector_formats;
 pub(crate) mod video_formats;

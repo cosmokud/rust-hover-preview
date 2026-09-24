@@ -22,7 +22,7 @@ A Windows 11 tray app inspired by QTTabBar. Hover a file in File Explorer — or
 
 You can add or remove formats in `config.ini`. Unsupported formats show no preview, except text, which the app will try to force-read.
 
-Almost everything is previewed by **Windows 11 and this app alone** — a codec Windows ships, WebView2, the drawing layer that plays metafiles, the Windows PDF engine, or a reader written into the app. Four things are not, and they are the app’s largest optional dependencies:
+Almost everything is previewed by **Windows 11 and this app alone** — a codec Windows ships, WebView2, the drawing layer that plays metafiles, the Windows PDF engine, or a reader written into the app. Five things are not, and they are the app’s largest optional dependencies:
 
 ### Runs on Windows 11 alone
 
@@ -60,6 +60,12 @@ The documents this app has no reader of its own for, drawn by an installed Libre
 
 ImageMagick previews otherwise-unopenable files—especially camera raws—at display size, rotated, decoded from memory. Raws/own-coder: `3fr` `arw` `cr2` `cr3` `crw` `cur` `dcm` `dcr` `dcx` `dng` `dpx` `erf` `fff` `fit` `fits` `fts` `iiq` `j2c` `j2k` `jng` `jp2` `jpc` `jpm` `jpt` `k25` `kdc` `mdc` `mef` `miff` `mng` `mos` `mrw` `nef` `nrw` `orf` `pef` `pfm` `raf` `raw` `rmf` `rw2` `rwl` `sgi` `sr2` `srf` `srw` `vicar` `wbmp` `x3f` `xbm` `xcf` `xpm`. Alternates/other engine names: `pict` (`pct`), `sun` (`ras`), `pcds` (`pcd`), `dxt1`/`dxt5` (`dds`), `icb` `vda` `vst`, `picon`, `group4`;
 Raw sample dumps: `rgb` `rgba` `gray` `cmyk` `ycbcr` `mono` `group4` and the rest; dimensions inferred by trying aspect ratios against file length—first exact divisor wins, else none; transpose ambiguity can make portrait landscape.
+
+### Needs PeaZip
+
+The archives this app has no reader of its own for, listed by an installed PeaZip and shown as the same page of contents a `.zip` is shown as, all of them: `001` `apfs` `ar` `arj` `bz2` `bzip2` `cab` `chm` `cpio` `cramfs` `deb` `dmg` `esd` `gz` `gzip` `hfs` `hfsx` `hxs` `iso` `lha` `lit` `lzh` `lzma` `msi` `msp` `pkg` `ppkg` `qcow` `qcow2` `rpm` `squashfs` `swm` `taz` `tbz` `tbz2` `tpz` `txz` `tzst` `udf` `udeb` `vdi` `vhd` `vhdx` `vmdk` `wim` `xar` `xip` `xz` `z` `zst`. A `.tar.gz` and a `.tgz` are the archive list’s above and stay this app’s own.
+
+A single-stream format — a `.gz`, a `.bz2`, a `.xz`, a `.zst`, a `.z` — is shown as the one member it holds, under the name the file had before it was compressed. What is **not** in that list is written down with its reason in [TODO.md](TODO.md): PeaZip’s own `.pea`, FreeArc’s `.arc`, `.zpaq`, and the codecs its build carries no format for — `br`, `lz4`, `lz5`, `lizard`, `flzma2` — are formats its *other* tools handle, and the archiver this app drives cannot open one as an archive.
 
 ### Themes
 
@@ -156,6 +162,16 @@ winget install -e --id ImageMagick.ImageMagick
 >
 > If that is refused as well, open **Terminal as administrator** (right-click the Start button → _Terminal (Admin)_) and run the same command from there.
 
+### Optional: Enable Niche Archives (PeaZip)
+
+`cab` and everything else in the `[peazip]` list is listed by **PeaZip**, which this app runs where it finds it — nothing is bundled with the app and there is nothing to configure. Install it once:
+
+```text
+winget install -e --id Giorgiotani.Peazip
+```
+
+A portable copy is looked for too, in a `peazip` folder beside `config.ini` or beside the app. What the app runs is the archiver PeaZip ships inside itself (`res\bin\7z\7z.exe`) and never the PeaZip window: a hover opens nothing, prints nothing, and leaves nothing behind. A second hover of the same archive costs no launch at all.
+
 ## Usage
 
 1. Start the app — a tray icon appears.
@@ -168,7 +184,7 @@ winget install -e --id ImageMagick.ImageMagick
 The item a setting starts at carries `(Default)` after its name, so a menu says both what is set now — the check or radio mark — and what a setting nobody has touched would be.
 
 - **Enable Preview** — turn previews on or off.
-- **Preview Types** — Images, Videos, Text, PDF, Archives, Office, Vector, Fonts, Design, Libre, Magick: gate a kind without touching its file list.
+- **Preview Types** — Images, Videos, Text, PDF, Archives, Office, Vector, Fonts, Design, Libre, Magick, Peazip: gate a kind without touching its file list.
 - **Text Preview**
   - **Full Mode** — adds scrolling, selection, and copy; off by default.
   - **Theme** — Atom One Light, One Dark Pro, or any `.tmTheme` in the theme folder.
@@ -243,6 +259,7 @@ image_preview_enabled=true
 magick_preview_enabled=true
 office_preview_enabled=true
 pdf_preview_enabled=true
+peazip_preview_enabled=true
 text_preview_enabled=true
 vector_preview_enabled=true
 video_preview_enabled=true
@@ -318,7 +335,7 @@ Key settings, in plain terms:
 - `text_preview_full_mode` — `true` adds scrolling, selection, and copy.
 - `text_font_scale` — a percentage from 1 to 1000, default `125`; archive listings follow it too.
 - `extensions` / `names` — the text-preview gates. Extensions are written without dots. Names match extensionless files.
-- `image_extensions`, `video_extensions`, `archive_extensions`, `office_extensions`, `font_extensions`, `design_extensions`, `vector_extensions` — per-type preview gates, written without dots. An entry with a dot in it, like `tar.gz`, is matched against the end of the file name. `libre_extensions` and `magick_extensions`, in their own sections, are the documents LibreOffice draws and the pictures ImageMagick develops.
+- `image_extensions`, `video_extensions`, `archive_extensions`, `office_extensions`, `font_extensions`, `design_extensions`, `vector_extensions` — per-type preview gates, written without dots. An entry with a dot in it, like `tar.gz`, is matched against the end of the file name. `libre_extensions`, `magick_extensions` and `peazip_extensions`, in their own sections, are the documents LibreOffice draws, the pictures ImageMagick develops, and the archives PeaZip lists.
 - `image_cache_mb` — memory for decoded image frames: default `32`, max `2048`; `0` holds nothing.
 - `office_cache_mb` — memory for Office-rendered pages: default `64`, max `2048`; `0` holds nothing between hovers but still renders for the current hover.
 - `pdf_cache_mb` — memory for PDF pages as pixels: default `32`, max `2048`; the same file at two preview sizes is held as two pages.
@@ -344,6 +361,8 @@ Key settings, in plain terms:
 - `libre_preview_enabled` — whether documents LibreOffice can draw are previewed at all; `true` by default.
 - `magick_preview_enabled` — whether pictures ImageMagick develops, camera raw above all, are previewed at all; `true` by default. The list behind it is `[magick] extensions`.
 - There is no TTL for ImageMagick, and no `magick_idle` key: it is the one engine here that is a converter rather than a process this app can hold open, so what a file costs is a conversion or a hit in the picture cache (`image_cache_mb`) and never a file of the app's own.
+- `peazip_preview_enabled` — whether the archives PeaZip lists, the cabinet files and isos and disk images above all, are previewed at all; `true` by default. The list behind it is `[peazip] extensions`.
+- There is no TTL for PeaZip either, and no `peazip_idle` key, for the same reason: what this app runs of it is the console archiver it carries, which prints an archive's table of contents and exits. What a file costs is a listing or a hit in the listing cache, and a second hover of the same archive starts nothing at all.
 - `pdf_scale` / `office_scale` — the same for a PDF page and an Office-rendered page, both `fit` by default as well as a percentage. A workbook’s fallback bitmap follows its own size and is never enlarged.
 - `font_scale` — percentage or `fit`, read against the screen. `50` is default, `fit` is all of it, and `100` or more reads as `fit`. A font has no size of its own, so the share is of the display.
 - `design_scale` — the same for a design document, `fit` by default. A design preview is the picture the file keeps of the whole document, so the share is of the screen the way a page’s is rather than of the document’s own size.
@@ -368,7 +387,7 @@ The release binary is written to `target/release/rust-hover-preview.exe`. A rele
 
 ## Architecture
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the full system overview. In short: Windows accessibility APIs and Shell COM identify the hovered or focused Explorer item. GDI paints the preview into a topmost layered window. Text and code are highlighted with TextMate-style themes, Markdown is rendered, archive contents are listed from the archives’ own tables of contents, Office documents are drawn from a page Office renders in the background, WebView2 draws SVG documents and font specimens, camera raw and the pictures beside it are developed by ImageMagick, and video is played by FFmpeg where installed and by Windows’ own media engine where it is not.
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the full system overview. In short: Windows accessibility APIs and Shell COM identify the hovered or focused Explorer item. GDI paints the preview into a topmost layered window. Text and code are highlighted with TextMate-style themes, Markdown is rendered, archive contents are listed from the archives’ own tables of contents — or from the listing an installed PeaZip produces for the formats no reader here has — Office documents are drawn from a page Office renders in the background, WebView2 draws SVG documents and font specimens, camera raw and the pictures beside it are developed by ImageMagick, and video is played by FFmpeg where installed and by Windows’ own media engine where it is not.
 
 ## TODO
 

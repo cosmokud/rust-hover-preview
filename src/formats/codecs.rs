@@ -175,6 +175,10 @@ pub fn engines() -> Vec<Row> {
             available: crate::engines::imagemagick_render::available(),
         },
         Row {
+            name: "PeaZip",
+            available: crate::engines::peazip_render::available(),
+        },
+        Row {
             name: "Microsoft Word",
             available: prog_id_installed("Word.Application"),
         },

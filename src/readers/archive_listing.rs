@@ -12,6 +12,16 @@
 //! scan stops at an entry count, a name is cut to a length this side of absurd,
 //! and every loop asks the caller's cancel flag, which is the flag the load
 //! worker is already handed — so a hover that has moved on stops reading.
+//!
+//! A format none of those readers has — a cabinet file, an iso, the `.lzh` of an
+//! older piece of software — is where the PeaZip engine comes in. It is asked for
+//! the archive's table of contents by `peazip_render`, its answer is read here by
+//! [`engine_listing`] into the same shape a reader of this app's produces, and it
+//! is held under the same key in the same cache — which is what makes the two
+//! passes of one hover, and a second hover of the same file, cost one read of
+//! the file whatever read it was. Nothing below this line starts anything: what
+//! is read here is an answer that has already come back, and a file the engine
+//! has not answered for yet is a file with no listing rather than a launch.
 
 use once_cell::sync::Lazy;
 use std::fs::File;
@@ -162,11 +172,7 @@ impl Listing {
 /// The listing for `path`, from the cache when the file is unchanged.
 pub(crate) fn listing_for(path: &Path, cancel: Option<&AtomicBool>) -> Option<Arc<Listing>> {
     let metadata = std::fs::metadata(path).ok()?;
-    let key = ListingKey {
-        path: path.to_path_buf(),
-        modified: metadata.modified().ok(),
-        len: metadata.len(),
-    };
+    let key = ListingKey::of(path, &metadata);
 
     if let Ok(mut cache) = LISTINGS.lock() {
         if let Some(index) = cache.iter().position(|(cached, _)| *cached == key) {
@@ -190,6 +196,50 @@ pub(crate) fn listing_for(path: &Path, cancel: Option<&AtomicBool>) -> Option<Ar
     Some(listing)
 }
 
+/// Whether a listing for this file is already in hand, without reading anything to find out.
+///
+/// It is the question an engine is asked before it is asked for a listing — an archive whose
+/// listing is held is an archive there is nothing to ask about — and it is a probe of the cache
+/// rather than a read, so a caller that asks it on every hover of every file pays a lock and a
+/// comparison for each of them.
+pub(crate) fn is_listed(path: &Path) -> bool {
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return false;
+    };
+    let key = ListingKey::of(path, &metadata);
+
+    LISTINGS
+        .lock()
+        .map(|cache| cache.iter().any(|(cached, _)| *cached == key))
+        .unwrap_or(false)
+}
+
+/// Hold the listing the engine produced for `path`, under the key a reader of this app's would
+/// have been cached under.
+///
+/// It is what joins the engine's answer to the rest of the path: the measure pass and the render
+/// pass that follow ask [`listing_for`] for the same file and find this rather than the readers
+/// below, which have nothing to say about a format they do not have — and a second hover of the
+/// file costs a lookup rather than a launch, for as long as the file is unchanged and the answer
+/// has not been pushed out of the cache by other archives.
+pub(crate) fn remember_engine_listing(path: &Path, listing: Listing) {
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return;
+    };
+    let key = ListingKey::of(path, &metadata);
+
+    let Ok(mut cache) = LISTINGS.lock() else {
+        return;
+    };
+
+    if cache.len() >= LISTING_CACHE_MAX_ENTRIES {
+        cache.clear();
+    }
+
+    cache.retain(|(cached, _)| *cached != key);
+    cache.insert(0, (key, Arc::new(listing)));
+}
+
 /// The listing as the archive itself states it, read once per file version.
 fn read_listing(path: &Path, file_size: u64, cancel: Option<&AtomicBool>) -> Option<Listing> {
     match kind_of(path)? {
@@ -199,6 +249,138 @@ fn read_listing(path: &Path, file_size: u64, cancel: Option<&AtomicBool>) -> Opt
         ArchiveKind::Tar => read_tar(path, file_size, cancel),
         ArchiveKind::TarGz => read_targz(path, file_size, cancel),
     }
+}
+
+// ------------------------------------------------------------ the engine's answer
+
+/// The line the engine writes between what it says about the archive and the entries themselves.
+///
+/// Everything above it is the engine talking about its own run — its version, the file it
+/// scanned, the archive's own header — and everything below it is the archive's table of
+/// contents in the same `Key = Value` shape, one blank line between entries. Splitting there is
+/// what keeps the archive's own `Path` out of the listing, since the header of the report states
+/// it too.
+const ENGINE_SEPARATOR: &str = "----------";
+
+/// The listing the PeaZip engine's own report of an archive gives, read into the shape every
+/// reader of this app's produces.
+///
+/// What the engine is asked for is a technical listing — each entry's own fields, one to a line —
+/// and what it answers with is that listing as text, which is the only thing about it this side
+/// has to be able to read. The fields are read for what the page needs and nothing else: the
+/// entry's path, what it weighs and what it took, whether it is a folder, and whether it is
+/// encrypted. Everything the engine says beyond those — the method an entry was packed with, the
+/// block it shares, its CRC, its timestamps, its attributes — belongs to an extraction this app
+/// never does.
+///
+/// Two shapes of report are worth naming, because both are ordinary and neither is an error. A
+/// report with nothing under the separator is an archive the engine could not open the table of
+/// contents of — one whose own headers are encrypted, which it will not list without a password —
+/// and it is answered with no listing rather than with an empty one: a page saying an archive
+/// holds nothing is a claim, and this is not the place that claim can be made from. And a
+/// single-stream format keeps no name inside itself at all — a `bzip2` or a `zstd` file is the
+/// compressed bytes and nothing beside them — so the one entry the engine reports for one of
+/// those has no path, and what it is called is worked out from the archive's own name (see
+/// [`stream_member_name`]).
+pub(crate) fn engine_listing(report: &str, archive: &Path, file_size: u64) -> Option<Listing> {
+    let (_, entries) = report.split_once(ENGINE_SEPARATOR)?;
+
+    let mut listing = Listing::new();
+    listing.file_size = file_size;
+
+    let mut fields: Vec<(&str, &str)> = Vec::new();
+
+    // The report ends with a blank line, and a block is ended by one — so the walk is given one
+    // more line than the report has and the last block is closed by it rather than by the end of
+    // the text.
+    for line in entries.lines().chain(std::iter::once("")) {
+        if line.trim().is_empty() {
+            if !fields.is_empty() {
+                push_engine_entry(&mut listing, &fields, archive);
+                fields.clear();
+            }
+            continue;
+        }
+
+        // A field is `Name = Value`, and the value may be empty — which is how the engine says
+        // that a field does not apply to this entry. The split is on the first separator, so a
+        // path with one of its own is still a path.
+        if let Some((name, value)) = line.split_once(" = ") {
+            fields.push((name.trim(), value.trim()));
+        }
+    }
+
+    // An archive with nothing in it and one whose table could not be read are the same report
+    // from here, and both are answered the same way (see above).
+    if listing.entries.is_empty() {
+        return None;
+    }
+
+    listing.settle_totals();
+    Some(listing)
+}
+
+/// One entry out of the fields the engine reported for it.
+fn push_engine_entry(listing: &mut Listing, fields: &[(&str, &str)], archive: &Path) {
+    let value = |name: &str| {
+        fields
+            .iter()
+            .find(|(field, _)| *field == name)
+            .map(|(_, value)| *value)
+    };
+
+    let Some(name) = value("Path").map(str::to_string).or_else(|| {
+        // An entry the engine reports no path for is the member of a single-stream format, which
+        // has no name inside it to report.
+        value("Size")?;
+        stream_member_name(archive)
+    }) else {
+        return;
+    };
+
+    // A folder is stated twice over by the two shapes of report: the entry's own attributes
+    // carry the `D` every extractor reads, and the containers that keep a separate flag state it
+    // as one of the entry's fields.
+    let is_dir = value("Attributes").is_some_and(|attributes| attributes.contains('D'))
+        || value("Folder") == Some("+");
+
+    let size = value("Size")
+        .and_then(|size| size.parse::<u64>().ok())
+        .unwrap_or(0);
+    // A field left empty is a field the engine has no answer for — a member of a solid block
+    // shares its packed size with the entries beside it — and a total the page cannot state is
+    // what `settle_totals` does with one.
+    let packed = value("Packed Size").and_then(|packed| packed.parse::<u64>().ok());
+    let encrypted = value("Encrypted") == Some("+");
+
+    if let Some(name) = normalize_name(&name) {
+        listing.push(
+            name,
+            if is_dir { 0 } else { size },
+            packed,
+            is_dir,
+            encrypted,
+        );
+    }
+}
+
+/// What the one member of a single-stream format is called: the archive's own name with the
+/// extension it was compressed under taken off, which is the name an extraction writes it under
+/// and the name the file had before it was compressed.
+///
+/// Nothing here can recover the name it *did* have — a `bzip2` stream keeps no name, and a `zstd`
+/// one usually keeps none either — so what is shown is the closest true thing rather than a guess
+/// at the original.
+fn stream_member_name(archive: &Path) -> Option<String> {
+    let name = archive.file_name().and_then(|name| name.to_str())?;
+
+    let stem = name
+        .rsplit_once('.')
+        .map(|(stem, _)| stem)
+        .filter(|stem| !stem.is_empty())
+        .unwrap_or(name);
+
+    Some(stem.to_string())
 }
 
 /// Which reader can open `path`.
@@ -511,8 +693,166 @@ struct ListingKey {
     len: u64,
 }
 
+impl ListingKey {
+    /// What a listing of this file is held under: the file, and the version of it that was read,
+    /// so that an archive saved again is an archive to read again.
+    fn of(path: &Path, metadata: &std::fs::Metadata) -> Self {
+        Self {
+            path: path.to_path_buf(),
+            modified: metadata.modified().ok(),
+            len: metadata.len(),
+        }
+    }
+}
+
 /// Listings, newest first. Small: it is here so that the measure pass, the render
 /// pass and a second hover read the archive once between them.
 type ListingCache = Vec<(ListingKey, Arc<Listing>)>;
 
 static LISTINGS: Lazy<Mutex<ListingCache>> = Lazy::new(|| Mutex::new(Vec::new()));
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A report of a zip, as the engine writes one: every entry states whether it is a folder in
+    /// a field of its own as well as in its attributes, and the sizes are the entry's own.
+    const ZIP_REPORT: &str = "\n7-Zip 25.01 (x64) : Copyright (c) 1999-2025 Igor Pavlov : 2025-08-03\n\n\
+Scanning the drive for archives:\n1 file, 428 bytes (1 KiB)\n\n\
+Listing archive: C:\\downloads\\photos.zip\n\n--\nPath = C:\\downloads\\photos.zip\nType = zip\n\
+Physical Size = 428\n\n----------\nPath = a.txt\nFolder = -\nSize = 13\nPacked Size = 13\n\
+Modified = 2026-09-25 03:25:39.6103164\nAttributes = A\nEncrypted = -\nCRC = 38E6C41A\nMethod = Store\n\n\
+Path = inner\nFolder = +\nSize = 0\nPacked Size = 0\nModified = 2026-09-25 03:25:39.6118192\n\
+Attributes = D\nEncrypted = -\nCRC = \nMethod = Store\n\n\
+Path = inner\\b.txt\nFolder = -\nSize = 13\nPacked Size = 13\nAttributes = A\nEncrypted = -\n\n";
+
+    #[test]
+    fn reads_the_entries_out_of_the_engines_own_report() {
+        let listing = engine_listing(ZIP_REPORT, Path::new(r"C:\downloads\photos.zip"), 428)
+            .expect("a listing");
+
+        assert_eq!(listing.entries.len(), 3);
+        assert_eq!(listing.file_size, 428);
+
+        let names: Vec<&str> = listing
+            .entries
+            .iter()
+            .map(|entry| entry.name.as_str())
+            .collect();
+        // A path inside the archive is `/`-separated wherever the engine wrote a backslash, the
+        // way every other reader of this app's names one.
+        assert_eq!(names, vec!["a.txt", "inner", "inner/b.txt"]);
+
+        assert!(listing.entries[1].is_dir);
+        assert!(!listing.entries[0].is_dir);
+        assert_eq!(listing.entries[2].size, 13);
+        assert_eq!(listing.entries[2].packed, Some(13));
+        assert!(!listing.entries[0].encrypted);
+
+        // The folder takes nothing in either column, which is what the totals are settled over.
+        assert_eq!(listing.total_size, 26);
+        assert_eq!(listing.packed_total, Some(26));
+        assert!(!listing.scan_capped && !listing.read_truncated && !listing.encrypted_headers);
+    }
+
+    /// A report of a 7z, which is the other shape: a folder is stated by its attributes alone,
+    /// and a member of a solid block has no packed size of its own to state.
+    #[test]
+    fn reads_a_report_whose_entries_state_less_about_themselves() {
+        let report =
+            "Path = C:\\downloads\\backup.7z\nType = 7z\nPhysical Size = 203\n\n----------\n\
+Path = inner\nSize = 0\nPacked Size = 0\nAttributes = D\nEncrypted = -\n\n\
+Path = a.txt\nSize = 13\nPacked Size = 30\nAttributes = A\nEncrypted = -\n\n\
+Path = inner\\b.txt\nSize = 13\nPacked Size = \nAttributes = A\nEncrypted = -\n\n";
+
+        let listing =
+            engine_listing(report, Path::new(r"C:\downloads\backup.7z"), 203).expect("a listing");
+
+        assert_eq!(listing.entries.len(), 3);
+        assert!(listing.entries[0].is_dir);
+        assert_eq!(listing.entries[1].packed, Some(30));
+        assert_eq!(
+            listing.entries[2].packed, None,
+            "a member of a solid block has no packed size of its own"
+        );
+
+        // One entry the format cannot state a packed size for is a total this page cannot state
+        // either, which is what every other reader's `None` means in the same place.
+        assert_eq!(listing.total_size, 26);
+        assert_eq!(listing.packed_total, None);
+    }
+
+    /// A single-stream format keeps no name inside itself, so the one member the engine reports
+    /// for one has no path: what it is called is the archive's own name without the extension it
+    /// was compressed under, which is where an extraction would put it.
+    #[test]
+    fn names_the_one_member_of_a_stream_that_keeps_no_name_of_its_own() {
+        let report = "Path = C:\\downloads\\notes.txt.zst\nType = zstd\n\n----------\n\
+Size = \nPacked Size = \n\n";
+
+        let listing = engine_listing(report, Path::new(r"C:\downloads\notes.txt.zst"), 26)
+            .expect("a listing");
+
+        assert_eq!(listing.entries.len(), 1);
+        assert_eq!(listing.entries[0].name, "notes.txt");
+        assert_eq!(listing.entries[0].size, 0);
+        assert_eq!(listing.entries[0].packed, None);
+        assert!(!listing.entries[0].is_dir);
+    }
+
+    /// What an encrypted archive reports is a report with nothing under the separator, and what
+    /// a file that is not an archive at all reports is no separator — both are answered with no
+    /// listing rather than with a page claiming the archive is empty.
+    #[test]
+    fn answers_an_archive_it_could_not_read_with_no_listing() {
+        let encrypted =
+            "Path = C:\\downloads\\secret.7z\nType = 7z\nPhysical Size = 32\n\n----------\n";
+        assert!(engine_listing(encrypted, Path::new("secret.7z"), 32).is_none());
+
+        let not_an_archive = "7-Zip 25.01 (x64)\n\nERROR: notes.txt\nnotes.txt\nOpen ERROR: Can not open the file as archive\n";
+        assert!(engine_listing(not_an_archive, Path::new("notes.txt"), 12).is_none());
+
+        assert!(engine_listing("", Path::new("empty.cab"), 0).is_none());
+    }
+
+    /// What is held for a file is what the two passes of one hover read, and an archive saved
+    /// again is read again rather than answered out of the cache.
+    #[test]
+    fn holds_the_engines_answer_under_the_files_own_key() {
+        let folder = std::env::temp_dir()
+            .join("rust-hover-preview-peazip-listing")
+            .join("remembering");
+        std::fs::create_dir_all(&folder).expect("a test folder");
+
+        let archive = folder.join("a.cab");
+        std::fs::write(&archive, b"MSCF\x00\x00\x00\x00 a cabinet, of a sort")
+            .expect("a written file");
+
+        let listing = |name: &str| {
+            let mut listing = Listing::new();
+            listing.file_size = 32;
+            listing.push(name.to_string(), 13, Some(13), false, false);
+            listing.settle_totals();
+            listing
+        };
+
+        remember_engine_listing(&archive, listing("first.txt"));
+        let held = listing_for(&archive, None).expect("the answer that is held");
+        assert_eq!(held.entries[0].name, "first.txt");
+        assert!(
+            !held.encrypted_headers,
+            "what the engine answered is a listing, not a reader's caveat"
+        );
+
+        // Saved again: what was known about the file it was is not what it is now, so the key
+        // does not match and the answer is not the one that was held.
+        std::fs::write(&archive, b"MSCF\x00\x00\x00\x00 a cabinet, saved again")
+            .expect("a written file");
+        assert!(
+            listing_for(&archive, None).is_none(),
+            "no reader here knows the format, and the engine has not answered for this version"
+        );
+
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+}

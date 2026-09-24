@@ -2,11 +2,12 @@
 
 ## Features
 
+- Add preview integration for voidtools Everything search.
 - **File Format Support:**
   - More design & project files (`.xcf`, ...)
   - CAD files (`.dwg`, `.step`, `.stl`, ...)
   - 3D files (`.obj`, `.fbx`, `.gltf`, `.glb`, ...)
-- Add preview integration for voidtools Everything search.
+  - Audio files (`.mp3`, `.opus`, ...)
 
 ## Unsupported LibreOffice Format
 
@@ -125,6 +126,52 @@ module out, so asking one of those builds for a `.xwd` fails looking for a modul
 there, and `magick -list format` — which names the formats whose coders are installed — does not
 name it at all. A build that ships it declares it, and then the name is one entry away like the
 rest.
+
+## Unsupported PeaZip File Format
+
+The archives PeaZip opens that nothing here shows. They are of two kinds, and neither is a name
+missing from `[peazip]` by accident: a name put in that list is a name the engine is *asked*
+about, and one it turns down costs a launch before the answer is remembered, so a name the
+engine cannot read is left out on purpose and written down here instead.
+
+Beside each name is the one thing that would change it.
+
+**A format PeaZip handles with another of its own tools** — the engine this app drives is the
+console archiver PeaZip carries, and these are the formats its other backends handle: `pea`
+(PeaZip's own format), `arc` (FreeArc), `zpaq` and `paq`/`lpaq`, `upx`, and the codecs its build
+carries no format for — `br` (Brotli), `lz4`, `lz5`, `lizard`, `flzma2`. Asking the engine for
+one of them is answered with `Cannot open the file as archive`, measured against PeaZip 10.9.0
+for a `.arc`, a `.zpaq` and a `.br`. What would show them:
+
+- `arc`, `zpaq`: the backend tools PeaZip ships list their own archives — `Arc.exe l` and
+  `zpaq.exe l` — each with a syntax and an output of its own, so each is a second and a third
+  listing parser beside the one `archive_listing` reads. What they are asked for would then be
+  settled per format, since a file is not one of theirs by its bytes alone.
+- `pea`: there is no list command to drive. The PEA documentation says so — "there is no
+  separate list/test command" — and what the format holds is written in object headers that its
+  extractor walks. A reader here would be a walk of those headers (they are not compressed), or
+  a preview built by extracting a copy to a temp folder, which is an extraction this app makes
+  for nothing else.
+- `br`, `lz4`, `lz5`, `lizard`, `flzma2`: single-stream codecs. PeaZip's `brotli.exe` and
+  `zstd.exe` compress and decompress one file at a time, so a preview of a `.br` is a preview of
+  one member rather than of a container — the same shape the `.gz`, `.bz2`, `.xz` and `.zst`
+  entries have, and a second engine rather than a list entry. (`zstd` is in the list already:
+  PeaZip's build declares it as a *format* as well as a codec, which is the difference.)
+
+**And a format whose marker a hover cannot reach.** An `.iso` and a `.udf` say what they are
+thirty-two kilobytes into the file — `CD001` at 32769, a UDF descriptor at 32768 — and what a
+hover reads of any file is its first four kilobytes, so neither can be confirmed by its own
+bytes. Both preview by name, through the engine, and a renamed one is a file nothing recognizes
+rather than a file shown wrongly. `lzma` and a split archive's `001` are here for the plainer
+version of the same thing: neither has a marker at all, so both are the name's business, and
+that is the whole of what can be done with them.
+
+What is *not* here is the names the engine reads and this app leaves out on purpose — the
+programs it lists as resources (`exe`, `dll`, `sys`, `obj`, `elf`, `macho`), the names that are
+words rather than formats (`img`, `ext`, `fat`, `mbr`, `gpt`), and the index files beside a
+compiled help file. Each of those *could* be shown, and each is left out for a reason that is
+written where the list is (`peazip_formats`), because a preview nobody asked for is worse than
+none.
 
 ## Configuration
 

@@ -29,6 +29,7 @@ use crate::formats::magick_formats::{
     sanitize_magick_extensions, DEFAULT_MAGICK_EXTENSIONS, MAGICK_EXTENSIONS_BEFORE_THE_REST,
 };
 use crate::formats::office_formats::{sanitize_office_extensions, DEFAULT_OFFICE_EXTENSIONS};
+use crate::formats::peazip_formats::{sanitize_peazip_extensions, DEFAULT_PEAZIP_EXTENSIONS};
 use crate::formats::text_formats::{
     sanitize_extensions, sanitize_names, DEFAULT_TEXT_EXTENSIONS, DEFAULT_TEXT_NAMES,
 };
@@ -64,6 +65,9 @@ const LIBRE_SECTION: &str = "libre";
 /// And the list of pictures the ImageMagick engine is asked about, for the same reason:
 /// what this app hands to it rather than reading itself.
 const MAGICK_SECTION: &str = "magick";
+/// And the list of archives the PeaZip engine is asked about, for the same reason: the
+/// formats this app hands to it rather than reading itself.
+const PEAZIP_SECTION: &str = "peazip";
 pub const DEFAULT_WEBP_PLAYBACK_FPS: u32 = 90;
 pub const MAX_WEBP_PLAYBACK_FPS: u32 = 90;
 /// The volume a video is played at unless the file says otherwise: silent, so a hover
@@ -950,6 +954,14 @@ pub enum PreviewType {
     /// picture backdrop, held in the picture cache. See `magick_formats` for what is listed
     /// and `imagemagick_render` for how one is converted.
     Magick,
+    /// Archives this app hands to an installed PeaZip rather than reading — the cabinet files,
+    /// isos, disk images, installers and single-stream compressors no reader here has. What
+    /// comes back is the archive's own table of contents, read into the shape every other
+    /// listing is and drawn as the same page, which is why this is a gate of its own rather
+    /// than a second list of names: a user who wants their `.cab` files left alone is not
+    /// asking for their zips to be left alone. See `peazip_formats` for what is listed and
+    /// `peazip_render` for how one is listed.
+    Peazip,
 }
 
 impl PreviewType {
@@ -975,6 +987,7 @@ impl PreviewType {
             Self::Vector => config.vector_preview_enabled,
             Self::Libre => config.libre_preview_enabled,
             Self::Magick => config.magick_preview_enabled,
+            Self::Peazip => config.peazip_preview_enabled,
         }
     }
 
@@ -992,6 +1005,7 @@ impl PreviewType {
             Self::Vector => config.vector_preview_enabled = enabled,
             Self::Libre => config.libre_preview_enabled = enabled,
             Self::Magick => config.magick_preview_enabled = enabled,
+            Self::Peazip => config.peazip_preview_enabled = enabled,
         }
     }
 }
@@ -1314,6 +1328,12 @@ pub struct AppConfig {
     /// gate for `[magick]`, and the switch a user who wants their camera raw files left
     /// alone reaches for; see `magick_formats`.
     pub magick_preview_enabled: bool,
+    /// Whether an archive the PeaZip engine lists may be previewed at all. It is the gate for
+    /// `[peazip]`, and the switch a user who wants their cabinet files, isos and disk images
+    /// left alone reaches for — a switch of its own rather than the archive gate beside it,
+    /// because these are the names nothing on this machine but an engine opens; see
+    /// `peazip_formats`.
+    pub peazip_preview_enabled: bool,
     /// Whether vector drawings are previewed at all, ahead of the vector list their names
     /// are entries of, and of the browser engine a document of that kind is drawn by.
     pub vector_preview_enabled: bool,
@@ -1417,6 +1437,11 @@ pub struct AppConfig {
     /// extensions` in `config.ini`: the formats ImageMagick reads and this app has no
     /// reader of its own for — the camera raw formats above all. See `magick_formats`.
     pub magick_extensions: Vec<String>,
+    /// The names of the archives the PeaZip engine is asked about, as `[peazip] extensions` in
+    /// `config.ini`: the formats its console archiver reads and this app has no reader of its
+    /// own for — the cabinet files, isos, disk images and single-stream compressors. See
+    /// `peazip_formats`.
+    pub peazip_extensions: Vec<String>,
     /// Extensions previewed as vector drawings, already normalized for lookup.
     pub vector_extensions: Vec<String>,
 }
@@ -1468,6 +1493,7 @@ impl Default for AppConfig {
             design_preview_enabled: true,
             libre_preview_enabled: true,
             magick_preview_enabled: true,
+            peazip_preview_enabled: true,
             vector_preview_enabled: true,
             office_cache_mb: DEFAULT_OFFICE_CACHE_MB,
             libre_cache_mb: DEFAULT_LIBRE_CACHE_MB,
@@ -1497,6 +1523,7 @@ impl Default for AppConfig {
             design_extensions: sanitize_design_extensions(DEFAULT_DESIGN_EXTENSIONS),
             libre_extensions: sanitize_libre_extensions(DEFAULT_LIBRE_EXTENSIONS),
             magick_extensions: sanitize_magick_extensions(DEFAULT_MAGICK_EXTENSIONS),
+            peazip_extensions: sanitize_peazip_extensions(DEFAULT_PEAZIP_EXTENSIONS),
             vector_extensions: sanitize_vector_extensions(DEFAULT_VECTOR_EXTENSIONS),
         }
     }
@@ -1542,6 +1569,7 @@ const SETTING_GROUPS: &[(&str, &[&str])] = &[
             "magick_preview_enabled",
             "office_preview_enabled",
             "pdf_preview_enabled",
+            "peazip_preview_enabled",
             "text_preview_enabled",
             "vector_preview_enabled",
             "video_preview_enabled",
@@ -2214,6 +2242,11 @@ impl AppConfig {
         );
         ini.set(
             CONFIG_SECTION,
+            "peazip_preview_enabled",
+            Some(self.peazip_preview_enabled.to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
             "vector_preview_enabled",
             Some(self.vector_preview_enabled.to_string()),
         );
@@ -2359,6 +2392,11 @@ impl AppConfig {
             MAGICK_SECTION,
             "extensions",
             Some(sanitize_magick_extensions(&self.magick_extensions.join(",")).join(",")),
+        );
+        ini.set(
+            PEAZIP_SECTION,
+            "extensions",
+            Some(sanitize_peazip_extensions(&self.peazip_extensions.join(",")).join(",")),
         );
         ini.set(
             VECTOR_SECTION,
@@ -2628,6 +2666,10 @@ impl AppConfig {
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "magick_preview_enabled") {
             self.magick_preview_enabled = value;
         }
+        // And the PeaZip kind's, read and left where it is for the same reason.
+        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "peazip_preview_enabled") {
+            self.peazip_preview_enabled = value;
+        }
         // The vector kind's switch is read from its own name, and stays where it is where the
         // name is not written at all.
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "vector_preview_enabled") {
@@ -2819,6 +2861,19 @@ impl AppConfig {
             sanitize_magick_extensions,
         );
         self.magick_extensions = list;
+        // And the PeaZip engine's, the same shape once more: the archives its console archiver
+        // reads and this app has no reader of its own for — the cabinet files, isos, disk
+        // images and single-stream compressors — written from the built-in list on the first
+        // run and read back from there, so a user can add a format the engine reads and this app
+        // does not know, or take one out.
+        let list = configured_list(
+            ini,
+            PEAZIP_SECTION,
+            "extensions",
+            DEFAULT_PEAZIP_EXTENSIONS,
+            sanitize_peazip_extensions,
+        );
+        self.peazip_extensions = list;
         // And the vector list, new with its kind: an older file has no section at all, so
         // the key is gone and the built-in entries come back with it. Its entries have
         // grown since — `svg` and `svgz`, which were entries of the image list until the

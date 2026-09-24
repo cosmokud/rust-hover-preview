@@ -1220,6 +1220,16 @@ fn is_media_file(path: &Path) -> bool {
     if matches_archive_list(path, &config.archive_extensions) {
         return PreviewType::Archives.enabled_in(&config);
     }
+
+    // An archive no reader of this app's own opens is listed by the PeaZip engine where one is
+    // installed — a cabinet file, an iso, a disk image, a Linux package — and it is asked beside
+    // the archive list above it, which is where the two are told apart: a name in that list is
+    // read by this app itself, and one in this list is read by an engine. It is a kind of its own
+    // rather than a second list of names for the archive gate, so a user who wants these left
+    // alone is not asking for their zips to be left alone; see `peazip_formats`.
+    if crate::formats::peazip_formats::matches_peazip_list(path, &config.peazip_extensions) {
+        return PreviewType::Peazip.enabled_in(&config);
+    }
     if matches_office_list(path, &config.office_extensions) {
         return PreviewType::Office.enabled_in(&config);
     }
