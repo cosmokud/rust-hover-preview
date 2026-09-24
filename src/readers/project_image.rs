@@ -115,8 +115,9 @@ pub fn decode(path: &Path, width: u32, height: u32) -> Option<Vec<u8>> {
     let index = preview_member(&mut archive)?;
     let bytes = member_bytes(&mut archive, index)?;
 
-    let mut reader =
-        image::ImageReader::new(std::io::Cursor::new(&bytes)).with_guessed_format().ok()?;
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(&bytes))
+        .with_guessed_format()
+        .ok()?;
     reader.limits(image_decode_limits());
     let picture = reader.decode().ok()?;
 
@@ -127,7 +128,9 @@ pub fn decode(path: &Path, width: u32, height: u32) -> Option<Vec<u8>> {
         picture
     };
 
-    Some(crate::ui::preview_window::rgba_to_bgra(picture.to_rgba8().as_raw()))
+    Some(crate::ui::preview_window::rgba_to_bgra(
+        picture.to_rgba8().as_raw(),
+    ))
 }
 
 /// The size the picture is stored at, read from the picture's own header.

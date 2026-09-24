@@ -1,7 +1,7 @@
-use crate::shell::cloud_files;
 use crate::config::config::{
     image_decode_limits, sanitize_pdf_cache_mb, PreviewType, DEFAULT_PDF_CACHE_MB,
 };
+use crate::shell::cloud_files;
 use crate::CONFIG;
 use once_cell::sync::Lazy;
 use std::collections::HashMap;

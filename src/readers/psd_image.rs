@@ -151,7 +151,8 @@ pub fn decode(path: &Path, width: u32, height: u32) -> Option<Vec<u8>> {
     let stream = match compression {
         Compression::Zip { .. } => {
             let mut body = BufReader::new(File::open(path).ok()?);
-            body.seek(SeekFrom::Start(file.stream_position().ok()?)).ok()?;
+            body.seek(SeekFrom::Start(file.stream_position().ok()?))
+                .ok()?;
             Some(ZlibDecoder::new(body))
         }
         _ => None,
@@ -285,7 +286,9 @@ enum Compression {
     /// another, each in scan-line order — read as the rows themselves rather than
     /// sought into. The predicted form writes a row as the difference between it and
     /// the row before it, which is unwound as it is read.
-    Zip { predicted: bool },
+    Zip {
+        predicted: bool,
+    },
 }
 
 fn compression_of(value: u16) -> Option<Compression> {
@@ -626,21 +629,14 @@ fn spans(source: u32, target: u32) -> Vec<(usize, usize)> {
     (0..target)
         .map(|index| {
             let start = (index * source / target).min(source - 1);
-            let end = (((index + 1) * source) / target)
-                .max(start + 1)
-                .min(source);
+            let end = (((index + 1) * source) / target).max(start + 1).min(source);
             (start, end - start)
         })
         .collect()
 }
 
 /// Add one source row's samples into the sums of the target columns they belong to.
-fn accumulate(
-    samples: &[u8],
-    columns: &[(usize, usize)],
-    meaning: &Meaning,
-    sums: &mut [u64],
-) {
+fn accumulate(samples: &[u8], columns: &[(usize, usize)], meaning: &Meaning, sums: &mut [u64]) {
     match meaning {
         Meaning::Component => {
             for (column, (start, length)) in columns.iter().enumerate() {

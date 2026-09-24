@@ -21,19 +21,19 @@
 use once_cell::sync::Lazy;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
-use windows::core::{GUID, IUnknown, Interface};
+use windows::core::{IUnknown, Interface, GUID};
 use windows::Win32::Graphics::Imaging::{
     IWICBitmapCodecInfo, WICComponentEnumerateDefault, WICDecoder,
 };
 use windows::Win32::Media::MediaFoundation::{
-    MFMediaType_Video, MFStartup, MFTEnumEx, MFT_CATEGORY_VIDEO_DECODER, MFT_ENUM_FLAG,
-    MFT_ENUM_FLAG_ASYNCMFT, MFT_ENUM_FLAG_HARDWARE, MFT_ENUM_FLAG_LOCALMFT, MFT_ENUM_FLAG_SYNCMFT,
-    MFT_REGISTER_TYPE_INFO, MFSTARTUP_FULL, MFVideoFormat_AV1, MFVideoFormat_H264,
-    MFVideoFormat_HEVC, MFVideoFormat_MPEG2, MFVideoFormat_MP4V, MFVideoFormat_Theora,
-    MFVideoFormat_VP90, MFVideoFormat_WMV3, IMFActivate, MF_VERSION,
+    IMFActivate, MFMediaType_Video, MFStartup, MFTEnumEx, MFVideoFormat_AV1, MFVideoFormat_H264,
+    MFVideoFormat_HEVC, MFVideoFormat_MP4V, MFVideoFormat_MPEG2, MFVideoFormat_Theora,
+    MFVideoFormat_VP90, MFVideoFormat_WMV3, MFSTARTUP_FULL, MFT_CATEGORY_VIDEO_DECODER,
+    MFT_ENUM_FLAG, MFT_ENUM_FLAG_ASYNCMFT, MFT_ENUM_FLAG_HARDWARE, MFT_ENUM_FLAG_LOCALMFT,
+    MFT_ENUM_FLAG_SYNCMFT, MFT_REGISTER_TYPE_INFO, MF_VERSION,
 };
 use windows::Win32::System::Com::{
-    CoInitializeEx, CoTaskMemFree, CLSIDFromProgID, COINIT_MULTITHREADED,
+    CLSIDFromProgID, CoInitializeEx, CoTaskMemFree, COINIT_MULTITHREADED,
 };
 use windows::Win32::System::Registry::{
     RegCloseKey, RegOpenKeyExW, HKEY, HKEY_LOCAL_MACHINE, KEY_READ,
@@ -48,7 +48,8 @@ const FFPLAY_NAME: &str = "ffplay.exe";
 /// whether it is registered at all, which is what the system itself answers activation
 /// from: the class is opened with a stream rather than with nothing, so there is no
 /// cheaper way to ask it something.
-const PDF_ENGINE_CLASS: &str = r"SOFTWARE\Microsoft\WindowsRuntime\ActivatableClassId\Windows.Data.Pdf.PdfDocument";
+const PDF_ENGINE_CLASS: &str =
+    r"SOFTWARE\Microsoft\WindowsRuntime\ActivatableClassId\Windows.Data.Pdf.PdfDocument";
 
 /// The MIME types a codec extension claims a picture format under. A component that
 /// reports one of these is the extension being installed, which is the same question the
@@ -138,8 +139,7 @@ pub fn images() -> Vec<Row> {
         },
         Row {
             name: "AVIF",
-            available: image_codec(AVIF_MIME_TYPES)
-                || (heif && video_decoder(&MFVideoFormat_AV1)),
+            available: image_codec(AVIF_MIME_TYPES) || (heif && video_decoder(&MFVideoFormat_AV1)),
         },
         Row {
             name: "JPEG XL",
@@ -360,10 +360,8 @@ fn image_codec(mime_types: &[&str]) -> bool {
     };
 
     let Ok(components) = (unsafe {
-        factory.CreateComponentEnumerator(
-            WICDecoder.0 as u32,
-            WICComponentEnumerateDefault.0 as u32,
-        )
+        factory
+            .CreateComponentEnumerator(WICDecoder.0 as u32, WICComponentEnumerateDefault.0 as u32)
     }) else {
         return false;
     };
@@ -429,10 +427,7 @@ fn component_reports(info: &IWICBitmapCodecInfo, mime: &str) -> bool {
 /// by it, and one whose application is missing is drawn by the render engine beside it
 /// (see `office_formats::app_installed`).
 pub(crate) fn prog_id_installed(prog_id: &str) -> bool {
-    let wide: Vec<u16> = prog_id
-        .encode_utf16()
-        .chain(std::iter::once(0))
-        .collect();
+    let wide: Vec<u16> = prog_id.encode_utf16().chain(std::iter::once(0)).collect();
 
     unsafe { CLSIDFromProgID(windows::core::PCWSTR(wide.as_ptr())).is_ok() }
 }

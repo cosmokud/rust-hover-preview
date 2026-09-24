@@ -157,15 +157,8 @@ pub fn is_raw_sample(path: &Path) -> bool {
 /// than a set of approximations to one — and every one of them is a landscape or a square,
 /// because a shape and its transpose are the same number of pixels and there is nothing in a
 /// dump to say which way round it was made.
-const PICTURE_PROPORTIONS: [(u64, u64); 7] = [
-    (4, 3),
-    (3, 2),
-    (16, 9),
-    (16, 10),
-    (1, 1),
-    (5, 4),
-    (21, 9),
-];
+const PICTURE_PROPORTIONS: [(u64, u64); 7] =
+    [(4, 3), (3, 2), (16, 9), (16, 10), (1, 1), (5, 4), (21, 9)];
 
 /// The shape of a raw sample dump: the size the engine is to read the file at, worked out from the
 /// file's own length and from what one pixel of the name weighs.
@@ -360,7 +353,10 @@ fn key_of(path: &Path) -> Key {
 
     Key {
         path: path.to_path_buf(),
-        len: metadata.as_ref().map(|metadata| metadata.len()).unwrap_or(0),
+        len: metadata
+            .as_ref()
+            .map(|metadata| metadata.len())
+            .unwrap_or(0),
         modified: metadata.and_then(|metadata| metadata.modified().ok()),
     }
 }
@@ -430,8 +426,7 @@ pub fn refused(path: &Path) -> bool {
 pub fn developed(path: &Path) -> bool {
     let key = key_of(path);
 
-    LAST
-        .lock()
+    LAST.lock()
         .map(|last| last.as_ref().is_some_and(|last| last.key == key))
         .unwrap_or(false)
 }
@@ -909,7 +904,10 @@ mod tests {
             "clip.mp4",
             "drawing.cdr",
         ] {
-            assert!(!imports(Path::new(name)), "`{name}` is not one of its formats");
+            assert!(
+                !imports(Path::new(name)),
+                "`{name}` is not one of its formats"
+            );
         }
 
         for name in ["shot.nef", "shot.CR3", "shot.arw", "shot.dng", "scan.dcm"] {
@@ -998,13 +996,19 @@ mod tests {
         let taken = take_developed(&raw).expect("the picture");
         assert_eq!((taken.width, taken.height), (1600, 1200));
         assert!(!developed(&raw), "and there is one of it");
-        assert!(take_developed(&raw).is_none(), "which cannot be taken twice");
+        assert!(
+            take_developed(&raw).is_none(),
+            "which cannot be taken twice"
+        );
 
         // A picture developed for one file is left where it is by a caller asking about
         // another: what it is waiting for is its own hover.
         hold(held());
         assert!(take_developed(&other).is_none());
-        assert!(developed(&raw), "so the picture it is holding is still there");
+        assert!(
+            developed(&raw),
+            "so the picture it is holding is still there"
+        );
         take_developed(&raw);
 
         let _ = std::fs::remove_dir_all(&folder);
@@ -1065,7 +1069,10 @@ mod tests {
         };
 
         // The lengths a photograph comes in: three bytes a pixel, four, and one.
-        assert_eq!(raw_geometry(&dump("a.rgb", 640 * 480 * 3)), Some((640, 480)));
+        assert_eq!(
+            raw_geometry(&dump("a.rgb", 640 * 480 * 3)),
+            Some((640, 480))
+        );
         assert_eq!(raw_geometry(&dump("b.gray", 800 * 600)), Some((800, 600)));
         assert_eq!(
             raw_geometry(&dump("c.rgba", 1920 * 1080 * 4)),
@@ -1100,11 +1107,18 @@ mod tests {
             "a camera raw is a container rather than a dump"
         );
         assert!(!is_raw_sample(&dump("j.png", 64)));
-        assert!(is_raw_sample(&dump("i.RGB", 64)), "whatever case it is written in");
+        assert!(
+            is_raw_sample(&dump("i.RGB", 64)),
+            "whatever case it is written in"
+        );
         assert_eq!(raw_geometry(&dump("k.nef", 640 * 480 * 3 + 64)), None);
         assert_eq!(raw_geometry(&dump("l.rgb", 100)), None, "not a whole pixel");
         assert_eq!(raw_geometry(&dump("m.gray", 0)), None);
-        assert_eq!(raw_geometry(&dump("n.rgb", 7)), None, "too small to be a picture");
+        assert_eq!(
+            raw_geometry(&dump("n.rgb", 7)),
+            None,
+            "too small to be a picture"
+        );
 
         let _ = std::fs::remove_dir_all(&folder);
     }
@@ -1221,9 +1235,13 @@ mod tests {
         };
 
         assert!(!is_hung(&running(Duration::from_secs(0))));
-        assert!(!is_hung(&running(CONVERSION_GIVE_UP - Duration::from_secs(1))));
+        assert!(!is_hung(&running(
+            CONVERSION_GIVE_UP - Duration::from_secs(1)
+        )));
         assert!(is_hung(&running(CONVERSION_GIVE_UP)));
-        assert!(is_hung(&running(CONVERSION_GIVE_UP + Duration::from_secs(30))));
+        assert!(is_hung(&running(
+            CONVERSION_GIVE_UP + Duration::from_secs(30)
+        )));
     }
 
     /// The engine's own program is found by name, and the older name only ever where
@@ -1241,7 +1259,8 @@ mod tests {
                 .and_then(|name| name.to_str())
                 .unwrap_or_default();
             assert!(
-                name.eq_ignore_ascii_case(ENGINE_IMAGE) || name.eq_ignore_ascii_case(LEGACY_ENGINE_IMAGE),
+                name.eq_ignore_ascii_case(ENGINE_IMAGE)
+                    || name.eq_ignore_ascii_case(LEGACY_ENGINE_IMAGE),
                 "the engine runs under one of its own two names"
             );
 

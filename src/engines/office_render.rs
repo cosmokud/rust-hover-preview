@@ -30,13 +30,13 @@
 //!   here are the request slot, the files that have refused a page, and which
 //!   worker is current.
 
-use crate::shell::cloud_files;
+use crate::app::engine_processes;
 use crate::config::config::{
     read_within_budget, sanitize_office_cache_mb, EngineIdle, PreviewType, DEFAULT_OFFICE_CACHE_MB,
     DEFAULT_OFFICE_ENGINE_IDLE_SECS,
 };
-use crate::app::engine_processes;
 use crate::formats::office_formats::{app_for, container_kind, OfficeApp};
+use crate::shell::cloud_files;
 use crate::ui::preview_window;
 use crate::CONFIG;
 use directories::BaseDirs;
@@ -855,7 +855,11 @@ fn wait_for_message(milliseconds: u32) {
     }
 }
 
-fn render_request(engines: &mut Engines, request: &RenderRequest, generation: u64) -> RenderOutcome {
+fn render_request(
+    engines: &mut Engines,
+    request: &RenderRequest,
+    generation: u64,
+) -> RenderOutcome {
     let Some(app_kind) = app_for(&request.source) else {
         return RenderOutcome::NoEngine;
     };
