@@ -1975,8 +1975,10 @@ fn magick_render_is_due(path: &Path) -> bool {
 /// until the engine has developed one, and asking late is waiting twice. Nothing is waited on
 /// here either — the conversion runs on the engine's own thread — so what comes back is the
 /// wait, and the hover is replayed when the engine answers. The room is part of the request
-/// rather than of the wait: what the engine is told is how large a picture it may write,
-/// which is the box the preview may take.
+/// rather than of the wait, and it is the room the display has rather than the one the wait
+/// was laid out at: what the engine is told is how large a picture it may write, and a
+/// picture written into too small a box is one no later layout can draw any larger (see
+/// `PendingLoad::room`).
 fn request_magick_render(
     path: &Path,
     generation: u64,
@@ -5524,6 +5526,11 @@ fn libre_box(path: &Path) -> Option<(u32, u32)> {
 /// places and what the frame is keyed by. Nothing is converted here: a file the engine has
 /// developed nothing for yet is the wait, and the loop asks for the picture the moment there
 /// is a hover to ask for it (see `request_magick_render`).
+///
+/// The wait is a spinner's box and says nothing about how large the picture will be drawn,
+/// which is why it is not the room the engine is asked for: a picture is only this size
+/// *after* the conversion, so the room it is developed in is a ceiling on the size its
+/// preview can ever be drawn at (see `PendingLoad::room`).
 fn magick_box(path: &Path) -> Option<(u32, u32)> {
     if !imagemagick_render::available() {
         // Nothing to develop it with, so there is nothing to show: a machine without the
@@ -6088,9 +6095,19 @@ struct PendingLoad {
     pos_y: i32,
     width: u32,
     height: u32,
-    /// The room the layout allowed this preview, which is the box a page on its way
-    /// is asked for in: a slide is exported at the width the render is asked for, so
-    /// the room the display has is the sharpest page that display can show.
+    /// The room the display the hover is on has (`ScreenBounds::room`), which is the box
+    /// a page on its way is asked for in and the box a picture the image converter
+    /// develops is developed at. A slide is exported at the width the render is asked
+    /// for, so the room the display has is the sharpest page that display can show; and
+    /// a picture is developed *at* the size it is then drawn at, so a room smaller than
+    /// that is a picture that can never be shown any larger.
+    ///
+    /// It is deliberately not the room this load's own layout came out at. A hover
+    /// waiting on an engine is laid out as the spinner's own box at the pointer (see
+    /// `waiting_placement`), and the room that layout comes out at is the corner of the
+    /// display the spinner was put in — a box that says nothing about how large the
+    /// preview will be drawn, and for a picture a ceiling that would leave it thumbnail
+    /// sized for good.
     room: (u32, u32),
     spinner_shown: bool,
     /// How long this load may run before the spinner is put up for it, read from
@@ -6149,6 +6166,11 @@ impl PendingLoad {
         };
 
         let bounds = monitor_bounds_from_point(cursor.x, cursor.y);
+
+        // The room an engine is asked for follows the hand the preview does, because the
+        // display the hand is on is the one the hover is now waiting on: a pointer that has
+        // crossed to another display is a picture developed for that display's room.
+        self.room = bounds.room();
 
         if let Some(layout) = compute_mouse_layout(cursor.x, cursor.y, placement, bounds, dpi) {
             followed.preview = (layout.pos_x, layout.pos_y) != (self.pos_x, self.pos_y)
@@ -7185,6 +7207,22 @@ struct ScreenBounds {
 impl ScreenBounds {
     fn height(self) -> i32 {
         self.bottom - self.top
+    }
+
+    /// The room the display has: the whole work area, which is the largest box anything
+    /// shown on this display can be drawn in — every placement mode takes its own room
+    /// out of this one, so a box this size bounds all of them.
+    ///
+    /// It is what an engine that has to draw a preview *before* the file can be measured
+    /// is asked for, rather than the room the hover's own layout came out at: a picture
+    /// the image converter develops is developed at the size it is then shown at, so a
+    /// room smaller than this is a picture that can never be shown any larger however
+    /// much room its preview is given afterwards (see `PendingLoad::room`).
+    fn room(self) -> (u32, u32) {
+        (
+            (self.right - self.left).max(1) as u32,
+            (self.bottom - self.top).max(1) as u32,
+        )
     }
 }
 
@@ -8593,13 +8631,14 @@ pub fn run_preview_window() {
                             // dropped and the page has somewhere to land — and the
                             // wait it is given is the one every other kind of wait
                             // gets, so the spinner goes up once the delay has run
-                            // (see `spinner_due`). The page is asked for in the room
-                            // this preview may take, which is what the page is drawn
-                            // at the size of: the spinner's own box is a spinner's
-                            // and says nothing about how large the page will be
-                            // drawn, while a slide is exported at the width the
-                            // render is asked for — so the room the display has is
-                            // the sharpest page that display can show.
+                            // (see `spinner_due`). What is asked for is the room the
+                            // display has rather than the box this hover's layout
+                            // came out at, which for a wait is the spinner's own box
+                            // at the pointer and says nothing about how large the
+                            // page will be drawn: a slide is exported at the width
+                            // the render is asked for, so the room the display has is
+                            // the sharpest page that display can show (see
+                            // `PendingLoad::room`).
                             let (width, height) = pending_load
                                 .as_ref()
                                 .map(|pl| pl.room)
@@ -8611,9 +8650,11 @@ pub fn run_preview_window() {
                             //
                             // And a picture the image converter develops is the same wait
                             // once more — the engine's answer arrives as a message rather
-                            // than as a page in a folder, and what is asked of it is the
-                            // room the preview may take, since what it writes is a picture
-                            // at the size it is shown rather than at the size of the file.
+                            // than as a page in a folder, and what it writes is a picture
+                            // at the size it is shown rather than at the size of the file,
+                            // which is what makes its room a ceiling rather than a hint: a
+                            // picture developed into a box smaller than the display can
+                            // never be drawn any larger than that box.
                             page_render_pending = request_office_render(
                                 &result.path,
                                 result.generation,
@@ -8995,6 +9036,12 @@ pub fn run_preview_window() {
                 let mut show_requested = false;
                 let mut preview_scale = current_hover_scales().picture;
                 let mut show_dpi = 96u32;
+                // The room the display the hover is on has, which is what an engine that
+                // has to draw the preview before the file can be measured is asked for.
+                // It is the display's room rather than the one this hover's layout comes
+                // out at, which for a hover waiting on an engine is the corner of the
+                // display the spinner was put in (see `PendingLoad::room`).
+                let mut show_room: Option<(u32, u32)> = None;
                 let show_snapshot = matches!(
                     preview_msg,
                     PreviewMessage::Show(..) | PreviewMessage::ShowKeyboard(..)
@@ -9071,6 +9118,7 @@ pub fn run_preview_window() {
                                 );
                                 show_path = Some(path);
                                 show_dpi = dpi;
+                                show_room = Some(bounds.room());
                             }
                         }
                     }
@@ -9127,6 +9175,7 @@ pub fn run_preview_window() {
                                 );
                                 show_path = Some(path);
                                 show_dpi = dpi;
+                                show_room = Some(bounds.room());
                             }
                         }
                     }
@@ -9200,6 +9249,14 @@ pub fn run_preview_window() {
                     let max_height = layout.max_height;
                     let preview_w = layout.preview_w;
                     let preview_h = layout.preview_h;
+
+                    // The room an engine-drawn preview is asked for is the room the display
+                    // has rather than the one this layout came out at: a hover waiting on an
+                    // engine is laid out as the spinner's own box at the pointer, and the
+                    // room that layout comes out at is the corner the spinner was put in —
+                    // which for a picture developed at the size it is shown at would be a
+                    // ceiling on the size it could ever be drawn at (see `PendingLoad::room`).
+                    let room = show_room.unwrap_or((max_width, max_height));
 
                     // The box the wait goes in while the load runs: the spinner's own
                     // place, which is not the preview's. A hover with no room for the
@@ -9304,7 +9361,7 @@ pub fn run_preview_window() {
                             pos_y,
                             width: preview_w,
                             height: preview_h,
-                            room: (max_width, max_height),
+                            room,
                             spinner_shown,
                             spinner_delay: load_spinner_delay(),
                             spinner_pos: (spinner_x, spinner_y),
@@ -9407,7 +9464,7 @@ pub fn run_preview_window() {
                                         pos_y,
                                         width: media_width as u32,
                                         height: media_height as u32,
-                                        room: (max_width, max_height),
+                                        room,
                                         spinner_shown: false,
                                         spinner_delay: Duration::ZERO,
                                         spinner_pos: (spinner_x, spinner_y),
@@ -9479,7 +9536,7 @@ pub fn run_preview_window() {
                             pos_y,
                             width: preview_w,
                             height: preview_h,
-                            room: (max_width, max_height),
+                            room,
                             spinner_shown: false,
                             spinner_delay: load_spinner_delay(),
                             spinner_pos: (spinner_x, spinner_y),
@@ -11026,6 +11083,16 @@ mod tests {
         assert_eq!((placement.pos_x, placement.pos_y), (301, 301));
         assert_eq!((placement.preview_w, placement.preview_h), (side, side));
 
+        // And the room that layout comes out at is that corner of the display rather than
+        // the display itself. It is the spinner's own room and says nothing about how large
+        // the preview it is waiting for will be drawn, which is why it is not the room the
+        // engine that draws that preview is asked for (see `PendingLoad::room`).
+        assert_eq!(
+            (placement.max_width, placement.max_height),
+            (699, 499),
+            "the room is the corner the spinner was put in, not the display"
+        );
+
         // With the display ending just past the pointer there is no room in the
         // quadrant it grows into, so the spinner takes the corner that is visible:
         // its box placed to the pointer's left, still touching it.
@@ -11191,9 +11258,43 @@ mod tests {
         assert_eq!((placement.pos_x, placement.pos_y), (690, 340));
     }
 
+    /// The room the display has is its whole work area: the largest box anything shown on
+    /// it can be drawn in, and the box an engine that has to draw a preview before the file
+    /// can be measured is asked for (see `PendingLoad::room`). A work area with no room in
+    /// it is a pixel rather than nothing, because a box of nothing is an engine asked to
+    /// write nothing.
+    #[test]
+    fn a_display_room_is_the_whole_of_its_work_area() {
+        assert_eq!(bounds().room(), (1000, 800));
+
+        assert_eq!(
+            ScreenBounds {
+                left: 100,
+                top: 40,
+                right: 1800,
+                bottom: 1040,
+            }
+            .room(),
+            (1700, 1000),
+            "the room is the work area whatever corner it is anchored at"
+        );
+
+        assert_eq!(
+            ScreenBounds {
+                left: 0,
+                top: 0,
+                right: 0,
+                bottom: 0,
+            }
+            .room(),
+            (1, 1),
+            "a display with no room is asked for a pixel rather than for nothing"
+        );
+    }
+
     /// A planned preview is inside the display it was planned for: the box it takes is
-    /// within the room it was given, and the whole of it — place and size, both axes —
-    /// is within that display's work area.
+    /// within the room it was given, that room is within the room the display itself has,
+    /// and the whole of it — place and size, both axes — is within that display's work area.
     fn assert_inside_the_display(layout: PreviewLayout, bounds: ScreenBounds) {
         assert!(
             layout.preview_w <= layout.max_width && layout.preview_h <= layout.max_height,
@@ -11202,6 +11303,22 @@ mod tests {
             layout.preview_h,
             layout.max_width,
             layout.max_height
+        );
+
+        // The room a placement hands its preview is taken out of the display — the side of
+        // the pointer it goes beside, the quadrant it grows into, the room left past a name —
+        // so the display's own room bounds every one of them. That is what makes it the box
+        // to ask an engine for when the file cannot be measured before it is drawn: a picture
+        // developed into a smaller box than this could never be drawn at the size a layout
+        // asks for (see `PendingLoad::room`).
+        let room = bounds.room();
+        assert!(
+            layout.max_width <= room.0 && layout.max_height <= room.1,
+            "the room a layout was given, {} by {}, leaves the display's own room of {} by {}",
+            layout.max_width,
+            layout.max_height,
+            room.0,
+            room.1
         );
 
         assert!(

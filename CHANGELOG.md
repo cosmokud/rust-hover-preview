@@ -36,6 +36,7 @@
 - Documents and specimens are no longer drawn in the order the pointer crossed them. The engine now gets one current request at a time, with stale requests dropped.
 - A browser navigation that stops answering no longer blocks every later preview. The wait is bounded and then abandoned.
 - A document or specimen now closes when the pointer touches it, in whatever window it is drawn.
+- **Camera raws no longer preview at a fraction of their size.** A picture `ImageMagick` develops was asked for in the room the hover’s own layout came out at, and a hover waiting on an engine is laid out as the waiting spinner’s box at the pointer — a corner of the display — so a large raw was developed into that corner and could never be drawn any larger than it, at 100% or at any other scale. The engine is now asked for the room the display has, which is also what a page on its way is rendered into: a raw fills the preview the way a picture of the same size does.
 
 ## [0.3.1] - 2026-09-24
 
