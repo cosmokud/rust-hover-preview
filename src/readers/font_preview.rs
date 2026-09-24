@@ -19,8 +19,9 @@
 //! map answers for are drawn — the pangram always among them where the font has Latin, and
 //! a line apiece where it has Japanese, Chinese, Korean, Cyrillic, Greek, Arabic, Hebrew,
 //! Thai or Devanagari. A font of a script there is no line for — a Georgian one, a symbol
-//! one — is drawn from the characters its own map holds, which is the same answer reached
-//! the other way round.
+//! one — is drawn from the characters its own map holds, and so is a font with no script at
+//! all: an icon font's glyphs are private-use ones, and a line of them is what a specimen of
+//! such a font is for. Both are the same answer reached the other way round.
 //!
 //! Answering it costs a read of the file under the budget every other read is answered
 //! under, and a parse of two of its tables: the character map, and the `name` table the
@@ -799,9 +800,15 @@ fn byte_map_glyph(bytes: &[u8], offset: usize, code: u32) -> Option<u16> {
     Some(u16::from(*bytes.get(offset + 6 + code as usize)?))
 }
 
-/// Whether a code point is one a specimen can draw: not a control or a space, not one of
-/// the private-use areas a font keeps its own things in, and not a variation selector,
-/// which is a mark on the character before it rather than a character.
+/// Whether a code point is one a specimen can draw: not a control or a space, and not a
+/// variation selector, which is a mark on the character before it rather than a character.
+///
+/// A private-use one *is* drawn, which is the whole of what an icon font has: its glyphs
+/// are the ones it keeps in a private-use area, with no character of any script behind
+/// them, and a line of them is what a specimen of such a font is for. What keeps them off
+/// the lines a text font is judged by is that only the last resort asks for them: the lines
+/// are the ones this app knows, and a font is drawn from its own characters only where it
+/// covers none of them — which no font that draws text ever does.
 fn drawable(code: u32) -> Option<char> {
     let character = char::from_u32(code)?;
 
@@ -809,12 +816,9 @@ fn drawable(code: u32) -> Option<char> {
         return None;
     }
 
-    let private = (0xe000..=0xf8ff).contains(&code)
-        || (0xf0000..=0xffffd).contains(&code)
-        || (0x100000..=0x10fffd).contains(&code);
     let variation = (0xfe00..=0xfe0f).contains(&code) || (0xe0100..=0xe01ef).contains(&code);
 
-    (!private && !variation).then_some(character)
+    (!variation).then_some(character)
 }
 
 /// Every code point a format 4 subtable maps, in its own order, while `visit` asks for
@@ -1617,6 +1621,31 @@ mod tests {
         // And the title falls back to the file's own name where the font names itself
         // nothing.
         assert_eq!(specimen.title, "arabic");
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// A font whose glyphs are all private-use ones — an icon font — is drawn from them:
+    /// they are the font's own characters, and the icons are what a specimen of such a font
+    /// is for. What is not drawn is the variation selector beside them, which is a mark on
+    /// the character before it rather than a character of its own.
+    #[test]
+    fn draws_an_icon_font_from_its_own_glyphs() {
+        let icons: Vec<u32> = (0xe000..0xe008).collect();
+        let covered: Vec<u32> = icons.iter().copied().chain([0xfe0f]).collect();
+
+        let path = fixture("icons.ttf", &sfnt(&[table(b"cmap", cmap_table(&covered))]));
+        let specimen = probe(&path).expect("a specimen");
+
+        assert_eq!(specimen.samples.len(), 1);
+        assert_eq!(specimen.samples[0].chars().count(), icons.len());
+        assert!(
+            specimen.samples[0]
+                .chars()
+                .all(|character| icons.contains(&u32::from(character))),
+            "the line is the font's own icons: {:?}",
+            specimen.samples[0]
+        );
 
         let _ = std::fs::remove_file(&path);
     }
