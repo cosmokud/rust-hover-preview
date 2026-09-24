@@ -1,54 +1,72 @@
 //! Which files are previewed by ImageMagick rather than by a reader of this app's own.
 //!
-//! ImageMagick is the one tool that opens nearly every picture ever written: its own
-//! coders for the formats nobody else kept, and the camera raw formats through the raw
-//! decoder it is built with — LibRaw, the library behind `dcraw`. A camera writes a
-//! `.nef`, a `.cr3`, a `.arw`, a `.raf` or a `.dng` — a raw sensor reading with a picture
-//! wrapped around it, which no decoder of this app reads and Windows has no codec for —
-//! and where ImageMagick is installed this app asks it to draw one as a picture (see
-//! `imagemagick_render`). What is listed here is which of those names this app hands over,
-//! and the list is deliberately narrower than the engine's reach:
+//! ImageMagick is the one tool that opens nearly every picture ever written: its own coders for
+//! the formats nobody else kept, and the camera raw formats through the raw decoder it is built
+//! with — LibRaw, the library behind `dcraw`. A camera writes a `.nef`, a `.cr3`, a `.arw`, a
+//! `.raf` or a `.dng` — a raw sensor reading with a picture wrapped around it, which no decoder
+//! of this app reads and Windows has no codec for — and where ImageMagick is installed this app
+//! asks it to draw one as a picture (see `imagemagick_render`). What is listed here is which of
+//! those names this app hands over.
 //!
-//! * A name another kind already reads is not here. Pictures, drawings, videos, archives,
-//!   fonts, PDFs and the text lists are answered by this app's own readers, and asking an
-//!   image converter about a `.png` or a `.jpg` would be a launch that answers worse than
-//!   what is already there. That is why `pcx`, `pcd`, `pct`, `ras`, `wpg` and `sti` are
-//!   not here although ImageMagick reads every one of them: they are names the `[libre]`
-//!   list carries, and a name sits in exactly one list so that a preview of it cannot come
-//!   back by two routes. `cin`, `dcx`'s neighbours in FFmpeg's list and the rest follow
-//!   the same rule, and each is named where it is left out below.
-//! * A file this app's own readers answer for is not here either, even where ImageMagick
-//!   reads the format as well: `psd`, `exr`, `hdr`, `dds`, `qoi`, `svg`, the five font
-//!   formats and the two PostScript families are all read by a reader of this app's or
-//!   drawn by one of its engines, and a second opinion about one of them is not a preview
-//!   this app needs.
+//! The list is built from the engine's own registry rather than from what it is said to support:
+//! every name in it was read one at a time out of `magick -list format` on an installed engine,
+//! and a name belongs here only where that registry declares read support for it. A name the
+//! engine has no coder for is a launch that answers nothing, and a name it reads through a
+//! delegate the machine has not been given is the same launch — what that costs is bounded by the
+//! engine remembering the answer (see `imagemagick_render`).
 //!
-//! What a name is asked about is settled by the engine's own registry rather than by a list
-//! of what it is said to support — read one name at a time out of `magick -list format` on
-//! an installed engine — and a name belongs here only where that registry declares read
-//! support for it. A name the engine has no coder for is a launch that answers nothing; a
-//! name it reads through a delegate this machine has not been given is the same launch,
-//! and what that costs is bounded by the engine remembering the answer (see
-//! `imagemagick_render`).
+//! What is *not* here is a judgement about the engine or the format rather than a gap, and each
+//! group is worth naming:
 //!
-//! What is *not* here is a judgement about the format rather than a gap, and the three
-//! groups are worth naming:
+//! * **A name another kind already reads is not here.** `pcx`, `pcd`, `pct`, `ras`, `wpg`, `sti`
+//!   and `cin` are entries of the `[libre]` and video lists, `psd`, `exr`, `hdr`, `dds`, `qoi`
+//!   and `svg` of the readers this app carries, and a name sits in exactly one list so that a
+//!   preview of one cannot come back by two routes. The *spellings* of a format are not that
+//!   rule, which is why several names below sit beside a sibling in another list: `pict` is here
+//!   while `pct` is the `[libre]` list's, `sun` is here while `ras` is, and `pcds` is here while
+//!   `pcd` is — the engine the other list names has no filter for the second spelling, so that
+//!   spelling is a name no other list claims. `dxt1` and `dxt5` are the same case against the
+//!   picture path: a `.dds` is decoded by a reader of this app's, and its two spellings are not.
+//!   One name here is asked for and may draw nothing, which is the coder's own limit rather than
+//!   a delegate's absence: measured against the installed build, `pict` reads a QuickDraw picture
+//!   of a few dozen pixels and refuses one of a few hundred with `insufficient image data`, so a
+//!   `.pict` of a size anyone would hover is a hover with no preview rather than a broken one.
+//! * **The fonts are not here.** `pfa`, `pfb` and `dfont` are fonts the browser engine the
+//!   specimens are drawn by cannot be given — every font a page asks for goes through that
+//!   engine's own sanitizer, which takes OpenType and the two WebFont containers and nothing else
+//!   (see `font_formats`, where the measurement is) — and the answer to that is not this engine:
+//!   a font is the font preview's kind, and a specimen is a page of text rather than a picture,
+//!   so a rendering of a face by an image converter is not what this app wants for one.
+//! * **The documents are not here.** A PostScript or PDF file, an `.xps`, a `.djvu` and an
+//!   `.mvg` are pages rather than pictures, and the engine draws them only through a Ghostscript,
+//!   a DjVuLibre or a Graphviz installed beside it. A page of a document is what the PDF path and
+//!   the render engine are for, and a name here answers nothing on a machine that has none of
+//!   those delegates — which is every machine this was measured on. A user who has one can add
+//!   the name by hand.
+//! * **The things that are not files are not here.** `xc`, `canvas`, `caption`, `gradient`,
+//!   `label`, `null`, `pattern`, `plasma`, `tile`, `http`, `https`, `ftp`, `file`, `inline`,
+//!   `data`, `clipboard`, `vid`, `screenshot`, `thumbnail`, `mask`, `clip`, `msvg`, `rsvg` and
+//!   `dcraw` are the engine's own notation: names of images to *make* rather than of files to
+//!   open, and a hover on a file called `xc` is a hover on nothing. What the text lists answer for
+//!   — `txt`, `html`, `json`, `yaml` — is theirs, and `info`, `kernel`, `histogram`, `matte`,
+//!   `uil`, `shtml`, `brf`, `cip`, `isobrl`, `isobrl6`, `ubrl`, `ubrl6`, `ashlar`, `eps2`, `eps3`,
+//!   `ps2` and `ps3` are shapes the engine only ever *writes*: a name behind one of those is a
+//!   file nothing here can open, and one the engine itself cannot read.
+//! * **And one name is missing because the build is.** `xwd` is an X11 window dump, a format
+//!   ImageMagick has a coder for (registered as `_XWD`) that the Windows installer's module set
+//!   does not ship: asking one of those builds for a `.xwd` fails looking for a coder module that
+//!   is not there, and `magick -list format` — which names the formats whose coders are installed
+//!   — does not name it at all. A build that ships it declares it, and then the name is an entry
+//!   away like every other.
 //!
-//! * **The pictures with no head to read.** `rgb`, `rgba`, `gray`, `cmyk`, `bgr`, `uyvy`,
-//!   `yuv`, `pal` and `mono` are raw samples with no header at all: the engine reads them
-//!   only when it is told the size and the depth to read them at, which a hover cannot
-//!   know. Every one of them is a format a user can still add to the list and ask about —
-//!   what is missing there is the answer rather than the name.
-//! * **The documents.** A PostScript or PDF file, an `.xps`, a `.djvu` and an `.mvg` are
-//!   pages rather than pictures, and ImageMagick reads the first three only through a
-//!   Ghostscript this app cannot count on. A page of a document is what the PDF path and
-//!   the render engine are for.
-//! * **The things that are not files.** `xc`, `canvas`, `caption`, `gradient`, `label`,
-//!   `null`, `pattern`, `plasma`, `tile`, `url`, `https`, `inline`, `data`, `clipboard`,
-//!   `vid` and `mvg` are the engine's own pseudo-formats: names of images to make rather
-//!   than of files to open, and a hover on a file called `xc` is a hover on nothing. `txt`,
-//!   `html`, `json`, `yaml`, `info`, `sixel` and `uil` are answered by the text lists or by
-//!   nothing, and `ttf`, `otf` and the rest of the fonts by the font preview.
+//! A raw sample dump is the one kind of file here the engine cannot measure for itself. `rgb`,
+//! `rgba`, `gray`, `cmyk` and the rest of them are samples with no header at all — no size, no
+//! depth, no channel order beyond the name — because the shape of one was written down where the
+//! file was made rather than in the file. What is left to read is the file's own length, so the
+//! shape is worked out from that and from what one pixel of the name weighs, and a length that
+//! does not settle it is answered with no preview rather than with a guess (see
+//! `imagemagick_render::raw_geometry`); the engine is then told the size the file is to be read
+//! at.
 //!
 //! The list lives in `config.ini` as `[magick] extensions`, written from the built-in list
 //! on first run and read back from there, so a user can add a format the engine reads and
@@ -65,37 +83,60 @@ use std::path::Path;
 /// The extensions written to `config.ini` on first run: the picture formats ImageMagick
 /// reads and this app has no reader of its own for.
 ///
-/// The camera raw formats come first in spirit if not in order — `3fr`, `arw`, `cr2`,
-/// `cr3`, `crw`, `dcr`, `dng`, `erf`, `fff`, `iiq`, `k25`, `kdc`, `mdc`, `mef`, `mos`,
-/// `mrw`, `nef`, `nrw`, `orf`, `pef`, `raf`, `raw`, `rmf`, `rw2`, `rwl`, `sr2`, `srf`,
-/// `srw` and `x3f`, from the raw decoder the engine is built with, which is every raw
-/// format a camera writes that is still met with — and they are what this list is mostly
-/// about: nothing else on a Windows machine opens one, the shell shows a thumbnail from
-/// the picture the camera left inside the file and nothing else, and a hover onto one
-/// shows nothing at all rather than the photograph.
+/// The camera raw formats come first in spirit if not in order — `3fr`, `arw`, `cr2`, `cr3`,
+/// `crw`, `dcr`, `dng`, `erf`, `fff`, `iiq`, `k25`, `kdc`, `mdc`, `mef`, `mos`, `mrw`,
+/// `nef`, `nrw`, `orf`, `pef`, `raf`, `raw`, `rmf`, `rw2`, `rwl`, `sr2`, `srf`, `srw` and
+/// `x3f`, from the raw decoder the engine is built with, which is every raw format a camera
+/// writes that is still met with — and they are what this list is mostly about: nothing else
+/// on a Windows machine opens one, the shell shows a thumbnail from the picture the camera
+/// left inside the file and nothing else, and a hover onto one shows nothing at all rather
+/// than the photograph.
 ///
-/// What follows them is the formats the engine has a coder of its own for and no other
-/// list claims: the medical scanner's `dcm`, the film scanner's `dcx` and `dpx`, the
-/// astronomer's `fit`, `fits` and `fts`, the compositor's `j2c`, `j2k`, `jp2`, `jpc`, `jpm`
-/// and `jpt`, the animator's `jng` and `mng`, the illustrator's `xcf`, `xbm` and `xpm`, the
-/// painter's `sgi`, the engineer's `vicar`, the phone's `wbmp`, the cursor's `cur`, and the
-/// engine's own `miff`.
+/// What follows them, in the order the list above is written in:
 ///
-/// Four names ImageMagick reads are deliberately *not* here, and each is a note about the
-/// engine rather than about the format. `sti` is a Sinar raw capture, and the name is one the
-/// `[libre]` list already carries for the StarImpress template it means to everything else —
-/// a name sits in one list, and that list is the one that claimed it first. `cin` is a Cineon
-/// film frame, which FFmpeg demuxes and plays, so it is the video list's. `palm` is a Palm
-/// pixmap with no header to be found under any name, which the engine reads by being told
-/// what it is looking at. And `xwd` is an X11 window dump — a format ImageMagick has a coder
-/// for, registered under the name `_XWD`, that the *Windows* installer's module set does not
-/// ship: asking one of those builds for a `.xwd` fails looking for a coder module that is not
-/// there, and `magick -list format` names the formats whose coders are installed, so it does
-/// not name this one. The distinction matters for a name like this: a list built from the
-/// engine's own registry can only hold what the engine on the machine actually reads, and one
-/// this app put in anyway would be a launch that answers nothing every run. A build that does
-/// ship the coder declares it, and the name can be added to the list by hand like any other.
-pub const DEFAULT_MAGICK_EXTENSIONS: &str = "3fr,arw,cr2,cr3,crw,cur,dcm,dcr,dcx,dng,dpx,erf,fff,fit,fits,fts,iiq,j2c,j2k,jng,jp2,jpc,jpm,jpt,k25,kdc,mdc,mef,miff,mng,mos,mrw,nef,nrw,orf,pef,pfm,raf,raw,rmf,rw2,rwl,sgi,sr2,srf,srw,vicar,wbmp,x3f,xbm,xcf,xpm";
+/// * The formats the engine has a coder of its own for and no other list claims: the medical
+///   scanner's `dcm`, the film scanner's `dcx` and `dpx`, the astronomer's `fit`, `fits` and
+///   `fts`, the compositor's `j2c`, `j2k`, `jp2`, `jpc`, `jpm` and `jpt`, the animator's `jng`
+///   and `mng`, the illustrator's `xcf`, `xbm` and `xpm`, the painter's `sgi`, the engineer's
+///   `vicar`, the phone's `wbmp`, the cursor's `cur`, and the engine's own `miff`.
+/// * The formats the registry declares read support for that no preview was ever asked for: a
+///   pixel-art program's sprites (`ase`, `aseprite`), a floppy-era paint program's pictures
+///   (`mac`, `pix`, `rla`, `rle`, `art`, `cut`, `wbinfo`), a fax machine's pages (`fax`, `g3`,
+///   `g4`), a scanner's `pgx`, a texture of a console's (`tim`, `tm2`), an icon of a robot's
+///   (`rgf`), an embroidery machine's pattern (`pes`), a spectrum analyser's screen (`scr`), a
+///   telescope's or a satellite's frame (`hrz`, `ipl`, `fl32`, `sct`, `jnx`), a colour lookup
+///   table (`cube`), a document's provenance record (`c2pa`), a markup language (`pango`), and
+///   the rest of the names beside them. Each is a picture the engine really draws; what none of
+///   them has is a reason to have been picked over the others, and the list shipping with them
+///   is what settles that.
+/// * The second spelling of a format whose first spelling another list holds — `pict`, `sun`,
+///   `pcds`, `dxt1` and `dxt5`, `icb`, `vda` and `vst`, `picon` — which the engine reads and the
+///   engine the other spelling belongs to does not (see the module documentation above).
+/// * The raw sample dumps (`rgb`, `rgba`, `gray`, `cmyk` and their kin, and the `group4` fax
+///   bitstream), whose shape comes from their own length: a dump whose length does not settle one
+///   is a file this app shows nothing for, and one that does is read at the size that came out of
+///   it.
+///
+/// What is deliberately *not* here is named in the module documentation above: the alternatives
+/// spelling of a name another list already claims, the fonts, the documents that need a delegate,
+/// the engine's own notation, and `xwd`, which this build ships no coder for.
+pub const DEFAULT_MAGICK_EXTENSIONS: &str = "3fr,aai,art,arw,ase,aseprite,bayer,bayera,bgr,bgra,bgro,c2pa,cal,cals,cmyk,cmyka,cr2,cr3,crw,cube,cur,cut,\
+dcm,dcr,dcx,dng,dpx,dxt1,dxt5,erf,fax,fff,fit,fits,fl32,fts,ftxt,g3,g4,gray,graya,group4,hrz,icb,iiq,ipl,j2c,\
+j2k,jng,jnx,jp2,jpc,jpm,jpt,k25,kdc,mac,map,mat,mdc,mef,miff,mng,mono,mos,mpc,mrw,mtv,nef,nrw,orf,otb,pal,\
+palm,pango,pcds,pef,pes,pfm,pgx,phm,picon,pict,pix,pwp,raf,raw,rgb,rgb565,rgba,rgbo,rgf,rla,rle,rmf,rw2,rwl,\
+scr,sct,sf3,sfw,sgi,six,sixel,sr2,srf,srw,stegano,sun,tim,tm2,uyvy,vda,vicar,viff,vips,vst,wbinfo,wbmp,x3f,\
+xbm,xcf,xpm,xv,ycbcr,ycbcra,yuv";
+
+/// The built-in list as it stood while it held the camera raw formats and the pictures beside them
+/// and nothing else: what this app wrote before the names nobody had asked for were added to it,
+/// and before the raw sample dumps were.
+///
+/// A file holding exactly these entries is the app's own older list rather than a user's edit —
+/// nobody has touched it — so it is brought up to the built-in list rather than kept as written,
+/// which is what gives an installation that already exists the names added since. Without it those
+/// names would reach a fresh installation only, since every `config.ini` already written holds the
+/// list as it was (see `config::repair_older_lists`).
+pub const MAGICK_EXTENSIONS_BEFORE_THE_REST: &str = "3fr,arw,cr2,cr3,crw,cur,dcm,dcr,dcx,dng,dpx,erf,fff,fit,fits,fts,iiq,j2c,j2k,jng,jp2,jpc,jpm,jpt,k25,kdc,mdc,mef,miff,mng,mos,mrw,nef,nrw,orf,pef,pfm,raf,raw,rmf,rw2,rwl,sgi,sr2,srf,srw,vicar,wbmp,x3f,xbm,xcf,xpm";
 
 /// Whether the configured list claims `path`.
 pub fn matches_magick_list(path: &Path, extensions: &[String]) -> bool {

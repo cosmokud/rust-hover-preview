@@ -112,6 +112,140 @@ const LEGACY_ENGINE_IMAGE: &str = "convert.exe";
 /// held, the way every other cache of this app's shape answers that.
 const ANSWERS_MAX_ENTRIES: usize = 512;
 
+/// What one pixel of a raw sample dump weighs, in bits, by the name it is written under, or
+/// nothing for a name that is not a dump.
+///
+/// A dump is samples and no container, which is why the engine has to be told a size before it can
+/// read one; what the name adds is the shape of a pixel — how many samples to it, and how wide a
+/// sample is. Eight bits to a sample everywhere except the two bi-level names, which are one bit
+/// to a pixel and the one place a dump says anything about its own packing, and the packed
+/// sixteen-bit name, whose pixel is a word rather than a triple.
+fn raw_sample_bits(name: &str) -> Option<u64> {
+    let bits = match name {
+        // One bit to a pixel: a bi-level bitmap, and a fax bitstream.
+        "mono" | "group4" => 1,
+        // One sample to a pixel: a grey, a colormap's index, a sensor's mosaic.
+        "gray" | "map" | "bayer" => 8,
+        // Two: a grey and its coverage, a mosaic and its coverage, a packed sixteen-bit pixel,
+        // and a pair of chroma samples beside their luma.
+        "graya" | "bayera" | "rgb565" | "uyvy" | "yuv" | "pal" => 16,
+        // Three: the ordinary colour triple, and the three a video sample is carried in.
+        "rgb" | "bgr" | "ycbcr" => 24,
+        // Four: a triple with coverage beside it, the print's four inks, and the luma with both of
+        // its chroma samples and its coverage.
+        "rgba" | "bgra" | "rgbo" | "bgro" | "cmyk" | "ycbcra" => 32,
+        // And the print's four inks with coverage beside them.
+        "cmyka" => 40,
+        _ => return None,
+    };
+
+    Some(bits)
+}
+
+/// Whether this file is a raw sample dump: samples and no container, whose shape has to be worked
+/// out rather than read (see [`raw_geometry`]).
+pub fn is_raw_sample(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| extension.to_lowercase())
+        .is_some_and(|extension| raw_sample_bits(&extension).is_some())
+}
+
+/// The proportions a picture is written in, the commonest first: what the shape of a dump is
+/// tried against. Every one of them has to divide the file's pixel count exactly (see
+/// [`raw_geometry`]), so the table is a list of the shapes pictures are actually made in rather
+/// than a set of approximations to one — and every one of them is a landscape or a square,
+/// because a shape and its transpose are the same number of pixels and there is nothing in a
+/// dump to say which way round it was made.
+const PICTURE_PROPORTIONS: [(u64, u64); 7] = [
+    (4, 3),
+    (3, 2),
+    (16, 9),
+    (16, 10),
+    (1, 1),
+    (5, 4),
+    (21, 9),
+];
+
+/// The shape of a raw sample dump: the size the engine is to read the file at, worked out from the
+/// file's own length and from what one pixel of the name weighs.
+///
+/// A dump has no header, and that is what the format is: the samples, with the width, the height
+/// and the depth written down wherever the file was made — a data sheet, a script, a tool's
+/// command line — rather than in the file. There is nothing in the bytes to read, which is what
+/// the engine's own `must specify image size` says. What the length does say is how many pixels
+/// there are, and a picture is a whole number of pixels across and down in one of the proportions
+/// pictures are written in, so the proportions are tried in turn and the first that divides the
+/// pixel count exactly is the shape the file is read at.
+///
+/// Two things cannot be known, and both are properties of arithmetic rather than of this code:
+/// a shape and its transpose are the same length, so a portrait dump is read as the landscape
+/// shape of the proportion it comes out at; and a `.rgb` of a landscape photograph has the same
+/// length as a square one from time to time — a 1920x1080 picture is a 1440x1440 picture's worth
+/// of pixels — so the order of the table is what settles those, and it is the order pictures are
+/// mostly made in. A length that fits no proportion of the table is answered with no preview at
+/// all, since a preview of the wrong shape is worse than none.
+///
+/// Nothing is read here and nothing is started: the answer is arithmetic over the file's size, so
+/// a hover is placed by it before the engine is asked for anything.
+pub fn raw_geometry(path: &Path) -> Option<(u32, u32)> {
+    let name = path.extension()?.to_str()?.to_lowercase();
+    let bits = raw_sample_bits(&name)?;
+
+    let length = std::fs::metadata(path).ok()?.len();
+    let total_bits = length.checked_mul(8)?;
+    if total_bits % bits != 0 {
+        return None;
+    }
+
+    let pixels = total_bits / bits;
+    if pixels == 0 {
+        return None;
+    }
+
+    for (across, down) in PICTURE_PROPORTIONS {
+        // A shape of this proportion: `pixels = width * height` with `width * down = height *
+        // across`, so the height is the square root of what the file leaves for it.
+        let Some(square) = pixels.checked_mul(down).map(|scaled| scaled / across) else {
+            continue;
+        };
+
+        let height = integer_sqrt(square);
+        if height == 0 || !(8..=65_535).contains(&height) || pixels % height != 0 {
+            continue;
+        }
+
+        let width = pixels / height;
+        if !(8..=65_535).contains(&width) || width * down != height * across {
+            continue;
+        }
+
+        return Some((width as u32, height as u32));
+    }
+
+    None
+}
+
+/// The integer square root of a number: the largest whole number whose square is at most it.
+fn integer_sqrt(value: u64) -> u64 {
+    if value == 0 {
+        return 0;
+    }
+
+    // A float square root is right to within a unit over the range a file length reaches, and the
+    // two loops are what make it exact rather than nearly so.
+    let mut root = (value as f64).sqrt() as u64;
+
+    while root > 0 && root * root > value {
+        root -= 1;
+    }
+    while (root + 1).saturating_mul(root + 1) <= value {
+        root += 1;
+    }
+
+    root
+}
+
 /// Where ImageMagick keeps its program, for the three places it installs and for a
 /// portable copy a user may have put beside `config.ini`.
 ///
@@ -249,6 +383,10 @@ pub struct Developed {
 /// The picture the engine developed for each file, waiting to be drawn, or nothing.
 static LAST: Lazy<Mutex<Option<Held>>> = Lazy::new(|| Mutex::new(None));
 
+/// A size the engine developed a file at, keyed the way the cache keys it: the file and the
+/// version of it the size belongs to.
+type DevelopedSize = (Key, (u32, u32));
+
 /// What each file's picture turned out to be, by file and version: the size a conversion
 /// developed it at.
 ///
@@ -256,7 +394,7 @@ static LAST: Lazy<Mutex<Option<Held>>> = Lazy::new(|| Mutex::new(None));
 /// the frame it builds by — and it is held for the run rather than on disk, since it is the
 /// engine's answer about a file rather than the file's picture: a file saved again is a file
 /// to develop again, and a run that has just started knows nothing about anything.
-static DEVELOPED_SIZE: Lazy<Mutex<Vec<(Key, (u32, u32))>>> = Lazy::new(|| Mutex::new(Vec::new()));
+static DEVELOPED_SIZE: Lazy<Mutex<Vec<DevelopedSize>>> = Lazy::new(|| Mutex::new(Vec::new()));
 
 /// The files the engine would not draw, by file and version.
 ///
@@ -542,8 +680,31 @@ fn develop(path: &Path, room: (u32, u32)) -> Option<Held> {
 /// The output is named as a PNG explicitly rather than by what a file extension would say:
 /// the coder is what is being asked for, and the format is this side's business.
 fn convert(program: &Path, source: &Path, room: (u32, u32)) -> Option<Vec<u8>> {
+    // A dump is samples with no container, so how large it is *and* how wide a sample in it is are
+    // the two things the engine cannot work out for itself: what the file's own length settled is
+    // handed to it before the file is named, and the eight bits a sample that length was read at
+    // is handed to it beside the size. The depth is not a detail: an install built for sixteen
+    // bits a sample reads a dump as sixteen by default, so an eight-bit dump given a size and no
+    // depth is a file the engine finds half a picture short of what it asked for. A dump whose
+    // length settled nothing is a file the engine would refuse with `must specify image size`, so
+    // it is not started for one at all.
+    let dump = if is_raw_sample(source) {
+        match raw_geometry(source) {
+            Some((width, height)) => Some(format!("{width}x{height}")),
+            None => return None,
+        }
+    } else {
+        None
+    };
+
     let geometry = format!("{}x{}>", room.0.max(1), room.1.max(1));
-    let mut child = Command::new(program)
+    let mut child = Command::new(program);
+
+    if let Some(size) = dump.as_deref() {
+        child.args(["-size", size, "-depth", "8"]);
+    }
+
+    let mut child = child
         .arg(source)
         .arg("-delete")
         .arg("1--1")
@@ -866,6 +1027,95 @@ mod tests {
         assert!(!refused(&raw));
 
         let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    /// What a raw sample dump is, which is the one kind of file the engine cannot measure for
+    /// itself: the name says what one pixel weighs and nothing says how many there are, so the
+    /// shape comes out of the file's own length.
+    ///
+    /// The arithmetic is checked on the lengths pictures are actually written at, and on the ones
+    /// that settle nothing: a length that is not a whole number of pixels, and a length no
+    /// proportion of the table divides exactly, are both answered with nothing rather than with a
+    /// guess — while a length whose proportion is a landscape photograph's is answered even where
+    /// it is also a square's, which is what the order of the table is for.
+    #[test]
+    fn works_a_raw_samples_shape_out_of_its_own_length() {
+        let folder = std::env::temp_dir()
+            .join("rust-hover-preview-magick-tests")
+            .join("geometry");
+        std::fs::create_dir_all(&folder).expect("a test folder");
+
+        let dump = |name: &str, bytes: u64| {
+            let path = folder.join(name);
+            // A length rather than its contents: what is measured is the file's size, and a
+            // sparse file gets one without writing gigabytes of nothing to a disk.
+            let file = std::fs::File::create(&path).expect("a written dump");
+            file.set_len(bytes).expect("a dump of that length");
+            path
+        };
+
+        // The lengths a photograph comes in: three bytes a pixel, four, and one.
+        assert_eq!(raw_geometry(&dump("a.rgb", 640 * 480 * 3)), Some((640, 480)));
+        assert_eq!(raw_geometry(&dump("b.gray", 800 * 600)), Some((800, 600)));
+        assert_eq!(
+            raw_geometry(&dump("c.rgba", 1920 * 1080 * 4)),
+            Some((1920, 1080))
+        );
+        assert_eq!(
+            raw_geometry(&dump("d.rgb", 2560 * 1440 * 3)),
+            Some((2560, 1440))
+        );
+        assert_eq!(
+            raw_geometry(&dump("e.rgb", 3840 * 2160 * 3)),
+            Some((3840, 2160))
+        );
+
+        // A 16:9 picture is a square's worth of pixels — 1920x1080 is 1440 of them to a side —
+        // and the picture is the answer rather than the square.
+        let wide = raw_geometry(&dump("f.gray", 1920 * 1080)).expect("a shape");
+        assert_eq!(wide, (1920, 1080));
+        assert_ne!(wide.0, wide.1, "the longer side is the width");
+
+        // A bi-level bitmap is bits rather than bytes, and a fax bitstream is read the same way.
+        assert_eq!(
+            raw_geometry(&dump("g.mono", 1024 * 768 / 8)),
+            Some((1024, 768))
+        );
+
+        // A name that is not a dump has no shape to work out at all — a camera raw is a container
+        // with a picture in it, which is a different thing entirely — and neither has a length
+        // that is not a whole number of pixels, or one that no proportion of the table divides.
+        assert!(
+            !is_raw_sample(&dump("h.NEF", 1024)),
+            "a camera raw is a container rather than a dump"
+        );
+        assert!(!is_raw_sample(&dump("j.png", 64)));
+        assert!(is_raw_sample(&dump("i.RGB", 64)), "whatever case it is written in");
+        assert_eq!(raw_geometry(&dump("k.nef", 640 * 480 * 3 + 64)), None);
+        assert_eq!(raw_geometry(&dump("l.rgb", 100)), None, "not a whole pixel");
+        assert_eq!(raw_geometry(&dump("m.gray", 0)), None);
+        assert_eq!(raw_geometry(&dump("n.rgb", 7)), None, "too small to be a picture");
+
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    /// The integer square root the shape is worked out with: exact at the ends a file length
+    /// reaches, and never a unit off.
+    #[test]
+    fn takes_an_exact_square_root() {
+        for (value, root) in [
+            (0u64, 0u64),
+            (1, 1),
+            (3, 1),
+            (4, 2),
+            (8, 2),
+            (9, 3),
+            (10_000, 100),
+            (10_001, 100),
+            (4_294_967_296, 65_536),
+        ] {
+            assert_eq!(integer_sqrt(value), root, "the square root of {value}");
+        }
     }
 
     /// What the engine ends is only what it started, and only once that conversion has had
