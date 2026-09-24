@@ -9,7 +9,7 @@ use crate::config::config::{
     DEFAULT_DECODE_BUDGET_GB, DEFAULT_DESIGN_BACKGROUND, DEFAULT_DESIGN_SCALE,
     DEFAULT_FOLLOW_CURSOR, DEFAULT_FONT_BACKGROUND, DEFAULT_FONT_SCALE, DEFAULT_HOVER_DELAY_MS,
     DEFAULT_IMAGE_BACKGROUND, DEFAULT_IMAGE_CACHE_MB, DEFAULT_LIBRE_CACHE_MB, DEFAULT_LIBRE_SCALE,
-    DEFAULT_LIBREOFFICE_IDLE_SECS, DEFAULT_MAGICK_IDLE_SECS, DEFAULT_OFFICE_CACHE_MB,
+    DEFAULT_LIBREOFFICE_IDLE_SECS, DEFAULT_OFFICE_CACHE_MB,
     DEFAULT_OFFICE_ENGINE, DEFAULT_OFFICE_ENGINE_IDLE_SECS, DEFAULT_OFFICE_SCALE,
     DEFAULT_PDF_CACHE_MB, DEFAULT_PDF_SCALE,
     DEFAULT_PREVIEW_SCALE, DEFAULT_SAME_FILE_REHOVER_DELAY_MS, DEFAULT_SETTLING_DELAY_MS,
@@ -18,7 +18,6 @@ use crate::config::config::{
     DEFAULT_VIDEO_SCALE, DEFAULT_VIDEO_VOLUME, DEFAULT_WEBVIEW_IDLE_SECS,
 };
 use crate::shell::explorer_hook;
-use crate::engines::imagemagick_render;
 use crate::engines::libreoffice_render;
 use crate::engines::office_render;
 use crate::readers::pdf_preview;
@@ -321,13 +320,7 @@ const ID_TRAY_WEBVIEW_IDLE_BASE: u16 = 1090;
 /// one font size at 1097, and the `theme` folder's items begin at 1100 — so its range is the
 /// widest run left between the image backdrop's four ids at 1023 and the config row at 1040.
 const ID_TRAY_LIBREOFFICE_IDLE_BASE: u16 = 1027;
-/// The `Engine → ImageMagick TTL` submenu, the fourth of them. It sits past every range the
-/// app hands out rather than in the slack the other three fit into — 1499 is where the last
-/// of the `Timing` delays ends — since what it bounds is not a process at all: the engine is
-/// a converter that exits with the file it was given, and what the setting keeps is the
-/// picture it wrote (see `imagemagick_render`).
-const ID_TRAY_MAGICK_IDLE_BASE: u16 = 1500;
-/// The idle times the four `… TTL` submenus offer, longest first — the
+/// The idle times the three `… TTL` submenus offer, longest first — the
 /// order the menus list them in, so an engine that is never let go is the topmost
 /// item and one that is let go as soon as it has drawn a page is the bottom one. A
 /// value a hand-edited `config.ini` asks for that is not one of these is shown with
@@ -540,13 +533,6 @@ unsafe extern "system" fn tray_window_proc(
                     .contains(&cmd) =>
                 {
                     set_libreoffice_idle(cmd - ID_TRAY_LIBREOFFICE_IDLE_BASE)
-                }
-                // And the image converter's, in the range of its own.
-                cmd if (ID_TRAY_MAGICK_IDLE_BASE
-                    ..ID_TRAY_MAGICK_IDLE_BASE + ENGINE_IDLE_CHOICES.len() as u16)
-                    .contains(&cmd) =>
-                {
-                    set_magick_idle(cmd - ID_TRAY_MAGICK_IDLE_BASE)
                 }
                 // A cache size, by the position it was listed at.
                 cmd if (ID_TRAY_IMAGE_CACHE_BASE..ID_TRAY_OFFICE_CACHE_BASE).contains(&cmd) => {
@@ -1600,25 +1586,14 @@ unsafe fn show_context_menu(hwnd: HWND) {
         libreoffice_render::available(),
     );
 
-    // ImageMagick TTL: the same row for the engine the pictures beside Office are developed
-    // by, and the same idle times — but it is the one engine of the four that has no process
-    // to keep: `magick.exe` reads a file, writes one and exits, so what the setting bounds is
-    // how long the picture it wrote is kept before the next hover of that file converts it
-    // again (see `imagemagick_render`). Greyed out where ImageMagick is not installed, since
-    // there is nothing there to keep anything.
-    let magick_idle = CONFIG
-        .lock()
-        .map(|c| c.magick_idle)
-        .unwrap_or(EngineIdle::Seconds(DEFAULT_MAGICK_IDLE_SECS));
-
-    append_engine_idle_menu(
-        engine_menu,
-        w!("ImageMagick TTL"),
-        ID_TRAY_MAGICK_IDLE_BASE,
-        magick_idle,
-        DEFAULT_MAGICK_IDLE_SECS,
-        imagemagick_render::available(),
-    );
+    // ImageMagick TTL: there is none, and that is the engine's own answer rather than an
+    // omission. Every other engine this app starts is one it can keep — an application, a
+    // browser, an automation server — and what their TTLs bound is a process left running.
+    // ImageMagick is a converter: `magick.exe` reads a file, writes one and exits, so there is
+    // no instance to hold and nothing for an idle time to keep. What it develops is a picture
+    // of this app's, held in the image cache under the budget pictures already have, and a
+    // file whose frame has been given up is developed again — a wait, not a setting
+    // (see `imagemagick_render`).
 
     // WebView2 TTL: the same question about the browser that draws a document — every
     // document, still or not. It is greyed out on a machine with no WebView2 runtime, since
@@ -2544,26 +2519,6 @@ fn set_libreoffice_idle(index: u16) {
 
     if let Ok(mut config) = CONFIG.lock() {
         config.libreoffice_idle = idle;
-        config.save();
-    }
-}
-
-/// How long a picture the ImageMagick engine converted is kept after the last hover that
-/// read it.
-///
-/// Nothing is rebuilt here either, and nothing has to be: the engine thread reads the
-/// setting every second while it waits for files, so a shorter time applies to the pictures
-/// that are already converted — they are let go at the next look — and `0 seconds`, the
-/// bottom of the list, is every picture converted every time it is hovered. A picture that
-/// is being hovered is not one of them: a read of it moves the moment the setting counts
-/// from, so what is dropped is what nothing has asked for (see `imagemagick_render`).
-fn set_magick_idle(index: u16) {
-    let Some(idle) = engine_idle_at(index) else {
-        return;
-    };
-
-    if let Ok(mut config) = CONFIG.lock() {
-        config.magick_idle = idle;
         config.save();
     }
 }

@@ -236,17 +236,6 @@ pub const DEFAULT_WEBVIEW_IDLE_SECS: u64 = 600;
 /// of what keeping it saves. What it costs is the application itself — a few hundred
 /// megabytes while it is held — which is what the setting is for.
 pub const DEFAULT_LIBREOFFICE_IDLE_SECS: u64 = 600;
-/// How long a picture the ImageMagick engine converted is kept after the last hover that
-/// read it, by default: ten minutes, the same as every other engine's, because what the
-/// setting is about is the same thing — not paying twice for work that has already been
-/// done.
-///
-/// What it bounds is a little different, and the engine says why: ImageMagick is a
-/// converter that exits with the file it was given, so there is no process to keep. What it
-/// leaves behind is the picture it wrote, and that is what this keeps or drops — a raw
-/// developed once and hovered again is a read rather than a second development (see
-/// `imagemagick_render`).
-pub const DEFAULT_MAGICK_IDLE_SECS: u64 = 600;
 /// The ceiling a hand-edited number of seconds is reduced to. Past a day there is
 /// nothing a number says that `indefinitely` does not say better.
 pub const MAX_OFFICE_ENGINE_IDLE_SECS: u64 = 86_400;
@@ -1296,16 +1285,6 @@ pub struct AppConfig {
     /// never let go of is a process this app holds for the rest of the run (see
     /// `libreoffice_render`).
     pub libreoffice_idle: EngineIdle,
-    /// How long a picture the ImageMagick engine converted is kept after the last hover
-    /// that read it, which is the tray's `Engine → ImageMagick TTL` setting.
-    ///
-    /// It is the same setting as the three above it and it counts from the same place —
-    /// the moment the engine last produced something — but what it is counting over is a
-    /// file rather than a process, because the engine is a converter rather than an
-    /// application: `magick.exe` reads a file, writes one and exits. `0 seconds` is a
-    /// picture that is converted every time it is hovered, and `indefinitely` is one that is
-    /// kept until the folder is swept by something else (see `imagemagick_render`).
-    pub magick_idle: EngineIdle,
     /// Memory the pages PDF previews were drawn as may hold, in megabytes, between
     /// hovers. A page is rendered at `0` like at any other size; it is simply not
     /// kept once the hover that asked for it is over.
@@ -1419,7 +1398,6 @@ impl Default for AppConfig {
             office_engine_idle: EngineIdle::Seconds(DEFAULT_OFFICE_ENGINE_IDLE_SECS),
             webview_idle: EngineIdle::Seconds(DEFAULT_WEBVIEW_IDLE_SECS),
             libreoffice_idle: EngineIdle::Seconds(DEFAULT_LIBREOFFICE_IDLE_SECS),
-            magick_idle: EngineIdle::Seconds(DEFAULT_MAGICK_IDLE_SECS),
             pdf_cache_mb: DEFAULT_PDF_CACHE_MB,
             text_cache_mb: DEFAULT_TEXT_CACHE_MB,
             decode_budget_gb: DEFAULT_DECODE_BUDGET_GB,
@@ -1550,7 +1528,6 @@ const SETTING_GROUPS: &[(&str, &[&str])] = &[
         "Engine",
         &[
             "libreoffice_idle",
-            "magick_idle",
             "office_engine",
             "office_engine_idle",
             "webview_idle",
@@ -2171,11 +2148,6 @@ impl AppConfig {
         );
         ini.set(
             CONFIG_SECTION,
-            "magick_idle",
-            Some(self.magick_idle.as_str()),
-        );
-        ini.set(
-            CONFIG_SECTION,
             "pdf_cache_mb",
             Some(sanitize_pdf_cache_mb(self.pdf_cache_mb).to_string()),
         );
@@ -2565,11 +2537,6 @@ impl AppConfig {
         if let Some(value) = ini.get(CONFIG_SECTION, "libreoffice_idle") {
             if let Some(idle) = EngineIdle::from_str(&value) {
                 self.libreoffice_idle = idle;
-            }
-        }
-        if let Some(value) = ini.get(CONFIG_SECTION, "magick_idle") {
-            if let Some(idle) = EngineIdle::from_str(&value) {
-                self.magick_idle = idle;
             }
         }
         if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "pdf_cache_mb") {
@@ -3189,6 +3156,11 @@ mod tests {
     /// of their own — written from the built-in list on first run, normalized on the way in
     /// and out, and read back from the file — and the kind they belong to has a gate of its
     /// own under `Preview Types`.
+    ///
+    /// What the engine's own work costs is not a setting of its own, and there is nothing to
+    /// assert about one: a picture it develops is held in the image cache, under the budget
+    /// pictures have always been held under, and a file whose frame has been given up is
+    /// developed again rather than kept in a file of the app's own (see `imagemagick_render`).
     #[test]
     fn the_pictures_the_magick_engine_is_asked_about_are_a_list_and_a_gate_of_their_own() {
         let config = AppConfig::default();
@@ -3196,20 +3168,12 @@ mod tests {
             config.magick_extensions,
             sanitize_magick_extensions(DEFAULT_MAGICK_EXTENSIONS)
         );
-        assert_eq!(
-            config.magick_idle,
-            EngineIdle::Seconds(DEFAULT_MAGICK_IDLE_SECS),
-            "and the engine starts at the idle time the app starts at"
-        );
-        assert_eq!(DEFAULT_MAGICK_IDLE_SECS, 600, "which is ten minutes");
 
         let mut ini = Ini::new();
         ini.set(MAGICK_SECTION, "extensions", Some(".NEF, cr3".to_string()));
-        ini.set(CONFIG_SECTION, "magick_idle", Some("900".to_string()));
 
         let config = read_file(&mut ini);
         assert_eq!(config.magick_extensions, vec!["nef", "cr3"]);
-        assert_eq!(config.magick_idle, EngineIdle::Seconds(900));
 
         // A section that is gone is answered with the built-in list, and the file is one to
         // write out again with it, since a key that is gone is not what the app is using.
@@ -3800,7 +3764,6 @@ extensions=png,jpg
         let under_engine = &written[engine..advanced];
         for key in [
             "libreoffice_idle",
-            "magick_idle",
             "office_engine",
             "office_engine_idle",
             "webview_idle",

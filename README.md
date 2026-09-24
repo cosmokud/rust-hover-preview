@@ -72,7 +72,7 @@ Every name in it is one that a filter of the engine declares as something it imp
 
 The pictures nothing else on the machine opens — **camera raw above all** — are developed by an installed ImageMagick, and what comes back is a picture this app draws like any other, at the picture scaling and over the picture background: `3fr` `arw` `cr2` `cr3` `crw` `cur` `dcm` `dcr` `dcx` `dng` `dpx` `erf` `fff` `fit` `fits` `fts` `iiq` `j2c` `j2k` `jng` `jp2` `jpc` `jpm` `jpt` `k25` `kdc` `mdc` `mef` `miff` `mng` `mos` `mrw` `nef` `nrw` `orf` `pef` `pfm` `raf` `raw` `rmf` `rw2` `rwl` `sgi` `sr2` `srf` `srw` `vicar` `wbmp` `x3f` `xbm` `xcf` `xpm`.
 
-The camera names are the point: a `.nef`, a `.cr3`, a `.dng` or a `.raf` is a raw sensor reading with a picture wrapped around it, the shell shows only the thumbnail the camera left inside the file, and a hover onto one shows nothing at all rather than the photograph. ImageMagick is asked for a picture at the size the preview is shown at, with the rotation the file asks for applied — so a raw held sideways is previewed the right way up — and what it writes is kept beside `config.ini`, which is what **Engine → ImageMagick TTL** bounds. Every other name in the list is a format the engine has a coder of its own for and no other list claims.
+The camera names are the point: a `.nef`, a `.cr3`, a `.dng` or a `.raf` is a raw sensor reading with a picture wrapped around it, the shell shows only the thumbnail the camera left inside the file, and a hover onto one shows nothing at all rather than the photograph. ImageMagick is asked for a picture at the size the preview is shown at, with the rotation the file asks for applied — so a raw held sideways is previewed the right way up — and what it writes is read from its own output and decoded from memory, so a hover leaves nothing on the disk. Every other name in the list is a format the engine has a coder of its own for and no other list claims.
 
 Every name in it was checked against an installed engine's own registry — `magick -list format` — rather than against the formats ImageMagick is said to support, and the pictures with no head to read (`rgb`, `rgba`, `gray`, `cmyk` and the rest of the raw sample formats), the documents that need Ghostscript (`ps`, `xps`, `djvu`) and the engine's own pseudo-formats (`xc`, `canvas`, `label`) are deliberately not in it. A name added to it by hand is asked about from the next read, and a name the engine cannot read costs one conversion and is remembered.
 
@@ -168,7 +168,7 @@ If `winget` reports an error, the package sources are usually why: run `winget s
 winget install -e --id ImageMagick.ImageMagick
 ```
 
-Then hover a raw: the first hover converts that picture — a fraction of a second to a second — and every hover after it is instant, because the picture the engine developed is kept beside `config.ini`. **Engine → ImageMagick TTL** says how long it is kept, ten minutes by default, and `0 seconds` converts every time. A raw is developed at the size the preview is shown at rather than at the size of the sensor, so hovering a forty-megapixel file costs the preview and not the file.
+Then hover a raw: the first hover develops that picture — a fraction of a second to a second, with the usual waiting spinner — and a hover of a file whose picture is still in the picture cache is instant, because what is kept is an ordinary decoded frame like any other picture's. A raw whose frame the cache has given up is developed again. A raw is developed at the size the preview is shown at rather than at the size of the sensor, so hovering a forty-megapixel file costs the preview and not the file, and nothing is written to disk: the picture goes from the engine's output straight into the frame.
 
 ## Usage
 
@@ -224,7 +224,6 @@ The item a setting starts at carries `(Default)` after its name, so a menu says 
   - **Microsoft Office TTL** — how long a family’s Office app is kept warm: Indefinitely, 1 hour, 30 minutes, 10 minutes (default), 5 minutes, 1 minute, 0 seconds.
   - **LibreOffice TTL** — the same for the engine that draws CorelDRAW and the documents beside it: how long it is kept after the last document it converted. A kept engine converts the next document without starting up again — measured on one document, 1.2 s cold against 0.2 s — and while it is kept it is a LibreOffice with a small document of this app's own open, which is a few hundred megabytes. `0 seconds` keeps none, which is an engine per document. Greyed out where LibreOffice is not installed.
   - **WebView2 TTL** — how long the browser that draws SVG documents is kept warm; greyed out where WebView2 is missing.
-  - **ImageMagick TTL** — how long the picture ImageMagick developed is kept before the next hover of that file converts it again: the same times, 10 minutes by default and `0 seconds` converting every time. It is the one engine of the four with no process to keep — `magick.exe` reads a file, writes one and exits — so what the setting bounds is what it wrote rather than an engine left running. Greyed out where ImageMagick is not installed.
 - **Codecs** — what this machine has: Videos, Images, and Engines. Missing ones are greyed out.
 - **Run at Startup** — add or remove the Windows startup entry.
 - **Config.ini** — open the configuration file; the item is named for the running version.
@@ -308,7 +307,6 @@ text_cache_mb=0
 
 ; Engine
 libreoffice_idle=600
-magick_idle=600
 office_engine=microsoft_office
 office_engine_idle=600
 
@@ -349,7 +347,7 @@ Key settings, in plain terms:
 - `libre_cache_mb` — megabytes of converted pages kept on disk, `32` by default; `0` keeps nothing between hovers. A page whose budget gave it up is converted again the next time it is hovered.
 - `libre_preview_enabled` — whether documents LibreOffice can draw are previewed at all; `true` by default.
 - `magick_preview_enabled` — whether pictures ImageMagick develops, camera raw above all, are previewed at all; `true` by default. The list behind it is `[magick] extensions`.
-- `magick_idle` — seconds the picture ImageMagick developed is kept after the last hover that read it, or `indefinitely`; default `600`. It differs from the three engine TTLs beside it in what it bounds rather than in what it means: ImageMagick is a converter that exits with the file it was given, so there is no process to keep and what is kept is the picture it wrote. `0` converts the picture every time it is hovered, and a picture nothing has hovered for longer than this is dropped by the engine.
+- There is no TTL for ImageMagick, and no `magick_idle` key: it is the one engine here that is a converter rather than a process this app can hold open, so what a file costs is a conversion or a hit in the picture cache (`image_cache_mb`) and never a file of the app's own.
 - `pdf_scale` / `office_scale` — the same for a PDF page and an Office-rendered page, both `fit` by default as well as a percentage. A workbook’s fallback bitmap follows its own size and is never enlarged.
 - `font_scale` — percentage or `fit`, read against the screen. `50` is default, `fit` is all of it, and `100` or more reads as `fit`. A font has no size of its own, so the share is of the display.
 - `design_scale` — the same for a design document, `fit` by default. A design preview is the picture the file keeps of the whole document, so the share is of the screen the way a page’s is rather than of the document’s own size.
