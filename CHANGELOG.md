@@ -7,6 +7,10 @@
 - **`Engine → AFK Timer`**: an engine that is not marked `Persistent` is let go once no Explorer window has been reachable for the time you pick — 1 hour down to 15 seconds, 1 minute by default.
 - A **`Persistent`** toggle at the top of each **`… TTL`** submenu: on, the engine is kept for its TTL whatever you are doing, which is how it worked before; off, which is how they all start, the AFK timer bounds it.
 - New `config.ini` keys: `afk_timer_seconds`, `office_engine_persistent`, `libreoffice_persistent`, `webview_persistent`.
+- **`PeaZip` previews** for the archives nothing here reads — `cab`, `iso`, `udf`, `wim`, `msi`, `deb`, `rpm`, `arj`, `lzh`, `hfs`, `vhd`, `dmg` and the rest of the `[peazip]` list. An installed PeaZip lists them and the app shows the same page of contents a `.zip` is shown as; nothing is bundled, the PeaZip window is never opened, and a second hover of the same archive starts nothing. A single-stream `gz`, `bz2`, `xz`, `zst` or `z` is shown as the one member it holds.
+- A **`Peazip`** switch in the tray **`Preview Types`** submenu, below **`Magick`**; `[peazip] extensions` in `config.ini` controls which formats are asked about, and a name the engine cannot list is remembered so it costs one launch and never another.
+- **`PeaZip`** appears in **`Codecs → Engines`** to show if it is installed.
+- Archives are recognized by content as well as by name, so a renamed one still previews: a `.cab` renamed to `.dat` is listed all the same. The formats PeaZip opens through its other tools — `pea`, `arc`, `zpaq`, `br` and the codecs its build carries no format for — are written down with their reasons in `TODO.md`.
 
 ### Changed
 

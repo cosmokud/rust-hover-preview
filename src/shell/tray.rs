@@ -257,6 +257,16 @@ const ID_TRAY_TYPE_LIBRE: u16 = 1098;
 /// The `Magick` gate, under the same submenu: the pictures an installed ImageMagick develops
 /// rather than this app decoding — the camera raw formats above all. See `magick_formats`.
 const ID_TRAY_TYPE_MAGICK: u16 = 1099;
+/// The `Peazip` gate, under the same submenu: the archives an installed PeaZip lists rather
+/// than this app reading — the cabinet files, isos, disk images, installers and single-stream
+/// compressors no reader here has. See `peazip_formats`.
+///
+/// It is drawn below `Magick` and numbered away from both the engines' block above it and the
+/// `theme` folder's range above that (`ID_TRAY_THEME_CUSTOM_BASE`): what the number has to be is
+/// a command that no other row of the menu is matched by, since two rows sharing one is a click
+/// that does the wrong thing — which is what the `Libre` gate above learned when it carried
+/// 1100.
+const ID_TRAY_TYPE_PEAZIP: u16 = 1515;
 /// The `Vector` gate, for the drawings that are not pictures: SVG documents, which are the
 /// kind SVG documents have always had — the id is the one this gate carried under that name
 /// — and the metafiles and encapsulated PostScript files the same kind grew to hold.
@@ -558,6 +568,7 @@ unsafe extern "system" fn tray_window_proc(
                 ID_TRAY_TYPE_DESIGN => toggle_preview_type(PreviewType::Design),
                 ID_TRAY_TYPE_LIBRE => toggle_preview_type(PreviewType::Libre),
                 ID_TRAY_TYPE_MAGICK => toggle_preview_type(PreviewType::Magick),
+                ID_TRAY_TYPE_PEAZIP => toggle_preview_type(PreviewType::Peazip),
                 ID_TRAY_TYPE_VECTOR => toggle_preview_type(PreviewType::Vector),
                 // An Office engine's idle time, by the position it was listed at.
                 cmd if (ID_TRAY_ENGINE_IDLE_BASE
@@ -766,6 +777,7 @@ unsafe fn show_context_menu(hwnd: HWND) {
         (PreviewType::Design, ID_TRAY_TYPE_DESIGN, w!("Design")),
         (PreviewType::Libre, ID_TRAY_TYPE_LIBRE, w!("Libre")),
         (PreviewType::Magick, ID_TRAY_TYPE_MAGICK, w!("Magick")),
+        (PreviewType::Peazip, ID_TRAY_TYPE_PEAZIP, w!("Peazip")),
     ];
     let types_menu = CreatePopupMenu().unwrap();
 
@@ -1691,6 +1703,13 @@ unsafe fn show_context_menu(hwnd: HWND) {
     // of this app's, held in the image cache under the budget pictures already have, and a
     // file whose frame has been given up is developed again — a wait, not a setting
     // (see `imagemagick_render`).
+    //
+    // PeaZip TTL: and there is none for the same reason, which is the engine's own answer once
+    // more. PeaZip is a frontend, and what this app runs of it is the console archiver it
+    // carries, which is a converter like the one above: handed an archive it prints the table
+    // of contents and exits. There is no instance to keep and nothing an idle time would bound
+    // — and what a second hover of the same archive costs is no engine at all, since the
+    // listing it produced is held under the file's own key (see `peazip_render`).
 
     // WebView2 TTL: the same question about the browser that draws a document — every
     // document, still or not. It is greyed out on a machine with no WebView2 runtime, since
