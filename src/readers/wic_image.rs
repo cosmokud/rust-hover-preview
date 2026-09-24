@@ -454,7 +454,7 @@ mod tests {
             "four bytes to the pixel, at the box that was asked for"
         );
 
-        for (index, pixel) in pixels.chunks_exact(4).enumerate() {
+        for (index, pixel) in pixels.as_chunks::<4>().0.iter().enumerate() {
             let (blue, green, red, alpha) = (pixel[0], pixel[1], pixel[2], pixel[3]);
             let distance =
                 |channel: u8, expected: u8| (i32::from(channel) - i32::from(expected)).abs();
@@ -492,10 +492,12 @@ mod tests {
     /// test above stands down on.
     fn write_probe_heic(width: u32, height: u32) -> Option<PathBuf> {
         let format = BitmapEncoder::HeifEncoderId().ok()?;
-        let pixels: Vec<u8> = std::iter::repeat([PROBE_RED, PROBE_GREEN, PROBE_BLUE, 255])
-            .take((width * height) as usize)
-            .flatten()
-            .collect();
+        let pixels: Vec<u8> = std::iter::repeat_n(
+            [PROBE_RED, PROBE_GREEN, PROBE_BLUE, 255],
+            (width * height) as usize,
+        )
+        .flatten()
+        .collect();
 
         let stream = InMemoryRandomAccessStream::new().ok()?;
         let encoder = BitmapEncoder::CreateAsync(format, &stream)

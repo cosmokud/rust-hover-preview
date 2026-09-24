@@ -317,7 +317,11 @@ mod tests {
         assert_eq!((width, height), (4, 4));
         assert_eq!(pixels.len(), 4 * 4 * 4);
         assert!(
-            pixels.chunks_exact(4).all(|pixel| pixel[3] == 255),
+            pixels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|pixel| pixel[3] == 255),
             "a drawn picture is opaque"
         );
         // Blue, green, red — the order the frame is in — and the colour survived.
