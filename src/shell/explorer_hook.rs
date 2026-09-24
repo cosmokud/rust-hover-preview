@@ -2925,11 +2925,16 @@ struct HoverLocation {
 
 impl HoverLocation {
     /// The place a look's hints describe, as the facts that look managed to read.
+    ///
+    /// A fact is read into the form it is compared in — see `location_fact_key` — so that
+    /// the Shell spelling one place another way on the next look is not a difference of
+    /// place. What is stored is that form rather than what the Shell said, because the
+    /// only thing a stored fact is for is being compared with the next look's.
     fn of(hints: &HoverResolverHints) -> Self {
         Self {
-            folder: hints.current_folder.clone(),
-            search_root: hints.search_root.clone(),
-            location_url: hints.location_url.clone(),
+            folder: hints.current_folder.as_deref().map(location_fact_key),
+            search_root: hints.search_root.as_deref().map(location_fact_key),
+            location_url: hints.location_url.as_deref().map(location_fact_key),
             view_hwnd: hints.shell_view_hwnd,
         }
     }
@@ -2943,6 +2948,59 @@ impl HoverLocation {
             || self.location_url.is_some()
             || self.view_hwnd.is_some()
     }
+}
+
+/// The form a location fact is compared in, so that two answers describing one place are
+/// one answer.
+///
+/// A fact out of the Shell is the Shell's own spelling of it, and the Shell does not spell
+/// one place the same way on every look. The folder a view has open is canonicalized where
+/// that succeeds — which is where the verbatim `\\?\` form comes from — and is left as the
+/// view reported it where it does not, so the same folder answers `\\?\G:\Pictures` on one
+/// look and `G:\Pictures` on the next, on the volumes where canonicalizing is the thing
+/// that fails from time to time. Read as it comes, that difference is a difference of
+/// *place*, and the preview of a file that never moved is taken down on the look that
+/// happens to answer the other spelling — and put back on the one after it, which is a
+/// preview that blinks at a pointer which has not moved at all. Case is the other half of
+/// the same coin: Windows reads two spellings of a path as one path, and so does a fact
+/// that is one, and a trailing separator names the place named without it.
+///
+/// What is *not* normalized is a search's own URL: a query's text is the query, and two
+/// searches that differ in case are two searches.
+fn location_fact_key(fact: &str) -> String {
+    let trimmed = fact.trim();
+    let unverbatim = match trimmed.strip_prefix(r"\\?\UNC\") {
+        Some(share) => format!(r"\\{share}"),
+        None => trimmed.strip_prefix(r"\\?\").unwrap_or(trimmed).to_string(),
+    };
+
+    let unrooted = unverbatim.trim_end_matches(['\\', '/']);
+    let unrooted = if unrooted.is_empty() {
+        unverbatim.as_str()
+    } else {
+        unrooted
+    };
+
+    if is_search_ms_url(unrooted) {
+        unrooted.to_string()
+    } else {
+        unrooted.to_ascii_lowercase()
+    }
+}
+
+/// Whether a look that differs from the place recorded is one the look before it also
+/// described.
+///
+/// One look answering what the last one did not is a shell that answered differently
+/// rather than a view that moved: a walk out of the view that failed where it had
+/// succeeded, a handle taken again, a fact come back in another spelling that the
+/// normalization did not reach. What confirms a change is the same answer coming back —
+/// two looks in a row describing one place that is not the one recorded — and a view that
+/// alternates between two answers never confirms at all. A place read for the first time
+/// is not a change to confirm: there is nothing recorded for it to differ from, and the
+/// gate below is armed for it as it always was.
+fn location_change_confirmed(pending: Option<&HoverLocation>, look: &HoverLocation) -> bool {
+    pending.is_some_and(|pending| !hover_location_changed(pending, look))
 }
 
 /// Whether two looks at the view describe different places.
@@ -3342,6 +3400,10 @@ pub fn run_explorer_hook() {
     // The place the last folder probe found the pointer over, as the facts that probe
     // read — see `HoverLocation`.
     let mut last_cursor_location: Option<HoverLocation> = None;
+    // The look that differed from the place recorded, held until the look after it says
+    // the same thing: one answer about a place is not one to act on, and the second look
+    // describing it is what makes it a change (see `location_change_confirmed`).
+    let mut confirming_location: Option<HoverLocation> = None;
     let mut hover_resolver_hints = HoverResolverHints::default();
     let mut suspend_preview_until_user_input = false;
     let mut allow_keyboard_preview_on_first_observation = false;
@@ -3503,6 +3565,7 @@ pub fn run_explorer_hook() {
             keyboard_screen_owner = false;
             hover_resolver_hints = HoverResolverHints::default();
             last_cursor_location = None;
+            confirming_location = None;
             explorer_probe_backoff_until =
                 Some(Instant::now() + Duration::from_millis(EXPLORER_RESTART_BACKOFF_MS));
             current_state = get_explorer_state();
@@ -3573,6 +3636,7 @@ pub fn run_explorer_hook() {
                     keyboard_screen_owner = false;
                     hover_resolver_hints = HoverResolverHints::default();
                     last_cursor_location = None;
+                    confirming_location = None;
                     explorer_probe_backoff_until =
                         Some(Instant::now() + Duration::from_millis(DISPLAY_CHANGE_BACKOFF_MS));
                 } else {
@@ -3922,6 +3986,12 @@ pub fn run_explorer_hook() {
             // or background load result cannot resurrect a stuck preview under
             // the pointer. Keyboard previews own the screen: they may cover the
             // parked cursor and are never dismissed by it.
+            //
+            // What the pointer can touch is three surfaces, and they are not the same window:
+            // this app's own layered preview, the player's window a video is played in, and
+            // — for a document or a specimen — the engine's window, which is asked for by its
+            // own handle because a document drawn by a browser is still a preview of this
+            // app's (see `cursor_preview_hover`).
             let preview_hover = if should_probe_preview_hover(
                 is_keyboard_hover || pointer_pause.freezes_pointer(),
                 last_file.is_some(),
@@ -3932,6 +4002,7 @@ pub fn run_explorer_hook() {
                 PreviewCursorHover::NONE
             };
             let over_image_preview = preview_hover.image;
+            let over_engine_preview = preview_hover.engine;
             let over_video_preview = preview_hover.video;
             let over_any_preview = preview_hover.any();
 
@@ -3942,8 +4013,9 @@ pub fn run_explorer_hook() {
             let guard_active = video_hover_guard_until
                 .map(|until| Instant::now() < until)
                 .unwrap_or(false);
-            let should_dismiss_for_preview_hover =
-                (over_image_preview && !pointer_hold) || (over_video_preview && !guard_active);
+            let should_dismiss_for_preview_hover = ((over_image_preview || over_engine_preview)
+                && !pointer_hold)
+                || (over_video_preview && !guard_active);
 
             if should_dismiss_for_preview_hover
                 || (suppress_preview_until_cursor_leaves_preview && over_any_preview)
@@ -4008,15 +4080,25 @@ pub fn run_explorer_hook() {
                 // read as a change where both looks answered it, so a folder the shell
                 // could not walk out this time is not another place — see
                 // `HoverLocation`.
-                if location.was_answered()
+                let differs = location.was_answered()
                     && last_cursor_location
                         .as_ref()
                         .map(|previous| hover_location_changed(previous, &location))
                         // The first look at a place is a change like any other: what
                         // is under the pointer is asked about as a view that has just
                         // been opened rather than one that was always there.
-                        .unwrap_or(true)
-                {
+                        .unwrap_or(true);
+
+                // And it is not acted on until the look after it says the same thing: a
+                // look that answers what the last one did not is a shell that answered
+                // differently, and the look that describes the same place again is what
+                // makes it a view that moved — see `location_change_confirmed`.
+                let first_look = last_cursor_location.is_none();
+                let confirmed = first_look
+                    || location_change_confirmed(confirming_location.as_ref(), &location);
+                confirming_location = differs.then(|| location.clone());
+
+                if differs && confirmed {
                     // A change that follows recent input is user navigation:
                     // the file under the parked cursor may preview as soon as
                     // the new view has settled, without a mouse move.
@@ -4030,36 +4112,59 @@ pub fn run_explorer_hook() {
                     // was cached about the last one describes the wrong place: a
                     // folder remembered for the window and the view that answered
                     // for it. A name looked up against those resolves to something
-                    // that is not there, or to nothing at all.
+                    // that is not there, or to nothing at all. The answer this tick
+                    // already holds was read against the view that has been left, so
+                    // it goes with them rather than deciding anything below.
                     clear_shell_view_probe_caches();
                     resolver.forget_view();
-                    suspend_preview_until_user_input = true;
-                    allow_keyboard_preview_on_first_observation = false;
-                    folder_change_user_initiated = user_navigation;
-                    folder_change_time = Some(Instant::now());
-                    suspended_initial_focus = None;
+                    resolver.forget_probe();
                     hover_start = None;
                     last_focused_key = None;
                     // Reset cursor baseline so we don't mistake stale delta for movement.
                     last_cursor_pos = cursor_pos;
                     stationary_hover_probe_done = false;
-                    // Drain stale GetAsyncKeyState flags from prior navigation,
-                    // then remember the press count: only a later navigation key
-                    // press may lift this suspension, so key state left over
-                    // from the navigation that opened the folder cannot.
-                    let _ = keyboard_navigation_input_state();
-                    keyboard_press_seq_at_suspend = keyboard_navigation_press_seq;
 
-                    if last_file.is_some() || keyboard_file.is_some() || is_keyboard_hover {
-                        hide_preview();
+                    // Whether the file the preview on screen is about is still the one
+                    // under the pointer, asked of the view that has just answered. A
+                    // place re-read in another spelling, a handle taken again, a walk
+                    // that failed once and succeeded the next time are all changes to the
+                    // *view*, and the file the pointer stands on is a question of its
+                    // own: a preview taken down for one of them and put back a moment
+                    // later is the blink this reads to avoid, and what a view that
+                    // changed under an unmoved pointer is owed is the question asked
+                    // again rather than the preview taken away.
+                    let still_on_the_file = last_file.as_ref().is_some_and(|file| {
+                        get_file_under_cursor(&mut resolver)
+                            .is_some_and(|current| same_path(file, &current))
+                    });
+
+                    if !still_on_the_file {
+                        // Nothing released the gate yet: the view the place describes is
+                        // one the pointer's file has not been read in, so the preview
+                        // that was up belongs to a file this view does not hold.
+                        suspend_preview_until_user_input = true;
+                        allow_keyboard_preview_on_first_observation = false;
+                        folder_change_user_initiated = user_navigation;
+                        folder_change_time = Some(Instant::now());
+                        suspended_initial_focus = None;
+                        // Drain stale GetAsyncKeyState flags from prior navigation,
+                        // then remember the press count: only a later navigation key
+                        // press may lift this suspension, so key state left over
+                        // from the navigation that opened the folder cannot.
+                        let _ = keyboard_navigation_input_state();
+                        keyboard_press_seq_at_suspend = keyboard_navigation_press_seq;
+
+                        if last_file.is_some() || keyboard_file.is_some() || is_keyboard_hover {
+                            hide_preview();
+                        }
+                        last_file = None;
+                        suppressed.clear();
+                        pointer_pause.clear();
+                        stationary_search_miss_started_at = None;
+                        keyboard_file = None;
+                        is_keyboard_hover = false;
+                        video_hover_guard_until = None;
                     }
-                    last_file = None;
-                    suppressed.clear();
-                    pointer_pause.clear();
-                    stationary_search_miss_started_at = None;
-                    keyboard_file = None;
-                    is_keyboard_hover = false;
-                    video_hover_guard_until = None;
                 }
             }
 
@@ -4215,6 +4320,17 @@ pub fn run_explorer_hook() {
                         // Nothing under the pointer: it is on its way to (or on) the
                         // preview, or on the spinner standing in for one, which is
                         // not the user leaving the file it shows.
+                        keep_while_pointer_held = true;
+                    } else if pointer_item_holds(cursor_pos.x, cursor_pos.y) {
+                        // A read that came back with nothing is not the pointer leaving:
+                        // the box the item is drawn in still holds it, so the file the
+                        // preview on screen is about is still the one under the hand, and
+                        // what failed is the asking — a walk out through the shell on a
+                        // volume that is slow to answer, a view busy drawing the item it
+                        // was just asked for. The preview is kept and the question asked
+                        // again; taking it down for a look that failed and putting it
+                        // back a moment later is the blink this reads to avoid (see
+                        // `HOVER_POINTER_BOX`).
                         keep_while_pointer_held = true;
                     } else if let Some(file) = last_file.clone() {
                         suppressed.suppress(file);
@@ -5159,5 +5275,77 @@ mod tests {
         }
 
         unsafe { CoUninitialize() };
+    }
+
+    /// One place, spelled two ways, is one place — which is what the Shell does not
+    /// promise. The folder a view has open is canonicalized where that succeeds and left
+    /// as the view reported it where it does not, so the same folder answers the verbatim
+    /// form on one look and the plain one on the next. Read as it comes, that difference
+    /// of spelling is a difference of *place*: the preview of a file that never moved is
+    /// taken down on the look that answers the other spelling and put back on the one
+    /// after it, which is the blink the key is for. Case and a trailing separator are the
+    /// same difference, and a share keeps its server.
+    #[test]
+    fn one_place_spelled_two_ways_is_one_place() {
+        assert_eq!(
+            location_fact_key(r"\\?\G:\Downloads\Stash\TEST WHAAT"),
+            location_fact_key(r"G:\Downloads\Stash\TEST WHAAT"),
+            "the verbatim form names the path it is written around"
+        );
+        assert_eq!(
+            location_fact_key(r"G:\Pictures\"),
+            location_fact_key(r"G:\Pictures"),
+            "a trailing separator names the place named without it"
+        );
+        assert_eq!(
+            location_fact_key(r"G:\Pictures"),
+            location_fact_key(r"g:\pictures"),
+            "and Windows reads two spellings of a path as one path"
+        );
+        assert_eq!(
+            location_fact_key(r"\\?\UNC\server\share"),
+            location_fact_key(r"\\server\share"),
+            "the verbatim form of a share keeps its server"
+        );
+
+        // A search's query is the query: two searches that differ in case are two
+        // searches, so a fact that is one is left as it was written.
+        assert_ne!(
+            location_fact_key("search-ms:query=Foo"),
+            location_fact_key("search-ms:query=foo")
+        );
+    }
+
+    /// What the confirmation is for: one look answering what the last one did not is a
+    /// shell that answered differently, and the look that says the same thing again is
+    /// what makes it a view that moved. A place that alternates between two answers never
+    /// confirms at all — which is the shape a flip takes, and the reason a single
+    /// differing look is not acted on.
+    #[test]
+    fn a_location_change_is_the_one_the_look_after_it_describes() {
+        let place = |folder: &str| HoverLocation {
+            folder: Some(folder.to_string()),
+            ..HoverLocation::default()
+        };
+
+        let here = place("g:\\pictures");
+        let there = place("g:\\documents");
+
+        assert!(
+            !location_change_confirmed(None, &there),
+            "a change nothing has confirmed is not acted on"
+        );
+        assert!(
+            location_change_confirmed(Some(&there), &there),
+            "the same place answered twice is a change"
+        );
+        assert!(
+            !location_change_confirmed(Some(&here), &there),
+            "two answers naming different places confirm nothing"
+        );
+        assert!(
+            !hover_location_changed(&there, &there) && hover_location_changed(&here, &there),
+            "which is the comparison the change itself is read by"
+        );
     }
 }
