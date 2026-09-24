@@ -4056,8 +4056,6 @@ fn load_video_thumbnail(
     })
 }
 
-// Windows constant for hiding console window
-const CREATE_NO_WINDOW: u32 = 0x08000000;
 const VIDEO_CROPDETECT_LIMIT: &str = "24";
 const VIDEO_CROPDETECT_ROUND: &str = "16";
 const VIDEO_CROPDETECT_FRAMES: &str = "48";
@@ -4088,7 +4086,7 @@ fn get_video_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
         .arg(path)
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
-        .creation_flags(CREATE_NO_WINDOW) // Hide the console window
+        .creation_flags(engine_processes::CREATE_NO_WINDOW) // Hide the console window
         .spawn()
         .ok()?;
 
@@ -4194,7 +4192,7 @@ fn collect_video_crop_candidates(path: &PathBuf) -> HashMap<(u32, u32, u32, u32)
         ])
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
-        .creation_flags(CREATE_NO_WINDOW)
+        .creation_flags(engine_processes::CREATE_NO_WINDOW)
         .spawn()
     {
         Ok(child) => child,
@@ -4594,7 +4592,7 @@ fn start_video_playback(path: &PathBuf, x: i32, y: i32, width: i32, height: i32)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .creation_flags(CREATE_NO_WINDOW) // Hide the console window
+        .creation_flags(engine_processes::CREATE_NO_WINDOW) // Hide the console window
         .spawn()
         .ok();
 

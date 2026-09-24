@@ -54,6 +54,7 @@
 use crate::config::config::decode_budget_bytes;
 use once_cell::sync::Lazy;
 use std::io::Read;
+use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -507,6 +508,11 @@ fn develop(path: &Path, room: (u32, u32)) -> Option<Held> {
 ///   left behind by a run that ended badly. The bytes are read as they are written, on a
 ///   thread of its own, because a picture larger than the pipe between the two processes
 ///   would otherwise be a conversion that blocks forever on a write nobody is reading.
+/// * And it is started without a console window of its own (`CREATE_NO_WINDOW`): the engine
+///   is a console program and this app is not, so Windows would otherwise give every
+///   conversion a window of its own — a black rectangle over whatever the pointer was on,
+///   for as long as the launch lasted. See `engine_processes` for the flag and for what it is
+///   said of.
 /// * `-delete 1--1` keeps the first picture of a file that holds several, which is what makes
 ///   the rest of this work at all: an astronomer's `.fits`, a multi-page `.dcx` and an
 ///   animated `.mng` are more than one picture in one file, and what the engine writes for one
@@ -551,6 +557,7 @@ fn convert(program: &Path, source: &Path, room: (u32, u32)) -> Option<Vec<u8>> {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
+        .creation_flags(crate::app::engine_processes::CREATE_NO_WINDOW)
         .spawn()
         .ok()?;
 
