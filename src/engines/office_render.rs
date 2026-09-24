@@ -86,6 +86,19 @@ fn engine_idle() -> EngineIdle {
         .unwrap_or(EngineIdle::Seconds(DEFAULT_OFFICE_ENGINE_IDLE_SECS))
 }
 
+/// Whether the engines are kept whatever the user is doing, which is the `Persistent`
+/// toggle at the top of the same submenu.
+///
+/// Read rather than captured, and for the reason the idle time is: it is what decides
+/// whether an engine is let go at all, so it is asked at the moment that is decided rather
+/// than held from whenever the engine was started.
+fn engine_persistent() -> bool {
+    CONFIG
+        .lock()
+        .map(|config| config.office_engine_persistent)
+        .unwrap_or(false)
+}
+
 /// How long a file that refused a page is left alone. Office refused it for a
 /// reason — a password, a repair dialog, a document in Protected View — and the
 /// answer will not be different a moment later, so the wait is the user's. It is
@@ -1125,10 +1138,24 @@ impl Engine {
         self.settings_taken = false;
     }
 
-    /// Whether this engine has gone long enough without drawing a page to be let
-    /// go. An engine kept indefinitely never has.
+    /// Whether this engine has been kept as long as the settings say it may be.
+    ///
+    /// Two rules, one per `Persistent` setting at the top of the family's TTL submenu. An
+    /// engine that is marked persistent is kept for its idle time whatever the user is
+    /// doing, and one kept indefinitely never has; an engine that is not is let go once no
+    /// Explorer window has been reachable for the AFK timer, with its idle time not
+    /// consulted at all in that mode — what an idle time is for is the memory an engine
+    /// holds while the user is elsewhere, and that is the question the AFK timer asks.
+    ///
+    /// What is let go of is the engine rather than what it drew: a rendered page is held in
+    /// `RENDERS` and not in the automation object, so a preview on screen stays on screen
+    /// while the engine that produced it goes.
     fn is_idle(&self) -> bool {
-        engine_idle().has_expired(self.idle_since.elapsed())
+        if engine_persistent() {
+            engine_idle().has_expired(self.idle_since.elapsed())
+        } else {
+            crate::app::afk::expired()
+        }
     }
 
     /// Let go of an engine that has just refused a page.

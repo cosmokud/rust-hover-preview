@@ -260,6 +260,16 @@ pub const DEFAULT_LIBREOFFICE_IDLE_SECS: u64 = 600;
 /// The ceiling a hand-edited number of seconds is reduced to. Past a day there is
 /// nothing a number says that `indefinitely` does not say better.
 pub const MAX_OFFICE_ENGINE_IDLE_SECS: u64 = 86_400;
+/// How long Explorer has to be out of reach before an engine that is not marked
+/// `Persistent` is let go, by default: one minute. What an engine costs is a process left
+/// running, and a minute is long enough that stepping into another application and
+/// straight back out of it is not a start paid for the visit.
+pub const DEFAULT_AFK_TIMER_SECS: u64 = 60;
+/// The ceiling a hand-edited `afk_timer_seconds` is reduced to, the same day the engine
+/// idle times are bounded by — a number past it says nothing the top of the menu does not
+/// say better. `0` is left as it is: it is the way to ask for an engine to go the moment
+/// Explorer goes out of reach.
+pub const MAX_AFK_TIMER_SECS: u64 = 86_400;
 
 pub fn sanitize_webp_playback_fps(value: u32) -> u32 {
     match value {
@@ -684,6 +694,14 @@ impl EngineIdle {
 
 fn sanitize_engine_idle_secs(seconds: u64) -> u64 {
     seconds.min(MAX_OFFICE_ENGINE_IDLE_SECS)
+}
+
+/// The away time a hand-edited `afk_timer_seconds` is read through, so that a number past
+/// what the menu offers is brought to the ceiling rather than taken as it is. `0` is left
+/// alone: the menu does not offer it either, and an engine let go the moment Explorer goes
+/// out of reach is a setting someone may mean.
+fn sanitize_afk_timer_secs(seconds: u64) -> u64 {
+    seconds.min(MAX_AFK_TIMER_SECS)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1326,6 +1344,23 @@ pub struct AppConfig {
     /// never let go of is a process this app holds for the rest of the run (see
     /// `libreoffice_render`).
     pub libreoffice_idle: EngineIdle,
+    /// How long Explorer has to be out of reach before an engine that is not marked
+    /// `Persistent` is let go, which is the tray's `Engine → AFK Timer` setting.
+    ///
+    /// It is the whole of what bounds such an engine: one is kept while an Explorer window
+    /// is reachable and let go once none has been for this long, whatever its idle time
+    /// says (see `app::afk`).
+    pub afk_timer_seconds: u64,
+    /// Whether the Office engines are kept whatever the user is doing, which is the
+    /// `Persistent` toggle at the top of the tray's `Engine → Microsoft Office TTL`
+    /// submenu. On, an engine is kept for its idle time while Explorer is minimized or
+    /// behind another application; off, `afk_timer_seconds` is what bounds it.
+    pub office_engine_persistent: bool,
+    /// The same for the browser engine, under `Engine → WebView2 TTL`.
+    pub webview_persistent: bool,
+    /// The same for the engine the documents beside Office are drawn by, under
+    /// `Engine → LibreOffice TTL`.
+    pub libreoffice_persistent: bool,
     /// Memory the pages PDF previews were drawn as may hold, in megabytes, between
     /// hovers. A page is rendered at `0` like at any other size; it is simply not
     /// kept once the hover that asked for it is over.
@@ -1440,6 +1475,10 @@ impl Default for AppConfig {
             office_engine_idle: EngineIdle::Seconds(DEFAULT_OFFICE_ENGINE_IDLE_SECS),
             webview_idle: EngineIdle::Seconds(DEFAULT_WEBVIEW_IDLE_SECS),
             libreoffice_idle: EngineIdle::Seconds(DEFAULT_LIBREOFFICE_IDLE_SECS),
+            afk_timer_seconds: DEFAULT_AFK_TIMER_SECS,
+            office_engine_persistent: false,
+            webview_persistent: false,
+            libreoffice_persistent: false,
             pdf_cache_mb: DEFAULT_PDF_CACHE_MB,
             text_cache_mb: DEFAULT_TEXT_CACHE_MB,
             decode_budget_gb: DEFAULT_DECODE_BUDGET_GB,
@@ -1570,10 +1609,14 @@ const SETTING_GROUPS: &[(&str, &[&str])] = &[
     (
         "Engine",
         &[
+            "afk_timer_seconds",
             "libreoffice_idle",
+            "libreoffice_persistent",
             "office_engine",
             "office_engine_idle",
+            "office_engine_persistent",
             "webview_idle",
+            "webview_persistent",
         ],
     ),
     (
@@ -2206,6 +2249,26 @@ impl AppConfig {
         );
         ini.set(
             CONFIG_SECTION,
+            "afk_timer_seconds",
+            Some(sanitize_afk_timer_secs(self.afk_timer_seconds).to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
+            "office_engine_persistent",
+            Some(self.office_engine_persistent.to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
+            "webview_persistent",
+            Some(self.webview_persistent.to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
+            "libreoffice_persistent",
+            Some(self.libreoffice_persistent.to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
             "pdf_cache_mb",
             Some(sanitize_pdf_cache_mb(self.pdf_cache_mb).to_string()),
         );
@@ -2599,6 +2662,18 @@ impl AppConfig {
             if let Some(idle) = EngineIdle::from_str(&value) {
                 self.libreoffice_idle = idle;
             }
+        }
+        if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "afk_timer_seconds") {
+            self.afk_timer_seconds = sanitize_afk_timer_secs(value);
+        }
+        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "office_engine_persistent") {
+            self.office_engine_persistent = value;
+        }
+        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "webview_persistent") {
+            self.webview_persistent = value;
+        }
+        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "libreoffice_persistent") {
+            self.libreoffice_persistent = value;
         }
         if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "pdf_cache_mb") {
             if let Ok(value) = u32::try_from(value) {

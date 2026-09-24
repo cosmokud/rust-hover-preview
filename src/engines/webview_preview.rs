@@ -751,6 +751,18 @@ fn idle_timeout() -> Option<Duration> {
         .as_duration()
 }
 
+/// Whether the browser is kept whatever the user is doing, which is the `Persistent` toggle
+/// at the top of the same submenu.
+///
+/// Read rather than captured, for the reason the idle time is: it is asked while the engine
+/// is up, so a click applies to the browser that is already warm.
+fn engine_persistent() -> bool {
+    CONFIG
+        .lock()
+        .map(|config| config.webview_persistent)
+        .unwrap_or(false)
+}
+
 /// Write one line to the trace file when `RHP_WEBVIEW_TRACE` is set, for the same
 /// reason the probes exist: an engine that does not come up says nothing on its own,
 /// and this is what it says. Nothing is written when the variable is not set, so an
@@ -885,19 +897,29 @@ fn engine_thread(commands: Receiver<Command>) {
             idle_since = Instant::now();
         }
 
-        // A document that has been off screen for longer than the setting asks for is
-        // one the engine is let go of, browser process and all.
+        // A document that has been off screen for as long as the engine is kept for is one
+        // the engine is let go of, browser process and all.
+        //
+        // Which question is asked is the `Persistent` toggle at the top of the TTL submenu.
+        // Persistent, it is the idle time, exactly as it was before the toggle existed; not
+        // persistent — the way this starts — it is the AFK timer, and the idle time is not
+        // consulted at all. What an idle time is for is the memory an engine holds while the
+        // user is elsewhere, which is the question the AFK timer asks directly.
         //
         // The thread is not let go of with it, and that is the whole of it: the channel
         // it holds is the one a hover sends into, and a thread that ended here would
         // leave every document after the first idle timeout with a message nobody reads.
         // What the app would show is no document at all — the engine's window is the
         // whole of an SVG preview — for the rest of the run.
-        let expired = match (host.as_ref(), idle_timeout()) {
-            (Some(_), Some(limit)) => {
-                !SHOWING.load(Ordering::Acquire) && idle_since.elapsed() >= limit
+        let expired = match host.as_ref() {
+            None => false,
+            // A document on screen is the engine earning its keep: the window is the
+            // preview, and the browser behind it is what is drawing it.
+            Some(_) if SHOWING.load(Ordering::Acquire) => false,
+            Some(_) if engine_persistent() => {
+                idle_timeout().is_some_and(|limit| idle_since.elapsed() >= limit)
             }
-            _ => false,
+            Some(_) => crate::app::afk::expired(),
         };
 
         if expired {

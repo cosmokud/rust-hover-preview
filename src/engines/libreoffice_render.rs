@@ -336,6 +336,10 @@ fn lock_file(document: &Path) -> PathBuf {
 /// How long past its last page the engine is kept, or `None` for a setting that keeps none
 /// at all — the `0 seconds` of the tray's `LibreOffice TTL`, which is an engine per
 /// document, exactly as every document was drawn before there was a setting.
+///
+/// It is the setting an engine marked `Persistent` is kept by and nothing else: one that is
+/// not persistent is let go by the AFK timer instead, and this is not asked about it
+/// (see `let_go_if_expired`).
 fn kept_idle() -> Option<EngineIdle> {
     let idle = CONFIG
         .lock()
@@ -343,6 +347,19 @@ fn kept_idle() -> Option<EngineIdle> {
         .unwrap_or(EngineIdle::Seconds(DEFAULT_LIBREOFFICE_IDLE_SECS));
 
     (idle != EngineIdle::Seconds(0)).then_some(idle)
+}
+
+/// Whether the engine is kept whatever the user is doing, which is the `Persistent` toggle
+/// at the top of the same submenu.
+///
+/// Read rather than captured, for the reason the idle time is: the engine thread asks it
+/// once a second while it waits for documents, so a click applies to an engine that is
+/// already up.
+fn engine_persistent() -> bool {
+    CONFIG
+        .lock()
+        .map(|config| config.libreoffice_persistent)
+        .unwrap_or(false)
 }
 
 /// The process holding the engine being kept, where there is one and it is still running.
@@ -517,14 +534,27 @@ fn track_engine_child(launcher: u32) {
     }
 }
 
-/// Let the engine go once it has been idle for longer than the setting names.
+/// Let the engine go once it is time, which is one of two questions rather than one.
 ///
 /// It is the engine thread that looks, once a second while it waits for documents: nothing
 /// else runs between hovers, and an engine that is never let go of is a process left on the
-/// machine for a setting that said otherwise. A setting of `0 seconds` — the switch the
-/// tray offers as the bottom of the list — lets go of an engine that is already running the
-/// moment it is looked at.
+/// machine for a setting that said otherwise.
+///
+/// Which question is asked is the `Persistent` toggle at the top of the same submenu. Not
+/// persistent — the way this starts — the engine is let go once no Explorer window has been
+/// reachable for the AFK timer, and the idle time is not consulted at all: what is being
+/// bounded is the few hundred megabytes an engine holds while the user is somewhere else.
+/// Marked persistent it is the idle time that is asked, exactly as it was before the toggle
+/// existed, and a setting of `0 seconds` — the switch the tray offers as the bottom of the
+/// list — lets go of an engine that is already running the moment it is looked at.
 fn let_go_if_expired() {
+    if !engine_persistent() {
+        if crate::app::afk::expired() {
+            let_go();
+        }
+        return;
+    }
+
     let Some(idle) = kept_idle() else {
         let_go();
         return;

@@ -1,3 +1,4 @@
+pub(crate) mod afk;
 pub(crate) mod engine_processes;
 pub(crate) mod single_instance;
 pub(crate) mod startup;

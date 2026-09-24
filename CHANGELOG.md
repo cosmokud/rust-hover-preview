@@ -2,6 +2,12 @@
 
 ## [0.3.3] - 2026-09-24
 
+### Added
+
+- **`Engine → AFK Timer`**: an engine that is not marked `Persistent` is let go once no Explorer window has been reachable for the time you pick — 1 hour down to 15 seconds, 1 minute by default.
+- A **`Persistent`** toggle at the top of each **`… TTL`** submenu: on, the engine is kept for its TTL whatever you are doing, which is how it worked before; off, which is how they all start, the AFK timer bounds it.
+- New `config.ini` keys: `afk_timer_seconds`, `office_engine_persistent`, `libreoffice_persistent`, `webview_persistent`.
+
 ### Changed
 
 - The update installer is downloaded only after you click the update row and confirm, not as soon as a newer release is found; a check now costs one small request.

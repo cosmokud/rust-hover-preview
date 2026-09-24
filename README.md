@@ -223,10 +223,11 @@ The item a setting starts at carries `(Default)` after its name, so a menu says 
   - **Decode Budget** — 16 GB down to 512 MB, 1 GB default: a file past it gets no preview.
   - **Tick** — how often the app looks at Explorer while a folder window is in focus: 15 ms (default), 31, 47, 63 or 78 ms, one to five Windows timer ticks. Lower answers a move sooner; higher is lighter on the CPU and on Explorer.
 - **Engine**
+  - **AFK Timer** — how long Explorer may be out of reach before an engine that is not marked **Persistent** is let go: 1 hour, 30 minutes, 10 minutes, 5 minutes, 1 minute (default), 30 seconds, 15 seconds. It counts time with no Explorer window reachable — every one of them minimized, or every one of them behind a maximized or fullscreen app — on any monitor, so a second Explorer window on another screen keeps every engine warm. Each **`… TTL`** submenu has a **Persistent** toggle at the top for an engine you want kept regardless.
   - **Select Engine → Office** — which engine an Office document’s page is asked of: **Microsoft Office** (default) draws it with the application that owns the format and keeps LibreOffice as the fallback for a family this machine has no application for, while **LibreOffice** draws every Office document whether Microsoft Office is installed or not. The LibreOffice row is greyed out where it is not installed.
-  - **Microsoft Office TTL** — how long a family’s Office app is kept warm: Indefinitely, 1 hour, 30 minutes, 10 minutes (default), 5 minutes, 1 minute, 0 seconds.
-  - **LibreOffice TTL** — the same for the engine that draws CorelDRAW and the documents beside it: how long it is kept after the last document it converted. A kept engine converts the next document without starting up again — measured on one document, 1.2 s cold against 0.2 s — and while it is kept it is a LibreOffice with a small document of this app's own open, which is a few hundred megabytes. `0 seconds` keeps none, which is an engine per document. Greyed out where LibreOffice is not installed.
-  - **WebView2 TTL** — how long the browser that draws SVG documents is kept warm; greyed out where WebView2 is missing.
+  - **Microsoft Office TTL** — **Persistent** on, how long a family’s Office app is kept warm whatever you are doing: Indefinitely, 1 hour, 30 minutes, 10 minutes (default), 5 minutes, 1 minute, 0 seconds. Off, it is kept while Explorer is reachable and let go by **AFK Timer** instead.
+  - **LibreOffice TTL** — the same for the engine that draws CorelDRAW and the documents beside it: how long it is kept after the last document it converted. A kept engine converts the next document without starting up again — measured on one document, 1.2 s cold against 0.2 s — and while it is kept it is a LibreOffice with a small document of this app's own open, which is a few hundred megabytes. `0 seconds` keeps none, which is an engine per document. Both are the answer for an engine marked **Persistent**; one that is not is let go by **AFK Timer** instead. Greyed out where LibreOffice is not installed.
+  - **WebView2 TTL** — **Persistent** on, how long the browser that draws SVG documents is kept warm; off, it is let go by **AFK Timer**. Greyed out where WebView2 is missing.
 - **Codecs** — what this machine has: Videos, Images, and Engines. Missing ones are greyed out.
 - **Run at Startup** — add or remove the Windows startup entry.
 - **Config.ini** — open the configuration file; the item is named for the running version.
@@ -310,9 +311,14 @@ text_cache_mb=0
 tick_ms=15
 
 ; Engine
+afk_timer_seconds=60
 libreoffice_idle=600
+libreoffice_persistent=false
 office_engine=microsoft_office
 office_engine_idle=600
+office_engine_persistent=false
+webview_idle=600
+webview_persistent=false
 
 ; Advanced
 hdr_exposure=0
@@ -339,7 +345,9 @@ Key settings, in plain terms:
 - `spinner_delay_ms` — how long a hover’s load may run before the waiting spinner is put up, in milliseconds: default `250`, and `0` puts it up with the load. One delay answers every kind of preview — a decode, a page Office is rendering, a browser that has to start — and there is no tray entry for it.
 - `office_engine` — which engine draws an Office document’s page: `microsoft_office` (default) asks the application that owns the format and falls back to LibreOffice for a family this machine has no application for, while `libreoffice` asks the render engine for every Office document whether Microsoft Office is installed or not. With no LibreOffice installed the second falls back to the first, and the tray row is greyed out.
 - `libreoffice_idle` — seconds the LibreOffice engine is kept after the last page it drew, or `indefinitely`; default `600`. `0` keeps no engine at all, which is a launch per document; while one is kept it is a LibreOffice with a small document of this app's own open, and it is ended by the app when the time is up.
-- `office_engine_idle` — seconds an Office engine is kept after its last page, or `indefinitely`; default `600`. `0` lets it go as soon as it has drawn a page.
+- `office_engine_idle` — seconds an Office engine is kept after its last page, or `indefinitely`; default `600`. `0` lets it go as soon as it has drawn a page. It bounds an engine the same way `libreoffice_idle` does, and like it, only while that engine is marked persistent.
+- `afk_timer_seconds` — seconds with no Explorer window reachable before an engine that is not marked persistent is let go; default `60`, clamped to a day. `0` lets an engine go the moment Explorer goes out of reach.
+- `office_engine_persistent`, `libreoffice_persistent`, `webview_persistent` — `true` keeps that engine whatever you are doing, with its `…_idle` time as the only bound; `false` (default) keeps it while Explorer is reachable and lets `afk_timer_seconds` bound it.
 - `trigger_key` / `trigger_key_mode` / `trigger_key_enabled` — the key (`alt`, `ctrl`, `shift`, `win`), what it does (`disable` or `enable`), and whether it is watched at all; `true` by default.
 - `follow_cursor` — `true` for Follow Cursor, `false` for Best Position.
 - `avoid_mode` — `filename` (default), `filename_column`, `details`, or `off`: what a preview is kept off.
