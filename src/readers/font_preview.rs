@@ -41,7 +41,7 @@ use crate::CONFIG;
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::SystemTime;
@@ -560,56 +560,34 @@ fn base128(bytes: &[u8], at: &mut usize) -> Option<u32> {
 ///
 /// The stream is one Brotli stream, so a table near its start cannot be read without
 /// inflating everything before it — and a stream is allowed to say it expands to any size
-/// at all. What bounds that is the budget: the sink refuses a byte past it, the decompressor
-/// stops there, and a stream that produced what was asked for is answered with it whether
-/// or not it would have gone on. `needed` is the sum of the directory's own lengths, so it
-/// is bounded by what the font says it holds as well.
+/// at all. What bounds that is what the decompressor is asked for: the bytes up to
+/// `needed` and not one more, which is a stream that stops where it is no longer read
+/// rather than one that is inflated whole and thrown away. `needed` is the end of the last
+/// table a specimen reads, so it is bounded by what the font says it holds, and by what a
+/// hover is allowed to decode for as well.
+///
+/// A stream that gives less than the directory said it holds is not read further: a
+/// truncated one, and one that is not a Brotli stream at all, are both answered the same
+/// way — with nothing, which is what keeps a hover from opening a box nothing is drawn in.
 fn decompress(data: &[u8], needed: usize) -> Option<Vec<u8>> {
     if needed == 0 || needed as u64 > decode_budget_bytes() {
         return None;
     }
 
-    let mut sink = Bounded {
-        bytes: Vec::with_capacity(needed.min(1 << 20)),
-        limit: needed as u64,
-    };
+    let mut reader = brotli_decompressor::Decompressor::new(data, 4096);
+    let mut stream = Vec::with_capacity(needed.min(1 << 20));
+    let mut buffer = vec![0u8; needed.min(1 << 16)];
 
-    {
-        let mut writer = brotli_decompressor::DecompressorWriter::new(&mut sink, 4096);
-        // A stream that stopped at the bound is the answer, and a stream that would not
-        // decompress at all leaves the sink short of it — which is the difference between
-        // the two ends of this.
-        let _ = writer.write_all(data);
-        let _ = writer.close();
-    }
+    while stream.len() < needed {
+        let want = (needed - stream.len()).min(buffer.len());
 
-    (sink.bytes.len() >= needed).then_some(sink.bytes)
-}
-
-/// A sink that stops a decompressor at the budget. What it exists for is the file that is
-/// not a font but says it is: a decompression bomb is a few kilobytes that expands to
-/// anything, and this is the side of that the app answers on.
-struct Bounded {
-    bytes: Vec<u8>,
-    limit: u64,
-}
-
-impl Write for Bounded {
-    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
-        if self.bytes.len() as u64 + buffer.len() as u64 > self.limit {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::WriteZero,
-                "past the budget",
-            ));
+        match reader.read(&mut buffer[..want]) {
+            Ok(0) | Err(_) => break,
+            Ok(read) => stream.extend_from_slice(&buffer[..read]),
         }
-
-        self.bytes.extend_from_slice(buffer);
-        Ok(buffer.len())
     }
 
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
+    (stream.len() >= needed).then_some(stream)
 }
 
 /// A font's own character map: what it can draw, asked of it one code point at a time.
@@ -1270,6 +1248,7 @@ mod tests {
     use super::*;
     use flate2::write::ZlibEncoder;
     use flate2::Compression;
+    use std::io::Write;
 
     /// A file of this module's own folder: the tests run beside each other, and one of them
     /// clearing its fixtures must not take another's with it.
@@ -1655,6 +1634,49 @@ mod tests {
             ("webfont.woff2", woff2(&tables)),
         ] {
             let path = fixture(name, &bytes);
+            let specimen = probe(&path).expect("a specimen");
+
+            assert_eq!(specimen.title, "Web Font Regular", "{name}");
+            assert_eq!(specimen.samples, vec![pangram.to_string()], "{name}");
+
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+
+    /// A stream that goes on past the last table a specimen reads, which is what a real
+    /// `.woff2` is: the outlines of a text face are tens of kilobytes, and the tables after
+    /// its `name` — its `post`, its kerning — are read by nobody here. So the two tables
+    /// that *are* read lie in a stream that has not ended, and they arrive in reads of the
+    /// decompressor's own size rather than in one: a reader that insists on whole reads
+    /// stops short of the table it needs. Every one of the 34 `.woff2` files on the machine
+    /// this was measured on is this shape, and this is the reader that finds them.
+    #[test]
+    fn reads_a_webfont_whose_stream_goes_past_what_it_needs() {
+        let pangram = SAMPLE_LINES[0];
+        let beyond = 16 * 1024;
+
+        // Two shapes of the same thing: the tables a specimen reads at the front, and a big
+        // table between them with the rest behind it, which is what a real directory holds.
+        for (name, tables) in [
+            (
+                "trailing.woff2",
+                vec![
+                    table(b"cmap", cmap_for(&[pangram])),
+                    table(b"name", name_table("Web Font", "Regular")),
+                    table(b"post", vec![0u8; beyond]),
+                ],
+            ),
+            (
+                "split.woff2",
+                vec![
+                    table(b"cmap", cmap_for(&[pangram])),
+                    table(b"post", vec![0u8; beyond]),
+                    table(b"name", name_table("Web Font", "Regular")),
+                    table(b"GPOS", vec![0u8; beyond / 4]),
+                ],
+            ),
+        ] {
+            let path = fixture(name, &woff2(&tables));
             let specimen = probe(&path).expect("a specimen");
 
             assert_eq!(specimen.title, "Web Font Regular", "{name}");
