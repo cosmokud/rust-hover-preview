@@ -36,7 +36,7 @@
 //! way out of the preview.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -122,6 +122,78 @@ pub struct Area {
     pub height: i32,
 }
 
+/// The document the preview loop wants drawn, as the one thing that is wanted: the file,
+/// the backdrop its page is written for, the box the wait has ended up in, and the
+/// generation this want was made under.
+///
+/// What this is for is a pointer that crosses a folder of documents or specimens: every
+/// file it settles on is one the loop asks for, one after another, and an engine that
+/// draws one document at a time and can be a tenth of a second about it would otherwise
+/// draw each of them in turn — showing a file the hand has already left before the one it
+/// is on, for as long as the hand keeps moving. One want is kept instead of a queue, so
+/// what the engine takes up is the newest file rather than the oldest, and a want is a
+/// generation of its own only where the *document* is another one: a box that moved while
+/// the same document was being navigated to is the same want, and counting it as another
+/// would throw away the navigation it is waiting for (see `show`).
+static WANTED: Lazy<Mutex<Option<Wanted>>> = Lazy::new(|| Mutex::new(None));
+
+/// The generation of the newest want. Every request carries the generation it was made
+/// under, and one that is not this is not carried out — which is the question the engine's
+/// thread asks of a navigation that is still running, in the middle of pumping a browser's
+/// messages and unable to take a lock the loop may be holding.
+static WANTED_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+/// The document the engine's window is showing, when one is: the file a landed navigation
+/// was for, kept until the window comes down.
+///
+/// The preview loop reads it to tell its own document landing from another hover's. A
+/// document that lands is what a wait ends on, and a wait is for one file: a page that
+/// arrives for a hover the loop has already left would otherwise take down the wait it is
+/// in the middle of and put a file the pointer has left on screen — see
+/// `preview_window`'s handover.
+static SHOWN: Lazy<Mutex<Option<PathBuf>>> = Lazy::new(|| Mutex::new(None));
+
+/// The engine's window handle, while it has one: what a hit test needs to know whether the
+/// pointer is on a document's preview, which is a preview of this app's in every way but
+/// the window it is drawn in.
+static HOST_HWND: AtomicIsize = AtomicIsize::new(0);
+
+/// The document the loop wants drawn, as the engine's thread takes it up: the want and the
+/// generation it was made under, or nothing when nothing is wanted.
+#[derive(Clone)]
+struct Wanted {
+    generation: u64,
+    path: PathBuf,
+    background: TransparentBackground,
+    area: Area,
+}
+
+/// What is wanted this moment, for the engine's thread to take up.
+fn wanted() -> Option<Wanted> {
+    WANTED.lock().ok().and_then(|wanted| wanted.clone())
+}
+
+/// Whether what was asked for under `generation` is still what is wanted.
+fn is_wanted(generation: u64) -> bool {
+    WANTED_GENERATION.load(Ordering::Acquire) == generation
+}
+
+/// The box the newest want for `generation` asks for, when that is still the newest want:
+/// where a navigation that has just landed puts its window, since a pointer that moved
+/// while the document was being drawn has moved the preview with it.
+fn wanted_area(generation: u64) -> Option<Area> {
+    WANTED
+        .lock()
+        .ok()
+        .and_then(|wanted| {
+            wanted
+                .as_ref()
+                .map(|wanted| (wanted.generation, wanted.area))
+        })
+        .filter(|(wanted, _)| *wanted == generation)
+        .map(|(_, area)| area)
+}
+
 /// The version of the WebView2 runtime on this machine, or nothing when it is not
 /// installed — which is what decides whether an SVG document can be previewed at all.
 pub fn runtime_version() -> Option<String> {
@@ -154,6 +226,31 @@ pub fn is_showing() -> bool {
 /// document the engine draws is a preview of this app's even though the window is not.
 pub fn screen_rect() -> Option<ScreenRect> {
     SHOWING_RECT.lock().ok().and_then(|rect| *rect)
+}
+
+/// The document the engine's window is showing, when it is showing one: the file the page
+/// that landed was written for.
+///
+/// The preview loop asks this to tell its own document from another hover's: a page that
+/// arrives is what a wait ends on, and a wait is for one file — one that lands for a hover
+/// the loop has left is not a wait that has ended (see `SHOWN`).
+pub fn showing_path() -> Option<PathBuf> {
+    SHOWN.lock().ok().and_then(|shown| shown.clone())
+}
+
+/// The window the engine draws in, when it has one: the handle a hit test compares against
+/// the window under the pointer, so that a document the engine draws is touched the way
+/// this app's own preview is — the window is the engine's, and the preview is this app's.
+pub fn showing_hwnd() -> isize {
+    HOST_HWND.load(Ordering::Acquire)
+}
+
+/// Say what the engine's window is showing, for `showing_path` to answer with. Nothing is
+/// said with the window coming down, which is what `hide` is for.
+fn publish_shown(path: Option<PathBuf>) {
+    if let Ok(mut shown) = SHOWN.lock() {
+        *shown = path;
+    }
 }
 
 /// Say where the engine's window is — or that it is nowhere — for `screen_rect` to
@@ -470,13 +567,16 @@ fn escape_text(text: &str) -> String {
 ///
 /// The answer is immediate and says nothing about whether the document arrived: the
 /// engine works on its own thread, and what it does with this is navigates, waits for
-/// the document, and puts its window up — `is_showing` is what says it got there. What a
-/// caller puts on screen while it waits is the waiting spinner and nothing else: this app
-/// draws no document, so there is no still frame to hold the place.
+/// the document, and puts its window up — `showing_path` is what says which document got
+/// there. What a caller puts on screen while it waits is the waiting spinner and nothing
+/// else: this app draws no document, so there is no still frame to hold the place.
 ///
-/// The same document asked for a second time — which is what a wait that follows the
-/// pointer does — is that window moved rather than the document navigated to again, and
-/// a file that is not a document at all is not the engine's to draw.
+/// A file that is not a document at all is not the engine's to draw, and everything else
+/// is the want in `WANTED`: the newest one wins, and what was asked for before it is not
+/// drawn at all. The *same* document asked for a second time — which is what a wait that
+/// follows the pointer does, sixty times a second — is the same want with the box it has
+/// moved to, and it keeps the generation it was made under, so a pointer that keeps moving
+/// while the document is on its way does not call off the navigation it is waiting for.
 pub fn show(path: &Path, area: Area, background: TransparentBackground) {
     if !draws(path) {
         trace(&format!(
@@ -486,6 +586,32 @@ pub fn show(path: &Path, area: Area, background: TransparentBackground) {
         return;
     }
 
+    let generation = {
+        let Ok(mut wanted) = WANTED.lock() else {
+            trace("show: the wanted cell is poisoned");
+            return;
+        };
+
+        let same_document = wanted
+            .as_ref()
+            .is_some_and(|wanted| wanted.path == path && wanted.background == background);
+
+        let generation = if same_document {
+            wanted.as_ref().map(|wanted| wanted.generation).unwrap_or(0)
+        } else {
+            WANTED_GENERATION.fetch_add(1, Ordering::AcqRel) + 1
+        };
+
+        *wanted = Some(Wanted {
+            generation,
+            path: path.to_path_buf(),
+            background,
+            area,
+        });
+
+        generation
+    };
+
     let Ok(mut engine) = ENGINE.lock() else {
         trace("show: the engine's lock is poisoned");
         return;
@@ -493,11 +619,7 @@ pub fn show(path: &Path, area: Area, background: TransparentBackground) {
 
     let sender = engine.get_or_insert_with(Engine::start).sender.clone();
 
-    if let Err(error) = sender.send(Command::Show {
-        path: path.to_path_buf(),
-        area,
-        background,
-    }) {
+    if let Err(error) = sender.send(Command::Show { generation }) {
         trace(&format!(
             "show({}): the engine's thread is gone: {error}",
             path.display()
@@ -508,13 +630,38 @@ pub fn show(path: &Path, area: Area, background: TransparentBackground) {
 /// Take the engine's window down. The engine itself is kept warm: what it costs to
 /// begin is a browser start, and what it costs to point at another document is a few
 /// milliseconds, so a hover that follows another one pays almost nothing.
+///
+/// Nothing is wanted once this returns, and the generation goes with it: a navigation the
+/// engine is in the middle of is one whose file the pointer has left, so it is dropped
+/// rather than put up, and the window comes down without waiting for it.
 pub fn hide() {
+    if let Ok(mut wanted) = WANTED.lock() {
+        *wanted = None;
+    }
+    WANTED_GENERATION.fetch_add(1, Ordering::AcqRel);
+
     let Ok(engine) = ENGINE.lock() else {
         return;
     };
 
     if let Some(engine) = engine.as_ref() {
         let _ = engine.sender.send(Command::Hide);
+    }
+}
+
+/// Move a want that is already in hand to the box the wait has ended up in: what a pointer
+/// that kept moving while the document was on its way asks for.
+///
+/// Nothing is sent to the engine — a document that is being navigated to is already drawn
+/// in the box the want carries when it lands — and nothing is asked where the file is not
+/// the one that is wanted: a box belongs to the hover that is waiting on it, and a hover
+/// for another file is a `show`, which is the ask that takes the place of this want
+/// altogether.
+pub fn wanted_here(path: &Path, area: Area) {
+    if let Ok(mut wanted) = WANTED.lock() {
+        if let Some(wanted) = wanted.as_mut().filter(|wanted| wanted.path == path) {
+            wanted.area = area;
+        }
     }
 }
 
@@ -539,10 +686,11 @@ pub fn shutdown() {
 
 /// What the preview thread asks the engine's thread to do.
 enum Command {
+    /// Draw what is wanted, as the want made under this generation: the document itself
+    /// travels in `WANTED`, and the generation is what says whether this ask is still the
+    /// newest one by the time the engine's thread takes it up (see `WANTED`).
     Show {
-        path: PathBuf,
-        area: Area,
-        background: TransparentBackground,
+        generation: u64,
     },
     Hide,
     Shutdown,
@@ -624,32 +772,57 @@ fn engine_thread(commands: Receiver<Command>) {
                 }
                 idle_since = Instant::now();
             }
-            Ok(Command::Show {
-                path,
-                area,
-                background,
-            }) => {
-                trace(&format!("engine: show {}", path.display()));
+            Ok(Command::Show { generation }) => {
+                // What was asked for here may have been asked for after: the pointer moves
+                // while a document is on its way, and the file this is about is then one
+                // it has left. Such a want is not taken up at all — nothing is navigated
+                // to, and nothing is shown — which is what keeps a folder of documents
+                // from being drawn one after another at the speed of the hand crossing it.
+                let ask = wanted().filter(|wanted| wanted.generation == generation);
 
-                if host.is_none() {
-                    host = Host::create();
+                if ask.is_none() {
+                    trace(&format!(
+                        "engine: dropped a show the loop has moved on from (generation {generation})"
+                    ));
+                }
 
-                    // An engine that could not be had is noted, so that hovers stop
-                    // opening a box nothing will be drawn into until the folder it
-                    // could not have is free again.
-                    if host.is_some() {
-                        note_engine_up();
-                    } else {
-                        note_failure();
+                if let Some(ask) = ask {
+                    trace(&format!("engine: show {}", ask.path.display()));
+
+                    if host.is_none() {
+                        host = Host::create();
+
+                        // An engine that could not be had is noted, so that hovers stop
+                        // opening a box nothing will be drawn into until the folder it
+                        // could not have is free again.
+                        if host.is_some() {
+                            note_engine_up();
+                        } else {
+                            note_failure();
+                        }
+                        trace(&format!("engine: host created: {}", host.is_some()));
                     }
-                    trace(&format!("engine: host created: {}", host.is_some()));
-                }
 
-                if let Some(host) = host.as_mut() {
-                    host.show(&path, area, background);
-                    trace(&format!("engine: shown: {}", is_showing()));
+                    if let Some(host) = host.as_mut() {
+                        host.show(&ask);
+                        trace(&format!("engine: shown: {}", is_showing()));
+                    }
+
+                    // A navigation the browser never answered is not a document to
+                    // hand another one to: it stops answering rather than failing, and
+                    // what it would put up next is the file before this one — so it is
+                    // let go of here and begun again by the next document, which is
+                    // what the app does with an engine that has stopped answering
+                    // wherever else one is kept.
+                    if host.as_ref().is_some_and(Host::is_hung) {
+                        trace("engine: let go, the browser stopped answering");
+
+                        if let Some(mut host) = host.take() {
+                            host.close();
+                        }
+                    }
+                    idle_since = Instant::now();
                 }
-                idle_since = Instant::now();
             }
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => break,
@@ -726,6 +899,11 @@ struct Host {
     /// started by the loader in this process — and it is what is ended if it is
     /// somehow still there when the engine goes.
     browser_pid: u32,
+    /// Whether the browser has stopped answering a navigation for longer than any document
+    /// takes. Such an engine is let go of by the thread that holds it rather than handed
+    /// the next document: what it would answer with is the file before this one, and what
+    /// its thread would do is wait on a page that is never coming (see `NAVIGATION_TIMEOUT`).
+    hung: bool,
 }
 
 impl Host {
@@ -822,12 +1000,45 @@ impl Host {
             webview,
             current: None,
             browser_pid,
+            hung: false,
         };
+
+        // The window a hit test compares against, for the preview loop and the Explorer
+        // hook: it is the window a document is drawn in, so it is the one the pointer
+        // touches when it is taken onto a document's preview.
+        HOST_HWND.store(hwnd.0 as isize, Ordering::Release);
 
         Some(host)
     }
 
-    fn show(&mut self, path: &Path, area: Area, background: TransparentBackground) {
+    /// Draw the document this want names in the box it asks for, or move the window to it
+    /// where the engine already holds that document.
+    ///
+    /// A file the engine is not already holding, or one whose backdrop or face has changed,
+    /// is navigated to *before* the window is put up: a window shown first would be the file
+    /// before it, and what is on screen a moment ago belongs to another hover. What the
+    /// navigation ends with is the whole of what happens next — the four ways it can end are
+    /// [`Arrival`], and three of them put nothing up at all:
+    ///
+    /// - the page arrived, and the window is put up in the box the *newest* want asks for,
+    ///   which is where a wait that followed the pointer ended up rather than where it
+    ///   started;
+    /// - a newer want took this one's place while the page was on its way: a file the
+    ///   pointer has left is not shown, and the window comes down, because what the window
+    ///   holds is the file before it and the loop is waiting for another one;
+    /// - the page could not be written or the engine would not navigate: the engine is fine
+    ///   and the hover waiting on this one has nothing left to wait for;
+    /// - the browser never answered at all, which is the one that leaves the engine unfit to
+    ///   be handed the next document (see `NAVIGATION_TIMEOUT`).
+    fn show(&mut self, wanted: &Wanted) {
+        let Wanted {
+            generation,
+            path,
+            background,
+            area,
+        } = wanted;
+        let (background, area) = (*background, *area);
+
         // Which face of a collection a specimen of this file is drawn from, read here rather
         // than inside the page: it is part of what the engine is holding, so a setting changed
         // between two hovers of one file is a page to write and navigate to again. A file that
@@ -848,6 +1059,11 @@ impl Host {
                 let _ = controller.SetDefaultBackgroundColor(background_color(background));
             }
 
+            // The box the page is rendered in, set before it is navigated to: a document
+            // is drawn at this size, so what arrives is what the layout asked for rather
+            // than something drawn small and resized after the fact. It is set again
+            // below from the box the *newest* want asks for, which is where a wait that
+            // followed a moving hand ended up.
             let _ = self.controller.SetBounds(RECT {
                 left: 0,
                 top: 0,
@@ -856,35 +1072,69 @@ impl Host {
             });
         }
 
-        // A file the engine is not already holding, or one whose backdrop or face has changed,
-        // is navigated to *before* the window is put up: a window shown first would be the file
-        // before it, and what is on screen a moment ago belongs to another hover.
-        if self.current.as_ref() != Some(&(path.to_path_buf(), background, face)) {
+        if self.current.as_ref() != Some(&(path.clone(), background, face)) {
+            // The document on screen is not this one, and what the window is holding is
+            // about to be navigated away from: it comes down first, so that nothing of
+            // another hover stands there while this one's page is on its way — what the
+            // loop shows meanwhile is its own spinner, which is what a wait is.
+            self.hide();
+
             let started = Instant::now();
-            let arrived = self.navigate(path, background, face);
+            let arrival = self.navigate(path, background, face, *generation);
             trace(&format!(
-                "engine: navigate {} arrived={arrived} in {} ms",
+                "engine: navigate {} {arrival:?} in {} ms",
                 path.display(),
                 started.elapsed().as_millis()
             ));
 
-            if !arrived {
-                // The page was not put up. The engine is fine — the next file is drawn as
-                // this one was meant to be — but the hover waiting on this one has nothing
-                // left to wait for.
-                self.hide();
-                note_document_failed();
-                return;
-            }
+            match arrival {
+                Arrival::Arrived => {
+                    if let Ok(mut timings) = LAST_TIMINGS.lock() {
+                        timings.navigate_ms = started.elapsed().as_millis() as u64;
+                    }
 
-            if let Ok(mut timings) = LAST_TIMINGS.lock() {
-                timings.navigate_ms = started.elapsed().as_millis() as u64;
+                    self.current = Some((path.clone(), background, face));
+                }
+                Arrival::Superseded => {
+                    // Another want has taken this one's place, so what was navigated to is
+                    // a file the pointer has left: nothing of it goes on screen. What the
+                    // engine holds is nothing either — the page this navigation was made
+                    // against has been written over with another document's — so the next
+                    // want is navigated to rather than moved to.
+                    self.current = None;
+                    return;
+                }
+                Arrival::Failed => {
+                    self.current = None;
+                    note_document_failed();
+                    return;
+                }
+                Arrival::TimedOut => {
+                    // A browser that never answered the navigation is not a browser to
+                    // hand the next document to: the hover waiting on this one is answered
+                    // with nothing, and the engine is let go of and begun again (see
+                    // `NAVIGATION_TIMEOUT` and `is_hung`).
+                    self.hung = true;
+                    self.current = None;
+                    note_document_failed();
+                    return;
+                }
             }
-
-            self.current = Some((path.to_path_buf(), background, face));
         }
 
+        // The box the *newest* want asks for, which is the one the wait has ended up in:
+        // a wait that followed a moving pointer keeps following it, and a document that
+        // takes a moment to be drawn lands where the hand is rather than where it was.
+        let area = wanted_area(*generation).unwrap_or(area);
+
         unsafe {
+            let _ = self.controller.SetBounds(RECT {
+                left: 0,
+                top: 0,
+                right: area.width,
+                bottom: area.height,
+            });
+
             let _ = self.controller.SetIsVisible(true);
             let _ = SetWindowPos(
                 self.hwnd,
@@ -898,14 +1148,23 @@ impl Host {
             let _ = ShowWindow(self.hwnd, SW_SHOWNOACTIVATE);
         }
 
+        publish_shown(Some(path.clone()));
         SHOWING.store(true, Ordering::Release);
         publish_rect(Some(area));
+    }
+
+    /// Whether the browser has stopped answering, which is a host to be let go of rather
+    /// than one to hand another document to.
+    fn is_hung(&self) -> bool {
+        self.hung
     }
 
     fn hide(&mut self) {
         unsafe {
             let _ = ShowWindow(self.hwnd, SW_HIDE);
         }
+
+        publish_shown(None);
         SHOWING.store(false, Ordering::Release);
         publish_rect(None);
     }
@@ -918,6 +1177,10 @@ impl Host {
             let _ = self.controller.Close();
             let _ = DestroyWindow(self.hwnd);
         }
+
+        // The window is gone, so nothing under the pointer is this engine's any more: a
+        // hit test that still held the handle would be reading a window that was destroyed.
+        HOST_HWND.store(0, Ordering::Release);
 
         // The environment goes with the host when it is dropped, and the browser
         // process it owns goes with the last controller over it.
@@ -932,7 +1195,18 @@ impl Host {
     /// it the size of the window, and a font's is the font in the page with its own lines under
     /// it — read at `face`, which is which of a collection's faces is written out; see
     /// `frame_page` and `font_page`.
-    fn navigate(&self, path: &Path, background: TransparentBackground, face: usize) -> bool {
+    ///
+    /// The wait is asked under the generation this navigation was made for, and it ends on one
+    /// of the four [`Arrival`]s: the page arriving, a newer want taking this one's place, the
+    /// browser not answering within `NAVIGATION_TIMEOUT`, or the navigation not being made at
+    /// all. What is *not* done is waiting without a bound — see `wait_for_navigation`.
+    fn navigate(
+        &self,
+        path: &Path,
+        background: TransparentBackground,
+        face: usize,
+        generation: u64,
+    ) -> Arrival {
         let version = file_version(path);
         let page = if font_formats::is_font_file(path) {
             font_page(path, version, background, face)
@@ -941,7 +1215,7 @@ impl Host {
         };
 
         let Some((page, url)) = page else {
-            return false;
+            return Arrival::Failed;
         };
 
         trace(&format!(
@@ -965,21 +1239,85 @@ impl Host {
                 .add_NavigationCompleted(&handler, &mut token)
                 .is_err()
             {
-                return false;
+                return Arrival::Failed;
             }
 
             let started = self.webview.Navigate(PCWSTR(url.as_ptr()));
-            let arrived = started.is_ok() && webview2_com::wait_with_pump(receiver).is_ok();
+            let arrival = if started.is_err() {
+                Arrival::Failed
+            } else {
+                wait_for_navigation(&receiver, generation)
+            };
 
             let _ = self.webview.remove_NavigationCompleted(token);
 
-            arrived
+            arrival
         }
+    }
+}
+
+/// How a navigation ended, as the four things `Host::show` does something about.
+#[derive(Clone, Copy, Debug)]
+enum Arrival {
+    /// The page arrived: the document is the one the engine is holding.
+    Arrived,
+    /// The page could not be written, or the engine would not navigate at all.
+    Failed,
+    /// A newer want took this one's place while the navigation ran: what is being navigated
+    /// to is a file the pointer has left, so nothing of it goes up.
+    Superseded,
+    /// The browser stopped answering: the navigation was given longer than any document
+    /// takes and nothing came back (see `NAVIGATION_TIMEOUT`).
+    TimedOut,
+}
+
+/// How long a navigation may run before the browser is read as having stopped answering.
+///
+/// What the wait is for is `NavigationCompleted`, and that event is the one thing in this
+/// module with no bound of its own: a navigation it never fires for leaves the engine's
+/// thread waiting on it for the rest of the run, with every document after it queued behind
+/// a wait that never ends, the idle timeout unable to fire because the thread that holds it
+/// is the thread that is waiting, and the window standing there with the file before this
+/// one on it. A page of this app's own is a file on the machine and a document a browser has
+/// to lay out — milliseconds warm, a few hundred with the browser being begun — so what is
+/// past this is not a document still being drawn: it is a browser that has stopped
+/// answering, and it is let go of and begun again by the next document.
+const NAVIGATION_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Wait for the page to arrive, pumping the thread's messages while it does, and ending on
+/// one of the three things that can end the wait.
+///
+/// The messages have to be pumped rather than waited on: a controller is created on this
+/// thread and stops drawing when the thread stops retrieving messages, and the event this
+/// waits for arrives through that same queue. What is not done is waiting *without* a
+/// bound, which is what the loop below is: the two ways it ends early are what keep a
+/// hover's answer from being held behind a browser that has stopped answering, and behind a
+/// document nobody is waiting for any more.
+fn wait_for_navigation(receiver: &Receiver<()>, generation: u64) -> Arrival {
+    let started = Instant::now();
+
+    loop {
+        if receiver.try_recv().is_ok() {
+            return Arrival::Arrived;
+        }
+
+        if !is_wanted(generation) {
+            return Arrival::Superseded;
+        }
+
+        if started.elapsed() >= NAVIGATION_TIMEOUT {
+            return Arrival::TimedOut;
+        }
+
+        pump_messages();
+        std::thread::sleep(Duration::from_millis(2));
     }
 }
 
 impl Drop for Host {
     fn drop(&mut self) {
+        publish_shown(None);
+        HOST_HWND.store(0, Ordering::Release);
         SHOWING.store(false, Ordering::Release);
         publish_rect(None);
 
