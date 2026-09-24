@@ -13,6 +13,7 @@ use crate::config::config::{
 use crate::engines::imagemagick_render;
 use crate::engines::libreoffice_render;
 use crate::engines::office_render;
+use crate::engines::peazip_render;
 use crate::engines::webview_preview;
 use crate::formats::archive_formats;
 use crate::formats::codecs;
@@ -21,6 +22,7 @@ use crate::formats::font_formats;
 use crate::formats::libre_formats;
 use crate::formats::magick_formats;
 use crate::formats::office_formats;
+use crate::formats::peazip_formats;
 use crate::formats::text_formats;
 use crate::formats::vector_formats;
 use crate::formats::video_formats::{self, is_video_file};
@@ -526,6 +528,17 @@ pub enum PreviewMessage {
         generation: u64,
         ok: bool,
     },
+    /// The PeaZip engine is done with a file: the archive's table of contents is in hand, read
+    /// into the listing cache, or there is none — a file it cannot open is remembered as one it
+    /// will not list. The generation is the hover that was waiting on it, so a listing landing
+    /// after the pointer has moved on is ignored; the listing itself is held under the file's own
+    /// key either way, so the next hover of it is a read rather than a launch (see
+    /// `peazip_render_is_due`).
+    PeazipReady {
+        path: PathBuf,
+        generation: u64,
+        ok: bool,
+    },
 }
 
 /// Represents different types of media we can display
@@ -567,6 +580,16 @@ enum MediaType {
     Pdf,
     Text,
     Archive,
+    /// An archive an installed PeaZip listed for this app — a cabinet file, an iso, a disk image,
+    /// a Linux package, a single-stream `.gz` or `.zst` — drawn as the same page an archive this
+    /// app read itself is drawn as, because that is what it is: a list of what the file holds,
+    /// painted by this window into a frame of its own.
+    ///
+    /// It is a kind of its own for the gate alone, the way the picture an image converter develops
+    /// is: the switch over these is not the switch for archives, so a user who wants their isos
+    /// left alone is not asking for their zips to be left alone. See `peazip_formats` and
+    /// `peazip_render`.
+    Peazip,
     Office,
     /// A design document, previewed from the picture its own format keeps of the whole
     /// thing: the merged image at the end of a Photoshop file, or the flattened
@@ -614,6 +637,10 @@ impl MediaType {
             Self::Text => Some(PreviewType::Text),
             Self::Pdf => Some(PreviewType::Pdf),
             Self::Archive => Some(PreviewType::Archives),
+            // And an archive an engine listed: the page is an archive's page in every way that
+            // matters — a frame of this app's own, painted from a listing — and only the switch
+            // over it is a switch of its own.
+            Self::Peazip => Some(PreviewType::Peazip),
             Self::Office => Some(PreviewType::Office),
             // A design document is drawn into a frame like any picture, and the switch
             // over it is its own: the picture *is* what the file keeps of the document,
@@ -651,7 +678,7 @@ impl MediaType {
     /// than recomposited from shared pixels, which is what decides whether a
     /// theme switch means rebuilding it.
     fn is_painted(&self) -> bool {
-        matches!(self, Self::Text | Self::Archive)
+        matches!(self, Self::Text | Self::Archive | Self::Peazip)
     }
 }
 
@@ -1156,6 +1183,22 @@ pub fn notify_magick_ready(path: &Path, generation: u64, ok: bool) {
     if let Ok(sender) = PREVIEW_SENDER.lock() {
         if let Some(ref tx) = *sender {
             let _ = tx.send(PreviewMessage::MagickReady {
+                path: path.to_path_buf(),
+                generation,
+                ok,
+            });
+        }
+    }
+}
+
+/// And the PeaZip engine, on the same terms: the archive has been listed, or it is one the engine
+/// will not list. What is waiting on it is a hover that has already asked and is showing the
+/// spinner — the page an archive is drawn as cannot be measured before its listing exists — and
+/// what the answer does is replay that hover, with the listing in hand or with nothing at all.
+pub fn notify_peazip_ready(path: &Path, generation: u64, ok: bool) {
+    if let Ok(sender) = PREVIEW_SENDER.lock() {
+        if let Some(ref tx) = *sender {
+            let _ = tx.send(PreviewMessage::PeazipReady {
                 path: path.to_path_buf(),
                 generation,
                 ok,
@@ -2046,6 +2089,43 @@ fn request_magick_render(path: &Path, generation: u64, room: (u32, u32)) -> Opti
     Some((path.to_path_buf(), generation))
 }
 
+/// Whether this hover is owed a listing by the PeaZip engine: an archive the engine lists, with an
+/// engine installed to list it and nothing listed for this version of it yet.
+///
+/// It is the same question `magick_render_is_due` is, asked of an engine that reports rather than
+/// draws — one that reads an archive, prints what is inside it and exits, which is why there is a
+/// process to wait for and nothing to keep. Four things ask it: the layout, which measures a file
+/// like this as the wait for a listing; the loader, which answers with it that a hover is still
+/// waiting rather than failed; the loop, which asks the engine for the listing only where there is
+/// one to ask for; and the layout's own placement question, which decides whether a hover is a
+/// wait for something rather than a preview of it (see `page_is_on_the_way`).
+fn peazip_render_is_due(path: &Path) -> bool {
+    // The file's own bytes first, the name after them, exactly as the image converter's own
+    // question asks it: an archive renamed to a name no list holds is still the engine's to list,
+    // and one whose bytes are another kind is not a file to start it for (see
+    // `peazip_formats::is_engine_archive`).
+    peazip_formats::is_engine_archive(path)
+        && PreviewType::Peazip.enabled()
+        && peazip_render::available()
+        && !peazip_render::refused(path)
+        && !peazip_render::listed(path)
+}
+
+/// Ask the engine for the listing this hover needs, and answer what is now being waited on.
+///
+/// The same answer, and for the same reason, as `request_libre_render` and
+/// `request_magick_render`: a listing does not exist until the engine has produced it, and asking
+/// late is waiting twice. Nothing is waited on here either — the run happens on the engine's own
+/// thread — so what comes back is the wait, and the hover is replayed when the engine answers.
+fn request_peazip_render(path: &Path, generation: u64) -> Option<(PathBuf, u64)> {
+    if !peazip_render_is_due(path) {
+        return None;
+    }
+
+    peazip_render::request(path, generation);
+    Some((path.to_path_buf(), generation))
+}
+
 /// Every scale a hover is laid out by, read from the configuration together so that the
 /// measure of a file and the render that follows it cannot disagree about the size.
 #[derive(Debug, Clone, Copy)]
@@ -2165,7 +2245,12 @@ fn effective_preview_scale(path: &Path, scales: HoverScales) -> PreviewScale {
 
     if pdf_preview::is_pdf_file(path) {
         scale_of_kind(PreviewType::Pdf, path, scales)
-    } else if is_text_preview(path) || archive_formats::is_archive_file(path) {
+    } else if is_text_preview(path)
+        || archive_formats::is_archive_file(path)
+        || peazip_formats::is_peazip_file(path)
+    {
+        // A listing is a page of text painted to the box it is given, whether this app read the
+        // archive itself or an engine listed it, so both are the text rule.
         scale_of_kind(PreviewType::Text, path, scales)
     } else if video_probe_due(path) {
         // A video that has not been probed yet is a hover that is waiting, and what is on
@@ -2210,8 +2295,12 @@ fn scale_of_kind(kind: PreviewType, path: &Path, scales: HoverScales) -> Preview
 
         // Text is drawn at a fixed, display-scaled font size and a listing is painted to
         // the frame it is given, so neither is enlarged or reduced by a setting: the size
-        // the box came out at is the size they are drawn at.
-        PreviewType::Text | PreviewType::Archives => PreviewScale::Percent(100),
+        // the box came out at is the size they are drawn at. An archive an engine listed is
+        // the second of those: the same page, painted the same way, from a listing that came
+        // back from somewhere else.
+        PreviewType::Text | PreviewType::Archives | PreviewType::Peazip => {
+            PreviewScale::Percent(100)
+        }
 
         // A page Office rendered is the PDF rule at the share `office_scale` names. The
         // raster picture a workbook is answered with where no printer can export a page is
@@ -4144,12 +4233,18 @@ fn load_text_preview(
 
 /// Load an archive's contents as a page of its own, the way a text preview is
 /// loaded: measured first, then painted into exactly the box the layout planned.
+///
+/// Which kind the page comes out as is the caller's to say, because the same page is drawn for
+/// two of them: an archive this app read itself is shown under `Archives`, and one an engine
+/// listed under `Peazip` — the same reader of the same listing and the same painted frame, with
+/// only the gate over the preview on screen differing between them.
 fn load_archive_preview(
     path: &Path,
     width: u32,
     height: u32,
     dpi: u32,
     options: ArchivePreviewOptions,
+    media_type: MediaType,
     cancel: &AtomicBool,
 ) -> Option<MediaData> {
     let (pixels, width, height) = archive_preview::render(path, width, height, dpi, options)?;
@@ -4168,7 +4263,7 @@ fn load_archive_preview(
         all_frames_loaded: None,
         current_frame: 0,
         last_frame_time: Instant::now(),
-        media_type: MediaType::Archive,
+        media_type,
         stream_cancel: None,
         video_process: None,
         loading_start: None,
@@ -5115,6 +5210,28 @@ fn load_media(
             max_height,
             dpi,
             current_archive_options(),
+            MediaType::Archive,
+            &cancel,
+        );
+    }
+
+    // An archive no reader of this app's own opens is the engine's to list and this window's to
+    // draw: what comes back is the archive's own table of contents, and the page it is drawn as
+    // is the page a `.zip` is drawn as — the same reader of the same listing, the same painted
+    // frame — shown under the `Peazip` kind, whose switch is the one that is about it.
+    //
+    // Nothing is listed here. A file the engine has not answered for yet is a wait rather than a
+    // failure — the loop has asked for it, and the hover is replayed when the answer lands (see
+    // `peazip_render_is_due`) — so what it gets here is nothing, which is the spinner it is
+    // already showing.
+    if peazip_formats::is_peazip_file(path) {
+        return load_archive_preview(
+            path,
+            max_width,
+            max_height,
+            dpi,
+            current_archive_options(),
+            MediaType::Peazip,
             &cancel,
         );
     }
@@ -5250,6 +5367,7 @@ fn load_media_of_kind(
             max_height,
             dpi,
             current_archive_options(),
+            MediaType::Archive,
             &cancel,
         ),
         PreviewType::Office => {
@@ -5268,6 +5386,19 @@ fn load_media_of_kind(
         PreviewType::Magick => {
             load_magick_picture(path, max_width, max_height, preview_scale, &cancel)
         }
+        // An archive an engine listed is loaded as an archive: the listing it produced is in the
+        // same cache under the same key, so the page is measured and painted from it without this
+        // arm knowing where it came from — and a file the engine has not answered for yet is a
+        // listing the cache does not hold, which is the wait the hover is already in.
+        PreviewType::Peazip => load_archive_preview(
+            path,
+            max_width,
+            max_height,
+            dpi,
+            current_archive_options(),
+            MediaType::Peazip,
+            &cancel,
+        ),
         PreviewType::Design => load_design_preview(path, max_width, max_height, preview_scale),
         // Which half of the drawing kind this is, is the name's to say here rather than the
         // content's: a document is drawn by the browser engine and a metafile by the drawing
@@ -5562,7 +5693,7 @@ fn media_dimensions_of_kind(kind: PreviewType, path: &PathBuf) -> Option<(u32, u
     match kind {
         PreviewType::Videos => video_box(path),
         PreviewType::Pdf => pdf_preview::page_dimensions(path),
-        PreviewType::Archives | PreviewType::Text => None,
+        PreviewType::Archives | PreviewType::Text | PreviewType::Peazip => None,
         PreviewType::Office => office_preview::measure(path),
         PreviewType::Libre => libre_box(path),
         PreviewType::Magick => magick_box(path),
@@ -5686,7 +5817,7 @@ fn page_is_on_the_way(path: &Path) -> bool {
             office_preview::SourceKind::None
         );
 
-    office || libre_render_is_due(path) || magick_render_is_due(path)
+    office || libre_render_is_due(path) || magick_render_is_due(path) || peazip_render_is_due(path)
 }
 
 /// The size the layout should place and scale a preview from.
@@ -5706,10 +5837,11 @@ fn media_dimensions(path: &PathBuf, bounds: ScreenBounds, dpi: u32) -> Option<(u
         crate::formats::content_type::of(path)
     {
         return match kind {
-            // The two kinds measured against the room they are drawn in, which is a question
+            // The three kinds measured against the room they are drawn in, which is a question
             // this side has the answer to and `media_dimensions_of_kind` does not.
             PreviewType::Text => text_box(path, bounds, dpi),
             PreviewType::Archives => archive_box(path, bounds, dpi),
+            PreviewType::Peazip => peazip_box(path, bounds, dpi),
             _ => media_dimensions_of_kind(kind, path),
         };
     }
@@ -5720,6 +5852,15 @@ fn media_dimensions(path: &PathBuf, bounds: ScreenBounds, dpi: u32) -> Option<(u
 
     if archive_formats::is_archive_preview(path) {
         return archive_box(path, bounds, dpi);
+    }
+
+    // And an archive an engine lists, measured where the hook asks it: beside the archive list
+    // above it, which is where the two are told apart — a name in that list is read by this app
+    // itself, and one in this list is read by an engine. What is measured is the page the
+    // engine's listing makes, and a listing that has not come back yet is the wait for one (see
+    // `peazip_box`).
+    if peazip_formats::is_peazip_preview(path) {
+        return peazip_box(path, bounds, dpi);
     }
 
     get_media_dimensions(path)
@@ -5741,6 +5882,36 @@ fn archive_box(path: &Path, bounds: ScreenBounds, dpi: u32) -> Option<(u32, u32)
     let cap_height = bounds.height().max(1) as u32;
 
     archive_preview::measure(path, cap_width, cap_height, dpi, current_archive_options())
+}
+
+/// The box an archive the PeaZip engine lists is placed at: the box the same listing would be
+/// measured at had this app read the archive itself, the spinner's own box while the engine has
+/// not answered yet, and nothing at all for a file the engine has turned down or for a machine
+/// with no engine to list it.
+///
+/// The measurement is the archive page's own, and it is the same one either way: a listing is a
+/// listing, and where it came from is not something the layout is told (see
+/// `archive_listing::listing_for`). What is waited for is a page that does not exist yet — the box
+/// an engine's answer has not arrived for says nothing about how large it will be — so it is
+/// placed as the spinner, flush at the pointer, and laid out again by the replay that arrives with
+/// the answer.
+fn peazip_box(path: &Path, bounds: ScreenBounds, dpi: u32) -> Option<(u32, u32)> {
+    if !peazip_render::available() {
+        // Nothing to list it with, so there is nothing to show: a machine without the engine shows
+        // no preview for these names rather than a page of something else.
+        return None;
+    }
+
+    if let Some(size) = archive_box(path, bounds, dpi) {
+        return Some(size);
+    }
+
+    // A file the engine has already turned down is not one to wait for.
+    if peazip_render::refused(path) {
+        return None;
+    }
+
+    Some((office_preview::WAITING_BOX, office_preview::WAITING_BOX))
 }
 
 /// A text preview's box, placed for the width it came out with.
@@ -8774,7 +8945,13 @@ pub fn run_preview_window() {
                                     result.generation,
                                     (width, height),
                                 )
-                            });
+                            })
+                            // And the archive listing no reader of this app's own can make: it is
+                            // the same wait for the same reason — a listing does not exist until
+                            // the engine has produced one — and it is asked after the three above
+                            // because no name sits in more than one of their lists (see
+                            // `peazip_formats`).
+                            .or_else(|| request_peazip_render(&result.path, result.generation));
                         }
                         None => {
                             // Loading failed, hide window
@@ -8964,6 +9141,18 @@ pub fn run_preview_window() {
                         // is: what the hover that asked is waiting for is a picture to be
                         // placed with, not another hover — and an engine that will not draw
                         // the file is the same wait answered, with nothing in it.
+                        if latest_preview_msg.is_none() && page_ready.is_none() {
+                            page_ready = Some((path, generation, ok));
+                        }
+                    }
+                    PreviewMessage::PeazipReady {
+                        path,
+                        generation,
+                        ok,
+                    } => {
+                        // And a listing, which is the same answer once more: what the hover is
+                        // waiting for is a table of contents to draw a page from, and an archive
+                        // the engine will not list is that wait answered with nothing.
                         if latest_preview_msg.is_none() && page_ready.is_none() {
                             page_ready = Some((path, generation, ok));
                         }
@@ -9344,6 +9533,10 @@ pub fn run_preview_window() {
                     // rather than of a page: it replays the hover that was waiting on
                     // it exactly as the render tier's answer does.
                     PreviewMessage::MagickReady { .. } => {}
+                    // And the listing an engine produced, which is the same shape of answer
+                    // once more: a page's worth of content arriving for the hover that asked
+                    // for it, replayed rather than handled as a hover here.
+                    PreviewMessage::PeazipReady { .. } => {}
                 }
 
                 // Shared load/display logic for Show and ShowKeyboard

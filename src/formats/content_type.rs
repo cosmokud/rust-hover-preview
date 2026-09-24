@@ -264,6 +264,13 @@ fn names_of(kind: &Type) -> Option<&'static [&'static str]> {
         "zip" | "7z" | "rar" | "tar" | "gz" | "tgz" | "bz2" | "xz" | "cab" | "iso" | "dmg"
         | "ogg" => None,
 
+        // A disk image is a box like the ones above, and `qcow2` is the one of those that the
+        // common table files under its own heading rather than among them: what a `.qcow2` holds
+        // is a file system, and the answer this app has for one is the PeaZip engine's rather than
+        // a program's — which is the answer the arm below would otherwise give it, and the reason
+        // it is named here rather than left to it (see `peazip_formats`).
+        "qcow2" => None,
+
         // Nothing to show at all: a program, or a sound. No kind of this app previews
         // either, so a document's name that holds one starts no engine — which is the
         // answer this whole module exists to give for the files that were never documents.
@@ -548,6 +555,165 @@ const SIGNATURES: &[Signature] = &[
     Signature {
         names: &["crw"],
         matches: Matcher::Test(|probe| at(probe, 6, b"HEAPCCDR")),
+    },
+    // ---------------------------------------------------- archives an engine lists
+    // The formats the PeaZip engine reads that nothing else on a machine opens, and that this
+    // app has no reader of its own for — see `peazip_formats`. Each is asked what the format
+    // writes at the front of a file and nothing else, the way every entry above is asked; a
+    // format whose head says nothing, or whose marker sits past what is read, is answered by
+    // its name instead, which is what that list is for.
+    //
+    // Three of them are deliberately *not* here, and each is worth saying out loud:
+    //
+    // * **A gzip stream.** It opens with `1F 8B` like every other, and a signature naming `gz`
+    //   would claim a `.tgz` for this kind: the content of a tarball *is* a gzip stream, so the
+    //   names a signature answers with are the only thing consulted, and a `.tgz` would stop
+    //   being the archive this app reads itself and become a file waiting on an engine. The
+    //   whole of that format is left to the name.
+    // * **A disk image's.** An iso and a udf say what they are thirty-two kilobytes into the
+    //   file — `CD001` at 32769, a UDF descriptor at 32768 — and what a hover reads of a file is
+    //   its first four kilobytes, so neither marker is reachable from here. What is left to the
+    //   name is the whole of those two formats (see TODO.md, where the bound is written down).
+    // * **And a `.lzma`, and the parts of a split archive.** Neither has a marker at all: an
+    //   LZMA stream is the compressed data with nothing in front of it, and `.001` is the first
+    //   slice of a file rather than a format. Both are the name's business, as every format
+    //   without a head is.
+    //
+    // A Unix archive — an `ar`, and the `.deb` and `.udeb` packages that are one — which opens
+    // with the eight characters every one of them begins with.
+    Signature {
+        names: &["ar", "deb", "udeb"],
+        matches: Matcher::Test(|probe| starts_with(probe, b"!<arch>\n")),
+    },
+    // An ARJ archive: the two bytes the format is defined by, and the header length that
+    // follows them, which is what keeps a file that merely begins with those two bytes from
+    // answering as one.
+    Signature {
+        names: &["arj"],
+        matches: Matcher::Test(is_arj_archive),
+    },
+    // A cabinet file: its four characters and the four zero bytes a cabinet's own header
+    // reserves.
+    Signature {
+        names: &["cab"],
+        matches: Matcher::Test(|probe| starts_with(probe, b"MSCF\x00\x00\x00\x00")),
+    },
+    // A compiled help file: the two words the format opens with, the second of which is the
+    // offset its directory sits at — a constant of the format rather than a number that varies.
+    Signature {
+        names: &["chm"],
+        matches: Matcher::Test(|probe| {
+            starts_with(probe, b"ITSF\x03\x00\x00\x00") && at(probe, 8, &[0x60, 0x00, 0x00, 0x00])
+        }),
+    },
+    // A cpio archive, in the three shapes the format is written in: the two ASCII headers
+    // that name their own version, and the older binary one, which is the same number written
+    // either way round.
+    Signature {
+        names: &["cpio"],
+        matches: Matcher::Test(is_cpio_archive),
+    },
+    // An LHA archive, which says what it is four bytes in: a dashes-and-letters method, the
+    // `-lh` every one of them carries, and the level digit after it.
+    Signature {
+        names: &["lha", "lzh"],
+        matches: Matcher::Test(is_lha_archive),
+    },
+    // A Linux package: the four bytes every RPM opens with.
+    Signature {
+        names: &["rpm"],
+        matches: Matcher::Test(|probe| starts_with(probe, &[0xED, 0xAB, 0xEE, 0xDB])),
+    },
+    // Apple's archive: a `pkg` installer, a `xip` of a signed one, and the `xar` itself.
+    Signature {
+        names: &["pkg", "xar", "xip"],
+        matches: Matcher::Test(|probe| starts_with(probe, b"xar!")),
+    },
+    // A Windows image, which the installer's `.esd` is a second shape of.
+    Signature {
+        names: &["esd", "swm", "wim"],
+        matches: Matcher::Test(|probe| starts_with(probe, b"MSWIM\x00\x00\x00")),
+    },
+    // A SquashFS image, in the four byte orders the format writes its magic in.
+    Signature {
+        names: &["squashfs"],
+        matches: Matcher::Test(is_squashfs),
+    },
+    // The single-stream compressors that name themselves at the front: a bzip2 stream opens with
+    // the three characters every one of them carries and the block size after them, an xz stream
+    // with its own six, and a `.z` with two control bytes that no text file and no other format
+    // opens with. What is left to the name is what has nothing to ask — a `.lzma`, whose stream is
+    // the compressed data and nothing in front of it, and a gzip stream, which is the one name
+    // here that another list already reads by a longer spelling of it (see the note above).
+    Signature {
+        names: &["bzip2", "bz2"],
+        matches: Matcher::Test(|probe| {
+            starts_with(probe, b"BZh")
+                && probe
+                    .get(3)
+                    .is_some_and(|level| (b'1'..=b'9').contains(level))
+        }),
+    },
+    Signature {
+        names: &["xz"],
+        matches: Matcher::Test(|probe| starts_with(probe, &[0xFD, b'7', b'z', b'X', b'Z', 0x00])),
+    },
+    Signature {
+        names: &["z"],
+        matches: Matcher::Test(|probe| starts_with(probe, &[0x1F, 0x9D])),
+    },
+    // A zstd stream: the frame magic written little-endian.
+    Signature {
+        names: &["zst"],
+        matches: Matcher::Test(|probe| starts_with(probe, &[0x28, 0xB5, 0x2F, 0xFD])),
+    },
+    // The four disk images that name themselves at the front: a macOS image, a Virtual PC one,
+    // a Hyper-V one, and VMware's — whose descriptor is a text file and whose split extents
+    // carry this.
+    Signature {
+        names: &["dmg"],
+        matches: Matcher::Test(|probe| {
+            starts_with(probe, b"koly") && at(probe, 4, &[0x00, 0x00, 0x00, 0x04])
+        }),
+    },
+    Signature {
+        names: &["vhd"],
+        matches: Matcher::Test(|probe| starts_with(probe, b"conectix")),
+    },
+    Signature {
+        names: &["vhdx"],
+        matches: Matcher::Test(|probe| starts_with(probe, b"vhdxfile")),
+    },
+    Signature {
+        names: &["vmdk"],
+        matches: Matcher::Test(|probe| starts_with(probe, b"KDMV")),
+    },
+    // A QEMU image: the format's four bytes and the version that follows them.
+    Signature {
+        names: &["qcow", "qcow2"],
+        matches: Matcher::Test(|probe| starts_with(probe, b"QFI\xFB")),
+    },
+    // A VirtualBox image, whose magic sits sixty-four bytes in rather than at the front.
+    Signature {
+        names: &["vdi"],
+        matches: Matcher::Test(|probe| at(probe, 64, &[0x7F, 0x10, 0xDA, 0xBE])),
+    },
+    // An Apple file system image, whose container header names itself thirty-two bytes in.
+    Signature {
+        names: &["apfs"],
+        matches: Matcher::Test(|probe| at(probe, 32, b"NXSB")),
+    },
+    // A Macintosh volume, in either of the two shapes it was written in: the signature at a
+    // kilobyte, and the version that follows it.
+    Signature {
+        names: &["hfs", "hfsx"],
+        matches: Matcher::Test(is_hfs_volume),
+    },
+    // The compressed file system of an embedded device, whose older header says what it is in
+    // words rather than in a number.
+    Signature {
+        names: &["cramfs"],
+        matches: Matcher::Test(|probe| at(probe, 16, b"Compressed ROMFS")),
     },
     // ------------------------------------------------------------------------ drawings
     // Windows' two metafiles. Neither is a picture this app decodes: both are replayed by
@@ -1118,6 +1284,52 @@ const SIGNATURES: &[Signature] = &[
         matches: Matcher::Test(|probe| starts_with(probe, b"ttcf")),
     },
 ];
+
+// ------------------------------------------- the heads of the archives above
+
+/// Whether the front of a file is an ARJ archive: the two bytes the format is defined by, and
+/// the length of the header that follows them.
+///
+/// Two bytes alone are a weak thing to hang a format on — a file that happens to begin with them
+/// is not an archive — so the word after them is asked as well: an ARJ header length is a small
+/// number, and a file that answers with a large one is not this format.
+fn is_arj_archive(probe: &[u8]) -> bool {
+    starts_with(probe, &[0x60, 0xEA])
+        && read_le16(probe, 2).is_some_and(|header| (10..=4_096).contains(&header))
+}
+
+/// Whether the front of a file is a cpio archive, in any of the three shapes the format is
+/// written in: the two ASCII headers that name their own version, and the older binary one,
+/// whose sixteen-bit magic a writer may have written either way round.
+fn is_cpio_archive(probe: &[u8]) -> bool {
+    starts_with(probe, b"070701")
+        || starts_with(probe, b"070702")
+        || starts_with(probe, b"070707")
+        || starts_with(probe, &[0xC7, 0x71])
+        || starts_with(probe, &[0x71, 0xC7])
+}
+
+/// Whether the front of a file is an LHA archive: the method it was compressed with, four bytes
+/// in — every one of them begins `-lh`, whatever level and dictionary size follow — and the level
+/// digit that has to come after it.
+fn is_lha_archive(probe: &[u8]) -> bool {
+    at(probe, 2, b"-lh") && probe.get(5).is_some_and(|level| level.is_ascii_digit())
+}
+
+/// Whether the front of a file is a SquashFS image: the format's magic, in the four byte orders
+/// its writers have written it in.
+fn is_squashfs(probe: &[u8]) -> bool {
+    ["hsqs", "sqsh", "shsq", "qshs"]
+        .iter()
+        .any(|magic| starts_with(probe, magic.as_bytes()))
+}
+
+/// Whether the front of a file is a Macintosh volume: the signature that sits at a kilobyte of
+/// the volume rather than at the front of the file, and the version word after it — `H+` for the
+/// older format and `HX` for the one that replaced it.
+fn is_hfs_volume(probe: &[u8]) -> bool {
+    at(probe, 1024, &[0x42, 0x44]) && (at(probe, 1026, b"H+") || at(probe, 1026, b"HX"))
+}
 
 /// Whether the front of a file is one of the packages that declare their own type: a zip
 /// whose first entry is a stored `mimetype` entry holding `mime`.
@@ -2141,6 +2353,13 @@ fn kind_claiming(names: &[&str], config: &AppConfig) -> Option<PreviewType> {
             return Some(PreviewType::Archives);
         }
 
+        // An archive the PeaZip engine lists, asked where the hook asks it: beside the archive
+        // list above it, which is where the two are told apart — a name in that list is read by
+        // this app itself, and one in this list is read by an engine.
+        if crate::formats::peazip_formats::matches_peazip_list(&named, &config.peazip_extensions) {
+            return Some(PreviewType::Peazip);
+        }
+
         if crate::formats::office_formats::matches_office_list(&named, &config.office_extensions) {
             return Some(PreviewType::Office);
         }
@@ -2243,6 +2462,14 @@ mod tests {
         header[64..68].copy_from_slice(creator);
         header[76..78].copy_from_slice(&1u16.to_be_bytes());
         header
+    }
+
+    /// The front of a file whose magic sits an offset into it rather than at its front — a disk
+    /// image's, or the volume signature of a Macintosh one — as the bytes a probe would hold.
+    fn at_offset(offset: usize, magic: &[u8]) -> Vec<u8> {
+        let mut probe = vec![0u8; offset + magic.len()];
+        probe[offset..].copy_from_slice(magic);
+        probe
     }
 
     /// A name and a content that disagree are answered with the kind the content belongs
@@ -2495,6 +2722,128 @@ mod tests {
             classified("film.docx", &declared_package("image/openraster")),
             Content::Kind(PreviewType::Design),
             "an OpenRaster project, named by the type it declares"
+        );
+
+        // ------------------------------------------------- the archives an engine lists
+        assert_eq!(
+            classified("film.docx", b"!<arch>\ndebian-binary   "),
+            Content::Kind(PreviewType::Peazip),
+            "a Unix archive, which is what a `.deb` and a `.udeb` are"
+        );
+        assert_eq!(
+            classified("film.docx", &[0x60, 0xEA, 0x1A, 0x00, 0x00, 0x00]),
+            Content::Kind(PreviewType::Peazip),
+            "an ARJ archive"
+        );
+        assert_eq!(
+            classified("film.docx", b"MSCF\x00\x00\x00\x00\x00\x00\x00\x00"),
+            Content::Kind(PreviewType::Peazip),
+            "a cabinet file"
+        );
+        assert_eq!(
+            classified("film.docx", b"ITSF\x03\x00\x00\x00\x60\x00\x00\x00"),
+            Content::Kind(PreviewType::Peazip),
+            "a compiled help file"
+        );
+        assert_eq!(
+            classified("film.docx", b"07070100000000"),
+            Content::Kind(PreviewType::Peazip),
+            "a cpio archive, in its ASCII header"
+        );
+        assert_eq!(
+            classified("film.docx", &[0xC7, 0x71, 0x00, 0x00, 0x00, 0x00]),
+            Content::Kind(PreviewType::Peazip),
+            "and in the older binary one, written either way round"
+        );
+        assert_eq!(
+            classified("film.docx", b"\x00\x00-lh5-\x00\x00\x00\x00"),
+            Content::Kind(PreviewType::Peazip),
+            "an LHA archive"
+        );
+        assert_eq!(
+            classified("film.docx", &[0xED, 0xAB, 0xEE, 0xDB, 0x03, 0x00]),
+            Content::Kind(PreviewType::Peazip),
+            "a Linux package"
+        );
+        assert_eq!(
+            classified("film.docx", b"xar!\x00\x1C\x00\x01"),
+            Content::Kind(PreviewType::Peazip),
+            "an Apple archive, which a `.pkg` and a `.xip` are"
+        );
+        assert_eq!(
+            classified("film.docx", b"MSWIM\x00\x00\x00\x00\x00\x00\x00\x00"),
+            Content::Kind(PreviewType::Peazip),
+            "a Windows image"
+        );
+        assert_eq!(
+            classified("film.docx", b"sqsh\x02\x00\x00\x00"),
+            Content::Kind(PreviewType::Peazip),
+            "a SquashFS image"
+        );
+        assert_eq!(
+            classified("film.docx", &[0x1F, 0x9D, 0x90, 0x00]),
+            Content::Kind(PreviewType::Peazip),
+            "a `.z` of the older Unix compressor"
+        );
+        assert_eq!(
+            classified("film.docx", b"BZh9\x31\x41\x59\x26\x53\x59"),
+            Content::Kind(PreviewType::Peazip),
+            "a bzip2 stream"
+        );
+        assert_eq!(
+            classified("film.docx", &[0xFD, b'7', b'z', b'X', b'Z', 0x00, 0x00]),
+            Content::Kind(PreviewType::Peazip),
+            "an xz stream"
+        );
+        assert_eq!(
+            classified("film.docx", &[0x28, 0xB5, 0x2F, 0xFD, 0x00]),
+            Content::Kind(PreviewType::Peazip),
+            "a zstd stream"
+        );
+        assert_eq!(
+            classified("film.docx", b"koly\x00\x00\x00\x04\x00\x00\x02\x00"),
+            Content::Kind(PreviewType::Peazip),
+            "a macOS disk image"
+        );
+        assert_eq!(
+            classified("film.docx", b"conectix\x00\x00\x00\x00"),
+            Content::Kind(PreviewType::Peazip),
+            "a Virtual PC image"
+        );
+        assert_eq!(
+            classified("film.docx", b"vhdxfile\x00\x00\x00\x00"),
+            Content::Kind(PreviewType::Peazip),
+            "a Hyper-V image"
+        );
+        assert_eq!(
+            classified("film.docx", b"KDMV\x01\x00\x00\x00"),
+            Content::Kind(PreviewType::Peazip),
+            "a VMware image"
+        );
+        assert_eq!(
+            classified("film.docx", b"QFI\xFB\x00\x00\x00\x02"),
+            Content::Kind(PreviewType::Peazip),
+            "a QEMU image"
+        );
+        assert_eq!(
+            classified("film.docx", &at_offset(64, &[0x7F, 0x10, 0xDA, 0xBE])),
+            Content::Kind(PreviewType::Peazip),
+            "a VirtualBox image, whose magic sits sixty-four bytes in"
+        );
+        assert_eq!(
+            classified("film.docx", &at_offset(32, b"NXSB")),
+            Content::Kind(PreviewType::Peazip),
+            "an Apple file system image"
+        );
+        assert_eq!(
+            classified("film.docx", &at_offset(1024, b"BDH+")),
+            Content::Kind(PreviewType::Peazip),
+            "a Macintosh volume"
+        );
+        assert_eq!(
+            classified("film.docx", &at_offset(16, b"Compressed ROMFS")),
+            Content::Kind(PreviewType::Peazip),
+            "a compressed file system of the older header"
         );
 
         // ---------------------------------------------------------------- drawings
