@@ -73,7 +73,7 @@ use windows::Win32::System::Com::{
 /// a picture at all, and these are pictures — so this is only which pictures the
 /// codec has to be asked about rather than the decoder every other picture goes
 /// through.
-const CODEC_EXTENSIONS: &[&str] = &["avif", "dds", "heic", "heif", "jxl", "webp"];
+const CODEC_EXTENSIONS: &[&str] = &["avci", "avif", "dds", "heic", "heif", "jxl", "webp"];
 
 thread_local! {
     /// The imaging factory this thread asks its codecs through.

@@ -18,9 +18,10 @@ use std::path::Path;
 ///
 /// `apng` is a name like any other here — an animated PNG is recognized by its own
 /// `acTL` chunk rather than by what it is called — and `gif`, `png` and `webp` are
-/// each both an animated format and a still one. `avif`,
+/// each both an animated format and a still one. `avci`, `avif`,
 /// `heic`, `heif`, `jxl` and a still `webp` are pictures the same way, and what decodes
-/// them is the codec Windows has rather than one this app carries — a `webp` being the
+/// them is the codec Windows has rather than one this app carries — `avci` being the AVC
+/// still of the same container family, beside the HEVC and AV1 ones — a `webp` being the
 /// one of them with a second reader behind it, libwebp in the binary, for the machine
 /// that codec is missing from and for the picture that moves; see `wic_image` and
 /// `webp_image`. `dds` is a picture of the same kind and by the same route: the codec
@@ -33,7 +34,7 @@ use std::path::Path;
 /// are entries of the vector list and are gated — and sized, and drawn over — by that
 /// kind; see `vector_formats` and `svg_preview`.
 pub const DEFAULT_IMAGE_EXTENSIONS: &str =
-    "apng,avif,bmp,dds,exr,ff,gif,hdr,heic,heif,ico,jfif,jpe,jpeg,jpg,jxl,pam,pbm,pgm,png,pnm,ppm,qoi,tga,tif,tiff,webp";
+    "apng,avci,avif,bmp,dds,exr,ff,gif,hdr,heic,heif,ico,jfif,jpe,jpeg,jpg,jxl,pam,pbm,pgm,png,pnm,ppm,qoi,tga,tif,tiff,webp";
 
 /// The built-in image list as it stood while `svg` and `svgz` were entries of it.
 ///
@@ -57,6 +58,18 @@ pub const IMAGE_EXTENSIONS_WITH_SVG: &str =
 /// `config::configured_list_over_history`).
 pub const IMAGE_EXTENSIONS_BEFORE_DDS: &str =
     "apng,avif,bmp,exr,ff,gif,hdr,heic,heif,ico,jfif,jpe,jpeg,jpg,jxl,pam,pbm,pgm,png,pnm,ppm,qoi,svg,svgz,tga,tif,tiff,webp";
+
+/// The built-in image list as it stood before `avci` was added to it — the AVC still of the
+/// container family whose HEVC and AV1 stills the codec Windows has reads under `heic` and
+/// `avif`.
+///
+/// A file holding exactly these entries is the app's own older list rather than a user's
+/// edit — nobody has touched it — so it is brought up to the built-in list rather than kept
+/// as written. Without that, the name would reach a fresh installation only: every
+/// `config.ini` already written holds the list as it was, and a list that differs is
+/// otherwise the user's own (see `config::configured_list_over_history`).
+pub const IMAGE_EXTENSIONS_BEFORE_AVCI: &str =
+    "apng,avif,bmp,dds,exr,ff,gif,hdr,heic,heif,ico,jfif,jpe,jpeg,jpg,jxl,pam,pbm,pgm,png,pnm,ppm,qoi,tga,tif,tiff,webp";
 
 /// The built-in image list as it stood before the formats Windows has a codec for were
 /// added to it: `avif`, `heic`, `heif` and `jxl`.

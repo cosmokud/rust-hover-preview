@@ -69,19 +69,21 @@ fn named(path: &Path, extension: &str) -> bool {
 
 /// Whether a page may be read from `path`.
 ///
-/// A `.pdf` is one by its name. A `.ai` is one when Illustrator saved it the way it
-/// saves one by default — with `Create PDF Compatible File` on, which has been the
-/// default since Illustrator 9 — because the document *is* page 1 of a PDF then, and
-/// the private data the application writes beside the artwork is what the OS engine
-/// reads past. Saved without that compatibility the file is PostScript, which is not
-/// a page any engine here can draw, so the bytes are asked rather than believed and a
-/// file that answers no is a file with no preview.
+/// A `.pdf` is one by its name, and with it the two other spellings of the same document the
+/// format's own world writes: `pdfa`, the archival profile of a PDF, and `epdf`, the
+/// encapsulated one, are both pages the Windows engine opens exactly as it opens a `.pdf`. A
+/// `.ai` is one when Illustrator saved it the way it saves one by default — with `Create PDF
+/// Compatible File` on, which has been the default since Illustrator 9 — because the document
+/// *is* page 1 of a PDF then, and the private data the application writes beside the artwork is
+/// what the OS engine reads past. Saved without that compatibility the file is PostScript,
+/// which is not a page any engine here can draw, so the bytes are asked rather than believed and
+/// a file that answers no is a file with no preview.
 ///
-/// Only the name that needs the question pays for it: a `.pdf` is answered without
-/// opening anything, and a cloud placeholder is not opened to answer either, which is
+/// Only the name that needs the question pays for it: the three page spellings are answered
+/// without opening anything, and a cloud placeholder is not opened to answer either, which is
 /// the rule every gate in this app follows.
 pub fn is_pdf_file(path: &Path) -> bool {
-    if named(path, "pdf") {
+    if named(path, "pdf") || named(path, "pdfa") || named(path, "epdf") {
         return true;
     }
 

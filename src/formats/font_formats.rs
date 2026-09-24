@@ -28,6 +28,17 @@ use std::path::Path;
 /// own on this side; see `webview_preview` and `font_preview`. What this side reads
 /// of them is two tables, the character map and the name, and the drawing is the
 /// engine's.
+///
+/// Those five are also the *whole* of what the engine can be given, which is why no
+/// other font format is listed here and none can be added that would work. Every font
+/// a page asks for goes through the engine's own sanitizer before its font stack sees
+/// it — the OpenType Sanitizer, which parses OpenType in its two shapes and the two
+/// WebFont containers and turns everything else down — so a PostScript Type 1 face
+/// (`pfa`, `pfb`), a Macintosh suitcase (`dfont`), a Windows bitmap font (`fon`) and a
+/// face inside a collection's other shape are all files the specimen can be told about
+/// and cannot be drawn with. Measured on the runtime this app uses: a `.ttf` loads and
+/// an 11 KB `.fon` beside it is refused, which is the sanitizer answering rather than
+/// the font.
 pub const DEFAULT_FONT_EXTENSIONS: &str = "otf,ttc,ttf,woff,woff2";
 
 /// Whether the configured list claims `path`.

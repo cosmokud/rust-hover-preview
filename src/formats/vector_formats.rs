@@ -24,10 +24,11 @@ use std::path::Path;
 /// `svg` and `svgz` are the documents the browser engine draws, and both spellings of the
 /// same format; `wmf` and `emf` are Windows' two metafiles — a list of drawing records that
 /// the drawing layer plays back, which is why a preview of one is sharp at any size — and
-/// `eps` and `epsi` are the two spellings of an encapsulated PostScript file, read here
-/// for the preview picture a writer leaves inside it rather than for the PostScript
-/// itself: nothing in this app interprets PostScript.
-pub const DEFAULT_VECTOR_EXTENSIONS: &str = "emf,eps,epsi,svg,svgz,wmf";
+/// `eps`, `epsi`, `epsf`, `epi`, `ept`, `ept2` and `ept3` are the spellings of an encapsulated
+/// PostScript file, read here for the preview picture a writer leaves inside it rather than for
+/// the PostScript itself: nothing in this app interprets PostScript, and an ImageMagick that
+/// could draw one would still need a Ghostscript installed beside it.
+pub const DEFAULT_VECTOR_EXTENSIONS: &str = "emf,epi,eps,epsf,epsi,ept,ept2,ept3,svg,svgz,wmf";
 
 /// The built-in vector list as it stood before `svg` and `svgz` were added to it — which
 /// is to say the list the kind had when it was written.
@@ -38,6 +39,16 @@ pub const DEFAULT_VECTOR_EXTENSIONS: &str = "emf,eps,epsi,svg,svgz,wmf";
 /// already written, and a list that differs is otherwise the user's own (see
 /// `config::configured_list_over_history`).
 pub const VECTOR_EXTENSIONS_BEFORE_SVG: &str = "emf,eps,epsi,wmf";
+
+/// The built-in vector list as it stood before the other spellings of an encapsulated
+/// PostScript file were added to it: `epsf`, `epi` and `ept` with `ept2` and `ept3`.
+///
+/// A file holding exactly these entries is the app's own older list rather than a user's
+/// edit — nobody has touched it — so it is brought up to the built-in list rather than kept
+/// as written. Without that, the five spellings would reach a fresh installation only: every
+/// `config.ini` already written holds the list as it was, and a list that differs is
+/// otherwise the user's own (see `config::configured_list_over_history`).
+pub const VECTOR_EXTENSIONS_BEFORE_THE_EPS_SPELLINGS: &str = "emf,eps,epsi,svg,svgz,wmf";
 
 /// Whether the configured list claims `path`.
 pub fn matches_vector_list(path: &Path, extensions: &[String]) -> bool {
