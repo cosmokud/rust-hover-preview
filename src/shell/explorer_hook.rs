@@ -11,8 +11,8 @@ use crate::formats::office_formats::matches_office_list;
 use crate::readers::pdf_preview::is_pdf_file;
 use crate::ui::preview_window::{
     cursor_preview_hover, hide_preview, kill_stray_video_process, monitor_dpi_from_point,
-    preview_pointer_hold, preview_screen_rect, show_preview, show_preview_keyboard,
-    PreviewCursorHover,
+    pointer_item_holds, preview_pointer_hold, preview_screen_rect, publish_pointer_item_box,
+    show_preview, show_preview_keyboard, PreviewCursorHover,
 };
 use crate::readers::svg_preview;
 use crate::formats::text_formats::matches_text_lists;
@@ -1031,6 +1031,31 @@ fn should_probe_preview_hover(
     suppress_until_cursor_leaves: bool,
 ) -> bool {
     !pointer_frozen && (mouse_preview_active || suppress_until_cursor_leaves)
+}
+
+/// Whether the pointer has left the item the preview on screen is about, which is the
+/// mouse having moved whatever the distance says.
+///
+/// How far a hand has come is a measurement of jitter, and one that is deliberately
+/// coarse while the keyboard drives — a pointer resting on a desk must not end a
+/// keyboard preview — so a pointer can cross to the row below, and another file, and
+/// never count as moved at all: the preview of the file it has left stays on screen
+/// with nothing taking it down, since the probe that would have is closed behind it.
+/// What a preview is about is not a distance but the box the view draws its item in,
+/// which the hook publishes with every look at the item under the pointer (see
+/// `preview_window::publish_pointer_item_box`); a pointer outside that box has left
+/// the item, and the tick that sees it is treated as the move it is — so the preview
+/// is taken down and the item now under the pointer is asked about like any other.
+///
+/// A pointer that the preview itself is holding is not one that has left: a text
+/// frame being read, or the spinner a page is being waited behind, is the pointer
+/// where it means to be, whatever box the item under it draws.
+fn pointer_moved_off_the_hovered_item(
+    preview_active: bool,
+    pointer_hold: bool,
+    pointer_on_the_item: bool,
+) -> bool {
+    preview_active && !pointer_hold && !pointer_on_the_item
 }
 
 /// Whether a preview may be shown for `path`: the kind of preview it would get,
@@ -2461,6 +2486,20 @@ fn resolve_file_under_cursor(resolver: &mut ItemResolver, point: POINT) -> Optio
     note_probe(&PROBE_POINTER_RESOLUTIONS);
     let item = uia_item_from_point(resolver, point, false)?;
 
+    // The item the pointer is on, as the box the view draws it in, published for the
+    // preview thread to hold a reveal to and for this loop to read a move off: a
+    // pointer outside that box has left the item, whatever a distance says. It is
+    // published with every look at the item under the pointer — this one and the one
+    // the walk below makes — so what it holds is where the pointer is now rather than
+    // where the hover on screen was resolved from (see
+    // `preview_window::publish_pointer_item_box`).
+    publish_pointer_item_box((
+        item.bounds.left,
+        item.bounds.top,
+        item.bounds.right,
+        item.bounds.bottom,
+    ));
+
     if let Some(root_key) = root_window_at(point).map(|window| window.0 as isize) {
         if let Some(path) = item_file_path(resolver, root_key, &item) {
             // The view is asked twice: a wheel turns the list under a parked
@@ -3690,8 +3729,20 @@ pub fn run_explorer_hook() {
                 is_keyboard_hover || keyboard_screen_owner,
                 monitor_dpi_from_point(cursor_pos.x, cursor_pos.y),
             );
+            // How far the hand has come is one reading of "the mouse has moved", and
+            // the file the preview on screen is about is another: a pointer that has
+            // left that item has moved whatever the threshold says, and the two are
+            // taken together so a row crossed under the threshold cannot leave the
+            // preview of the file that was left behind (see
+            // `pointer_moved_off_the_hovered_item`). The box is only asked about
+            // while a preview is up, which is when it means anything at all.
             let moved = (cursor_pos.x - last_cursor_pos.x).abs() > move_threshold
-                || (cursor_pos.y - last_cursor_pos.y).abs() > move_threshold;
+                || (cursor_pos.y - last_cursor_pos.y).abs() > move_threshold
+                || pointer_moved_off_the_hovered_item(
+                    last_file.is_some(),
+                    pointer_hold,
+                    pointer_item_holds(cursor_pos.x, cursor_pos.y),
+                );
             // Read the navigation keys first: GetAsyncKeyState's "pressed since
             // the previous call" bit goes away with the first read of a key in
             // an iteration, and that fresh press is what a folder change has to
@@ -4473,6 +4524,34 @@ mod tests {
         assert!(
             !display_signature_changed(None, &before),
             "the first look at a desktop is not a change"
+        );
+    }
+
+    /// A pointer that has left the item the preview on screen is about has moved,
+    /// whether or not it went far enough to clear the threshold: the threshold is a
+    /// hand's own jitter, and a row of the list crossed under it would otherwise
+    /// leave the preview of the file that was left behind on screen, with the probe
+    /// that would have noticed held behind a single probe per parked cursor. The two
+    /// states that are not a move are the ones where there is nothing on screen to
+    /// leave, and the pointer a preview is holding — see
+    /// `pointer_moved_off_the_hovered_item`.
+    #[test]
+    fn a_pointer_off_the_hovered_item_has_moved() {
+        assert!(
+            pointer_moved_off_the_hovered_item(true, false, false),
+            "a pointer outside the item the preview is about has left it"
+        );
+        assert!(
+            !pointer_moved_off_the_hovered_item(true, false, true),
+            "a pointer still inside it has not"
+        );
+        assert!(
+            !pointer_moved_off_the_hovered_item(false, false, false),
+            "and nothing is on screen for a pointer to have left"
+        );
+        assert!(
+            !pointer_moved_off_the_hovered_item(true, true, false),
+            "nor is a pointer the preview itself holds one that has left it"
         );
     }
 
