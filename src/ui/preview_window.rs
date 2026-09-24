@@ -7818,7 +7818,10 @@ struct KeyboardPlacement {
     item_rect: (i32, i32, i32, i32),
     /// The region the `Avoid` setting keeps a preview off: the item's own text, the
     /// name alone, or the column the name sits in, as the setting has it — or `None`
-    /// when nothing is kept off, or the view reported no text for the item.
+    /// when nothing is kept off, which a keyboard preview is never asked with: the hook
+    /// reads `Avoid Nothing` as `Avoid Filename` and answers with the item's own box
+    /// when the view reported no text (see
+    /// `explorer_hook::HoveredItem::keyboard_avoid_box`).
     avoid: Option<ScreenRegion>,
     /// Whether the item draws anything beside the piece its name is drawn in, which
     /// with the item's shape is what says it is a row of its view rather than a box —
@@ -7894,9 +7897,10 @@ fn compute_keyboard_layout(
     // after it are within what the setting allows a preview to cover.
     //
     // A row with no tail — a narrow view, a name long enough to fill it — and a row
-    // with nothing kept off at all are both left to the placement below, which anchors
-    // them at their middle: there is nowhere beside such a row to put a preview, and
-    // the display's own room is all there is.
+    // with no region to be placed from at all are both left to the placement below,
+    // which anchors them at their middle: there is nowhere beside such a row to put a
+    // preview, and the display's own room is all there is. (The keyboard path is never
+    // asked with no region — see `KeyboardPlacement`.)
     if row_shaped {
         if let Some(tail_right) = avoid
             .map(|(_, _, right, _)| right)
@@ -10282,9 +10286,11 @@ mod tests {
         }
     }
 
-    /// With nothing kept off — `Avoid Nothing` — a row is placed by the position mode
+    /// A row the placement was given no region for is placed by the position mode
     /// alone: it is anchored at its middle, the way a hover over it is read, and the
-    /// preview is allowed to cover it.
+    /// preview is allowed to cover it. No keyboard preview is asked this way — the hook
+    /// reads `Avoid Nothing` as `Avoid Filename` (see `KeyboardPlacement`) — and the
+    /// answer is what a caller with no region to be placed from gets.
     #[test]
     fn a_keyboard_row_with_nothing_kept_off_is_placed_by_position_alone() {
         let layout = compute_keyboard_layout(

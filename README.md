@@ -199,7 +199,7 @@ The item a setting starts at carries `(Default)` after its name, so a menu says 
   - **Settling Delay** — the same steps, how long the pointer must have been still before it will preview what it is on: 0 ms, the default, is a new file previewed while the hand is still moving to it. The keyboard's own previews are not gated by it.
 - **Placement**
   - **Position** — Follow Cursor or Best Position; Best Position by default.
-  - **Avoid** — Avoid Nothing, Avoid Filename (default), Avoid Filename Column, or Avoid Details. This keeps a preview off the item it is about.
+  - **Avoid** — Avoid Nothing, Avoid Filename (default), Avoid Filename Column, or Avoid Details. This keeps a preview off the item it is about. Keyboard previews have no cursor to be anchored to, so **Avoid Nothing** places them the way **Avoid Filename** does.
 - **Scaling**
   - **Image Scaling** — Fit to Screen or 25%–400%, of the image's own size.
   - **Video Scaling** — the same shares for a video, 100% (default).

@@ -245,10 +245,36 @@ impl HoveredItem {
     /// for a view that reports no text, the name being drawn inside that box whatever
     /// the view says about it, so an item whose text cannot be measured is avoided as
     /// the whole of itself.
+    ///
+    /// It is the pointer's region. A keyboard preview is placed from a region of its
+    /// own, which is this one except at `Off` — see [`Self::keyboard_avoid_box`].
     fn avoid_box(&self) -> Option<(i32, i32, i32, i32)> {
         let region = match avoid_mode() {
             AvoidMode::Off => return None,
             AvoidMode::Filename => self.name_box(),
+            AvoidMode::FilenameColumn => self.text.map(|text| text.name),
+            AvoidMode::Details => self.text.map(|text| text.all),
+        }
+        .unwrap_or(self.bounds);
+
+        Some((region.left, region.top, region.right, region.bottom))
+    }
+
+    /// The region a *keyboard* preview of this item is kept off: what [`Self::avoid_box`]
+    /// names for every way of avoiding but one — `Avoid Nothing` is read as
+    /// `Avoid Filename`.
+    ///
+    /// A pointer's `Avoid Nothing` places a preview by the position mode alone because
+    /// the cursor is what such a placement is read from. A keyboard preview has no
+    /// cursor, and the item it has instead is a box as wide as the view for a row — so a
+    /// placement by the position mode alone is one anchored at that box's middle, over
+    /// the very file it describes, which is the placement the region exists to forbid.
+    /// The name is the one thing the item says about itself and the one line a preview
+    /// can be put beside, so a setting that keeps nothing off keeps the name off, and a
+    /// keyboard preview is placed the way `Avoid Filename` places it.
+    fn keyboard_avoid_box(&self) -> Option<(i32, i32, i32, i32)> {
+        let region = match avoid_mode() {
+            AvoidMode::Off | AvoidMode::Filename => self.name_box(),
             AvoidMode::FilenameColumn => self.text.map(|text| text.name),
             AvoidMode::Details => self.text.map(|text| text.all),
         }
@@ -1965,10 +1991,12 @@ fn item_from_element(
     }
 
     // The item's own text is read only where it can answer, and only when the caller
-    // wants it: what the view draws is what a way of avoiding is measured from, and a
-    // walk with nothing to keep a preview off has no region to read. See
-    // `item_text_box`.
-    let text = (measure_content && avoid_mode() != AvoidMode::Off)
+    // wants it: what the view draws is what a way of avoiding is measured from. The
+    // pointer's walk asks for it only while the setting keeps something off (see
+    // `avoid_box_under_cursor`), where the keyboard's asks whenever it walks, because
+    // the region a keyboard preview is placed from is read even at `Avoid Nothing` (see
+    // `keyboard_avoid_box`). See `item_text_box`.
+    let text = measure_content
         .then(|| item_text_box(resolver, element, &bounds))
         .flatten();
 
@@ -4477,7 +4505,7 @@ pub fn run_explorer_hook() {
                                         focused_info.item.bounds.top,
                                         focused_info.item.bounds.right,
                                         focused_info.item.bounds.bottom,
-                                        focused_info.item.avoid_box(),
+                                        focused_info.item.keyboard_avoid_box(),
                                         focused_info.item.draws_columns(),
                                     );
                                 }
@@ -4537,7 +4565,7 @@ pub fn run_explorer_hook() {
                                     focused_info.item.bounds.top,
                                     focused_info.item.bounds.right,
                                     focused_info.item.bounds.bottom,
-                                    focused_info.item.avoid_box(),
+                                    focused_info.item.keyboard_avoid_box(),
                                     focused_info.item.draws_columns(),
                                 );
                             }
