@@ -650,7 +650,10 @@ fn rendered_path(path: &Path) -> Option<PathBuf> {
     let mut hasher = DefaultHasher::new();
     path.to_string_lossy().to_lowercase().hash(&mut hasher);
     let metadata = std::fs::metadata(path).ok();
-    metadata.as_ref().map(|metadata| metadata.len()).hash(&mut hasher);
+    metadata
+        .as_ref()
+        .map(|metadata| metadata.len())
+        .hash(&mut hasher);
     metadata
         .and_then(|metadata| metadata.modified().ok())
         .and_then(|modified| modified.duration_since(std::time::UNIX_EPOCH).ok())
@@ -878,7 +881,10 @@ mod tests {
             "icon.svg",
             "animation.swf",
         ] {
-            assert!(!imports(Path::new(name)), "`{name}` is not one of its formats");
+            assert!(
+                !imports(Path::new(name)),
+                "`{name}` is not one of its formats"
+            );
         }
     }
 
@@ -1009,7 +1015,13 @@ mod tests {
     /// libraries, whatever case they are written in.
     #[test]
     fn reads_coreldraw_and_the_formats_beside_it() {
-        for name in ["logo.cdr", "drawing.CDR", "artwork.cmx", "poster.pub", "plan.vsd"] {
+        for name in [
+            "logo.cdr",
+            "drawing.CDR",
+            "artwork.cmx",
+            "poster.pub",
+            "plan.vsd",
+        ] {
             assert!(imports(Path::new(name)), "`{name}` is one of its formats");
         }
     }
@@ -1069,11 +1081,7 @@ mod tests {
         let _ = gone.wait();
 
         let started = Instant::now();
-        assert!(!wait_until_ready_for(
-            pid,
-            &holder,
-            Duration::from_secs(30)
-        ));
+        assert!(!wait_until_ready_for(pid, &holder, Duration::from_secs(30)));
         assert!(
             started.elapsed() < Duration::from_secs(2),
             "an engine whose process is gone is not waited for, and the bound is not paid"

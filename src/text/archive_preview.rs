@@ -14,8 +14,8 @@
 //! layout settled on. Both build the same page and neither keeps it — the listing
 //! they are built from is what is cached.
 
-use crate::readers::archive_listing::{self, ArchiveEntry, Listing};
 use crate::config::config::TextTheme;
+use crate::readers::archive_listing::{self, ArchiveEntry, Listing};
 use crate::text::text_paint::{
     blend, fill_rect, plain_style, rgb, scaled, DibSurface, RunPainter, TextMetrics, TextStyle,
     BODY_LEVEL,

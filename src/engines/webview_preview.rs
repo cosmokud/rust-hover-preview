@@ -64,10 +64,10 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
+use crate::app::engine_processes;
 use crate::config::config::{
     EngineIdle, PreviewType, TransparentBackground, DEFAULT_WEBVIEW_IDLE_SECS,
 };
-use crate::app::engine_processes;
 use crate::formats::font_formats;
 use crate::readers::font_preview;
 use crate::{readers::svg_preview, CONFIG};
@@ -284,14 +284,7 @@ fn publish_shown(path: Option<PathBuf>) {
 /// answer with.
 fn publish_rect(area: Option<Area>) {
     if let Ok(mut rect) = SHOWING_RECT.lock() {
-        *rect = area.map(|area| {
-            (
-                area.x,
-                area.y,
-                area.x + area.width,
-                area.y + area.height,
-            )
-        });
+        *rect = area.map(|area| (area.x, area.y, area.x + area.width, area.y + area.height));
     }
 }
 
@@ -1834,8 +1827,8 @@ mod tests {
         )
         .expect("a written file");
 
-        let (page, url) = frame_page(&document, 42, TransparentBackground::Black)
-            .expect("a page for a document");
+        let (page, url) =
+            frame_page(&document, 42, TransparentBackground::Black).expect("a page for a document");
         let html = std::fs::read_to_string(&page).expect("a written page");
 
         assert!(html.contains("width:100%;height:100%;object-fit:contain"));
@@ -2009,14 +2002,8 @@ mod tests {
     #[test]
     fn turns_a_verbatim_path_into_a_url_a_browser_opens() {
         for (path, expected) in [
-            (
-                r"C:\art\clock.svg",
-                "file:///C:/art/clock.svg",
-            ),
-            (
-                r"\\?\C:\art\clock.svg",
-                "file:///C:/art/clock.svg",
-            ),
+            (r"C:\art\clock.svg", "file:///C:/art/clock.svg"),
+            (r"\\?\C:\art\clock.svg", "file:///C:/art/clock.svg"),
             (r"\\?\C:\a b\c#d.svg", "file:///C:/a%20b/c%23d.svg"),
             (r"\\?\UNC\server\share\a.svg", "file://server/share/a.svg"),
             (r"\\server\share\a.svg", "file://server/share/a.svg"),

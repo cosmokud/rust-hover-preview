@@ -239,7 +239,11 @@ pub fn half_to_float(bits: u16) -> f32 {
         _ => (1.0 + mantissa as f32 / 1024.0) * 2.0f32.powi(exponent as i32 - 15),
     };
 
-    if sign == 0 { value } else { -value }
+    if sign == 0 {
+        value
+    } else {
+        -value
+    }
 }
 
 // ---- signed samples: the SNORM side of the same formats ------------------------------
@@ -403,8 +407,7 @@ fn gradient_signed(texels: &mut [[u8; 4]; 16], block: &[u8], channel: AlphaChann
         }
     } else {
         for step in 0..4usize {
-            codes[2 + step] =
-                (FIFTHS[3 - step] * codes[0] + FIFTHS[step] * codes[1] + 32768) >> 16;
+            codes[2 + step] = (FIFTHS[3 - step] * codes[0] + FIFTHS[step] * codes[1] + 32768) >> 16;
         }
         codes[6] = -127;
         codes[7] = 127;
@@ -452,8 +455,8 @@ fn between(start: [u8; 4], end: [u8; 4], start_weight: u32, end_weight: u32) -> 
     let mut mixed = [0u8; 4];
 
     for channel in 0..4 {
-        mixed[channel] =
-            ((start_weight * start[channel] as u32 + end_weight * end[channel] as u32) / total) as u8;
+        mixed[channel] = ((start_weight * start[channel] as u32 + end_weight * end[channel] as u32)
+            / total) as u8;
     }
 
     mixed
@@ -620,9 +623,9 @@ static ANCHORS_2: [usize; 64] = [
 /// The same, for the second and third subsets of a three-subset cut.
 static ANCHORS_3: [[usize; 64]; 2] = [
     [
-        3, 3, 15, 15, 8, 3, 15, 15, 8, 8, 6, 6, 6, 5, 3, 3, 3, 3, 8, 15, 3, 3, 6, 10, 5, 8, 8, 6, 8,
-        5, 15, 15, 8, 15, 3, 5, 6, 10, 8, 15, 15, 3, 15, 5, 15, 15, 15, 15, 3, 15, 5, 5, 5, 8, 5, 10,
-        5, 10, 8, 13, 15, 12, 3, 3,
+        3, 3, 15, 15, 8, 3, 15, 15, 8, 8, 6, 6, 6, 5, 3, 3, 3, 3, 8, 15, 3, 3, 6, 10, 5, 8, 8, 6,
+        8, 5, 15, 15, 8, 15, 3, 5, 6, 10, 8, 15, 15, 3, 15, 5, 15, 15, 15, 15, 3, 15, 5, 5, 5, 8,
+        5, 10, 5, 10, 8, 13, 15, 12, 3, 3,
     ],
     [
         15, 8, 8, 3, 15, 15, 3, 8, 15, 15, 15, 15, 15, 15, 15, 8, 15, 8, 15, 3, 15, 8, 15, 8, 3,
@@ -803,11 +806,7 @@ fn subset_of(subsets: usize, partition: usize, index: usize) -> (usize, bool) {
     match subsets {
         2 => {
             let subset = ((PARTITIONS_2[partition] >> index) & 1) as usize;
-            let anchor = if subset != 0 {
-                ANCHORS_2[partition]
-            } else {
-                0
-            };
+            let anchor = if subset != 0 { ANCHORS_2[partition] } else { 0 };
 
             (subset, index == anchor)
         }
@@ -858,38 +857,198 @@ struct Bc6hMode {
 /// none left empty, since the mode a block uses is a thing the block says rather than a
 /// thing it is counted into.
 static BC6H_MODES: [Bc6hMode; 32] = [
-    Bc6hMode { transformed: true, partition_bits: 5, endpoint_bits: 10, delta_bits: [5, 5, 5] },
-    Bc6hMode { transformed: true, partition_bits: 5, endpoint_bits: 7, delta_bits: [6, 6, 6] },
-    Bc6hMode { transformed: true, partition_bits: 5, endpoint_bits: 11, delta_bits: [5, 4, 4] },
-    Bc6hMode { transformed: false, partition_bits: 0, endpoint_bits: 10, delta_bits: [10, 10, 10] },
-    Bc6hMode { transformed: false, partition_bits: 0, endpoint_bits: 0, delta_bits: [0, 0, 0] },
-    Bc6hMode { transformed: false, partition_bits: 0, endpoint_bits: 0, delta_bits: [0, 0, 0] },
-    Bc6hMode { transformed: true, partition_bits: 5, endpoint_bits: 11, delta_bits: [4, 5, 4] },
-    Bc6hMode { transformed: true, partition_bits: 0, endpoint_bits: 11, delta_bits: [9, 9, 9] },
-    Bc6hMode { transformed: false, partition_bits: 0, endpoint_bits: 0, delta_bits: [0, 0, 0] },
-    Bc6hMode { transformed: false, partition_bits: 0, endpoint_bits: 0, delta_bits: [0, 0, 0] },
-    Bc6hMode { transformed: true, partition_bits: 5, endpoint_bits: 11, delta_bits: [4, 4, 5] },
-    Bc6hMode { transformed: true, partition_bits: 0, endpoint_bits: 12, delta_bits: [8, 8, 8] },
-    Bc6hMode { transformed: false, partition_bits: 0, endpoint_bits: 0, delta_bits: [0, 0, 0] },
-    Bc6hMode { transformed: false, partition_bits: 0, endpoint_bits: 0, delta_bits: [0, 0, 0] },
-    Bc6hMode { transformed: true, partition_bits: 5, endpoint_bits: 9, delta_bits: [5, 5, 5] },
-    Bc6hMode { transformed: true, partition_bits: 0, endpoint_bits: 16, delta_bits: [4, 4, 4] },
-    Bc6hMode { transformed: false, partition_bits: 0, endpoint_bits: 0, delta_bits: [0, 0, 0] },
-    Bc6hMode { transformed: false, partition_bits: 0, endpoint_bits: 0, delta_bits: [0, 0, 0] },
-    Bc6hMode { transformed: true, partition_bits: 5, endpoint_bits: 8, delta_bits: [6, 5, 5] },
-    Bc6hMode { transformed: false, partition_bits: 0, endpoint_bits: 0, delta_bits: [0, 0, 0] },
-    Bc6hMode { transformed: false, partition_bits: 0, endpoint_bits: 0, delta_bits: [0, 0, 0] },
-    Bc6hMode { transformed: false, partition_bits: 0, endpoint_bits: 0, delta_bits: [0, 0, 0] },
-    Bc6hMode { transformed: true, partition_bits: 5, endpoint_bits: 8, delta_bits: [5, 6, 5] },
-    Bc6hMode { transformed: false, partition_bits: 0, endpoint_bits: 0, delta_bits: [0, 0, 0] },
-    Bc6hMode { transformed: false, partition_bits: 0, endpoint_bits: 0, delta_bits: [0, 0, 0] },
-    Bc6hMode { transformed: false, partition_bits: 0, endpoint_bits: 0, delta_bits: [0, 0, 0] },
-    Bc6hMode { transformed: true, partition_bits: 5, endpoint_bits: 8, delta_bits: [5, 5, 6] },
-    Bc6hMode { transformed: false, partition_bits: 0, endpoint_bits: 0, delta_bits: [0, 0, 0] },
-    Bc6hMode { transformed: false, partition_bits: 0, endpoint_bits: 0, delta_bits: [0, 0, 0] },
-    Bc6hMode { transformed: false, partition_bits: 0, endpoint_bits: 0, delta_bits: [0, 0, 0] },
-    Bc6hMode { transformed: false, partition_bits: 5, endpoint_bits: 6, delta_bits: [6, 6, 6] },
-    Bc6hMode { transformed: false, partition_bits: 0, endpoint_bits: 0, delta_bits: [0, 0, 0] },
+    Bc6hMode {
+        transformed: true,
+        partition_bits: 5,
+        endpoint_bits: 10,
+        delta_bits: [5, 5, 5],
+    },
+    Bc6hMode {
+        transformed: true,
+        partition_bits: 5,
+        endpoint_bits: 7,
+        delta_bits: [6, 6, 6],
+    },
+    Bc6hMode {
+        transformed: true,
+        partition_bits: 5,
+        endpoint_bits: 11,
+        delta_bits: [5, 4, 4],
+    },
+    Bc6hMode {
+        transformed: false,
+        partition_bits: 0,
+        endpoint_bits: 10,
+        delta_bits: [10, 10, 10],
+    },
+    Bc6hMode {
+        transformed: false,
+        partition_bits: 0,
+        endpoint_bits: 0,
+        delta_bits: [0, 0, 0],
+    },
+    Bc6hMode {
+        transformed: false,
+        partition_bits: 0,
+        endpoint_bits: 0,
+        delta_bits: [0, 0, 0],
+    },
+    Bc6hMode {
+        transformed: true,
+        partition_bits: 5,
+        endpoint_bits: 11,
+        delta_bits: [4, 5, 4],
+    },
+    Bc6hMode {
+        transformed: true,
+        partition_bits: 0,
+        endpoint_bits: 11,
+        delta_bits: [9, 9, 9],
+    },
+    Bc6hMode {
+        transformed: false,
+        partition_bits: 0,
+        endpoint_bits: 0,
+        delta_bits: [0, 0, 0],
+    },
+    Bc6hMode {
+        transformed: false,
+        partition_bits: 0,
+        endpoint_bits: 0,
+        delta_bits: [0, 0, 0],
+    },
+    Bc6hMode {
+        transformed: true,
+        partition_bits: 5,
+        endpoint_bits: 11,
+        delta_bits: [4, 4, 5],
+    },
+    Bc6hMode {
+        transformed: true,
+        partition_bits: 0,
+        endpoint_bits: 12,
+        delta_bits: [8, 8, 8],
+    },
+    Bc6hMode {
+        transformed: false,
+        partition_bits: 0,
+        endpoint_bits: 0,
+        delta_bits: [0, 0, 0],
+    },
+    Bc6hMode {
+        transformed: false,
+        partition_bits: 0,
+        endpoint_bits: 0,
+        delta_bits: [0, 0, 0],
+    },
+    Bc6hMode {
+        transformed: true,
+        partition_bits: 5,
+        endpoint_bits: 9,
+        delta_bits: [5, 5, 5],
+    },
+    Bc6hMode {
+        transformed: true,
+        partition_bits: 0,
+        endpoint_bits: 16,
+        delta_bits: [4, 4, 4],
+    },
+    Bc6hMode {
+        transformed: false,
+        partition_bits: 0,
+        endpoint_bits: 0,
+        delta_bits: [0, 0, 0],
+    },
+    Bc6hMode {
+        transformed: false,
+        partition_bits: 0,
+        endpoint_bits: 0,
+        delta_bits: [0, 0, 0],
+    },
+    Bc6hMode {
+        transformed: true,
+        partition_bits: 5,
+        endpoint_bits: 8,
+        delta_bits: [6, 5, 5],
+    },
+    Bc6hMode {
+        transformed: false,
+        partition_bits: 0,
+        endpoint_bits: 0,
+        delta_bits: [0, 0, 0],
+    },
+    Bc6hMode {
+        transformed: false,
+        partition_bits: 0,
+        endpoint_bits: 0,
+        delta_bits: [0, 0, 0],
+    },
+    Bc6hMode {
+        transformed: false,
+        partition_bits: 0,
+        endpoint_bits: 0,
+        delta_bits: [0, 0, 0],
+    },
+    Bc6hMode {
+        transformed: true,
+        partition_bits: 5,
+        endpoint_bits: 8,
+        delta_bits: [5, 6, 5],
+    },
+    Bc6hMode {
+        transformed: false,
+        partition_bits: 0,
+        endpoint_bits: 0,
+        delta_bits: [0, 0, 0],
+    },
+    Bc6hMode {
+        transformed: false,
+        partition_bits: 0,
+        endpoint_bits: 0,
+        delta_bits: [0, 0, 0],
+    },
+    Bc6hMode {
+        transformed: false,
+        partition_bits: 0,
+        endpoint_bits: 0,
+        delta_bits: [0, 0, 0],
+    },
+    Bc6hMode {
+        transformed: true,
+        partition_bits: 5,
+        endpoint_bits: 8,
+        delta_bits: [5, 5, 6],
+    },
+    Bc6hMode {
+        transformed: false,
+        partition_bits: 0,
+        endpoint_bits: 0,
+        delta_bits: [0, 0, 0],
+    },
+    Bc6hMode {
+        transformed: false,
+        partition_bits: 0,
+        endpoint_bits: 0,
+        delta_bits: [0, 0, 0],
+    },
+    Bc6hMode {
+        transformed: false,
+        partition_bits: 0,
+        endpoint_bits: 0,
+        delta_bits: [0, 0, 0],
+    },
+    Bc6hMode {
+        transformed: false,
+        partition_bits: 5,
+        endpoint_bits: 6,
+        delta_bits: [6, 6, 6],
+    },
+    Bc6hMode {
+        transformed: false,
+        partition_bits: 0,
+        endpoint_bits: 0,
+        delta_bits: [0, 0, 0],
+    },
 ];
 
 /// The sixteen texels of one BC6H block, as the light they hold.

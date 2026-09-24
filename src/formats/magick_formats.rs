@@ -259,19 +259,41 @@ mod tests {
             "picture.palm",
         ] {
             let path = std::path::Path::new(name);
-            let claimed = crate::formats::image_formats::matches_image_list(path, &config.image_extensions)
-                || crate::formats::vector_formats::matches_vector_list(path, &config.vector_extensions)
-                || crate::formats::design_formats::matches_design_list(path, &config.design_extensions)
-                || crate::formats::font_formats::matches_font_list(path, &config.font_extensions)
-                || crate::formats::libre_formats::matches_libre_list(path, &config.libre_extensions)
-                || crate::formats::video_formats::matches_video_list(path, &config.video_extensions)
-                || crate::formats::archive_formats::matches_archive_list(path, &config.archive_extensions)
-                || crate::formats::office_formats::matches_office_list(path, &config.office_extensions)
-                || crate::formats::text_formats::matches_text_lists(
-                    path,
-                    &config.text_extensions,
-                    &config.text_names,
-                );
+            let claimed =
+                crate::formats::image_formats::matches_image_list(path, &config.image_extensions)
+                    || crate::formats::vector_formats::matches_vector_list(
+                        path,
+                        &config.vector_extensions,
+                    )
+                    || crate::formats::design_formats::matches_design_list(
+                        path,
+                        &config.design_extensions,
+                    )
+                    || crate::formats::font_formats::matches_font_list(
+                        path,
+                        &config.font_extensions,
+                    )
+                    || crate::formats::libre_formats::matches_libre_list(
+                        path,
+                        &config.libre_extensions,
+                    )
+                    || crate::formats::video_formats::matches_video_list(
+                        path,
+                        &config.video_extensions,
+                    )
+                    || crate::formats::archive_formats::matches_archive_list(
+                        path,
+                        &config.archive_extensions,
+                    )
+                    || crate::formats::office_formats::matches_office_list(
+                        path,
+                        &config.office_extensions,
+                    )
+                    || crate::formats::text_formats::matches_text_lists(
+                        path,
+                        &config.text_extensions,
+                        &config.text_names,
+                    );
 
             if !claimed {
                 continue;
@@ -368,7 +390,8 @@ mod tests {
         // The same bytes under a picture's own name are a picture of this app's: the two
         // agree, so there is nothing for the engine to be asked about.
         let named = folder.join("artwork.png");
-        std::fs::write(&named, [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]).expect("a written picture");
+        std::fs::write(&named, [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A])
+            .expect("a written picture");
         assert!(
             !is_engine_picture(&named),
             "a picture this app decodes itself is not one to start an engine for"

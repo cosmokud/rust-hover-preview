@@ -26,19 +26,19 @@ use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use windows::core::{implement, BSTR, IUnknown, Interface, PCWSTR};
+use windows::core::{implement, IUnknown, Interface, BSTR, PCWSTR};
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Imaging::{
     GUID_WICPixelFormat32bppBGRA, IWICBitmap, WICBitmapCacheOnLoad, WICBitmapLockWrite,
 };
 use windows::Win32::Media::MediaFoundation::{
-    IMFAttributes, IMFByteStream, IMFMediaEngine, IMFMediaEngineClassFactory, IMFMediaEngineEx,
-    IMFMediaEngineNotify, IMFMediaEngineNotify_Impl, MFCreateAttributes,
-    MFCreateMFByteStreamOnStream, MFCreateSourceReaderFromByteStream, MFARGB,
-    MF_BYTESTREAM_ORIGIN_NAME, MF_MEDIA_ENGINE_CALLBACK, MF_MEDIA_ENGINE_EVENT_ERROR,
-    MF_MEDIA_ENGINE_READY_HAVE_CURRENT_DATA, MF_MEDIA_ENGINE_VIDEO_OUTPUT_FORMAT, MF_MT_FRAME_SIZE,
-    MF_MT_PIXEL_ASPECT_RATIO, MF_SOURCE_READER_FIRST_VIDEO_STREAM, MFVideoFormat_ARGB32,
-    CLSID_MFMediaEngineClassFactory,
+    CLSID_MFMediaEngineClassFactory, IMFAttributes, IMFByteStream, IMFMediaEngine,
+    IMFMediaEngineClassFactory, IMFMediaEngineEx, IMFMediaEngineNotify, IMFMediaEngineNotify_Impl,
+    MFCreateAttributes, MFCreateMFByteStreamOnStream, MFCreateSourceReaderFromByteStream,
+    MFVideoFormat_ARGB32, MFARGB, MF_BYTESTREAM_ORIGIN_NAME, MF_MEDIA_ENGINE_CALLBACK,
+    MF_MEDIA_ENGINE_EVENT_ERROR, MF_MEDIA_ENGINE_READY_HAVE_CURRENT_DATA,
+    MF_MEDIA_ENGINE_VIDEO_OUTPUT_FORMAT, MF_MT_FRAME_SIZE, MF_MT_PIXEL_ASPECT_RATIO,
+    MF_SOURCE_READER_FIRST_VIDEO_STREAM,
 };
 use windows::Win32::System::Com::{
     CoCreateInstance, IStream, CLSCTX_INPROC_SERVER, STGM_READ, STGM_SHARE_DENY_NONE,
@@ -123,12 +123,11 @@ pub fn dimensions(path: &Path) -> Option<(u32, u32)> {
     }
 
     let byte_stream = open_stream(path)?;
-    let reader = unsafe { MFCreateSourceReaderFromByteStream(&byte_stream, None::<&IMFAttributes>) }
-        .ok()?;
-    let media_type = unsafe {
-        reader.GetNativeMediaType(MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32, 0)
-    }
-    .ok()?;
+    let reader =
+        unsafe { MFCreateSourceReaderFromByteStream(&byte_stream, None::<&IMFAttributes>) }.ok()?;
+    let media_type =
+        unsafe { reader.GetNativeMediaType(MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32, 0) }
+            .ok()?;
 
     // The frame's size and the shape of a pixel, both packed into one `UINT64` each: the
     // width is the high half and the height the low one, and a pixel aspect ratio is a
@@ -139,8 +138,7 @@ pub fn dimensions(path: &Path) -> Option<(u32, u32)> {
         return None;
     }
 
-    let aspect = unsafe { media_type.GetUINT64(&MF_MT_PIXEL_ASPECT_RATIO) }
-        .unwrap_or(1 << 32);
+    let aspect = unsafe { media_type.GetUINT64(&MF_MT_PIXEL_ASPECT_RATIO) }.unwrap_or(1 << 32);
     let (aspect_width, aspect_height) = ((aspect >> 32) as u32, aspect as u32);
 
     // A pixel that is not square makes the picture a different shape from its frame, and
@@ -204,11 +202,7 @@ pub fn resize(width: u32, height: u32) {
 /// The file being played, which is what a hover that lands on the same file again compares
 /// against rather than restarting it.
 pub fn playing_path() -> Option<PathBuf> {
-    SESSION.with(|slot| {
-        slot.borrow()
-            .as_ref()
-            .map(|session| session.path.clone())
-    })
+    SESSION.with(|slot| slot.borrow().as_ref().map(|session| session.path.clone()))
 }
 
 /// Whether a video is playing, which is also whether one that was just asked for started.
@@ -363,7 +357,12 @@ fn surface(width: u32, height: u32) -> Option<IWICBitmap> {
 
     unsafe {
         factory
-            .CreateBitmap(width, height, &GUID_WICPixelFormat32bppBGRA, WICBitmapCacheOnLoad)
+            .CreateBitmap(
+                width,
+                height,
+                &GUID_WICPixelFormat32bppBGRA,
+                WICBitmapCacheOnLoad,
+            )
             .ok()
     }
 }

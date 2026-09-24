@@ -1,0 +1,8 @@
+# What this project is built, formatted and linted with, named so that cargo, rustfmt
+# and clippy answer the same here, in CI and on the machine of whoever clones it next:
+# a toolchain installed beside it cannot be the one that formats this tree. The release
+# is the one `rust-version` in Cargo.toml names and the one the CI workflow installs by
+# name — a bump is made in all three places, on purpose.
+[toolchain]
+channel = "1.98.1"
+components = ["rustfmt", "clippy"]

@@ -13,7 +13,9 @@
 //! and theme, so a second hover, a theme switch or a repaint costs a layout
 //! instead of a parse.
 
-use crate::config::config::{sanitize_text_cache_mb, MarkdownMode, TextTheme, DEFAULT_TEXT_CACHE_MB};
+use crate::config::config::{
+    sanitize_text_cache_mb, MarkdownMode, TextTheme, DEFAULT_TEXT_CACHE_MB,
+};
 use crate::text::text_paint::{
     blend, fill_rect, plain_style, readable, rgb, scaled, text_style, DibSurface, RunPainter,
     TextMetrics, TextStyle, BODY_LEVEL, SIZE_LEVELS,

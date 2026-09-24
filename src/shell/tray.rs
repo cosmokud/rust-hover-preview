@@ -1,30 +1,30 @@
-use crate::formats::codecs::{self, refresh as refresh_codecs, Row};
+use crate::app::updates;
 use crate::config::config::{
     sanitize_decode_budget_gb, sanitize_image_cache_mb, sanitize_libre_cache_mb,
-    sanitize_office_cache_mb,
-    sanitize_pdf_cache_mb, sanitize_text_cache_mb, sanitize_text_font_scale_percent,
-    sanitize_tick_ms, AvoidMode, EngineIdle, MarkdownMode, OfficeEngine, PreviewScale,
-    PreviewType, TextTheme, TransparentBackground, TriggerKeyMode, DEFAULT_ANIMATED_SCALE,
-    DEFAULT_AVOID_MODE, DEFAULT_DDS_BACKGROUND, DEFAULT_DECODE_BUDGET_GB, DEFAULT_DESIGN_BACKGROUND,
-    DEFAULT_DESIGN_SCALE, DEFAULT_FOLLOW_CURSOR, DEFAULT_FONT_BACKGROUND, DEFAULT_FONT_SCALE,
-    DEFAULT_HOVER_DELAY_MS, DEFAULT_IMAGE_BACKGROUND, DEFAULT_IMAGE_CACHE_MB,
-    DEFAULT_LIBRE_CACHE_MB, DEFAULT_LIBRE_SCALE, DEFAULT_LIBREOFFICE_IDLE_SECS,
-    DEFAULT_OFFICE_CACHE_MB, DEFAULT_OFFICE_ENGINE, DEFAULT_OFFICE_ENGINE_IDLE_SECS,
-    DEFAULT_OFFICE_SCALE, DEFAULT_PDF_CACHE_MB, DEFAULT_PDF_SCALE, DEFAULT_PREVIEW_SCALE,
-    DEFAULT_SAME_FILE_REHOVER_DELAY_MS, DEFAULT_SETTLING_DELAY_MS, DEFAULT_TEXT_CACHE_MB,
-    DEFAULT_TEXT_FONT_SCALE_PERCENT, DEFAULT_TICK_MS, DEFAULT_VECTOR_BACKGROUND,
-    DEFAULT_VECTOR_SCALE, DEFAULT_VIDEO_SCALE, DEFAULT_VIDEO_VOLUME, DEFAULT_WEBVIEW_IDLE_SECS,
+    sanitize_office_cache_mb, sanitize_pdf_cache_mb, sanitize_text_cache_mb,
+    sanitize_text_font_scale_percent, sanitize_tick_ms, AvoidMode, EngineIdle, MarkdownMode,
+    OfficeEngine, PreviewScale, PreviewType, TextTheme, TransparentBackground, TriggerKeyMode,
+    DEFAULT_ANIMATED_SCALE, DEFAULT_AVOID_MODE, DEFAULT_DDS_BACKGROUND, DEFAULT_DECODE_BUDGET_GB,
+    DEFAULT_DESIGN_BACKGROUND, DEFAULT_DESIGN_SCALE, DEFAULT_FOLLOW_CURSOR,
+    DEFAULT_FONT_BACKGROUND, DEFAULT_FONT_SCALE, DEFAULT_HOVER_DELAY_MS, DEFAULT_IMAGE_BACKGROUND,
+    DEFAULT_IMAGE_CACHE_MB, DEFAULT_LIBREOFFICE_IDLE_SECS, DEFAULT_LIBRE_CACHE_MB,
+    DEFAULT_LIBRE_SCALE, DEFAULT_OFFICE_CACHE_MB, DEFAULT_OFFICE_ENGINE,
+    DEFAULT_OFFICE_ENGINE_IDLE_SECS, DEFAULT_OFFICE_SCALE, DEFAULT_PDF_CACHE_MB, DEFAULT_PDF_SCALE,
+    DEFAULT_PREVIEW_SCALE, DEFAULT_SAME_FILE_REHOVER_DELAY_MS, DEFAULT_SETTLING_DELAY_MS,
+    DEFAULT_TEXT_CACHE_MB, DEFAULT_TEXT_FONT_SCALE_PERCENT, DEFAULT_TICK_MS,
+    DEFAULT_VECTOR_BACKGROUND, DEFAULT_VECTOR_SCALE, DEFAULT_VIDEO_SCALE, DEFAULT_VIDEO_VOLUME,
+    DEFAULT_WEBVIEW_IDLE_SECS,
 };
-use crate::shell::explorer_hook;
+use crate::config::theme_files;
 use crate::engines::libreoffice_render;
 use crate::engines::office_render;
+use crate::engines::webview_preview;
+use crate::formats::codecs::{self, refresh as refresh_codecs, Row};
 use crate::readers::pdf_preview;
-use crate::ui::preview_window::{refresh_preview, refresh_preview_types, trim_image_cache};
+use crate::shell::explorer_hook;
 use crate::text::text_preview;
 use crate::text::text_theme;
-use crate::config::theme_files;
-use crate::app::updates;
-use crate::engines::webview_preview;
+use crate::ui::preview_window::{refresh_preview, refresh_preview_types, trim_image_cache};
 use crate::{app::startup, CONFIG, RUNNING};
 use once_cell::sync::Lazy;
 use std::os::windows::ffi::OsStrExt;

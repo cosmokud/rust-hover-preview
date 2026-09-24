@@ -1,47 +1,46 @@
-use crate::formats::archive_formats;
-use crate::text::archive_preview::{self, ArchivePreviewOptions};
-use crate::shell::cloud_files;
-use crate::formats::codecs;
+use crate::app::engine_processes;
 use crate::config::config::{
     frame_bytes_within_budget, image_decode_limits, read_within_budget, sanitize_image_cache_mb,
-    sanitize_spinner_delay_ms, sanitize_webp_playback_fps, MarkdownMode, OfficeEngine, PreviewScale,
-    PreviewType,
-    TextTheme, TransparentBackground, DEFAULT_ANIMATED_SCALE_PERCENT, DEFAULT_DDS_BACKGROUND,
-    DEFAULT_DESIGN_BACKGROUND, DEFAULT_DESIGN_SCALE, DEFAULT_FONT_BACKGROUND, DEFAULT_FONT_SCALE,
-    DEFAULT_IMAGE_BACKGROUND, DEFAULT_IMAGE_CACHE_MB, DEFAULT_LIBRE_SCALE, DEFAULT_OFFICE_SCALE,
-    DEFAULT_PDF_SCALE, DEFAULT_PREVIEW_SCALE_PERCENT, DEFAULT_SPINNER_DELAY_MS,
-    DEFAULT_TEXT_FONT_SCALE_PERCENT, DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS,
-    DEFAULT_VECTOR_BACKGROUND, DEFAULT_VECTOR_SCALE, DEFAULT_VIDEO_SCALE_PERCENT,
-    DEFAULT_WEBP_PLAYBACK_FPS,
+    sanitize_spinner_delay_ms, sanitize_webp_playback_fps, MarkdownMode, OfficeEngine,
+    PreviewScale, PreviewType, TextTheme, TransparentBackground, DEFAULT_ANIMATED_SCALE_PERCENT,
+    DEFAULT_DDS_BACKGROUND, DEFAULT_DESIGN_BACKGROUND, DEFAULT_DESIGN_SCALE,
+    DEFAULT_FONT_BACKGROUND, DEFAULT_FONT_SCALE, DEFAULT_IMAGE_BACKGROUND, DEFAULT_IMAGE_CACHE_MB,
+    DEFAULT_LIBRE_SCALE, DEFAULT_OFFICE_SCALE, DEFAULT_PDF_SCALE, DEFAULT_PREVIEW_SCALE_PERCENT,
+    DEFAULT_SPINNER_DELAY_MS, DEFAULT_TEXT_FONT_SCALE_PERCENT,
+    DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS, DEFAULT_VECTOR_BACKGROUND, DEFAULT_VECTOR_SCALE,
+    DEFAULT_VIDEO_SCALE_PERCENT, DEFAULT_WEBP_PLAYBACK_FPS,
 };
-use crate::readers::dds_image;
-use crate::formats::design_formats;
-use crate::app::engine_processes;
-use crate::readers::eps_image;
-use crate::formats::font_formats;
-use crate::readers::font_preview;
-use crate::formats::libre_formats;
 use crate::engines::imagemagick_render;
 use crate::engines::libreoffice_render;
-use crate::formats::magick_formats;
-use crate::readers::metafile_image;
-use crate::formats::office_formats;
-use crate::readers::office_preview;
 use crate::engines::office_render;
+use crate::engines::webview_preview;
+use crate::formats::archive_formats;
+use crate::formats::codecs;
+use crate::formats::design_formats;
+use crate::formats::font_formats;
+use crate::formats::libre_formats;
+use crate::formats::magick_formats;
+use crate::formats::office_formats;
+use crate::formats::text_formats;
+use crate::formats::vector_formats;
+use crate::formats::video_formats::{self, is_video_file};
+use crate::readers::dds_image;
+use crate::readers::eps_image;
+use crate::readers::font_preview;
+use crate::readers::metafile_image;
+use crate::readers::office_preview;
 use crate::readers::pdf_preview;
 use crate::readers::project_image;
 use crate::readers::psd_image;
 use crate::readers::svg_preview;
-use crate::formats::text_formats;
-use crate::text::text_preview::{self, TextPreviewOptions};
 use crate::readers::tone_map;
-use crate::formats::vector_formats;
-use crate::formats::video_formats::{self, is_video_file};
 use crate::readers::video_player;
 use crate::readers::webp_image;
-use crate::engines::webview_preview;
-use crate::shell::wheel_input;
 use crate::readers::wic_image;
+use crate::shell::cloud_files;
+use crate::shell::wheel_input;
+use crate::text::archive_preview::{self, ArchivePreviewOptions};
+use crate::text::text_preview::{self, TextPreviewOptions};
 use crate::{CONFIG, RUNNING};
 use gif::DecodeOptions;
 use image::{AnimationDecoder, GenericImageView};
@@ -156,7 +155,10 @@ static PREVIEW_ALIVE_MS: AtomicU64 = AtomicU64::new(0);
 /// since a loop waiting on the channel for a hover is a loop that is working (see
 /// `preview_stall_ms`).
 fn note_preview_alive() {
-    PREVIEW_ALIVE_MS.store(PREVIEW_CLOCK.elapsed().as_millis() as u64, Ordering::Relaxed);
+    PREVIEW_ALIVE_MS.store(
+        PREVIEW_CLOCK.elapsed().as_millis() as u64,
+        Ordering::Relaxed,
+    );
 }
 
 /// How long the preview loop has been quiet, in milliseconds: the age of its last
@@ -260,7 +262,9 @@ pub fn pointer_item_holds(x: i32, y: i32) -> bool {
         return true;
     };
 
-    (*published).map(|region| box_holds(x, y, region)).unwrap_or(true)
+    (*published)
+        .map(|region| box_holds(x, y, region))
+        .unwrap_or(true)
 }
 
 /// The box the item under the pointer is drawn in, as the last look at it published, or
@@ -1466,10 +1470,7 @@ fn skip_gif_sub_blocks(reader: &mut BufReader<File>) -> bool {
         if length[0] == 0 {
             return true;
         }
-        if reader
-            .seek(SeekFrom::Current(length[0] as i64))
-            .is_err()
-        {
+        if reader.seek(SeekFrom::Current(length[0] as i64)).is_err() {
             return false;
         }
     }
@@ -1493,9 +1494,7 @@ fn webp_has_animation(path: &Path) -> bool {
 
     // `RIFF`, the file's own length, and the form type every WebP carries.
     let mut header = [0u8; 12];
-    if reader.read_exact(&mut header).is_err()
-        || &header[..4] != b"RIFF"
-        || &header[8..] != b"WEBP"
+    if reader.read_exact(&mut header).is_err() || &header[..4] != b"RIFF" || &header[8..] != b"WEBP"
     {
         return false;
     }
@@ -1516,10 +1515,7 @@ fn webp_has_animation(path: &Path) -> bool {
         }
 
         // Chunks are padded to an even length.
-        if reader
-            .seek(SeekFrom::Current(length + length % 2))
-            .is_err()
-        {
+        if reader.seek(SeekFrom::Current(length + length % 2)).is_err() {
             return false;
         }
     }
@@ -2041,11 +2037,7 @@ fn magick_render_is_due(path: &Path) -> bool {
 /// was laid out at: what the engine is told is how large a picture it may write, and a
 /// picture written into too small a box is one no later layout can draw any larger (see
 /// `PendingLoad::room`).
-fn request_magick_render(
-    path: &Path,
-    generation: u64,
-    room: (u32, u32),
-) -> Option<(PathBuf, u64)> {
+fn request_magick_render(path: &Path, generation: u64, room: (u32, u32)) -> Option<(PathBuf, u64)> {
     if !magick_render_is_due(path) {
         return None;
     }
@@ -3768,9 +3760,15 @@ fn load_engine_page(
     preview_scale: PreviewScale,
 ) -> Option<MediaData> {
     let (page_width, page_height) = pdf_preview::page_dimensions(page)?;
-    let (target_width, target_height) =
-        scale_dimensions(page_width, page_height, max_width, max_height, preview_scale);
-    let (pixels, width, height) = pdf_preview::render_first_page(page, target_width, target_height)?;
+    let (target_width, target_height) = scale_dimensions(
+        page_width,
+        page_height,
+        max_width,
+        max_height,
+        preview_scale,
+    );
+    let (pixels, width, height) =
+        pdf_preview::render_first_page(page, target_width, target_height)?;
 
     Some(static_image_media(
         ImageFrame {
@@ -3809,7 +3807,13 @@ fn load_engine_page_for_office(
     }
 
     let page = libreoffice_render::rendered_page(path)?;
-    load_engine_page(&page, MediaType::Office, max_width, max_height, preview_scale)
+    load_engine_page(
+        &page,
+        MediaType::Office,
+        max_width,
+        max_height,
+        preview_scale,
+    )
 }
 
 /// The picture the ImageMagick engine developed for a file, drawn as the picture it is.
@@ -3883,7 +3887,11 @@ fn load_magick_picture(
     let image = decode_png(&developed.png)?;
     let (orig_width, orig_height) = image.dimensions();
     let resized = if target_width != orig_width || target_height != orig_height {
-        image.resize_exact(target_width, target_height, image::imageops::FilterType::Triangle)
+        image.resize_exact(
+            target_width,
+            target_height,
+            image::imageops::FilterType::Triangle,
+        )
     } else {
         image
     };
@@ -5245,12 +5253,17 @@ fn load_media_of_kind(
             &cancel,
         ),
         PreviewType::Office => {
-            load_office_preview(path, max_width, max_height, preview_scale, &cancel).or_else(|| {
-                load_engine_page_for_office(path, max_width, max_height, preview_scale)
-            })
+            load_office_preview(path, max_width, max_height, preview_scale, &cancel)
+                .or_else(|| load_engine_page_for_office(path, max_width, max_height, preview_scale))
         }
         PreviewType::Libre => libreoffice_render::rendered_page(path).and_then(|page| {
-            load_engine_page(&page, MediaType::Libre, max_width, max_height, preview_scale)
+            load_engine_page(
+                &page,
+                MediaType::Libre,
+                max_width,
+                max_height,
+                preview_scale,
+            )
         }),
         PreviewType::Magick => {
             load_magick_picture(path, max_width, max_height, preview_scale, &cancel)
@@ -5417,7 +5430,9 @@ fn get_media_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
     // disagree: the box a file is placed at is the box of the kind its content belongs to,
     // and a format no kind previews is placed nowhere at all — see `content_type`.
     match crate::formats::content_type::of(path) {
-        crate::formats::content_type::Content::Kind(kind) => return media_dimensions_of_kind(kind, path),
+        crate::formats::content_type::Content::Kind(kind) => {
+            return media_dimensions_of_kind(kind, path)
+        }
         crate::formats::content_type::Content::Foreign => return None,
         crate::formats::content_type::Content::Unknown => {}
     }
@@ -5554,7 +5569,9 @@ fn media_dimensions_of_kind(kind: PreviewType, path: &PathBuf) -> Option<(u32, u
         PreviewType::Design => design_dimensions(path),
         PreviewType::Vector => {
             if svg_preview::is_svg_file(path) {
-                webview_preview::can_draw().then(|| svg_preview::measure(path)).flatten()
+                webview_preview::can_draw()
+                    .then(|| svg_preview::measure(path))
+                    .flatten()
             } else {
                 vector_dimensions(path)
             }
@@ -5562,12 +5579,7 @@ fn media_dimensions_of_kind(kind: PreviewType, path: &PathBuf) -> Option<(u32, u
         PreviewType::Fonts => webview_preview::can_draw()
             .then(|| font_preview::probe(path))
             .flatten()
-            .map(|_| {
-                (
-                    font_preview::SPECIMEN_WIDTH,
-                    font_preview::SPECIMEN_HEIGHT,
-                )
-            }),
+            .map(|_| (font_preview::SPECIMEN_WIDTH, font_preview::SPECIMEN_HEIGHT)),
         PreviewType::Images => picture_dimensions(path),
     }
 }
@@ -5728,13 +5740,7 @@ fn archive_box(path: &Path, bounds: ScreenBounds, dpi: u32) -> Option<(u32, u32)
     let cap_width = (bounds.right - bounds.left).max(1) as u32;
     let cap_height = bounds.height().max(1) as u32;
 
-    archive_preview::measure(
-        path,
-        cap_width,
-        cap_height,
-        dpi,
-        current_archive_options(),
-    )
+    archive_preview::measure(path, cap_width, cap_height, dpi, current_archive_options())
 }
 
 /// A text preview's box, placed for the width it came out with.
@@ -8763,7 +8769,11 @@ pub fn run_preview_window() {
                             )
                             .or_else(|| request_libre_render(&result.path, result.generation))
                             .or_else(|| {
-                                request_magick_render(&result.path, result.generation, (width, height))
+                                request_magick_render(
+                                    &result.path,
+                                    result.generation,
+                                    (width, height),
+                                )
                             });
                         }
                         None => {
@@ -9830,7 +9840,10 @@ mod tests {
 
         assert!(pointer_item_holds(100, 200), "the item's own corner holds");
         assert!(pointer_item_holds(299, 219), "and so does its far one");
-        assert!(!pointer_item_holds(99, 210), "a point past its left edge does not");
+        assert!(
+            !pointer_item_holds(99, 210),
+            "a point past its left edge does not"
+        );
         assert!(!pointer_item_holds(150, 220), "nor one a row below it");
 
         clear_pointer_item_box();
@@ -10084,8 +10097,9 @@ mod tests {
             // What the app's own `config.ini` holds is not what this test is about: it asks
             // the machine, and the setting is pinned to the one that asks the machine.
             config.office_engine = OfficeEngine::MicrosoftOffice;
-            config.office_extensions =
-                office_formats::sanitize_office_extensions(office_formats::DEFAULT_OFFICE_EXTENSIONS);
+            config.office_extensions = office_formats::sanitize_office_extensions(
+                office_formats::DEFAULT_OFFICE_EXTENSIONS,
+            );
         }
 
         let folder = std::env::temp_dir().join("rust-hover-preview-office-engines");
@@ -10167,7 +10181,11 @@ mod tests {
         bytes.extend_from_slice(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]);
 
         // The header: one pixel, eight bits, colour type six.
-        push_png_chunk(&mut bytes, *b"IHDR", &[0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0, 0]);
+        push_png_chunk(
+            &mut bytes,
+            *b"IHDR",
+            &[0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0, 0],
+        );
 
         if animated {
             push_png_chunk(&mut bytes, *b"acTL", &[0, 0, 0, 2, 0, 0, 0, 0]);
@@ -10308,12 +10326,9 @@ mod tests {
         let gap = logical_px(TEST_DPI, KEYBOARD_GAP_PIXELS);
 
         for avoid in [Some(label), None] {
-            let layout = compute_keyboard_layout(
-                keyboard_placement(tile, avoid, false),
-                bounds(),
-                TEST_DPI,
-            )
-            .expect("a placement beside the tile");
+            let layout =
+                compute_keyboard_layout(keyboard_placement(tile, avoid, false), bounds(), TEST_DPI)
+                    .expect("a placement beside the tile");
 
             assert_eq!(layout.pos_x, tile.2 + gap, "just past the tile's own edge");
         }
@@ -11709,7 +11724,10 @@ mod tests {
             "engine available: {}",
             crate::engines::webview_preview::is_available()
         );
-        println!("document: {}", crate::engines::webview_preview::draws(&path));
+        println!(
+            "document: {}",
+            crate::engines::webview_preview::draws(&path)
+        );
         // Which engine would play a video here, which is the whole of the fallback's
         // routing: `ffplay` when it is installed, and the media engine Windows has when it
         // is not. Reported for every file rather than only for a video, because a probe is
@@ -12040,7 +12058,11 @@ mod tests {
         // list as it is held in memory, so the file on disk is not touched.
         if let Ok(forced) = std::env::var("RHP_LIBRE_PROBE_FORCE") {
             if let Ok(mut config) = crate::CONFIG.lock() {
-                for name in forced.split(',').map(str::trim).filter(|name| !name.is_empty()) {
+                for name in forced
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|name| !name.is_empty())
+                {
                     let name = name.trim_start_matches('.').to_lowercase();
                     if !config.libre_extensions.contains(&name) {
                         config.libre_extensions.push(name.clone());

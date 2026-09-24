@@ -463,11 +463,15 @@ const SIGNATURES: &[Signature] = &[
     // own three letters after the first.
     Signature {
         names: &["jng"],
-        matches: Matcher::Test(|probe| starts_with(probe, &[0x8B, b'J', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A])),
+        matches: Matcher::Test(|probe| {
+            starts_with(probe, &[0x8B, b'J', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A])
+        }),
     },
     Signature {
         names: &["mng"],
-        matches: Matcher::Test(|probe| starts_with(probe, &[0x8A, b'M', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A])),
+        matches: Matcher::Test(|probe| {
+            starts_with(probe, &[0x8A, b'M', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A])
+        }),
     },
     // A GIMP document, which opens with the program's own name and the version letter the
     // format is written under.
@@ -687,7 +691,10 @@ const SIGNATURES: &[Signature] = &[
     // and is told from the rest by the revision word that follows.
     Signature {
         names: &["123"],
-        matches: Matcher::Test(|probe| at(probe, 0, &[0x00, 0x00, 0x1A, 0x00]) && matches!(probe.get(4..6), Some([0x03, 0x10] | [0x05, 0x10]))),
+        matches: Matcher::Test(|probe| {
+            at(probe, 0, &[0x00, 0x00, 0x1A, 0x00])
+                && matches!(probe.get(4..6), Some([0x03, 0x10] | [0x05, 0x10]))
+        }),
     },
     Signature {
         names: &["wk3"],
@@ -705,7 +712,9 @@ const SIGNATURES: &[Signature] = &[
     // and both are asked here, because the name is the only thing the two agree on.
     Signature {
         names: &["wks"],
-        matches: Matcher::Test(|probe| at(probe, 0, &[0x00, 0x00, 0x02, 0x00, 0x04, 0x04]) || at(probe, 0, &[0xFF, 0x00, 0x02])),
+        matches: Matcher::Test(|probe| {
+            at(probe, 0, &[0x00, 0x00, 0x02, 0x00, 0x04, 0x04]) || at(probe, 0, &[0xFF, 0x00, 0x02])
+        }),
     },
     Signature {
         names: &["wb2"],
@@ -870,7 +879,10 @@ const SIGNATURES: &[Signature] = &[
     },
     Signature {
         names: &["vc1"],
-        matches: Matcher::Test(|probe| at(probe, 0, &[0x00, 0x00, 0x01, 0x0F]) && probe.get(4).is_some_and(|byte| byte & 0xC0 == 0xC0)),
+        matches: Matcher::Test(|probe| {
+            at(probe, 0, &[0x00, 0x00, 0x01, 0x0F])
+                && probe.get(4).is_some_and(|byte| byte & 0xC0 == 0xC0)
+        }),
     },
     // Raw Dirac, which is VC-2 under another name: the parse-info prefix, a parse code
     // that is one of the format's, and, where the unit it points at is in the probe, two
@@ -931,7 +943,9 @@ const SIGNATURES: &[Signature] = &[
     },
     Signature {
         names: &["xmv"],
-        matches: Matcher::Test(|probe| at(probe, 12, b"xobX") && matches!(read_le32(probe, 16), Some(1..=4))),
+        matches: Matcher::Test(|probe| {
+            at(probe, 12, b"xobX") && matches!(read_le32(probe, 16), Some(1..=4))
+        }),
     },
     Signature {
         names: &["yop"],
@@ -943,13 +957,19 @@ const SIGNATURES: &[Signature] = &[
     },
     Signature {
         names: &["rm", "rmvb"],
-        matches: Matcher::Test(|probe| starts_with(probe, b".RMF\x00\x00") || starts_with(probe, b".RMP\x00\x00") || starts_with(probe, &[0x2E, 0x72, 0x61, 0xFD])),
+        matches: Matcher::Test(|probe| {
+            starts_with(probe, b".RMF\x00\x00")
+                || starts_with(probe, b".RMP\x00\x00")
+                || starts_with(probe, &[0x2E, 0x72, 0x61, 0xFD])
+        }),
     },
     // A recorded RealMedia stream, which Real's own recorder writes rather than the server:
     // the seven bytes of its header, or the three a recording of another kind opens with.
     Signature {
         names: &["ivr"],
-        matches: Matcher::Test(|probe| starts_with(probe, b".R1M\x00\x01\x01") || starts_with(probe, b".REC")),
+        matches: Matcher::Test(|probe| {
+            starts_with(probe, b".R1M\x00\x01\x01") || starts_with(probe, b".REC")
+        }),
     },
     Signature {
         names: &["cpk"],
@@ -957,11 +977,22 @@ const SIGNATURES: &[Signature] = &[
     },
     Signature {
         names: &["gxf"],
-        matches: Matcher::Test(|probe| starts_with(probe, &[0x00, 0x00, 0x00, 0x00, 0x01, 0xBC]) && at(probe, 10, &[0x00, 0x00, 0x00, 0x00, 0xE1, 0xE2])),
+        matches: Matcher::Test(|probe| {
+            starts_with(probe, &[0x00, 0x00, 0x00, 0x00, 0x01, 0xBC])
+                && at(probe, 10, &[0x00, 0x00, 0x00, 0x00, 0xE1, 0xE2])
+        }),
     },
     Signature {
         names: &["ifv"],
-        matches: Matcher::Test(|probe| starts_with(probe, &[0x11, 0xD2, 0xD3, 0xAB, 0xBA, 0xA9, 0xCF, 0x11, 0x8E, 0xE6, 0x00, 0xC0, 0x0C, 0x20, 0x53, 0x65, 0x44])),
+        matches: Matcher::Test(|probe| {
+            starts_with(
+                probe,
+                &[
+                    0x11, 0xD2, 0xD3, 0xAB, 0xBA, 0xA9, 0xCF, 0x11, 0x8E, 0xE6, 0x00, 0xC0, 0x0C,
+                    0x20, 0x53, 0x65, 0x44,
+                ],
+            )
+        }),
     },
     Signature {
         names: &["kux"],
@@ -973,7 +1004,9 @@ const SIGNATURES: &[Signature] = &[
     },
     Signature {
         names: &["pmp"],
-        matches: Matcher::Test(|probe| starts_with(probe, b"pmpm") && at(probe, 4, &[0x01, 0x00, 0x00, 0x00])),
+        matches: Matcher::Test(|probe| {
+            starts_with(probe, b"pmpm") && at(probe, 4, &[0x01, 0x00, 0x00, 0x00])
+        }),
     },
     // Scaleform's video, which FFmpeg has no demuxer for and `file`'s own table names: the
     // four characters the container opens with and the marker thirty-two bytes in.
@@ -983,11 +1016,18 @@ const SIGNATURES: &[Signature] = &[
     },
     Signature {
         names: &["dav"],
-        matches: Matcher::Test(|probe| starts_with(probe, b"DAHUA") || (starts_with(probe, b"DHAV") && matches!(probe.get(4), Some(0xF0 | 0xF1 | 0xFC | 0xFD)))),
+        matches: Matcher::Test(|probe| {
+            starts_with(probe, b"DAHUA")
+                || (starts_with(probe, b"DHAV")
+                    && matches!(probe.get(4), Some(0xF0 | 0xF1 | 0xFC | 0xFD)))
+        }),
     },
     Signature {
         names: &["viv"],
-        matches: Matcher::Test(|probe| probe.first() == Some(&0) && (at(probe, 4, b"Version:Vivo/") || at(probe, 5, b"Version:Vivo/"))),
+        matches: Matcher::Test(|probe| {
+            probe.first() == Some(&0)
+                && (at(probe, 4, b"Version:Vivo/") || at(probe, 5, b"Version:Vivo/"))
+        }),
     },
     Signature {
         names: &["rcv"],
@@ -995,11 +1035,26 @@ const SIGNATURES: &[Signature] = &[
     },
     Signature {
         names: &["str"],
-        matches: Matcher::Test(|probe| starts_with(probe, &[0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00])),
+        matches: Matcher::Test(|probe| {
+            starts_with(
+                probe,
+                &[
+                    0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00,
+                ],
+            )
+        }),
     },
     Signature {
         names: &["wtv"],
-        matches: Matcher::Test(|probe| starts_with(probe, &[0xB7, 0xD8, 0x00, 0x20, 0x37, 0x49, 0xDA, 0x11, 0xA6, 0x4E, 0x00, 0x07, 0xE9, 0x5E, 0xAD, 0x8D])),
+        matches: Matcher::Test(|probe| {
+            starts_with(
+                probe,
+                &[
+                    0xB7, 0xD8, 0x00, 0x20, 0x37, 0x49, 0xDA, 0x11, 0xA6, 0x4E, 0x00, 0x07, 0xE9,
+                    0x5E, 0xAD, 0x8D,
+                ],
+            )
+        }),
     },
     Signature {
         names: &["nsv"],
@@ -1260,7 +1315,9 @@ fn is_cgm(probe: &[u8]) -> bool {
 /// Whether the front of a file is a ClarisWorks document: the version byte of the format,
 /// and the four characters every file the application wrote carries beside it.
 fn is_clarisworks(probe: &[u8]) -> bool {
-    probe.first().is_some_and(|version| (1..=6).contains(version))
+    probe
+        .first()
+        .is_some_and(|version| (1..=6).contains(version))
         && (at(probe, 4, b"BOBO") || at(probe, 4, b"CWKJ"))
 }
 
@@ -1507,9 +1564,7 @@ fn is_dirac_stream(probe: &[u8]) -> bool {
     // Where the unit it names is in the probe, the two have to agree about where this one
     // ended; where it is not, the parse code has answered already.
     match probe.get(next as usize..) {
-        Some(rest) if rest.len() >= 13 => {
-            at(rest, 0, b"BBCD") && read_be32(rest, 9) == Some(next)
-        }
+        Some(rest) if rest.len() >= 13 => at(rest, 0, b"BBCD") && read_be32(rest, 9) == Some(next),
         _ => true,
     }
 }
@@ -1667,7 +1722,8 @@ fn is_cdxl(probe: &[u8]) -> bool {
         return false;
     }
 
-    let (Some(&kind), Some(&planes), Some(&reserved)) = (probe.first(), probe.get(19), probe.get(18))
+    let (Some(&kind), Some(&planes), Some(&reserved)) =
+        (probe.first(), probe.get(19), probe.get(18))
     else {
         return false;
     };
@@ -2080,7 +2136,8 @@ fn kind_claiming(names: &[&str], config: &AppConfig) -> Option<PreviewType> {
             return Some(PreviewType::Pdf);
         }
 
-        if crate::formats::archive_formats::matches_archive_list(&named, &config.archive_extensions) {
+        if crate::formats::archive_formats::matches_archive_list(&named, &config.archive_extensions)
+        {
             return Some(PreviewType::Archives);
         }
 
@@ -2137,8 +2194,13 @@ fn answer_key(path: &Path) -> AnswerKey {
 
     AnswerKey {
         path: path.to_path_buf(),
-        modified: metadata.as_ref().and_then(|metadata| metadata.modified().ok()),
-        len: metadata.as_ref().map(|metadata| metadata.len()).unwrap_or(0),
+        modified: metadata
+            .as_ref()
+            .and_then(|metadata| metadata.modified().ok()),
+        len: metadata
+            .as_ref()
+            .map(|metadata| metadata.len())
+            .unwrap_or(0),
     }
 }
 
@@ -2229,9 +2291,18 @@ mod tests {
     /// format is known by or one of the others.
     #[test]
     fn agreement_is_no_opinion() {
-        assert_eq!(classified("shot.png", b"\x89PNG\x0D\x0A\x1A\x0A"), Content::Unknown);
-        assert_eq!(classified("film.mkv", &[0x1A, 0x45, 0xDF, 0xA3]), Content::Unknown);
-        assert_eq!(classified("film.mp4", b"\x00\x00\x00\x20ftypisom"), Content::Unknown);
+        assert_eq!(
+            classified("shot.png", b"\x89PNG\x0D\x0A\x1A\x0A"),
+            Content::Unknown
+        );
+        assert_eq!(
+            classified("film.mkv", &[0x1A, 0x45, 0xDF, 0xA3]),
+            Content::Unknown
+        );
+        assert_eq!(
+            classified("film.mp4", b"\x00\x00\x00\x20ftypisom"),
+            Content::Unknown
+        );
         assert_eq!(
             classified("picture.mjpeg", &[0xFF, 0xD8, 0xFF, 0xE0]),
             Content::Unknown,
@@ -2383,7 +2454,10 @@ mod tests {
             "a Netpbm picture"
         );
         assert_eq!(
-            classified("film.docx", b"P7\nWIDTH 1\nHEIGHT 1\nDEPTH 3\nMAXVAL 255\nENDHDR\n"),
+            classified(
+                "film.docx",
+                b"P7\nWIDTH 1\nHEIGHT 1\nDEPTH 3\nMAXVAL 255\nENDHDR\n"
+            ),
             Content::Kind(PreviewType::Images),
             "a PAM picture, which names its own fields"
         );
@@ -2393,7 +2467,10 @@ mod tests {
             "a Photo CD image pac"
         );
         assert_eq!(
-            classified("film.docx", &[0x0A, 0x05, 0x01, 0x08, 0, 0, 0, 0, 9, 9, 9, 9]),
+            classified(
+                "film.docx",
+                &[0x0A, 0x05, 0x01, 0x08, 0, 0, 0, 0, 9, 9, 9, 9]
+            ),
             Content::Kind(PreviewType::Libre),
             "a PCX picture"
         );
@@ -2657,7 +2734,10 @@ mod tests {
             "and one of a profile that carries no header of its own is left to the name"
         );
         assert_eq!(
-            classified("film.docx", b"BBCD\x00\x00\x00\x00\x0D\x00\x00\x00\x00BBCD\x00\x00\x00\x00\x00\x00\x00\x00\x0D"),
+            classified(
+                "film.docx",
+                b"BBCD\x00\x00\x00\x00\x0D\x00\x00\x00\x00BBCD\x00\x00\x00\x00\x00\x00\x00\x00\x0D"
+            ),
             Content::Kind(PreviewType::Videos),
             "a Dirac or VC-2 stream, whose two units agree about where the first ended"
         );
@@ -2688,7 +2768,10 @@ mod tests {
             "an IVF stream"
         );
         assert_eq!(
-            classified("film.docx", b"\x06\x0E\x2B\x34\x02\x05\x01\x01\x0D\x01\x02\x01\x01\x02"),
+            classified(
+                "film.docx",
+                b"\x06\x0E\x2B\x34\x02\x05\x01\x01\x0D\x01\x02\x01\x01\x02"
+            ),
             Content::Kind(PreviewType::Videos),
             "an MXF, and the `.imx` essence that is one"
         );
@@ -2788,7 +2871,13 @@ mod tests {
             "a GXF stream"
         );
         assert_eq!(
-            classified("film.docx", &[0x11, 0xD2, 0xD3, 0xAB, 0xBA, 0xA9, 0xCF, 0x11, 0x8E, 0xE6, 0x00, 0xC0, 0x0C, 0x20, 0x53, 0x65, 0x44]),
+            classified(
+                "film.docx",
+                &[
+                    0x11, 0xD2, 0xD3, 0xAB, 0xBA, 0xA9, 0xCF, 0x11, 0x8E, 0xE6, 0x00, 0xC0, 0x0C,
+                    0x20, 0x53, 0x65, 0x44
+                ]
+            ),
             Content::Kind(PreviewType::Videos),
             "an IFV stream"
         );
@@ -2839,12 +2928,21 @@ mod tests {
             "a VC-1 test stream"
         );
         assert_eq!(
-            classified("film.docx", &[0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00]),
+            classified(
+                "film.docx",
+                &[0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00]
+            ),
             Content::Kind(PreviewType::Videos),
             "a PlayStation STR stream"
         );
         assert_eq!(
-            classified("film.docx", &[0xB7, 0xD8, 0x00, 0x20, 0x37, 0x49, 0xDA, 0x11, 0xA6, 0x4E, 0x00, 0x07, 0xE9, 0x5E, 0xAD, 0x8D]),
+            classified(
+                "film.docx",
+                &[
+                    0xB7, 0xD8, 0x00, 0x20, 0x37, 0x49, 0xDA, 0x11, 0xA6, 0x4E, 0x00, 0x07, 0xE9,
+                    0x5E, 0xAD, 0x8D
+                ]
+            ),
             Content::Kind(PreviewType::Videos),
             "a Windows recorded television stream"
         );
@@ -2858,7 +2956,13 @@ mod tests {
         // FFmpeg's own demuxer scores: a block table, a periodic command byte, a header of
         // offsets, a table that has to chain, a picture start code twice over.
         assert_eq!(
-            classified("film.docx", &[0x01, 0x00, 0x04, 0x01, 0x05, 0x00, 0x02, 0x01, 0x07, 0x00, 0x03, 0x01, 0x0A, 0x00, 0x01, 0x01]),
+            classified(
+                "film.docx",
+                &[
+                    0x01, 0x00, 0x04, 0x01, 0x05, 0x00, 0x02, 0x01, 0x07, 0x00, 0x03, 0x01, 0x0A,
+                    0x00, 0x01, 0x01
+                ]
+            ),
             Content::Kind(PreviewType::Videos),
             "an Interplay C93 movie"
         );
@@ -3004,7 +3108,10 @@ mod tests {
             "a program database starts no engine"
         );
         assert_eq!(
-            classified("app.pdb", b"Microsoft C/C++ program database 2.00\r\n\x1aJG"),
+            classified(
+                "app.pdb",
+                b"Microsoft C/C++ program database 2.00\r\n\x1aJG"
+            ),
             Content::Foreign,
             "and neither does one of the version before it"
         );
@@ -3012,7 +3119,10 @@ mod tests {
         // What the engine reads is the Palm document, and a file of the name that is
         // nothing of the sort is not left to the name to decide: it is a file this app has
         // no reader for, which is the answer to the program database as well.
-        assert_eq!(classified("data.pdb", b"\x00\x01\x02\x03"), Content::Foreign);
+        assert_eq!(
+            classified("data.pdb", b"\x00\x01\x02\x03"),
+            Content::Foreign
+        );
         assert_eq!(
             classified("data.pdb", b"not a database of any kind"),
             Content::Foreign
@@ -3064,7 +3174,11 @@ mod tests {
             }
 
             if crate::formats::libre_formats::matches_libre_list(&named, &config.libre_extensions) {
-                assert_eq!(*kind, PreviewType::Libre, "`{extension}` is the engine's name");
+                assert_eq!(
+                    *kind,
+                    PreviewType::Libre,
+                    "`{extension}` is the engine's name"
+                );
                 continue;
             }
 
@@ -3123,7 +3237,10 @@ mod tests {
             Content::Unknown,
             "a `.h264` that is not one is answered by its name like any other file"
         );
-        assert_eq!(classified("notes.txt", b"just some text\n"), Content::Unknown);
+        assert_eq!(
+            classified("notes.txt", b"just some text\n"),
+            Content::Unknown
+        );
         assert_eq!(
             classified("drawing.svg", b"<svg xmlns=\"http://www.w3.org/2000/svg\">"),
             Content::Unknown,

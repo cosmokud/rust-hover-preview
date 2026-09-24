@@ -31,8 +31,8 @@ You don't need to write code to help. Useful contributions include:
 
 ## Getting set up
 
-Requirements: Windows 11, Rust 1.98.1+, Visual Studio Build Tools (MSVC / C++),
-and the Windows SDK.
+Requirements: Windows 11, Rust 1.98.1 (the release `rust-toolchain.toml` pins),
+Visual Studio Build Tools (MSVC / C++), and the Windows SDK.
 
 ```bash
 git clone https://github.com/cosmokud/rust-hover-preview.git
@@ -59,16 +59,19 @@ for a full system overview.
    ```
 
 2. Make your changes. Follow the existing code style and keep changes focused:
-   one issue per branch.
+   one issue per branch, and leave the formatting of code you did not touch alone.
 3. Format, check, and test before you push:
 
    ```bash
-   cargo fmt --check
+   cargo fmt --all -- --check
    cargo clippy --all-targets -- -D warnings
    cargo test
    ```
 
-   If a check fails, fix it before opening a pull request.
+   If a check fails, fix it before opening a pull request. `rust-toolchain.toml` pins
+   the toolchain, so cargo, rustfmt and clippy answer the same on every machine as
+   they do in CI — which runs exactly these three commands on every pull request and
+   on `main`.
 4. Write a clear commit message in the present tense, for example
    `Fix preview placement on second monitor` rather than `Fixed...`.
 5. Push your branch and open a pull request against `main`.

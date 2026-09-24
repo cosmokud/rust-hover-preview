@@ -1,0 +1,55 @@
+name: CI
+
+# What CONTRIBUTING asks for before a push, run on the commit rather than left to
+# whoever remembers to: the tree is formatted, lint-free and passing its tests, or the
+# commit is answered with a failure and the log that says what failed. It only checks —
+# no formatting commit, no push, no release — and it is given no permission beyond
+# reading the repository, so there is nothing else it could do.
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+# One run per reference: a branch pushed twice in a row cancels the run the first push
+# started, so an afternoon of small commits is one run rather than ten.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: Formatting, lints and tests
+    runs-on: windows-latest
+
+    steps:
+      # SECURITY: pinned to the commit the tag it is written against pointed at, the
+      # way both deploy workflows pin theirs.
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      # The release `rust-toolchain.toml` names, asked for by name so the version a run
+      # formats and lints with is the one in its log rather than whichever stable the
+      # runner image happens to carry that week.
+      - name: Install Rust (MSVC)
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
+        with:
+          toolchain: 1.98.1
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2 (2.9.2)
+
+      - name: Formatting
+        run: cargo fmt --all -- --check
+
+      - name: Lints
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Tests
+        run: cargo test

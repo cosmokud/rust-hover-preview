@@ -229,8 +229,9 @@ fn draw(preview: &Preview, width: u32, height: u32) -> Option<Vec<u8>> {
         // The decoder has the first word on a picture, and the palette reader the second:
         // a colour table with an alpha sample beside its index is a shape the decoder
         // turns down whole, and it is one an EPS carries often enough to be read here.
-        Preview::Picture(picture) => picture_frame(picture, width, height)
-            .or_else(|| palette_frame(picture, width, height)),
+        Preview::Picture(picture) => {
+            picture_frame(picture, width, height).or_else(|| palette_frame(picture, width, height))
+        }
     }
 }
 
@@ -238,8 +239,9 @@ fn draw(preview: &Preview, width: u32, height: u32) -> Option<Vec<u8>> {
 /// made of a picture is: the same decoder, the same budget and the same frame the
 /// container previews are made in.
 fn picture_frame(bytes: &[u8], width: u32, height: u32) -> Option<Vec<u8>> {
-    let mut reader =
-        image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format().ok()?;
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()
+        .ok()?;
     reader.limits(image_decode_limits());
     let picture = reader.decode().ok()?;
 
@@ -341,7 +343,13 @@ impl Order {
 
 /// One directory entry's values, as the numbers they are: what fits inside the entry sits
 /// in it, and what does not is read from where the entry says it is.
-fn entry_values(order: Order, bytes: &[u8], entry: usize, count: usize, size: usize) -> Option<Vec<u64>> {
+fn entry_values(
+    order: Order,
+    bytes: &[u8],
+    entry: usize,
+    count: usize,
+    size: usize,
+) -> Option<Vec<u64>> {
     let length = count.checked_mul(size)?;
     let raw = if length > 4 {
         let at = order.u32(bytes, entry + 8)? as usize;

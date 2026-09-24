@@ -30,9 +30,9 @@ use std::ptr;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Gdi::{
     CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteEnhMetaFile, DeleteObject,
-    GetEnhMetaFileHeader, PlayEnhMetaFile, SelectObject, SetBkMode, SetEnhMetaFileBits,
-    BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, ENHMETAHEADER, HENHMETAFILE, HGDIOBJ,
-    MM_ANISOTROPIC, TRANSPARENT,
+    GetEnhMetaFileHeader, PlayEnhMetaFile, SelectObject, SetBkMode, SetEnhMetaFileBits, BITMAPINFO,
+    BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, ENHMETAHEADER, HENHMETAFILE, HGDIOBJ, MM_ANISOTROPIC,
+    TRANSPARENT,
 };
 use windows::Win32::System::DataExchange::{SetWinMetaFileBits, METAFILEPICT};
 
@@ -77,10 +77,7 @@ pub fn is_metafile_records(records: &[u8]) -> bool {
 
     // A type of zero or one and a header of nine words, which is what a picture will not
     // begin with whatever it is a picture of.
-    matches!(
-        records.get(..4),
-        Some([0 | 1, 0x00, 0x09, 0x00])
-    )
+    matches!(records.get(..4), Some([0 | 1, 0x00, 0x09, 0x00]))
 }
 
 /// The size the drawing asks to be shown at.
@@ -149,9 +146,8 @@ impl Placeable {
 
     /// The same bounds in the DIPs a preview is measured in.
     fn size(&self) -> (u32, u32) {
-        let to_pixels = |units: i32| {
-            (units as i64 * DIP_DPI as i64 / self.twips.max(1) as i64).max(1) as u32
-        };
+        let to_pixels =
+            |units: i32| (units as i64 * DIP_DPI as i64 / self.twips.max(1) as i64).max(1) as u32;
 
         (to_pixels(self.width), to_pixels(self.height))
     }
@@ -257,7 +253,12 @@ fn is_enhanced(records: &[u8]) -> bool {
     }
 
     let word = |at: usize| {
-        u32::from_le_bytes([records[at], records[at + 1], records[at + 2], records[at + 3]])
+        u32::from_le_bytes([
+            records[at],
+            records[at + 1],
+            records[at + 2],
+            records[at + 3],
+        ])
     };
 
     word(0) == 1 && word(40) == 0x464D_4520
@@ -334,7 +335,8 @@ impl Surface {
         };
 
         let mut bits: *mut core::ffi::c_void = ptr::null_mut();
-        let Ok(bitmap) = (unsafe { CreateDIBSection(dc, &info, DIB_RGB_COLORS, &mut bits, None, 0) })
+        let Ok(bitmap) =
+            (unsafe { CreateDIBSection(dc, &info, DIB_RGB_COLORS, &mut bits, None, 0) })
         else {
             unsafe {
                 let _ = DeleteDC(dc);
