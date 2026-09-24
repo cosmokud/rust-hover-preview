@@ -3051,21 +3051,6 @@ fn location_fact_key(fact: &str) -> String {
     }
 }
 
-/// Whether a look that differs from the place recorded is one the look before it also
-/// described.
-///
-/// One look answering what the last one did not is a shell that answered differently
-/// rather than a view that moved: a walk out of the view that failed where it had
-/// succeeded, a handle taken again, a fact come back in another spelling that the
-/// normalization did not reach. What confirms a change is the same answer coming back —
-/// two looks in a row describing one place that is not the one recorded — and a view that
-/// alternates between two answers never confirms at all. A place read for the first time
-/// is not a change to confirm: there is nothing recorded for it to differ from, and the
-/// gate below is armed for it as it always was.
-fn location_change_confirmed(pending: Option<&HoverLocation>, look: &HoverLocation) -> bool {
-    pending.is_some_and(|pending| !hover_location_changed(pending, look))
-}
-
 /// Whether two looks at the view describe different places.
 ///
 /// A fact counts only where *both* looks answered it. A look that could not walk the
@@ -3471,10 +3456,6 @@ pub fn run_explorer_hook() {
     // The place the last folder probe found the pointer over, as the facts that probe
     // read — see `HoverLocation`.
     let mut last_cursor_location: Option<HoverLocation> = None;
-    // The look that differed from the place recorded, held until the look after it says
-    // the same thing: one answer about a place is not one to act on, and the second look
-    // describing it is what makes it a change (see `location_change_confirmed`).
-    let mut confirming_location: Option<HoverLocation> = None;
     let mut hover_resolver_hints = HoverResolverHints::default();
     let mut suspend_preview_until_user_input = false;
     let mut allow_keyboard_preview_on_first_observation = false;
@@ -3636,7 +3617,6 @@ pub fn run_explorer_hook() {
             keyboard_screen_owner = false;
             hover_resolver_hints = HoverResolverHints::default();
             last_cursor_location = None;
-            confirming_location = None;
             explorer_probe_backoff_until =
                 Some(Instant::now() + Duration::from_millis(EXPLORER_RESTART_BACKOFF_MS));
             current_state = get_explorer_state();
@@ -3707,7 +3687,6 @@ pub fn run_explorer_hook() {
                     keyboard_screen_owner = false;
                     hover_resolver_hints = HoverResolverHints::default();
                     last_cursor_location = None;
-                    confirming_location = None;
                     explorer_probe_backoff_until =
                         Some(Instant::now() + Duration::from_millis(DISPLAY_CHANGE_BACKOFF_MS));
                 } else {
@@ -4160,16 +4139,7 @@ pub fn run_explorer_hook() {
                         // been opened rather than one that was always there.
                         .unwrap_or(true);
 
-                // And it is not acted on until the look after it says the same thing: a
-                // look that answers what the last one did not is a shell that answered
-                // differently, and the look that describes the same place again is what
-                // makes it a view that moved — see `location_change_confirmed`.
-                let first_look = last_cursor_location.is_none();
-                let confirmed = first_look
-                    || location_change_confirmed(confirming_location.as_ref(), &location);
-                confirming_location = differs.then(|| location.clone());
-
-                if differs && confirmed {
+                if differs {
                     // A change that follows recent input is user navigation:
                     // the file under the parked cursor may preview as soon as
                     // the new view has settled, without a mouse move.
@@ -5434,39 +5404,6 @@ mod tests {
         assert_ne!(
             location_fact_key("search-ms:query=Foo"),
             location_fact_key("search-ms:query=foo")
-        );
-    }
-
-    /// What the confirmation is for: one look answering what the last one did not is a
-    /// shell that answered differently, and the look that says the same thing again is
-    /// what makes it a view that moved. A place that alternates between two answers never
-    /// confirms at all — which is the shape a flip takes, and the reason a single
-    /// differing look is not acted on.
-    #[test]
-    fn a_location_change_is_the_one_the_look_after_it_describes() {
-        let place = |folder: &str| HoverLocation {
-            folder: Some(folder.to_string()),
-            ..HoverLocation::default()
-        };
-
-        let here = place("g:\\pictures");
-        let there = place("g:\\documents");
-
-        assert!(
-            !location_change_confirmed(None, &there),
-            "a change nothing has confirmed is not acted on"
-        );
-        assert!(
-            location_change_confirmed(Some(&there), &there),
-            "the same place answered twice is a change"
-        );
-        assert!(
-            !location_change_confirmed(Some(&here), &there),
-            "two answers naming different places confirm nothing"
-        );
-        assert!(
-            !hover_location_changed(&there, &there) && hover_location_changed(&here, &there),
-            "which is the comparison the change itself is read by"
         );
     }
 }

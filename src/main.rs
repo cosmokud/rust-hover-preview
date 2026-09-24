@@ -128,9 +128,12 @@ fn main() {
     // the app.
     engines::webview_preview::shutdown();
 
-    // Wait for threads to finish (with timeout)
+    // Wait for the threads that end by themselves. The hook is not one of them: every probe
+    // it makes crosses into Explorer, and a shell that has stopped answering holds one of
+    // those crossings for as long as it likes — which is the wait the Office engine's own
+    // thread is not given, for the same reason. It goes with the process.
     let _ = preview_handle.join();
-    let _ = hook_handle.join();
+    drop(hook_handle);
     let _ = wheel_handle.join();
     let _ = config_watch_handle.join();
 
