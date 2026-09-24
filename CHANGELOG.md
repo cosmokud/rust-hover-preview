@@ -1,51 +1,31 @@
 # Changelog
 
-# Changelog
-
-# Changelog
-
 ## [0.3.2] - 2026-09-24
 
 ### Added
 
-- **`ImageMagick` previews.** Uncommon images this app cannot read are rendered by the user’s installed `ImageMagick`, especially camera raw files (`nef`, `cr2`, `cr3`, `arw`, `dng`, `raf`, `orf`, `rw2`, `pef`, `x3f`, and more), plus many niche formats (`xcf`, `sgi`, `jp2`, `dpx`, `fits`, `dcm`, and others). Nothing is bundled; the app finds the installed engine or a portable copy beside `config.ini`.
-- A **`Magick`** switch in the tray’s **`Preview Types`** submenu, below **`Libre`**, so raw formats can be enabled separately from other pictures.
-- `[magick] extensions` in `config.ini`: the list of formats to ask `ImageMagick` about. It is created from built-ins on first run, can be edited by hand, and unsupported names are remembered after one attempt.
-- **`ImageMagick`** in **`Codecs → Engines`**, showing whether it is installed.
-- Camera raw files are recognized by both their bytes and their names, so renamed raw files still preview. Other supported formats are recognized the same way. Previews follow picture scaling and background, and raw images are rotated correctly.
-- Conversions leave no files behind: the image is written to the engine’s output, read from memory, and decoded. Hover frames are cached under `image_cache_mb` like other images. There is no `ImageMagick TTL` setting because this engine exits after each file. It runs without a console window.
-- Every format `ImageMagick` can draw is now included: second spellings like `pict` beside `pct`, `sun` beside `ras`, `pcds` beside `pcd`, `dxt1`/`dxt5` beside `dds`, plus many rare formats. Excluded items — fonts, `Ghostscript`/`DjVuLibre` pages, pseudo-formats, and unsupported coders — are explained in the module and `TODO.md`.
-- Raw sample dumps (`rgb`, `rgba`, `bgr`, `gray`, `cmyk`, `ycbcr`, `uyvy`, `yuv`, `mono`, `group4`, and others) now preview. Size and depth are inferred from file length and pixel weight; impossible proportions show no preview instead of guessing.
-- Added more spellings for existing formats: `epsf`, `epi`, `ept`, `ept2`, `ept3` in `[vector]`; `avci` in `[image]`; and `pdfa`/`epdf` accepted by the PDF gate.
+- **`ImageMagick` previews** for camera raws (`nef`, `cr2`, `cr3`, `arw`, `dng`, `raf`, etc.) and niche images (`xcf`, `sgi`, `jp2`, `dpx`, `fits`, `dcm`, etc.). Uses your installed copy or a portable copy beside `config.ini`; nothing is bundled.
+- A **`Magick`** switch in the tray **`Preview Types`** submenu, below **`Libre`**; `[magick] extensions` in `config.ini` controls which formats are asked about and remembers unsupported names.
+- **`ImageMagick`** appears in **`Codecs → Engines`** to show if it is installed.
+- Raw files are recognized by content and name, so renamed raws still preview. Scaling, background, and rotation work; conversions leave no files; hover frames use `image_cache_mb`; no `ImageMagick TTL`; no console window.
+- More formats/spellings work: `pict`/`pct`, `sun`/`ras`, `pcds`/`pcd`, `dxt1`/`dxt5`/`dds`, raw sample dumps (`rgb`, `rgba`, `bgr`, `gray`, `cmyk`, etc.), `[vector]` (`epsf`, `epi`, `ept`, `ept2`, `ept3`), `[image]` (`avci`), and PDF gate (`pdfa`/`epdf`). Exclusions are explained in the module and `TODO.md`.
+- **`Performance → Tick`** / `tick_ms` now defaults to **15 ms** (up to **78 ms**), changed from **30 ms**, so Explorer changes are noticed sooner. Larger values are lighter on CPU.
 
 ### Changed
 
-- Bumped version to `0.3.2` in `Cargo.toml` and `Cargo.lock`.
+- Version bumped to `0.3.2` in `Cargo.toml` and `Cargo.lock`.
 
 ### Fixed
 
-- `[libre]` was written to `config.ini` but never read back, so manual edits did nothing. It is now read like other lists.
-- **`Preview Types → Libre`** did nothing because it used the wrong command id, sometimes switching the text theme instead. It now has its own id beside **`Magick`**.
-- A refused preview could leave its waiting spinner on screen forever. The wait is now cleared with its answer, whether the spinner appeared or not.
-- New entries in built-in lists now reach existing installations, not only fresh ones. Lists recognize their earlier versions and update themselves.
-- Previews no longer blink, vanish, reappear, or stay after the pointer leaves. This fixes races between hover tracking and preview drawing at any `Timing → Delay`, including `0 ms`.
-- Previews no longer blink when the shell gives less information about a view than before. View facts are compared one at a time, so a failed lookup does not count as a change.
-- A preview is never placed over the pointer it is for. Placements now avoid covering the cursor where possible.
-- A preview no longer blinks once on the file the pointer rests on because the place name was written two ways. Place comparisons are normalized, and a change is read against the file under the pointer rather than acted on outright — so nothing is delayed by it and the preview of the file being read is never the thing that pays.
-- A shell read that returns nothing is no longer treated as the pointer leaving the file. The item’s drawn box decides that.
-- Documents and specimens are no longer drawn in the order the pointer crossed them. The engine now gets one current request at a time, with stale requests dropped.
-- A browser navigation that stops answering no longer blocks every later preview. The wait is bounded and then abandoned.
-- A document or specimen now closes when the pointer touches it, in whatever window it is drawn. What the pointer is over inside the engine’s window is a window of the browser’s — a child of the engine’s, one or two levels down — and not the engine’s own window at all, so the question that answers whether the pointer is on a preview now asks whether the window under it is the engine’s window *or one inside it*. Comparing the two handles alone never matched, which is why a document was the one preview the pointer could not close.
-- A preview the pointer is holding is held only while the window that publishes the hold is on screen. The hold that keeps a spinner alive under the pointer, and a text preview under a pointer that may be selecting from it, belongs to this app’s own window: a hidden window publishes nothing, so a hold left over from a spinner can no longer stand over the document that replaced it and refuse the pointer that would close it.
-- **Camera raws no longer preview at a fraction of their size.** A picture `ImageMagick` develops was asked for in the room the hover’s own layout came out at, and a hover waiting on an engine is laid out as the waiting spinner’s box at the pointer — a corner of the display — so a large raw was developed into that corner and could never be drawn any larger than it, at 100% or at any other scale. The engine is now asked for the room the display has, which is also what a page on its way is rendered into: a raw fills the preview the way a picture of the same size does.
-- A preview no longer stays on screen for good when the pointer moves onto an item with no preview of its own — an application, a folder, a name no kind claims. What a look that answered nothing means is decided by the item it found rather than by the box under the pointer alone: an item with no preview is an item all the same and publishes its own box, so the preview is spared only when that box is the box the preview was resolved from *and* still holds the pointer. Any other item is the pointer having left, and the preview goes with it — while a read that failed at the same item keeps the preview and asks again.
-- A hover for a document or a specimen can no longer leave its waiting spinner on the screen for good. Every way that wait can end is something the engine *says* — the document itself landing, a failure notice, a newer want taking the file’s place — so the wait is ended by an answer rather than by a timer on this side, and a browser that never answers is bounded inside the engine instead (see below).
-- The engine can no longer be waited on without a bound while it is being had at all. The environment and the controller were waited on until the runtime answered, and a runtime that never answered left the engine’s thread waiting for the rest of the run with every document behind it; both are now asked for inside one deadline, and a browser that stopped answering a navigation is ended before its host is closed, so the close is the close of something already gone rather than a wait on a browser that has stopped taking messages.
-- A document’s preview no longer vanishes and comes back while another document is hovered. The window keeps what it holds until the next page is ready — nothing is taken down first — and the document before it is taken down by the hide the hook already sends when the pointer leaves that file, so a hover on a document is a document that swaps rather than one that blinks.
-- Nothing on the engine’s path is polled any more. The page arriving and a newer want each *wake* the engine’s thread out of its wait, so a navigation nobody is waiting for is dropped the moment it is superseded rather than at the next interval, and the wait for a page is a `GetMessage` with no tick in it at all.
-- The app can no longer be held open by a shell that has stopped answering. The hook thread is the one thread the exit does not wait for: every probe it makes is a crossing into Explorer, and a shell that has stopped answering holds one of those for as long as it likes — the same wait the Office engine’s own thread is not given, for the same reason.
-- **`Avoid Nothing` now places a keyboard preview the way `Avoid Filename` does.** A keyboard preview has no cursor to be anchored to, so the setting used to place it past the item’s whole row, the way `Avoid Details` reads; it is now placed past the file name. Mouse previews are unchanged.
-- A preview loop that has stopped responding no longer holds the engines it was keeping warm — the Explorer hook ends them for it — and closing a preview no longer waits on that loop to take its window down.
+- `[libre]` in `config.ini` is now read, and **`Preview Types → Libre`** works correctly. New built-in format lists also reach existing installations.
+- Previews no longer blink, vanish, reappear, stay after the pointer leaves, or cover the pointer. This works at any `Timing → Delay`, including `0 ms`.
+- Fewer false “pointer left” events; empty Explorer reads and different place names no longer cause blinking. Document/specimen previews now swap cleanly.
+- Stuck spinners are cleared. Waits for documents, specimens, browsers, and the engine are bounded, so a stopped browser or preview loop cannot block or hold the app open.
+- A document or specimen closes when the pointer touches it, even inside child windows. Held previews are released when their window is hidden, so old holds cannot block closing.
+- A preview now closes when the pointer moves to an item with no preview, such as an application, folder, or unknown name. A failed read at the same item keeps the preview and asks again.
+- **Camera raws no longer preview at a fraction of their size.** **`ImageMagick`** now gets the display’s available room, so raws fill the preview like normal pictures.
+- **`Avoid Nothing`** now places keyboard previews like **`Avoid Filename`**, not like **`Avoid Details`**; mouse previews are unchanged.
+- The engine path is no longer polled; newer requests wake it immediately, and replaced navigations are dropped. An unresponsive Explorer no longer keeps the app open.
 
 ## [0.3.1] - 2026-09-24
 

@@ -134,6 +134,23 @@ pub const DEFAULT_SAME_FILE_REHOVER_DELAY_MS: u64 = 200;
 /// pointer has settled is the one that gives this a value. The pointer is the whole of
 /// its subject: a keyboard preview is the keyboard's own and is not gated by it.
 pub const DEFAULT_SETTLING_DELAY_MS: u64 = 0;
+/// How often the app looks at the pointer's world while Explorer has focus, in
+/// milliseconds: the loop's tick, and with it how soon a move is answered.
+///
+/// It is the one number that trades responsiveness against what the app costs while
+/// it works: every look is a crossing into Explorer — the cursor is read, the item
+/// under it is resolved, and the engines are asked about — and the loop never sleeps
+/// for longer than this while a folder window is in front. A system tick is the floor
+/// a wait can be honoured at, so the value is meant in whole ones: fifteen is one, and
+/// the ladder the menu offers counts up from there. See `MIN_TICK_MS` and `MAX_TICK_MS`.
+pub const DEFAULT_TICK_MS: u64 = 15;
+/// The least a hand-edited tick is reduced to, in milliseconds: below half a system
+/// tick the number asks for a wait the system cannot honour, and the loop would be
+/// spinning for nothing.
+pub const MIN_TICK_MS: u64 = 8;
+/// The most a hand-edited tick is reduced to, in milliseconds: past a second the
+/// number says nothing that turning previews off does not say better.
+pub const MAX_TICK_MS: u64 = 1000;
 /// How long a hover's load may run before the waiting spinner is put up for it.
 ///
 /// The window is hidden while a load runs, so one that finishes inside this has gone
@@ -258,6 +275,14 @@ pub fn sanitize_webp_playback_fps(value: u32) -> u32 {
 /// to it.
 pub fn sanitize_image_cache_mb(value: u32) -> u32 {
     value.min(MAX_IMAGE_CACHE_MB)
+}
+
+/// The tick the loop runs at, in milliseconds: what a hand-edited file is read
+/// through, so that a number the system cannot honour — or one that would leave the
+/// app looking asleep — is brought to the near end of the two bounds rather than
+/// taken as it is (see `DEFAULT_TICK_MS`).
+pub fn sanitize_tick_ms(value: u64) -> u64 {
+    value.clamp(MIN_TICK_MS, MAX_TICK_MS)
 }
 
 /// The rendered-page cache size in megabytes.
@@ -1088,6 +1113,18 @@ pub struct AppConfig {
     /// in milliseconds: what keeps a pointer crossing a list from answering every file it
     /// passes on its way (see `DEFAULT_SETTLING_DELAY_MS`).
     pub settling_delay_ms: u64,
+    /// How often the app looks at the pointer's world while Explorer has focus, in
+    /// milliseconds (see `DEFAULT_TICK_MS`).
+    ///
+    /// The one timing that is about the app rather than about a hover: it is the loop's
+    /// own tick, so it sets how soon a move is answered, how soon the file under a
+    /// parked pointer is read again, and — with them — what the app costs while a folder
+    /// window is in front. Every look is a crossing into Explorer, which is why a tick
+    /// of nothing is not offered and a very small one is clamped rather than honoured.
+    /// What does not move with it: the keyboard's own probe, which keeps its rate (see
+    /// `explorer_hook`), and the folder, display and state checks, which are
+    /// amortizations of expensive enumerations with clocks of their own.
+    pub tick_ms: u64,
     /// How long a hover's load may run before the waiting spinner is put up for it,
     /// in milliseconds. `0` puts it up with the load.
     ///
@@ -1364,6 +1401,7 @@ impl Default for AppConfig {
             avoid_mode: DEFAULT_AVOID_MODE,
             same_file_rehover_delay_ms: DEFAULT_SAME_FILE_REHOVER_DELAY_MS,
             settling_delay_ms: DEFAULT_SETTLING_DELAY_MS,
+            tick_ms: DEFAULT_TICK_MS,
             spinner_delay_ms: DEFAULT_SPINNER_DELAY_MS,
             webp_playback_fps: DEFAULT_WEBP_PLAYBACK_FPS,
             image_cache_mb: DEFAULT_IMAGE_CACHE_MB,
@@ -1526,6 +1564,7 @@ const SETTING_GROUPS: &[(&str, &[&str])] = &[
             "office_cache_mb",
             "pdf_cache_mb",
             "text_cache_mb",
+            "tick_ms",
         ],
     ),
     (
@@ -1986,6 +2025,7 @@ impl AppConfig {
             "settling_delay_ms",
             Some(self.settling_delay_ms.to_string()),
         );
+        ini.set(CONFIG_SECTION, "tick_ms", Some(self.tick_ms.to_string()));
         ini.set(
             CONFIG_SECTION,
             "spinner_delay_ms",
@@ -2348,6 +2388,9 @@ impl AppConfig {
         }
         if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "settling_delay_ms") {
             self.settling_delay_ms = value;
+        }
+        if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "tick_ms") {
+            self.tick_ms = sanitize_tick_ms(value);
         }
         if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "spinner_delay_ms") {
             self.spinner_delay_ms = sanitize_spinner_delay_ms(value);
@@ -3472,6 +3515,20 @@ mod tests {
 
         assert_eq!(config.spinner_delay_ms, MAX_SPINNER_DELAY_MS);
         assert!(config.differs(&ini));
+
+        // A tick is reduced too, at both ends: below the system's own clock the number
+        // asks for a wait nothing can honour, and past a second it says nothing that
+        // turning previews off does not say better.
+        let mut ini = written_file();
+        ini.set(CONFIG_SECTION, "tick_ms", Some("0".to_string()));
+
+        let config = read_file(&mut ini);
+
+        assert_eq!(
+            config.tick_ms, MIN_TICK_MS,
+            "a tick of nothing is the floor"
+        );
+        assert!(config.differs(&ini));
     }
 
     /// A file the app writes is a file it reads back as itself: reading the text `save` puts on
@@ -3493,6 +3550,7 @@ mod tests {
         config.image_background = TransparentBackground::Transparent;
         config.text_scroll_far_edge_grace_pixels = 12.5;
         config.office_cache_mb = 1024;
+        config.tick_ms = 47;
 
         for config in [AppConfig::default(), config] {
             let written = ordered_text(&config.to_ini());
@@ -4055,6 +4113,8 @@ something_new=1
             DEFAULT_SAME_FILE_REHOVER_DELAY_MS
         );
         assert_eq!(config.same_file_rehover_delay_ms, 200);
+        assert_eq!(config.tick_ms, DEFAULT_TICK_MS);
+        assert_eq!(config.tick_ms, 15, "the loop looks once a system tick");
         assert_eq!(config.video_volume, DEFAULT_VIDEO_VOLUME);
         assert_eq!(config.video_volume, 0, "a hover never makes a sound");
     }
