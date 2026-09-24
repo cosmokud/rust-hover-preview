@@ -11,20 +11,10 @@ A Windows 11 tray app inspired by QTTabBar. Hover a file in File Explorer — or
 ## Highlights
 
 - Mouse-hover and keyboard-navigation previews in Explorer.
-- Images, including animated GIF, APNG, and WebP.
-- What a file really holds decides its preview: a video named as a document is played, a document named as a picture is drawn, and a file whose content no reader here answers for is left alone. A format whose bytes carry no signature — WordPerfect `wpd`, Lotus `wk4`, a RoQ video — is routed to the engine that reads it by extension, and a name that means two formats is settled by content: a `.pdb` is handed to LibreOffice only when it is a Palm OS ebook, never when it is a compiler's program database.
-- Design documents — Photoshop, Illustrator, Krita, OpenRaster, and more — previewed from the picture their own format saves of the whole document.
-- HEIC, AVIF, and JPEG XL through Windows codec extensions where installed.
-- Camera raw and the pictures nothing else opens — the raws of every camera, plus `xcf`, `sgi`, `jp2`, `dpx`, `fits` and the rest — developed by ImageMagick where it is installed.
-- Vector drawings — SVG, Windows metafiles, and Illustrator `.eps` — drawn sharply at preview size.
-- Font specimens: font name plus sample lines covering its own character map.
-- Videos through FFmpeg if installed, otherwise through Windows’ own media engine.
-- PDF first pages via the built-in Windows PDF engine.
-- Text and code with syntax highlighting, rendered Markdown, and themes.
-- Archives as a file tree with sizes — read without unpacking.
-- Office documents drawn from a background Office render, so previews appear quickly after the first hover.
-- Scaling from 25% to 400%, or fit-to-screen. Separate scaling for images and videos, and for vector drawings, PDF, Office pages, fonts, and design documents.
 - Previews appear beside the cursor or focused item and are kept on screen.
+- Supports previews for images, design documents, camera raw, vector drawings, fonts, videos, PDFs, text/code, archives, Office documents, and more.
+- A file’s preview depends on what’s really inside it—not its name—so renamed files still show correctly, unreadable content gets no preview, and ambiguous types are resolved by extension or content.
+- Scaling from 25% to 400%, or fit-to-screen. Separate scaling for images and videos, and for vector drawings, PDF, Office pages, fonts, and design documents.
 - Tray menu and hand-editable `config.ini`.
 - DPI aware, single-instance, sleep/resume resilient, and light on idle CPU.
 
@@ -153,7 +143,7 @@ All are free. Windows 11 often has HEIF, AV1, and WebP already. Where one is mis
 winget install -e --id TheDocumentFoundation.LibreOffice
 ```
 
-If `winget` reports an error, the package sources are usually why: run `winget source reset --force`, and if that is refused as well, open **Terminal as administrator** (right-click the Start button → _Terminal (Admin)_) and run the same command from there. Then hover a `.cdr`: the first hover converts that document and takes a moment, and every hover after it is instant, because the converted page is kept beside `config.ini`. The engine itself is kept too, for ten minutes by default — **Engine → LibreOffice TTL** — so the next document does not pay for a start again.
+If `winget` reports an error, the package sources are usually why: run `winget source reset --force`, and if that is refused as well, open **Terminal as administrator** (right-click the Start button → _Terminal (Admin)_) and run the same command from there.
 
 ### Optional: Enable Camera Raw and More Pictures (ImageMagick)
 
@@ -162,8 +152,6 @@ If `winget` reports an error, the package sources are usually why: run `winget s
 ```text
 winget install -e --id ImageMagick.ImageMagick
 ```
-
-Then hover a raw: the first hover develops that picture — a fraction of a second to a second, with the usual waiting spinner — and a hover of a file whose picture is still in the picture cache is instant, because what is kept is an ordinary decoded frame like any other picture's. A raw whose frame the cache has given up is developed again. A raw is developed at the size the preview is shown at rather than at the size of the sensor, so hovering a forty-megapixel file costs the preview and not the file, and nothing is written to disk: the picture goes from the engine's output straight into the frame. A raw sample dump — a `.rgb`, a `.gray`, a `.yuv` — is the one case where this app tells the engine the size instead of the other way round: the shape is worked out from the file's own length, and a dump whose length settles no shape shows no preview at all.
 
 ## Usage
 
