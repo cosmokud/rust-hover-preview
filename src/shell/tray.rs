@@ -4,11 +4,11 @@ use crate::config::config::{
     sanitize_office_cache_mb, sanitize_pdf_cache_mb, sanitize_text_cache_mb,
     sanitize_text_font_scale_percent, sanitize_tick_ms, AvoidMode, EngineIdle, MarkdownMode,
     OfficeEngine, PreviewScale, PreviewType, TextTheme, TransparentBackground, TriggerKeyMode,
-    DEFAULT_ANIMATED_SCALE, DEFAULT_AVOID_MODE, DEFAULT_DDS_BACKGROUND, DEFAULT_DECODE_BUDGET_GB,
-    DEFAULT_DESIGN_BACKGROUND, DEFAULT_DESIGN_SCALE, DEFAULT_FOLLOW_CURSOR,
-    DEFAULT_FONT_BACKGROUND, DEFAULT_FONT_SCALE, DEFAULT_HOVER_DELAY_MS, DEFAULT_IMAGE_BACKGROUND,
-    DEFAULT_IMAGE_CACHE_MB, DEFAULT_LIBREOFFICE_IDLE_SECS, DEFAULT_LIBRE_CACHE_MB,
-    DEFAULT_LIBRE_SCALE, DEFAULT_OFFICE_CACHE_MB, DEFAULT_OFFICE_ENGINE,
+    DEFAULT_AFK_TIMER_SECS, DEFAULT_ANIMATED_SCALE, DEFAULT_AVOID_MODE, DEFAULT_DDS_BACKGROUND,
+    DEFAULT_DECODE_BUDGET_GB, DEFAULT_DESIGN_BACKGROUND, DEFAULT_DESIGN_SCALE,
+    DEFAULT_FOLLOW_CURSOR, DEFAULT_FONT_BACKGROUND, DEFAULT_FONT_SCALE, DEFAULT_HOVER_DELAY_MS,
+    DEFAULT_IMAGE_BACKGROUND, DEFAULT_IMAGE_CACHE_MB, DEFAULT_LIBREOFFICE_IDLE_SECS,
+    DEFAULT_LIBRE_CACHE_MB, DEFAULT_LIBRE_SCALE, DEFAULT_OFFICE_CACHE_MB, DEFAULT_OFFICE_ENGINE,
     DEFAULT_OFFICE_ENGINE_IDLE_SECS, DEFAULT_OFFICE_SCALE, DEFAULT_PDF_CACHE_MB, DEFAULT_PDF_SCALE,
     DEFAULT_PREVIEW_SCALE, DEFAULT_SAME_FILE_REHOVER_DELAY_MS, DEFAULT_SETTLING_DELAY_MS,
     DEFAULT_TEXT_CACHE_MB, DEFAULT_TEXT_FONT_SCALE_PERCENT, DEFAULT_TICK_MS,
@@ -346,6 +346,32 @@ const ENGINE_IDLE_CHOICES: [EngineIdle; 7] = [
     EngineIdle::Seconds(60),
     EngineIdle::Seconds(0),
 ];
+/// The `Engine → AFK Timer` submenu: one command per away time it offers, in the order it
+/// lists them. Both it and the `Persistent` range below sit past every other range the app
+/// hands out — the `Tick` range is the last of those and ends at 1504 — so a time is never
+/// read as a tick and a toggle is never read as either.
+const ID_TRAY_AFK_TIMER_BASE: u16 = 1505;
+/// The `Persistent` toggle at the top of each `… TTL` submenu, one command apiece, in the
+/// order those submenus are listed: `Microsoft Office TTL`, then `LibreOffice TTL`, then
+/// `WebView2 TTL`.
+const ID_TRAY_ENGINE_PERSISTENT_BASE: u16 = 1512;
+/// The away times the `AFK Timer` submenu offers, in the order it lists them: an hour at the
+/// top and a quarter of a minute at the bottom, with the one that bounds an engine by
+/// default in the middle. There is no `Indefinitely` here — a time that never comes round is
+/// what the `Persistent` toggle beside it is for — and a value a hand-edited `config.ini`
+/// asks for that is not one of these is shown with nothing marked rather than rounded to the
+/// nearest, the way every other menu of this shape reads one. See `app::afk` for what the
+/// time is counted against.
+const AFK_TIMER_CHOICES_SECS: [u64; 7] = [3600, 1800, 600, 300, 60, 30, 15];
+
+/// The two command ranges one `… TTL` submenu hands out: the idle times it lists, and the
+/// `Persistent` toggle above them. They are one value rather than two because they belong to
+/// the same submenu and are always handed over together — a submenu is built for one engine,
+/// and both of its ranges are that engine's.
+struct EngineIdleIds {
+    times: u16,
+    persistent: u16,
+}
 
 /// Where the `theme` folder's own items start: one command ID each, in the order
 /// the submenu listed them. The IDs the app uses end at the `Office Engine TTL`
@@ -553,6 +579,20 @@ unsafe extern "system" fn tray_window_proc(
                     .contains(&cmd) =>
                 {
                     set_libreoffice_idle(cmd - ID_TRAY_LIBREOFFICE_IDLE_BASE)
+                }
+                // An away time for the `AFK Timer`, by the position it was listed at.
+                cmd if (ID_TRAY_AFK_TIMER_BASE
+                    ..ID_TRAY_AFK_TIMER_BASE + AFK_TIMER_CHOICES_SECS.len() as u16)
+                    .contains(&cmd) =>
+                {
+                    set_afk_timer(cmd - ID_TRAY_AFK_TIMER_BASE)
+                }
+                // A `Persistent` toggle, by the submenu it heads: the Office engines, then
+                // the render engine's, then the browser's.
+                cmd if (ID_TRAY_ENGINE_PERSISTENT_BASE..ID_TRAY_ENGINE_PERSISTENT_BASE + 3)
+                    .contains(&cmd) =>
+                {
+                    toggle_engine_persistent(cmd - ID_TRAY_ENGINE_PERSISTENT_BASE)
                 }
                 // A cache size, by the position it was listed at.
                 cmd if (ID_TRAY_IMAGE_CACHE_BASE..ID_TRAY_OFFICE_CACHE_BASE).contains(&cmd) => {
@@ -1569,10 +1609,17 @@ unsafe fn show_context_menu(hwnd: HWND) {
     // block below `Performance`, which is about what those engines cost while they are up.
     let engine_menu = CreatePopupMenu().unwrap();
 
+    // How long Explorer has to be out of reach before an engine that is not marked
+    // `Persistent` is let go. It is the first row here because it is what the three TTL
+    // submenus below are answered against: the times those offer are what a persistent
+    // engine is kept by, and this is what bounds one that is not (see `app::afk`).
+    append_afk_timer_menu(engine_menu);
+
     // Add the "Select Engine" submenu: which engine each kind of document is asked of, where
-    // there is a choice to make. It is the first of the four rows here, above the three that
-    // say how long each engine this app starts is kept — the applications it names are the
-    // ones those are about. Office is the only kind with two engines to choose between.
+    // there is a choice to make. It is the first of the three that name an engine, above the
+    // three that say how long each engine this app starts is kept — the applications it names
+    // are the ones those are about. Office is the only kind with two engines to choose
+    // between.
     append_select_engine_menu(engine_menu);
 
     // Microsoft Office TTL: how long the Office engine a family started is kept after
@@ -1582,16 +1629,28 @@ unsafe fn show_context_menu(hwnd: HWND) {
     // family not paying for an Office start, and what it costs is an Office
     // application in the process list. It is listed longest first, with the engine
     // that is never let go at the top.
+    //
+    // The times are what an engine marked `Persistent` is kept by. One that is not is let
+    // go by the `AFK Timer` above instead, and its time is not consulted — which is what a
+    // user who wants the old behaviour back switches on.
     let office_idle = CONFIG
         .lock()
         .map(|c| c.office_engine_idle)
         .unwrap_or(EngineIdle::Seconds(DEFAULT_OFFICE_ENGINE_IDLE_SECS));
+    let office_persistent = CONFIG
+        .lock()
+        .map(|c| c.office_engine_persistent)
+        .unwrap_or(false);
 
     append_engine_idle_menu(
         engine_menu,
         w!("Microsoft Office TTL"),
-        ID_TRAY_ENGINE_IDLE_BASE,
+        EngineIdleIds {
+            times: ID_TRAY_ENGINE_IDLE_BASE,
+            persistent: ID_TRAY_ENGINE_PERSISTENT_BASE,
+        },
         office_idle,
+        office_persistent,
         DEFAULT_OFFICE_ENGINE_IDLE_SECS,
         true,
     );
@@ -1606,12 +1665,20 @@ unsafe fn show_context_menu(hwnd: HWND) {
         .lock()
         .map(|c| c.libreoffice_idle)
         .unwrap_or(EngineIdle::Seconds(DEFAULT_LIBREOFFICE_IDLE_SECS));
+    let libreoffice_persistent = CONFIG
+        .lock()
+        .map(|c| c.libreoffice_persistent)
+        .unwrap_or(false);
 
     append_engine_idle_menu(
         engine_menu,
         w!("LibreOffice TTL"),
-        ID_TRAY_LIBREOFFICE_IDLE_BASE,
+        EngineIdleIds {
+            times: ID_TRAY_LIBREOFFICE_IDLE_BASE,
+            persistent: ID_TRAY_ENGINE_PERSISTENT_BASE + 1,
+        },
         libreoffice_idle,
+        libreoffice_persistent,
         DEFAULT_LIBREOFFICE_IDLE_SECS,
         libreoffice_render::available(),
     );
@@ -1632,12 +1699,17 @@ unsafe fn show_context_menu(hwnd: HWND) {
         .lock()
         .map(|c| c.webview_idle)
         .unwrap_or(EngineIdle::Seconds(DEFAULT_WEBVIEW_IDLE_SECS));
+    let webview_persistent = CONFIG.lock().map(|c| c.webview_persistent).unwrap_or(false);
 
     append_engine_idle_menu(
         engine_menu,
         w!("WebView2 TTL"),
-        ID_TRAY_WEBVIEW_IDLE_BASE,
+        EngineIdleIds {
+            times: ID_TRAY_WEBVIEW_IDLE_BASE,
+            persistent: ID_TRAY_ENGINE_PERSISTENT_BASE + 2,
+        },
         webview_idle,
+        webview_persistent,
         DEFAULT_WEBVIEW_IDLE_SECS,
         webview_preview::is_available(),
     );
@@ -2374,20 +2446,108 @@ fn append_select_engine_menu(parent: HMENU) {
     };
 }
 
-/// One `… Engine TTL` submenu: the idle times every engine this app keeps warm
-/// offers, with the one that engine is on marked, and nothing marked for a time the
-/// menu does not offer — which is what a hand-edited `config.ini` can ask for. An
-/// engine that is not on the machine at all is greyed out, since there is nothing
-/// there to keep.
+/// The `AFK Timer` submenu: how long Explorer may be out of reach before an engine that is
+/// not marked `Persistent` is let go.
+///
+/// It is one setting for every engine this app keeps, because the question it answers is
+/// about the user rather than about an engine: nothing this app holds is being looked at
+/// while no Explorer window is reachable, and which of those engines is worth holding until
+/// the user comes back is what the `Persistent` toggles below are for. It is listed longest
+/// first, like every other menu of times here, and it marks the time it is on: a value a
+/// hand-edited `config.ini` asks for that is not one of these is shown with nothing marked
+/// rather than rounded to the nearest.
+fn append_afk_timer_menu(parent: HMENU) {
+    let seconds = CONFIG
+        .lock()
+        .map(|config| config.afk_timer_seconds)
+        .unwrap_or(DEFAULT_AFK_TIMER_SECS);
+
+    let menu = unsafe { CreatePopupMenu().unwrap() };
+
+    // The labels are kept for as long as the menu is being filled out, for the reason the
+    // idle times' are: `AppendMenuW` is handed a pointer, so the wide strings have to
+    // outlive the call that lists them.
+    let labels: Vec<Vec<u16>> = AFK_TIMER_CHOICES_SECS
+        .iter()
+        .map(|choice| {
+            afk_timer_label(*choice)
+                .encode_utf16()
+                .chain(std::iter::once(0))
+                .collect()
+        })
+        .collect();
+
+    for (index, label) in labels.iter().enumerate() {
+        let _ = unsafe {
+            AppendMenuW(
+                menu,
+                MF_STRING,
+                (ID_TRAY_AFK_TIMER_BASE + index as u16) as usize,
+                PCWSTR(label.as_ptr()),
+            )
+        };
+    }
+
+    if let Some(index) = AFK_TIMER_CHOICES_SECS
+        .iter()
+        .position(|choice| *choice == seconds)
+    {
+        let _ = unsafe {
+            CheckMenuRadioItem(
+                menu,
+                ID_TRAY_AFK_TIMER_BASE as u32,
+                (ID_TRAY_AFK_TIMER_BASE + AFK_TIMER_CHOICES_SECS.len() as u16 - 1) as u32,
+                (ID_TRAY_AFK_TIMER_BASE + index as u16) as u32,
+                MF_BYCOMMAND.0,
+            )
+        };
+    }
+
+    let _ = unsafe {
+        AppendMenuW(
+            parent,
+            MF_STRING | MF_POPUP,
+            menu.0 as usize,
+            w!("AFK Timer"),
+        )
+    };
+}
+
+/// One `… Engine TTL` submenu: how far it may go, as the `Persistent` toggle at the top of
+/// it and the idle times below that, with the time the engine is on marked and nothing
+/// marked for a time the menu does not offer — which is what a hand-edited `config.ini` can
+/// ask for.
+///
+/// The toggle is what decides what the times mean. On, they are the whole of how long the
+/// engine is kept, whatever the user is doing; off, `Engine → AFK Timer` is what bounds it
+/// and the times are not consulted at all, so an engine is kept while Explorer is in front
+/// of the user and let go once it has not been for that long. The toggle is at the top and
+/// the times below a separator because it is a different kind of answer — a checkmark rather
+/// than one of the times — and because nothing below it applies until it is on.
+///
+/// An engine that is not on the machine at all is greyed out, since there is nothing there
+/// to keep.
 fn append_engine_idle_menu(
     parent: HMENU,
     label: PCWSTR,
-    base: u16,
+    ids: EngineIdleIds,
     idle: EngineIdle,
+    persistent: bool,
     default_seconds: u64,
     enabled: bool,
 ) {
     let menu = unsafe { CreatePopupMenu().unwrap() };
+
+    let persistent_flags = MF_STRING | if persistent { MF_CHECKED } else { MF_UNCHECKED };
+    let _ = unsafe {
+        AppendMenuW(
+            menu,
+            persistent_flags,
+            ids.persistent as usize,
+            w!("Persistent"),
+        )
+    };
+    let _ = unsafe { AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null()) };
 
     // The labels are kept for as long as the menu is being filled out, for the same
     // reason the cache labels are: `AppendMenuW` is handed a pointer, so the wide
@@ -2407,7 +2567,7 @@ fn append_engine_idle_menu(
             AppendMenuW(
                 menu,
                 MF_STRING,
-                (base + index as u16) as usize,
+                (ids.times + index as u16) as usize,
                 PCWSTR(label.as_ptr()),
             )
         };
@@ -2420,9 +2580,9 @@ fn append_engine_idle_menu(
         let _ = unsafe {
             CheckMenuRadioItem(
                 menu,
-                base as u32,
-                (base + ENGINE_IDLE_CHOICES.len() as u16 - 1) as u32,
-                (base + index as u16) as u32,
+                ids.times as u32,
+                (ids.times + ENGINE_IDLE_CHOICES.len() as u16 - 1) as u32,
+                (ids.times + index as u16) as u32,
                 MF_BYCOMMAND.0,
             )
         };
@@ -2533,7 +2693,32 @@ fn engine_idle_at(index: u16) -> Option<EngineIdle> {
     ENGINE_IDLE_CHOICES.get(index as usize).copied()
 }
 
-/// How long the Office engines are kept after their families' last pages.
+/// What an away time is called in the `AFK Timer` submenu: the time, with the one an engine
+/// that is not `Persistent` is bounded by marked as the default.
+///
+/// Three of the seven are not a whole number of minutes, and each says itself which one it
+/// is — a half of a minute and a quarter of one are what the bottom of the list is for, so
+/// they are read as seconds rather than as `0 minutes`.
+fn afk_timer_label(seconds: u64) -> String {
+    let label = match seconds {
+        3600 => "1 hour".to_string(),
+        60 => "1 minute".to_string(),
+        seconds if seconds < 60 => format!("{seconds} seconds"),
+        seconds => format!("{} minutes", seconds / 60),
+    };
+
+    default_label(&label, seconds == DEFAULT_AFK_TIMER_SECS)
+}
+
+/// The away time an item of the `AFK Timer` submenu stands for, by the position it was
+/// listed at. An id past the last time the menu offered is one that is not there.
+fn afk_timer_secs_at(index: u16) -> Option<u64> {
+    AFK_TIMER_CHOICES_SECS.get(index as usize).copied()
+}
+
+/// How long the Office engines are kept after their families' last pages — for an engine
+/// marked `Persistent`. One that is not is let go by the AFK timer instead, and this is not
+/// consulted for it (see `app::afk`).
 ///
 /// Nothing is rebuilt here and nothing on screen changes. An engine that is being
 /// let go sooner is let go by the worker the next time it looks — which is twice a
@@ -2573,9 +2758,11 @@ fn set_office_engine(engine: OfficeEngine) {
     }
 }
 
-/// How long the browser engine is kept after the last document it drew. Nothing is
-/// rebuilt here either: the engine reads the setting every time it decides whether to
-/// let itself go, so a shorter time applies to the engine that is already warm.
+/// How long the browser engine is kept after the last document it drew — for a browser that
+/// is marked `Persistent`; one that is not is let go by the AFK timer instead, and this is
+/// not consulted for it. Nothing is rebuilt here either: the engine reads the setting every
+/// time it decides whether to let itself go, so a shorter time applies to the engine that is
+/// already warm.
 fn set_webview_idle(index: u16) {
     let Some(idle) = engine_idle_at(index) else {
         return;
@@ -2587,7 +2774,9 @@ fn set_webview_idle(index: u16) {
     }
 }
 
-/// How long the LibreOffice engine is kept after the last page it drew.
+/// How long the LibreOffice engine is kept after the last page it drew — for an engine marked
+/// `Persistent`; one that is not is let go by the AFK timer instead, and this is not consulted
+/// for it.
 ///
 /// Nothing is rebuilt here either, and nothing has to be: the engine thread reads the setting
 /// every second while it waits for documents, so a shorter time applies to the engine that is
@@ -2603,6 +2792,48 @@ fn set_libreoffice_idle(index: u16) {
         config.libreoffice_idle = idle;
         config.save();
     }
+}
+
+/// How long Explorer may be out of reach before an engine that is not marked `Persistent` is
+/// let go.
+///
+/// Nothing is rebuilt here and nothing on screen changes for the same reason the idle times
+/// rebuild nothing: an engine that is not persistent reads this on the look it already takes
+/// — the Office worker twice a second, the engine thread once a second, the browser every
+/// quarter of one while it is up — so a shorter time lets go of an engine that is already
+/// warm, and a longer one keeps an engine the next look would have let go of.
+fn set_afk_timer(index: u16) {
+    let Some(seconds) = afk_timer_secs_at(index) else {
+        return;
+    };
+
+    if let Ok(mut config) = CONFIG.lock() {
+        config.afk_timer_seconds = seconds;
+        config.save();
+    }
+}
+
+/// Whether one of the three engines is kept whatever the user is doing, from the
+/// `Persistent` toggle at the top of its TTL submenu.
+///
+/// The toggle is which submenu it heads rather than which engine it names, because the three
+/// are listed in one order and the ids are handed out in it. Nothing is rebuilt here either:
+/// both sides of the setting are read live by the engine that decides with them, so a toggle
+/// turned on keeps the engine the next look would have let go of, and one turned off lets go
+/// of an engine that is already up as soon as the AFK timer says it may.
+fn toggle_engine_persistent(index: u16) {
+    let Ok(mut config) = CONFIG.lock() else {
+        return;
+    };
+
+    match index {
+        0 => config.office_engine_persistent = !config.office_engine_persistent,
+        1 => config.libreoffice_persistent = !config.libreoffice_persistent,
+        2 => config.webview_persistent = !config.webview_persistent,
+        _ => return,
+    }
+
+    config.save();
 }
 
 /// The size an item of the `Cache` submenu stands for, by the position it was
