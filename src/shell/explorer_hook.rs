@@ -1,3 +1,5 @@
+use crate::app::engine_processes;
+use crate::engines::webview_preview;
 use crate::formats::archive_formats::matches_archive_list;
 use crate::shell::cloud_files;
 use crate::config::config::{
@@ -12,7 +14,8 @@ use crate::readers::pdf_preview::is_pdf_file;
 use crate::ui::preview_window::{
     cursor_preview_hover, hide_preview, kill_stray_video_process, monitor_dpi_from_point,
     pointer_item_box, pointer_item_holds, preview_pointer_hold, preview_screen_rect,
-    publish_pointer_item_box, show_preview, show_preview_keyboard, PreviewCursorHover,
+    preview_stall_ms, publish_pointer_item_box, show_preview, show_preview_keyboard,
+    PreviewCursorHover,
 };
 use crate::readers::svg_preview;
 use crate::formats::text_formats::matches_text_lists;
@@ -790,6 +793,19 @@ const DISPLAY_CHANGE_BACKOFF_MS: u64 = 1500;
 const DISPLAY_CHECK_MS: u64 = 200;
 const KEYBOARD_FOCUS_INPUT_GRACE_MS: u64 = 500;
 const HOVER_RESOLVER_INPUT_GRACE_MS: u64 = 1500;
+
+/// How long the preview loop may go without ticking before the engines it is holding
+/// are ended from here.
+///
+/// The engines an idle tier keeps warm are the preview loop's to end, and a loop that
+/// has stopped answering cannot end anything: a document nothing is waiting on, held
+/// by a loop that is not running, is the leftover process this app exists not to leave
+/// behind (see `engine_processes`). What counts as stopped is the age of the loop's
+/// last tick, which it notes as it runs (`preview_window::preview_stall_ms`) — its own
+/// waits are a sixteenth of a second with a preview up and half a second idle, so
+/// three seconds of quiet is not a wait but work that has not come back, or a loop
+/// that is gone.
+const PREVIEW_STALL_MS: u64 = 3000;
 /// How far the pointer has to move before it counts as moved at all, in logical
 /// pixels — and the wider distance that counts while the keyboard owns the screen, so
 /// a pointer resting on a desk cannot cancel a keyboard preview. Logical distances,
@@ -947,6 +963,46 @@ fn flush_probe_counts(now: Instant, last: &mut Instant, path: &Path) {
         let _ = writeln!(
             file,
             "points {points}  item walks {items} (slowest {item_slowest}ms)  view walks {walks} (windows {windows}, pointer matched {matches}, cache asked {opened}, answered {hits}, slowest {view_slowest}ms)"
+        );
+    }
+}
+
+/// End the engines held by a preview loop that has stopped ticking, which is what the
+/// loop's own idle tiers would have done had it been running.
+///
+/// Engines only, and never the player a video preview ran: what ends that is the
+/// dismissal that hid it, by id (see `engine_processes`). The one engine left alone is
+/// a browser drawing a document — that window *is* the preview while it is up, with
+/// this app's own window hidden behind it — so a document being read is not an engine
+/// being kept, and a loop that has stopped could not put it back. Nothing here waits
+/// on anything, and nothing is written anywhere but the trace.
+fn end_engines_of_a_stalled_preview(quiet_ms: u64, trace: Option<&Path>) {
+    if webview_preview::showing_path().is_some() {
+        return;
+    }
+
+    engine_processes::terminate_all_owned();
+    note_stalled_preview(trace, quiet_ms);
+}
+
+/// Note a preview loop that stopped ticking, where a trace is being written: how long
+/// it had been quiet, and that the engines it was holding were ended for it. Written
+/// once for the stall, like everything else here — the trace is there to say what a
+/// hover costs, and must never be what makes it cost more.
+fn note_stalled_preview(path: Option<&Path>, quiet_ms: u64) {
+    let Some(path) = path else {
+        return;
+    };
+
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        use std::io::Write;
+        let _ = writeln!(
+            file,
+            "preview loop quiet {quiet_ms}ms: its engines were ended from the hook"
         );
     }
 }
@@ -3569,10 +3625,27 @@ pub fn run_explorer_hook() {
     // all unless `RHP_HOOK_TRACE` asked for them.
     let mut last_probe_flush = Instant::now();
     let probe_trace_path = hook_trace_path();
+    // Whether the engines a preview loop that has stopped ticking was holding have
+    // been ended for the stall it is in; cleared the moment it ticks again (see
+    // `PREVIEW_STALL_MS`).
+    let mut stalled_preview_engines_ended = false;
 
     while RUNNING.load(Ordering::SeqCst) {
         if let Some(path) = probe_trace_path.as_deref() {
             flush_probe_counts(Instant::now(), &mut last_probe_flush, path);
+        }
+
+        // A preview loop that has stopped ticking cannot end what it is holding, so
+        // what it keeps warm is ended from here instead — once for the stall, and not
+        // again until it ticks (see `PREVIEW_STALL_MS`).
+        let preview_quiet_ms = preview_stall_ms();
+        if preview_quiet_ms >= PREVIEW_STALL_MS {
+            if !stalled_preview_engines_ended {
+                stalled_preview_engines_ended = true;
+                end_engines_of_a_stalled_preview(preview_quiet_ms, probe_trace_path.as_deref());
+            }
+        } else {
+            stalled_preview_engines_ended = false;
         }
         // Explorer restarting is not something the resolver can recover from by
         // itself: the window collection it holds and the view that answered through

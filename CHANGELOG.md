@@ -45,6 +45,7 @@
 - Nothing on the engine’s path is polled any more. The page arriving and a newer want each *wake* the engine’s thread out of its wait, so a navigation nobody is waiting for is dropped the moment it is superseded rather than at the next interval, and the wait for a page is a `GetMessage` with no tick in it at all.
 - The app can no longer be held open by a shell that has stopped answering. The hook thread is the one thread the exit does not wait for: every probe it makes is a crossing into Explorer, and a shell that has stopped answering holds one of those for as long as it likes — the same wait the Office engine’s own thread is not given, for the same reason.
 - **`Avoid Nothing` now places a keyboard preview the way `Avoid Filename` does.** A keyboard preview has no cursor to be anchored to, so the setting used to place it past the item’s whole row, the way `Avoid Details` reads; it is now placed past the file name. Mouse previews are unchanged.
+- A preview loop that has stopped responding no longer holds the engines it was keeping warm — the Explorer hook ends them for it — and closing a preview no longer waits on that loop to take its window down.
 
 ## [0.3.1] - 2026-09-24
 
