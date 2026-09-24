@@ -29,8 +29,8 @@
 
 use crate::config::config::{frame_bytes_within_budget, read_within_budget};
 use libwebp_sys::{
-    MODE_BGRA, VP8_STATUS_OK, WebPDecode, WebPDecoderConfig, WebPGetInfo,
-    WebPInitDecoderConfig, WebPRGBABuffer,
+    WebPDecode, WebPDecoderConfig, WebPGetInfo, WebPInitDecoderConfig, WebPRGBABuffer, MODE_BGRA,
+    VP8_STATUS_OK,
 };
 use std::io::Read;
 use std::path::Path;
@@ -127,8 +127,11 @@ mod tests {
         std::fs::create_dir_all(&folder).expect("a test folder");
 
         let png_named_webp = folder.join("actually-a-png.webp");
-        std::fs::write(&png_named_webp, b"\x89PNG\r\n\x1a\n this is not a WebP at all")
-            .expect("a written file");
+        std::fs::write(
+            &png_named_webp,
+            b"\x89PNG\r\n\x1a\n this is not a WebP at all",
+        )
+        .expect("a written file");
 
         let riff_but_not_webp = folder.join("riff-of-something-else.webp");
         let mut bytes = b"RIFF".to_vec();
@@ -147,4 +150,3 @@ mod tests {
         }
     }
 }
-

@@ -470,8 +470,7 @@ mod tests {
             ),
             (
                 "font-relative.svg",
-                br#"<svg xmlns="http://www.w3.org/2000/svg" width="4em" height="2ex"/>"#
-                    .as_slice(),
+                br#"<svg xmlns="http://www.w3.org/2000/svg" width="4em" height="2ex"/>"#.as_slice(),
             ),
         ] {
             let path = fixture(name, contents);

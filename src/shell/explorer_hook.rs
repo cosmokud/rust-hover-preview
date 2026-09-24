@@ -1,27 +1,27 @@
 use crate::app::engine_processes;
-use crate::engines::webview_preview;
-use crate::formats::archive_formats::matches_archive_list;
-use crate::shell::cloud_files;
 use crate::config::config::{
     AvoidMode, PreviewType, TriggerKeyMode, DEFAULT_HOVER_DELAY_MS,
     DEFAULT_SAME_FILE_REHOVER_DELAY_MS, DEFAULT_SETTLING_DELAY_MS, DEFAULT_TICK_MS,
 };
+use crate::engines::webview_preview;
+use crate::formats::archive_formats::matches_archive_list;
 use crate::formats::design_formats::matches_design_list;
 use crate::formats::font_formats::matches_font_list;
 use crate::formats::image_formats::matches_image_list;
 use crate::formats::office_formats::matches_office_list;
+use crate::formats::text_formats::matches_text_lists;
+use crate::formats::vector_formats::matches_vector_list;
+use crate::formats::video_formats::{is_video_file, matches_video_list};
 use crate::readers::pdf_preview::is_pdf_file;
+use crate::readers::svg_preview;
+use crate::shell::cloud_files;
+use crate::shell::wheel_input;
 use crate::ui::preview_window::{
     cursor_preview_hover, hide_preview, kill_stray_video_process, monitor_dpi_from_point,
     pointer_item_box, pointer_item_holds, preview_pointer_hold, preview_screen_rect,
     preview_stall_ms, publish_pointer_item_box, show_preview, show_preview_keyboard,
     PreviewCursorHover,
 };
-use crate::readers::svg_preview;
-use crate::formats::text_formats::matches_text_lists;
-use crate::formats::vector_formats::matches_vector_list;
-use crate::formats::video_formats::{is_video_file, matches_video_list};
-use crate::shell::wheel_input;
 use crate::{CONFIG, RUNNING};
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
@@ -50,9 +50,9 @@ use windows::Win32::UI::Accessibility::{
     TreeScope_Children, TreeScope_Element, UIA_BoundingRectanglePropertyId,
     UIA_ControlTypePropertyId, UIA_DataItemControlTypeId, UIA_EditControlTypeId,
     UIA_GroupControlTypeId, UIA_LegacyIAccessiblePatternId, UIA_ListItemControlTypeId,
-    UIA_NamePropertyId,
-    UIA_NativeWindowHandlePropertyId, UIA_SelectionPatternId, UIA_TextControlTypeId,
-    UIAutomationPropertyInfo, UIAutomationType_Int, UIA_CONTROLTYPE_ID, UIA_PROPERTY_ID,
+    UIA_NamePropertyId, UIA_NativeWindowHandlePropertyId, UIA_SelectionPatternId,
+    UIA_TextControlTypeId, UIAutomationPropertyInfo, UIAutomationType_Int, UIA_CONTROLTYPE_ID,
+    UIA_PROPERTY_ID,
 };
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, GetDpiForSystem, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
@@ -4377,11 +4377,7 @@ pub fn run_explorer_hook() {
                 // without a mouse move. A navigation key press after the change
                 // releases it as well: that press is the user asking for the
                 // keyboard preview and must not be swallowed as a baseline.
-                if moved
-                    || scroll_since_move
-                    || folder_change_user_initiated
-                    || navigation_press
-                {
+                if moved || scroll_since_move || folder_change_user_initiated || navigation_press {
                     suspend_preview_until_user_input = false;
                     allow_keyboard_preview_on_first_observation = navigation_press;
                     folder_change_user_initiated = false;
@@ -4809,9 +4805,8 @@ pub fn run_explorer_hook() {
                             continue;
                         }
 
-                        let search_view_active =
-                            hover_resolver_hints.is_search_view
-                                || is_current_search_view_legacy(&resolver);
+                        let search_view_active = hover_resolver_hints.is_search_view
+                            || is_current_search_view_legacy(&resolver);
                         if search_view_active {
                             let miss_started =
                                 stationary_search_miss_started_at.get_or_insert_with(Instant::now);
@@ -4997,15 +4992,24 @@ mod tests {
             "and so is reading it again on the next look"
         );
         assert!(
-            hover_location_changed(&here, &view(Some("D:\\Videos"), Some("file:///D:/Pictures"), 0x1234)),
+            hover_location_changed(
+                &here,
+                &view(Some("D:\\Videos"), Some("file:///D:/Pictures"), 0x1234)
+            ),
             "another folder is another place"
         );
         assert!(
-            hover_location_changed(&here, &view(Some("D:\\Pictures"), Some("file:///D:/Videos"), 0x1234)),
+            hover_location_changed(
+                &here,
+                &view(Some("D:\\Pictures"), Some("file:///D:/Videos"), 0x1234)
+            ),
             "and so is the same window arrived at another URL"
         );
         assert!(
-            hover_location_changed(&here, &view(Some("D:\\Pictures"), Some("file:///D:/Pictures"), 0x5678)),
+            hover_location_changed(
+                &here,
+                &view(Some("D:\\Pictures"), Some("file:///D:/Pictures"), 0x5678)
+            ),
             "and so is another view of it, in a window of its own"
         );
 
@@ -5087,16 +5091,39 @@ mod tests {
     #[test]
     fn a_details_rows_text_is_read_as_a_row() {
         let text = text_boxes(&[
-            RECT { left: 1160, top: 372, right: 1396, bottom: 391 },
-            RECT { left: 1396, top: 372, right: 1540, bottom: 391 },
-            RECT { left: 1540, top: 372, right: 1660, bottom: 391 },
-            RECT { left: 1660, top: 372, right: 1740, bottom: 391 },
+            RECT {
+                left: 1160,
+                top: 372,
+                right: 1396,
+                bottom: 391,
+            },
+            RECT {
+                left: 1396,
+                top: 372,
+                right: 1540,
+                bottom: 391,
+            },
+            RECT {
+                left: 1540,
+                top: 372,
+                right: 1660,
+                bottom: 391,
+            },
+            RECT {
+                left: 1660,
+                top: 372,
+                right: 1740,
+                bottom: 391,
+            },
         ])
         .expect("a row that draws text");
 
         assert_eq!(text.name.left, 1160, "the name is the leftmost piece");
         assert_eq!(text.name.right, 1396, "which is the `Name` column");
-        assert_eq!(text.all.right, 1740, "the row's text stops at its last column");
+        assert_eq!(
+            text.all.right, 1740,
+            "the row's text stops at its last column"
+        );
         assert!(text.columns, "the columns beside the name make it a row");
     }
 
@@ -5107,15 +5134,38 @@ mod tests {
     #[test]
     fn a_content_rows_text_is_read_as_a_row() {
         let text = text_boxes(&[
-            RECT { left: 1204, top: 349, right: 1504, bottom: 371 },
-            RECT { left: 1542, top: 354, right: 1600, bottom: 370 },
-            RECT { left: 1578, top: 371, right: 1617, bottom: 387 },
-            RECT { left: 1836, top: 371, right: 1889, bottom: 387 },
+            RECT {
+                left: 1204,
+                top: 349,
+                right: 1504,
+                bottom: 371,
+            },
+            RECT {
+                left: 1542,
+                top: 354,
+                right: 1600,
+                bottom: 370,
+            },
+            RECT {
+                left: 1578,
+                top: 371,
+                right: 1617,
+                bottom: 387,
+            },
+            RECT {
+                left: 1836,
+                top: 371,
+                right: 1889,
+                bottom: 387,
+            },
         ])
         .expect("a row that draws text");
 
         assert_eq!(text.name.left, 1204, "the name is the leftmost piece");
-        assert_eq!(text.all.right, 1889, "the row's text stops at its last column");
+        assert_eq!(
+            text.all.right, 1889,
+            "the row's text stops at its last column"
+        );
         assert!(text.columns, "the details beside the name make it a row");
     }
 
@@ -5125,15 +5175,38 @@ mod tests {
     /// see `text_boxes`.
     #[test]
     fn text_under_the_name_is_not_a_column_beside_it() {
-        let label = text_boxes(&[RECT { left: 1235, top: 602, right: 1312, bottom: 618 }])
-            .expect("a label that draws text");
+        let label = text_boxes(&[RECT {
+            left: 1235,
+            top: 602,
+            right: 1312,
+            bottom: 618,
+        }])
+        .expect("a label that draws text");
         assert_eq!(label.all, label.name, "the label is all of the text");
-        assert!(!label.columns, "a label under an icon has nothing beside it");
+        assert!(
+            !label.columns,
+            "a label under an icon has nothing beside it"
+        );
 
         let stacked = text_boxes(&[
-            RECT { left: 1193, top: 346, right: 1384, bottom: 362 },
-            RECT { left: 1193, top: 362, right: 1384, bottom: 378 },
-            RECT { left: 1193, top: 378, right: 1384, bottom: 394 },
+            RECT {
+                left: 1193,
+                top: 346,
+                right: 1384,
+                bottom: 362,
+            },
+            RECT {
+                left: 1193,
+                top: 362,
+                right: 1384,
+                bottom: 378,
+            },
+            RECT {
+                left: 1193,
+                top: 378,
+                right: 1384,
+                bottom: 394,
+            },
         ])
         .expect("a tile that draws text");
         assert_eq!(stacked.name.bottom, 362, "the name is the first line");
@@ -5207,7 +5280,11 @@ mod tests {
             window(false, false, true),
         ]);
 
-        assert_eq!(chosen, Some(2), "the last window that is the foreground one");
+        assert_eq!(
+            chosen,
+            Some(2),
+            "the last window that is the foreground one"
+        );
     }
 
     /// A probe that matched no window has no answer, which is what leaves the hints
@@ -5501,9 +5578,7 @@ mod tests {
                 "walked {walked} of {count} windows; the pointer is in window {} with folder {:?}",
                 context.shell_view_hwnd, context.folder_path
             ),
-            None => println!(
-                "walked {walked} of {count} windows; the pointer is in none of them"
-            ),
+            None => println!("walked {walked} of {count} windows; the pointer is in none of them"),
         }
 
         unsafe { CoUninitialize() };

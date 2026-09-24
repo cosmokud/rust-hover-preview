@@ -76,8 +76,8 @@
 //! format that is not one of the ones above, a level that will not fit the budget every
 //! other reader is handed, and a read that comes back short are one answer: no preview.
 
-use crate::readers::bcn::{self, Blocks, Texels};
 use crate::config::config::{decode_budget_bytes, frame_bytes_within_budget};
+use crate::readers::bcn::{self, Blocks, Texels};
 use crate::readers::tone_map::ToneMap;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
@@ -158,9 +158,7 @@ pub fn decode(path: &Path, width: u32, height: u32) -> Option<Vec<u8>> {
     let tone = ToneMap::current();
 
     let mut pixels = match header.picture {
-        Picture::Blocks(blocks) => {
-            decode_blocks(blocks, &level, level_width, level_height, tone)?
-        }
+        Picture::Blocks(blocks) => decode_blocks(blocks, &level, level_width, level_height, tone)?,
         Picture::Samples(samples) => {
             decode_samples(samples, &level, level_width, level_height, tone)?
         }
@@ -179,7 +177,12 @@ pub fn decode(path: &Path, width: u32, height: u32) -> Option<Vec<u8>> {
     let scaled = if (level_width, level_height) == (width, height) {
         source
     } else {
-        image::imageops::resize(&source, width, height, image::imageops::FilterType::Triangle)
+        image::imageops::resize(
+            &source,
+            width,
+            height,
+            image::imageops::FilterType::Triangle,
+        )
     };
 
     Some(crate::ui::preview_window::rgba_to_bgra(scaled.as_raw()))
@@ -585,12 +588,18 @@ fn dx10_picture(format: u32) -> Option<Picture> {
         2 => Some(Picture::Samples(Samples::Colour(Order::Rgba, Sample::F32))),
         10 => Some(Picture::Samples(Samples::Colour(Order::Rgba, Sample::F16))),
         11 => Some(Picture::Samples(Samples::Colour(Order::Rgba, Sample::U16))),
-        13 => Some(Picture::Samples(Samples::Colour(Order::Rgba, Sample::Snorm16))),
+        13 => Some(Picture::Samples(Samples::Colour(
+            Order::Rgba,
+            Sample::Snorm16,
+        ))),
         16 => Some(Picture::Samples(Samples::RedGreen(Sample::F32))),
         24 => Some(Picture::Samples(Samples::Rgb10a2)),
         26 => Some(Picture::Samples(Samples::Rgb11_11_10)),
         28 | 29 => Some(Picture::Samples(Samples::Colour(Order::Rgba, Sample::U8))),
-        31 => Some(Picture::Samples(Samples::Colour(Order::Rgba, Sample::Snorm8))),
+        31 => Some(Picture::Samples(Samples::Colour(
+            Order::Rgba,
+            Sample::Snorm8,
+        ))),
         34 => Some(Picture::Samples(Samples::RedGreen(Sample::F16))),
         35 => Some(Picture::Samples(Samples::RedGreen(Sample::U16))),
         37 => Some(Picture::Samples(Samples::RedGreen(Sample::Snorm16))),
@@ -921,9 +930,7 @@ fn sample_alpha(sample: Sample, bytes: &[u8]) -> u8 {
         Sample::U8 => bytes[0],
         Sample::U16 => narrow_sixteen(u16::from_le_bytes([bytes[0], bytes[1]])),
         Sample::F16 => narrow_float(bcn::half_to_float(u16::from_le_bytes([bytes[0], bytes[1]]))),
-        Sample::F32 => narrow_float(f32::from_le_bytes([
-            bytes[0], bytes[1], bytes[2], bytes[3],
-        ])),
+        Sample::F32 => narrow_float(f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])),
         // A signed channel is a number either side of zero rather than coverage, and the
         // formats that hold one have no alpha channel at all — the fourth sample of a
         // signed four-channel format is another number, and a preview has nothing to do

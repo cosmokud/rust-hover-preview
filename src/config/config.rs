@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Duration;
 
+use crate::config::theme_files;
 use crate::formats::archive_formats::{sanitize_archive_extensions, DEFAULT_ARCHIVE_EXTENSIONS};
 use crate::formats::design_formats::{
     sanitize_design_extensions, DEFAULT_DESIGN_EXTENSIONS, DESIGN_EXTENSIONS_BEFORE_AI,
@@ -31,13 +32,12 @@ use crate::formats::office_formats::{sanitize_office_extensions, DEFAULT_OFFICE_
 use crate::formats::text_formats::{
     sanitize_extensions, sanitize_names, DEFAULT_TEXT_EXTENSIONS, DEFAULT_TEXT_NAMES,
 };
-use crate::config::theme_files;
-use crate::readers::tone_map::Curve;
 use crate::formats::vector_formats::{
-    sanitize_vector_extensions, DEFAULT_VECTOR_EXTENSIONS,
-    VECTOR_EXTENSIONS_BEFORE_THE_EPS_SPELLINGS, VECTOR_EXTENSIONS_BEFORE_SVG,
+    sanitize_vector_extensions, DEFAULT_VECTOR_EXTENSIONS, VECTOR_EXTENSIONS_BEFORE_SVG,
+    VECTOR_EXTENSIONS_BEFORE_THE_EPS_SPELLINGS,
 };
 use crate::formats::video_formats::{sanitize_video_extensions, DEFAULT_VIDEO_EXTENSIONS};
+use crate::readers::tone_map::Curve;
 
 const CONFIG_SECTION: &str = "settings";
 /// The image extension list lives in its own section so the one long value stays
@@ -2103,7 +2103,11 @@ impl AppConfig {
             "design_scale",
             Some(self.design_scale.as_str()),
         );
-        ini.set(CONFIG_SECTION, "libre_scale", Some(self.libre_scale.as_str()));
+        ini.set(
+            CONFIG_SECTION,
+            "libre_scale",
+            Some(self.libre_scale.as_str()),
+        );
         ini.set(
             CONFIG_SECTION,
             "ttc_face",
