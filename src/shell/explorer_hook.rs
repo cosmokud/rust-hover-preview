@@ -49,7 +49,8 @@ use windows::Win32::UI::Accessibility::{
     IUIAutomationRegistrar, IUIAutomationSelectionPattern, IUIAutomationTreeWalker,
     TreeScope_Children, TreeScope_Element, UIA_BoundingRectanglePropertyId,
     UIA_ControlTypePropertyId, UIA_DataItemControlTypeId, UIA_EditControlTypeId,
-    UIA_LegacyIAccessiblePatternId, UIA_ListItemControlTypeId, UIA_NamePropertyId,
+    UIA_GroupControlTypeId, UIA_LegacyIAccessiblePatternId, UIA_ListItemControlTypeId,
+    UIA_NamePropertyId,
     UIA_NativeWindowHandlePropertyId, UIA_SelectionPatternId, UIA_TextControlTypeId,
     UIAutomationPropertyInfo, UIAutomationType_Int, UIA_CONTROLTYPE_ID, UIA_PROPERTY_ID,
 };
@@ -2000,7 +2001,20 @@ fn walk_to_item(
     let mut element = start.clone();
 
     for _ in 0..=POINTER_ITEM_ANCESTOR_LIMIT {
-        if let Some(item) = item_from_element(resolver, &element, point, measure_content) {
+        if let Some(mut item) = item_from_element(resolver, &element, point, measure_content) {
+            // An item's box is the place its content is drawn, which for an item that has
+            // been scrolled partly out of the view is not the place the view shows it: the
+            // box carries on behind the toolbar above and past the edge of the window
+            // below, and the pointer is on the search bar, the address bar, or off the
+            // window there rather than on the item — a preview that nothing takes down,
+            // because the box it is held by says the pointer never left. The view the item
+            // is drawn in is the part of that box that is really there (see
+            // `view_bounds`), so the box is kept to it here, once, and every question
+            // asked of the item's box afterwards is asked of the part that exists.
+            if let Some(view) = view_bounds(resolver, &element) {
+                item.bounds = clip_box(item.bounds, view);
+            }
+
             return Some(item);
         }
 
@@ -2008,6 +2022,49 @@ fn walk_to_item(
     }
 
     None
+}
+
+/// The box of the view that shows an item: the element the item sits in, a level or two
+/// up — the list itself, or the group a view that groups its items draws it in.
+///
+/// This is what clips an item's box to what is on screen. A provider reports an item's
+/// box at the place the item's content is drawn however far the view has been scrolled,
+/// so the box of an item half out of a view whose content is larger than its window
+/// reaches behind the toolbar and past the bottom edge of the window. The container the
+/// view draws its items in does not scroll with them: its rectangle is the window the
+/// items are shown in, and an item is on screen exactly where the two overlap.
+///
+/// Nothing is answered when the walk cannot get there, which leaves the item's own box as
+/// the provider reported it — the reading this app had before the container was asked.
+fn view_bounds(resolver: &ItemResolver, element: &IUIAutomationElement) -> Option<RECT> {
+    let cache = resolver.cache.as_ref()?;
+    let walker = resolver.walker.as_ref()?;
+    let mut current = unsafe { walker.GetParentElementBuildCache(element, cache) }.ok()?;
+
+    // A grouped view puts a group between the item and the list, and a group scrolls with
+    // its items — so it is not the window they are shown in, and the climb goes on. The
+    // climb is bounded like every other walk here: a provider that answers something
+    // unexpected must not cost the probe an unbounded one.
+    for _ in 0..POINTER_ITEM_ANCESTOR_LIMIT {
+        match element_control_type(&current) {
+            Some(UIA_GroupControlTypeId) => {
+                current = unsafe { walker.GetParentElementBuildCache(&current, cache) }.ok()?;
+            }
+            _ => break,
+        }
+    }
+
+    element_bounds(&current)
+}
+
+/// An item's box, kept to the part of it the view shows.
+fn clip_box(bounds: RECT, view: RECT) -> RECT {
+    RECT {
+        left: bounds.left.max(view.left),
+        top: bounds.top.max(view.top),
+        right: bounds.right.min(view.right),
+        bottom: bounds.bottom.min(view.bottom),
+    }
 }
 
 /// The item an element is, when the pointer's box test says it is the one asked
@@ -2612,6 +2669,12 @@ fn resolve_file_under_cursor(resolver: &mut ItemResolver, point: POINT) -> Optio
     // the walk below makes — so what it holds is where the pointer is now rather than
     // where the hover on screen was resolved from (see
     // `preview_window::publish_pointer_item_box`).
+    //
+    // What is published is the part of that box the view actually shows: the item's box
+    // as it comes back from the walk is already the part of it that exists on screen
+    // (see `view_bounds`), so a pointer over the toolbar above a clipped item, or off the
+    // window below one, is outside it and has left the item — where the box the provider
+    // drew carries on saying it has not.
     publish_pointer_item_box((
         item.bounds.left,
         item.bounds.top,
