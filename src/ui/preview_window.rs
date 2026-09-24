@@ -397,11 +397,11 @@ pub enum PreviewMessage {
         path: PathBuf,
         generation: u64,
     },
-    /// The ImageMagick engine is done with a file: the picture it developed is waiting in
-    /// the folder the engine keeps its pictures in, or there is none — a file it cannot read
-    /// is marked as one it will not draw again. The generation is the hover that was waiting
-    /// on it, so a conversion landing after the pointer has moved on is ignored; the picture
-    /// is kept for the next hover either way (see `magick_render_is_due`).
+    /// The ImageMagick engine is done with a file: the picture it developed is in hand, or
+    /// there is none — a file it cannot read is remembered as one it will not draw. The
+    /// generation is the hover that was waiting on it, so a conversion landing after the
+    /// pointer has moved on is ignored; the picture itself is held for the hover that asked
+    /// either way (see `magick_render_is_due`).
     MagickReady {
         path: PathBuf,
         generation: u64,
@@ -1871,18 +1871,18 @@ fn magick_render_is_due(path: &Path) -> bool {
     magick_formats::is_engine_picture(path)
         && PreviewType::Magick.enabled()
         && imagemagick_render::available()
-        && imagemagick_render::converted(path).is_none()
         && !imagemagick_render::refused(path)
+        && !imagemagick_render::developed(path)
 }
 
 /// Ask the engine for the picture this hover needs, and answer what is now being waited on.
 ///
-/// The same answer, and for the same reason, as `request_libre_render`: the picture does not
-/// exist until the engine has developed one, and asking late is waiting twice. Nothing is
-/// waited on here either — the conversion runs on the engine's own thread — so what comes
-/// back is the wait, and the hover is replayed when the engine answers. The room is part of
-/// the request rather than of the wait: what the engine is told is how large a picture it may
-/// write, which is the box the preview may take.
+/// The same answer, and for the same reason, as `request_libre_render`: there is no picture
+/// until the engine has developed one, and asking late is waiting twice. Nothing is waited on
+/// here either — the conversion runs on the engine's own thread — so what comes back is the
+/// wait, and the hover is replayed when the engine answers. The room is part of the request
+/// rather than of the wait: what the engine is told is how large a picture it may write,
+/// which is the box the preview may take.
 fn request_magick_render(
     path: &Path,
     generation: u64,
@@ -3639,17 +3639,23 @@ fn load_engine_page_for_office(
 
 /// The picture the ImageMagick engine developed for a file, drawn as the picture it is.
 ///
-/// Nothing is converted here, and nothing is waited on: a file the engine has not read yet is
-/// answered with nothing, which is the wait the hover is already in — the loop has asked the
-/// engine for the picture, and the hover is replayed when the answer lands (see
-/// `magick_render_is_due`). What is there is a PNG under the app's own folder, and what is
-/// done with it is what is done with any picture: decoded into the box the layout planned,
-/// held in the image cache under the file, its version and that box, and composited over
-/// `image_background`.
+/// Nothing is converted here, and nothing is waited on. Three things answer a hover in the
+/// order they are worth asking:
 ///
-/// Reading it is also what says it has been used, which is the moment `ImageMagick TTL`
-/// counts from: a picture that has just been hovered is not one the engine thread lets go of
-/// (see `imagemagick_render`).
+/// * the frame this app has already built for this file at this box, which is the image cache
+///   every other picture is kept in — a hit costs a lookup and no engine at all, which is what
+///   a pointer swept back and forth over a folder of raws is answered with;
+/// * the picture the engine developed and nobody has drawn yet, which is what the frame is
+///   built from: it is decoded from the bytes the engine wrote them as — never from a file,
+///   since nothing of a conversion is written down — resampled into the box the layout
+///   planned, and held in that same cache under the file, its version and that box;
+/// * and nothing at all, which is the wait the hover is already in — the loop has asked the
+///   engine for the picture, and the hover is replayed when the answer lands (see
+///   `magick_render_is_due`).
+///
+/// What the frame is composited over is `image_background` and what share of its own size it
+/// is drawn at is the picture's, because that is what it is: a picture of this app's, in the
+/// format a frame is composed in, held like any other.
 fn load_magick_picture(
     path: &Path,
     max_width: u32,
@@ -3657,18 +3663,81 @@ fn load_magick_picture(
     preview_scale: PreviewScale,
     cancel: &Arc<AtomicBool>,
 ) -> Option<MediaData> {
-    let picture = imagemagick_render::converted(path)?;
-    imagemagick_render::touch(&picture);
+    // The size the engine developed this file at — which is the picture's own size rather
+    // than the file's, since what the engine writes is a picture fitted into the room — and
+    // what the frame is keyed by, together with the box it is drawn in.
+    let cache_key = match imagemagick_render::dimensions(path) {
+        Some((width, height)) => {
+            let (target_width, target_height) =
+                scale_dimensions(width, height, max_width, max_height, preview_scale);
 
-    // The engine's picture is a picture to everything below this line — it is decoded,
-    // resampled and cached like any other, and a raw is a photograph at the size it is
-    // written rather than a page to be fitted to the screen — and a kind of its own to what
-    // draws it: the switch over it is the one about the formats an engine develops rather
-    // than the one about pictures, exactly as a texture's is.
-    let mut media = load_picture(&picture, max_width, max_height, preview_scale, cancel)?;
-    media.media_type = MediaType::Magick;
+            Some(ImageCacheKey {
+                path: path.to_path_buf(),
+                version: file_version(path),
+                width: target_width,
+                height: target_height,
+            })
+        }
+        // A file the engine has developed nothing for is a file with no size to key a frame
+        // by: what is coming is the engine's answer, and the frame it is drawn as is built
+        // from that answer rather than placed in the cache under a size nothing knows.
+        None => None,
+    };
 
-    Some(media)
+    if let Some(key) = cache_key.as_ref() {
+        if let Some(frame) = image_cache_get(key) {
+            return Some(static_image_media(frame, MediaType::Magick));
+        }
+    }
+
+    // The picture the engine developed, which is the one thing a hover that asked for it is
+    // waiting for. A hover that has moved on leaves it where it is: what it is waiting for is
+    // its own replay.
+    let developed = imagemagick_render::take_developed(path)?;
+    if cancel.load(Ordering::Acquire) {
+        return None;
+    }
+
+    let (target_width, target_height) = scale_dimensions(
+        developed.width,
+        developed.height,
+        max_width,
+        max_height,
+        preview_scale,
+    );
+    let image = decode_png(&developed.png)?;
+    let (orig_width, orig_height) = image.dimensions();
+    let resized = if target_width != orig_width || target_height != orig_height {
+        image.resize_exact(target_width, target_height, image::imageops::FilterType::Triangle)
+    } else {
+        image
+    };
+
+    let rgba = resized.to_rgba8();
+    let frame = ImageFrame {
+        pixels: rgba_to_bgra(rgba.as_raw()),
+        width: target_width,
+        height: target_height,
+        delay_ms: 0,
+    };
+
+    if let Some(key) = cache_key {
+        image_cache_put(key, frame.clone());
+    }
+
+    Some(static_image_media(frame, MediaType::Magick))
+}
+
+/// The picture the engine wrote, decoded from the bytes it wrote it as — under the budget
+/// every other decode of this app is answered under, and with the format asked for rather
+/// than taken on trust.
+fn decode_png(png: &[u8]) -> Option<image::DynamicImage> {
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(png))
+        .with_guessed_format()
+        .ok()?;
+    reader.limits(image_decode_limits());
+
+    reader.decode().ok()
 }
 
 /// The drawing a vector file is previewed from.
@@ -5354,16 +5423,15 @@ fn libre_box(path: &Path) -> Option<(u32, u32)> {
     Some((office_preview::WAITING_BOX, office_preview::WAITING_BOX))
 }
 
-/// The box a picture the ImageMagick engine develops is placed at: the one it has already
-/// converted for this version of the file, the wait for one that is on its way, and nothing
-/// at all for a file the engine has turned down or for a machine with no engine to develop
-/// one with.
+/// The box a picture the ImageMagick engine develops is placed at: the size the engine
+/// developed it at, the wait for one that is on its way, and nothing at all for a file the
+/// engine has turned down or for a machine with no engine to develop one with.
 ///
-/// What the engine hands back is a PNG, so what is measured here is a picture's own size
-/// rather than a page's — the size the engine wrote it at, which is the size the preview is
-/// drawn at under the picture scale. Nothing is converted here: a file the engine has not
-/// read yet is the wait, and the loop asks for the picture the moment there is a hover to ask
-/// for it (see `request_magick_render`).
+/// The size is the picture's own — read from the header of the bytes the engine wrote, which
+/// is the size the preview is drawn at under the picture scale — and it is what the layout
+/// places and what the frame is keyed by. Nothing is converted here: a file the engine has
+/// developed nothing for yet is the wait, and the loop asks for the picture the moment there
+/// is a hover to ask for it (see `request_magick_render`).
 fn magick_box(path: &Path) -> Option<(u32, u32)> {
     if !imagemagick_render::available() {
         // Nothing to develop it with, so there is nothing to show: a machine without the
@@ -5372,8 +5440,8 @@ fn magick_box(path: &Path) -> Option<(u32, u32)> {
         return None;
     }
 
-    if let Some(picture) = imagemagick_render::converted(path) {
-        return image_dimensions_with_header_check(&picture);
+    if let Some(size) = imagemagick_render::dimensions(path) {
+        return Some(size);
     }
 
     // A file the engine has already turned down is not one to wait for.
