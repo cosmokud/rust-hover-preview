@@ -1724,6 +1724,14 @@ fn show_path(show: &PreviewMessage) -> Option<&PathBuf> {
 /// it is being put back on is the one the pointer is on now — the point it opened from
 /// resolves the display it came from, which is the one that is gone. A keyboard hover
 /// is the item's own place and is replayed as it came.
+///
+/// It is asked of every mouse hover the loop takes up, and not only of the ones being
+/// replayed. The point a `Show` arrives with is one the Explorer hook sampled at the top
+/// of its own tick — ahead of a walk through the shell and of the look for the `Avoid`
+/// region the layout is placed by — so the better part of a frame has passed by the time
+/// anything is laid out from it, and a fast hand covers dozens of pixels in that time. The
+/// one thing the layout does with the point is keep the box clear of it, which is worth
+/// something only while the point is still the hand's.
 fn replay_where_the_pointer_is(show: Option<PreviewMessage>) -> Option<PreviewMessage> {
     match (show, cursor_position()) {
         (Some(PreviewMessage::Show(path, _, _, avoid)), Some(cursor)) => {
@@ -9424,7 +9432,10 @@ pub fn run_preview_window() {
                 }
             }
 
-            if let Some(preview_msg) = latest_preview_msg {
+            // Anchored one read before the layout it decides, so the box is placed clear of
+            // the hand that asked for this hover rather than of the one it was measured from
+            // (see `replay_where_the_pointer_is`).
+            if let Some(preview_msg) = replay_where_the_pointer_is(latest_preview_msg) {
                 // Common variables for Show/ShowKeyboard - set in match, used after
                 let mut show_path: Option<PathBuf> = None;
                 let mut show_layout: Option<PreviewLayout> = None;
