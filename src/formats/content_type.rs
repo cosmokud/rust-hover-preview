@@ -2345,7 +2345,7 @@ fn kind_claiming(names: &[&str], config: &AppConfig) -> Option<PreviewType> {
         // A PDF is a kind of its own rather than a list: the one name is the whole of what
         // the PDF path claims, and what a page is read from is the file's own header.
         if name.eq_ignore_ascii_case("pdf") {
-            return Some(PreviewType::Pdf);
+            return Some(PreviewType::Ebook);
         }
 
         if crate::formats::archive_formats::matches_archive_list(&named, &config.archive_extensions)
@@ -2361,7 +2361,7 @@ fn kind_claiming(names: &[&str], config: &AppConfig) -> Option<PreviewType> {
         }
 
         if crate::formats::office_formats::matches_office_list(&named, &config.office_extensions) {
-            return Some(PreviewType::Office);
+            return Some(PreviewType::Document);
         }
 
         if crate::formats::libre_formats::matches_libre_list(&named, &config.libre_extensions) {

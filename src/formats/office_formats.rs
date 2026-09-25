@@ -113,10 +113,10 @@ pub fn is_office_file(path: &Path) -> bool {
 }
 
 /// Whether the file is previewed as an Office document under the current
-/// configuration. The `Office` gate is checked on top of the list, so turning
-/// Office previews off leaves the list alone and turning them back on restores it.
+/// configuration. The `Document` gate is checked on top of the list, so turning
+/// document previews off leaves the list alone and turning them back on restores it.
 pub fn is_office_preview(path: &Path) -> bool {
-    is_office_file(path) && PreviewType::Office.enabled()
+    is_office_file(path) && PreviewType::Document.enabled()
 }
 
 /// Which application renders a document with this name, by the family its

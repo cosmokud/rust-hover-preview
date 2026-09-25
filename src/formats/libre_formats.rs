@@ -150,7 +150,8 @@ pub fn is_libre_file(path: &Path) -> bool {
 }
 
 /// Whether a preview may be shown for `path`: the file the configured list claims, and
-/// the `Libre` gate in the tray's `Preview Types` submenu.
+/// the `Document` gate in the tray's `Preview Types` submenu — the same gate the Office
+/// documents beside these answer to, since what either is previewed as is a page.
 ///
 /// Both halves ask it where a kind can be switched off under a preview that is already
 /// on screen: a hover is not sent for a kind that is off, and a layout finds no size for
@@ -201,7 +202,7 @@ pub fn engine_page_kind(path: &Path) -> Option<PreviewType> {
         crate::formats::office_formats::page_engine(path),
         Some(OfficeEngine::LibreOffice)
     )
-    .then_some(PreviewType::Office)
+    .then_some(PreviewType::Document)
 }
 
 #[cfg(test)]
@@ -432,7 +433,7 @@ mod tests {
             let installed = crate::formats::office_formats::app_installed(&path);
             assert_eq!(
                 engine_page_kind(&path),
-                (!installed).then_some(PreviewType::Office),
+                (!installed).then_some(PreviewType::Document),
                 "`{name}`: the render engine draws it exactly where the application that owns \
                  the format is not installed"
             );

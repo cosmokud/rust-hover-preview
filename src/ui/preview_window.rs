@@ -4,8 +4,8 @@ use crate::config::config::{
     sanitize_spinner_delay_ms, sanitize_webp_playback_fps, MarkdownMode, OfficeEngine,
     PreviewScale, PreviewType, TextTheme, TransparentBackground, DEFAULT_ANIMATED_SCALE_PERCENT,
     DEFAULT_DDS_BACKGROUND, DEFAULT_DESIGN_BACKGROUND, DEFAULT_DESIGN_SCALE,
-    DEFAULT_FONT_BACKGROUND, DEFAULT_FONT_SCALE, DEFAULT_IMAGE_BACKGROUND, DEFAULT_IMAGE_CACHE_MB,
-    DEFAULT_LIBRE_SCALE, DEFAULT_OFFICE_SCALE, DEFAULT_PDF_SCALE, DEFAULT_PREVIEW_SCALE_PERCENT,
+    DEFAULT_DOCUMENT_SCALE, DEFAULT_EBOOK_SCALE, DEFAULT_FONT_BACKGROUND, DEFAULT_FONT_SCALE,
+    DEFAULT_IMAGE_BACKGROUND, DEFAULT_IMAGE_CACHE_MB, DEFAULT_PREVIEW_SCALE_PERCENT,
     DEFAULT_SPINNER_DELAY_MS, DEFAULT_TEXT_FONT_SCALE_PERCENT,
     DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS, DEFAULT_VECTOR_BACKGROUND, DEFAULT_VECTOR_SCALE,
     DEFAULT_VIDEO_SCALE_PERCENT, DEFAULT_WEBP_PLAYBACK_FPS,
@@ -614,9 +614,8 @@ enum MediaType {
     /// A picture an installed ImageMagick developed for this app — a camera raw above all:
     /// what comes back is a PNG, which is decoded and drawn like the picture it is, over the
     /// backdrop a picture is drawn over and at the share of its own size a picture is drawn
-    /// at. It is a kind of its own for the gate alone: the switch over these previews is not
-    /// the switch for pictures, so a user who wants their raws left alone has one. See
-    /// `magick_formats` and `imagemagick_render`.
+    /// at. It is the picture kind's second half, and the switch over it is the switch for
+    /// pictures; see `magick_formats` and `imagemagick_render`.
     Magick,
     Loading,
 }
@@ -635,22 +634,22 @@ impl MediaType {
             Self::EngineFont => Some(PreviewType::Fonts),
             Self::Video | Self::NativeVideo => Some(PreviewType::Videos),
             Self::Text => Some(PreviewType::Text),
-            Self::Pdf => Some(PreviewType::Pdf),
+            Self::Pdf => Some(PreviewType::Ebook),
             Self::Archive => Some(PreviewType::Archives),
             // And an archive an engine listed: the page is an archive's page in every way that
-            // matters — a frame of this app's own, painted from a listing — and only the switch
-            // over it is a switch of its own.
+            // matters — a frame of this app's own, painted from a listing — and the switch over
+            // it is the archive switch, because what a user turns off is archives.
             Self::Peazip => Some(PreviewType::Peazip),
-            Self::Office => Some(PreviewType::Office),
+            Self::Office => Some(PreviewType::Document),
             // A design document is drawn into a frame like any picture, and the switch
             // over it is its own: the picture *is* what the file keeps of the document,
             // but a user who wants none of them is not asking for pictures to be off.
             Self::Design => Some(PreviewType::Design),
-            // The same for a document an engine drew, at the gate over the engine's kind.
+            // The same for a document an engine drew, at the gate over the document kind.
             Self::Libre => Some(PreviewType::Libre),
             // And for a picture one developed: it is a picture in every way that matters —
-            // a frame of this app's own, drawn like any other — and only the switch over it
-            // is a switch of its own.
+            // a frame of this app's own, drawn like any other — and the switch over it is the
+            // switch for pictures, because what a user turns off is pictures.
             Self::Magick => Some(PreviewType::Magick),
             Self::Vector => Some(PreviewType::Vector),
             Self::Loading => None,
@@ -1825,22 +1824,20 @@ fn current_hover_scales() -> HoverScales {
             picture: cfg.preview_scale,
             video: cfg.video_scale,
             animated: cfg.animated_scale,
-            page: cfg.pdf_scale,
-            office: cfg.office_scale,
+            ebook: cfg.ebook_scale,
+            document: cfg.document_scale,
             font: cfg.font_scale,
             design: cfg.design_scale,
-            libre: cfg.libre_scale,
             vector: cfg.vector_scale,
         })
         .unwrap_or(HoverScales {
             picture: PreviewScale::Percent(DEFAULT_PREVIEW_SCALE_PERCENT),
             video: PreviewScale::Percent(DEFAULT_VIDEO_SCALE_PERCENT),
             animated: PreviewScale::Percent(DEFAULT_ANIMATED_SCALE_PERCENT),
-            page: DEFAULT_PDF_SCALE,
-            office: DEFAULT_OFFICE_SCALE,
+            ebook: DEFAULT_EBOOK_SCALE,
+            document: DEFAULT_DOCUMENT_SCALE,
             font: DEFAULT_FONT_SCALE,
             design: DEFAULT_DESIGN_SCALE,
-            libre: DEFAULT_LIBRE_SCALE,
             vector: DEFAULT_VECTOR_SCALE,
         })
 }
@@ -1949,7 +1946,7 @@ fn office_render_is_due(path: &Path, width: u32) -> bool {
     // called: a picture left under a `.docx` name is drawn as the picture it is, and asking
     // Office for a page would start an engine for a file that is not its own — which is the
     // one thing the question of content exists to prevent (see `content_type`).
-    if content_names_another_kind(path, PreviewType::Office) {
+    if content_names_another_kind(path, PreviewType::Document) {
         return false;
     }
 
@@ -2142,14 +2139,12 @@ struct HoverScales {
     /// so that what moves is drawn at the size one wants it at rather than at the size
     /// one wants a photograph at.
     animated: PreviewScale,
-    /// The share of the display a PDF page is drawn at.
-    page: PreviewScale,
-    /// The share of the display a document an engine drew is shown at: what the engine hands
-    /// back is a page, so the share is of the room the display has rather than of a size the
-    /// file asks for, exactly as a PDF page's is.
-    libre: PreviewScale,
-    /// The share of the display the page an Office document is drawn as is shown at.
-    office: PreviewScale,
+    /// The share of the display a PDF — the `Ebook` kind — page is drawn at.
+    ebook: PreviewScale,
+    /// The share of the display a page of the `Document` kind is shown at: what an installed
+    /// engine hands back is a page, so the share is of the room the display has rather than of
+    /// a size the file asks for, exactly as a PDF page's is.
+    document: PreviewScale,
     /// The share of the display a font specimen is drawn at.
     font: PreviewScale,
     /// The share of the display a design document is drawn at.
@@ -2176,7 +2171,7 @@ struct HoverScales {
 /// below `100%` reduces that size rather than being ignored — the page is no
 /// longer enlarged by it either, since enlarging a page is what fit-to-screen
 /// already does (see `fit_reduced`). What share of that room a page is drawn at is
-/// `pdf_scale`'s to say, and it says the whole of it unless it is asked for less.
+/// `ebook_scale`'s to say, and it says the whole of it unless it is asked for less.
 ///
 /// Text is the opposite case: it is drawn at a fixed, display-scaled font size,
 /// so enlarging it would only stretch the window around text that stays the same
@@ -2193,10 +2188,12 @@ struct HoverScales {
 /// fills it, so the setting is the document's size and nothing else: see
 /// `webview_preview::frame_page`.
 ///
-/// A page Office rendered is the PDF rule again: it is drawn at whatever size it is
-/// asked for, at the share of the room `office_scale` names. The one source that is not
-/// a page is the bitmap a workbook is answered with where no page can be exported, and
-/// it follows the share the way `bitmap_at_display_scale` reads it.
+/// A page of the `Document` kind is the PDF rule again: whether the application that owns the
+/// format exported it or an installed render engine drew it, it is drawn at whatever size it is
+/// asked for, at the share of the room `document_scale` names — one setting for both, since it
+/// is one question about one shape of preview. The one source that is not a page is the bitmap a
+/// workbook is answered with where no page can be exported, and it follows the share the way
+/// `bitmap_at_display_scale` reads it.
 ///
 /// A font is the same rule once more, at the share `font_scale` names: the specimen is a
 /// page of this app's own — the box `font_preview` measures a font at — and the glyphs are
@@ -2244,7 +2241,7 @@ fn effective_preview_scale(path: &Path, scales: HoverScales) -> PreviewScale {
     }
 
     if pdf_preview::is_pdf_file(path) {
-        scale_of_kind(PreviewType::Pdf, path, scales)
+        scale_of_kind(PreviewType::Ebook, path, scales)
     } else if page_is_painted(path) {
         // A listing is a page of text painted to the box it is given, whether this app read the
         // archive itself or an engine listed it, so both are the text rule.
@@ -2256,7 +2253,7 @@ fn effective_preview_scale(path: &Path, scales: HoverScales) -> PreviewScale {
         // follows it is laid out at (see `video_probe_due`).
         PreviewScale::Percent(100)
     } else if office_formats::is_office_file(path) {
-        scale_of_kind(PreviewType::Office, path, scales)
+        scale_of_kind(PreviewType::Document, path, scales)
     } else if libre_formats::is_libre_file(path) {
         scale_of_kind(PreviewType::Libre, path, scales)
     } else if magick_formats::is_magick_file(path) {
@@ -2288,7 +2285,7 @@ fn scale_of_kind(kind: PreviewType, path: &Path, scales: HoverScales) -> Preview
     match kind {
         // A page is a vector, so the room the display has is free quality: the setting is
         // the whole of that room unless it asks for less (see `fit_reduced`).
-        PreviewType::Pdf => fit_reduced(scales.page),
+        PreviewType::Ebook => fit_reduced(scales.ebook),
 
         // Text is drawn at a fixed, display-scaled font size and a listing is painted to
         // the frame it is given, so neither is enlarged or reduced by a setting: the size
@@ -2299,22 +2296,24 @@ fn scale_of_kind(kind: PreviewType, path: &Path, scales: HoverScales) -> Preview
             PreviewScale::Percent(100)
         }
 
-        // A page Office rendered is the PDF rule at the share `office_scale` names. The
-        // raster picture a workbook is answered with where no printer can export a page is
-        // the exception: it is only as good as the pixels it holds, so it follows the
-        // configured share the way an image does rather than being enlarged to fit. And a
-        // document with nothing drawn for it yet is placed at the spinner's own size, since
-        // a page on the way has no shape to fit.
-        PreviewType::Office => match office_preview::source_kind(path) {
+        // A page of the `Document` kind is the Ebook rule at the share `document_scale` names,
+        // and both halves of the kind answer to it: the page an Office document's own
+        // application exported, and the page an installed render engine drew. The raster
+        // picture a workbook is answered with where no printer can export a page is the
+        // exception: it is only as good as the pixels it holds, so it follows the configured
+        // share the way an image does rather than being enlarged to fit. And a document with
+        // nothing drawn for it yet is placed at the spinner's own size, since a page on the way
+        // has no shape to fit.
+        PreviewType::Document => match office_preview::source_kind(path) {
             office_preview::SourceKind::None => PreviewScale::Percent(100),
-            source if source.may_be_enlarged() => fit_reduced(scales.office),
-            _ => bitmap_at_display_scale(scales.office),
+            source if source.may_be_enlarged() => fit_reduced(scales.document),
+            _ => bitmap_at_display_scale(scales.document),
         },
 
-        // A document an engine draws follows a scale of its own, and the share is of the
-        // display the way a PDF page's is: what the engine hands back is a page, not a
-        // picture with a size of its own to be scaled from.
-        PreviewType::Libre => fit_reduced(scales.libre),
+        // A document an engine draws is the other half of that kind, and it answers to the same
+        // setting: what the engine hands back is a page, not a picture with a size of its own to
+        // be scaled from, so the share is of the display the way a PDF page's is.
+        PreviewType::Libre => fit_reduced(scales.document),
 
         // A picture an engine developed is the picture's rule: what comes back is a PNG,
         // which is a bitmap with a size of its own — the size the engine wrote it at — so
@@ -5378,7 +5377,7 @@ fn load_media_of_kind(
 ) -> Option<MediaData> {
     match kind {
         PreviewType::Videos => load_video_thumbnail(path, max_width, max_height, preview_scale),
-        PreviewType::Pdf => load_pdf_first_page(path, max_width, max_height, preview_scale),
+        PreviewType::Ebook => load_pdf_first_page(path, max_width, max_height, preview_scale),
         PreviewType::Archives => load_archive_preview(
             path,
             max_width,
@@ -5388,7 +5387,7 @@ fn load_media_of_kind(
             MediaType::Archive,
             &cancel,
         ),
-        PreviewType::Office => {
+        PreviewType::Document => {
             load_office_preview(path, max_width, max_height, preview_scale, &cancel)
                 .or_else(|| load_engine_page_for_office(path, max_width, max_height, preview_scale))
         }
@@ -5710,9 +5709,9 @@ fn media_dimensions_of_kind(kind: PreviewType, path: &PathBuf) -> Option<(u32, u
 
     match kind {
         PreviewType::Videos => video_box(path),
-        PreviewType::Pdf => pdf_preview::page_dimensions(path),
+        PreviewType::Ebook => pdf_preview::page_dimensions(path),
         PreviewType::Archives | PreviewType::Text | PreviewType::Peazip => None,
-        PreviewType::Office => office_preview::measure(path),
+        PreviewType::Document => office_preview::measure(path),
         PreviewType::Libre => libre_box(path),
         PreviewType::Magick => magick_box(path),
         PreviewType::Design => design_dimensions(path),
@@ -5829,7 +5828,7 @@ fn page_is_on_the_way(path: &Path) -> bool {
     // under a document's name is drawn here, and placing it at the pointer as the wait for a
     // page would be a preview waiting for nothing (see `content_names_another_kind`).
     let office = office_formats::is_office_preview(path)
-        && !content_names_another_kind(path, PreviewType::Office)
+        && !content_names_another_kind(path, PreviewType::Document)
         && matches!(
             office_preview::source_kind(path),
             office_preview::SourceKind::None
@@ -10141,11 +10140,10 @@ mod tests {
             picture: PreviewScale::Percent(DEFAULT_PREVIEW_SCALE_PERCENT),
             video: PreviewScale::Percent(DEFAULT_VIDEO_SCALE_PERCENT),
             animated: PreviewScale::Percent(DEFAULT_ANIMATED_SCALE_PERCENT),
-            page: DEFAULT_PDF_SCALE,
-            office: DEFAULT_OFFICE_SCALE,
+            ebook: DEFAULT_EBOOK_SCALE,
+            document: DEFAULT_DOCUMENT_SCALE,
             font: DEFAULT_FONT_SCALE,
             design: DEFAULT_DESIGN_SCALE,
-            libre: DEFAULT_LIBRE_SCALE,
             vector: DEFAULT_VECTOR_SCALE,
         }
     }
@@ -10169,9 +10167,8 @@ mod tests {
             picture: PreviewScale::Percent(100),
             video: PreviewScale::Percent(50),
             animated: PreviewScale::Percent(100),
-            office: PreviewScale::FitToScreen,
-            libre: PreviewScale::FitToScreen,
-            page: PreviewScale::FitToScreen,
+            document: PreviewScale::FitToScreen,
+            ebook: PreviewScale::FitToScreen,
             design: PreviewScale::Percent(25),
             vector: PreviewScale::Percent(25),
             font: PreviewScale::Percent(25),
@@ -10277,7 +10274,7 @@ mod tests {
     fn a_foreign_engine_is_never_started_for_a_file_that_is_not_its_own() {
         if let Ok(mut config) = CONFIG.lock() {
             config.confirm_file_type = true;
-            config.office_preview_enabled = true;
+            config.document_preview_enabled = true;
             config.video_preview_enabled = true;
         }
 
@@ -10354,7 +10351,7 @@ mod tests {
     fn an_office_document_is_asked_of_one_engine_and_not_the_other() {
         if let Ok(mut config) = CONFIG.lock() {
             config.confirm_file_type = true;
-            config.office_preview_enabled = true;
+            config.document_preview_enabled = true;
             // What the app's own `config.ini` holds is not what this test is about: it asks
             // the machine, and the setting is pinned to the one that asks the machine.
             config.office_engine = OfficeEngine::MicrosoftOffice;
@@ -10612,18 +10609,18 @@ mod tests {
         assert_eq!(layout.pos_x, 510, "half the row's width, and the gap");
     }
 
-    /// A page — a PDF's, or one Office rendered — is drawn at the room the display
+    /// A page — a PDF's, or one a document was drawn as — is drawn at the room the display
     /// has, because the room is free quality there. Every setting at or above
     /// `100%` asks for at least that room, so they are one setting for a page; only
     /// a setting below it is a size the user picked, and it is answered by
     /// reducing the fitted size rather than by ignoring it. Which page setting is
-    /// read is the kind's own: a PDF page follows `pdf_scale` and a page Office
-    /// rendered follows `office_scale`, and neither moves for the picture scale.
+    /// read is the kind's own: a PDF page follows `ebook_scale` and a page drawn for
+    /// a document follows `document_scale`, and neither moves for the picture scale.
     #[test]
     fn a_page_takes_the_room_the_display_has() {
         let pdf = PathBuf::from(r"C:\docs\report.pdf");
         let vector_scale = DEFAULT_VECTOR_SCALE;
-        let office_scale = PreviewScale::Percent(75);
+        let document_scale = PreviewScale::Percent(75);
 
         for configured in [
             PreviewScale::FitToScreen,
@@ -10636,9 +10633,9 @@ mod tests {
                     &pdf,
                     HoverScales {
                         picture: configured,
-                        page: configured,
+                        ebook: configured,
                         vector: vector_scale,
-                        office: office_scale,
+                        document: document_scale,
                         ..hover_scales()
                     }
                 ),
@@ -10651,9 +10648,9 @@ mod tests {
                 &pdf,
                 HoverScales {
                     picture: PreviewScale::Percent(400),
-                    page: PreviewScale::Percent(50),
+                    ebook: PreviewScale::Percent(50),
                     vector: vector_scale,
-                    office: office_scale,
+                    document: document_scale,
                     ..hover_scales()
                 }
             ),
@@ -10664,9 +10661,9 @@ mod tests {
                 &pdf,
                 HoverScales {
                     picture: PreviewScale::Percent(400),
-                    page: PreviewScale::Percent(25),
+                    ebook: PreviewScale::Percent(25),
                     vector: vector_scale,
-                    office: office_scale,
+                    document: document_scale,
                     ..hover_scales()
                 }
             ),
@@ -10678,9 +10675,9 @@ mod tests {
                 &pdf,
                 HoverScales {
                     picture: PreviewScale::Percent(400),
-                    page: PreviewScale::FitToScreen,
+                    ebook: PreviewScale::FitToScreen,
                     vector: vector_scale,
-                    office: office_scale,
+                    document: document_scale,
                     ..hover_scales()
                 }
             ),
@@ -10697,7 +10694,7 @@ mod tests {
     fn a_document_is_drawn_at_its_share_of_the_room() {
         let svg = PathBuf::from(r"C:\art\clock.svg");
         let configured = PreviewScale::Percent(100);
-        let page = PreviewScale::FitToScreen;
+        let ebook = PreviewScale::FitToScreen;
 
         assert_eq!(
             effective_preview_scale(
@@ -10705,7 +10702,7 @@ mod tests {
                 HoverScales {
                     picture: configured,
                     vector: PreviewScale::FitToScreen,
-                    page,
+                    ebook,
                     ..hover_scales()
                 }
             ),
@@ -10718,7 +10715,7 @@ mod tests {
                     HoverScales {
                         picture: configured,
                         vector: PreviewScale::Percent(percent),
-                        page,
+                        ebook,
                         ..hover_scales()
                     }
                 ),
@@ -10733,7 +10730,7 @@ mod tests {
                 HoverScales {
                     picture: configured,
                     vector: PreviewScale::Percent(60),
-                    page,
+                    ebook,
                     ..hover_scales()
                 }
             ),
@@ -10752,7 +10749,7 @@ mod tests {
                     HoverScales {
                         picture: configured,
                         vector: PreviewScale::Percent(100),
-                        page,
+                        ebook,
                         ..hover_scales()
                     }
                 ),
@@ -10770,7 +10767,7 @@ mod tests {
     fn a_specimen_is_drawn_at_its_share_of_the_room() {
         let font = PathBuf::from(r"C:\fonts\Inter-Regular.woff2");
         let picture = PreviewScale::Percent(400);
-        let page = PreviewScale::FitToScreen;
+        let ebook = PreviewScale::FitToScreen;
         let vector = PreviewScale::Percent(75);
 
         assert_eq!(
@@ -10779,7 +10776,7 @@ mod tests {
                 HoverScales {
                     picture,
                     vector,
-                    page,
+                    ebook,
                     ..hover_scales()
                 }
             ),
@@ -10794,7 +10791,7 @@ mod tests {
                     HoverScales {
                         picture,
                         vector,
-                        page,
+                        ebook,
                         font: PreviewScale::Percent(percent),
                         ..hover_scales()
                     }
@@ -10815,7 +10812,7 @@ mod tests {
                     HoverScales {
                         picture,
                         vector,
-                        page,
+                        ebook,
                         font: configured,
                         ..hover_scales()
                     }
@@ -10833,7 +10830,7 @@ mod tests {
                 HoverScales {
                     picture: PreviewScale::Percent(200),
                     vector,
-                    page,
+                    ebook,
                     font: PreviewScale::Percent(10),
                     ..hover_scales()
                 }
@@ -10856,8 +10853,8 @@ mod tests {
                 HoverScales {
                     picture,
                     vector: DEFAULT_VECTOR_SCALE,
-                    page: PreviewScale::Percent(25),
-                    office: PreviewScale::Percent(75),
+                    ebook: PreviewScale::Percent(25),
+                    document: PreviewScale::Percent(75),
                     font: PreviewScale::Percent(10),
                     ..hover_scales()
                 }
@@ -10875,8 +10872,8 @@ mod tests {
                 HoverScales {
                     picture: PreviewScale::Percent(200),
                     vector: PreviewScale::FitToScreen,
-                    page: PreviewScale::Percent(25),
-                    office: PreviewScale::Percent(75),
+                    ebook: PreviewScale::Percent(25),
+                    document: PreviewScale::Percent(75),
                     font: PreviewScale::Percent(10),
                     ..hover_scales()
                 }
@@ -11133,8 +11130,8 @@ mod tests {
             HoverScales {
                 picture: PreviewScale::Percent(400),
                 vector: DEFAULT_VECTOR_SCALE,
-                page: PreviewScale::Percent(25),
-                office: PreviewScale::Percent(10),
+                ebook: PreviewScale::Percent(25),
+                document: PreviewScale::Percent(10),
                 font: PreviewScale::Percent(DEFAULT_FONT_SCALE_PERCENT),
                 ..hover_scales()
             },
