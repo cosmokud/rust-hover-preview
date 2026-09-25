@@ -179,6 +179,10 @@ pub fn engines() -> Vec<Row> {
             available: crate::engines::peazip_render::available(),
         },
         Row {
+            name: "Calibre",
+            available: crate::engines::calibre_render::available(),
+        },
+        Row {
             name: "Microsoft Word",
             available: prog_id_installed("Word.Application"),
         },

@@ -135,11 +135,11 @@ fn usable_page(path: &Path) -> Option<(Page, (u32, u32))> {
     }
 
     let page = office_render::held_page(path)?;
-    if let Some(size) = document_cache::size(path, OfficeEngine::MicrosoftOffice) {
+    if let Some(size) = document_cache::size(path, OfficeEngine::MicrosoftOffice.as_str()) {
         return Some((page, size));
     }
 
-    document_cache::forget(path, OfficeEngine::MicrosoftOffice);
+    document_cache::forget(path, OfficeEngine::MicrosoftOffice.as_str());
     None
 }
 

@@ -357,14 +357,14 @@ impl Signature {
 /// The formats the common table does not carry, which are the ones an engine here reads
 /// and no file manager would name.
 ///
-/// Every name the two engines' lists carry that `infer` has no signature for is answered
+/// Every name the engines' lists carry that `infer` has no signature for is answered
 /// here, so that the content of a file decides what it is whichever engine the file
 /// belongs to: a picture this app's own decoder reads, a drawing the drawing layer plays,
-/// a document the render engine imports, and the containers and raw streams FFmpeg plays
-/// that no common table names. What a format's test is worth differs, and where it is not
-/// a literal the test says what it is: the magic of a format whose header is its own, a
-/// start code followed by the header a stream of that codec opens with, or — for the
-/// packages that declare a type — the declaration itself.
+/// a document the render engine imports, a book the ebook engine reads, and the containers
+/// and raw streams FFmpeg plays that no common table names. What a format's test is worth
+/// differs, and where it is not a literal the test says what it is: the magic of a format
+/// whose header is its own, a start code followed by the header a stream of that codec
+/// opens with, or — for the packages that declare a type — the declaration itself.
 ///
 /// Three kinds of name are deliberately *not* here, and each is a judgement about the
 /// format rather than a gap:
@@ -986,6 +986,66 @@ const SIGNATURES: &[Signature] = &[
     Signature {
         names: &["kra"],
         matches: Matcher::Package(b"application/x-krita"),
+    },
+    // --------------------------------------------------------------------------- ebooks
+    // The books the ebook engine reads that say what they are in their own bytes. What is asked of
+    // each is what is asked of every entry above — what the format writes at the front of a file,
+    // and nothing else — and a book whose head says nothing is answered by its name instead, which
+    // is what `calibre_formats` is for.
+    //
+    // Three kinds of name are deliberately *not* here, and each is a judgement about the format
+    // rather than a gap:
+    //
+    // * **An EPUB is a box like any other**, and the one thing that tells it from a zip is a
+    //   declaration — which is the same shape the OpenDocuments above have, and it is read the
+    //   same way. A book of the format is the one book here that answers a kind of its own, since
+    //   the name `epub` is claimed by no other list: a `.zip` whose declaration says it is an EPub
+    //   is one, which is what the declaration is for.
+    // * **A PalmDoc is not asked about**, although a `.prc` and a `.pdb` of that shape are books
+    //   the engine reads. A Palmobook and an AportisDoc are the same header and the same
+    //   identifiers, and the second is the render engine's by its own name — so the name is what
+    //   settles which of the two engines a PalmDatabase is for, and a signature asked of the bytes
+    //   alone would answer the one thing the two cannot be told apart by (see `GUARDS`, where the
+    //   `.pdb` name is asked about already).
+    // * **`snb`, `tcr`, `pml` and `htmlz` have no head to ask about at all.** A `.snb` is a SQLite
+    //   database — the container every application on the machine keeps its own state in, which is
+    //   the last thing a signature should claim — a `.tcr` and a `.pml` are text with a marker too
+    //   weak to trust, and a `.htmlz` is a zip. All four are answered by their names.
+    //
+    // What is asked of a Mobipocket book is the two identifiers the format is defined by, written
+    // where every Palm database keeps its own: the type `BOOK` and the creator `MOBI`. It is the
+    // whole of the Kindle family under one signature — an `.azw`, an `.azw3`, an `.azw4` and a
+    // `.prc` are the same database with the same pair inside — and it is what tells one from the
+    // Palm ebook the render engine reads, which is the same header with other identifiers.
+    Signature {
+        names: &["azw", "azw3", "azw4", "mobi", "prc"],
+        matches: Matcher::Test(is_mobipocket),
+    },
+    // The open one, which declares its own type beside its own name like every package above.
+    Signature {
+        names: &["epub"],
+        matches: Matcher::Package(b"application/epub+zip"),
+    },
+    // FictionBook: the root element every file of the format is written with, behind the
+    // declaration every XML file opens with. No text list claims the name, which is why the
+    // signature is worth asking for at all: `<?xml` alone is every XML file there is.
+    Signature {
+        names: &["fb2"],
+        matches: Matcher::Test(is_fictionbook),
+    },
+    // A scanned book: the chunk every DjVu file opens with, and the form type that follows it —
+    // a document of pages, a single page, or a page included by another.
+    Signature {
+        names: &["djvu"],
+        matches: Matcher::Test(is_djvu),
+    },
+    // And the container of the Sony readers of the 2000s, which writes its own three letters with
+    // a zero byte between each of them.
+    Signature {
+        names: &["lrf"],
+        matches: Matcher::Test(|probe| {
+            starts_with(probe, &[b'L', 0x00, b'R', 0x00, b'F', 0x00, 0x00, 0x00])
+        }),
     },
     // -------------------------------------------------------------------------- videos
     // The ISO base media family, for the names the common table leaves out of it: `3gp`,
@@ -2134,6 +2194,12 @@ const fn engine(extension: &'static str) -> (&'static str, PreviewType) {
     (extension, PreviewType::Libre)
 }
 
+/// One of the books the ebook engine reads: a name the `[calibre]` list carries that no
+/// signature above names.
+const fn ebook(extension: &'static str) -> (&'static str, PreviewType) {
+    (extension, PreviewType::Calibre)
+}
+
 /// The names no table above answers for, and the kind each of them belongs to.
 ///
 /// What is left once the two tables above have answered for everything they can is short,
@@ -2190,6 +2256,14 @@ static KIND_BY_NAME: &[(&str, PreviewType)] = &[
     engine("vstx"),
     engine("zabw"),
     engine("zmf"),
+    // And the books of the ebook engine's list whose own head is nothing to ask about: the two
+    // texts of the dedicated readers, the SQLite database a `.snb` is, and the zip an `.htmlz` is.
+    // The books beside them are answered by their own bytes above, and every one of them is a name
+    // this table would otherwise have no opinion about at all.
+    ebook("htmlz"),
+    ebook("pml"),
+    ebook("snb"),
+    ebook("tcr"),
 ];
 
 /// The names in the table above that are more than one format's, and the question asked of
@@ -2216,10 +2290,16 @@ type Guard = fn(&[u8]) -> Content;
 /// container of debug information and no kind of document at all — and which is the one a
 /// developer's folders are full of, and the reason this name is not answered by itself.
 ///
-/// What comes back is the ebook where the file's own header is a Palm OS one, and nothing
-/// at all where it is anything else, the program database included. Nothing is left to the
+/// What comes back is the ebook where the file's own header is a Palm OS one, and nothing at
+/// all where it is anything else, the program database included. Nothing is left to the
 /// name here, deliberately: a `.pdb` that is neither of the two is a file this app has no
 /// reader for either way, and the engine is not asked about one.
+///
+/// A `.pdb` that is a *Mobipocket* book is not one of those, and does not arrive here at all:
+/// the two identifiers that tell one — the type `BOOK` and the creator `MOBI` — are a signature
+/// of their own above, which is answered before any name is asked about (see [`SIGNATURES`]).
+/// What the signature means is that such a file is the ebook engine's rather than the render
+/// engine's, which is right by the file rather than by the name it happens to have been given.
 fn palm_ebook_or_program_database(probe: &[u8]) -> Content {
     if is_program_database(probe) {
         return Content::Foreign;
@@ -2272,6 +2352,44 @@ fn is_palm_database(probe: &[u8]) -> bool {
 fn is_palm_tag(tag: &[u8]) -> bool {
     tag.first().is_some_and(|byte| byte.is_ascii_alphabetic())
         && tag.iter().all(|byte| byte.is_ascii_graphic())
+}
+
+/// Whether the front of a file is a Mobipocket book — the header every Kindle ebook is, under the
+/// five names the ebook engine reads it by.
+///
+/// It is the same Palm database `is_palm_database` reads, asked about one pair of identifiers
+/// rather than about the shape of the two fields: the type `BOOK` and the creator `MOBI`, which is
+/// what a Mobipocket file, an `.azw`, a KF8 `.azw3`, an `.azw4` and a `.prc` all carry, and which
+/// is what tells one from the Palm ebook the render engine's own filters read — the same header
+/// with the identifiers of another application. The record count is asked for beside them, the way
+/// it is there: a file whose header declares nothing in it is not a book.
+fn is_mobipocket(probe: &[u8]) -> bool {
+    at(probe, 60, b"BOOK")
+        && at(probe, 64, b"MOBI")
+        && read_be16(probe, 76).is_some_and(|records| records > 0)
+}
+
+/// Whether the front of a file is a FictionBook: the root element every file of the format is
+/// written with, behind the declaration every XML file opens with.
+///
+/// Both halves are asked because either alone is no answer: `<?xml` is every XML file there is, and
+/// a root element of this name is what no other document format has. The byte-order mark a file
+/// may be written with is skipped, since the declaration is what has to follow it.
+fn is_fictionbook(probe: &[u8]) -> bool {
+    let body = probe.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(probe);
+
+    starts_with(body, b"<?xml") && contains(body, b"<FictionBook")
+}
+
+/// Whether the front of a file is a DjVu document: the chunk every file of the format opens with,
+/// and the form type that follows it — a document of several pages, a single page, or a page
+/// included by another.
+fn is_djvu(probe: &[u8]) -> bool {
+    starts_with(probe, b"AT&TFORM")
+        && matches!(
+            probe.get(8..12),
+            Some([b'D', b'J', b'V', b'M' | b'U' | b'I'])
+        )
 }
 
 /// What the name a file carries answers for it, where the tables above named nothing.
@@ -2358,6 +2476,15 @@ fn kind_claiming(names: &[&str], config: &AppConfig) -> Option<PreviewType> {
         // this app itself, and one in this list is read by an engine.
         if crate::formats::peazip_formats::matches_peazip_list(&named, &config.peazip_extensions) {
             return Some(PreviewType::Peazip);
+        }
+
+        // A book an installed ebook engine reads, asked where the hook asks it: beside the listing
+        // engine above and the document engines below, which is where the lists are told apart —
+        // a name in no other list is read by this one, and the name is what a book of the format
+        // is recognized by where its own head says nothing.
+        if crate::formats::calibre_formats::matches_calibre_list(&named, &config.calibre_extensions)
+        {
+            return Some(PreviewType::Calibre);
         }
 
         if crate::formats::office_formats::matches_office_list(&named, &config.office_extensions) {
@@ -2461,6 +2588,14 @@ mod tests {
         header[60..64].copy_from_slice(kind);
         header[64..68].copy_from_slice(creator);
         header[76..78].copy_from_slice(&1u16.to_be_bytes());
+        header
+    }
+
+    /// The same header with the two identifiers a Mobipocket book is defined by — the type `BOOK`
+    /// and the creator `MOBI` — and the record a MOBI header of its own begins in.
+    fn mobipocket() -> Vec<u8> {
+        let mut header = palm_database("A Book", b"BOOK", b"MOBI");
+        header.extend_from_slice(b"MOBI");
         header
     }
 
@@ -3020,6 +3155,41 @@ mod tests {
             );
         }
 
+        // ------------------------------------------------------------------ ebooks
+        assert_eq!(
+            classified("book.dat", &mobipocket()),
+            Content::Kind(PreviewType::Calibre),
+            "a Mobipocket book, which is what every Kindle format is inside"
+        );
+        assert_eq!(
+            classified("book.dat", &declared_package("application/epub+zip")),
+            Content::Kind(PreviewType::Calibre),
+            "an EPub, named by the type it declares"
+        );
+        assert_eq!(
+            classified("book.dat", b"<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<FictionBook xmlns=\"http://www.gribuser.ru/xml/fictionbook/2.0\">"),
+            Content::Kind(PreviewType::Calibre),
+            "a FictionBook, whose root element is what tells it from an ordinary XML file"
+        );
+        assert_eq!(
+            classified(
+                "book.dat",
+                b"\xEF\xBB\xBF<?xml version=\"1.0\"?><FictionBook>"
+            ),
+            Content::Kind(PreviewType::Calibre),
+            "and one written with a byte-order mark, which the declaration follows"
+        );
+        assert_eq!(
+            classified("book.dat", b"AT&TFORMDJVM\x00\x00\x00\x08"),
+            Content::Kind(PreviewType::Calibre),
+            "a DjVu document"
+        );
+        assert_eq!(
+            classified("book.dat", b"L\x00R\x00F\x00\x00\x00"),
+            Content::Kind(PreviewType::Calibre),
+            "a BBeB book, which writes its own letters with a zero byte between them"
+        );
+
         // ------------------------------------------------------------------ videos
         assert_eq!(
             classified("film.docx", b"\x00\x00\x00\x20ftypisom"),
@@ -3503,13 +3673,13 @@ mod tests {
         );
     }
 
-    /// What is in the table is the two engines' own lists, and the kind beside a name is
+    /// What is in the table is the engines' own lists, and the kind beside a name is
     /// the kind the lists themselves give it: a video name is a video, a name of the
-    /// render engine's is the engine's, and a name neither list carries is not in the
-    /// table at all. It is what keeps the table from drifting away from the lists — a name
-    /// taken out of `libre_formats`, the way `swf` was, has to be taken out of here with
-    /// it — and what keeps `dif`, which both lists carry, answered in the order every
-    /// other question about a file is asked in.
+    /// render engine's is the engine's, a name of the ebook engine's is the ebook engine's, and a
+    /// name no list carries is not in the table at all. It is what keeps the table from drifting
+    /// away from the lists — a name taken out of `libre_formats`, the way `swf` was, has to be
+    /// taken out of here with it — and what keeps `dif`, which two lists carry, answered in the
+    /// order every other question about a file is asked in.
     #[test]
     fn the_table_holds_the_names_the_lists_hold() {
         let config = AppConfig::default();
@@ -3531,7 +3701,19 @@ mod tests {
                 continue;
             }
 
-            panic!("`{extension}` is not a name either list carries");
+            if crate::formats::calibre_formats::matches_calibre_list(
+                &named,
+                &config.calibre_extensions,
+            ) {
+                assert_eq!(
+                    *kind,
+                    PreviewType::Calibre,
+                    "`{extension}` is the ebook engine's name"
+                );
+                continue;
+            }
+
+            panic!("`{extension}` is not a name any list carries");
         }
     }
 

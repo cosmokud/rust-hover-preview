@@ -10,12 +10,14 @@ use crate::config::config::{
     DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS, DEFAULT_VECTOR_BACKGROUND, DEFAULT_VECTOR_SCALE,
     DEFAULT_VIDEO_SCALE_PERCENT, DEFAULT_WEBP_PLAYBACK_FPS,
 };
+use crate::engines::calibre_render;
 use crate::engines::imagemagick_render;
 use crate::engines::libreoffice_render;
 use crate::engines::office_render;
 use crate::engines::peazip_render;
 use crate::engines::webview_preview;
 use crate::formats::archive_formats;
+use crate::formats::calibre_formats;
 use crate::formats::codecs;
 use crate::formats::design_formats;
 use crate::formats::font_formats;
@@ -617,6 +619,16 @@ enum MediaType {
     /// at. It is the picture kind's second half, and the switch over it is the switch for
     /// pictures; see `magick_formats` and `imagemagick_render`.
     Magick,
+    /// A page an installed Calibre converted a book into — a Kindle or Mobipocket file, an EPub,
+    /// a FictionBook, a scanned book — drawn exactly as a PDF page is: a frame of this app's own,
+    /// made from the first page of the PDF the engine wrote, at the share of the display a book is
+    /// drawn over. It is the book kind's second half, and the switch over it is the switch for
+    /// books; see `calibre_formats` and `calibre_render`.
+    ///
+    /// It is a kind of its own rather than `Pdf` because the two are gated apart: the switch a user
+    /// throws over a book the app drew itself is not the switch over one an engine had to convert,
+    /// and only one of the two costs a conversion to show.
+    Calibre,
     Loading,
 }
 
@@ -651,6 +663,9 @@ impl MediaType {
             // a frame of this app's own, drawn like any other — and the switch over it is the
             // switch for pictures, because what a user turns off is pictures.
             Self::Magick => Some(PreviewType::Magick),
+            // And a book an engine converted: a page like any other, at the gate over books,
+            // because what a user turns off is books.
+            Self::Calibre => Some(PreviewType::Calibre),
             Self::Vector => Some(PreviewType::Vector),
             Self::Loading => None,
         }
@@ -2123,6 +2138,77 @@ fn request_peazip_render(path: &Path, generation: u64) -> Option<(PathBuf, u64)>
     Some((path.to_path_buf(), generation))
 }
 
+/// Whether this hover is owed a page by the ebook engine: a book the engine reads, with an engine
+/// installed to convert it and nothing converted for this version of it yet.
+///
+/// It is the same question `libre_render_is_due` is, asked of an engine that converts a whole book
+/// rather than drawing a page of one — one that reads a file, writes a PDF and exits, which is why
+/// there is a process to wait for and nothing to keep. Four things ask it: the layout, which
+/// measures a book like this as the wait for a page; the loader, which answers with it that a hover
+/// is still waiting rather than failed; the loop, which asks the engine for the page only where
+/// there is one to ask for; and the layout's own placement question, which decides whether a hover
+/// is a wait for something rather than a preview of it (see `page_is_on_the_way`).
+fn calibre_render_is_due(path: &Path) -> bool {
+    // The file's own bytes first, the name after them, exactly as the render engine's own question
+    // asks it: a book renamed to a name no list holds is still the engine's to convert, and one
+    // whose bytes are another kind is not a file to start it for (see
+    // `calibre_formats::is_engine_ebook`).
+    calibre_formats::is_engine_ebook(path)
+        && PreviewType::Calibre.enabled()
+        && calibre_render::available()
+        && !calibre_render::refused(path)
+        && calibre_render::rendered_page(path).is_none()
+}
+
+/// Ask the engine for the page this hover needs, and answer what is now being waited on.
+///
+/// The same answer, and for the same reason, as `request_libre_render`: a page does not exist until
+/// the engine has converted the book, and asking late is waiting twice. Nothing is waited on here
+/// either — the conversion runs on the engine's own thread — so what comes back is the wait, and
+/// the loop watches the folder the page lands in for it.
+fn request_calibre_render(path: &Path, generation: u64) -> Option<(PathBuf, u64)> {
+    if !calibre_render_is_due(path) {
+        return None;
+    }
+
+    calibre_render::request(path);
+    Some((path.to_path_buf(), generation))
+}
+
+/// What an engine that answers by writing a page into the app's own folder has said about this
+/// file: `Some(true)` where the page has landed, `Some(false)` where the engine has answered that
+/// it will not draw the file at all, and `None` where neither engine is the one being waited on or
+/// where one of them is and nothing has come back yet.
+///
+/// Two engines answer this way — the render engine and the ebook engine — and neither sends a
+/// message when it is done: what says a page is there is the page, read out of the cache it was
+/// kept in (see `libre_render_is_due` and `calibre_render_is_due`). One question for both, so that
+/// the wait and the replay that takes the answer up are one code path whichever engine produced it.
+fn engine_page_answer(path: &Path) -> Option<bool> {
+    // Which engine owes the page is asked of the file, and it is the same question the request side
+    // asked before there was anything to ask for: an engine that was never asked has no page for the
+    // file, and waiting on it would be waiting for nothing.
+    let (drawn, refused) = if calibre_formats::is_engine_ebook(path) {
+        (
+            calibre_render::rendered_page(path).is_some(),
+            calibre_render::refused(path),
+        )
+    } else if libre_formats::engine_page_kind(path).is_some() {
+        (
+            libreoffice_render::rendered_page(path).is_some(),
+            libreoffice_render::refused(path),
+        )
+    } else {
+        return None;
+    };
+
+    match (drawn, refused) {
+        (true, _) => Some(true),
+        (false, true) => Some(false),
+        (false, false) => None,
+    }
+}
+
 /// Every scale a hover is laid out by, read from the configuration together so that the
 /// measure of a file and the render that follows it cannot disagree about the size.
 #[derive(Debug, Clone, Copy)]
@@ -2261,6 +2347,11 @@ fn effective_preview_scale(path: &Path, scales: HoverScales) -> PreviewScale {
         // back is a PNG, so the share of its own size that `preview_scale` names is the share
         // it is drawn at — the picture's rule rather than a document's.
         scale_of_kind(PreviewType::Magick, path, scales)
+    } else if calibre_formats::is_calibre_file(path) {
+        // A book an engine converts is a book for this question: what it hands back is a PDF of
+        // the book, so the share of the display `ebook_scale` names is the share it is drawn at,
+        // exactly as the page of a PDF this app reads itself is (see `load_engine_page`).
+        scale_of_kind(PreviewType::Calibre, path, scales)
     } else if design_formats::is_design_file(path) {
         scale_of_kind(PreviewType::Design, path, scales)
     } else if svg_preview::is_svg_file(path) || vector_formats::is_vector_file(path) {
@@ -2321,6 +2412,14 @@ fn scale_of_kind(kind: PreviewType, path: &Path, scales: HoverScales) -> Preview
         // left to the arm below so that a `.nef` the content named and one the name named
         // come out at the same size (see `effective_preview_scale`).
         PreviewType::Magick => scales.picture,
+
+        // And a book an engine converted keeps the book rule, at the share `ebook_scale` names:
+        // what the engine hands back is a PDF, which is a page rather than a picture with a size of
+        // its own to be scaled from — so the share is of the display, the same question a PDF page
+        // and a page an engine drew answer. It is asked here rather than left to an arm of its own
+        // because the setting is the same one: a user who wants their books smaller wants them
+        // smaller whichever reader drew one.
+        PreviewType::Calibre => fit_reduced(scales.ebook),
 
         // A design document is a document for this question rather than a picture: what is
         // previewed is the picture the file keeps of the whole of itself, at whatever size
@@ -5253,6 +5352,27 @@ fn load_media(
         );
     }
 
+    // A book no reader of this app's own opens is the engine's to convert and this window's to
+    // draw: what comes back is a PDF of the book, and the page it is drawn as is the page a PDF
+    // this app read itself is drawn as — the same reader of the same kind of file, shown under the
+    // `Calibre` kind, whose switch is the one that is about it.
+    //
+    // Nothing is converted here. A book the engine has not answered for yet is a wait rather than a
+    // failure — the loop has asked for it, and the hover is replayed when the page lands (see
+    // `calibre_render_is_due`) — so what it gets here is nothing, which is the spinner it is
+    // already showing.
+    if calibre_formats::is_calibre_file(path) {
+        return calibre_render::rendered_page(path).and_then(|page| {
+            load_engine_page(
+                &page,
+                MediaType::Calibre,
+                max_width,
+                max_height,
+                preview_scale,
+            )
+        });
+    }
+
     if office_formats::is_office_file(path) {
         // Where no Office is installed to draw a page, the render engine beside it draws one
         // instead: the same page, shown as an Office document rather than as a document of
@@ -5416,6 +5536,15 @@ fn load_media_of_kind(
             MediaType::Peazip,
             &cancel,
         ),
+        PreviewType::Calibre => calibre_render::rendered_page(path).and_then(|page| {
+            load_engine_page(
+                &page,
+                MediaType::Calibre,
+                max_width,
+                max_height,
+                preview_scale,
+            )
+        }),
         PreviewType::Design => load_design_preview(path, max_width, max_height, preview_scale),
         // Which half of the drawing kind this is, is the name's to say here rather than the
         // content's: a document is drawn by the browser engine and a metafile by the drawing
@@ -5626,6 +5755,14 @@ fn get_media_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
         return magick_box(path);
     }
 
+    // And a book the ebook engine converts, measured where the hook asks it: beside the listing
+    // engine and the document engines, none of whose lists would have claimed a `.mobi` anyway.
+    // What is measured is the page the engine wrote, and one it has not written yet is the wait
+    // for it (see `calibre_box`).
+    if calibre_formats::is_calibre_preview(path) {
+        return calibre_box(path);
+    }
+
     // A design document is measured from the picture it is previewed from — the merged
     // image at the end of a Photoshop file, or the picture a project container holds —
     // and a file neither reader will answer for reports no size, which is how it comes
@@ -5714,6 +5851,7 @@ fn media_dimensions_of_kind(kind: PreviewType, path: &PathBuf) -> Option<(u32, u
         PreviewType::Document => office_preview::measure(path),
         PreviewType::Libre => libre_box(path),
         PreviewType::Magick => magick_box(path),
+        PreviewType::Calibre => calibre_box(path),
         PreviewType::Design => design_dimensions(path),
         PreviewType::Vector => {
             if svg_preview::is_svg_file(path) {
@@ -5750,6 +5888,36 @@ fn libre_box(path: &Path) -> Option<(u32, u32)> {
 
     // A document the engine has already turned down is not one to wait for.
     if libreoffice_render::refused(path) {
+        return None;
+    }
+
+    Some((office_preview::WAITING_BOX, office_preview::WAITING_BOX))
+}
+
+/// The box a book the ebook engine converts is placed at: the page it has already converted for
+/// this version of the book, the wait for one that is on its way, and nothing at all for a book the
+/// engine has turned down or for a machine with no engine to convert one with.
+///
+/// It is the shape `libre_box` has, and it is the same question: what is placed is a page the
+/// engine wrote rather than a size the file asks for — a book holds no page of its own, which is
+/// the whole reason it is handed to an engine — so the box is the page's own and, until there is
+/// one, the spinner's. Nothing is converted here: a book the engine has answered nothing for yet is
+/// the wait, and the loop asks for the page the moment there is a hover to ask for it (see
+/// `request_calibre_render`).
+fn calibre_box(path: &Path) -> Option<(u32, u32)> {
+    if !calibre_render::available() {
+        // Nothing to convert it with, so there is nothing to show: a machine without the engine
+        // shows no preview for these names rather than the first page of the markup a `.fb2` is,
+        // which is the whole reason the name is in this list.
+        return None;
+    }
+
+    if let Some(page) = calibre_render::rendered_page(path) {
+        return pdf_preview::page_dimensions(&page);
+    }
+
+    // A book the engine has already turned down is not one to wait for.
+    if calibre_render::refused(path) {
         return None;
     }
 
@@ -5815,8 +5983,8 @@ fn picture_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
 }
 
 /// Whether this hover is the wait for a page rather than a preview of one: an Office
-/// document or a document the render engine draws, with nothing drawn for it yet and a page
-/// on the way.
+/// document, a document the render engine draws or a book the ebook engine converts, with
+/// nothing drawn for it yet and a page on the way.
 ///
 /// A hover like that is placed by the spinner's own box, flush at the pointer, rather than
 /// by the size a preview would take: it is the wait for the file under the hand, which
@@ -5834,7 +6002,11 @@ fn page_is_on_the_way(path: &Path) -> bool {
             office_preview::SourceKind::None
         );
 
-    office || libre_render_is_due(path) || magick_render_is_due(path) || peazip_render_is_due(path)
+    office
+        || libre_render_is_due(path)
+        || magick_render_is_due(path)
+        || peazip_render_is_due(path)
+        || calibre_render_is_due(path)
 }
 
 /// The size the layout should place and scale a preview from.
@@ -6281,13 +6453,15 @@ fn spawn_load_worker(
             // not merely a wait that is not shown: the loop reads this as "there is nothing
             // to draw and nothing coming", which is the branch that hides the window and
             // drops the hover — so the engine is never asked for its answer and the file
-            // has no preview at all. The listing the PeaZip engine owes is such a wait (see
-            // `peazip_render_is_due`).
+            // has no preview at all. The listing the PeaZip engine owes is such a wait, and so
+            // is the page the ebook engine converts a book into (see `peazip_render_is_due` and
+            // `calibre_render_is_due`).
             let awaiting_render = media.is_none()
                 && (office_render_is_due(&request.path, request.max_width)
                     || libre_render_is_due(&request.path)
                     || magick_render_is_due(&request.path)
-                    || peazip_render_is_due(&request.path));
+                    || peazip_render_is_due(&request.path)
+                    || calibre_render_is_due(&request.path));
 
             let _ = result_tx.send(LoadResult {
                 generation: request.generation,
@@ -9031,7 +9205,11 @@ pub fn run_preview_window() {
                             // the engine has produced one — and it is asked after the three above
                             // because no name sits in more than one of their lists (see
                             // `peazip_formats`).
-                            .or_else(|| request_peazip_render(&result.path, result.generation));
+                            .or_else(|| request_peazip_render(&result.path, result.generation))
+                            // And the page a book is converted into, which is the same wait once
+                            // more: a PDF does not exist until the engine has written one, and no
+                            // name sits in this list and another either (see `calibre_formats`).
+                            .or_else(|| request_calibre_render(&result.path, result.generation));
 
                             // Nothing was asked for because there is nothing left to ask
                             // about: every engine that could owe this file something has
@@ -9265,7 +9443,9 @@ pub fn run_preview_window() {
             // the page has arrived — or whether the engine has answered that it will not
             // draw the document at all — is a read of that folder rather than a message
             // from a thread. What comes of it is the answer an Office page gives, and the
-            // same code below takes it up: it is the same wait, in the same box.
+            // same code below takes it up: it is the same wait, in the same box. The page a book
+            // is converted into is the second engine that answers this way, and it is read here
+            // for the same reason.
             //
             // Which documents are watched for is asked of the place the request was made
             // from, so a hover is never watched for a page nothing was asked to draw: an
@@ -9273,14 +9453,8 @@ pub fn run_preview_window() {
             // application's tier, and is answered by a message rather than by this read (see
             // `libre_render_is_due`).
             if page_ready.is_none() {
-                if let Some((path, generation)) = page_render_pending
-                    .as_ref()
-                    .filter(|(path, _)| libre_formats::engine_page_kind(path).is_some())
-                {
-                    let drawn = libreoffice_render::rendered_page(path).is_some();
-                    let refused = libreoffice_render::refused(path);
-
-                    if drawn || refused {
+                if let Some((path, generation)) = page_render_pending.as_ref() {
+                    if let Some(drawn) = engine_page_answer(path) {
                         page_ready = Some((path.clone(), *generation, drawn));
                     }
                 }
@@ -12749,6 +12923,166 @@ mod tests {
                 continue;
             };
             println!("measure after the listing: {dimensions:?}");
+
+            let Some(layout) = compute_mouse_layout(
+                cursor_x,
+                cursor_y,
+                HoverPlacement {
+                    orig_dims: dimensions,
+                    avoid: None,
+                    follow_cursor: false,
+                    preview_scale: scale,
+                    flush_at_cursor: false,
+                },
+                bounds,
+                dpi,
+            ) else {
+                println!("layout: none — the hover shows no preview");
+                continue;
+            };
+            println!(
+                "layout: {}x{} at ({}, {}), free room {}x{}",
+                layout.preview_w,
+                layout.preview_h,
+                layout.pos_x,
+                layout.pos_y,
+                layout.max_width,
+                layout.max_height
+            );
+
+            let cancel = Arc::new(AtomicBool::new(false));
+            let started = Instant::now();
+            match load_media(
+                &path,
+                layout.max_width,
+                layout.max_height,
+                scale,
+                dpi,
+                Arc::clone(&cancel),
+            ) {
+                Some(media) => println!(
+                    "loaded: {}x{}, {} frame(s), in {:?}",
+                    media.current_width(),
+                    media.current_height(),
+                    media.frames.len(),
+                    started.elapsed()
+                ),
+                None => println!(
+                    "loaded: nothing — the hover blinks, in {:?}",
+                    started.elapsed()
+                ),
+            }
+        }
+    }
+
+    /// The whole path a hover takes for a book an installed Calibre converts, which is the
+    /// render engine's path with a slower engine behind it: measured as the wait for a page, the
+    /// conversion asked for, the page watched for, and then — when the engine has answered —
+    /// measured and loaded from the page itself. Ignored, and driven by `RHP_CALIBRE_PROBE` —
+    /// `$env:RHP_CALIBRE_PROBE = "C:\books\book.mobi;C:\books\book.epub"; cargo test -- --ignored --nocapture calibre_hover_probe`
+    /// — for a book whose preview does not appear, and for working through a list of the formats
+    /// this engine is asked about one at a time.
+    ///
+    /// It also answers the routing, which is what such a preview is usually about: the name the
+    /// configured list carries, what the file's bytes and its name together make of it, whether
+    /// the engine is installed to convert it, and whether this hover is the wait for one at all.
+    /// That last question is asked here of the loader's own predicate rather than of the list,
+    /// because the list is only half of it: a file the engine will be asked about is still a file
+    /// with no preview if the load that missed it is not read as a wait (see `awaiting_render` in
+    /// the loader worker).
+    #[test]
+    #[ignore = "reads the files named in RHP_CALIBRE_PROBE and starts the installed Calibre"]
+    fn calibre_hover_probe() {
+        let Ok(list) = std::env::var("RHP_CALIBRE_PROBE") else {
+            println!("set RHP_CALIBRE_PROBE to one or more paths, separated by ';'");
+            return;
+        };
+
+        let bounds = ScreenBounds {
+            left: 0,
+            top: 0,
+            right: 1920,
+            bottom: 1080,
+        };
+        let dpi = 96;
+        let (cursor_x, cursor_y) = (900, 500);
+
+        for path in list
+            .split(';')
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+        {
+            let path = PathBuf::from(path);
+            println!("\n--- {} ---", path.display());
+
+            let claimed = crate::CONFIG
+                .lock()
+                .map(|config| {
+                    calibre_formats::matches_calibre_list(&path, &config.calibre_extensions)
+                })
+                .unwrap_or(false);
+
+            println!(
+                "kinds: calibre list = {claimed}, engine ebook = {}, engine available = {}",
+                calibre_formats::is_engine_ebook(&path),
+                calibre_render::available()
+            );
+            println!(
+                "state: refused = {}, page = {:?}, render due = {}",
+                calibre_render::refused(&path),
+                calibre_render::rendered_page(&path),
+                calibre_render_is_due(&path)
+            );
+
+            let scale = effective_preview_scale(&path, current_hover_scales());
+            println!("scale: {scale:?}");
+            println!(
+                "measure before the page: {:?} — the spinner's own box is {}",
+                media_dimensions(&path, bounds, dpi),
+                office_preview::WAITING_BOX
+            );
+
+            // The hover the page is asked for, which is what the loop does the moment a book like
+            // this is missed. A file this kind does not hold — one another list reads, one whose
+            // bytes are another kind, or one the engine has already turned down — has nothing to
+            // ask for and nothing to wait on.
+            let Some(_waiting) = request_calibre_render(&path, 0) else {
+                println!("request: nothing — the engine is not asked about this file");
+                continue;
+            };
+
+            let started = Instant::now();
+            let mut page = None;
+            while page.is_none()
+                && !calibre_render::refused(&path)
+                && started.elapsed() < Duration::from_secs(300)
+            {
+                std::thread::sleep(Duration::from_millis(250));
+                page = calibre_render::rendered_page(&path);
+            }
+
+            println!(
+                "engine: page = {:?}, refused = {}, after {:?}",
+                page,
+                calibre_render::refused(&path),
+                started.elapsed()
+            );
+
+            if let Some(page) = &page {
+                println!(
+                    "page: {} bytes, {:?}",
+                    std::fs::metadata(page).map(|meta| meta.len()).unwrap_or(0),
+                    pdf_preview::page_dimensions(page)
+                );
+            }
+
+            // The replay, which is what the loop does when the page lands: the hover is measured
+            // again — this time from the page — placed, and loaded.
+            let Some(dimensions) = media_dimensions(&path, bounds, dpi) else {
+                println!("measure after the page: nothing — the hover shows no preview");
+                continue;
+            };
+            println!("measure after the page: {dimensions:?}");
 
             let Some(layout) = compute_mouse_layout(
                 cursor_x,
