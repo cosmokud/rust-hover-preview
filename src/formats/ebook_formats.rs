@@ -15,8 +15,8 @@
 //!
 //! * **The PDF's own spellings** — `pdf`, and the two the format's world writes beside it:
 //!   `pdfa`, the archival profile, and `epdf`, the encapsulated one, which the same reader opens
-//!   as it opens any page. They are answered by [`is_page_name`], and a name that leaves the list
-//!   is a name this app stops drawing.
+//!   as it opens any page. They are answered by [`matches_page_name`], and a name that leaves the
+//!   list is a name this app stops drawing.
 //! * **Everything else the list holds** is a comic, and it is read out of the container by
 //!   [`crate::readers::comic_preview`]. That includes a name a user adds by hand: what the comic
 //!   reader answers for is decided by the file rather than by the name — a zip, a rar, or nothing
@@ -119,17 +119,8 @@ pub fn is_ebook_preview(path: &Path) -> bool {
 /// names the PDF reader is the reader for.
 ///
 /// It is the name half of the question `pdf_preview::is_pdf_file` asks — that function adds the one
-/// content answer of its own, a drawing saved as a PDF — and it is asked from there rather than
-/// here so that the two halves of "is this a page" are read together.
-// Nothing in the app asks this any more — what a file is, is the router's answer (see
-// `routing::kind_of`) — and the tests below are what it is kept for.
-#[allow(dead_code)]
-pub fn is_page_name(path: &Path) -> bool {
-    page_spelling(path) && is_ebook_file(path)
-}
-
-/// The same question asked of a list the caller already holds, which is the form every caller
-/// that has the configuration in hand asks it in.
+/// content answer of its own, a drawing saved as a PDF — and it is asked of a list the caller
+/// already holds, which is the form every caller that has the configuration in hand asks it in.
 ///
 /// The hook resolves a hover with the configuration held, and every list it consults it consults
 /// through the caller's own copy — `matches_ebook_list(path, &config.ebook_extensions)` and the
@@ -147,19 +138,6 @@ fn page_spelling(path: &Path) -> bool {
         crate::formats::text_formats::lookup_extension(path).as_deref(),
         Some("pdf") | Some("pdfa") | Some("epdf")
     )
-}
-
-/// Whether the list holds this file's name and the name is not a PDF's: a comic, which is read out
-/// of its own container rather than drawn by the PDF reader.
-///
-/// What this answers is which *reader* is asked about a file, not whether the file is a comic: a
-/// name whose file is not a zip, a rar or a container of pictures is a name the comic reader
-/// answers nothing for, and the hover shows nothing rather than the wrong thing.
-// The same: the page half is asked of the router now, and this is the pair the tests below
-// contrast a comic with.
-#[allow(dead_code)]
-pub fn is_comic_name(path: &Path) -> bool {
-    is_ebook_file(path) && !is_page_name(path)
 }
 
 #[cfg(test)]
@@ -285,7 +263,7 @@ mod tests {
                 matches_ebook_list(path, &list),
                 "`{name}` is a page the PDF reader draws"
             );
-            assert!(is_page_name(path), "and it is read as one");
+            assert!(matches_page_name(path, &list), "and it is read as one");
         }
 
         for name in ["chapter.cbz", "chapter.cbr", "collection.cbc"] {
@@ -294,12 +272,15 @@ mod tests {
                 matches_ebook_list(path, &list),
                 "`{name}` is a comic this app reads itself"
             );
-            assert!(is_comic_name(path), "and it is read as one");
+            assert!(
+                !matches_page_name(path, &list),
+                "and the PDF reader is not asked about it: a comic is the other half of the list"
+            );
         }
 
         // A name that is in neither half is neither: what the list does not hold is not a book.
-        assert!(!is_page_name(Path::new("book.epub")));
-        assert!(!is_comic_name(Path::new("book.epub")));
+        assert!(!matches_ebook_list(Path::new("book.epub"), &list));
+        assert!(!matches_page_name(Path::new("book.epub"), &list));
     }
 
     /// The PDF's names are asked of the list a caller hands in — the form the hook asks them in,
@@ -337,24 +318,17 @@ mod tests {
     /// reader that decides that is the comic one — nothing here claims a name is a comic.
     #[test]
     fn a_name_added_by_hand_is_asked_of_the_reader_that_reads_it() {
-        if let Ok(mut config) = crate::CONFIG.lock() {
-            config.ebook_extensions =
-                sanitize_ebook_extensions("cbc,cbr,cbz,myalbum,pdf,pdfa,epdf");
-        }
+        let added = sanitize_ebook_extensions("cbc,cbr,cbz,myalbum,pdf,pdfa,epdf");
 
         assert!(
-            is_comic_name(Path::new("book.myalbum")),
+            matches_ebook_list(Path::new("book.myalbum"), &added),
             "a name the list holds and the PDF reader has no spelling for is the comic reader's to answer"
         );
         assert!(
-            !is_page_name(Path::new("book.myalbum")),
+            !matches_page_name(Path::new("book.myalbum"), &added),
             "and the PDF reader is not asked about it"
         );
-        assert!(is_page_name(Path::new("book.pdf")));
-
-        if let Ok(mut config) = crate::CONFIG.lock() {
-            config.ebook_extensions = sanitize_ebook_extensions(DEFAULT_EBOOK_EXTENSIONS);
-        }
+        assert!(matches_page_name(Path::new("book.pdf"), &added));
     }
 
     /// A name that is not a bare extension is dropped rather than matched against, the way every
