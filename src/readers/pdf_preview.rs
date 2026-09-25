@@ -1,5 +1,6 @@
 use crate::config::config::{image_decode_limits, PreviewType};
 use crate::shell::cloud_files;
+use crate::CONFIG;
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::fs::File;
@@ -92,8 +93,28 @@ fn named(path: &Path, extension: &str) -> bool {
 /// Only the name that needs the question pays for it: the three page spellings are answered
 /// without opening anything, and a cloud placeholder is not opened to answer either, which is the
 /// rule every gate in this app follows.
+///
+/// The list is read here because this form is asked by callers that have nothing in hand. A caller
+/// that already holds the configuration asks [`is_pdf_file_in`] instead, which is the same
+/// question with the list handed to it.
 pub fn is_pdf_file(path: &Path) -> bool {
-    if crate::formats::ebook_formats::is_page_name(path) {
+    CONFIG
+        .lock()
+        .map(|config| is_pdf_file_in(path, &config.ebook_extensions))
+        .unwrap_or(false)
+}
+
+/// The same question asked of a list the caller already holds, which is the form the hook asks it
+/// in: it resolves a hover with the configuration in hand, and every list it consults it consults
+/// through that copy.
+///
+/// A question that went and read the configuration again would wait on a lock the same thread is
+/// already holding — and a lock taken twice on one thread never comes back, so the thread that
+/// took it never returns to anything else it was doing. The hook's thread is the one that watches
+/// Explorer, and the whole app's other threads queue up behind it on the same lock, which is what
+/// the first PDF a pointer came to rest on used to do to it (see `explorer_hook::is_media_file`).
+pub fn is_pdf_file_in(path: &Path, extensions: &[String]) -> bool {
+    if crate::formats::ebook_formats::matches_page_name(path, extensions) {
         return true;
     }
 
@@ -585,6 +606,68 @@ fn has_pdf_header_in(bytes: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The page names are read out of the list a caller hands in — the form the hook asks the
+    /// question in, holding the configuration the list lives in — and a name that has left the
+    /// list is a name this app stops drawing, the list being the reader's rather than this
+    /// module's (see `is_pdf_file_in`).
+    #[test]
+    fn reads_a_page_name_out_of_the_list_it_is_given() {
+        let list = crate::formats::ebook_formats::sanitize_ebook_extensions(
+            crate::formats::ebook_formats::DEFAULT_EBOOK_EXTENSIONS,
+        );
+
+        for name in ["report.pdf", "archived.pdfa", "encapsulated.epdf"] {
+            assert!(
+                is_pdf_file_in(Path::new(name), &list),
+                "`{name}` is a page the engine opens"
+            );
+        }
+
+        assert!(
+            !is_pdf_file_in(Path::new("notes.txt"), &list),
+            "a name the list does not hold is not a page"
+        );
+
+        let without_the_page_names = crate::formats::ebook_formats::sanitize_ebook_extensions(
+            "cbc,cbr,cbz",
+        );
+        assert!(
+            !is_pdf_file_in(Path::new("report.pdf"), &without_the_page_names),
+            "and a name taken out of the list is answered by what it is rather than by a list"
+        );
+    }
+
+    /// An Illustrator document is a page when it is one and the list has nothing to say about it:
+    /// the name is a drawing's, so the file's own header is the whole of the answer.
+    #[test]
+    fn reads_an_illustrator_document_by_its_own_header() {
+        let folder = std::env::temp_dir()
+            .join("rust-hover-preview-pdf-tests")
+            .join("illustrator");
+        std::fs::create_dir_all(&folder).expect("a test folder");
+
+        let list = crate::formats::ebook_formats::sanitize_ebook_extensions(
+            crate::formats::ebook_formats::DEFAULT_EBOOK_EXTENSIONS,
+        );
+
+        let compatible = folder.join("artwork.ai");
+        std::fs::write(&compatible, b"%PDF-1.7\none page").expect("a written file");
+        assert!(
+            is_pdf_file_in(&compatible, &list),
+            "a document saved with PDF compatibility is page one of a PDF"
+        );
+
+        let postscript = folder.join("drawn.ai");
+        std::fs::write(&postscript, b"%!PS-Adobe-3.0\n").expect("a written file");
+        assert!(
+            !is_pdf_file_in(&postscript, &list),
+            "and one saved without it is PostScript, which is not a page any engine here draws"
+        );
+
+        let _ = std::fs::remove_file(&compatible);
+        let _ = std::fs::remove_file(&postscript);
+    }
 
     /// The file and its version are what a page's size is read for: a file saved
     /// again — exported at another page size, say — is measured again rather than
