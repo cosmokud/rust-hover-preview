@@ -14,7 +14,8 @@ use crate::formats::archive_formats::{
     sanitize_archive_extensions, ARCHIVE_EXTENSIONS_BEFORE_THE_COMICS, DEFAULT_ARCHIVE_EXTENSIONS,
 };
 use crate::formats::calibre_formats::{
-    sanitize_calibre_extensions, CALIBRE_EXTENSIONS_BEFORE_THE_EBOOKS, DEFAULT_CALIBRE_EXTENSIONS,
+    sanitize_calibre_extensions, CALIBRE_EXTENSIONS_BEFORE_THE_EBOOKS,
+    CALIBRE_EXTENSIONS_WITH_THE_HELP_FILE, DEFAULT_CALIBRE_EXTENSIONS,
 };
 use crate::formats::design_formats::{
     sanitize_design_extensions, DEFAULT_DESIGN_EXTENSIONS, DESIGN_EXTENSIONS_BEFORE_AI,
@@ -37,7 +38,7 @@ use crate::formats::magick_formats::{
 use crate::formats::office_formats::{sanitize_office_extensions, DEFAULT_OFFICE_EXTENSIONS};
 use crate::formats::peazip_formats::{
     sanitize_peazip_extensions, DEFAULT_PEAZIP_EXTENSIONS, PEAZIP_EXTENSIONS_BEFORE_THE_BACKENDS,
-    PEAZIP_EXTENSIONS_BEFORE_THE_EBOOKS,
+    PEAZIP_EXTENSIONS_BEFORE_THE_EBOOKS, PEAZIP_EXTENSIONS_BEFORE_THE_HELP_FILE,
 };
 use crate::formats::text_formats::{
     sanitize_extensions, sanitize_names, DEFAULT_TEXT_EXTENSIONS, DEFAULT_TEXT_NAMES,
@@ -1835,7 +1836,10 @@ fn repair_older_lists(ini: &mut Ini) -> bool {
         (
             CALIBRE_SECTION,
             DEFAULT_CALIBRE_EXTENSIONS,
-            &[CALIBRE_EXTENSIONS_BEFORE_THE_EBOOKS][..],
+            &[
+                CALIBRE_EXTENSIONS_BEFORE_THE_EBOOKS,
+                CALIBRE_EXTENSIONS_WITH_THE_HELP_FILE,
+            ][..],
             sanitize_calibre_extensions as fn(&str) -> Vec<String>,
         ),
         (
@@ -1844,6 +1848,7 @@ fn repair_older_lists(ini: &mut Ini) -> bool {
             &[
                 PEAZIP_EXTENSIONS_BEFORE_THE_BACKENDS,
                 PEAZIP_EXTENSIONS_BEFORE_THE_EBOOKS,
+                PEAZIP_EXTENSIONS_BEFORE_THE_HELP_FILE,
             ][..],
             sanitize_peazip_extensions as fn(&str) -> Vec<String>,
         ),
@@ -3563,17 +3568,15 @@ mod tests {
         }
     }
 
-    /// And the same for the lists a name moved *out of* when the book kind grew a list of its own, and
-    /// for the list one moved *into*: `cbz` was the `[archive]` list's until a comic became a book,
-    /// `chm` and `lit` were the `[peazip]` list's until the ebook engine was the one asked about them,
-    /// and the list the three of them ended up in is one this app had already written once without
-    /// two of them. A file holding any of those as this app shipped it has never been edited — nobody
-    /// types these — so all three are brought up to the lists of now, which is what takes the names
-    /// out of the listing lists and puts the whole of them into the book lists.
+    /// And the same for the lists a name moved between when the book kind grew one of its own: `cbz`
+    /// was the `[archive]` list's until a comic became a book, `lit` was the `[peazip]` list's until
+    /// the ebook engine was the one asked about it, and `chm` has been both — the ebook engine drew a
+    /// page for one for a build and the archiver has it again, because a help file is not worth two
+    /// seconds of waiting. A file holding any of those as this app shipped it has never been edited —
+    /// nobody types these — so all of them are brought up to the lists of now.
     ///
-    /// It is the case worth having a test for rather than the two repairs separately: a file written
-    /// between the changes holds one list of each pair, and it is what every installation that has
-    /// been running for a day holds.
+    /// It is the case worth having a test for rather than the repairs separately: a file written
+    /// between two changes holds one list of each pair, and `chm` can be in either of two of them.
     #[test]
     fn a_list_holding_the_apps_own_entries_loses_the_names_that_became_books() {
         let mut ini = Ini::new();
@@ -3585,12 +3588,12 @@ mod tests {
         ini.set(
             PEAZIP_SECTION,
             "extensions",
-            Some(PEAZIP_EXTENSIONS_BEFORE_THE_EBOOKS.to_string()),
+            Some(PEAZIP_EXTENSIONS_BEFORE_THE_HELP_FILE.to_string()),
         );
         ini.set(
             CALIBRE_SECTION,
             "extensions",
-            Some(CALIBRE_EXTENSIONS_BEFORE_THE_EBOOKS.to_string()),
+            Some(CALIBRE_EXTENSIONS_WITH_THE_HELP_FILE.to_string()),
         );
 
         let config = read_file(&mut ini);
@@ -3603,15 +3606,15 @@ mod tests {
         assert_eq!(
             config.peazip_extensions,
             sanitize_peazip_extensions(DEFAULT_PEAZIP_EXTENSIONS),
-            "and a help file is not an archive either"
+            "and the help file the engine had taken is the archiver's again"
         );
         assert_eq!(
             config.calibre_extensions,
             sanitize_calibre_extensions(DEFAULT_CALIBRE_EXTENSIONS),
-            "and the list that had been written without them is given them"
+            "and the engine's list is without it, with the Microsoft Reader book it kept"
         );
 
-        for name in ["cbz", "chm", "lit"] {
+        for name in ["cbz", "lit"] {
             assert!(
                 !config.archive_extensions.iter().any(|entry| entry == name)
                     && !config.peazip_extensions.iter().any(|entry| entry == name),
@@ -3619,12 +3622,18 @@ mod tests {
             );
         }
 
-        for name in ["chm", "lit"] {
-            assert!(
-                config.calibre_extensions.iter().any(|entry| entry == name),
-                "`{name}` is the engine's now, and an installation that already exists is given it"
-            );
-        }
+        assert!(
+            config.peazip_extensions.iter().any(|entry| entry == "chm"),
+            "and the help file the engine had taken for a build is the archiver's again"
+        );
+        assert!(
+            !config.calibre_extensions.iter().any(|entry| entry == "chm"),
+            "so a hover on one is a listing rather than a two-second wait"
+        );
+        assert!(
+            config.calibre_extensions.iter().any(|entry| entry == "lit"),
+            "and the Microsoft Reader book is the engine's, which is where it stays"
+        );
 
         // And the list the comics went to is a section the file has never held, so the built-in
         // entries come back with the key rather than the names being lost on the way over.

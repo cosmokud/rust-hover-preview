@@ -31,13 +31,13 @@
 //! * The Kindle and Mobipocket family: `azw`, `azw3`, `azw4`, `mobi` and `prc`. All of them are
 //!   Palm databases with the same two identifiers inside — see `content_type`, which reads them —
 //!   and the engine reads them as one format under five names.
-//! * `chm` and `lit`, the two books whose text is packed rather than stored: a compiled help file
-//!   is HTML compressed with LZX inside an ITSF container, and a Microsoft Reader book is the same
-//!   compression inside an OLE compound file. Neither is a container of pictures and neither is a
-//!   format whose text any reader here unpacks, so both are the engine's. Both were the listing
-//!   engine's names before that — which is what `[peazip]`'s own older list is written down for — and
-//!   a file written between the two changes holds this list without them, which is what
-//!   `CALIBRE_EXTENSIONS_BEFORE_THE_EBOOKS` below is written down for.
+//! * `lit`, the Microsoft Reader book: HTML compressed with LZX inside an OLE compound file, which
+//!   is neither a container of pictures nor a format whose text any reader here unpacks, so it is the
+//!   engine's. Its neighbour `.chm` is the same kind of box and is *not* here: a compiled help file
+//!   is drawn as a page by this engine and takes two to three seconds to draw, and a help file is a
+//!   file a pointer crosses rather than one it waits on — so the name is the listing engine's, where
+//!   it is answered immediately, and what is given up is a page nobody was waiting for (see
+//!   `peazip_formats`).
 //! * The open one, `epub`, which is the format most ebooks are sold in.
 //! * `fb2`, the FictionBook the Russian ebook sites write.
 //! * `djvu`, the scanned book, in the same family as a PDF: what a hover shows is a page of the
@@ -101,20 +101,32 @@ use std::path::Path;
 /// name that is a programming language (`rb`), the Sony container's protected spelling (`lrx`), and
 /// the names the engine does not read at all (`tpz`, and the `kfx` a plugin would be needed for).
 pub const DEFAULT_CALIBRE_EXTENSIONS: &str =
+    "azw,azw3,azw4,djvu,epub,fb2,htmlz,lit,lrf,mobi,pml,prc,snb,tcr";
+
+/// The built-in `[calibre]` list as it stood while a compiled help file was this engine's to draw.
+///
+/// `chm` was in this list for one build and is not any more: the page the engine draws for one is
+/// right, and the two to three seconds it takes to draw it is not — a help file is a file a pointer
+/// crosses on its way somewhere else, and the listing the archiver prints for one is there before a
+/// hover has finished settling (see `peazip_formats`, which is where the name is again). A file
+/// holding this list is a file this app wrote, so it is brought up to the list of now rather than
+/// kept as written, and the name goes back where it came from.
+pub const CALIBRE_EXTENSIONS_WITH_THE_HELP_FILE: &str =
     "azw,azw3,azw4,chm,djvu,epub,fb2,htmlz,lit,lrf,mobi,pml,prc,snb,tcr";
 
 /// The built-in `[calibre]` list as it stood before `chm` and `lit` became the engine's names.
 ///
 /// A file holding exactly these entries is this app's own earlier list rather than a user's edit —
 /// nobody has typed it — so it is brought up to the built-in list rather than kept as written, which
-/// is what gives an installation that already exists the two names. Without it those two would reach
-/// a fresh installation only: every `config.ini` already written holds the list as it was, and a list
-/// nobody has touched is indistinguishable from one a user edited unless the older spellings of it
-/// are written down here (see `config::repair_older_lists`).
+/// is what gives an installation that already exists the name that stayed. Without it that name would
+/// reach a fresh installation only: every `config.ini` already written holds the list as it was, and a
+/// list nobody has touched is indistinguishable from one a user edited unless the older spellings of
+/// it are written down here (see `config::repair_older_lists`).
 ///
-/// The two names were the `[peazip]` list's until then, so the same change takes them out of that
-/// list — and a file written before both moves is one neither of the repairs can finish on its own,
-/// which is why each list has the one it needs rather than the pair being written down once.
+/// Both names were the `[peazip]` list's until then, so the same change takes them out of that list.
+/// `chm` has since gone back — see [`CALIBRE_EXTENSIONS_WITH_THE_HELP_FILE`] — so a file can hold
+/// either of the two older spellings of this list, and both are written down for that reason: a list
+/// this app shipped is a list it brings up to now, whichever of them it is.
 pub const CALIBRE_EXTENSIONS_BEFORE_THE_EBOOKS: &str =
     "azw,azw3,azw4,djvu,epub,fb2,htmlz,lrf,mobi,pml,prc,snb,tcr";
 
@@ -271,23 +283,29 @@ mod tests {
             "so the engine is not asked about one either"
         );
 
-        // And the two names the engine gained with this build are its own: a compiled help file and
-        // a Microsoft Reader book were the listing engine's until they were, which is what
-        // `[peazip]`'s own older list is written down for.
-        for name in ["help.chm", "book.lit"] {
-            let path = Path::new(name);
-            assert!(
-                matches_calibre_list(path, &list),
-                "`{name}` is a page only this engine can draw"
-            );
-            assert!(
-                !crate::formats::peazip_formats::matches_peazip_list(
-                    path,
-                    &config.peazip_extensions
-                ),
-                "and it is not the listing engine's any more: one name, one answer"
-            );
-        }
+        // And the name this list gained with this build is its own: a Microsoft Reader book is a page
+        // only this engine draws. Its neighbour `.chm` was here for a build and is the archiver's
+        // again — the page is right and the two to three seconds it takes to draw is not, which is
+        // the judgement `peazip_formats` carries the other half of.
+        let book = Path::new("book.lit");
+        assert!(
+            matches_calibre_list(book, &list),
+            "a Microsoft Reader book is a page only this engine can draw"
+        );
+        assert!(
+            !crate::formats::peazip_formats::matches_peazip_list(book, &config.peazip_extensions),
+            "and it is not the listing engine's any more: one name, one answer"
+        );
+
+        let help = Path::new("help.chm");
+        assert!(
+            crate::formats::peazip_formats::matches_peazip_list(help, &config.peazip_extensions),
+            "a compiled help file is the listing engine's, which answers immediately"
+        );
+        assert!(
+            !matches_calibre_list(help, &list),
+            "and it is not this engine's: a help file is not a page to wait two seconds for"
+        );
 
         // The Palm database is the one name two engines are about, and it is asked the way the app
         // asks it rather than by the list alone: a `.pdb` is a Palm ebook, which the render engine
