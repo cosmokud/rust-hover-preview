@@ -41,3 +41,23 @@ pub fn disable_startup() {
         }
     }
 }
+
+/// Whether this app is registered to start when the user logs in.
+///
+/// Asked of the registry rather than of the configuration, because the registry is what
+/// actually starts it: the value is the entry's presence, so an entry the user turned off in
+/// Task Manager, or one another tool removed, is answered as the app that will not start
+/// rather than as the value `config.ini` remembers choosing.
+pub fn is_startup_enabled() -> bool {
+    use windows::Win32::System::Registry::{RegQueryValueExW, KEY_READ};
+
+    unsafe {
+        let mut hkey: HKEY = HKEY::default();
+        if RegOpenKeyExW(HKEY_CURRENT_USER, STARTUP_KEY, 0, KEY_READ, &mut hkey).is_ok() {
+            let result = RegQueryValueExW(hkey, APP_NAME, None, None, None, None).is_ok();
+            let _ = RegCloseKey(hkey);
+            return result;
+        }
+    }
+    false
+}
