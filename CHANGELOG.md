@@ -16,10 +16,13 @@
 
 ### Changed
 
+- Version bumped to `0.3.3` in `Cargo.toml` and `Cargo.lock`.
 - The update installer is downloaded only after you click the update row and confirm, not as soon as a newer release is found; a check now costs one small request.
 - The update check now runs at every startup as well as when the tray menu is opened, and the hour between checks is counted in memory rather than written to `%LOCALAPPDATA%`.
 - The update prompt now asks with three answers: **`Auto`** installs the update as before, **`Manual`** opens the release page in your browser, and **`Cancel`** does nothing.
-- Version bumped to `0.3.3` in `Cargo.toml` and `Cargo.lock`.
+- **The `Cache` submenu has two entries** where it had five: **`Image (RAM)`**, the decoded frames held between hovers, and **`Document (Disk)`**, the pages an engine drew. **Text** and **Ebook** previews are no longer cached at all — a painted text frame and a rasterized PDF page are the cheapest things here to make again and the dearest to hold, so a text hover keeps the parsed document and its styled lines, and a PDF hover keeps only the page's size. What either costs is a layout, a raster and an encode rather than the memory a screenful of pixels takes.
+- **The pages both document engines draw are one cache, on disk.** `document_cache_mb` — `128` by default, `0`–`2048` — replaces `office_cache_mb` and `libre_cache_mb`, and a `config.ini` holding either older key is read once for the larger of the two and written without them. The pages live under `%TEMP%\rust-hover-preview\document`, named for the document, the version of it and the engine that drew it, so a page outlives the run that drew it and the engine it was drawn by — and so a page one engine drew is never handed back as the other's work. What is given up first is the page that has not been _read_ for longest, not the one converted longest ago, and the page a hover is waiting for is never given up: at `0` a page is kept from the moment it is drawn until the hover that asked for it ends.
+- The LibreOffice engine's own profile and the stub document it holds open moved out of `%APPDATA%\rust-hover-preview\rendered` — a folder that is deleted at startup now, along with everything else an earlier version cached — to `%LOCALAPPDATA%\rust-hover-preview\libreoffice`, beside the app's other engine state.
 
 ### Fixed
 
@@ -28,6 +31,9 @@
 - An installation made from a pre-release is offered the stable release its version names, instead of never being offered an update again.
 - A preview of an archive PeaZip listed was drawn at the size of the screen’s free room instead of the size the layout planned, so a `.cab` or an `.iso` came up as a page stretched to the display rather than as the page a `.zip` of the same kind comes up as.
 - Hovering a file whose preview an engine makes — an Office document, a `cdr` the render engine draws, a camera raw, an archive PeaZip lists — no longer leaves the spinner up for good when the file is left and taken up again while that engine is still working. The answer the engine had already produced was read as belonging to a hover that had gone, because it named the hover before the one waiting: the wait under the spinner was cleared with it, and the page, picture or listing in hand was not shown until the file was hovered again. An answer for the file a hover is waiting on is now that wait’s own, and a hover waiting on an engine is bounded by the same timeout whether or not the request it made is the one being watched for.
+- The `Cache → Libre` budget is evicted by when a page was last read rather than when it was converted, which is what "the oldest first" was always meant to be.
+- A document an engine would not draw is no longer refused for good: the mark ages out after two minutes, so a document that was locked, half-copied, or read while a filter was still being installed is asked about again.
+- The tray's `Cache` submenu no longer says everything it sizes is held in memory and nowhere else, which stopped being true when converted pages landed on disk.
 
 ## [0.3.2] - 2026-09-24
 

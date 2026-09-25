@@ -36,10 +36,11 @@ fn main() {
     configure_dpi_awareness();
     sync_startup_setting();
 
-    // A page is held in memory and nowhere else, so whatever an earlier version left
-    // in the cache folder — and whatever a render that was ended mid-flight left in
-    // the temp folder — is dropped before anything starts writing there again.
-    engines::office_render::discard_old_disk_cache();
+    // What an earlier version cached on disk goes, and whatever a render that was ended
+    // mid-flight left in the temp folder goes with it — the pages this version keeps are not
+    // that, and are left where they are so that a document drawn before this run is a read
+    // rather than another render.
+    engines::document_cache::discard_leftovers();
 
     // The log an earlier version appended a line to for every video hover is no
     // longer written; the file it left behind goes the same way, as its own user,

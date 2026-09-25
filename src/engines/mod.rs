@@ -1,3 +1,4 @@
+pub(crate) mod document_cache;
 pub(crate) mod imagemagick_render;
 pub(crate) mod libreoffice_render;
 pub(crate) mod office_render;

@@ -21,32 +21,28 @@
 //!   one render, never the tier: a worker that has been inside one piece of work
 //!   for too long is given up on, the process it started is ended with it, and
 //!   the next hover is answered by a fresh worker. Nothing waits on this thread.
-//! * **A page lives in memory, never on disk.** Office's export calls take a file
-//!   name rather than a stream, so one render writes one scratch file under the
-//!   temp folder — and reads it back into memory and deletes it in the same breath,
-//!   before the hover that asked for it ends. What is kept afterwards is bounded by
-//!   `office_cache_mb`, and at a budget of nothing the page is dropped the moment
-//!   its hover is over: the disk is never a cache, and the only other things kept
-//!   here are the request slot, the files that have refused a page, and which
-//!   worker is current.
+//! * **A page outlives the hover that asked for it, and the run that drew it.** Office's
+//!   export calls take a file name rather than a stream, so one render writes one scratch
+//!   file under the temp folder and reads it back out. What it read is kept as the page both
+//!   engines' documents are drawn from, bounded by `document_cache_mb` (see
+//!   `document_cache`). What is kept *here* is the request slot, the documents that have
+//!   refused a page, and which worker is current.
 
 use crate::app::engine_processes;
 use crate::config::config::{
-    read_within_budget, sanitize_office_cache_mb, EngineIdle, PreviewType, DEFAULT_OFFICE_CACHE_MB,
-    DEFAULT_OFFICE_ENGINE_IDLE_SECS,
+    read_within_budget, EngineIdle, OfficeEngine, PreviewType, DEFAULT_OFFICE_ENGINE_IDLE_SECS,
 };
+use crate::engines::document_cache::{self, Page, PageKind};
 use crate::formats::office_formats::{app_for, container_kind, OfficeApp};
 use crate::shell::cloud_files;
 use crate::ui::preview_window;
 use crate::CONFIG;
-use directories::BaseDirs;
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant, SystemTime};
 
 use windows::core::{GUID, PCWSTR, VARIANT};
 use windows::Win32::Foundation::{BOOL, HGLOBAL, HWND, LPARAM, WPARAM};
@@ -203,73 +199,6 @@ const PROGRESS_SWEEP_INTERVAL: Duration = Duration::from_millis(100);
 /// The longest class name `GetClassNameW` is given room for.
 const MAX_CLASS_NAME: usize = 256;
 
-/// Which of the files a render can produce.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum RenderedKind {
-    /// A one-page PDF, which the existing PDF renderer draws.
-    Pdf,
-    /// A PNG of the first slide.
-    Png,
-    /// A bitmap of a workbook's used range, for a machine whose Excel cannot
-    /// export a page at all — see `render_excel`.
-    Bmp,
-}
-
-impl RenderedKind {
-    fn extension(self) -> &'static str {
-        match self {
-            Self::Pdf => "pdf",
-            Self::Png => "png",
-            Self::Bmp => "bmp",
-        }
-    }
-}
-
-/// A page that has been rendered for a document and is being held in memory.
-pub(crate) struct CachedRender {
-    pub(crate) kind: RenderedKind,
-    /// What Office exported, read back out of the scratch file it was written to.
-    pub(crate) bytes: Arc<Vec<u8>>,
-    /// The width the render was asked for, which is what a slide's export — and so
-    /// the sharpness of the page held — is decided by.
-    pub(crate) export_width: u32,
-    /// The page's own size, filled in the first time a layout asks for it.
-    ///
-    /// It is read from the bytes by the side that may talk to the PDF engine, and
-    /// it is kept on the entry rather than in a cache of its own so that it cannot
-    /// outlive the page it was read from: a document that is saved again is a new
-    /// entry, and the size is read from the new page.
-    pub(crate) dimensions: Arc<OnceLock<Option<(u32, u32)>>>,
-}
-
-/// A page being held: the bytes, and when they were last asked for.
-struct CacheEntry {
-    kind: RenderedKind,
-    bytes: Arc<Vec<u8>>,
-    export_width: u32,
-    dimensions: Arc<OnceLock<Option<(u32, u32)>>>,
-    size: usize,
-    last_used: u64,
-}
-
-/// The pages held in memory, and how much of the budget they take.
-#[derive(Default)]
-struct RenderCache {
-    entries: HashMap<String, CacheEntry>,
-    bytes: usize,
-    /// A counter rather than a clock, so the order pages are dropped in cannot be
-    /// changed by the system clock moving.
-    tick: u64,
-    /// The page whose hover is in flight, if there is one.
-    ///
-    /// It is never dropped to make room: at a budget of nothing it is the only page
-    /// held, and it is what the preview about to be shown draws. It goes when the
-    /// hover it belongs to does (`hover_ended`).
-    held: Option<String>,
-}
-
-static RENDERS: Lazy<Mutex<RenderCache>> = Lazy::new(|| Mutex::new(RenderCache::default()));
-
 struct RenderRequest {
     source: PathBuf,
     width: u32,
@@ -315,174 +244,35 @@ pub(crate) fn enabled() -> bool {
     PreviewType::Document.enabled()
 }
 
-fn cache_limit_bytes() -> usize {
-    let megabytes = CONFIG
-        .lock()
-        .map(|config| sanitize_office_cache_mb(config.office_cache_mb))
-        .unwrap_or(DEFAULT_OFFICE_CACHE_MB);
-
-    megabytes as usize * 1024 * 1024
-}
-
-/// The page rendered for this version of the file, if one is being held.
+/// The page held for this document, if one has been drawn for it.
 ///
-/// What the bytes *are* is not asked here: whether a page can actually be read out
-/// of them is a question for the side that draws it (`office_preview`), whose
-/// threads may talk to the PDF engine — this one is apartment-threaded for Office,
-/// and a WinRT call waited on from here would deadlock.
-pub(crate) fn cached_render(source: &Path) -> Option<CachedRender> {
-    let key = cache_key(source);
-    let limit = cache_limit_bytes();
-    let mut cache = RENDERS.lock().ok()?;
-
-    cache_trim(&mut cache, limit);
-
-    cache.tick += 1;
-    let tick = cache.tick;
-
-    let entry = cache.entries.get_mut(&key)?;
-    entry.last_used = tick;
-
-    Some(CachedRender {
-        kind: entry.kind,
-        bytes: entry.bytes.clone(),
-        export_width: entry.export_width,
-        dimensions: entry.dimensions.clone(),
-    })
+/// What the page *is* is not asked here: whether a page can actually be read out of the file it
+/// is kept as is a question for the side that draws it (`office_preview`), whose threads may
+/// talk to the PDF engine — this one is apartment-threaded for Office, and a WinRT call waited
+/// on from here would deadlock.
+pub(crate) fn held_page(source: &Path) -> Option<Page> {
+    document_cache::page(source, OfficeEngine::MicrosoftOffice)
 }
 
-/// Whether the page held for this document is narrower than one rendered for a box
-/// `width` wide would be.
+/// Whether the page held for this document is narrower than one rendered for a box `width` wide
+/// would be.
 ///
-/// A slide is exported at the width it is asked for, so a deck that was first
-/// previewed on a smaller display holds a page that a larger one would draw softer
-/// than it could — worth replacing, which is what this answers. Every other family's
-/// page is the size its document makes it, whatever box the render was asked for, so
-/// nothing about one of those is narrower than anything.
-pub(crate) fn page_is_narrower_than(cached: &CachedRender, width: u32) -> bool {
-    cached.kind == RenderedKind::Png && cached.export_width < slide_export_width(width)
+/// A slide is exported at the width it is asked for, so a deck that was first previewed on a
+/// smaller display holds a page that a larger one would draw softer than it could — worth
+/// replacing, which is what this answers. Every other family's page is the size its document
+/// makes it, whatever box the render was asked for, so nothing about one of those is narrower
+/// than anything. What the held page's own width is, is read from the page itself (see
+/// `document_cache::size`).
+pub(crate) fn page_is_narrower_than(source: &Path, page: &Page, width: u32) -> bool {
+    page.kind == PageKind::Png
+        && document_cache::size(source, OfficeEngine::MicrosoftOffice)
+            .is_some_and(|(export_width, _)| export_width < slide_export_width(width))
 }
 
-/// Hold the page a render just produced, dropping whatever no longer fits beside it.
-fn store_render(source: &Path, kind: RenderedKind, bytes: Vec<u8>, export_width: u32) {
-    let key = cache_key(source);
-    let limit = cache_limit_bytes();
-    let Ok(mut cache) = RENDERS.lock() else {
-        return;
-    };
-
-    cache.tick += 1;
-    let tick = cache.tick;
-    let size = bytes.len();
-
-    let previous = cache.entries.insert(
-        key.clone(),
-        CacheEntry {
-            kind,
-            bytes: Arc::new(bytes),
-            export_width,
-            dimensions: Arc::new(OnceLock::new()),
-            size,
-            last_used: tick,
-        },
-    );
-    if let Some(previous) = previous {
-        cache.bytes -= previous.size;
-    }
-    cache.bytes += size;
-
-    // The page just rendered is the one a hover is waiting for, so it is held
-    // whatever the budget says: dropping it here would leave the spinner with
-    // nothing to replace it. It is released when that hover ends.
-    cache.held = Some(key);
-
-    cache_trim(&mut cache, limit);
-}
-
-/// Drop pages, least recently used first, until the cache fits inside `limit`.
-///
-/// The page a hover is waiting for is never one of them, which is what a budget of
-/// nothing means: nothing is kept *between* hovers, rather than no page being
-/// shown at all. A limit of zero therefore empties the cache of everything else.
-fn cache_trim(cache: &mut RenderCache, limit: usize) {
-    while cache.bytes > limit {
-        // Bound to its own statement so the borrow of `entries` has ended before
-        // the entry is removed.
-        let oldest = cache
-            .entries
-            .iter()
-            .filter(|(key, _)| Some(key.as_str()) != cache.held.as_deref())
-            .min_by_key(|(_, entry)| entry.last_used)
-            .map(|(key, _)| key.clone());
-
-        let Some(oldest) = oldest else {
-            break;
-        };
-
-        if let Some(dropped) = cache.entries.remove(&oldest) {
-            cache.bytes -= dropped.size;
-        }
-    }
-}
-
-/// The hover a page was rendered for is over: it is no longer being waited on, so
-/// at a budget of nothing it is dropped now rather than lingering until the next
-/// render happens to make room.
+/// The hover a page was drawn for is over: it is no longer being waited on, so at a budget of
+/// nothing it is given up now rather than lingering until the next render happens to make room.
 pub(crate) fn hover_ended(source: &Path) {
-    let key = cache_key(source);
-    let limit = cache_limit_bytes();
-    let Ok(mut cache) = RENDERS.lock() else {
-        return;
-    };
-
-    if cache.held.as_deref() == Some(key.as_str()) {
-        cache.held = None;
-    }
-
-    cache_trim(&mut cache, limit);
-}
-
-/// Drop the page held for a document: bytes that cannot be drawn — one a render
-/// cut short, or one something else corrupted — are not a page. What this gets is
-/// the document rendered again rather than a preview that blinks away every time
-/// it is hovered.
-pub(crate) fn forget(source: &Path) {
-    let key = cache_key(source);
-    let Ok(mut cache) = RENDERS.lock() else {
-        return;
-    };
-
-    if let Some(dropped) = cache.entries.remove(&key) {
-        cache.bytes -= dropped.size;
-    }
-    if cache.held.as_deref() == Some(key.as_str()) {
-        cache.held = None;
-    }
-}
-
-/// Trim the cache to the configured size now, which is what the tray asks for when
-/// a smaller size is chosen: what is over the new budget is freed at the moment it
-/// is set rather than at the next render.
-pub(crate) fn trim_now() {
-    let limit = cache_limit_bytes();
-    if let Ok(mut cache) = RENDERS.lock() {
-        cache_trim(&mut cache, limit);
-    }
-}
-
-/// Delete what earlier versions cached on disk: the rendered pages under the
-/// user's cache folder, and any scratch file a render that was ended mid-flight
-/// left behind in the temp folder.
-///
-/// Only the `office` folder is removed — in the installed layout the app's own
-/// executable and uninstaller live beside it in that same directory, and a page
-/// cache is not worth risking them for.
-pub(crate) fn discard_old_disk_cache() {
-    if let Some(dirs) = BaseDirs::new() {
-        let _ = std::fs::remove_dir_all(dirs.cache_dir().join("rust-hover-preview").join("office"));
-    }
-
-    let _ = std::fs::remove_dir_all(scratch_folder());
+    document_cache::hover_ended(source);
 }
 
 /// Ask for a page to be rendered, unless one is already waiting or the file has
@@ -892,7 +682,7 @@ fn render_request(
     }
 
     // Another hover may have produced this page while this request waited.
-    if cached_render(&request.source).is_some() {
+    if held_page(&request.source).is_some() {
         return RenderOutcome::Rendered;
     }
 
@@ -954,13 +744,14 @@ fn render_request(
         };
 
         // What the renderer wrote is the answer, whatever it chose to write: the
-        // file it left behind is read here and deleted, and the page is held in
-        // memory. Reading it whatever the render reported is also what keeps the
-        // scratch folder empty — a file a failed export left behind is not one the
-        // next attempt is allowed to find.
+        // file it left behind is read here and deleted, and the page is kept where
+        // both engines' documents are drawn from (see `document_cache`). Reading it
+        // whatever the render reported is also what keeps the scratch folder empty —
+        // a file a failed export left behind is not one the next attempt is allowed
+        // to find.
         let page = take_render(&target);
         if let Some((kind, bytes)) = page.filter(|_| rendered) {
-            store_render(&request.source, kind, bytes, request.width);
+            document_cache::store(&request.source, OfficeEngine::MicrosoftOffice, kind, &bytes);
             return RenderOutcome::Rendered;
         }
         if retried {
@@ -2051,34 +1842,15 @@ fn copy_to_temp(source: &str) -> Option<PathBuf> {
 
 // ---------------------------------------------------------- the scratch file
 
-/// Where a render is written before it is read back into memory.
+/// Where a render is written before it is read back out of it.
 ///
-/// Office's export calls take a file name rather than a stream, so a page has to
-/// land somewhere before it can be held. It is this app's own folder under the
-/// temp folder — the same one a document Office will not open is copied into — and
-/// the file is deleted the moment it has been read, so what is on disk is one
-/// render in flight and nothing else.
+/// Office's export calls take a file name rather than a stream, so a page has to land somewhere
+/// before it can be kept. It is this app's own folder under the temp folder — the same one a
+/// document Office will not open is copied into, and the folder the kept pages sit inside — and
+/// the file is deleted the moment it has been read, so what is on disk is one render in flight
+/// and nothing else.
 fn scratch_folder() -> PathBuf {
-    std::env::temp_dir().join("rust-hover-preview")
-}
-
-/// What a held page is keyed by: the file, and the version of it that was
-/// rendered.
-fn cache_key(source: &Path) -> String {
-    let metadata = std::fs::metadata(source).ok();
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-
-    source.to_string_lossy().to_lowercase().hash(&mut hasher);
-    if let Some(metadata) = metadata {
-        metadata.len().hash(&mut hasher);
-        if let Ok(modified) = metadata.modified() {
-            if let Ok(since_epoch) = modified.duration_since(UNIX_EPOCH) {
-                since_epoch.as_nanos().hash(&mut hasher);
-            }
-        }
-    }
-
-    format!("{:016x}", hasher.finish())
+    document_cache::temp_folder()
 }
 
 /// Where one render writes its page. Which file it is — which extension — is the
@@ -2119,10 +1891,10 @@ fn render_target() -> Option<RenderTarget> {
 /// Every candidate is removed whether or not it is the one read — an empty file
 /// Office gave up on, or one this app's own reading could not take, is not left for
 /// the next attempt to find. What comes back is the bytes and the kind they are.
-fn take_render(target: &RenderTarget) -> Option<(RenderedKind, Vec<u8>)> {
+fn take_render(target: &RenderTarget) -> Option<(PageKind, Vec<u8>)> {
     let mut taken = None;
 
-    for kind in [RenderedKind::Pdf, RenderedKind::Png, RenderedKind::Bmp] {
+    for kind in [PageKind::Pdf, PageKind::Png, PageKind::Bmp] {
         let path = target.file(kind.extension());
         if std::fs::metadata(&path).is_err() {
             continue;
@@ -2409,34 +2181,19 @@ mod tests {
         );
     }
 
-    #[test]
-    fn keys_a_render_by_the_file_and_its_version() {
-        // A folder of this module's own: the tests run beside each other, and one
-        // of them clearing its fixtures must not take another's with it.
+    /// A document of this module's own, in a folder the tests share: a page is kept by the
+    /// document it was drawn for, so the names are what keep one test's document out of
+    /// another's.
+    fn document(name: &str) -> PathBuf {
         let folder = std::env::temp_dir()
             .join("rust-hover-preview-office-tests")
-            .join("render");
+            .join("documents");
         std::fs::create_dir_all(&folder).expect("a test folder");
-        let path = folder.join("keyed.docx");
-        std::fs::write(&path, b"one").expect("a written document");
 
-        let first = cache_key(&path);
-        assert_eq!(first, cache_key(&path));
+        let path = folder.join(name);
+        std::fs::write(&path, b"a document").expect("a written document");
 
-        std::fs::write(&path, b"a longer document").expect("a rewritten document");
-        assert_ne!(first, cache_key(&path));
-
-        let _ = std::fs::remove_file(&path);
-    }
-
-    /// A page as the render tier holds one, at the width the render was asked for.
-    fn held(kind: RenderedKind, export_width: u32) -> CachedRender {
-        CachedRender {
-            kind,
-            bytes: Arc::new(Vec::new()),
-            export_width,
-            dimensions: Arc::new(OnceLock::new()),
-        }
+        path
     }
 
     /// A slide is exported at the width the render was asked for, so a deck that was
@@ -2446,31 +2203,67 @@ mod tests {
     /// whatever box the render was asked for.
     #[test]
     fn asks_for_a_slide_again_when_a_wider_display_wants_one() {
-        let deck = held(RenderedKind::Png, 1280);
+        let source = document("wider.pptx");
+        let deck = document_cache::store(
+            &source,
+            OfficeEngine::MicrosoftOffice,
+            PageKind::Png,
+            &slide_bytes(1280, 720),
+        )
+        .expect("a kept slide");
+
         assert!(
-            page_is_narrower_than(&deck, 1920),
+            page_is_narrower_than(&source, &deck, 1920),
             "a wider box replaces the page"
         );
         assert!(
-            page_is_narrower_than(&deck, 3840),
+            page_is_narrower_than(&source, &deck, 3840),
             "and a display larger than a slide is ever exported for asks for the widest one"
         );
         assert!(
-            !page_is_narrower_than(&deck, 1200),
+            !page_is_narrower_than(&source, &deck, 1200),
             "a box the page already fills does not"
         );
 
-        let at_the_cap = held(RenderedKind::Png, MAX_SLIDE_EXPORT_WIDTH);
+        let at_the_cap = document_cache::store(
+            &source,
+            OfficeEngine::MicrosoftOffice,
+            PageKind::Png,
+            &slide_bytes(MAX_SLIDE_EXPORT_WIDTH, 1080),
+        )
+        .expect("a kept slide");
+
         assert!(
-            !page_is_narrower_than(&at_the_cap, 3840),
+            !page_is_narrower_than(&source, &at_the_cap, 3840),
             "a page already at the cap is not asked for again"
         );
 
-        let page = held(RenderedKind::Pdf, 800);
+        // A page a document made for itself has no export width to ask again for: what it is
+        // is the size the document made it, whatever box the render was asked for.
+        let page = document_cache::store(
+            &source,
+            OfficeEngine::MicrosoftOffice,
+            PageKind::Bmp,
+            &bmp_bytes(800, 600, [10, 20, 30, 255]),
+        )
+        .expect("a kept picture");
+
         assert!(
-            !page_is_narrower_than(&page, 3840),
+            !page_is_narrower_than(&source, &page, 3840),
             "a page a document made is the size its document makes it"
         );
+
+        let _ = std::fs::remove_file(&source);
+    }
+
+    /// A PNG of one colour, written the way a slide's export is.
+    fn slide_bytes(width: u32, height: u32) -> Vec<u8> {
+        let mut written = std::io::Cursor::new(Vec::new());
+        image::RgbaImage::from_pixel(width, height, image::Rgba([10, 20, 30, 255]))
+            .write_to(&mut written, image::ImageFormat::Png)
+            .expect("a written slide");
+
+        written.into_inner()
     }
 
     /// The engine's own lifecycle: one is started for each family, let go, and
@@ -2521,33 +2314,30 @@ mod tests {
             config.office_engine = crate::config::config::OfficeEngine::MicrosoftOffice;
         }
 
-        let folder = std::env::temp_dir()
-            .join("rust-hover-preview-office-tests")
-            .join("pages");
-        std::fs::create_dir_all(&folder).expect("a test folder");
-        let source = folder.join("held.docx");
-        std::fs::write(&source, b"a document").expect("a written document");
+        let source = document("held.docx");
 
         // A picture that can be read is a page, and its own size is what the layout
         // places the preview by.
-        store_render(
+        document_cache::store(
             &source,
-            RenderedKind::Bmp,
-            bmp_bytes(2, 2, [10, 20, 30, 255]),
-            1280,
-        );
+            OfficeEngine::MicrosoftOffice,
+            PageKind::Bmp,
+            &bmp_bytes(2, 2, [10, 20, 30, 255]),
+        )
+        .expect("a kept page");
         assert_eq!(measure(&source), Some((2, 2)), "a page that can be read");
         assert_eq!(source_kind(&source), SourceKind::Raster);
 
         // One that cannot is dropped, and the answer is that nothing is rendered yet.
-        store_render(
+        document_cache::store(
             &source,
-            RenderedKind::Bmp,
-            b"not a picture at all".to_vec(),
-            1280,
-        );
+            OfficeEngine::MicrosoftOffice,
+            PageKind::Bmp,
+            b"not a picture at all",
+        )
+        .expect("a kept page");
         assert_eq!(source_kind(&source), SourceKind::None, "nothing to draw");
-        assert!(cached_render(&source).is_none(), "the broken page is gone");
+        assert!(held_page(&source).is_none(), "the broken page is gone");
 
         let _ = std::fs::remove_file(&source);
     }
@@ -2676,8 +2466,14 @@ mod tests {
                 "last failure: {}",
                 last_failure().unwrap_or_else(|| "none recorded".to_string())
             );
-            match cached_render(&path) {
-                Some(cached) => println!("page: {:?} ({} bytes)", cached.kind, cached.bytes.len()),
+            match held_page(&path) {
+                Some(page) => println!(
+                    "page: {:?} ({} bytes)",
+                    page.kind,
+                    std::fs::metadata(&page.path)
+                        .map(|metadata| metadata.len())
+                        .unwrap_or(0)
+                ),
                 None => println!("page: none"),
             }
 
@@ -2873,11 +2669,13 @@ mod tests {
                     last_failure().unwrap_or_else(|| "none recorded".to_string())
                 );
             }
-            match cached_render(&path) {
-                Some(cached) => println!(
+            match held_page(&path) {
+                Some(page) => println!(
                     "held page: {:?} ({} bytes)",
-                    cached.kind,
-                    cached.bytes.len()
+                    page.kind,
+                    std::fs::metadata(&page.path)
+                        .map(|metadata| metadata.len())
+                        .unwrap_or(0)
                 ),
                 None => println!("held page: none"),
             }
@@ -3044,7 +2842,7 @@ mod tests {
             let started = Instant::now();
             let outcome = render_here(&mut engines, &request);
             let took = started.elapsed();
-            let kind = cached_render(path).map(|cached| cached.kind);
+            let kind = held_page(path).map(|page| page.kind);
             let engine_after = app_for(path)
                 .and_then(|app_kind| engines.get(app_kind))
                 .map(|engine| engine.owned_pid);
