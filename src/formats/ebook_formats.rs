@@ -122,11 +122,28 @@ pub fn is_ebook_preview(path: &Path) -> bool {
 /// content answer of its own, a drawing saved as a PDF — and it is asked from there rather than
 /// here so that the two halves of "is this a page" are read together.
 pub fn is_page_name(path: &Path) -> bool {
-    let Some(extension) = own_extension(path) else {
-        return false;
-    };
+    page_spelling(path) && is_ebook_file(path)
+}
 
-    matches!(extension.as_str(), "pdf" | "pdfa" | "epdf") && is_ebook_file(path)
+/// The same question asked of a list the caller already holds, which is the form every caller
+/// that has the configuration in hand asks it in.
+///
+/// The hook resolves a hover with the configuration held, and every list it consults it consults
+/// through the caller's own copy — `matches_ebook_list(path, &config.ebook_extensions)` and the
+/// gates beside it — because a question that went and read the configuration again would wait on
+/// a lock the same thread is already holding, and a lock taken twice on one thread is a deadlock
+/// (see `explorer_hook::is_media_file`).
+pub fn matches_page_name(path: &Path, extensions: &[String]) -> bool {
+    page_spelling(path) && matches_ebook_list(path, extensions)
+}
+
+/// Whether the file is named with one of the three spellings the PDF reader draws: `pdf`, `pdfa`
+/// and `epdf`. Whether such a name is still a book is the list's answer, asked beside this one.
+fn page_spelling(path: &Path) -> bool {
+    matches!(
+        own_extension(path).as_deref(),
+        Some("pdf") | Some("pdfa") | Some("epdf")
+    )
 }
 
 /// Whether the list holds this file's name and the name is not a PDF's: a comic, which is read out
@@ -284,6 +301,34 @@ mod tests {
         // A name that is in neither half is neither: what the list does not hold is not a book.
         assert!(!is_page_name(Path::new("book.epub")));
         assert!(!is_comic_name(Path::new("book.epub")));
+    }
+
+    /// The PDF's names are asked of the list a caller hands in — the form the hook asks them in,
+    /// since it resolves a hover with the configuration held and a question that read the
+    /// configuration again would be a lock taken twice on that thread (see `matches_page_name`).
+    #[test]
+    fn asks_for_the_pdf_names_of_the_list_it_is_given() {
+        let list = sanitize_ebook_extensions(DEFAULT_EBOOK_EXTENSIONS);
+
+        for name in ["book.pdf", "report.pdfa", "encapsulated.epdf"] {
+            assert!(
+                matches_page_name(Path::new(name), &list),
+                "`{name}` is a page the PDF reader draws"
+            );
+        }
+
+        assert!(
+            !matches_page_name(Path::new("chapter.cbz"), &list),
+            "a comic is the other half of this list and not a page of it"
+        );
+        assert!(
+            !matches_page_name(Path::new("book.epub"), &list),
+            "and a book the ebook engine converts is not one either"
+        );
+        assert!(
+            !matches_page_name(Path::new("book.pdf"), &sanitize_ebook_extensions("cbz,cbr,cbc")),
+            "a name taken out of the list is a name this app stops drawing"
+        );
     }
 
     /// A name a user adds is a comic if the file it names is a container of pictures, and the
