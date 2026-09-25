@@ -736,7 +736,11 @@ fn stream_member_name(archive: &Path) -> Option<String> {
 /// that turns out to be a 7z under a stale name is still a 7z. The name answers
 /// when the header says nothing — the two cases where it has to are the zip that
 /// begins with an executable stub and the tar written without the ustar magic.
-fn kind_of(path: &Path) -> Option<ArchiveKind> {
+///
+/// It is asked from outside the reader as well as inside it: what a container is, is the
+/// question a route has to answer before it can say which reader opens one, and the answer
+/// is borrowed from here rather than written down a second time (`native_formats`).
+pub(crate) fn kind_of(path: &Path) -> Option<ArchiveKind> {
     if let Some(probe) = read_probe(path) {
         if let Some(kind) = magic_kind(&probe) {
             return Some(kind);

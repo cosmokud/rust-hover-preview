@@ -1,19 +1,10 @@
 use crate::app::engine_processes;
 use crate::config::config::{
-    AvoidMode, PreviewType, TriggerKeyMode, DEFAULT_HOVER_DELAY_MS,
-    DEFAULT_SAME_FILE_REHOVER_DELAY_MS, DEFAULT_SETTLING_DELAY_MS, DEFAULT_TICK_MS,
+    AvoidMode, TriggerKeyMode, DEFAULT_HOVER_DELAY_MS, DEFAULT_SAME_FILE_REHOVER_DELAY_MS,
+    DEFAULT_SETTLING_DELAY_MS, DEFAULT_TICK_MS,
 };
 use crate::engines::webview_preview;
-use crate::formats::archive_formats::matches_archive_list;
-use crate::formats::design_formats::matches_design_list;
-use crate::formats::font_formats::matches_font_list;
-use crate::formats::image_formats::matches_image_list;
-use crate::formats::office_formats::matches_office_list;
-use crate::formats::text_formats::matches_text_lists;
-use crate::formats::vector_formats::matches_vector_list;
-use crate::formats::video_formats::{is_video_file, matches_video_list};
-use crate::readers::pdf_preview::is_pdf_file_in;
-use crate::readers::svg_preview;
+use crate::formats::video_formats::is_video_file;
 use crate::shell::cloud_files;
 use crate::shell::wheel_input;
 use crate::ui::preview_window::{
@@ -1180,14 +1171,11 @@ fn read_failure_is_the_same_item(
 /// and whether that kind is switched on in the tray's `Preview Types`
 /// submenu.
 ///
-/// The kinds are asked the way the renderer asks them — a video first, then a
-/// PDF, then the archive list, then the office list, then the text lists, then
-/// the image list — so the two cannot disagree about what a file is. A video goes
-/// first because only its content settles the extensions it shares with text: a
-/// `.ts` carrying MPEG-TS packets is a video however the gates stand, and one that
-/// does not is the TypeScript source the text lists claim. The lists come from the
-/// configuration this already holds rather than from the gates' own lookups, which
-/// would take the same lock again.
+/// The kinds are not worked out here: they are asked of the one table that answers for
+/// every side of the app, so the hook, the loader and the layout cannot disagree about
+/// what a file is (see `formats::routing`). The lists come from the configuration this
+/// already holds rather than from the gates' own lookups, which would take the same lock
+/// again — and nothing in the router reads the configuration itself.
 ///
 /// What the file's content says it is comes ahead of all of that, where it disagrees
 /// with the name: a `.docx` whose bytes are an MP4 is a video, and the engine it is
@@ -1211,110 +1199,11 @@ fn is_media_file(path: &Path) -> bool {
         crate::formats::content_type::Content::Unknown => {}
     }
 
-    if matches_video_list(path, &config.video_extensions) {
-        return PreviewType::Videos.enabled_in(&config);
-    }
-    // The PDF's own names are asked of the copy in hand rather than of the gate, for the reason
-    // this function's documentation gives above: the configuration is held here, and the gate
-    // that reads it would be a lock taken twice on this thread (see `is_pdf_file_in`).
-    if is_pdf_file_in(path, &config.ebook_extensions) {
-        return PreviewType::Ebook.enabled_in(&config);
-    }
-
-    // And a comic, which is the other half of the same kind and is claimed by the same list: what a
-    // hover on one shows is a page of it rather than the page of contents a box of files used to be,
-    // and what a user turns off for either is books. A container with no plate in it is a box this
-    // side reads and answers nothing for, which the box measurement is what settles; see
-    // `ebook_formats`.
-    if crate::formats::ebook_formats::matches_ebook_list(path, &config.ebook_extensions) {
-        return PreviewType::Ebook.enabled_in(&config);
-    }
-    if matches_archive_list(path, &config.archive_extensions) {
-        return PreviewType::Archives.enabled_in(&config);
-    }
-
-    // An archive no reader of this app's own opens is listed by the PeaZip engine where one is
-    // installed — a cabinet file, an iso, a disk image, a Linux package — and it is asked beside
-    // the archive list above it, which is where the two are told apart: a name in that list is
-    // read by this app itself, and one in this list is read by an engine. What it is gated by is
-    // the archive switch itself, since what either is shown as is the same page of contents; see
-    // `peazip_formats`.
-    if crate::formats::peazip_formats::matches_peazip_list(path, &config.peazip_extensions) {
-        return PreviewType::Peazip.enabled_in(&config);
-    }
-
-    // A book no reader of this app's own opens is converted by the ebook engine where one is
-    // installed — a Mobipocket or Kindle file, an EPub, a FictionBook, a scanned book — and it is
-    // asked beside the listing engine above it, which is where the two are told apart: a name in no
-    // other list is read by this one. What it is gated by is the book switch itself, since what a
-    // converted book is shown as is what a PDF is shown as — a page; see `calibre_formats`.
-    if crate::formats::calibre_formats::matches_calibre_list(path, &config.calibre_extensions) {
-        return PreviewType::Calibre.enabled_in(&config);
-    }
-    if matches_office_list(path, &config.office_extensions) {
-        return PreviewType::Document.enabled_in(&config);
-    }
-
-    // A design document is a kind of its own — what its preview is made of comes out
-    // of the file itself rather than out of a decoder its extension names — and it is
-    // asked where the renderer asks it: after the office list, ahead of the text and
-    // image lists that would not have claimed a `.psd` anyway.
-    //
-    // A document this app hands to a render engine — CorelDRAW above all — is one of the two
-    // halves of the `Document` kind, and it is asked before the design list because a name can
-    // sit in both: what draws such a file is the engine, and what this app reads of one by
-    // itself is a thumbnail rather than a preview; see `libre_formats`.
-    if crate::formats::libre_formats::matches_libre_list(path, &config.libre_extensions) {
-        return PreviewType::Libre.enabled_in(&config);
-    }
-
-    // A picture an image converter develops — a camera raw above all — is one of the two halves
-    // of the picture kind as well, asked where the renderer asks it: after the documents an
-    // engine draws, ahead of the design, text, font and image lists, none of which would have
-    // claimed a `.nef` anyway. What such a file keeps of itself is nothing a reader here opens,
-    // which is the whole reason the name is in that list; see `magick_formats`.
-    if crate::formats::magick_formats::matches_magick_list(path, &config.magick_extensions) {
-        return PreviewType::Magick.enabled_in(&config);
-    }
-
-    if matches_design_list(path, &config.design_extensions) {
-        return PreviewType::Design.enabled_in(&config);
-    }
-
-    // A vector drawing is a kind of its own — an SVG document is an entry of the image
-    // list and a metafile is an entry of its own — and it is asked where the renderer asks
-    // it: after the design documents, ahead of the text and image lists.
-    if matches_vector_list(path, &config.vector_extensions) {
-        return PreviewType::Vector.enabled_in(&config);
-    }
-
-    if matches_text_lists(path, &config.text_extensions, &config.text_names) {
-        return PreviewType::Text.enabled_in(&config);
-    }
-
-    // A font is its own kind rather than an entry of the image list — what draws one is the
-    // browser engine, the way a document's is — so it is asked here, ahead of the list that
-    // would have turned a `.ttf` down: the renderer asks the same question in the same
-    // place, so the two cannot disagree about which gate a file is under.
-    if matches_font_list(path, &config.font_extensions) {
-        return PreviewType::Fonts.enabled_in(&config);
-    }
-
-    if !matches_image_list(path, &config.image_extensions) {
-        return false;
-    }
-
-    // A drawing is its own kind, and it is asked here rather than by its name alone: the
-    // vector list claims the drawings of that kind, and a file named as a picture that is
-    // one — an `svg` a hand-edited image list still names, since it was an entry of that
-    // list until the kind it belongs to was given it — is answered by what it is. The
-    // renderer asks the same question in the same place, so the two cannot disagree about
-    // which gate a file is under.
-    if svg_preview::is_svg_file(path) {
-        return PreviewType::Vector.enabled_in(&config);
-    }
-
-    PreviewType::Images.enabled_in(&config)
+    // The kind is the router's answer and the router's order is the only one — a video first,
+    // then a page, on through the boxes and the documents to the pictures last — so what this
+    // gate admits is what the loader will draw (see `formats::routing`). Every list is asked
+    // of the copy in hand, and the switch the kind is under is the gate that decides it.
+    crate::formats::routing::kind_of(path, &config).is_some_and(|kind| kind.enabled_in(&config))
 }
 
 /// How far a preview is placed clear of the item it is about, as the tray's `Avoid`
