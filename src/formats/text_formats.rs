@@ -162,7 +162,15 @@ pub fn matches_text_lists(path: &Path, extensions: &[String], names: &[String]) 
 
 /// Whether the file is previewed as text under the current configuration. The
 /// `Text` gate is checked first, so turning text previews off leaves the lists
-/// alone and turning them back on restores them.
+/// alone and turning them back on restores it.
+///
+/// It is the configured lists' own answer rather than the app's: a name the text lists hold
+/// and an earlier list claims as well is that earlier kind, and what kind a file is, is asked
+/// of the one order every side asks it in (see `routing::kind_of`). Nothing in the app is left
+/// holding that question — the hook, the loader and the layout all ask the router — so no
+/// binary reads this, and it is kept for the tests that contrast a name's list with the kind
+/// the app gives it.
+#[allow(dead_code)]
 pub fn is_text_file(path: &Path) -> bool {
     CONFIG
         .lock()
