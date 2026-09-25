@@ -18,6 +18,7 @@
 
 - The update installer is downloaded only after you click the update row and confirm, not as soon as a newer release is found; a check now costs one small request.
 - The update check now runs at every startup as well as when the tray menu is opened, and the hour between checks is counted in memory rather than written to `%LOCALAPPDATA%`.
+- The update prompt now asks with three answers: **`Auto`** installs the update as before, **`Manual`** opens the release page in your browser, and **`Cancel`** does nothing.
 - Version bumped to `0.3.3` in `Cargo.toml` and `Cargo.lock`.
 
 ### Fixed

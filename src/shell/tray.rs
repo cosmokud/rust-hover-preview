@@ -418,14 +418,21 @@ unsafe extern "system" fn tray_window_proc(
                     toggle_startup();
                 }
                 ID_TRAY_UPDATE => {
-                    // The update goes on where the user has been asked and has said so: the
-                    // installer runs silently, replaces this app and starts it again, so the
-                    // app ends itself here rather than waiting to be terminated by the
-                    // installer it just started. A declined update is a click that does
+                    // The update row answers three ways, and only one of them ends this app:
+                    // `Auto` is the installer, which runs silently, replaces this app and
+                    // starts it again, so the app ends itself here rather than waiting to be
+                    // terminated by the installer it just started; `Manual` is the release
+                    // page opened in the user's own browser; `Cancel` is a click that does
                     // nothing and a menu that stays as it was.
-                    if updates::install() {
-                        RUNNING.store(false, Ordering::SeqCst);
-                        PostQuitMessage(0);
+                    match updates::ask() {
+                        updates::Answer::Auto => {
+                            if updates::install() {
+                                RUNNING.store(false, Ordering::SeqCst);
+                                PostQuitMessage(0);
+                            }
+                        }
+                        updates::Answer::Manual => updates::open_release_page(),
+                        updates::Answer::Cancel => {}
                     }
                 }
                 ID_TRAY_ENABLE => {
