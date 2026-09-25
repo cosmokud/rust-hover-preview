@@ -143,7 +143,6 @@ struct Node {
     name: String,
     is_dir: bool,
     size: u64,
-    encrypted: bool,
     children: Vec<usize>,
 }
 
@@ -168,7 +167,6 @@ impl Tree {
                 name: String::new(),
                 is_dir: true,
                 size: 0,
-                encrypted: false,
                 children: Vec::new(),
             }],
         };
@@ -194,7 +192,6 @@ impl Tree {
                             name: (*segment).to_string(),
                             is_dir: true,
                             size: 0,
-                            encrypted: false,
                             children: Vec::new(),
                         });
                         let node = tree.nodes.len() - 1;
@@ -214,7 +211,6 @@ impl Tree {
                     let node = &mut tree.nodes[node];
                     node.is_dir = false;
                     node.size = entry.size;
-                    node.encrypted = entry.encrypted;
                 } else if !last {
                     // A segment with something under it is a folder, whatever a
                     // member of the same name said first.
@@ -290,7 +286,6 @@ impl Tree {
                     name: node.name.clone(),
                     is_dir: false,
                     size: node.size,
-                    encrypted: node.encrypted,
                     covers: 1,
                 });
             }
@@ -326,7 +321,6 @@ impl Tree {
             name,
             is_dir: true,
             size: 0,
-            encrypted: false,
             covers,
         });
 
@@ -340,8 +334,6 @@ struct TreeRow {
     name: String,
     is_dir: bool,
     size: u64,
-    #[allow(dead_code)]
-    encrypted: bool,
     /// Tree nodes this row stands for, which is more than one where a chain of
     /// single-child folders was collapsed.
     covers: usize,

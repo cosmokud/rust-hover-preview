@@ -10335,10 +10335,16 @@ mod tests {
         let renamed = folder.join("letter.docx");
         std::fs::write(&renamed, b"{\\rtf1\\ansi\\deff0 hello}").expect("a written document");
 
-        assert!(
-            !crate::formats::text_formats::is_text_file(&renamed),
-            "the name is not one the text lists carry"
-        );
+        let listed_as_text = {
+            let config = CONFIG.lock().expect("the configuration");
+            crate::formats::text_formats::matches_text_lists(
+                &renamed,
+                &config.text_extensions,
+                &config.text_names,
+            )
+        };
+
+        assert!(!listed_as_text, "the name is not one the text lists carry");
         assert!(
             is_text_preview(&renamed),
             "and the bytes are text, so text is what draws it"
@@ -12439,6 +12445,14 @@ mod tests {
             let path = PathBuf::from(path);
             println!("\n--- {} ---", path.display());
             println!("engine available: {}", libreoffice_render::available());
+            let text_lists = {
+                let config = crate::CONFIG.lock().expect("the configuration");
+                crate::formats::text_formats::matches_text_lists(
+                    &path,
+                    &config.text_extensions,
+                    &config.text_names,
+                )
+            };
             println!(
                 "kinds: video = {}, pdf = {}, office = {}, libre = {}, design = {}, vector = {}, text = {}",
                 crate::formats::video_formats::is_video_file(&path),
@@ -12447,7 +12461,7 @@ mod tests {
                 libre_formats::is_libre_file(&path),
                 design_formats::is_design_file(&path),
                 vector_formats::is_vector_file(&path),
-                crate::formats::text_formats::is_text_file(&path),
+                text_lists,
             );
 
             let scale = effective_preview_scale(&path, current_hover_scales());
@@ -12740,15 +12754,19 @@ mod tests {
         {
             println!("\n--- {} ---", path.display());
 
-            let claimed = crate::CONFIG
+            let (claimed, page_name) = crate::CONFIG
                 .lock()
-                .map(|config| ebook_formats::matches_ebook_list(&path, &config.ebook_extensions))
-                .unwrap_or(false);
+                .map(|config| {
+                    (
+                        ebook_formats::matches_ebook_list(&path, &config.ebook_extensions),
+                        ebook_formats::matches_page_name(&path, &config.ebook_extensions),
+                    )
+                })
+                .unwrap_or((false, false));
 
             println!(
-                "kinds: ebook list = {claimed}, page name = {}, comic name = {}, preview = {}",
-                ebook_formats::is_page_name(&path),
-                ebook_formats::is_comic_name(&path),
+                "kinds: ebook list = {claimed}, page name = {page_name}, comic name = {}, preview = {}",
+                claimed && !page_name,
                 ebook_formats::is_ebook_preview(&path)
             );
 

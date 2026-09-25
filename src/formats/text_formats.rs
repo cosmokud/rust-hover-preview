@@ -1,4 +1,3 @@
-use crate::CONFIG;
 use std::path::Path;
 
 /// Extensions previewed as text before the list is edited in `config.ini`.
@@ -155,28 +154,13 @@ pub fn matches_configured_name(path: &Path, names: &[String]) -> bool {
 ///
 /// This is the classification without the gate: the lists as they stand, so a
 /// caller that already holds the configuration can ask what kind of preview a
-/// file is without asking whether that kind is switched on.
+/// file is without asking whether that kind is switched on — which is how the
+/// router asks it, and what the hook, the loader and the layout all end up
+/// asking (`routing::kind_of`).
+///
+/// It is the configured lists' own answer rather than the app's: a name these
+/// lists hold and an earlier list claims as well is that earlier kind, and what
+/// kind a file is, is asked of the one order every side asks it in.
 pub fn matches_text_lists(path: &Path, extensions: &[String], names: &[String]) -> bool {
     matches_configured_extension(path, extensions) || matches_configured_name(path, names)
-}
-
-/// Whether the file is previewed as text under the current configuration. The
-/// `Text` gate is checked first, so turning text previews off leaves the lists
-/// alone and turning them back on restores it.
-///
-/// It is the configured lists' own answer rather than the app's: a name the text lists hold
-/// and an earlier list claims as well is that earlier kind, and what kind a file is, is asked
-/// of the one order every side asks it in (see `routing::kind_of`). Nothing in the app is left
-/// holding that question — the hook, the loader and the layout all ask the router — so no
-/// binary reads this, and it is kept for the tests that contrast a name's list with the kind
-/// the app gives it.
-#[allow(dead_code)]
-pub fn is_text_file(path: &Path) -> bool {
-    CONFIG
-        .lock()
-        .map(|config| {
-            config.text_preview_enabled
-                && matches_text_lists(path, &config.text_extensions, &config.text_names)
-        })
-        .unwrap_or(false)
 }
