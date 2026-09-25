@@ -11,6 +11,8 @@
 - A **`Peazip`** switch in the tray **`Preview Types`** submenu, below **`Magick`**; `[peazip] extensions` in `config.ini` controls which formats are asked about, and a name the engine cannot list is remembered so it costs one launch and never another.
 - **`PeaZip`** appears in **`Codecs → Engines`** to show if it is installed.
 - Archives are recognized by content as well as by name, so a renamed one still previews: a `.cab` renamed to `.dat` is listed all the same. The formats PeaZip opens through its other tools — `pea`, `arc`, `zpaq`, `br` and the codecs its build carries no format for — are written down with their reasons in `TODO.md`.
+- **PeaZip previews now drive the rest of the tools PeaZip ships**, each for the format only it reads: FreeArc’s archiver for `arc`, zpaq for `zpaq`, and Zstandard’s own tool for `zst`, which reports how large the stream was before it was compressed where the 7-Zip console leaves that blank. `arc`, `bcm`, `br`, `lpaq8` and `zpaq` join `[peazip] extensions`, and an existing `config.ini` is brought up to the list on the next run.
+- `br`, `bcm` and `lpaq8` — single-stream compressors whose tools print nothing about what is inside — preview as the one member an extraction would write, named after the file, with nothing started at all.
 
 ### Changed
 
@@ -23,6 +25,7 @@
 - A restart no longer hides an available update until the hour is up.
 - The update row appears whether or not the installer could be fetched, and a download that fails says so instead of leaving no row at all.
 - An installation made from a pre-release is offered the stable release its version names, instead of never being offered an update again.
+- A preview of an archive PeaZip listed was drawn at the size of the screen’s free room instead of the size the layout planned, so a `.cab` or an `.iso` came up as a page stretched to the display rather than as the page a `.zip` of the same kind comes up as.
 
 ## [0.3.2] - 2026-09-24
 
