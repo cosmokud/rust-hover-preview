@@ -2,6 +2,11 @@
 //! release than the one running has been published, and — where one has — the
 //! installer for it, fetched when the click that puts it on asks for it.
 //!
+//! The click that puts it on is a question with three answers, and only one of
+//! them installs anything: `Auto` fetches the installer and runs it, `Manual`
+//! opens the release page in the user's own browser instead, and `Cancel` is
+//! nothing at all.
+//!
 //! What asks is the app's own start, so that the answer is waiting by the time
 //! anyone looks for it, and the tray menu, because an opening is the one other
 //! moment a user is looking for one: `show_context_menu` asks for a check as the
@@ -30,7 +35,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use windows::core::{w, PCWSTR};
-use windows::Win32::Foundation::HWND;
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::Networking::WinHttp::{
     WinHttpCloseHandle, WinHttpConnect, WinHttpOpen, WinHttpOpenRequest, WinHttpQueryDataAvailable,
     WinHttpQueryHeaders, WinHttpReadData, WinHttpReceiveResponse, WinHttpSendRequest,
@@ -38,8 +43,12 @@ use windows::Win32::Networking::WinHttp::{
     WINHTTP_QUERY_CONTENT_LENGTH, WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_QUERY_FLAG_NUMBER64,
     WINHTTP_QUERY_STATUS_CODE,
 };
+use windows::Win32::System::Threading::GetCurrentThreadId;
+use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::{
-    MessageBoxW, IDYES, MB_ICONINFORMATION, MB_ICONWARNING, MB_OK, MB_SETFOREGROUND, MB_YESNO,
+    CallNextHookEx, GetDlgItem, MessageBoxW, SetWindowTextW, SetWindowsHookExW,
+    UnhookWindowsHookEx, HCBT_ACTIVATE, IDNO, IDYES, MB_ICONINFORMATION, MB_ICONWARNING, MB_OK,
+    MB_SETFOREGROUND, MB_YESNOCANCEL, SW_SHOWNORMAL, WH_CBT,
 };
 
 /// Where this app's releases are published, and the two files a check asks for.
@@ -54,6 +63,14 @@ const RELEASE_HOST: &str = "github.com";
 const LATEST_PATH: &str = "/cosmokud/rust-hover-preview/releases/latest/download";
 const RELEASE_PATH: &str = "/cosmokud/rust-hover-preview/releases/download";
 const VERSION_ASSET: &str = "version.txt";
+
+/// The page a `Manual` answer opens: the release the version is read from, which
+/// is the update the row is offering — `latest` without the asset path the
+/// version is read at. It is the one address here that is handed to something
+/// other than this app's own request, and the only one that is opened rather than
+/// fetched: the browser the user already has, and nothing of this app runs on the
+/// way.
+const LATEST_PAGE: &str = "/cosmokud/rust-hover-preview/releases/latest";
 
 /// What the installer is called where it is fetched to, which is this app's own
 /// name for it: the file it was fetched from is named for the version it carries,
@@ -129,22 +146,19 @@ pub(crate) fn is_confirming() -> bool {
     CONFIRMING.load(Ordering::SeqCst)
 }
 
-/// Put the update on, once the user has said so. The installer is fetched here
-/// rather than ahead of the check that found it: a click is what a download of a
-/// few megabytes is worth, and a row nobody clicked costs the network nothing.
-/// The installer then runs silently — `/S` is its own switch for that, and `/R`,
-/// which only a silent installer reads, is what starts the app again once the new
-/// version is in place. `false` is answered where there is nothing on offer, where
-/// the user declined, and where nothing could be fetched; the three are one answer
-/// to the caller, and only the last is one the user is told about.
+/// Put the update on, once the user has said so — which is the `Auto` answer and
+/// nothing else. The installer is fetched here rather than ahead of the check that
+/// found it: a click is what a download of a few megabytes is worth, and a row
+/// nobody clicked costs the network nothing. The installer then runs silently —
+/// `/S` is its own switch for that, and `/R`, which only a silent installer reads,
+/// is what starts the app again once the new version is in place. `false` is
+/// answered where there is nothing on offer and where nothing could be fetched;
+/// the two are one answer to the caller, and only the last is one the user is told
+/// about.
 pub(crate) fn install() -> bool {
     let Some(version) = available() else {
         return false;
     };
-
-    if !confirmed(&version) {
-        return false;
-    }
 
     let Some(installer) = fetch_installer(&version) else {
         download_failed(&version);
@@ -158,36 +172,119 @@ pub(crate) fn install() -> bool {
         .is_ok()
 }
 
+/// The other way to take the update, which is the `Manual` answer: the release
+/// page, opened in the browser the user already has. Nothing is fetched and
+/// nothing is run here — the page is where the installer is, and taking it from
+/// there is the user's own business — so the app is left exactly where it was.
+pub(crate) fn open_release_page() {
+    let url = wide(&format!("https://{RELEASE_HOST}{LATEST_PAGE}"));
+
+    unsafe {
+        let _ = ShellExecuteW(
+            HWND::default(),
+            w!("open"),
+            PCWSTR(url.as_ptr()),
+            PCWSTR::null(),
+            PCWSTR::null(),
+            SW_SHOWNORMAL,
+        );
+    }
+}
+
+/// What the click on the update row is answered with: the buttons of the dialog,
+/// left to right, and the three things that can be done with the update.
+pub(crate) enum Answer {
+    /// Put the update on, which is what the row did before it had three answers.
+    Auto,
+    /// Take the update by hand: the release page, in the browser.
+    Manual,
+    /// Nothing, and a menu that stays as it was.
+    Cancel,
+}
+
 /// Ask, and answer with what the user said. It stands where it does because the
-/// click it follows is a click that ends the app: what a user is agreeing to is
-/// an update that puts itself on, and a window that comes back as the new
-/// version. It is the first of the app's two dialogs, and the other is only ever
-/// reached past a yes to this one.
+/// click it follows may end the app: what a user is agreeing to with `Auto` is an
+/// update that puts itself on, and a window that comes back as the new version,
+/// while `Manual` is the release page in their browser and `Cancel` is a click
+/// that does nothing. It is the first of the app's two dialogs, and the other is
+/// only ever reached past `Auto`.
 ///
 /// The dialog is given no owner, and is set to the foreground, for the same
 /// reason: the one window this app owns is the tray's, which is never shown and
 /// has no place on screen for a dialog to be centred over.
-fn confirmed(version: &str) -> bool {
+///
+/// The question is asked with a message box — the platform's own dialog for one —
+/// which carries the three buttons this question needs but names two of them for
+/// a question this app is not asking; see `name_buttons` for what is done about
+/// that. A click with nothing on offer is answered `Cancel` without a dialog at
+/// all, which is the same click that does nothing.
+pub(crate) fn ask() -> Answer {
+    let Some(version) = available() else {
+        return Answer::Cancel;
+    };
+
     let caption = wide("Rust Hover Preview");
     let text = wide(&format!(
-        "Version {version} is available.\n\nInstall it now? The update downloads and installs \
-         automatically, and the app restarts on the new version."
+        "Version {version} is available.\n\n\
+         Auto: Download and install now, then restart the app on the new version.\n\
+         Manual: Open the release page in your browser."
     ));
 
     CONFIRMING.store(true, Ordering::SeqCst);
+
+    let hook = unsafe { SetWindowsHookExW(WH_CBT, Some(name_buttons), None, GetCurrentThreadId()) };
 
     let answer = unsafe {
         MessageBoxW(
             HWND::default(),
             PCWSTR(text.as_ptr()),
             PCWSTR(caption.as_ptr()),
-            MB_YESNO | MB_ICONINFORMATION | MB_SETFOREGROUND,
+            MB_YESNOCANCEL | MB_ICONINFORMATION | MB_SETFOREGROUND,
         )
     };
 
+    if let Ok(hook) = hook {
+        unsafe {
+            let _ = UnhookWindowsHookEx(hook);
+        }
+    }
+
     CONFIRMING.store(false, Ordering::SeqCst);
 
-    answer == IDYES
+    if answer == IDYES {
+        Answer::Auto
+    } else if answer == IDNO {
+        Answer::Manual
+    } else {
+        Answer::Cancel
+    }
+}
+
+/// Name the update dialog's buttons as it is created. `Yes` and `No` are the
+/// platform's names for a question this app is not asking, and the answers it
+/// does ask for are `Auto`, `Manual` and `Cancel` — of which the message box
+/// already carries the last, so the two it names are the two renamed.
+///
+/// The hook belongs to one thread, the one asking, and its life is one dialog:
+/// the message box is created by the thread that calls for it, so what it names
+/// is a window of this process's own, and no other process can meet it or be
+/// reached by it. `HCBT_ACTIVATE` is the moment the dialog is whole — every
+/// button of it exists by the time it is about to be shown — and a window that is
+/// not this dialog has no button under these ids, which is how the two lookups
+/// answer nothing and it is left exactly as it is.
+unsafe extern "system" fn name_buttons(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    if code == HCBT_ACTIVATE as i32 {
+        let dialog = HWND(wparam.0 as *mut c_void);
+
+        for (id, label) in [(IDYES, "Auto"), (IDNO, "Manual")] {
+            if let Ok(button) = GetDlgItem(dialog, id.0) {
+                let text = wide(label);
+                let _ = SetWindowTextW(button, PCWSTR(text.as_ptr()));
+            }
+        }
+    }
+
+    CallNextHookEx(None, code, wparam, lparam)
 }
 
 /// What a click that asked for the update and could not have it is told. It is

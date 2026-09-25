@@ -68,18 +68,19 @@ memory, so nothing about it is written to disk.
 What it asks for is two files in this project's own GitHub releases: `version.txt`
 at the newest release's stable address, and — where that names a version newer than
 this one, and only once you have clicked the row it puts in the tray menu and
-answered yes to the dialog that asks — that release's installer. Both are fetched
-over HTTPS, verified by the certificate checks Windows already performs, and sent
-through the proxy Windows is configured with, if any. The request identifies itself
-as this app and its version, and says nothing else.
+answered **Auto** to the dialog that asks — that release's installer. Both are
+fetched over HTTPS, verified by the certificate checks Windows already performs,
+and sent through the proxy Windows is configured with, if any. The request
+identifies itself as this app and its version, and says nothing else.
 
 Nothing is downloaded until you click the row above **Run at Startup** and answer
 the dialog that follows: the check itself is a request for one small file. That
-click asks first — a yes/no dialog saying the update installs itself and the app
-restarts — and only a yes downloads the installer and then runs it: it replaces
-the app silently, then starts it again. A download that does not arrive, or that
-is not a whole program, is deleted and reported; nothing is installed without that
-click and that yes.
+click asks first, and the dialog has three answers: **Auto** downloads the
+installer and then runs it — it replaces the app silently, then starts it again —
+**Manual** opens the release page in your browser, with nothing downloaded or run
+here, and **Cancel** does nothing at all. A download that does not arrive, or that
+is not a whole program, is deleted and reported; nothing is installed without
+**Auto**.
 
 A run makes one check as it starts, and at most one more an hour after that, so a
 session you leave alone asks nothing beyond that first check. There is no
@@ -142,7 +143,9 @@ own vendor privacy statements apply to them; this app adds no reporting on top.
 
 GitHub is the one service this app talks to at all, and only for the update
 check: it is asked whether a newer release exists, and for the installer when you
-ask to install one. No file you have previewed, and nothing about them, is part
+ask to install one. The release page a **Manual** answer opens is handed to your
+own browser rather than fetched here, and whatever it does with it is the
+browser's business. No file you have previewed, and nothing about them, is part
 of that request.
 
 ## If you report a bug
