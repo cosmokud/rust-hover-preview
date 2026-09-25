@@ -41,18 +41,3 @@ pub fn disable_startup() {
         }
     }
 }
-
-#[allow(dead_code)]
-pub fn is_startup_enabled() -> bool {
-    use windows::Win32::System::Registry::{RegQueryValueExW, KEY_READ};
-
-    unsafe {
-        let mut hkey: HKEY = HKEY::default();
-        if RegOpenKeyExW(HKEY_CURRENT_USER, STARTUP_KEY, 0, KEY_READ, &mut hkey).is_ok() {
-            let result = RegQueryValueExW(hkey, APP_NAME, None, None, None, None).is_ok();
-            let _ = RegCloseKey(hkey);
-            return result;
-        }
-    }
-    false
-}
