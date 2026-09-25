@@ -207,7 +207,7 @@ fn read(path: &Path) -> Content {
     // Neither table named the front of the file, so the name it carries is what is left to
     // ask. A file with no name to ask about — one with no extension at all — has nothing
     // here to disagree with either, and is left to the lists.
-    own_extension(path)
+    crate::formats::text_formats::lookup_extension(path)
         .and_then(|extension| kind_by_name(&extension, &probe))
         .unwrap_or(Content::Unknown)
 }
@@ -2418,7 +2418,7 @@ fn classify(path: &Path, names: &[&str], config: &AppConfig) -> Content {
     // A file with no extension at all has no name for the content to disagree with, and
     // one whose own name is among the names the content answered with is the two agreeing:
     // there is nothing to override either way.
-    let Some(own) = own_extension(path) else {
+    let Some(own) = crate::formats::text_formats::lookup_extension(path) else {
         return Content::Unknown;
     };
 
@@ -2463,13 +2463,6 @@ fn kind_claiming(names: &[&str], config: &AppConfig) -> Option<PreviewType> {
     })
 }
 
-/// The extension the file is named by, in the form the lists carry.
-fn own_extension(path: &Path) -> Option<String> {
-    path.extension()
-        .and_then(|extension| extension.to_str())
-        .map(|extension| extension.to_lowercase())
-}
-
 /// The file an answer belongs to: its path, and the version of it that was read.
 fn answer_key(path: &Path) -> AnswerKey {
     let metadata = std::fs::metadata(path).ok();
@@ -2510,7 +2503,7 @@ mod tests {
             return classify(Path::new(name), names, &AppConfig::default());
         }
 
-        own_extension(Path::new(name))
+        crate::formats::text_formats::lookup_extension(Path::new(name))
             .and_then(|extension| kind_by_name(&extension, content))
             .unwrap_or(Content::Unknown)
     }

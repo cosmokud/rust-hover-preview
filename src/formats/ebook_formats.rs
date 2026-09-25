@@ -144,7 +144,7 @@ pub fn matches_page_name(path: &Path, extensions: &[String]) -> bool {
 /// and `epdf`. Whether such a name is still a book is the list's answer, asked beside this one.
 fn page_spelling(path: &Path) -> bool {
     matches!(
-        own_extension(path).as_deref(),
+        crate::formats::text_formats::lookup_extension(path).as_deref(),
         Some("pdf") | Some("pdfa") | Some("epdf")
     )
 }
@@ -160,13 +160,6 @@ fn page_spelling(path: &Path) -> bool {
 #[allow(dead_code)]
 pub fn is_comic_name(path: &Path) -> bool {
     is_ebook_file(path) && !is_page_name(path)
-}
-
-/// The extension the file is named by, in the form the lists carry.
-fn own_extension(path: &Path) -> Option<String> {
-    path.extension()
-        .and_then(|extension| extension.to_str())
-        .map(|extension| extension.to_lowercase())
 }
 
 #[cfg(test)]
