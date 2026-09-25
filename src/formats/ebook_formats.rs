@@ -121,6 +121,9 @@ pub fn is_ebook_preview(path: &Path) -> bool {
 /// It is the name half of the question `pdf_preview::is_pdf_file` asks — that function adds the one
 /// content answer of its own, a drawing saved as a PDF — and it is asked from there rather than
 /// here so that the two halves of "is this a page" are read together.
+// Nothing in the app asks this any more — what a file is, is the router's answer (see
+// `routing::kind_of`) — and the tests below are what it is kept for.
+#[allow(dead_code)]
 pub fn is_page_name(path: &Path) -> bool {
     page_spelling(path) && is_ebook_file(path)
 }
@@ -152,6 +155,9 @@ fn page_spelling(path: &Path) -> bool {
 /// What this answers is which *reader* is asked about a file, not whether the file is a comic: a
 /// name whose file is not a zip, a rar or a container of pictures is a name the comic reader
 /// answers nothing for, and the hover shows nothing rather than the wrong thing.
+// The same: the page half is asked of the router now, and this is the pair the tests below
+// contrast a comic with.
+#[allow(dead_code)]
 pub fn is_comic_name(path: &Path) -> bool {
     is_ebook_file(path) && !is_page_name(path)
 }
@@ -326,7 +332,10 @@ mod tests {
             "and a book the ebook engine converts is not one either"
         );
         assert!(
-            !matches_page_name(Path::new("book.pdf"), &sanitize_ebook_extensions("cbz,cbr,cbc")),
+            !matches_page_name(
+                Path::new("book.pdf"),
+                &sanitize_ebook_extensions("cbz,cbr,cbc")
+            ),
             "a name taken out of the list is a name this app stops drawing"
         );
     }
