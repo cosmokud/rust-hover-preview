@@ -67,7 +67,9 @@ The archives this app has no reader of its own for, listed by an installed PeaZi
 
 ### Needs Calibre
 
-The ebooks this app has no reader of its own for, converted by an installed Calibre and drawn as the first page of the PDF it wrote — the same kind, scale and backdrop a PDF this app reads itself gets, all of them: `azw` `azw3` `azw4` `djvu` `epub` `fb2` `htmlz` `lrf` `mobi` `pml` `prc` `snb` `tcr`.
+The ebooks this app has no reader of its own for, converted by an installed Calibre and drawn as a page of the PDF it wrote — the same kind, scale and backdrop a PDF this app reads itself gets, all of them: `azw` `azw3` `azw4` `djvu` `epub` `fb2` `htmlz` `lrf` `mobi` `pml` `prc` `snb` `tcr`.
+
+The page shown is the first of the book’s opening pages that says anything about it, which is the cover where there is one and the title page or the first page of text where there is not: a cover is very often a single flat colour — the quick start guide inside Calibre’s own installation has a one-pixel cover — and a preview of a colour says nothing about a book. A page with anything at all on it is never skipped, and a PDF you read yourself is still shown from page 1.
 
 A book with DRM — an `.azw`, `.azw3` or `.azw4` bought from Amazon — cannot be converted by anything here and shows nothing. See `TODO.md` for the formats the engine reads that are not in the list, and why.
 
