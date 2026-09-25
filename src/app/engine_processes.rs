@@ -173,6 +173,19 @@ struct Owned {
 
 static OWNED: Lazy<Mutex<Vec<Owned>>> = Lazy::new(|| Mutex::new(Vec::new()));
 
+/// A lock the tests that stand a real process in for an engine take, so that one of them runs
+/// at a time.
+///
+/// The record above is one list for the whole process and the stand-ins every engine's tests
+/// use are the same image — `ping.exe`, the sleep Windows ships — so two of those tests
+/// running at once is one test's ending reaching another test's process: a sweep of every
+/// recorded engine ends a stand-in another test is still waiting on, and a test that answers
+/// the wrong status fails in a way that says nothing about the code it is testing. Nothing in
+/// the app shares a stand-in; only the tests do, and only because a stand-in is a real process
+/// and the record is process-wide. Held for the length of one test, which is under a second.
+#[cfg(test)]
+pub(crate) static STAND_IN: Mutex<()> = Mutex::new(());
+
 /// Take charge of an engine this app started: put it in the job, hold it, and write
 /// it down.
 pub fn record(image: &str, pid: u32) {

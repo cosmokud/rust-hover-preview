@@ -712,6 +712,9 @@ mod tests {
     /// keeps an id from being acted on by itself.
     #[test]
     fn ends_a_listing_only_once_it_has_outrun_the_give_up() {
+        let _stand_in = crate::app::engine_processes::STAND_IN
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let mut engine = std::process::Command::new("ping")
             .args(["-n", "30", "127.0.0.1"])
             .stdout(std::process::Stdio::null())
@@ -754,6 +757,9 @@ mod tests {
     /// back with its own status, and one that outlasts it is ended there rather than waited on.
     #[test]
     fn ends_a_listing_rather_than_waiting_past_its_bound() {
+        let _stand_in = crate::app::engine_processes::STAND_IN
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let mut quick = std::process::Command::new("ping")
             .args(["-n", "1", "127.0.0.1"])
             .stdout(std::process::Stdio::null())
