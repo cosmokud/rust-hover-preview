@@ -316,9 +316,9 @@ fn facts(
     // An icon or a cursor: the count of images it holds is in its own header, and more than
     // one of them is a set of sizes rather than a thing that moves.
     if front.len() >= 6
-        && (&front[..4] == [0x00, 0x00, 0x01, 0x00] || &front[..4] == [0x00, 0x00, 0x02, 0x00])
+        && (front[..4] == [0x00, 0x00, 0x01, 0x00] || front[..4] == [0x00, 0x00, 0x02, 0x00])
     {
-        let cursor = &front[..4] == [0x00, 0x00, 0x02, 0x00];
+        let cursor = front[..4] == [0x00, 0x00, 0x02, 0x00];
         let count = u16::from_le_bytes([front[4], front[5]]);
         let form = if count > 1 {
             PictureForm::Paged
