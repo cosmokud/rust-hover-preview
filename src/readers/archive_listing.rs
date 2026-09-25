@@ -23,6 +23,7 @@
 //! is read here is an answer that has already come back, and a file the engine
 //! has not answered for yet is a file with no listing rather than a launch.
 
+use crate::config::config::decode_budget_bytes;
 use once_cell::sync::Lazy;
 use std::fs::File;
 use std::io::Read;
@@ -212,6 +213,109 @@ pub(crate) fn is_listed(path: &Path) -> bool {
         .lock()
         .map(|cache| cache.iter().any(|(cached, _)| *cached == key))
         .unwrap_or(false)
+}
+
+/// One entry's bytes, found by the name a listing of the same file gave it.
+///
+/// It is what a reader of this app's own asks for when what it wants is not the archive but one
+/// thing inside it: the first page of a comic is a picture in a zip or a rar, and a picture is what
+/// the comic reader needs rather than the box it is filed in. What that costs is the entry and not
+/// the archive, which is the whole of why a hover on a comic is a decode rather than an unpacking:
+/// the headers are walked for the name alone — inflating nothing — and only the one entry that was
+/// named is read.
+///
+/// The name is compared the way a listing writes it rather than as the format spells it, so a
+/// caller never has to hand back a name the archive would not have recognized: the separators of a
+/// Windows-written zip and the control characters of a name that has them are a listing's own doing
+/// (see `normalize_name`), and a caller holding one of its names holds one this can find.
+///
+/// What is read is bounded by the ceiling one hover may decode for: an entry larger than that is
+/// read as far as the ceiling and no further, and a picture that is not all there is a picture that
+/// does not decode — which is the answer "no preview", arrived at without the allocation that would
+/// have been refused anyway.
+///
+/// Only the two containers a comic is filed in are read this way. A `.cbz` is a zip and a `.cbr` a
+/// rar; a 7z, a tar and a gzip stream are not containers a comic is published in, and a reader that
+/// wants an entry out of one is a reader this cannot answer.
+pub(crate) fn entry_bytes(path: &Path, name: &str) -> Option<Vec<u8>> {
+    let limit = decode_budget_bytes();
+
+    match kind_of(path)? {
+        ArchiveKind::Zip => zip_entry_bytes(path, name, limit),
+        ArchiveKind::Rar => rar_entry_bytes(path, name, limit),
+        ArchiveKind::SevenZ | ArchiveKind::Tar | ArchiveKind::TarGz => None,
+    }
+}
+
+/// One entry read out of a zip, by the name a listing gave it.
+///
+/// The entries are asked by index rather than by name because the name is a listing's: what is
+/// compared is what `normalize_name` makes of each entry's own name, which is the same thing a
+/// caller was handed.
+fn zip_entry_bytes(path: &Path, name: &str, limit: u64) -> Option<Vec<u8>> {
+    let mut archive = zip::ZipArchive::new(File::open(path).ok()?).ok()?;
+
+    for index in 0..archive.len() {
+        // The raw view, for the reason `read_zip` takes it: an entry packed by something this build
+        // has no decompressor for still has a name, and one whose name matches is the entry to try
+        // to read.
+        let found = archive
+            .by_index_raw(index)
+            .map(|entry| normalize_name(entry.name()).as_deref() == Some(name))
+            .unwrap_or(false);
+
+        if !found {
+            continue;
+        }
+
+        // Taken rather than read to the end: what the entry declares is a number a file may be
+        // wrong about, so what bounds the read is the read itself.
+        let entry = archive.by_index(index).ok()?;
+        let mut bytes = Vec::new();
+        entry.take(limit).read_to_end(&mut bytes).ok()?;
+
+        return Some(bytes);
+    }
+
+    None
+}
+
+/// One entry read out of a rar, by the name a listing gave it.
+///
+/// A rar is walked rather than indexed: the archiver reads its way to the member it was asked for,
+/// which is what makes a solid archive — where a member cannot be read without the ones before it —
+/// readable at all. The size the member *declares* is what bounds the read here, because the
+/// archiver hands back a member rather than a stream of one: a member larger than the ceiling is
+/// answered with nothing rather than read, which is the one place this reader refuses a plate the
+/// zip reader would have read part of.
+fn rar_entry_bytes(path: &Path, name: &str, limit: u64) -> Option<Vec<u8>> {
+    let mut archive = unrar::Archive::new(path).open_for_processing().ok()?;
+
+    loop {
+        let header = archive.read_header().ok()??;
+
+        let (found, is_dir, declared) = {
+            let entry = header.entry();
+
+            (
+                normalize_name(&entry.filename.to_string_lossy()).as_deref() == Some(name),
+                entry.is_directory(),
+                entry.unpacked_size,
+            )
+        };
+
+        if found && !is_dir {
+            if declared > limit {
+                return None;
+            }
+
+            let (bytes, _) = header.read().ok()?;
+
+            return Some(bytes);
+        }
+
+        archive = header.skip().ok()?;
+    }
 }
 
 /// Hold the listing the engine produced for `path`, under the key a reader of this app's would

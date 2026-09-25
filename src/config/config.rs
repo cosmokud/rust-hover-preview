@@ -10,12 +10,15 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use crate::config::theme_files;
-use crate::formats::archive_formats::{sanitize_archive_extensions, DEFAULT_ARCHIVE_EXTENSIONS};
+use crate::formats::archive_formats::{
+    sanitize_archive_extensions, ARCHIVE_EXTENSIONS_BEFORE_THE_COMICS, DEFAULT_ARCHIVE_EXTENSIONS,
+};
 use crate::formats::calibre_formats::{sanitize_calibre_extensions, DEFAULT_CALIBRE_EXTENSIONS};
 use crate::formats::design_formats::{
     sanitize_design_extensions, DEFAULT_DESIGN_EXTENSIONS, DESIGN_EXTENSIONS_BEFORE_AI,
     DESIGN_EXTENSIONS_BEFORE_CDR_AND_PROCREATE, DESIGN_EXTENSIONS_WITH_CDR,
 };
+use crate::formats::ebook_formats::{sanitize_ebook_extensions, DEFAULT_EBOOK_EXTENSIONS};
 use crate::formats::font_formats::{sanitize_font_extensions, DEFAULT_FONT_EXTENSIONS};
 use crate::formats::image_formats::{
     sanitize_image_extensions, DEFAULT_IMAGE_EXTENSIONS, IMAGE_EXTENSIONS_BEFORE_AVCI,
@@ -32,6 +35,7 @@ use crate::formats::magick_formats::{
 use crate::formats::office_formats::{sanitize_office_extensions, DEFAULT_OFFICE_EXTENSIONS};
 use crate::formats::peazip_formats::{
     sanitize_peazip_extensions, DEFAULT_PEAZIP_EXTENSIONS, PEAZIP_EXTENSIONS_BEFORE_THE_BACKENDS,
+    PEAZIP_EXTENSIONS_BEFORE_THE_EBOOKS,
 };
 use crate::formats::text_formats::{
     sanitize_extensions, sanitize_names, DEFAULT_TEXT_EXTENSIONS, DEFAULT_TEXT_NAMES,
@@ -74,6 +78,9 @@ const PEAZIP_SECTION: &str = "peazip";
 /// And the list of books the Calibre engine is asked about, for the same reason: the ebook formats
 /// this app hands to it rather than reading itself.
 const CALIBRE_SECTION: &str = "calibre";
+/// And the list of pages this app draws itself, for the same reason: the PDF and the comics — the
+/// names of the `Ebook` kind, which is the one list that holds two readers' worth of names.
+const EBOOK_SECTION: &str = "ebook";
 pub const DEFAULT_WEBP_PLAYBACK_FPS: u32 = 90;
 pub const MAX_WEBP_PLAYBACK_FPS: u32 = 90;
 /// The volume a video is played at unless the file says otherwise: silent, so a hover
@@ -1429,6 +1436,14 @@ pub struct AppConfig {
     /// for — the Kindle and Mobipocket families, the open EPUB, the FictionBook, the scanned book
     /// and the containers of the dedicated readers. See `calibre_formats`.
     pub calibre_extensions: Vec<String>,
+    /// The names of the pages this app draws itself, as `[ebook] extensions` in `config.ini`: the
+    /// PDF's three spellings, which its own reader draws, and the three comic containers, whose
+    /// first plate is a picture inside the box. See `ebook_formats`.
+    ///
+    /// It is the one list that holds two readers' worth of names, because a user asks one question
+    /// of them — what is a book — rather than which reader is the right one: what the PDF reader is
+    /// asked about is a name, and what the comic reader answers for is decided by the file.
+    pub ebook_extensions: Vec<String>,
     /// Extensions previewed as vector drawings, already normalized for lookup.
     pub vector_extensions: Vec<String>,
 }
@@ -1505,6 +1520,7 @@ impl Default for AppConfig {
             magick_extensions: sanitize_magick_extensions(DEFAULT_MAGICK_EXTENSIONS),
             peazip_extensions: sanitize_peazip_extensions(DEFAULT_PEAZIP_EXTENSIONS),
             calibre_extensions: sanitize_calibre_extensions(DEFAULT_CALIBRE_EXTENSIONS),
+            ebook_extensions: sanitize_ebook_extensions(DEFAULT_EBOOK_EXTENSIONS),
             vector_extensions: sanitize_vector_extensions(DEFAULT_VECTOR_EXTENSIONS),
         }
     }
@@ -1775,6 +1791,12 @@ fn repair_older_lists(ini: &mut Ini) -> bool {
 
     for (section, defaults, previous, sanitize) in [
         (
+            ARCHIVE_SECTION,
+            DEFAULT_ARCHIVE_EXTENSIONS,
+            &[ARCHIVE_EXTENSIONS_BEFORE_THE_COMICS][..],
+            sanitize_archive_extensions as fn(&str) -> Vec<String>,
+        ),
+        (
             IMAGE_SECTION,
             DEFAULT_IMAGE_EXTENSIONS,
             &[
@@ -1811,7 +1833,10 @@ fn repair_older_lists(ini: &mut Ini) -> bool {
         (
             PEAZIP_SECTION,
             DEFAULT_PEAZIP_EXTENSIONS,
-            &[PEAZIP_EXTENSIONS_BEFORE_THE_BACKENDS][..],
+            &[
+                PEAZIP_EXTENSIONS_BEFORE_THE_BACKENDS,
+                PEAZIP_EXTENSIONS_BEFORE_THE_EBOOKS,
+            ][..],
             sanitize_peazip_extensions as fn(&str) -> Vec<String>,
         ),
         (
@@ -2346,6 +2371,11 @@ impl AppConfig {
             Some(sanitize_calibre_extensions(&self.calibre_extensions.join(",")).join(",")),
         );
         ini.set(
+            EBOOK_SECTION,
+            "extensions",
+            Some(sanitize_ebook_extensions(&self.ebook_extensions.join(",")).join(",")),
+        );
+        ini.set(
             VECTOR_SECTION,
             "extensions",
             Some(sanitize_vector_extensions(&self.vector_extensions.join(",")).join(",")),
@@ -2818,6 +2848,19 @@ impl AppConfig {
             sanitize_calibre_extensions,
         );
         self.calibre_extensions = list;
+        // And the ebook list, which is the one list that is two readers' worth of names: the PDF's
+        // three spellings and the three comic containers, which are the same kind of preview to a
+        // user — a page of a book — and are drawn by two readers behind it (see `ebook_formats`).
+        // It is new with its kind, so an older file has no section at all and the built-in entries
+        // come back with the key.
+        let list = configured_list(
+            ini,
+            EBOOK_SECTION,
+            "extensions",
+            DEFAULT_EBOOK_EXTENSIONS,
+            sanitize_ebook_extensions,
+        );
+        self.ebook_extensions = list;
         // And the vector list, new with its kind: an older file has no section at all, so
         // the key is gone and the built-in entries come back with it. Its entries have
         // grown since — `svg` and `svgz`, which were entries of the image list until the
@@ -3510,6 +3553,65 @@ mod tests {
                 "`{name}` is one of the names added with the backends"
             );
         }
+    }
+
+    /// And the same for the lists a name moved *out of* when the book kind grew a list of its own:
+    /// `cbz` was the `[archive]` list's until a comic became a book, and `chm` and `lit` were the
+    /// `[peazip]` list's until the ebook engine was the one asked about them. A file holding either
+    /// list as this app shipped it has never been edited — nobody types these — so both are brought
+    /// up to the lists of now, which is what takes the three names out of every `config.ini` already
+    /// written, and the list the names went to is a section the file has never held.
+    #[test]
+    fn a_list_holding_the_apps_own_entries_loses_the_names_that_became_books() {
+        let mut ini = Ini::new();
+        ini.set(
+            ARCHIVE_SECTION,
+            "extensions",
+            Some(ARCHIVE_EXTENSIONS_BEFORE_THE_COMICS.to_string()),
+        );
+        ini.set(
+            PEAZIP_SECTION,
+            "extensions",
+            Some(PEAZIP_EXTENSIONS_BEFORE_THE_EBOOKS.to_string()),
+        );
+
+        let config = read_file(&mut ini);
+
+        assert_eq!(
+            config.archive_extensions,
+            sanitize_archive_extensions(DEFAULT_ARCHIVE_EXTENSIONS),
+            "a comic is not an archive any more"
+        );
+        assert_eq!(
+            config.peazip_extensions,
+            sanitize_peazip_extensions(DEFAULT_PEAZIP_EXTENSIONS),
+            "and a help file is not an archive either"
+        );
+
+        for name in ["cbz", "chm", "lit"] {
+            assert!(
+                !config.archive_extensions.iter().any(|entry| entry == name)
+                    && !config.peazip_extensions.iter().any(|entry| entry == name),
+                "`{name}` is a book now, so no listing list carries it"
+            );
+        }
+
+        // And the list the names went to is the one the file has never held, so the built-in
+        // entries come back with the key rather than the names being lost on the way over.
+        assert_eq!(
+            config.ebook_extensions,
+            sanitize_ebook_extensions(DEFAULT_EBOOK_EXTENSIONS),
+            "a file with no `[ebook]` section is given the built-in list"
+        );
+        assert_eq!(
+            config.calibre_extensions,
+            sanitize_calibre_extensions(DEFAULT_CALIBRE_EXTENSIONS),
+            "and the engine's list is what the two names moved into"
+        );
+        assert!(
+            config.differs(&ini),
+            "and the file, which holds none of that, is one to write"
+        );
     }
 
     /// Names taken out of a built-in list leave the files already written with them: the

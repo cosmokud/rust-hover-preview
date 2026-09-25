@@ -1,11 +1,13 @@
 //! Which ebooks are previewed by an installed Calibre rather than by a reader of this app's own.
 //!
-//! This app previews a PDF from its own reader and nothing else as a book. Everything a person
-//! actually buys or borrows is a format that reader does not open — the Mobipocket and Kindle
-//! families (`.mobi`, `.azw`, `.azw3`, `.azw4`, `.prc`), the open one (`.epub`), the Russian one
-//! (`.fb2`), the ones the dedicated readers of the 2000s used (`.lrf`, `.tcr`, `.pml`, `.rb`,
-//! `.snb`), the Palm databases the first ebooks arrived as (`.pdb`), and the scanned book
-//! (`.djvu`) — and a hover onto one of them shows nothing at all today.
+//! This app previews two things as a book from its own readers — a PDF, drawn from page one of the
+//! file, and a comic, whose first plate is a picture inside a container this app reads itself (see
+//! `ebook_formats`) — and nothing else. Everything a person actually buys, borrows or is sent is a
+//! format neither of those opens: the Mobipocket and Kindle families (`.mobi`, `.azw`, `.azw3`,
+//! `.azw4`, `.prc`), the open one (`.epub`), the Russian one (`.fb2`), the ones the dedicated
+//! readers of the 2000s used (`.lrf`, `.tcr`, `.pml`, `.rb`, `.snb`), the Palm databases the first
+//! ebooks arrived as (`.pdb`), the compiled help file (`.chm`), the Microsoft Reader book (`.lit`),
+//! and the scanned book (`.djvu`) — and a hover onto one of them shows nothing at all today.
 //!
 //! Calibre is the tool that opens them, and it opens more of them than anything else on a Windows
 //! machine: its conversion pipeline reads every format above and writes a PDF of what it read,
@@ -29,6 +31,11 @@
 //! * The Kindle and Mobipocket family: `azw`, `azw3`, `azw4`, `mobi` and `prc`. All of them are
 //!   Palm databases with the same two identifiers inside — see `content_type`, which reads them —
 //!   and the engine reads them as one format under five names.
+//! * `chm` and `lit`, the two books whose text is packed rather than stored: a compiled help file
+//!   is HTML compressed with LZX inside an ITSF container, and a Microsoft Reader book is the same
+//!   compression inside an OLE compound file. Neither is a container of pictures and neither is a
+//!   format whose text any reader here unpacks, so both are the engine's — and both were the
+//!   listing engine's names once, which is what `[peazip]`'s own older list is written down for.
 //! * The open one, `epub`, which is the format most ebooks are sold in.
 //! * `fb2`, the FictionBook the Russian ebook sites write.
 //! * `djvu`, the scanned book, in the same family as a PDF: what a hover shows is a page of the
@@ -40,19 +47,15 @@
 //! What is deliberately *not* here is a judgement rather than a gap, and each group is worth
 //! naming — see TODO.md, where every one of them is written down with what it would take:
 //!
-//! * **A name another kind already reads is not here.** `chm` and `lit` are the `[peazip]` list's,
-//!   `cbz` is the `[archive]` list's, `docx` is the Office list's, `odt` and `pdb` are the
-//!   `[libre]` list's, `html`, `rtf` and `txt` are the text lists', and `pdf` is this app's own
-//!   book reader. A name sits in exactly one list so that a preview of one cannot come back by two
-//!   routes.
-//! * **A comic book is not here, and the family it belongs to is why.** The engine reads `cbz`,
-//!   `cbr` and `cbc`, and the first of those is the archive list's already — this app reads a
-//!   `.cbz` itself and shows what is inside it, which is what a comic book is. A `.cbr` and a
-//!   `.cbc` are the same thing in other boxes, so the archive list is where they belong rather
-//!   than this one, and a box of pictures is not a book either way. Two things are written down
-//!   beside them in TODO.md: that neither has a reader here yet, and that a comic is hundreds of
-//!   plates rather than a book of text, which is the one shape of file the conversion bound below
-//!   is not calibrated for.
+//! * **A name another kind already reads is not here.** `docx` is the Office list's, `odt` and
+//!   `pdb` are the `[libre]` list's, `html`, `rtf` and `txt` are the text lists', and `pdf` is this
+//!   app's own page reader. A name sits in exactly one list so that a preview of one cannot come
+//!   back by two routes.
+//! * **And the books this app reads itself are not here, because it reads them.** `cbz`, `cbr` and
+//!   `cbc` are the `[ebook]` list's: the engine converts a comic the way it converts everything —
+//!   unpacking the archive, decoding every plate, rewriting each one and building a document of the
+//!   lot — which for a comic of a hundred megabytes is minutes of work for a preview that is one
+//!   page, against reading that page out of the container in milliseconds (see `comic_preview`).
 //! * **A name that is a programming language is not here.** `rb` is Rocket eBook to the engine and
 //!   a Ruby source file to everyone who writes one, and there are far more of the second. A
 //!   `.rb` is a text file, which is what the text list already says it is.
@@ -64,9 +67,10 @@
 //! * **And the formats whose own head is too weak to be worth a signature are answered by their
 //!   names alone.** A `.lrx` is the DRM-protected spelling of the Sony container below and is not
 //!   declared by the engine's own LRF plugin, so it is left out of the list and written down in
-//!   TODO.md; a `.snb` is a SQLite database, a `.tcr` and a `.pml` are text, and a `.htmlz` is a
-//!   zip — for those four the name is the whole of the question, and they are the reason the list
-//!   is asked at all.
+//!   TODO.md; a `.snb` is a SQLite database, a `.tcr` and a `.pml` are text, a `.chm` declares
+//!   itself and a `.lit` is an OLE compound file every Office document is as well, and a `.htmlz` is
+//!   a zip — for those the name is the whole of the question, and they are the reason the list is
+//!   asked at all.
 //!
 //! The question here is only what a file is *called*, and for most of these names that is the whole
 //! of it: what the file *is* — whether the engine can read it at all — is settled by the engine,
@@ -83,19 +87,19 @@ use std::path::Path;
 /// The extensions written to `config.ini` on first run: the ebook formats the engine reads as
 /// input that no list of this app's own already claims.
 ///
-/// The three groups are the module documentation's, in the order they are written there: the
-/// Kindle and Mobipocket family (`azw`, `azw3`, `azw4`, `mobi`, `prc`), the open and single-reader
-/// formats (`djvu`, `epub`, `fb2`, `lrf`), and the formats of the dedicated readers and of the
-/// engine itself (`htmlz`, `pml`, `snb`, `tcr`).
+/// The four groups are the module documentation's, in the order they are written there: the Kindle
+/// and Mobipocket family (`azw`, `azw3`, `azw4`, `mobi`, `prc`), the two books whose text is packed
+/// the way no reader here unpacks it (`chm`, `lit`), the open and single-reader formats (`djvu`,
+/// `epub`, `fb2`, `lrf`), and the formats of the dedicated readers and of the engine itself
+/// (`htmlz`, `pml`, `snb`, `tcr`).
 ///
 /// Deliberately absent, and each for a reason the module documentation above gives: the names
-/// another list of this app's already reads (`chm`, `lit`, `cbz`, `docx`, `odt`, `pdb`, `html`,
-/// `rtf`, `txt`, `pdf`), the comic books, whose family is the archive list's (`cbr`, `cbc`), the
-/// name that is a programming language (`rb`), the Sony container's protected spelling (`lrx`),
-/// and the names the engine does not read at all (`tpz`, and the `kfx` a plugin would be needed
-/// for).
+/// another list of this app's already reads (`cbz`, `docx`, `odt`, `pdb`, `html`, `rtf`, `txt`,
+/// `pdf`), the comic books, which this app reads itself and needs no engine for (`cbr`, `cbc`), the
+/// name that is a programming language (`rb`), the Sony container's protected spelling (`lrx`), and
+/// the names the engine does not read at all (`tpz`, and the `kfx` a plugin would be needed for).
 pub const DEFAULT_CALIBRE_EXTENSIONS: &str =
-    "azw,azw3,azw4,djvu,epub,fb2,htmlz,lrf,mobi,pml,prc,snb,tcr";
+    "azw,azw3,azw4,chm,djvu,epub,fb2,htmlz,lit,lrf,mobi,pml,prc,snb,tcr";
 
 /// Whether the configured list claims `path`.
 pub fn matches_calibre_list(path: &Path, extensions: &[String]) -> bool {
@@ -204,6 +208,7 @@ mod tests {
                     path,
                     &config.office_extensions,
                 )
+                || crate::formats::ebook_formats::matches_ebook_list(path, &config.ebook_extensions)
                 || crate::formats::peazip_formats::matches_peazip_list(
                     path,
                     &config.peazip_extensions,
@@ -216,15 +221,14 @@ mod tests {
         };
 
         for name in [
-            "help.chm",
-            "book.lit",
+            "book.rb",
             "comic.cbz",
-            "report.docx",
             "letter.odt",
             "notes.txt",
             "page.html",
+            "report.docx",
+            "report.pdf",
             "styled.rtf",
-            "book.rb",
         ] {
             let path = Path::new(name);
             assert!(
@@ -237,10 +241,9 @@ mod tests {
             );
         }
 
-        // A PDF is the one name no list of this app's carries and the engine is still not asked
-        // about: it is the book kind's own reader, which is the whole of what the `Ebook` gate is a
-        // gate over (see `content_type::kind_claiming`, where the name is answered before any list
-        // is asked).
+        // A PDF is the one name of that kind's list the engine is still not asked about, because the
+        // list holds it for this app's own reader: the PDF is the half of the book kind that is
+        // drawn here, and a comic is the half that is read here (see `ebook_formats`).
         let pdf = Path::new("report.pdf");
         assert!(
             crate::readers::pdf_preview::is_pdf_file(pdf),
@@ -250,6 +253,24 @@ mod tests {
             !matches_calibre_list(pdf, &list),
             "so the engine is not asked about one either"
         );
+
+        // And the two names the engine gained with this build are its own: a compiled help file and
+        // a Microsoft Reader book were the listing engine's until they were, which is what
+        // `[peazip]`'s own older list is written down for.
+        for name in ["help.chm", "book.lit"] {
+            let path = Path::new(name);
+            assert!(
+                matches_calibre_list(path, &list),
+                "`{name}` is a page only this engine can draw"
+            );
+            assert!(
+                !crate::formats::peazip_formats::matches_peazip_list(
+                    path,
+                    &config.peazip_extensions
+                ),
+                "and it is not the listing engine's any more: one name, one answer"
+            );
+        }
 
         // The Palm database is the one name two engines are about, and it is asked the way the app
         // asks it rather than by the list alone: a `.pdb` is a Palm ebook, which the render engine
