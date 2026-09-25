@@ -20,10 +20,13 @@
 //! order rather than by the name, which is why the order has one author.
 
 use crate::config::config::{AppConfig, PreviewType};
+use crate::engines::{
+    calibre_render, imagemagick_render, libreoffice_render, peazip_render, webview_preview,
+};
 use crate::formats::{
-    archive_formats, calibre_formats, design_formats, ebook_formats, font_formats, image_formats,
-    libre_formats, magick_formats, office_formats, peazip_formats, text_formats, vector_formats,
-    video_formats,
+    archive_formats, calibre_formats, codecs, design_formats, ebook_formats, font_formats,
+    image_formats, libre_formats, magick_formats, office_formats, peazip_formats, text_formats,
+    vector_formats, video_formats,
 };
 use crate::readers::pdf_preview;
 use crate::readers::svg_preview;
@@ -224,14 +227,9 @@ fn claim_images(path: &Path, config: &AppConfig, _asked: Asked) -> Option<Previe
 /// what writing them down buys is that the second reader a kind will grow is a line here
 /// instead of an edit in six chains.
 ///
-/// What resolves a chain is not here: whether a reader is installed, whether it has refused
-/// this file before and whether it has already answered are questions about the machine and
-/// the run, and they are asked where those answers are kept (see `preview_window`'s render
-/// tiers). This is the declaration; that is the resolution.
-///
-/// It is written down one step ahead of its reader: the engine tiers that walk it are the
-/// next change here, so nothing in the binary asks for it yet and only the tests below do.
-#[allow(dead_code)]
+/// What resolves a chain is [`readers_for`] beside it: whether a reader is installed and
+/// whether it has refused this file are questions about the machine and the run, and they are
+/// asked where those answers are kept. This is the declaration; that is the resolution.
 pub fn chain(kind: PreviewType) -> &'static [Reader] {
     match kind {
         // A video is played by FFmpeg where it is installed and by the engine Windows has
@@ -264,12 +262,61 @@ pub fn chain(kind: PreviewType) -> &'static [Reader] {
     }
 }
 
-/// One reader of a file: a reader of this app's own, or an engine this app drives.
+/// The readers of a file of this kind that could answer for it, in the order they are asked.
 ///
-/// Like the chain above it, this is declared a step before it is walked: what names a reader
-/// today is the kind a file turned out to be, and the tiers that ask this instead are the
-/// change that follows.
-#[allow(dead_code)]
+/// It is [`chain`] narrowed to what is true of the machine and the file: a reader that is not
+/// installed is not one to ask, one that was already asked about this file and turned it down
+/// is not asked twice, and one that cannot be started here is not a wait to sit through. What
+/// is left is asked in the chain's order, so the first reader that can answer is the one that
+/// does — which is what the preview loop walks when it has a hover to fill and no page to fill
+/// it with.
+///
+/// Whether a reader has *already* answered is not asked here: a page that has landed is in
+/// hand, and what the loop asks of this is only which engine to ask next. That question is
+/// asked where the answers are kept (see the render tiers in `preview_window`).
+pub fn readers_for(kind: PreviewType, path: &Path) -> Vec<Reader> {
+    chain(kind)
+        .iter()
+        .copied()
+        .filter(|reader| can_answer(*reader, path))
+        .collect()
+}
+
+/// Whether a reader is one to ask about `path` at all.
+fn can_answer(reader: Reader, path: &Path) -> bool {
+    match reader {
+        // A reader of this app's own is always there, and what it can read is the file's own
+        // question rather than the machine's (`native_formats`).
+        Reader::Native => true,
+
+        // The application that owns the format, where the machine has it: the answer is per
+        // file rather than per engine, because which application a name belongs to is the
+        // name's (see `office_formats::app_for`).
+        Reader::Office => office_formats::app_installed(path),
+
+        Reader::LibreOffice => {
+            libreoffice_render::available() && !libreoffice_render::refused(path)
+        }
+        Reader::ImageMagick => {
+            imagemagick_render::available() && !imagemagick_render::refused(path)
+        }
+        // Per name rather than per engine: the tools beside the console archiver read three of
+        // the names in the list, and a machine with the archiver and without the tool is a
+        // machine that cannot list those three (see `peazip_formats::Backend`).
+        Reader::PeaZip => peazip_render::available_for(path) && !peazip_render::refused(path),
+        Reader::Calibre => calibre_render::available() && !calibre_render::refused(path),
+
+        // FFmpeg's player, where it is installed: the one reader preferred over the engine
+        // Windows has, and the reason a video is a chain rather than a reader (see `codecs`).
+        Reader::Ffmpeg => codecs::ffplay_available(),
+
+        // The browser engine, which draws what neither of the two others can: a metafile is
+        // not this reader's at all, but a document drawn by it is nothing if it is missing.
+        Reader::WebView2 => webview_preview::is_available(),
+    }
+}
+
+/// One reader of a file: a reader of this app's own, or an engine this app drives.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Reader {
     /// A reader of this app's own — the picture decoders, the text and archive readers, the
@@ -415,6 +462,48 @@ mod tests {
             unexpected.is_empty(),
             "names reached a kind their list is not written for:\n  {}",
             unexpected.join("\n  ")
+        );
+    }
+
+    /// The walk narrows a chain and never reorders it: what a file can be asked of is what its
+    /// kind declares, less whatever this machine cannot answer with, in the order the kind
+    /// names them — so the reader asked first is the first of the chain that can answer.
+    #[test]
+    fn the_readers_a_file_is_asked_of_are_its_chain_narrowed() {
+        for (name, kind) in [
+            ("letter.docx", PreviewType::Document),
+            ("help.chm", PreviewType::Peazip),
+            ("book.epub", PreviewType::Calibre),
+            ("drawing.cdr", PreviewType::Libre),
+            ("shot.nef", PreviewType::Magick),
+            ("photo.jpg", PreviewType::Images),
+            ("film.mp4", PreviewType::Videos),
+            ("notes.txt", PreviewType::Text),
+        ] {
+            let path = Path::new(name);
+            let asked = readers_for(kind, path);
+            let declared = chain(kind);
+
+            assert!(
+                asked.len() <= declared.len(),
+                "`{name}` cannot be asked of more readers than {kind:?} declares"
+            );
+
+            // A subsequence rather than a set: every reader asked is one the chain names, and
+            // they come in the order it names them.
+            let mut rest = declared.iter();
+            for reader in &asked {
+                assert!(
+                    rest.any(|declared| declared == reader),
+                    "`{name}` is asked of {reader:?} out of the order {kind:?} declares"
+                );
+            }
+        }
+
+        assert_eq!(
+            readers_for(PreviewType::Document, Path::new("letter.docx")).first(),
+            chain(PreviewType::Document).first(),
+            "the first reader of a chain that can answer is the one asked"
         );
     }
 

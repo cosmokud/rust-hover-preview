@@ -28,7 +28,7 @@ use crate::formats::native_formats;
 use crate::formats::office_formats;
 use crate::formats::peazip_formats;
 use crate::formats::vector_formats;
-use crate::formats::video_formats::{self, is_video_file};
+use crate::formats::video_formats;
 use crate::readers::comic_preview;
 use crate::readers::dds_image;
 use crate::readers::eps_image;
@@ -2189,6 +2189,48 @@ fn request_calibre_render(path: &Path, generation: u64) -> Option<(PathBuf, u64)
     Some((path.to_path_buf(), generation))
 }
 
+/// Ask the first reader of this file's kind that can answer for it, and answer what is now being
+/// waited on.
+///
+/// It is the chain a hover's page is owed by, walked once rather than spelled out: which readers
+/// a kind has is `routing::chain`, which of them can answer for this file is
+/// `routing::readers_for`, and this asks them in that order. Nothing is waited on in this thread
+/// — every request starts work on an engine's own — so what comes back is the wait the loop
+/// watches for, and the first reader that asked for one is the reader being waited on.
+fn request_engine_render(path: &Path, generation: u64, room: (u32, u32)) -> Option<(PathBuf, u64)> {
+    let kind = CONFIG
+        .lock()
+        .ok()
+        .and_then(|config| crate::formats::routing::kind_of(path, &config))?;
+
+    for reader in crate::formats::routing::readers_for(kind, path) {
+        let requested = match reader {
+            crate::formats::routing::Reader::Office => {
+                request_office_render(path, generation, room.0, room.1)
+            }
+            crate::formats::routing::Reader::LibreOffice => request_libre_render(path, generation),
+            crate::formats::routing::Reader::ImageMagick => {
+                request_magick_render(path, generation, room)
+            }
+            crate::formats::routing::Reader::PeaZip => request_peazip_render(path, generation),
+            crate::formats::routing::Reader::Calibre => request_calibre_render(path, generation),
+
+            // A reader of this app's own owes the loop no wait, and neither do the two the loop
+            // does not ask: a video's player is started where the video is shown, and a document
+            // the browser draws is a hover handed over rather than a page waited on.
+            crate::formats::routing::Reader::Native
+            | crate::formats::routing::Reader::Ffmpeg
+            | crate::formats::routing::Reader::WebView2 => None,
+        };
+
+        if requested.is_some() {
+            return requested;
+        }
+    }
+
+    None
+}
+
 /// What an engine that answers by writing a page into the app's own folder has said about this
 /// file: `Some(true)` where the page has landed, `Some(false)` where the engine has answered that
 /// it will not draw the file at all, and `None` where neither engine is the one being waited on or
@@ -2340,49 +2382,35 @@ fn effective_preview_scale(path: &Path, scales: HoverScales) -> PreviewScale {
         return scale_of_kind(kind, path, scales);
     }
 
-    if pdf_preview::is_pdf_file(path) {
-        scale_of_kind(PreviewType::Ebook, path, scales)
-    } else if ebook_formats::is_comic_name(path) {
-        // A comic is the book rule at the book kind's share, the same one a PDF page keeps: what is
-        // drawn is a plate of a printed page, so the room the display has is what it is drawn over
-        // rather than a size of its own to be scaled from — and a manga is a page at book size, not
-        // a picture to be looked at at 100%.
-        scale_of_kind(PreviewType::Ebook, path, scales)
-    } else if page_is_painted(path) {
+    // Two questions that are about the run rather than about the file's kind, and both come
+    // before it: a page painted to the frame it is given is not scaled within it, and a video
+    // whose probe has not answered yet is the spinner rather than a video. Neither can be asked
+    // of the kind, which knows nothing about what the run has done so far.
+    if page_is_painted(path) {
         // A listing is a page of text painted to the box it is given, whether this app read the
         // archive itself or an engine listed it, so both are the text rule.
-        scale_of_kind(PreviewType::Text, path, scales)
-    } else if video_probe_due(path) {
+        return scale_of_kind(PreviewType::Text, path, scales);
+    }
+
+    if video_probe_due(path) {
         // A video that has not been probed yet is a hover that is waiting, and what is on
         // screen for one is the waiting spinner: a wait is placed at the size it is rather
         // than fitted to the display, and what the probe answers is what the replay that
         // follows it is laid out at (see `video_probe_due`).
-        PreviewScale::Percent(100)
-    } else if office_formats::is_office_file(path) {
-        scale_of_kind(PreviewType::Document, path, scales)
-    } else if libre_formats::is_libre_file(path) {
-        scale_of_kind(PreviewType::Libre, path, scales)
-    } else if magick_formats::is_magick_file(path) {
-        // A picture an engine develops is a picture for this question: what the engine hands
-        // back is a PNG, so the share of its own size that `preview_scale` names is the share
-        // it is drawn at — the picture's rule rather than a document's.
-        scale_of_kind(PreviewType::Magick, path, scales)
-    } else if calibre_formats::is_calibre_file(path) {
-        // A book an engine converts is a book for this question: what it hands back is a PDF of
-        // the book, so the share of the display `ebook_scale` names is the share it is drawn at,
-        // exactly as the page of a PDF this app reads itself is (see `load_engine_page`).
-        scale_of_kind(PreviewType::Calibre, path, scales)
-    } else if design_formats::is_design_file(path) {
-        scale_of_kind(PreviewType::Design, path, scales)
-    } else if svg_preview::is_svg_file(path) || vector_formats::is_vector_file(path) {
-        scale_of_kind(PreviewType::Vector, path, scales)
-    } else if font_formats::is_font_file(path) {
-        scale_of_kind(PreviewType::Fonts, path, scales)
-    } else if is_video_file(path) {
-        scale_of_kind(PreviewType::Videos, path, scales)
-    } else {
-        scale_of_kind(PreviewType::Images, path, scales)
+        return PreviewScale::Percent(100);
     }
+
+    // And the kind decides the rest, asked of the one table every side asks it in: what a hover
+    // is measured at is the answer the hook admitted it under and the loader draws it by (see
+    // `formats::routing`). A name no list claims is measured as the picture it ends up being
+    // decoded as, which is where the loader's own chain sends one.
+    let kind = CONFIG
+        .lock()
+        .ok()
+        .and_then(|config| crate::formats::routing::kind_of(path, &config))
+        .unwrap_or(PreviewType::Images);
+
+    scale_of_kind(kind, path, scales)
 }
 
 /// The share a preview of one kind is drawn at.
@@ -9171,30 +9199,16 @@ pub fn run_preview_window() {
                             // which is what makes its room a ceiling rather than a hint: a
                             // picture developed into a box smaller than the display can
                             // never be drawn any larger than that box.
-                            let requested = request_office_render(
+                            // The engines this hover could be owed a page by, asked in the order
+                            // the file's kind names them and only where one of them can answer:
+                            // whichever starts work is the one being waited on, and the loop
+                            // watches for the page or the picture or the listing it will leave
+                            // (see `request_engine_render`).
+                            let requested = request_engine_render(
                                 &result.path,
                                 result.generation,
-                                width,
-                                height,
-                            )
-                            .or_else(|| request_libre_render(&result.path, result.generation))
-                            .or_else(|| {
-                                request_magick_render(
-                                    &result.path,
-                                    result.generation,
-                                    (width, height),
-                                )
-                            })
-                            // And the archive listing no reader of this app's own can make: it is
-                            // the same wait for the same reason — a listing does not exist until
-                            // the engine has produced one — and it is asked after the three above
-                            // because no name sits in more than one of their lists (see
-                            // `peazip_formats`).
-                            .or_else(|| request_peazip_render(&result.path, result.generation))
-                            // And the page a book is converted into, which is the same wait once
-                            // more: a PDF does not exist until the engine has written one, and no
-                            // name sits in this list and another either (see `calibre_formats`).
-                            .or_else(|| request_calibre_render(&result.path, result.generation));
+                                (width, height),
+                            );
 
                             // Nothing was asked for because there is nothing left to ask
                             // about: every engine that could owe this file something has
@@ -10572,7 +10586,7 @@ mod tests {
         std::fs::write(&renamed, b"\x00\x00\x00\x20ftypisom").expect("a written video");
 
         assert!(
-            !is_video_file(&renamed),
+            !crate::formats::video_formats::is_video_file(&renamed),
             "the name is the picture list's, which is what answered before this"
         );
         assert!(
@@ -12696,7 +12710,7 @@ mod tests {
             println!("engine available: {}", libreoffice_render::available());
             println!(
                 "kinds: video = {}, pdf = {}, office = {}, libre = {}, design = {}, vector = {}, text = {}",
-                is_video_file(&path),
+                crate::formats::video_formats::is_video_file(&path),
                 pdf_preview::is_pdf_file(&path),
                 office_formats::is_office_file(&path),
                 libre_formats::is_libre_file(&path),
