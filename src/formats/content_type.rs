@@ -2444,90 +2444,23 @@ fn classify(path: &Path, names: &[&str], config: &AppConfig) -> Content {
     }
 }
 
-/// The kind of this app that claims one of the names the content answered with, asked in
-/// the order every other classification of a file is asked in.
+/// The kind of this app that claims one of the names the content answered with, asked in the
+/// one order every classification of a file is asked in.
 ///
-/// Each name is asked of the same list function the hook, the loader and the layout ask,
-/// by a name of this module's own making (`content.<extension>`) that stands for the file
-/// and is never opened: a list reads the extension and nothing else, so the file the
-/// caller holds is not touched a second time. Nothing claimed by any list is a format this
-/// app does not preview — see [`Content::Foreign`].
+/// Each name is asked of the same table the hook, the loader and the layout ask, by a name of
+/// this module's own making (`content.<extension>`) that stands for the file and is never
+/// opened: a list reads the extension and nothing else, so the file the caller holds is not
+/// touched a second time. It is the name half of that question rather than the file half —
+/// the two extensions a video list shares with the text lists are settled by content, and the
+/// content is exactly what answered here, so there is nothing left to read (see
+/// `routing::kind_of_name`). Nothing claimed by any list is a format this app does not
+/// preview — see [`Content::Foreign`].
 fn kind_claiming(names: &[&str], config: &AppConfig) -> Option<PreviewType> {
-    for name in names {
+    names.iter().find_map(|name| {
         let named = PathBuf::from(format!("content.{name}"));
 
-        if crate::formats::video_formats::claims_video_name(&named, &config.video_extensions) {
-            return Some(PreviewType::Videos);
-        }
-
-        // A PDF is a kind of its own rather than a list: the one name is the whole of what
-        // the PDF path claims, and what a page is read from is the file's own header.
-        // And a book of the kind's other half — a comic, which is a container of plates — is
-        // claimed by the same list, which is where the names of a page are written down (see
-        // `ebook_formats`).
-        if crate::formats::ebook_formats::matches_ebook_list(&named, &config.ebook_extensions) {
-            return Some(PreviewType::Ebook);
-        }
-
-        if crate::formats::archive_formats::matches_archive_list(&named, &config.archive_extensions)
-        {
-            return Some(PreviewType::Archives);
-        }
-
-        // An archive the PeaZip engine lists, asked where the hook asks it: beside the archive
-        // list above it, which is where the two are told apart — a name in that list is read by
-        // this app itself, and one in this list is read by an engine.
-        if crate::formats::peazip_formats::matches_peazip_list(&named, &config.peazip_extensions) {
-            return Some(PreviewType::Peazip);
-        }
-
-        // A book an installed ebook engine reads, asked where the hook asks it: beside the listing
-        // engine above and the document engines below, which is where the lists are told apart —
-        // a name in no other list is read by this one, and the name is what a book of the format
-        // is recognized by where its own head says nothing.
-        if crate::formats::calibre_formats::matches_calibre_list(&named, &config.calibre_extensions)
-        {
-            return Some(PreviewType::Calibre);
-        }
-
-        if crate::formats::office_formats::matches_office_list(&named, &config.office_extensions) {
-            return Some(PreviewType::Document);
-        }
-
-        if crate::formats::libre_formats::matches_libre_list(&named, &config.libre_extensions) {
-            return Some(PreviewType::Libre);
-        }
-
-        if crate::formats::magick_formats::matches_magick_list(&named, &config.magick_extensions) {
-            return Some(PreviewType::Magick);
-        }
-
-        if crate::formats::design_formats::matches_design_list(&named, &config.design_extensions) {
-            return Some(PreviewType::Design);
-        }
-
-        if crate::formats::vector_formats::matches_vector_list(&named, &config.vector_extensions) {
-            return Some(PreviewType::Vector);
-        }
-
-        if crate::formats::text_formats::matches_text_lists(
-            &named,
-            &config.text_extensions,
-            &config.text_names,
-        ) {
-            return Some(PreviewType::Text);
-        }
-
-        if crate::formats::font_formats::matches_font_list(&named, &config.font_extensions) {
-            return Some(PreviewType::Fonts);
-        }
-
-        if crate::formats::image_formats::matches_image_list(&named, &config.image_extensions) {
-            return Some(PreviewType::Images);
-        }
-    }
-
-    None
+        crate::formats::routing::kind_of_name(&named, config)
+    })
 }
 
 /// The extension the file is named by, in the form the lists carry.

@@ -24,9 +24,9 @@ use crate::formats::ebook_formats;
 use crate::formats::font_formats;
 use crate::formats::libre_formats;
 use crate::formats::magick_formats;
+use crate::formats::native_formats;
 use crate::formats::office_formats;
 use crate::formats::peazip_formats;
-use crate::formats::text_formats;
 use crate::formats::vector_formats;
 use crate::formats::video_formats::{self, is_video_file};
 use crate::readers::comic_preview;
@@ -2556,22 +2556,18 @@ fn fit_reduced(preview_scale: PreviewScale) -> PreviewScale {
 
 /// Whether the preview of `path` is a text preview.
 ///
-/// Every kind the gate asks about before the text lists is asked about here too, and for
-/// the reason the gate asks them first: a file is whichever kind claims it, and a file the
-/// hook claimed as a drawing or a document has been measured, laid out and gated as that
-/// kind by the time this is asked. A name written into the text list as well as an earlier
-/// list is that earlier kind, and rendering it as text would be a preview of another kind
-/// than the one the tray was asked to switch.
+/// It is one question rather than a chain of exclusions: what kind a file has is the router's
+/// answer, and a file is drawn as text exactly when that answer is text. It used to be written
+/// out here as "the text lists claim it and no kind asked earlier does", with the kinds listed
+/// one by one — and the list had been left short, so a name written into the text list beside a
+/// listing engine's or a picture converter's was measured as text and drawn as the other thing
+/// (see `formats::routing`).
 ///
-/// The video gate is the one that settles the extensions the text list shares with it —
-/// `.ts` and `.mts` — by content, since only it can tell a TypeScript source from the
-/// transport stream that goes by the same name; the rest are bare names, so asking them
-/// costs a lookup each and no read of the file.
+/// What the file's own bytes say comes first, as it does for the loader that draws it and for
+/// the box it is painted into: a file whose content is another kind is not drawn as text
+/// whatever it is called, and one whose content is text is drawn as text even where the name
+/// is a kind the lists would have claimed first.
 fn is_text_preview(path: &Path) -> bool {
-    // What the file's own bytes say comes first, as it does for the loader that draws it and
-    // the box it is painted into: a file whose content is another kind is not drawn as text
-    // whatever it is called, and one whose content is text is drawn as text even where the
-    // name is a kind the lists would have claimed first.
     match crate::formats::content_type::of(path) {
         crate::formats::content_type::Content::Kind(PreviewType::Text) => return true,
         // Another kind, or a format no kind here previews at all: neither is drawn as text,
@@ -2581,24 +2577,17 @@ fn is_text_preview(path: &Path) -> bool {
         crate::formats::content_type::Content::Unknown => {}
     }
 
-    if !text_formats::is_text_file(path) {
+    // The kind the hook called it, asked of the same table the hook asked: a name the text
+    // lists hold and an earlier list also claims is that earlier kind, and a preview measured
+    // as text would be placed as one and drawn as the other. The switch is part of the
+    // question, as it is wherever the text lists are asked — a kind turned off in the tray is
+    // not drawn at all.
+    let Ok(config) = CONFIG.lock() else {
         return false;
-    }
+    };
 
-    // Every kind the hook asks ahead of the text lists is asked ahead of them here too, so
-    // that a name in two lists is measured as the kind the hook called it: the text lists
-    // reach further than the others — a `.md` in the `[libre]` list is a Markdown document
-    // the engine would be asked to draw — and a preview measured as text would be placed
-    // as one and drawn as the other. A name in the video, book, archive or office list is
-    // excluded the same way, and `libre` is the newest of them.
-    !is_video_file(path)
-        && !pdf_preview::is_pdf_file(path)
-        && !ebook_formats::is_comic_name(path)
-        && !archive_formats::is_archive_file(path)
-        && !office_formats::is_office_file(path)
-        && !libre_formats::is_libre_file(path)
-        && !design_formats::is_design_file(path)
-        && !vector_formats::is_vector_file(path)
+    PreviewType::Text.enabled_in(&config)
+        && crate::formats::routing::kind_of(path, &config) == Some(PreviewType::Text)
 }
 
 /// Whether a preview of this file is painted into the box it is given rather than scaled within
@@ -5418,171 +5407,40 @@ fn load_media(
         crate::formats::content_type::Content::Unknown => {}
     }
 
-    if is_video_file(path) {
-        return load_video_thumbnail(path, max_width, max_height, preview_scale);
-    }
-
-    if pdf_preview::is_pdf_file(path) {
-        return load_pdf_first_page(path, max_width, max_height, preview_scale);
-    }
-
-    // And a comic, which is the other half of the same kind and is asked beside the PDF: what a
-    // hover on one shows is a page of it, which is a picture inside the container this app reads
-    // itself — so there is nothing to wait for here, and a box with no plate in it is a hover that
-    // shows nothing rather than one waiting on an answer (see `comic_preview`).
-    if ebook_formats::is_comic_name(path) {
-        return load_comic_page(path, max_width, max_height, preview_scale);
-    }
-
-    if archive_formats::is_archive_file(path) {
-        return load_archive_preview(
-            path,
-            max_width,
-            max_height,
-            dpi,
-            current_archive_options(),
-            MediaType::Archive,
-            &cancel,
-        );
-    }
-
-    // An archive no reader of this app's own opens is the engine's to list and this window's to
-    // draw: what comes back is the archive's own table of contents, and the page it is drawn as
-    // is the page a `.zip` is drawn as — the same reader of the same listing, the same painted
-    // frame — shown under the `Peazip` kind, whose switch is the one that is about it.
-    //
-    // Nothing is listed here. A file the engine has not answered for yet is a wait rather than a
-    // failure — the loop has asked for it, and the hover is replayed when the answer lands (see
-    // `peazip_render_is_due`) — so what it gets here is nothing, which is the spinner it is
-    // already showing.
-    if peazip_formats::is_peazip_file(path) {
-        return load_archive_preview(
-            path,
-            max_width,
-            max_height,
-            dpi,
-            current_archive_options(),
-            MediaType::Peazip,
-            &cancel,
-        );
-    }
-
-    // A book no reader of this app's own opens is the engine's to convert and this window's to
-    // draw: what comes back is a PDF of the book, and the page it is drawn as is the page a PDF
-    // this app read itself is drawn as — the same reader of the same kind of file, shown under the
-    // `Calibre` kind, whose switch is the one that is about it.
-    //
-    // Nothing is converted here. A book the engine has not answered for yet is a wait rather than a
-    // failure — the loop has asked for it, and the hover is replayed when the page lands (see
-    // `calibre_render_is_due`) — so what it gets here is nothing, which is the spinner it is
-    // already showing.
-    if calibre_formats::is_calibre_file(path) {
-        return calibre_render::rendered_page(path)
-            .and_then(|page| load_book_page(&page, max_width, max_height, preview_scale));
-    }
-
-    if office_formats::is_office_file(path) {
-        // Where no Office is installed to draw a page, the render engine beside it draws one
-        // instead: the same page, shown as an Office document rather than as a document of
-        // the engine's own kind — the file is what it is, whichever engine drew it. What is
-        // read is the page that engine has already drawn and nothing else: a document it has
-        // not drawn yet is the wait the loop is watching for, like any other page an engine
-        // owes a hover, so nothing is converted on this thread (see `libre_render_is_due`).
-        return load_office_preview(path, max_width, max_height, preview_scale, &cancel)
-            .or_else(|| load_engine_page_for_office(path, max_width, max_height, preview_scale));
-    }
-
-    // A design document is read for the picture its own format keeps of the whole
-    // thing, and it is asked where the hook asks it: after the office list, ahead of the
-    // text lists and the picture path — neither of which would have claimed one of these
-    // names anyway. What the reader refuses is refused outright rather than falling
-    // through to the decoder the picture path ends in, because that decoder is for the
-    // names it names and this is not one of them.
-    //
-    // The gate is not asked here, exactly as it is not asked for a PDF or a font: the
-    // hook asks it before a hover can reach this path at all.
-    // A document this app hands to a render engine is the engine's to draw, and there is
-    // nothing behind it: what such a file keeps of itself is a thumbnail, and a thumbnail is
-    // not shown — see `libre_formats` — so a machine without the engine shows nothing at all.
-    if libre_formats::is_libre_file(path) {
-        // The page is the engine's to draw and it is not drawn here: what is loaded is the
-        // page that engine has already written. A document without one is a wait rather
-        // than a failure — the loop has asked for it, and the hover is replayed when the
-        // page lands (see `libre_render_is_due`) — so what it gets here is nothing, which
-        // is the spinner it is already showing.
-        return libreoffice_render::rendered_page(path).and_then(|page| {
-            load_engine_page(
-                &page,
-                MediaType::Libre,
-                max_width,
-                max_height,
-                preview_scale,
-            )
-        });
-    }
-
-    if design_formats::is_design_file(path) {
-        return load_design_preview(path, max_width, max_height, preview_scale);
-    }
-
-    // A picture an installed ImageMagick develops is the engine's to convert and this
-    // window's to draw: what comes back is a PNG, which is loaded and composited like any
-    // other picture — the picture scale, the picture backdrop, the picture cache — and shown
-    // under the `Magick` kind, whose switch is the one that is about it.
-    //
-    // Nothing is converted here. A file the engine has not read yet is a wait rather than a
-    // failure — the loop has asked for it, and the hover is replayed when the answer lands
-    // (see `magick_render_is_due`) — so what it gets here is nothing, which is the spinner it
-    // is already showing.
-    if magick_formats::is_magick_file(path) {
-        return load_magick_picture(path, max_width, max_height, preview_scale, &cancel);
-    }
-
-    // A vector drawing is the drawing layer's to replay rather than a decoder's to read,
-    // and it is asked beside the design documents for the same reason they are: what it
-    // is, is its own header's answer rather than its name's.
-    //
-    // The list names both halves of the kind, though, so the document half is asked here
-    // first: an `.svg` is an entry of the vector list beside the metafiles, and neither
-    // reader below would take one — the hover would show nothing at all, which is not
-    // what a document the gate has already claimed may come to.
-    if vector_formats::is_vector_file(path) {
-        return if svg_preview::is_svg_file(path) {
-            webview_preview::draws(path).then(engine_svg_media)
-        } else {
-            load_vector_preview(path, max_width, max_height, preview_scale)
+    // What the file is, is the router's answer: one order, asked once, and the same one the hook
+    // that admitted this hover asked (see `formats::routing`). The configuration is taken and
+    // given up around that question alone, so nothing below is holding it.
+    let kind = {
+        let Ok(config) = CONFIG.lock() else {
+            return None;
         };
-    }
 
-    if text_formats::is_text_file(path) {
-        return load_text_preview(path, max_width, max_height, dpi, current_text_options());
-    }
+        crate::formats::routing::kind_of(path, &config)
+    };
 
-    // A document is the engine's to draw — this app rasterizes none of them — so there is
-    // nothing to make here: what comes back is the kind alone, and the install path reads
-    // it as the hover to hand over. An engine that cannot draw it is no preview, which is
-    // the answer a file that will not decode gets.
-    //
-    // It is asked here for a document the vector list does not name and the image list
-    // does, which is where the hook asks the same question: its own document check sits
-    // inside the image block, after the list that would have claimed a picture. The text
-    // lists are asked ahead of it for the reason the hook asks them there too — a name a
-    // user has put in the text list is a text file.
-    if svg_preview::is_svg_file(path) {
-        return webview_preview::draws(path).then(engine_svg_media);
-    }
+    let Some(kind) = kind else {
+        // A name no list claims has always been the picture path's, and a drawing among those is
+        // still the drawing layer's: what it is, is its own header's answer rather than its
+        // name's, and an `svg` a hand-edited list no longer names is a document this app can
+        // draw. The hook refuses such a file before a hover reaches this far (see
+        // `explorer_hook::is_media_file`), so this is the answer for the hover that came the
+        // other way — through the content, which named no kind either.
+        if svg_preview::is_svg_file(path) {
+            return webview_preview::draws(path).then(engine_svg_media);
+        }
 
-    // A font is drawn the same way, and asks two questions before it is: whether the engine
-    // can draw anything at all, and whether the file is a font this side can describe. A
-    // `.ttf` holding something else is answered with nothing rather than with a page of
-    // another font's glyphs, which is what the probe settles — and what it answers is what
-    // the specimen is made of, so the second question is asked first.
-    if font_formats::is_font_file(path) {
-        return (font_preview::probe(path).is_some() && webview_preview::draws(path))
-            .then(engine_font_media);
-    }
+        return load_picture(path, max_width, max_height, preview_scale, &cancel);
+    };
 
-    load_picture(path, max_width, max_height, preview_scale, &cancel)
+    load_media_of_kind(
+        kind,
+        path,
+        max_width,
+        max_height,
+        preview_scale,
+        dpi,
+        cancel,
+    )
 }
 
 /// The loader for a file whose content named a kind of its own — see `content_type`.
@@ -5605,11 +5463,25 @@ fn load_media_of_kind(
 ) -> Option<MediaData> {
     match kind {
         PreviewType::Videos => load_video_thumbnail(path, max_width, max_height, preview_scale),
-        // A book whose kind came from its *content* rather than from its name is a page the PDF
-        // reader is the one that reads: the bytes said PDF, whatever the file is called. A comic is
-        // never answered this way — a zip and a rar are boxes, and a box is not a kind — so the
-        // comic reader is asked about one by name in the chain above instead.
-        PreviewType::Ebook => load_pdf_first_page(path, max_width, max_height, preview_scale),
+        // A book is one kind with two readers, and which of the two a file is, is asked of the
+        // table that names them rather than assumed here: a page is the PDF engine's, a comic is
+        // the first plate read out of the container it is published in, and a comic reached by
+        // its *content* would otherwise be read as a page of a PDF that does not exist (see
+        // `native_formats`). What cannot be read for — a configuration that will not open — is
+        // answered as the page a book most often is.
+        PreviewType::Ebook => {
+            let job = CONFIG
+                .lock()
+                .ok()
+                .and_then(|config| native_formats::job_for(path, PreviewType::Ebook, &config));
+
+            match job {
+                Some(native_formats::NativeJob::Comic) => {
+                    load_comic_page(path, max_width, max_height, preview_scale)
+                }
+                _ => load_pdf_first_page(path, max_width, max_height, preview_scale),
+            }
+        }
         PreviewType::Archives => load_archive_preview(
             path,
             max_width,
@@ -10718,7 +10590,7 @@ mod tests {
         std::fs::write(&renamed, b"{\\rtf1\\ansi\\deff0 hello}").expect("a written document");
 
         assert!(
-            !text_formats::is_text_file(&renamed),
+            !crate::formats::text_formats::is_text_file(&renamed),
             "the name is not one the text lists carry"
         );
         assert!(
@@ -12830,7 +12702,7 @@ mod tests {
                 libre_formats::is_libre_file(&path),
                 design_formats::is_design_file(&path),
                 vector_formats::is_vector_file(&path),
-                text_formats::is_text_file(&path),
+                crate::formats::text_formats::is_text_file(&path),
             );
 
             let scale = effective_preview_scale(&path, current_hover_scales());
