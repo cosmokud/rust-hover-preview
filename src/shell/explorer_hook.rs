@@ -8,10 +8,10 @@ use crate::formats::video_formats::is_video_file;
 use crate::shell::cloud_files;
 use crate::shell::wheel_input;
 use crate::ui::preview_window::{
-    box_holds, cursor_preview_hover, hide_preview, kill_stray_video_process,
-    monitor_dpi_from_point, pointer_item_box, pointer_item_holds, preview_pointer_hold,
-    preview_screen_rect, preview_stall_ms, publish_pointer_item_box, show_preview,
-    show_preview_keyboard, PreviewCursorHover,
+    cursor_preview_hover, hide_preview, kill_stray_video_process, monitor_dpi_from_point,
+    pointer_item_box, pointer_item_holds, preview_pointer_hold, preview_screen_rect,
+    preview_stall_ms, publish_pointer_item_box, show_preview, show_preview_keyboard,
+    PreviewCursorHover,
 };
 use crate::{CONFIG, RUNNING};
 use once_cell::sync::Lazy;
@@ -1162,23 +1162,9 @@ fn read_failure_is_the_same_item(
         return false;
     };
 
-    published_box == Some(hover) && box_holds(point.x, point.y, hover)
-}
+    let holds = point.x >= hover.0 && point.x < hover.2 && point.y >= hover.1 && point.y < hover.3;
 
-/// Whether the pointer is still standing on the spot a dismissed preview was drawn in —
-/// the one thing the suppression after a dismissal waits for.
-///
-/// A dismissal by touch is not about the window. The hide is posted, so the surface under
-/// the pointer is gone — and with it the answer the next tick's probe would give — before
-/// the pointer has moved at all, while the file underneath is still the file that was
-/// dismissed: releasing there is the preview coming straight back up under the hand that
-/// closed it. What is left to wait for is the hand itself, and what says it has moved is
-/// the box the dismissed preview occupied, read while that preview was still on screen to
-/// be measured (see the dismissal in `run_explorer_hook`). A box that cannot be told —
-/// nothing was up to measure — holds nothing back, which is the reading that cannot leave
-/// a preview suppressed for good.
-fn dismissed_preview_still_holds(box_rect: Option<(i32, i32, i32, i32)>, point: POINT) -> bool {
-    box_rect.is_some_and(|box_rect| box_holds(point.x, point.y, box_rect))
+    published_box == Some(hover) && holds
 }
 
 /// Whether a preview may be shown for `path`: the kind of preview it would get,
@@ -3519,11 +3505,6 @@ pub fn run_explorer_hook() {
     let mut last_focused_key: Option<FocusedItemKey> = None;
     let mut is_keyboard_hover = false;
     let mut suppress_preview_until_cursor_leaves_preview = false;
-    // The box the preview a touch took down was drawn in, so that "until the cursor leaves"
-    // can mean the spot the pointer is standing on rather than the window it was standing
-    // in: the hide is posted, so the surface is gone a tick before the pointer has moved at
-    // all (see the dismissal below).
-    let mut dismissed_preview_box: Option<(i32, i32, i32, i32)> = None;
     let mut stationary_search_miss_started_at: Option<Instant> = None;
     // Short grace after starting a video preview to avoid instant self-dismiss
     // while ffplay window is still initializing under the cursor.
@@ -4170,11 +4151,6 @@ pub fn run_explorer_hook() {
                 || (suppress_preview_until_cursor_leaves_preview && over_any_preview)
             {
                 suppress_preview_until_cursor_leaves_preview = true;
-                // The spot that has to be left before anything is shown here again: read
-                // while the preview is still on screen to be measured, because the hide
-                // below is posted — what the pointer is standing in is this box, and it is
-                // the pointer that decides when the suppression is over (see below).
-                dismissed_preview_box = preview_screen_rect();
                 if let Some(file) = last_file.clone() {
                     suppressed.suppress(file);
                 }
@@ -4186,6 +4162,14 @@ pub fn run_explorer_hook() {
                 video_hover_guard_until = None;
                 stationary_hover_probe_done = false;
                 hover_start = Some(Instant::now());
+                continue;
+            }
+
+            if suppress_preview_until_cursor_leaves_preview {
+                suppress_preview_until_cursor_leaves_preview = false;
+                stationary_hover_probe_done = false;
+                hover_start = Some(Instant::now());
+                last_cursor_pos = cursor_pos;
                 continue;
             }
 
@@ -4645,34 +4629,6 @@ pub fn run_explorer_hook() {
                 }
             }
 
-            // The suppression a dismissal by touch leaves behind is a wait for the pointer
-            // to leave the spot the dismissed preview was drawn in, and not a wait for the
-            // window to go: the hide is posted, so the surface under the pointer is gone a
-            // tick or two before the pointer itself has moved, while the file underneath is
-            // still the file the touch took down. Releasing with the window is a preview of
-            // that file put straight back up under the hand that closed the last one, which
-            // at a fast hand is the blink of a spawn rather than a dismissal. Nothing is
-            // previewed from there until the hand has moved off the box the dismissed
-            // preview occupied — and a box that could not be read is no spot to wait for,
-            // so the suppression lifts with the window it was taken for.
-            //
-            // It is asked down here rather than at the dismissal on purpose: what the
-            // suppression holds back is the mouse's own hover, so it waits its turn behind
-            // the keyboard's, which drives its own preview wherever the pointer happens to
-            // be parked (see `KeyboardPointerPause`).
-            if suppress_preview_until_cursor_leaves_preview {
-                if dismissed_preview_still_holds(dismissed_preview_box, cursor_pos) {
-                    continue;
-                }
-
-                suppress_preview_until_cursor_leaves_preview = false;
-                dismissed_preview_box = None;
-                stationary_hover_probe_done = false;
-                hover_start = Some(Instant::now());
-                last_cursor_pos = cursor_pos;
-                continue;
-            }
-
             // If keyboard hover is active, or the pointer is frozen under a
             // keyboard preview, skip mouse hover delay logic entirely. The same
             // goes for a pointer held by what is on screen — inside a scrollable
@@ -4944,37 +4900,6 @@ mod tests {
         assert!(
             !read_failure_is_the_same_item(Some(item), None, inside),
             "and a look that published no box is not a look at the same item"
-        );
-    }
-
-    /// What a dismissal by touch leaves behind is the spot it happened on: the pointer has
-    /// to be outside the box the dismissed preview was drawn in before anything is shown
-    /// here again. The window itself is gone by then — the hide is posted, and the surface
-    /// under the pointer goes with it — so the box is the only thing left that tells a hand
-    /// still standing on the file it just dismissed from one that has moved on, and a box
-    /// that could not be read holds nothing back.
-    #[test]
-    fn a_pointer_still_on_a_dismissed_previews_spot_is_not_previewed_at() {
-        let preview = (300, 200, 700, 560);
-        let inside = POINT { x: 320, y: 210 };
-        let past_the_far_edge = POINT { x: 700, y: 210 };
-        let another_row = POINT { x: 150, y: 210 };
-
-        assert!(
-            dismissed_preview_still_holds(Some(preview), inside),
-            "the pointer standing where the preview was is the touch still going on"
-        );
-        assert!(
-            !dismissed_preview_still_holds(Some(preview), past_the_far_edge),
-            "and one past the box's own edge has left it, half-open the way a hit-test is"
-        );
-        assert!(
-            !dismissed_preview_still_holds(Some(preview), another_row),
-            "a pointer on another row has left the spot for good"
-        );
-        assert!(
-            !dismissed_preview_still_holds(None, inside),
-            "a box that could not be read holds nothing back"
         );
     }
 
