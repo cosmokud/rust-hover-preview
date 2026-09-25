@@ -251,7 +251,7 @@ pub(crate) fn enabled() -> bool {
 /// talk to the PDF engine — this one is apartment-threaded for Office, and a WinRT call waited
 /// on from here would deadlock.
 pub(crate) fn held_page(source: &Path) -> Option<Page> {
-    document_cache::page(source, OfficeEngine::MicrosoftOffice)
+    document_cache::page(source, OfficeEngine::MicrosoftOffice.as_str())
 }
 
 /// Whether the page held for this document is narrower than one rendered for a box `width` wide
@@ -265,7 +265,7 @@ pub(crate) fn held_page(source: &Path) -> Option<Page> {
 /// `document_cache::size`).
 pub(crate) fn page_is_narrower_than(source: &Path, page: &Page, width: u32) -> bool {
     page.kind == PageKind::Png
-        && document_cache::size(source, OfficeEngine::MicrosoftOffice)
+        && document_cache::size(source, OfficeEngine::MicrosoftOffice.as_str())
             .is_some_and(|(export_width, _)| export_width < slide_export_width(width))
 }
 
@@ -751,7 +751,12 @@ fn render_request(
         // to find.
         let page = take_render(&target);
         if let Some((kind, bytes)) = page.filter(|_| rendered) {
-            document_cache::store(&request.source, OfficeEngine::MicrosoftOffice, kind, &bytes);
+            document_cache::store(
+                &request.source,
+                OfficeEngine::MicrosoftOffice.as_str(),
+                kind,
+                &bytes,
+            );
             return RenderOutcome::Rendered;
         }
         if retried {
@@ -2206,7 +2211,7 @@ mod tests {
         let source = document("wider.pptx");
         let deck = document_cache::store(
             &source,
-            OfficeEngine::MicrosoftOffice,
+            OfficeEngine::MicrosoftOffice.as_str(),
             PageKind::Png,
             &slide_bytes(1280, 720),
         )
@@ -2227,7 +2232,7 @@ mod tests {
 
         let at_the_cap = document_cache::store(
             &source,
-            OfficeEngine::MicrosoftOffice,
+            OfficeEngine::MicrosoftOffice.as_str(),
             PageKind::Png,
             &slide_bytes(MAX_SLIDE_EXPORT_WIDTH, 1080),
         )
@@ -2242,7 +2247,7 @@ mod tests {
         // is the size the document made it, whatever box the render was asked for.
         let page = document_cache::store(
             &source,
-            OfficeEngine::MicrosoftOffice,
+            OfficeEngine::MicrosoftOffice.as_str(),
             PageKind::Bmp,
             &bmp_bytes(800, 600, [10, 20, 30, 255]),
         )
@@ -2320,7 +2325,7 @@ mod tests {
         // places the preview by.
         document_cache::store(
             &source,
-            OfficeEngine::MicrosoftOffice,
+            OfficeEngine::MicrosoftOffice.as_str(),
             PageKind::Bmp,
             &bmp_bytes(2, 2, [10, 20, 30, 255]),
         )
@@ -2331,7 +2336,7 @@ mod tests {
         // One that cannot is dropped, and the answer is that nothing is rendered yet.
         document_cache::store(
             &source,
-            OfficeEngine::MicrosoftOffice,
+            OfficeEngine::MicrosoftOffice.as_str(),
             PageKind::Bmp,
             b"not a picture at all",
         )

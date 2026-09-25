@@ -193,7 +193,7 @@ pub fn available() -> bool {
 /// answered yet?" asked of the document cache — a preview is laid out from what it finds, and a
 /// hover that is waiting for one keeps asking it until the answer is there (see [`request`]).
 pub fn rendered_page(path: &Path) -> Option<PathBuf> {
-    let page = document_cache::page(path, OfficeEngine::LibreOffice)?;
+    let page = document_cache::page(path, OfficeEngine::LibreOffice.as_str())?;
 
     usable(&page).then_some(page.path)
 }
@@ -207,7 +207,7 @@ pub fn rendered_page(path: &Path) -> Option<PathBuf> {
 /// half-copied, or read while a filter was still being installed — is asked about again (see
 /// `document_cache`).
 pub fn refused(path: &Path) -> bool {
-    document_cache::refused(path, OfficeEngine::LibreOffice)
+    document_cache::refused(path, OfficeEngine::LibreOffice.as_str())
 }
 
 /// Ask the engine for a page for `path`.
@@ -658,7 +658,7 @@ fn rendered(path: &Path) -> Option<PathBuf> {
     if let Some(page) = kept_page(path) {
         return Some(page);
     }
-    if document_cache::refused(path, OfficeEngine::LibreOffice) {
+    if document_cache::refused(path, OfficeEngine::LibreOffice.as_str()) {
         return None;
     }
 
@@ -672,14 +672,14 @@ fn rendered(path: &Path) -> Option<PathBuf> {
     if let Some(page) = kept_page(path) {
         return Some(page);
     }
-    if document_cache::refused(path, OfficeEngine::LibreOffice) {
+    if document_cache::refused(path, OfficeEngine::LibreOffice.as_str()) {
         return None;
     }
 
     let Some(page) = convert(&program, path) else {
         // An engine that would not draw this document is not asked again for a while: what it
         // answered is written down where the page it did not write would have been.
-        document_cache::refuse(path, OfficeEngine::LibreOffice);
+        document_cache::refuse(path, OfficeEngine::LibreOffice.as_str());
         return None;
     };
 
@@ -692,7 +692,7 @@ fn rendered(path: &Path) -> Option<PathBuf> {
 /// The header is the check rather than a re-conversion: what is read back is a file this app
 /// wrote, and a file that is not a PDF is not a page.
 fn kept_page(path: &Path) -> Option<PathBuf> {
-    let page = document_cache::page(path, OfficeEngine::LibreOffice)?;
+    let page = document_cache::page(path, OfficeEngine::LibreOffice.as_str())?;
 
     usable(&page).then_some(page.path)
 }
@@ -787,7 +787,12 @@ fn convert(program: &Path, source: &Path) -> Option<Page> {
 
     std::fs::remove_file(&written).ok();
 
-    document_cache::store(source, OfficeEngine::LibreOffice, PageKind::Pdf, &page)
+    document_cache::store(
+        source,
+        OfficeEngine::LibreOffice.as_str(),
+        PageKind::Pdf,
+        &page,
+    )
 }
 
 /// Wait for a process, ending it rather than waiting past `limit`.
@@ -1110,7 +1115,7 @@ mod tests {
 
         // Nothing is kept to begin with, so the first row is the launch every document paid
         // for on its own before there was a setting.
-        document_cache::forget(&source, OfficeEngine::LibreOffice);
+        document_cache::forget(&source, OfficeEngine::LibreOffice.as_str());
         let_go();
         let started = Instant::now();
         let first = convert(&program, &source);
@@ -1121,7 +1126,7 @@ mod tests {
         );
 
         // And the same document again, with the engine the first one started.
-        document_cache::forget(&source, OfficeEngine::LibreOffice);
+        document_cache::forget(&source, OfficeEngine::LibreOffice.as_str());
         let started = Instant::now();
         let next = convert(&program, &source);
         println!(
@@ -1162,7 +1167,7 @@ mod tests {
             config.libreoffice_idle = EngineIdle::Seconds(DEFAULT_LIBREOFFICE_IDLE_SECS);
         }
 
-        document_cache::forget(&source, OfficeEngine::LibreOffice);
+        document_cache::forget(&source, OfficeEngine::LibreOffice.as_str());
         std::fs::remove_file(&source).ok();
         std::fs::remove_file(lock_file(&holder)).ok();
     }

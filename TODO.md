@@ -185,6 +185,56 @@ compiled help file. Each of those *could* be shown, and each is left out for a r
 written where the list is (`peazip_formats`), because a preview nobody asked for is worse than
 none.
 
+## Unsupported Calibre File Format
+
+The books the ebook engine is asked about are the `[calibre]` list's; what is below is every other name
+its own conversion pipeline declares that this app does not hand over, read one at a time out of the
+engine's own documentation of it. None of them is missing by accident: the groups are the reasons, and
+what each would take is beside it.
+
+**A name another list of this app's already reads** — the engine is never asked about one of these, and
+the file is shown by the kind that holds it, which for most of them is a preview at least as good as a
+converted page: `cbz` (a comic — the `[archive]` list's, which this app reads itself and shows what is
+inside), `chm` and `lit` (`[peazip]`, listed as the archives they are), `docx` (the Office list), `odt`
+and `pdb` (`[libre]` — LibreOffice's own filters read AportisDoc and OpenDocument), `html`, `rtf` and
+`txt` (the text lists, which read and highlight them), and `pdf`, which is this app's own book reader.
+Adding one to `[calibre]` would be a second engine asked about a file another already answers, which is
+the one thing the lists exist to prevent.
+
+**A comic book, whose family is the archive list's** — `cbr` and `cbc` are the same thing as `cbz` in a
+RAR and in the engine's own container, and neither is in any list today, so a hover on one shows
+nothing at all. Two ways to change that, and they are not the same answer:
+
+- **`cbr` as an archive.** It *is* a RAR archive, and this app reads RAR already (`unrar`), so one
+  entry in the `[archive]` list — with the `ARCHIVE_EXTENSIONS_BEFORE_*` constant that brings a file
+  nobody has edited up to the list of now — gives a `.cbr` the instant page of contents a `.cbz` gets.
+  This is the cheap answer and the consistent one: the three comic containers are one thing, and a
+  listing is what this app does with all of them.
+- **`cbr` and `cbc` as books.** One entry each in `[calibre]`, and what comes back is the comic's own
+  pages. It works, and what it costs is a conversion of *hundreds of plates* rather than of a book of
+  text — the one shape of file the engine's give-up is not calibrated for (see `calibre_render`) — so a
+  long comic is a conversion ended at the bound and a file remembered as one the engine will not
+  convert, which is worse than the listing would have been.
+
+**A format the engine does not read at all** — no list entry can reach these, and the work is a reader
+or a plugin rather than a name: `tpz`, Amazon's Topaz, which the engine detects and *refuses* with a
+message saying it cannot be converted; `kfx`, the format the current Kindle store serves, which is read
+by a third-party plugin (`KFX Input`) rather than by the engine itself and which this app has no way to
+drive; and `recipe`, which is not a file format at all but a Python script the engine fetches feeds
+with.
+
+**A spelling the engine's own plugin does not declare** — `lrx`, the protected spelling of the Sony LRF
+container. The engine's LRF input plugin declares `.lrf` and not `.lrx`, so the name is left out of
+`[calibre]`: a name the engine cannot open costs a conversion before the answer is remembered. A
+machine whose engine turns out to read one has it back by adding `lrx` to the list by hand.
+
+**And a book no engine here can open, which is not a list's business** — the Kindle family above all.
+An `.azw`, an `.azw3` or an `.azw4` bought from Amazon is encrypted, and `ebook-convert` will not open
+one: what a hover on it shows is the spinner and then nothing, once, and then nothing at all until the
+refusal ages out. That is the answer the engine gives rather than a gap in the list, and it is written
+down here because it is the file a user is most likely to hover first — a protected book is a book no
+engine this app drives can convert, whatever list its name is in.
+
 ## Configuration
 
 - The `*_BEFORE_*` lists `repair_older_lists` reads are there for files written before this build, and can go when a file that old can no longer be in use — a release or two away. Nothing else carries the history of a list, and the names this app once wrote are not read at all any more: a file that holds one loses the line and nothing else has to know about it.

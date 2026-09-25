@@ -1,31 +1,31 @@
 //! The page a document's engine drew, kept on disk.
 //!
-//! Two engines draw documents for this app — Microsoft Office, driven through automation,
-//! and the LibreOffice beside it — and both of them are asked the same question: has a page
-//! been drawn for this version of this document, by this engine? The answer is the page
-//! itself, and it is kept here rather than in memory because producing one costs far more
-//! than reading one back: an Office start and an export, or a conversion of one to three
-//! seconds, against a read of a file a few hundred kilobytes long. What is kept is worth
-//! keeping across a restart for the same reason, which is why it is a folder rather than a
-//! structure that goes when the process does.
+//! Three engines draw pages for this app — Microsoft Office, driven through automation, the
+//! LibreOffice beside it, and the ebook engine that converts a book no reader here opens — and all
+//! of them are asked the same question: has a page been drawn for this version of this document, by
+//! this engine? The answer is the page itself, and it is kept here rather than in memory because
+//! producing one costs far more than reading one back: an Office start and an export, a conversion
+//! of one to three seconds, or an ebook converted at the length of the book, against a read of a
+//! file a few hundred kilobytes long. What is kept is worth keeping across a restart for the same
+//! reason, which is why it is a folder rather than a structure that goes when the process does.
 //!
 //! Everything about a page is in its name. `<key>.pdf`, `<key>.png` and `<key>.bmp` are the
 //! pages the engines produce — a Word or Excel export and a conversion are PDFs, a slide is a
-//! PNG, a workbook whose Excel cannot export a page at all is a picture of its used range —
-//! and `<key>.none` is the mark an engine leaves for a document it would not draw.
+//! PNG, a workbook whose Excel cannot export a page at all is a picture of its used range, and a
+//! book is a PDF too — and `<key>.none` is the mark an engine leaves for a document it would not
+//! draw.
 //!
 //! The key is the document, the version of it, and the engine that drew it. The engine is
 //! part of it because the two do not draw the same page: LibreOffice's rendering of a `.docx`
 //! is not Word's, so a page one engine drew is never handed back as the other's work when the
-//! choice between them changes (see `office_formats::page_engine`).
+//! choice between them changes (see `office_formats::page_engine`) — and neither of them is the
+//! page the ebook engine writes for a book, which is a third name again.
 //!
 //! What is kept is bounded by `document_cache_mb`, least recently used first — and "used" is
 //! the page file's own timestamp, set every time a page is read, so what is given up first is
 //! what has not been looked at for longest rather than what was converted first.
 
-use crate::config::config::{
-    sanitize_document_cache_mb, AppConfig, OfficeEngine, DEFAULT_DOCUMENT_CACHE_MB,
-};
+use crate::config::config::{sanitize_document_cache_mb, AppConfig, DEFAULT_DOCUMENT_CACHE_MB};
 use crate::readers::pdf_preview;
 use crate::CONFIG;
 use directories::BaseDirs;
@@ -101,8 +101,27 @@ pub(crate) struct Page {
 static SIZES: Lazy<Mutex<HashMap<String, (u32, u32)>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 
 /// The page a hover is waiting for: the one stored a moment ago and not drawn yet, and the one
-/// page a trim never gives up (see `prune`).
-static HELD: Lazy<Mutex<Option<String>>> = Lazy::new(|| Mutex::new(None));
+/// page a trim never gives up (see `prune`). It is held with the document it was drawn from, which
+/// is what lets a hover that ends say which page to release without knowing which engine drew it
+/// (see `hover_ended`).
+static HELD: Lazy<Mutex<Option<(String, PathBuf)>>> = Lazy::new(|| Mutex::new(None));
+
+/// Let go of the page a hover was waiting for, where the caller's own question says it is that page.
+///
+/// One helper for the three callers that release it, because what is held is a pair of things and
+/// what each of them knows differs: a page given up is asked about by its own name, while a hover
+/// that has ended knows the document it was drawn from and not the engine that drew it (see
+/// `hover_ended`).
+fn release_held(is_the_page: impl Fn(&str, &Path) -> bool) {
+    if let Ok(mut held) = HELD.lock() {
+        if held
+            .as_ref()
+            .is_some_and(|(key, source)| is_the_page(key, source))
+        {
+            *held = None;
+        }
+    }
+}
 
 /// The app's own folder under the temp folder: where a render writes the file an engine can
 /// only answer with, and where the pages are kept beside it.
@@ -133,10 +152,15 @@ fn folder() -> Option<PathBuf> {
 }
 
 /// The name the page drawn for this version of this document by this engine is kept under.
-fn key(source: &Path, engine: OfficeEngine) -> String {
+///
+/// The engine is named by the name it writes its own setting under — `microsoft_office`,
+/// `libreoffice`, or the ebook engine's own — because it is the engine's identity rather than its
+/// kind: a name is what goes into the key, and two engines that draw the same document draw
+/// different pages.
+fn key(source: &Path, engine: &str) -> String {
     let mut hasher = DefaultHasher::new();
     source.to_string_lossy().to_lowercase().hash(&mut hasher);
-    engine.as_str().hash(&mut hasher);
+    engine.hash(&mut hasher);
 
     let metadata = std::fs::metadata(source).ok();
     metadata
@@ -169,7 +193,7 @@ fn refused_path(folder: &Path, key: &str) -> PathBuf {
 /// question for the side that draws it — a side whose threads are multithreaded apartments and
 /// may talk to the PDF engine — and this is asked from threads that are not (see
 /// `office_preview`).
-pub(crate) fn page(source: &Path, engine: OfficeEngine) -> Option<Page> {
+pub(crate) fn page(source: &Path, engine: &str) -> Option<Page> {
     let folder = folder()?;
     let key = key(source, engine);
 
@@ -197,12 +221,7 @@ fn touch(page: &Path) {
 
 /// Keep a page an engine has just drawn, replacing whatever was kept for the same version of
 /// the same document.
-pub(crate) fn store(
-    source: &Path,
-    engine: OfficeEngine,
-    kind: PageKind,
-    bytes: &[u8],
-) -> Option<Page> {
+pub(crate) fn store(source: &Path, engine: &str, kind: PageKind, bytes: &[u8]) -> Option<Page> {
     let folder = folder()?;
     std::fs::create_dir_all(&folder).ok()?;
 
@@ -229,7 +248,7 @@ pub(crate) fn store(
     // says: giving it up here would leave the spinner with nothing to replace it. It is
     // released when that hover ends.
     if let Ok(mut held) = HELD.lock() {
-        *held = Some(key);
+        *held = Some((key, source.to_path_buf()));
     }
 
     prune();
@@ -251,7 +270,7 @@ fn write_whole(path: &Path, bytes: &[u8]) -> Option<()> {
 /// Give up the page kept for this version of this document: bytes that cannot be drawn — one a
 /// render cut short, or one something else corrupted — are not a page, and what this gets is
 /// the document drawn again rather than a preview that blinks away every time it is hovered.
-pub(crate) fn forget(source: &Path, engine: OfficeEngine) {
+pub(crate) fn forget(source: &Path, engine: &str) {
     let Some(folder) = folder() else {
         return;
     };
@@ -265,16 +284,12 @@ pub(crate) fn forget(source: &Path, engine: OfficeEngine) {
     if let Ok(mut sizes) = SIZES.lock() {
         sizes.remove(&key);
     }
-    if let Ok(mut held) = HELD.lock() {
-        if held.as_deref() == Some(key.as_str()) {
-            *held = None;
-        }
-    }
+    release_held(|held, _| held == key);
 }
 
 /// Write down that an engine would not draw this version of this document, where a page would
 /// have been put.
-pub(crate) fn refuse(source: &Path, engine: OfficeEngine) {
+pub(crate) fn refuse(source: &Path, engine: &str) {
     let Some(folder) = folder() else {
         return;
     };
@@ -285,11 +300,7 @@ pub(crate) fn refuse(source: &Path, engine: OfficeEngine) {
     let key = key(source, engine);
     let _ = std::fs::write(refused_path(&folder, &key), b"");
 
-    if let Ok(mut held) = HELD.lock() {
-        if held.as_deref() == Some(key.as_str()) {
-            *held = None;
-        }
-    }
+    release_held(|held, _| held == key);
 
     prune();
 }
@@ -300,7 +311,7 @@ pub(crate) fn refuse(source: &Path, engine: OfficeEngine) {
 /// the document once, and a document that was locked, or half-copied, or read while a filter
 /// was still being installed is one worth asking about again. The mark is dropped here rather
 /// than left for a trim to find, because the ask itself is what says it is stale.
-pub(crate) fn refused(source: &Path, engine: OfficeEngine) -> bool {
+pub(crate) fn refused(source: &Path, engine: &str) -> bool {
     let Some(folder) = folder() else {
         return false;
     };
@@ -326,22 +337,10 @@ pub(crate) fn refused(source: &Path, engine: OfficeEngine) -> bool {
 /// The hover a page was drawn for is over: it is no longer being waited on, so at a budget of
 /// nothing it goes now rather than lingering until the next render happens to make room.
 ///
-/// Both of the engine's names for the document are cleared, because the side that ends a hover
-/// knows the document and not which of the two engines drew its page.
+/// What is released is the page of *this* document, whichever engine drew it, because the side
+/// that ends a hover knows the document and not which of the engines was asked for a page.
 pub(crate) fn hover_ended(source: &Path) {
-    let keys = [
-        key(source, OfficeEngine::MicrosoftOffice),
-        key(source, OfficeEngine::LibreOffice),
-    ];
-
-    if let Ok(mut held) = HELD.lock() {
-        if held
-            .as_deref()
-            .is_some_and(|held| keys.iter().any(|key| key == held))
-        {
-            *held = None;
-        }
-    }
+    release_held(|_, held| held == source);
 
     prune();
 }
@@ -361,7 +360,7 @@ pub(crate) fn trim_now() {
 /// of the document. What is remembered is keyed by the document, its version and its engine
 /// rather than by the file the page is kept as: that file's timestamp says when the page was
 /// last *used*, which is not a version to read a size against (see `touch`).
-pub(crate) fn size(source: &Path, engine: OfficeEngine) -> Option<(u32, u32)> {
+pub(crate) fn size(source: &Path, engine: &str) -> Option<(u32, u32)> {
     let key = key(source, engine);
 
     if let Ok(sizes) = SIZES.lock() {
@@ -416,7 +415,7 @@ fn prune() {
     let held = HELD.lock().ok().and_then(|held| held.clone());
 
     if let Some(folder) = folder() {
-        prune_folder(&folder, limit, held.as_deref());
+        prune_folder(&folder, limit, held.as_ref().map(|(key, _)| key.as_str()));
     }
 }
 
@@ -517,6 +516,19 @@ pub(crate) fn discard_leftovers() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::config::OfficeEngine;
+
+    /// The name the Office application's pages are kept under, and the render engine's beside it.
+    /// They are the names the callers pass rather than the enum they come from, because the cache
+    /// is keyed by the engine's own name — which is what lets an engine that is neither of the two
+    /// keep pages here as well (see `key`).
+    fn office() -> &'static str {
+        OfficeEngine::MicrosoftOffice.as_str()
+    }
+
+    fn libre() -> &'static str {
+        OfficeEngine::LibreOffice.as_str()
+    }
 
     /// A document under the tests' own folder, named for the test that asks for it: the folder
     /// is one folder for the whole process (see `folder`), so the names are what keeps one
@@ -536,18 +548,18 @@ mod tests {
     fn keys_a_page_by_the_document_its_version_and_its_engine() {
         let source = document("keyed.docx");
 
-        let first = key(&source, OfficeEngine::MicrosoftOffice);
-        assert_eq!(first, key(&source, OfficeEngine::MicrosoftOffice));
+        let first = key(&source, office());
+        assert_eq!(first, key(&source, office()));
         assert_ne!(
             first,
-            key(&source, OfficeEngine::LibreOffice),
+            key(&source, libre()),
             "the engine that drew it is part of the page's name"
         );
 
         std::fs::write(&source, b"a longer document").expect("a rewritten document");
         assert_ne!(
             first,
-            key(&source, OfficeEngine::MicrosoftOffice),
+            key(&source, office()),
             "a document saved again is another page"
         );
 
@@ -561,34 +573,29 @@ mod tests {
         let source = document("held.docx");
 
         assert!(
-            page(&source, OfficeEngine::MicrosoftOffice).is_none(),
+            page(&source, office()).is_none(),
             "nothing is kept before anything is drawn"
         );
 
-        let kept = store(
-            &source,
-            OfficeEngine::MicrosoftOffice,
-            PageKind::Pdf,
-            b"%PDF-1.7 a page",
-        )
-        .expect("a kept page");
+        let kept =
+            store(&source, office(), PageKind::Pdf, b"%PDF-1.7 a page").expect("a kept page");
         assert_eq!(kept.kind, PageKind::Pdf);
         assert_eq!(
             std::fs::read(&kept.path).expect("a page to read"),
             b"%PDF-1.7 a page"
         );
 
-        let found = page(&source, OfficeEngine::MicrosoftOffice).expect("the page just kept");
+        let found = page(&source, office()).expect("the page just kept");
         assert_eq!(found.path, kept.path);
 
         assert!(
-            page(&source, OfficeEngine::LibreOffice).is_none(),
+            page(&source, libre()).is_none(),
             "the engine that did not draw it has no page for the document"
         );
 
-        forget(&source, OfficeEngine::MicrosoftOffice);
+        forget(&source, office());
         assert!(
-            page(&source, OfficeEngine::MicrosoftOffice).is_none(),
+            page(&source, office()).is_none(),
             "a page given up is not one to be found"
         );
 
@@ -602,23 +609,22 @@ mod tests {
         let source = document("refused.cdr");
 
         assert!(
-            !refused(&source, OfficeEngine::LibreOffice),
+            !refused(&source, libre()),
             "nothing is marked before an engine has been asked"
         );
 
-        refuse(&source, OfficeEngine::LibreOffice);
-        assert!(refused(&source, OfficeEngine::LibreOffice));
+        refuse(&source, libre());
+        assert!(refused(&source, libre()));
         assert!(
-            !refused(&source, OfficeEngine::MicrosoftOffice),
+            !refused(&source, office()),
             "one engine's refusal is not another's"
         );
 
         // A mark older than the age it is kept for is not an answer any more, and reading it
         // is what drops it: the document is asked about again.
-        let marker = folder().expect("a folder").join(format!(
-            "{}.{REFUSED_SUFFIX}",
-            key(&source, OfficeEngine::LibreOffice)
-        ));
+        let marker = folder()
+            .expect("a folder")
+            .join(format!("{}.{REFUSED_SUFFIX}", key(&source, libre())));
         std::fs::File::options()
             .write(true)
             .open(&marker)
@@ -626,7 +632,7 @@ mod tests {
             .set_modified(SystemTime::now() - REFUSAL_TTL - Duration::from_secs(1))
             .expect("an older mark");
 
-        assert!(!refused(&source, OfficeEngine::LibreOffice));
+        assert!(!refused(&source, libre()));
         assert!(!marker.is_file(), "and the mark is gone with the answer");
 
         let _ = std::fs::remove_file(&source);
@@ -679,19 +685,13 @@ mod tests {
     fn reads_and_remembers_a_pages_size() {
         let source = document("sized.png");
 
-        assert_eq!(size(&source, OfficeEngine::MicrosoftOffice), None);
+        assert_eq!(size(&source, office()), None);
 
-        store(
-            &source,
-            OfficeEngine::MicrosoftOffice,
-            PageKind::Png,
-            &png_bytes(64, 32),
-        )
-        .expect("a kept page");
+        store(&source, office(), PageKind::Png, &png_bytes(64, 32)).expect("a kept page");
 
-        assert_eq!(size(&source, OfficeEngine::MicrosoftOffice), Some((64, 32)));
+        assert_eq!(size(&source, office()), Some((64, 32)));
         assert_eq!(
-            size(&source, OfficeEngine::LibreOffice),
+            size(&source, libre()),
             None,
             "and by nothing about another engine"
         );

@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.3.4] - 2026-09-25
+
+### Added
+
+- **`Calibre` previews** for the ebooks nothing here opens: the Kindle and Mobipocket families (`azw`, `azw3`, `azw4`, `mobi`, `prc`), the open `epub`, the `fb2`, the scanned `djvu`, the Sony `lrf`, and the `pml`, `snb` and `tcr` of the dedicated readers. An installed Calibre converts the book and the app draws the first page of the PDF it wrote, exactly as it draws a PDF: the same `Ebook` kind, the same `Ebook Scaling` and backdrop, the same reader. Nothing is bundled, the Calibre window is never opened, a conversion leaves nothing behind in your folders, and a second hover of the same book starts no conversion at all.
+- **`Calibre`** appears in **`Codecs → Engines`** to show if it is installed, and the conversion runs without a console window.
+- `[calibre] extensions` in `config.ini` controls which formats are asked about; an installation that already exists is given the section and the built-in list on its next run, and a name the engine cannot read is remembered so it costs one conversion and never another.
+- Books are recognized by their own bytes as well as by their names, so a renamed one still previews: a Mobipocket file — an `.azw`, `.azw3`, `.azw4`, `.mobi` or `.prc` — by the two identifiers every one of them carries, an `.epub` by the type it declares inside itself, a `.fb2` by its root element, a `.djvu` by the chunk its format opens with, and a `.lrf` by the letters it writes with a zero byte between them. A file whose bytes are another kind is still shown as what it is.
+
+### Changed
+
+- Version bumped to `0.3.4` in `Cargo.toml` and `Cargo.lock`.
+- There is **no `Calibre TTL`** in the `Engine` submenu, and that is the engine's own answer rather than an omission. `ebook-convert.exe` is a converter — handed a book it writes a PDF of it and exits, booting a whole Python application to do it — so there is no instance to hold open between books and nothing an idle time could bound. It is the engine a TTL would suit best on paper, since a launch costs seconds, and the one engine with nothing to hold: what a second hover of the same book costs is a read of the page it already converted.
+- A converted book's page is kept in the same page cache every other engine's page is kept in — `document_cache_mb`, `128` by default — named for the book, the version of it and the engine that wrote it, so a page one engine drew is never handed back as another's work. What is read back is bounded by the decode budget, so a scan converted into a PDF of gigabytes is answered with no preview rather than with the read.
+- The page cache now keys a page by the name of the engine that drew it rather than by one of the two Office choices, which is what lets an engine that is neither of them keep its pages beside theirs.
+- `TODO.md` gains an **`Unsupported Calibre File Format`** section: every ebook format the engine reads or refuses that is not in `[calibre]`, grouped by reason, with what each one would take — the names another kind already answers (`cbz`, `chm`, `lit`, `docx`, `odt`, `pdb`, `html`, `rtf`, `txt`, `pdf`), the comics whose family is the archive list's (`cbr`, `cbc`), the formats the engine does not read at all (`tpz`, `kfx`, `recipe`), the spelling its own plugin does not declare (`lrx`), and the one thing no list can fix: a DRM-protected book is a book no engine here can convert.
+
+### Fixed
+
+- A `.pdb` that is a **Mobipocket book** is no longer handed to the render engine, which cannot read one. The two identifiers the format is defined by are read off the file's own header, and a book of that kind is converted by the engine that reads books. A `.pdb` that is the other thing the name means — an AportisDoc, or a compiler's program database — is answered exactly as it was.
+
 ## [0.3.3] - 2026-09-24
 
 ### Added

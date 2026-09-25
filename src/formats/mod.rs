@@ -1,4 +1,5 @@
 pub(crate) mod archive_formats;
+pub(crate) mod calibre_formats;
 pub(crate) mod codecs;
 pub(crate) mod content_type;
 pub(crate) mod design_formats;

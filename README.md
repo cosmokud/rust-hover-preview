@@ -12,7 +12,7 @@ A Windows 11 tray app inspired by QTTabBar. Hover a file in File Explorer — or
 
 - Mouse-hover and keyboard-navigation previews in Explorer.
 - Previews appear beside the cursor or focused item and are kept on screen.
-- Supports previews for images, design documents, camera raw, vector drawings, fonts, videos, PDFs, text/code, archives, Office documents, and more.
+- Supports previews for images, design documents, camera raw, vector drawings, fonts, videos, PDFs, ebooks, text/code, archives, Office documents, and more.
 - A file’s preview depends on what’s really inside it—not its name—so renamed files still show correctly, unreadable content gets no preview, and ambiguous types are resolved by extension or content.
 - Scaling from 25% to 400%, or fit-to-screen. Separate scaling for images and videos, and for vector drawings, PDFs, documents, fonts, and design documents.
 - Tray menu and hand-editable `config.ini`.
@@ -22,7 +22,7 @@ A Windows 11 tray app inspired by QTTabBar. Hover a file in File Explorer — or
 
 You can add or remove formats in `config.ini`. Unsupported formats show no preview, except text, which the app will try to force-read.
 
-Almost everything is previewed by **Windows 11 and this app alone** — a codec Windows ships, WebView2, the drawing layer that plays metafiles, the Windows PDF engine, or a reader written into the app. Five things are not, and they are the app’s largest optional dependencies:
+Almost everything is previewed by **Windows 11 and this app alone** — a codec Windows ships, WebView2, the drawing layer that plays metafiles, the Windows PDF engine, or a reader written into the app. Six things are not, and they are the app’s largest optional dependencies:
 
 ### Runs on Windows 11 alone
 
@@ -64,6 +64,12 @@ Raw sample dumps: `rgb` `rgba` `gray` `cmyk` `ycbcr` `mono` `group4` and the res
 ### Needs PeaZip
 
 The archives this app has no reader of its own for, listed by an installed PeaZip and shown as the same page of contents a `.zip` is shown as, all of them: `001` `apfs` `ar` `arc` `arj` `bcm` `br` `bz2` `bzip2` `cab` `chm` `cpio` `cramfs` `deb` `dmg` `esd` `gz` `gzip` `hfs` `hfsx` `hxs` `iso` `lha` `lit` `lpaq8` `lzh` `lzma` `msi` `msp` `pkg` `ppkg` `qcow` `qcow2` `rpm` `squashfs` `swm` `taz` `tbz` `tbz2` `tpz` `txz` `tzst` `udf` `udeb` `vdi` `vhd` `vhdx` `vmdk` `wim` `xar` `xip` `xz` `z` `zpaq` `zst`. A `.tar.gz` and a `.tgz` are the archive list’s above and stay this app’s own.
+
+### Needs Calibre
+
+The ebooks this app has no reader of its own for, converted by an installed Calibre and drawn as the first page of the PDF it wrote — the same kind, scale and backdrop a PDF this app reads itself gets, all of them: `azw` `azw3` `azw4` `djvu` `epub` `fb2` `htmlz` `lrf` `mobi` `pml` `prc` `snb` `tcr`.
+
+A book with DRM — an `.azw`, `.azw3` or `.azw4` bought from Amazon — cannot be converted by anything here and shows nothing. See `TODO.md` for the formats the engine reads that are not in the list, and why.
 
 ### Themes
 
@@ -169,6 +175,16 @@ winget install -e --id Giorgiotani.Peazip
 
 Or download the official installer from https://peazip.github.io/peazip-64bit.html and run the suggested file (`peazip-*.WIN64.exe`).
 
+### Optional: Enable Ebooks (Calibre)
+
+`mobi` and everything else in the `[calibre]` list is converted by **Calibre**, which this app runs where it finds it — nothing is bundled with the app and there is nothing to configure. Install it once:
+
+```text
+winget install -e --id calibre.calibre
+```
+
+Or download the official installer from https://calibre-ebook.com/download_windows and run the suggested file (`calibre-*-64bit.msi`).
+
 > [!WARNING]
 > If `winget` reports an error, the package sources are usually why: run `winget source reset --force`.
 >
@@ -186,7 +202,7 @@ Or download the official installer from https://peazip.github.io/peazip-64bit.ht
 The item a setting starts at carries `(Default)` after its name, so a menu says both what is set now — the check or radio mark — and what a setting nobody has touched would be.
 
 - **Enable Preview** — turn previews on or off.
-- **Preview Types** — Images, Videos, Text, Ebook, Archives, Document, Vector, Fonts, Design: gate a kind without touching its file list. One gate covers each pair of a kind the app reads and the kind an engine draws for it, so a camera raw is gated by **Images**, a document LibreOffice draws by **Document**, and an archive PeaZip lists by **Archives**.
+- **Preview Types** — Images, Videos, Text, Ebook, Archives, Document, Vector, Fonts, Design: gate a kind without touching its file list. One gate covers each pair of a kind the app reads and the kind an engine draws for it, so a camera raw is gated by **Images**, a document LibreOffice draws by **Document**, an archive PeaZip lists by **Archives**, and a book Calibre converts by **Ebook**.
 - **Text Preview**
   - **Full Mode** — adds scrolling, selection, and copy; off by default.
   - **Theme** — Atom One Light, One Dark Pro, or any `.tmTheme` in the theme folder.
@@ -207,7 +223,7 @@ The item a setting starts at carries `(Default)` after its name, so a menu says 
   - **Video Scaling** — the same shares for a video, 100% (default).
   - **Animated Scaling** — the same shares for an animated GIF, WebP, or PNG; a still GIF or PNG keeps Image Scaling. 100% (default).
   - **Vector Scaling** — Fit to Screen (default), or 75%, 50%, 25%, 10% of the display.
-  - **Ebook Scaling** — Fit to Screen (default), or the same shares of the display for a PDF page.
+  - **Ebook Scaling** — Fit to Screen (default), or the same shares of the display for a PDF page, and for a book an installed Calibre converted into one.
   - **Document Scaling** — the same shares of the display for a document drawn as a page, whichever drew it: an Office document’s own application, or LibreOffice for the formats beside it (CorelDRAW and the older word processors, spreadsheets and presentations). A workbook’s fallback bitmap is never enlarged.
   - **Font Scaling** — the same shares for a font specimen, 50% by default.
   - **Design Scaling** — the same shares of the display for a design document (Photoshop, Illustrator, Krita, OpenRaster, Procreate); Fit to Screen by default.
@@ -229,6 +245,7 @@ The item a setting starts at carries `(Default)` after its name, so a menu says 
   - **Microsoft Office TTL** — **Persistent** on, how long a family’s Office app is kept warm whatever you are doing: Indefinitely, 1 hour, 30 minutes, 10 minutes (default), 5 minutes, 1 minute, 0 seconds. Off, it is kept while Explorer is reachable and let go by **AFK Timer** instead.
   - **LibreOffice TTL** — the same for the engine that draws CorelDRAW and the documents beside it: how long it is kept after the last document it converted. A kept engine converts the next document without starting up again — measured on one document, 1.2 s cold against 0.2 s — and while it is kept it is a LibreOffice with a small document of this app's own open, which is a few hundred megabytes. `0 seconds` keeps none, which is an engine per document. Both are the answer for an engine marked **Persistent**; one that is not is let go by **AFK Timer** instead. Greyed out where LibreOffice is not installed.
   - **WebView2 TTL** — **Persistent** on, how long the browser that draws SVG documents is kept warm; off, it is let go by **AFK Timer**. Greyed out where WebView2 is missing.
+  - There is no `ImageMagick TTL`, no `PeaZip TTL` and no `Calibre TTL`, because none of those three is a process the app can keep: each is handed a file, writes what it read and exits. What a second hover of the same file costs is a hit in the cache its answer was kept in, so there is nothing an idle time could bound.
 - **Codecs** — what this machine has: Videos, Images, and Engines. Missing ones are greyed out.
 - **Run at Startup** — add or remove the Windows startup entry.
 - **Config.ini** — open the configuration file; the item is named for the running version.
@@ -332,7 +349,7 @@ Key settings, in plain terms:
 - `text_preview_full_mode` — `true` adds scrolling, selection, and copy.
 - `text_font_scale` — a percentage from 1 to 1000, default `125`; archive listings follow it too.
 - `extensions` / `names` — the text-preview gates. Extensions are written without dots. Names match extensionless files.
-- `image_extensions`, `video_extensions`, `archive_extensions`, `office_extensions`, `font_extensions`, `design_extensions`, `vector_extensions` — per-type preview gates, written without dots. An entry with a dot in it, like `tar.gz`, is matched against the end of the file name. `libre_extensions`, `magick_extensions` and `peazip_extensions`, in their own sections, are the documents LibreOffice draws, the pictures ImageMagick develops, and the archives PeaZip lists.
+- `image_extensions`, `video_extensions`, `archive_extensions`, `office_extensions`, `font_extensions`, `design_extensions`, `vector_extensions` — per-type preview gates, written without dots. An entry with a dot in it, like `tar.gz`, is matched against the end of the file name. `libre_extensions`, `magick_extensions`, `peazip_extensions` and `calibre_extensions`, in their own sections, are the documents LibreOffice draws, the pictures ImageMagick develops, the archives PeaZip lists, and the books Calibre converts.
 - `image_cache_mb` — memory for decoded image frames: default `32`, max `2048`; `0` holds nothing.
 - `document_cache_mb` — disk for the pages an engine drew — an Office export, a slide’s image, a workbook’s picture, a converted PDF: default `128`, max `2048`; `0` keeps nothing between hovers but still draws for the current one. The pages live under `%TEMP%\rust-hover-preview\document`, named for the document, the version of it and the engine that drew it, and the page that has not been read for longest is the one given up first.
 - `decode_budget_gb` — the most memory one hover may decode or read for: default `1`, smallest `0.25`, largest `64`. A file past it shows no preview.
@@ -354,6 +371,7 @@ Key settings, in plain terms:
 - `magick_preview_enabled` and `peazip_preview_enabled` are not read: a picture the ImageMagick engine develops is gated by `image_preview_enabled` and an archive the PeaZip engine lists by `archive_preview_enabled`, since what either is previewed as is a picture or an archive. `libre_preview_enabled` and `libre_scale` are gone the same way — what draws those documents is `document_preview_enabled` and `document_scale`. Lines left under the old names are removed the next time the file is written. `office_cache_mb` and `libre_cache_mb` are gone the same way: one `document_cache_mb` replaces both, and a file that still holds either is read once for the larger of the two and written without them.
 - There is no TTL for ImageMagick, and no `magick_idle` key: it is the one engine here that is a converter rather than a process this app can hold open, so what a file costs is a conversion or a hit in the picture cache (`image_cache_mb`) and never a file of the app's own.
 - There is no TTL for PeaZip either, and no `peazip_idle` key, for the same reason: what this app runs of it are the tools PeaZip carries, each of which prints an archive’s table of contents and exits — and for the three single-stream names whose tools have no listing to print, `br`, `bcm` and `lpaq8`, nothing is run at all. What a file costs is a listing or a hit in the listing cache, and a second hover of the same archive starts nothing at all.
+- And there is no TTL for Calibre, and no `calibre_idle` key, for the engine’s own answer a third time: `ebook-convert` reads a book, writes a PDF of it and exits, booting a whole Python application to do it. There is no instance to hold open between books and nothing an idle time could bound, however much a launch costs; what a second hover of the same book costs is a read of the page it converted, kept in the page cache (`document_cache_mb`) beside every other engine’s page.
 - `ebook_scale` — percentage or `fit`, read against the screen, for a PDF page; `fit` by default. `100` or more reads as `fit`.
 - `document_scale` — the same for a document drawn as a page, `fit` by default, whichever drew it: an Office document’s own application, or LibreOffice for the formats beside it. A workbook’s fallback bitmap follows its own size and is never enlarged.
 - `font_scale` — percentage or `fit`, read against the screen. `50` is default, `fit` is all of it, and `100` or more reads as `fit`. A font has no size of its own, so the share is of the display.
@@ -387,12 +405,10 @@ See [TODO.md](TODO.md) for planned work, known bugs, and other issues.
 
 ## Privacy
 
-Rust Hover Preview works fully offline — no telemetry, analytics, ads, accounts, or crash reporting. It reads only the item you hover or focus in Explorer, locally and only for enabled preview types. Cloud-only placeholders are skipped on purpose; password-protected files are never bypassed. Settings and themes live under `%APPDATA%\rust-hover-preview`; optional previews use your local FFmpeg, LibreOffice or ImageMagick if installed, Microsoft Office, Windows’ own media engine, and the Windows PDF engine. Caches are bounded by `config.ini`: decoded images stay in memory, while the page an engine drew for a document — an Office export, a converted PDF — is kept as a file under the temp folder, where Windows is free to clear it. The only network request is an update check, which runs only when you open the tray menu and at most once an hour. See `PRIVACY.md` for full details.
+Rust Hover Preview is local-first, previews work without an internet connection, and the only network request is an update check, which runs only when you open the tray menu and at most once an hour. There is no telemetry, analytics, ads, accounts, or crash reporting. It reads only the item you hover or focus in Explorer, locally and only for enabled preview types. Cloud-only placeholders are skipped on purpose; password-protected files are never bypassed. Settings and themes live under `%APPDATA%\rust-hover-preview`; optional previews use locally installed FFmpeg, LibreOffice, or ImageMagick when available, plus Microsoft Office, Windows' own media engine, and the Windows PDF engine. Caches are bounded by `config.ini`: decoded images stay in memory, while the page an engine drew for a document — an Office export, a converted PDF — is kept as a file under the temp folder, where Windows is free to clear it. See `PRIVACY.md` for full details.
 
 ## License
 
 MIT. See [LICENSE](LICENSE).
 
 The app is built out of other people’s code as much as its own — the Windows bindings, the image decoders, the syntax highlighter, the archive readers, the browser bindings — and each of those carries its own licence, with the notices MIT and BSD ask to be reproduced. [THIRD-PARTY.md](THIRD-PARTY.md) lists every dependency grouped by licence, with the copyright holders beside it, and the full texts are in [`LICENSES/`](LICENSES). Both are generated from the dependency tree rather than kept by hand; `generate-attribution.ps1` refreshes them.
-
-RAR archives are read with RARLAB’s UnRAR sources, compiled into the binary by the `unrar` crate. UnRAR source code may be used in any software to handle RAR archives without limitations and free of charge, but it may not be used to develop a RAR-compatible archiver or to recreate the RAR compression algorithm, which is proprietary. See [RARLAB’s licence](https://www.rarlab.com/license.htm) for the full terms.

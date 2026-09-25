@@ -1230,6 +1230,15 @@ fn is_media_file(path: &Path) -> bool {
     if crate::formats::peazip_formats::matches_peazip_list(path, &config.peazip_extensions) {
         return PreviewType::Peazip.enabled_in(&config);
     }
+
+    // A book no reader of this app's own opens is converted by the ebook engine where one is
+    // installed — a Mobipocket or Kindle file, an EPub, a FictionBook, a scanned book — and it is
+    // asked beside the listing engine above it, which is where the two are told apart: a name in no
+    // other list is read by this one. What it is gated by is the book switch itself, since what a
+    // converted book is shown as is what a PDF is shown as — a page; see `calibre_formats`.
+    if crate::formats::calibre_formats::matches_calibre_list(path, &config.calibre_extensions) {
+        return PreviewType::Calibre.enabled_in(&config);
+    }
     if matches_office_list(path, &config.office_extensions) {
         return PreviewType::Document.enabled_in(&config);
     }
