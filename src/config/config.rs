@@ -186,15 +186,15 @@ pub const MAX_IMAGE_CACHE_MB: u32 = 2048;
 /// without another render.
 pub const DEFAULT_OFFICE_CACHE_MB: u32 = 64;
 pub const MAX_OFFICE_CACHE_MB: u32 = 2048;
-/// Memory the pages a PDF preview was drawn as may hold. A page is stored as the
-/// pixels it was rendered into, so the size the layout asked for is part of what
+/// Memory the pages an `Ebook` preview — a PDF — was drawn as may hold. A page is stored as
+/// the pixels it was rendered into, so the size the layout asked for is part of what
 /// is kept rather than only the file it came from.
 ///
 /// A small budget is kept by default — a hit skips the document load, the raster
 /// and the renderer's own encode — and a page's own pixels are what it costs, so a
 /// budget holds fewer pages than it would frames of anything smaller.
-pub const DEFAULT_PDF_CACHE_MB: u32 = 32;
-pub const MAX_PDF_CACHE_MB: u32 = 2048;
+pub const DEFAULT_EBOOK_CACHE_MB: u32 = 32;
+pub const MAX_EBOOK_CACHE_MB: u32 = 2048;
 /// How much of what the render engine drew may be kept, in megabytes. A document the engine
 /// drew is a PDF written under the app's own folder, so what one costs once it has been
 /// converted is the size of that file, and what is kept is the working set of the folders a
@@ -311,13 +311,13 @@ pub fn sanitize_office_cache_mb(value: u32) -> u32 {
     value.min(MAX_OFFICE_CACHE_MB)
 }
 
-/// The rendered-PDF-page cache size in megabytes.
+/// The rendered-PDF-page cache size in megabytes, which is the cache of the `Ebook` kind.
 ///
 /// `0` is a cache that holds nothing rather than a preview tier that is switched
 /// off: a page is rendered for the hover that asks for it either way, so the only
 /// question a size answers is how much of what was drawn is kept between hovers.
-pub fn sanitize_pdf_cache_mb(value: u32) -> u32 {
-    value.min(MAX_PDF_CACHE_MB)
+pub fn sanitize_ebook_cache_mb(value: u32) -> u32 {
+    value.min(MAX_EBOOK_CACHE_MB)
 }
 
 /// How much of what the render engine drew is kept, in megabytes.
@@ -561,13 +561,14 @@ impl PreviewScale {
     }
 }
 
-/// What a PDF page is drawn at unless the configuration says otherwise: the whole of
-/// the room the display has for it, which is the answer that asks for nothing in
-/// particular — the page at its own size where the display can hold it, reduced only
-/// where it cannot.
-pub const DEFAULT_PDF_SCALE: PreviewScale = PreviewScale::FitToScreen;
-/// The same for the page an Office document is drawn as.
-pub const DEFAULT_OFFICE_SCALE: PreviewScale = PreviewScale::FitToScreen;
+/// What a PDF page — the `Ebook` kind — is drawn at unless the configuration says
+/// otherwise: the whole of the room the display has for it, which is the answer that asks
+/// for nothing in particular — the page at its own size where the display can hold it,
+/// reduced only where it cannot.
+pub const DEFAULT_EBOOK_SCALE: PreviewScale = PreviewScale::FitToScreen;
+/// The same for a page of the `Document` kind, drawn by the application that owns the
+/// format or by the render engine beside it.
+pub const DEFAULT_DOCUMENT_SCALE: PreviewScale = PreviewScale::FitToScreen;
 /// What a picture, a video and an animated picture are drawn at unless the configuration
 /// says otherwise: the size each file asks for, at the share its own setting names.
 pub const DEFAULT_PREVIEW_SCALE: PreviewScale =
@@ -587,10 +588,6 @@ pub const DEFAULT_VECTOR_SCALE: PreviewScale = PreviewScale::FitToScreen;
 /// answers is how much of the display to give it, and the answer that asks for nothing in
 /// particular is the room the display has.
 pub const DEFAULT_DESIGN_SCALE: PreviewScale = PreviewScale::FitToScreen;
-/// The same for a document the render engine draws, at the whole of the room: what a preview
-/// of one is is a page, drawn by the engine at whatever size the display has, so the question
-/// the setting answers is how much of the display to give it. See `libreoffice_render`.
-pub const DEFAULT_LIBRE_SCALE: PreviewScale = PreviewScale::FitToScreen;
 /// The same for a font specimen, at the share rather than the whole of the room: a specimen
 /// is a page of text rather than a document to be studied, and half the display holds the
 /// pangram at a size that can be read at a glance.
@@ -917,14 +914,25 @@ impl MarkdownMode {
 /// at all, and the lists that decide *which* files of that kind are previewed are
 /// left untouched by it, so switching a kind off and back on restores exactly
 /// what was configured.
+///
+/// The last three kinds are not rows of that submenu, because what they name is a rendering
+/// path rather than something a user asks for: a document an installed engine draws, a
+/// picture an installed converter develops, an archive an installed listing engine reads.
+/// Each is the same preview as the kind it belongs to — a page, a picture, a page of
+/// contents — and is switched by that kind's gate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PreviewType {
     Images,
     Videos,
     Text,
-    Pdf,
+    /// PDF pages: the one kind this app draws as a page with a reader of its own rather than
+    /// by handing the file to an engine, a decoder or the drawing layer. See `pdf_preview`.
+    Ebook,
     Archives,
-    Office,
+    /// Documents previewed as a page — the words of an Office document, and the drawings and
+    /// older formats an installed render engine draws. Which of the two draws a file is
+    /// answered by the machine rather than by the user; see `office_formats::page_engine`.
+    Document,
     /// Font files, the second kind the browser draws rather than a decoder: a specimen is
     /// a page of this app's own with the font in it, so a machine without the engine has no
     /// font preview either, and a user who wants none of them has this switch.
@@ -949,20 +957,27 @@ pub enum PreviewType {
     /// formats no reader here has. What draws one is LibreOffice where it is installed, and
     /// what comes back is a page; see `libre_formats` for what is listed and
     /// `libreoffice_render` for how it is drawn.
+    ///
+    /// It is the `Document` kind's second half rather than a switch of its own: what a user
+    /// turns off is documents.
     Libre,
     /// Pictures this app hands to an installed ImageMagick rather than decoding — the camera
     /// raw formats above all, which nothing else on a Windows machine opens at all. What
     /// comes back is a PNG, and it is drawn as the picture it is: the picture scale and the
     /// picture backdrop, held in the picture cache. See `magick_formats` for what is listed
     /// and `imagemagick_render` for how one is converted.
+    ///
+    /// It is the `Images` kind's second half rather than a switch of its own: what a user
+    /// turns off is pictures.
     Magick,
     /// Archives this app hands to an installed PeaZip rather than reading — the cabinet files,
     /// isos, disk images, installers and single-stream compressors no reader here has. What
     /// comes back is the archive's own table of contents, read into the shape every other
-    /// listing is and drawn as the same page, which is why this is a gate of its own rather
-    /// than a second list of names: a user who wants their `.cab` files left alone is not
-    /// asking for their zips to be left alone. See `peazip_formats` for what is listed and
+    /// listing is and drawn as the same page. See `peazip_formats` for what is listed and
     /// `peazip_render` for how one is listed.
+    ///
+    /// It is the `Archives` kind's second half rather than a switch of its own: what a user
+    /// turns off is archives.
     Peazip,
 }
 
@@ -976,38 +991,38 @@ impl PreviewType {
     }
 
     /// Whether this kind of preview is switched on in `config`.
+    ///
+    /// Three of the kinds share a gate with the kind they belong to — a document an engine
+    /// drew with the documents, a picture a converter developed with the pictures, an archive
+    /// a listing engine read with the archives — so there is one switch for each pair rather
+    /// than one for the reader and one for the engine.
     pub fn enabled_in(self, config: &AppConfig) -> bool {
         match self {
-            Self::Images => config.image_preview_enabled,
+            Self::Images | Self::Magick => config.image_preview_enabled,
             Self::Videos => config.video_preview_enabled,
             Self::Text => config.text_preview_enabled,
-            Self::Pdf => config.pdf_preview_enabled,
-            Self::Archives => config.archive_preview_enabled,
-            Self::Office => config.office_preview_enabled,
+            Self::Ebook => config.ebook_preview_enabled,
+            Self::Archives | Self::Peazip => config.archive_preview_enabled,
+            Self::Document | Self::Libre => config.document_preview_enabled,
             Self::Fonts => config.font_preview_enabled,
             Self::Design => config.design_preview_enabled,
             Self::Vector => config.vector_preview_enabled,
-            Self::Libre => config.libre_preview_enabled,
-            Self::Magick => config.magick_preview_enabled,
-            Self::Peazip => config.peazip_preview_enabled,
         }
     }
 
-    /// Switch this kind of preview on or off.
+    /// Switch this kind of preview on or off, which for the three engine-drawn kinds is the
+    /// switch of the kind they belong to — see `enabled_in`.
     pub fn set_enabled_in(self, config: &mut AppConfig, enabled: bool) {
         match self {
-            Self::Images => config.image_preview_enabled = enabled,
+            Self::Images | Self::Magick => config.image_preview_enabled = enabled,
             Self::Videos => config.video_preview_enabled = enabled,
             Self::Text => config.text_preview_enabled = enabled,
-            Self::Pdf => config.pdf_preview_enabled = enabled,
-            Self::Archives => config.archive_preview_enabled = enabled,
-            Self::Office => config.office_preview_enabled = enabled,
+            Self::Ebook => config.ebook_preview_enabled = enabled,
+            Self::Archives | Self::Peazip => config.archive_preview_enabled = enabled,
+            Self::Document | Self::Libre => config.document_preview_enabled = enabled,
             Self::Fonts => config.font_preview_enabled = enabled,
             Self::Design => config.design_preview_enabled = enabled,
             Self::Vector => config.vector_preview_enabled = enabled,
-            Self::Libre => config.libre_preview_enabled = enabled,
-            Self::Magick => config.magick_preview_enabled = enabled,
-            Self::Peazip => config.peazip_preview_enabled = enabled,
         }
     }
 }
@@ -1240,7 +1255,8 @@ pub struct AppConfig {
     /// different reasons: a picture is studied at the size it was written, while an
     /// animation at `50%` is half the pixels to decode and draw for every frame of it.
     pub animated_scale: PreviewScale,
-    /// How large a PDF page is drawn, as a share of the room the display has for it.
+    /// How large a PDF page — the `Ebook` kind — is drawn, as a share of the room the
+    /// display has for it.
     ///
     /// A page is a vector, so what it is asked for is a size rather than a resample:
     /// the room the display has is free quality there, and a share of that room is what
@@ -1248,18 +1264,22 @@ pub struct AppConfig {
     /// Screen` is the whole of it, which is where the setting starts, and `100%` or
     /// more reads as that fit.
     ///
-    /// It is a setting of its own rather than the SVG scale beside it because the two
+    /// It is a setting of its own rather than the vector scale beside it because the two
     /// documents are hovered for different reasons: a page is read at a glance and a
     /// drawing is looked at, so the size one wants is rarely the size the other wants.
-    pub pdf_scale: PreviewScale,
-    /// How large the page an Office document is drawn as is shown, as a share of the
-    /// room the display has — the same question, and the same answers, as the PDF
-    /// scale beside it.
+    pub ebook_scale: PreviewScale,
+    /// How large a page of the `Document` kind is shown, as a share of the room the
+    /// display has — the same question, and the same answers, as the Ebook scale beside it.
+    ///
+    /// One setting covers both halves of the kind — the page an Office document's own
+    /// application exports, and the page the render engine draws for a document no
+    /// application here has — because it is one question asked of one shape of preview: how
+    /// much of the display a page is given. See `effective_preview_scale`.
     ///
     /// The one source that is not a page is the bitmap a workbook is answered with
     /// where no page can be exported: it is only as good as the pixels it holds, so it
     /// follows the share as a share of its own size and is never enlarged.
-    pub office_scale: PreviewScale,
+    pub document_scale: PreviewScale,
     /// How large a font specimen is drawn, as a share of the room the display has — the same
     /// question, and the same answers, as the document scales above.
     ///
@@ -1277,9 +1297,6 @@ pub struct AppConfig {
     /// thing, at whatever size that picture is, so the size one wants is a share of the
     /// screen the way a page's is rather than a share of the file's own size.
     pub design_scale: PreviewScale,
-    /// How large a document the render engine draws is shown, as a share of the room the
-    /// display has. See `libreoffice_render`.
-    pub libre_scale: PreviewScale,
     /// How large a vector drawing is drawn, as a share of the room the display has for it —
     /// the same question, and the same answers, as the document scales above.
     ///
@@ -1304,38 +1321,43 @@ pub struct AppConfig {
     pub ttc_face: u32,
     pub theme: TextTheme,
     pub markdown_mode: MarkdownMode,
-    /// Whether image previews may be shown at all.
+    /// Whether pictures are previewed at all, ahead of the image list their names are
+    /// entries of.
+    ///
+    /// It is the gate for the pictures this app decodes and for the ones an installed
+    /// ImageMagick develops — the camera raw formats above all, which is `[magick]` — since
+    /// both are pictures: what the engine hands back is a PNG, drawn at the picture scale,
+    /// over the picture backdrop, held in the picture cache. Which of the two a file is, is
+    /// the list its name is in rather than a switch of its own.
     pub image_preview_enabled: bool,
     /// Whether video previews may be shown at all.
     pub video_preview_enabled: bool,
     /// Whether text files are previewed at all, ahead of the extension list.
     pub text_preview_enabled: bool,
-    /// Whether PDF previews may be shown at all.
-    pub pdf_preview_enabled: bool,
+    /// Whether a PDF — the `Ebook` kind — is previewed at all.
+    pub ebook_preview_enabled: bool,
     /// Whether archive contents are listed at all, ahead of the extension list.
+    ///
+    /// It is the gate for the archives this app reads and for the ones an installed PeaZip
+    /// lists — the cabinet files, isos, disk images and installers that are `[peazip]` —
+    /// since both are answered with the same page of contents. Which of the two a file is,
+    /// is the list its name is in rather than a switch of its own.
     pub archive_preview_enabled: bool,
-    /// Whether Office documents are previewed at all, ahead of the extension list.
-    pub office_preview_enabled: bool,
+    /// Whether documents are previewed at all, ahead of the lists their names are entries of.
+    ///
+    /// It is the gate for both halves of the `Document` kind: the documents whose own
+    /// application exports a page, and the ones an installed render engine draws — the word
+    /// processors, spreadsheets, presentations and drawings of `[libre]`, CorelDRAW above
+    /// all — since what either is previewed as is a page, drawn at the same share of the
+    /// display. Which of the two draws it is a question about the machine rather than a
+    /// switch; see `office_formats::page_engine`.
+    pub document_preview_enabled: bool,
     /// Whether font files are previewed at all, ahead of the font list their names are
     /// entries of.
     pub font_preview_enabled: bool,
     /// Whether design documents and projects are previewed at all, ahead of the design
     /// list their names are entries of.
     pub design_preview_enabled: bool,
-    /// Whether a document the render engine draws may be previewed at all. It is the gate
-    /// for `[libre]`, and the switch a user who wants their CorelDRAW files left alone
-    /// reaches for.
-    pub libre_preview_enabled: bool,
-    /// Whether a picture the ImageMagick engine develops may be previewed at all. It is the
-    /// gate for `[magick]`, and the switch a user who wants their camera raw files left
-    /// alone reaches for; see `magick_formats`.
-    pub magick_preview_enabled: bool,
-    /// Whether an archive the PeaZip engine lists may be previewed at all. It is the gate for
-    /// `[peazip]`, and the switch a user who wants their cabinet files, isos and disk images
-    /// left alone reaches for — a switch of its own rather than the archive gate beside it,
-    /// because these are the names nothing on this machine but an engine opens; see
-    /// `peazip_formats`.
-    pub peazip_preview_enabled: bool,
     /// Whether vector drawings are previewed at all, ahead of the vector list their names
     /// are entries of, and of the browser engine a document of that kind is drawn by.
     pub vector_preview_enabled: bool,
@@ -1383,10 +1405,10 @@ pub struct AppConfig {
     /// The same for the engine the documents beside Office are drawn by, under
     /// `Engine → LibreOffice TTL`.
     pub libreoffice_persistent: bool,
-    /// Memory the pages PDF previews were drawn as may hold, in megabytes, between
-    /// hovers. A page is rendered at `0` like at any other size; it is simply not
-    /// kept once the hover that asked for it is over.
-    pub pdf_cache_mb: u32,
+    /// Memory the pages PDF previews — the `Ebook` kind — were drawn as may hold, in
+    /// megabytes, between hovers. A page is rendered at `0` like at any other size; it is
+    /// simply not kept once the hover that asked for it is over.
+    pub ebook_cache_mb: u32,
     /// Memory the frames text previews were painted as may hold, in megabytes,
     /// between hovers. A frame is painted at `0` like at any other size; it is
     /// simply not kept once the hover that asked for it is over.
@@ -1476,11 +1498,10 @@ impl Default for AppConfig {
             preview_scale: PreviewScale::Percent(DEFAULT_PREVIEW_SCALE_PERCENT),
             video_scale: PreviewScale::Percent(DEFAULT_VIDEO_SCALE_PERCENT),
             animated_scale: PreviewScale::Percent(DEFAULT_ANIMATED_SCALE_PERCENT),
-            pdf_scale: DEFAULT_PDF_SCALE,
-            office_scale: DEFAULT_OFFICE_SCALE,
+            ebook_scale: DEFAULT_EBOOK_SCALE,
+            document_scale: DEFAULT_DOCUMENT_SCALE,
             font_scale: DEFAULT_FONT_SCALE,
             design_scale: DEFAULT_DESIGN_SCALE,
-            libre_scale: DEFAULT_LIBRE_SCALE,
             vector_scale: DEFAULT_VECTOR_SCALE,
             ttc_face: DEFAULT_TTC_FACE,
             theme: TextTheme::Light,
@@ -1488,14 +1509,11 @@ impl Default for AppConfig {
             image_preview_enabled: true,
             video_preview_enabled: true,
             text_preview_enabled: true,
-            pdf_preview_enabled: true,
+            ebook_preview_enabled: true,
             archive_preview_enabled: true,
-            office_preview_enabled: true,
+            document_preview_enabled: true,
             font_preview_enabled: true,
             design_preview_enabled: true,
-            libre_preview_enabled: true,
-            magick_preview_enabled: true,
-            peazip_preview_enabled: true,
             vector_preview_enabled: true,
             office_cache_mb: DEFAULT_OFFICE_CACHE_MB,
             libre_cache_mb: DEFAULT_LIBRE_CACHE_MB,
@@ -1507,7 +1525,7 @@ impl Default for AppConfig {
             office_engine_persistent: false,
             webview_persistent: false,
             libreoffice_persistent: false,
-            pdf_cache_mb: DEFAULT_PDF_CACHE_MB,
+            ebook_cache_mb: DEFAULT_EBOOK_CACHE_MB,
             text_cache_mb: DEFAULT_TEXT_CACHE_MB,
             decode_budget_gb: DEFAULT_DECODE_BUDGET_GB,
             hdr_tone_map: DEFAULT_HDR_TONE_MAP,
@@ -1565,13 +1583,10 @@ const SETTING_GROUPS: &[(&str, &[&str])] = &[
         &[
             "archive_preview_enabled",
             "design_preview_enabled",
+            "document_preview_enabled",
+            "ebook_preview_enabled",
             "font_preview_enabled",
             "image_preview_enabled",
-            "libre_preview_enabled",
-            "magick_preview_enabled",
-            "office_preview_enabled",
-            "pdf_preview_enabled",
-            "peazip_preview_enabled",
             "text_preview_enabled",
             "vector_preview_enabled",
             "video_preview_enabled",
@@ -1603,10 +1618,9 @@ const SETTING_GROUPS: &[(&str, &[&str])] = &[
         &[
             "animated_scale",
             "design_scale",
+            "document_scale",
+            "ebook_scale",
             "font_scale",
-            "libre_scale",
-            "office_scale",
-            "pdf_scale",
             "preview_scale",
             "vector_scale",
             "video_scale",
@@ -1628,10 +1642,10 @@ const SETTING_GROUPS: &[(&str, &[&str])] = &[
         &[
             "confirm_file_type",
             "decode_budget_gb",
+            "ebook_cache_mb",
             "image_cache_mb",
             "libre_cache_mb",
             "office_cache_mb",
-            "pdf_cache_mb",
             "text_cache_mb",
             "tick_ms",
         ],
@@ -2170,22 +2184,21 @@ impl AppConfig {
             "vector_scale",
             Some(self.vector_scale.as_str()),
         );
-        ini.set(CONFIG_SECTION, "pdf_scale", Some(self.pdf_scale.as_str()));
         ini.set(
             CONFIG_SECTION,
-            "office_scale",
-            Some(self.office_scale.as_str()),
+            "ebook_scale",
+            Some(self.ebook_scale.as_str()),
+        );
+        ini.set(
+            CONFIG_SECTION,
+            "document_scale",
+            Some(self.document_scale.as_str()),
         );
         ini.set(CONFIG_SECTION, "font_scale", Some(self.font_scale.as_str()));
         ini.set(
             CONFIG_SECTION,
             "design_scale",
             Some(self.design_scale.as_str()),
-        );
-        ini.set(
-            CONFIG_SECTION,
-            "libre_scale",
-            Some(self.libre_scale.as_str()),
         );
         ini.set(
             CONFIG_SECTION,
@@ -2215,8 +2228,8 @@ impl AppConfig {
         );
         ini.set(
             CONFIG_SECTION,
-            "pdf_preview_enabled",
-            Some(self.pdf_preview_enabled.to_string()),
+            "ebook_preview_enabled",
+            Some(self.ebook_preview_enabled.to_string()),
         );
         ini.set(
             CONFIG_SECTION,
@@ -2225,8 +2238,8 @@ impl AppConfig {
         );
         ini.set(
             CONFIG_SECTION,
-            "office_preview_enabled",
-            Some(self.office_preview_enabled.to_string()),
+            "document_preview_enabled",
+            Some(self.document_preview_enabled.to_string()),
         );
         ini.set(
             CONFIG_SECTION,
@@ -2237,21 +2250,6 @@ impl AppConfig {
             CONFIG_SECTION,
             "design_preview_enabled",
             Some(self.design_preview_enabled.to_string()),
-        );
-        ini.set(
-            CONFIG_SECTION,
-            "libre_preview_enabled",
-            Some(self.libre_preview_enabled.to_string()),
-        );
-        ini.set(
-            CONFIG_SECTION,
-            "magick_preview_enabled",
-            Some(self.magick_preview_enabled.to_string()),
-        );
-        ini.set(
-            CONFIG_SECTION,
-            "peazip_preview_enabled",
-            Some(self.peazip_preview_enabled.to_string()),
         );
         ini.set(
             CONFIG_SECTION,
@@ -2310,8 +2308,8 @@ impl AppConfig {
         );
         ini.set(
             CONFIG_SECTION,
-            "pdf_cache_mb",
-            Some(sanitize_pdf_cache_mb(self.pdf_cache_mb).to_string()),
+            "ebook_cache_mb",
+            Some(sanitize_ebook_cache_mb(self.ebook_cache_mb).to_string()),
         );
         ini.set(
             CONFIG_SECTION,
@@ -2596,14 +2594,16 @@ impl AppConfig {
         // A page's scale is read the same way and against the same whole: what the
         // number is a percentage of is the room the display has, one setting per kind
         // of document.
-        if let Some(value) = ini.get(CONFIG_SECTION, "pdf_scale") {
+        if let Some(value) = ini.get(CONFIG_SECTION, "ebook_scale") {
             if let Some(scale) = PreviewScale::from_str(&value) {
-                self.pdf_scale = scale;
+                self.ebook_scale = scale;
             }
         }
-        if let Some(value) = ini.get(CONFIG_SECTION, "office_scale") {
+        // A document's scale, which is the one setting both halves of the `Document` kind
+        // answer to: a page of an Office document, and a page the render engine drew.
+        if let Some(value) = ini.get(CONFIG_SECTION, "document_scale") {
             if let Some(scale) = PreviewScale::from_str(&value) {
-                self.office_scale = scale;
+                self.document_scale = scale;
             }
         }
         // A specimen's scale is read the same way again, against the share of the display
@@ -2618,11 +2618,6 @@ impl AppConfig {
         if let Some(value) = ini.get(CONFIG_SECTION, "design_scale") {
             if let Some(scale) = PreviewScale::from_str(&value) {
                 self.design_scale = scale;
-            }
-        }
-        if let Some(value) = ini.get(CONFIG_SECTION, "libre_scale") {
-            if let Some(scale) = PreviewScale::from_str(&value) {
-                self.libre_scale = scale;
             }
         }
         // And which face of a collection the specimen is of, in the numbering the tray's
@@ -2651,32 +2646,20 @@ impl AppConfig {
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "text_preview_enabled") {
             self.text_preview_enabled = value;
         }
-        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "pdf_preview_enabled") {
-            self.pdf_preview_enabled = value;
+        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "ebook_preview_enabled") {
+            self.ebook_preview_enabled = value;
         }
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "archive_preview_enabled") {
             self.archive_preview_enabled = value;
         }
-        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "office_preview_enabled") {
-            self.office_preview_enabled = value;
+        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "document_preview_enabled") {
+            self.document_preview_enabled = value;
         }
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "font_preview_enabled") {
             self.font_preview_enabled = value;
         }
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "design_preview_enabled") {
             self.design_preview_enabled = value;
-        }
-        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "libre_preview_enabled") {
-            self.libre_preview_enabled = value;
-        }
-        // The ImageMagick kind's switch is read from its own name, and stays where it is
-        // where the name is not written at all.
-        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "magick_preview_enabled") {
-            self.magick_preview_enabled = value;
-        }
-        // And the PeaZip kind's, read and left where it is for the same reason.
-        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "peazip_preview_enabled") {
-            self.peazip_preview_enabled = value;
         }
         // The vector kind's switch is read from its own name, and stays where it is where the
         // name is not written at all.
@@ -2725,9 +2708,9 @@ impl AppConfig {
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "libreoffice_persistent") {
             self.libreoffice_persistent = value;
         }
-        if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "pdf_cache_mb") {
+        if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "ebook_cache_mb") {
             if let Ok(value) = u32::try_from(value) {
-                self.pdf_cache_mb = sanitize_pdf_cache_mb(value);
+                self.ebook_cache_mb = sanitize_ebook_cache_mb(value);
             }
         }
         if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "text_cache_mb") {
@@ -3004,21 +2987,21 @@ mod tests {
         assert_eq!(config.vector_scale.as_str(), "fit");
     }
 
-    /// A page's scale is a setting of its own as well: a PDF, a page Office rendered
-    /// and a hand-edited picture scale are three answers to three questions, and one
+    /// A page's scale is a setting of its own as well: a PDF, a document a page was drawn
+    /// for and a hand-edited picture scale are three answers to three questions, and one
     /// of them changing leaves the others where they were.
     #[test]
     fn a_pages_scale_is_read_from_its_own_key() {
         let mut ini = Ini::new();
         ini.set(CONFIG_SECTION, "preview_scale", Some("400".to_string()));
         ini.set(CONFIG_SECTION, "vector_scale", Some("75".to_string()));
-        ini.set(CONFIG_SECTION, "pdf_scale", Some("25".to_string()));
-        ini.set(CONFIG_SECTION, "office_scale", Some("10".to_string()));
+        ini.set(CONFIG_SECTION, "ebook_scale", Some("25".to_string()));
+        ini.set(CONFIG_SECTION, "document_scale", Some("10".to_string()));
 
         let config = read_file(&mut ini);
 
-        assert_eq!(config.pdf_scale, PreviewScale::Percent(25));
-        assert_eq!(config.office_scale, PreviewScale::Percent(10));
+        assert_eq!(config.ebook_scale, PreviewScale::Percent(25));
+        assert_eq!(config.document_scale, PreviewScale::Percent(10));
         assert_eq!(config.vector_scale, PreviewScale::Percent(75));
         assert_eq!(config.preview_scale, PreviewScale::Percent(400));
 
@@ -3027,15 +3010,15 @@ mod tests {
         let mut ini = Ini::new();
         ini.set(
             CONFIG_SECTION,
-            "pdf_scale",
+            "ebook_scale",
             Some(" Fit to Screen ".to_string()),
         );
-        ini.set(CONFIG_SECTION, "office_scale", Some("50%".to_string()));
+        ini.set(CONFIG_SECTION, "document_scale", Some("50%".to_string()));
 
         let config = read_file(&mut ini);
 
-        assert_eq!(config.pdf_scale, PreviewScale::FitToScreen);
-        assert_eq!(config.office_scale, PreviewScale::Percent(50));
+        assert_eq!(config.ebook_scale, PreviewScale::FitToScreen);
+        assert_eq!(config.document_scale, PreviewScale::Percent(50));
     }
 
     /// The same for a video: a video's scale is a setting of its own like the four
@@ -3132,10 +3115,10 @@ mod tests {
     fn a_pages_scale_starts_at_the_whole_room() {
         let config = AppConfig::default();
 
-        assert_eq!(config.pdf_scale, PreviewScale::FitToScreen);
-        assert_eq!(config.pdf_scale.as_str(), "fit");
-        assert_eq!(config.office_scale, PreviewScale::FitToScreen);
-        assert_eq!(config.office_scale.as_str(), "fit");
+        assert_eq!(config.ebook_scale, PreviewScale::FitToScreen);
+        assert_eq!(config.ebook_scale.as_str(), "fit");
+        assert_eq!(config.document_scale, PreviewScale::FitToScreen);
+        assert_eq!(config.document_scale.as_str(), "fit");
     }
 
     /// The scale is written the way the picture scale is, so the words a person
@@ -3159,15 +3142,15 @@ mod tests {
         }
     }
 
-    /// A specimen's scale is the fourth of them and a setting of its own like the three:
+    /// A specimen's scale is the fifth of them and a setting of its own like the four:
     /// one key changing leaves the others where they were.
     #[test]
     fn a_specimens_scale_is_read_from_its_own_key() {
         let mut ini = Ini::new();
         ini.set(CONFIG_SECTION, "preview_scale", Some("400".to_string()));
         ini.set(CONFIG_SECTION, "vector_scale", Some("75".to_string()));
-        ini.set(CONFIG_SECTION, "pdf_scale", Some("25".to_string()));
-        ini.set(CONFIG_SECTION, "office_scale", Some("10".to_string()));
+        ini.set(CONFIG_SECTION, "ebook_scale", Some("25".to_string()));
+        ini.set(CONFIG_SECTION, "document_scale", Some("10".to_string()));
         ini.set(
             CONFIG_SECTION,
             "font_scale",
@@ -3178,8 +3161,8 @@ mod tests {
 
         assert_eq!(config.font_scale, PreviewScale::FitToScreen);
         assert_eq!(config.vector_scale, PreviewScale::Percent(75));
-        assert_eq!(config.pdf_scale, PreviewScale::Percent(25));
-        assert_eq!(config.office_scale, PreviewScale::Percent(10));
+        assert_eq!(config.ebook_scale, PreviewScale::Percent(25));
+        assert_eq!(config.document_scale, PreviewScale::Percent(10));
         assert_eq!(config.preview_scale, PreviewScale::Percent(400));
     }
 
@@ -3193,8 +3176,8 @@ mod tests {
 
         let mut ini = Ini::new();
         ini.set(CONFIG_SECTION, "vector_scale", Some("75".to_string()));
-        ini.set(CONFIG_SECTION, "pdf_scale", Some("25".to_string()));
-        ini.set(CONFIG_SECTION, "office_scale", Some("fit".to_string()));
+        ini.set(CONFIG_SECTION, "ebook_scale", Some("25".to_string()));
+        ini.set(CONFIG_SECTION, "document_scale", Some("fit".to_string()));
         ini.set(CONFIG_SECTION, "font_scale", Some("50".to_string()));
         ini.set(CONFIG_SECTION, "design_scale", Some(" 10% ".to_string()));
 
@@ -3202,8 +3185,8 @@ mod tests {
 
         assert_eq!(config.design_scale, PreviewScale::Percent(10));
         assert_eq!(config.vector_scale, PreviewScale::Percent(75));
-        assert_eq!(config.pdf_scale, PreviewScale::Percent(25));
-        assert_eq!(config.office_scale, PreviewScale::FitToScreen);
+        assert_eq!(config.ebook_scale, PreviewScale::Percent(25));
+        assert_eq!(config.document_scale, PreviewScale::FitToScreen);
         assert_eq!(config.font_scale, PreviewScale::Percent(50));
     }
 
@@ -3411,22 +3394,50 @@ mod tests {
             );
         }
 
-        // The gate is a switch of its own: switching it leaves every other kind and the list
-        // where they were.
+        // The gate is not a switch of its own: a picture an engine develops is a picture, so
+        // it is switched by the Images gate and by nothing else, and the list is left where it
+        // was either way.
         let mut config = AppConfig::default();
         assert!(PreviewType::Magick.enabled_in(&config));
 
         PreviewType::Magick.set_enabled_in(&mut config, false);
         assert!(!PreviewType::Magick.enabled_in(&config));
+        assert!(!PreviewType::Images.enabled_in(&config));
         assert!(PreviewType::Libre.enabled_in(&config));
-        assert!(PreviewType::Images.enabled_in(&config));
         assert_eq!(
             config.magick_extensions,
             sanitize_magick_extensions(DEFAULT_MAGICK_EXTENSIONS)
         );
 
-        PreviewType::Magick.set_enabled_in(&mut config, true);
+        PreviewType::Images.set_enabled_in(&mut config, true);
         assert!(PreviewType::Magick.enabled_in(&config));
+    }
+
+    /// The two other engine-drawn kinds share their gate the same way: a document an engine
+    /// drew is switched by the `Document` gate and an archive a listing engine read by the
+    /// `Archives` gate, whichever of the pair the switch is thrown from.
+    #[test]
+    fn an_engine_drawn_kind_is_switched_by_the_kind_it_belongs_to() {
+        let mut config = AppConfig::default();
+
+        for (kind, gate) in [
+            (PreviewType::Libre, PreviewType::Document),
+            (PreviewType::Peazip, PreviewType::Archives),
+            (PreviewType::Magick, PreviewType::Images),
+        ] {
+            kind.set_enabled_in(&mut config, false);
+
+            assert!(!kind.enabled_in(&config));
+            assert!(
+                !gate.enabled_in(&config),
+                "the gate the kind belongs to came down with it"
+            );
+
+            gate.set_enabled_in(&mut config, true);
+
+            assert!(kind.enabled_in(&config), "and back up with it");
+            assert!(gate.enabled_in(&config));
+        }
     }
 
     /// A file as the app reads one: what it has wrong or missing is put right first, and then
@@ -3718,7 +3729,7 @@ mod tests {
             decode_budget_gb: 0.5,
             office_engine_idle: EngineIdle::Indefinite,
             webview_idle: EngineIdle::Seconds(60),
-            pdf_scale: PreviewScale::Percent(25),
+            ebook_scale: PreviewScale::Percent(25),
             image_background: TransparentBackground::Transparent,
             text_scroll_far_edge_grace_pixels: 12.5,
             office_cache_mb: 1024,

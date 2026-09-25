@@ -1,15 +1,15 @@
 use crate::app::updates;
 use crate::config::config::{
-    sanitize_decode_budget_gb, sanitize_image_cache_mb, sanitize_libre_cache_mb,
-    sanitize_office_cache_mb, sanitize_pdf_cache_mb, sanitize_text_cache_mb,
+    sanitize_decode_budget_gb, sanitize_ebook_cache_mb, sanitize_image_cache_mb,
+    sanitize_libre_cache_mb, sanitize_office_cache_mb, sanitize_text_cache_mb,
     sanitize_text_font_scale_percent, sanitize_tick_ms, AvoidMode, EngineIdle, MarkdownMode,
     OfficeEngine, PreviewScale, PreviewType, TextTheme, TransparentBackground, TriggerKeyMode,
     DEFAULT_AFK_TIMER_SECS, DEFAULT_ANIMATED_SCALE, DEFAULT_AVOID_MODE, DEFAULT_DDS_BACKGROUND,
     DEFAULT_DECODE_BUDGET_GB, DEFAULT_DESIGN_BACKGROUND, DEFAULT_DESIGN_SCALE,
-    DEFAULT_FOLLOW_CURSOR, DEFAULT_FONT_BACKGROUND, DEFAULT_FONT_SCALE, DEFAULT_HOVER_DELAY_MS,
-    DEFAULT_IMAGE_BACKGROUND, DEFAULT_IMAGE_CACHE_MB, DEFAULT_LIBREOFFICE_IDLE_SECS,
-    DEFAULT_LIBRE_CACHE_MB, DEFAULT_LIBRE_SCALE, DEFAULT_OFFICE_CACHE_MB, DEFAULT_OFFICE_ENGINE,
-    DEFAULT_OFFICE_ENGINE_IDLE_SECS, DEFAULT_OFFICE_SCALE, DEFAULT_PDF_CACHE_MB, DEFAULT_PDF_SCALE,
+    DEFAULT_DOCUMENT_SCALE, DEFAULT_EBOOK_CACHE_MB, DEFAULT_EBOOK_SCALE, DEFAULT_FOLLOW_CURSOR,
+    DEFAULT_FONT_BACKGROUND, DEFAULT_FONT_SCALE, DEFAULT_HOVER_DELAY_MS, DEFAULT_IMAGE_BACKGROUND,
+    DEFAULT_IMAGE_CACHE_MB, DEFAULT_LIBREOFFICE_IDLE_SECS, DEFAULT_LIBRE_CACHE_MB,
+    DEFAULT_OFFICE_CACHE_MB, DEFAULT_OFFICE_ENGINE, DEFAULT_OFFICE_ENGINE_IDLE_SECS,
     DEFAULT_PREVIEW_SCALE, DEFAULT_SAME_FILE_REHOVER_DELAY_MS, DEFAULT_SETTLING_DELAY_MS,
     DEFAULT_TEXT_CACHE_MB, DEFAULT_TEXT_FONT_SCALE_PERCENT, DEFAULT_TICK_MS,
     DEFAULT_VECTOR_BACKGROUND, DEFAULT_VECTOR_SCALE, DEFAULT_VIDEO_SCALE, DEFAULT_VIDEO_VOLUME,
@@ -173,12 +173,12 @@ const ID_TRAY_SCALE_BASE: u16 = 1041;
 /// asks for, and both halves of the kind — a document the browser draws and a metafile the
 /// drawing layer replays — are asked with this one setting.
 const ID_TRAY_VECTOR_SCALE_BASE: u16 = 1400;
-/// The `PDF Scaling` and `Office Scaling` submenus beside it, each listing the same
+/// The `Ebook Scaling` and `Document Scaling` submenus beside it, each listing the same
 /// shares: they sit in the slack the `Avoid` items leave, so a share of the display is
 /// never read as a way of avoiding the item a preview is about.
-const ID_TRAY_PDF_SCALE_BASE: u16 = 1405;
-const ID_TRAY_OFFICE_SCALE_BASE: u16 = 1415;
-/// `Font Scaling`, the fourth of them, in the range after the Office one: a specimen is
+const ID_TRAY_EBOOK_SCALE_BASE: u16 = 1405;
+const ID_TRAY_DOCUMENT_SCALE_BASE: u16 = 1415;
+/// `Font Scaling`, the fourth of them, in the range after the Document one: a specimen is
 /// drawn at a share of the display the same way a document is.
 const ID_TRAY_FONT_SCALE_BASE: u16 = 1420;
 /// `Video Scaling`, the `Image Scaling` submenu's twin below it, in the range directly
@@ -195,9 +195,6 @@ const ID_TRAY_ANIMATED_SCALE_BASE: u16 = 1435;
 /// from a picture the file keeps of the whole of itself, so it is asked for a share of the
 /// display the way a page is rather than for a share of its own size.
 const ID_TRAY_DESIGN_SCALE_BASE: u16 = 1445;
-/// `Libre Scaling`, in the range after it: a document the render engine drew is handed back
-/// as a page, so the share is of the display the way a PDF page's is.
-const ID_TRAY_LIBRE_SCALE_BASE: u16 = 1450;
 /// The shares of the display every `… Scaling` submenu offers, in the order it lists
 /// them: the whole room a document can be given at the top, then the shares of it a
 /// document is asked for below. What differs between the settings is where they start —
@@ -234,39 +231,17 @@ const ID_TRAY_TEXT_FULL_MODE: u16 = 1061; // Text previews scroll/select on/off
 const ID_TRAY_TYPE_IMAGES: u16 = 1062;
 const ID_TRAY_TYPE_VIDEOS: u16 = 1063;
 const ID_TRAY_TYPE_TEXT: u16 = 1064;
-const ID_TRAY_TYPE_PDF: u16 = 1065;
+/// The `Ebook` gate: the pages this app reads and draws itself, which is every PDF.
+const ID_TRAY_TYPE_EBOOK: u16 = 1065;
 const ID_TRAY_TYPE_ARCHIVES: u16 = 1066;
-const ID_TRAY_TYPE_OFFICE: u16 = 1067;
+/// The `Document` gate: the pages drawn for a document, whether the application that owns
+/// the format drew one or an installed render engine did — the one switch both halves of the
+/// kind answer to (see `PreviewType`).
+const ID_TRAY_TYPE_DOCUMENT: u16 = 1067;
 /// The `Fonts` gate beside it, under the same `Preview Types` submenu.
 const ID_TRAY_TYPE_FONTS: u16 = 1070;
 /// The `Design` gate beside those, under the same submenu.
 const ID_TRAY_TYPE_DESIGN: u16 = 1071;
-/// The `Libre` gate, under the same submenu: the documents drawn by an installed render
-/// engine rather than read by this app — CorelDRAW above all.
-///
-/// It sits here with the `Magick` gate below it rather than beside the other kinds: 1062 to
-/// 1071 is every one of those, 1072 to 1082 are the font sizes and 1083 to 1097 are the
-/// engine idle times, so these two — the kinds that are engines rather than readers — are the
-/// last pair before the `theme` folder's block.
-///
-/// It carried 1100 until then, which is where the first file in the `theme` folder's submenu
-/// is drawn, and that item is matched first: the row switched the text theme rather than the
-/// kind, so what a user saw was a switch that did nothing. `Magick` is here with it so that
-/// the two are one block, and so that neither is anywhere near the theme folder's range.
-const ID_TRAY_TYPE_LIBRE: u16 = 1098;
-/// The `Magick` gate, under the same submenu: the pictures an installed ImageMagick develops
-/// rather than this app decoding — the camera raw formats above all. See `magick_formats`.
-const ID_TRAY_TYPE_MAGICK: u16 = 1099;
-/// The `Peazip` gate, under the same submenu: the archives an installed PeaZip lists rather
-/// than this app reading — the cabinet files, isos, disk images, installers and single-stream
-/// compressors no reader here has. See `peazip_formats`.
-///
-/// It is drawn below `Magick` and numbered away from both the engines' block above it and the
-/// `theme` folder's range above that (`ID_TRAY_THEME_CUSTOM_BASE`): what the number has to be is
-/// a command that no other row of the menu is matched by, since two rows sharing one is a click
-/// that does the wrong thing — which is what the `Libre` gate above learned when it carried
-/// 1100.
-const ID_TRAY_TYPE_PEAZIP: u16 = 1515;
 /// The `Vector` gate, for the drawings that are not pictures: SVG documents, which are the
 /// kind SVG documents have always had — the id is the one this gate carried under that name
 /// — and the metafiles and encapsulated PostScript files the same kind grew to hold.
@@ -276,7 +251,7 @@ const ID_TRAY_TYPE_VECTOR: u16 = 1069;
 /// folder's own items occupy (see `ID_TRAY_THEME_CUSTOM_BASE`).
 const ID_TRAY_IMAGE_CACHE_BASE: u16 = 1300;
 const ID_TRAY_OFFICE_CACHE_BASE: u16 = 1320;
-const ID_TRAY_PDF_CACHE_BASE: u16 = 1340;
+const ID_TRAY_EBOOK_CACHE_BASE: u16 = 1340;
 const ID_TRAY_TEXT_CACHE_BASE: u16 = 1360;
 /// The `Cache → Libre` sizes: how much of what the render engine drew is kept between
 /// hovers. The pages are files under the app's own folder rather than memory, which is what
@@ -561,14 +536,11 @@ unsafe extern "system" fn tray_window_proc(
                 ID_TRAY_TYPE_IMAGES => toggle_preview_type(PreviewType::Images),
                 ID_TRAY_TYPE_VIDEOS => toggle_preview_type(PreviewType::Videos),
                 ID_TRAY_TYPE_TEXT => toggle_preview_type(PreviewType::Text),
-                ID_TRAY_TYPE_PDF => toggle_preview_type(PreviewType::Pdf),
+                ID_TRAY_TYPE_EBOOK => toggle_preview_type(PreviewType::Ebook),
                 ID_TRAY_TYPE_ARCHIVES => toggle_preview_type(PreviewType::Archives),
-                ID_TRAY_TYPE_OFFICE => toggle_preview_type(PreviewType::Office),
+                ID_TRAY_TYPE_DOCUMENT => toggle_preview_type(PreviewType::Document),
                 ID_TRAY_TYPE_FONTS => toggle_preview_type(PreviewType::Fonts),
                 ID_TRAY_TYPE_DESIGN => toggle_preview_type(PreviewType::Design),
-                ID_TRAY_TYPE_LIBRE => toggle_preview_type(PreviewType::Libre),
-                ID_TRAY_TYPE_MAGICK => toggle_preview_type(PreviewType::Magick),
-                ID_TRAY_TYPE_PEAZIP => toggle_preview_type(PreviewType::Peazip),
                 ID_TRAY_TYPE_VECTOR => toggle_preview_type(PreviewType::Vector),
                 // An Office engine's idle time, by the position it was listed at.
                 cmd if (ID_TRAY_ENGINE_IDLE_BASE
@@ -609,7 +581,7 @@ unsafe extern "system" fn tray_window_proc(
                 cmd if (ID_TRAY_IMAGE_CACHE_BASE..ID_TRAY_OFFICE_CACHE_BASE).contains(&cmd) => {
                     set_image_cache_mb(cmd - ID_TRAY_IMAGE_CACHE_BASE)
                 }
-                cmd if (ID_TRAY_OFFICE_CACHE_BASE..ID_TRAY_PDF_CACHE_BASE).contains(&cmd) => {
+                cmd if (ID_TRAY_OFFICE_CACHE_BASE..ID_TRAY_EBOOK_CACHE_BASE).contains(&cmd) => {
                     set_office_cache_mb(cmd - ID_TRAY_OFFICE_CACHE_BASE)
                 }
                 cmd if (ID_TRAY_LIBRE_CACHE_BASE
@@ -618,8 +590,8 @@ unsafe extern "system" fn tray_window_proc(
                 {
                     set_libre_cache_mb(cmd - ID_TRAY_LIBRE_CACHE_BASE)
                 }
-                cmd if (ID_TRAY_PDF_CACHE_BASE..ID_TRAY_TEXT_CACHE_BASE).contains(&cmd) => {
-                    set_pdf_cache_mb(cmd - ID_TRAY_PDF_CACHE_BASE)
+                cmd if (ID_TRAY_EBOOK_CACHE_BASE..ID_TRAY_TEXT_CACHE_BASE).contains(&cmd) => {
+                    set_ebook_cache_mb(cmd - ID_TRAY_EBOOK_CACHE_BASE)
                 }
                 // The text cache is the last of the four, so its range is bounded by
                 // the sizes it offers rather than by the next base: an item of a
@@ -639,24 +611,24 @@ unsafe extern "system" fn tray_window_proc(
                     set_decode_budget_gb(cmd - ID_TRAY_DECODE_BUDGET_BASE)
                 }
                 // A share of the display a document is drawn at, by the position it
-                // was listed at: the vector scale, and the three page scales beside it.
+                // was listed at: the vector scale, and the two page scales beside it.
                 cmd if (ID_TRAY_VECTOR_SCALE_BASE
                     ..ID_TRAY_VECTOR_SCALE_BASE + DOCUMENT_SCALE_CHOICES.len() as u16)
                     .contains(&cmd) =>
                 {
                     set_vector_scale(cmd - ID_TRAY_VECTOR_SCALE_BASE)
                 }
-                cmd if (ID_TRAY_PDF_SCALE_BASE
-                    ..ID_TRAY_PDF_SCALE_BASE + DOCUMENT_SCALE_CHOICES.len() as u16)
+                cmd if (ID_TRAY_EBOOK_SCALE_BASE
+                    ..ID_TRAY_EBOOK_SCALE_BASE + DOCUMENT_SCALE_CHOICES.len() as u16)
                     .contains(&cmd) =>
                 {
-                    set_pdf_scale(cmd - ID_TRAY_PDF_SCALE_BASE)
+                    set_ebook_scale(cmd - ID_TRAY_EBOOK_SCALE_BASE)
                 }
-                cmd if (ID_TRAY_OFFICE_SCALE_BASE
-                    ..ID_TRAY_OFFICE_SCALE_BASE + DOCUMENT_SCALE_CHOICES.len() as u16)
+                cmd if (ID_TRAY_DOCUMENT_SCALE_BASE
+                    ..ID_TRAY_DOCUMENT_SCALE_BASE + DOCUMENT_SCALE_CHOICES.len() as u16)
                     .contains(&cmd) =>
                 {
-                    set_office_scale(cmd - ID_TRAY_OFFICE_SCALE_BASE)
+                    set_document_scale(cmd - ID_TRAY_DOCUMENT_SCALE_BASE)
                 }
                 cmd if (ID_TRAY_FONT_SCALE_BASE
                     ..ID_TRAY_FONT_SCALE_BASE + DOCUMENT_SCALE_CHOICES.len() as u16)
@@ -671,12 +643,6 @@ unsafe extern "system" fn tray_window_proc(
                     .contains(&cmd) =>
                 {
                     set_design_scale(cmd - ID_TRAY_DESIGN_SCALE_BASE)
-                }
-                cmd if (ID_TRAY_LIBRE_SCALE_BASE
-                    ..ID_TRAY_LIBRE_SCALE_BASE + DOCUMENT_SCALE_CHOICES.len() as u16)
-                    .contains(&cmd) =>
-                {
-                    set_libre_scale(cmd - ID_TRAY_LIBRE_SCALE_BASE)
                 }
                 // How large a video is drawn, by the position its item was listed at: the
                 // same shares the pictures above it are offered, in a range of their own
@@ -765,19 +731,20 @@ unsafe fn show_context_menu(hwnd: HWND) {
     // default. A gate is only whether previews of that kind may be shown at all —
     // the lists and settings that decide which files of that kind preview are left
     // alone, so switching one off and back on restores what was configured.
+    //
+    // One gate covers each pair of a kind this app reads and the kind an engine draws for
+    // it: an ImageMagick picture is a picture, a document LibreOffice drew is a document,
+    // and an archive PeaZip listed is an archive, so none of the three has a row here.
     let kinds = [
         (PreviewType::Images, ID_TRAY_TYPE_IMAGES, w!("Images")),
         (PreviewType::Videos, ID_TRAY_TYPE_VIDEOS, w!("Videos")),
         (PreviewType::Text, ID_TRAY_TYPE_TEXT, w!("Text")),
-        (PreviewType::Pdf, ID_TRAY_TYPE_PDF, w!("PDF")),
+        (PreviewType::Ebook, ID_TRAY_TYPE_EBOOK, w!("Ebook")),
         (PreviewType::Archives, ID_TRAY_TYPE_ARCHIVES, w!("Archives")),
-        (PreviewType::Office, ID_TRAY_TYPE_OFFICE, w!("Office")),
+        (PreviewType::Document, ID_TRAY_TYPE_DOCUMENT, w!("Document")),
         (PreviewType::Vector, ID_TRAY_TYPE_VECTOR, w!("Vector")),
         (PreviewType::Fonts, ID_TRAY_TYPE_FONTS, w!("Fonts")),
         (PreviewType::Design, ID_TRAY_TYPE_DESIGN, w!("Design")),
-        (PreviewType::Libre, ID_TRAY_TYPE_LIBRE, w!("Libre")),
-        (PreviewType::Magick, ID_TRAY_TYPE_MAGICK, w!("Magick")),
-        (PreviewType::Peazip, ID_TRAY_TYPE_PEAZIP, w!("Peazip")),
     ];
     let types_menu = CreatePopupMenu().unwrap();
 
@@ -1221,31 +1188,33 @@ unsafe fn show_context_menu(hwnd: HWND) {
         DEFAULT_ANIMATED_SCALE,
     );
 
-    // Add the Vector Scaling, PDF Scaling, Office Scaling, Font Scaling and Design Scaling
+    // Add the Vector Scaling, Ebook Scaling, Document Scaling, Font Scaling and Design Scaling
     // submenus: how much of the display each kind of document is drawn over. They sit beside
     // the picture scale because they are the same question about other kinds of preview, and
     // each is a submenu of its own because the answers are not the same answers: a picture's
     // percentage is of its own size, a document's is of the display — and a document and a
     // page do not start at the same share of it either.
-    let (pdf_scale, office_scale, font_scale, design_scale, vector_scale, libre_scale) = CONFIG
+    //
+    // One of them covers both halves of the `Document` kind, since a page the render engine
+    // drew is a page like any other: what the setting answers is how much of the display one
+    // is given, whichever engine drew it.
+    let (ebook_scale, document_scale, font_scale, design_scale, vector_scale) = CONFIG
         .lock()
         .map(|c| {
             (
-                c.pdf_scale,
-                c.office_scale,
+                c.ebook_scale,
+                c.document_scale,
                 c.font_scale,
                 c.design_scale,
                 c.vector_scale,
-                c.libre_scale,
             )
         })
         .unwrap_or((
-            DEFAULT_PDF_SCALE,
-            DEFAULT_OFFICE_SCALE,
+            DEFAULT_EBOOK_SCALE,
+            DEFAULT_DOCUMENT_SCALE,
             DEFAULT_FONT_SCALE,
             DEFAULT_DESIGN_SCALE,
             DEFAULT_VECTOR_SCALE,
-            DEFAULT_LIBRE_SCALE,
         ));
 
     append_document_scale_menu(
@@ -1257,17 +1226,17 @@ unsafe fn show_context_menu(hwnd: HWND) {
     );
     append_document_scale_menu(
         scaling_menu,
-        w!("PDF Scaling"),
-        ID_TRAY_PDF_SCALE_BASE,
-        pdf_scale,
-        DEFAULT_PDF_SCALE,
+        w!("Ebook Scaling"),
+        ID_TRAY_EBOOK_SCALE_BASE,
+        ebook_scale,
+        DEFAULT_EBOOK_SCALE,
     );
     append_document_scale_menu(
         scaling_menu,
-        w!("Office Scaling"),
-        ID_TRAY_OFFICE_SCALE_BASE,
-        office_scale,
-        DEFAULT_OFFICE_SCALE,
+        w!("Document Scaling"),
+        ID_TRAY_DOCUMENT_SCALE_BASE,
+        document_scale,
+        DEFAULT_DOCUMENT_SCALE,
     );
     append_document_scale_menu(
         scaling_menu,
@@ -1282,13 +1251,6 @@ unsafe fn show_context_menu(hwnd: HWND) {
         ID_TRAY_DESIGN_SCALE_BASE,
         design_scale,
         DEFAULT_DESIGN_SCALE,
-    );
-    append_document_scale_menu(
-        scaling_menu,
-        w!("Libre Scaling"),
-        ID_TRAY_LIBRE_SCALE_BASE,
-        libre_scale,
-        DEFAULT_LIBRE_SCALE,
     );
 
     let _ = AppendMenuW(
@@ -1436,17 +1398,17 @@ unsafe fn show_context_menu(hwnd: HWND) {
 
     // Add the "Cache" submenu: how much memory a preview's own data may be held in
     // between hovers — the frames a decoded image was shown as, the frames a text
-    // preview was painted as, the pages a PDF was drawn as, and the pages Office
-    // rendered — each of them listed largest first, with the size its own cache
-    // starts at marked. All of it is held in memory and nowhere else, and nothing is
+    // preview was painted as, the pages an Ebook was drawn as, and the pages a
+    // document was drawn as — each of them listed largest first, with the size its own
+    // cache starts at marked. All of it is held in memory and nowhere else, and nothing is
     // written to disk.
-    let (image_cache_mb, office_cache_mb, pdf_cache_mb, text_cache_mb, libre_cache_mb) = CONFIG
+    let (image_cache_mb, office_cache_mb, ebook_cache_mb, text_cache_mb, libre_cache_mb) = CONFIG
         .lock()
         .map(|c| {
             (
                 c.image_cache_mb,
                 c.office_cache_mb,
-                c.pdf_cache_mb,
+                c.ebook_cache_mb,
                 c.text_cache_mb,
                 c.libre_cache_mb,
             )
@@ -1454,7 +1416,7 @@ unsafe fn show_context_menu(hwnd: HWND) {
         .unwrap_or((
             DEFAULT_IMAGE_CACHE_MB,
             DEFAULT_OFFICE_CACHE_MB,
-            DEFAULT_PDF_CACHE_MB,
+            DEFAULT_EBOOK_CACHE_MB,
             DEFAULT_TEXT_CACHE_MB,
             DEFAULT_LIBRE_CACHE_MB,
         ));
@@ -1479,10 +1441,10 @@ unsafe fn show_context_menu(hwnd: HWND) {
             DEFAULT_TEXT_CACHE_MB,
         ),
         (
-            w!("PDF"),
-            ID_TRAY_PDF_CACHE_BASE,
-            pdf_cache_mb,
-            DEFAULT_PDF_CACHE_MB,
+            w!("Ebook"),
+            ID_TRAY_EBOOK_CACHE_BASE,
+            ebook_cache_mb,
+            DEFAULT_EBOOK_CACHE_MB,
         ),
         (
             w!("Office"),
@@ -1986,7 +1948,7 @@ fn toggle_preview_type(kind: PreviewType) {
         // them for good, and this thread may not wait on one — while the browser
         // needs nothing said to it at all: its own thread reads this gate and lets
         // the engine go.
-        if let PreviewType::Office = kind {
+        if let PreviewType::Document = kind {
             office_render::stop_engines();
         }
     }
@@ -2898,21 +2860,21 @@ fn set_office_cache_mb(index: u16) {
     office_render::trim_now();
 }
 
-/// How much memory the pages a PDF preview was drawn as may be held in, between
-/// hovers.
+/// How much memory the pages an `Ebook` preview — a PDF — was drawn as may be held in,
+/// between hovers.
 ///
 /// Like the caches beside it this switches nothing off: a page is rendered for the
 /// hover that asks for it whatever the size, and a size of nothing means it is
 /// dropped the moment it has been drawn. So nothing on screen changes here —
 /// what changes is how much is freed, and a smaller size frees it now rather than
 /// at the next render.
-fn set_pdf_cache_mb(index: u16) {
+fn set_ebook_cache_mb(index: u16) {
     let Some(megabytes) = cache_size_at(index) else {
         return;
     };
 
     if let Ok(mut config) = CONFIG.lock() {
-        config.pdf_cache_mb = sanitize_pdf_cache_mb(megabytes);
+        config.ebook_cache_mb = sanitize_ebook_cache_mb(megabytes);
         config.save();
     }
 
@@ -3090,33 +3052,34 @@ fn set_animated_scale(index: u16) {
     }
 }
 
-/// How much of the display a PDF page is drawn over, by the position the item was
-/// listed at.
+/// How much of the display a PDF page — the `Ebook` kind — is drawn over, by the position
+/// the item was listed at.
 ///
 /// The size a document is drawn at is part of the placement that was made when the preview
 /// was opened — the box is sized, and the document is drawn into it — so, like the position
 /// and the picture scale beside it, this applies to the next hover rather than resizing the
 /// preview that is already up.
-fn set_pdf_scale(index: u16) {
+fn set_ebook_scale(index: u16) {
     let Some(scale) = document_scale_at(index) else {
         return;
     };
 
     if let Ok(mut config) = CONFIG.lock() {
-        config.pdf_scale = scale;
+        config.ebook_scale = scale;
         config.save();
     }
 }
 
-/// How much of the display the page an Office document is drawn as is shown over, by
-/// the position the item was listed at.
-fn set_office_scale(index: u16) {
+/// How much of the display a page of the `Document` kind is shown over, by the position the
+/// item was listed at — the one setting behind both halves of the kind: a page an Office
+/// document's own application exported, and a page the render engine drew.
+fn set_document_scale(index: u16) {
     let Some(scale) = document_scale_at(index) else {
         return;
     };
 
     if let Ok(mut config) = CONFIG.lock() {
-        config.office_scale = scale;
+        config.document_scale = scale;
         config.save();
     }
 }
@@ -3134,22 +3097,6 @@ fn set_font_scale(index: u16) {
     }
 }
 
-/// How much of the display a design document is drawn over, by the position the item was
-/// listed at. The same rule as the four beside it: what a document is previewed from is
-/// the picture its own format keeps of the whole thing, so the share is of the display
-/// rather than of the document, and it applies to the next hover rather than resizing a
-/// preview that is already up.
-/// Select the share of the display a document the render engine drew is shown at, by the
-/// position its item was listed at.
-fn set_libre_scale(index: u16) {
-    if let Some(scale) = document_scale_at(index) {
-        if let Ok(mut config) = CONFIG.lock() {
-            config.libre_scale = scale;
-            config.save();
-        }
-    }
-}
-
 /// Select how much of what the render engine drew is kept between hovers, by the position
 /// its item was listed at.
 fn set_libre_cache_mb(index: u16) {
@@ -3161,6 +3108,11 @@ fn set_libre_cache_mb(index: u16) {
     }
 }
 
+/// How much of the display a design document is drawn over, by the position the item was
+/// listed at. The same rule as the four beside it: what a document is previewed from is
+/// the picture its own format keeps of the whole thing, so the share is of the display
+/// rather than of the document, and it applies to the next hover rather than resizing a
+/// preview that is already up.
 fn set_design_scale(index: u16) {
     let Some(scale) = document_scale_at(index) else {
         return;
@@ -3670,7 +3622,7 @@ mod tests {
         );
     }
 
-    /// The four `… Scaling` submenus are one range each, and the `Avoid` items sit in
+    /// The five `… Scaling` submenus are one range each, and the `Avoid` items sit in
     /// the slack between them: a click on a share of the display is never read as a way
     /// of avoiding the item a preview is about, and the other way round.
     #[test]
@@ -3678,11 +3630,10 @@ mod tests {
         let avoid = ID_TRAY_AVOID_BASE..ID_TRAY_AVOID_BASE + AVOID_CHOICES.len() as u16;
         let document_scales = [
             ID_TRAY_VECTOR_SCALE_BASE,
-            ID_TRAY_PDF_SCALE_BASE,
-            ID_TRAY_OFFICE_SCALE_BASE,
+            ID_TRAY_EBOOK_SCALE_BASE,
+            ID_TRAY_DOCUMENT_SCALE_BASE,
             ID_TRAY_FONT_SCALE_BASE,
             ID_TRAY_DESIGN_SCALE_BASE,
-            ID_TRAY_LIBRE_SCALE_BASE,
         ]
         .map(|base| base..base + DOCUMENT_SCALE_CHOICES.len() as u16);
 
@@ -3730,8 +3681,8 @@ mod tests {
 
         for default in [
             drawing_default,
-            DEFAULT_PDF_SCALE,
-            DEFAULT_OFFICE_SCALE,
+            DEFAULT_EBOOK_SCALE,
+            DEFAULT_DOCUMENT_SCALE,
             DEFAULT_FONT_SCALE,
         ] {
             assert_eq!(
@@ -3792,11 +3743,10 @@ mod tests {
 
         for base in [
             ID_TRAY_VECTOR_SCALE_BASE,
-            ID_TRAY_PDF_SCALE_BASE,
-            ID_TRAY_OFFICE_SCALE_BASE,
+            ID_TRAY_EBOOK_SCALE_BASE,
+            ID_TRAY_DOCUMENT_SCALE_BASE,
             ID_TRAY_FONT_SCALE_BASE,
             ID_TRAY_DESIGN_SCALE_BASE,
-            ID_TRAY_LIBRE_SCALE_BASE,
         ] {
             let scales = base..base + DOCUMENT_SCALE_CHOICES.len() as u16;
 
@@ -3834,9 +3784,13 @@ mod tests {
             ID_TRAY_DESIGN_SCALE_BASE,
             ID_TRAY_DESIGN_SCALE_BASE + DOCUMENT_SCALE_CHOICES.len() as u16,
         );
-        let libre_scales = (
-            ID_TRAY_LIBRE_SCALE_BASE,
-            ID_TRAY_LIBRE_SCALE_BASE + DOCUMENT_SCALE_CHOICES.len() as u16,
+        let ebook_scales = (
+            ID_TRAY_EBOOK_SCALE_BASE,
+            ID_TRAY_EBOOK_SCALE_BASE + DOCUMENT_SCALE_CHOICES.len() as u16,
+        );
+        let document_scales = (
+            ID_TRAY_DOCUMENT_SCALE_BASE,
+            ID_TRAY_DOCUMENT_SCALE_BASE + DOCUMENT_SCALE_CHOICES.len() as u16,
         );
         let vector_scales = (
             ID_TRAY_VECTOR_SCALE_BASE,
@@ -3856,7 +3810,13 @@ mod tests {
                 );
             }
 
-            for document in [font_scales, design_scales, libre_scales, vector_scales] {
+            for document in [
+                font_scales,
+                design_scales,
+                ebook_scales,
+                document_scales,
+                vector_scales,
+            ] {
                 assert_eq!(
                     overlaps(*range, document),
                     None,

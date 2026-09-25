@@ -14,7 +14,7 @@ A Windows 11 tray app inspired by QTTabBar. Hover a file in File Explorer — or
 - Previews appear beside the cursor or focused item and are kept on screen.
 - Supports previews for images, design documents, camera raw, vector drawings, fonts, videos, PDFs, text/code, archives, Office documents, and more.
 - A file’s preview depends on what’s really inside it—not its name—so renamed files still show correctly, unreadable content gets no preview, and ambiguous types are resolved by extension or content.
-- Scaling from 25% to 400%, or fit-to-screen. Separate scaling for images and videos, and for vector drawings, PDF, Office pages, fonts, and design documents.
+- Scaling from 25% to 400%, or fit-to-screen. Separate scaling for images and videos, and for vector drawings, PDFs, documents, fonts, and design documents.
 - Tray menu and hand-editable `config.ini`.
 - DPI aware, single-instance, sleep/resume resilient, and light on idle CPU.
 
@@ -64,8 +64,6 @@ Raw sample dumps: `rgb` `rgba` `gray` `cmyk` `ycbcr` `mono` `group4` and the res
 ### Needs PeaZip
 
 The archives this app has no reader of its own for, listed by an installed PeaZip and shown as the same page of contents a `.zip` is shown as, all of them: `001` `apfs` `ar` `arc` `arj` `bcm` `br` `bz2` `bzip2` `cab` `chm` `cpio` `cramfs` `deb` `dmg` `esd` `gz` `gzip` `hfs` `hfsx` `hxs` `iso` `lha` `lit` `lpaq8` `lzh` `lzma` `msi` `msp` `pkg` `ppkg` `qcow` `qcow2` `rpm` `squashfs` `swm` `taz` `tbz` `tbz2` `tpz` `txz` `tzst` `udf` `udeb` `vdi` `vhd` `vhdx` `vmdk` `wim` `xar` `xip` `xz` `z` `zpaq` `zst`. A `.tar.gz` and a `.tgz` are the archive list’s above and stay this app’s own.
-
-Which of PeaZip’s own tools is asked is the file’s name: the console archiver it carries lists most of these, and the backends beside it are asked for the formats that one cannot open — FreeArc’s archiver for an `.arc`, zpaq for a `.zpaq`, Zstandard’s tool for a `.zst` (which reports how large the stream was before it was compressed, where the archiver leaves that blank), and `brotli.exe`, `bcm.exe` and `lpaq8.exe` for `br`, `bcm` and `lpaq8` — three single-stream compressors whose tools have no listing to print, so what you see for one is the member an extraction would write, named after the file, with nothing started at all. PeaZip’s own `pea`, the codecs with no tool of their own (`lz4`, `lz5`, `lizard`, `flzma2`) and the PAQ8 family are not covered; see [TODO.md](TODO.md).
 
 ### Themes
 
@@ -149,6 +147,8 @@ All are free. Windows 11 often has HEIF, AV1, and WebP already. Where one is mis
 winget install -e --id TheDocumentFoundation.LibreOffice
 ```
 
+Or download the official installer from https://www.libreoffice.org/download/ and run the suggested file (`LibreOffice_*_Win_x86-64.msi`; LibreOffice ships an `.msi`, not an `.exe`).
+
 ### Optional: Enable Camera Raw and More Pictures (ImageMagick)
 
 `nef` and everything else in the `[magick]` list is developed by **ImageMagick**, which this app runs where it finds it — nothing is bundled with the app and there is nothing to configure. Install it once:
@@ -157,6 +157,8 @@ winget install -e --id TheDocumentFoundation.LibreOffice
 winget install -e --id ImageMagick.ImageMagick
 ```
 
+Or download the official installer from https://imagemagick.org/download/ and run the suggested file (`ImageMagick-*-Q16-HDRI-x64-dll.exe`).
+
 ### Optional: Enable Niche Archives (PeaZip)
 
 `cab` and everything else in the `[peazip]` list is listed by **PeaZip**, which this app runs where it finds it — nothing is bundled with the app and there is nothing to configure. Install it once:
@@ -164,6 +166,8 @@ winget install -e --id ImageMagick.ImageMagick
 ```text
 winget install -e --id Giorgiotani.Peazip
 ```
+
+Or download the official installer from https://peazip.github.io/peazip-64bit.html and run the suggested file (`peazip-*.WIN64.exe`).
 
 > [!WARNING]
 > If `winget` reports an error, the package sources are usually why: run `winget source reset --force`.
@@ -182,7 +186,7 @@ winget install -e --id Giorgiotani.Peazip
 The item a setting starts at carries `(Default)` after its name, so a menu says both what is set now — the check or radio mark — and what a setting nobody has touched would be.
 
 - **Enable Preview** — turn previews on or off.
-- **Preview Types** — Images, Videos, Text, PDF, Archives, Office, Vector, Fonts, Design, Libre, Magick, Peazip: gate a kind without touching its file list.
+- **Preview Types** — Images, Videos, Text, Ebook, Archives, Document, Vector, Fonts, Design: gate a kind without touching its file list. One gate covers each pair of a kind the app reads and the kind an engine draws for it, so a camera raw is gated by **Images**, a document LibreOffice draws by **Document**, and an archive PeaZip lists by **Archives**.
 - **Text Preview**
   - **Full Mode** — adds scrolling, selection, and copy; off by default.
   - **Theme** — Atom One Light, One Dark Pro, or any `.tmTheme` in the theme folder.
@@ -203,11 +207,10 @@ The item a setting starts at carries `(Default)` after its name, so a menu says 
   - **Video Scaling** — the same shares for a video, 100% (default).
   - **Animated Scaling** — the same shares for an animated GIF, WebP, or PNG; a still GIF or PNG keeps Image Scaling. 100% (default).
   - **Vector Scaling** — Fit to Screen (default), or 75%, 50%, 25%, 10% of the display.
-  - **PDF Scaling** — Fit to Screen (default), or the same shares of the display.
-  - **Office Scaling** — the same for a page Office rendered; a workbook’s fallback bitmap is never enlarged.
+  - **Ebook Scaling** — Fit to Screen (default), or the same shares of the display for a PDF page.
+  - **Document Scaling** — the same shares of the display for a document drawn as a page, whichever drew it: an Office document’s own application, or LibreOffice for the formats beside it (CorelDRAW and the older word processors, spreadsheets and presentations). A workbook’s fallback bitmap is never enlarged.
   - **Font Scaling** — the same shares for a font specimen, 50% by default.
   - **Design Scaling** — the same shares of the display for a design document (Photoshop, Illustrator, Krita, OpenRaster, Procreate); Fit to Screen by default.
-  - **Libre Scaling** — the same shares of the display for a document LibreOffice draws (CorelDRAW and the older word processors, spreadsheets and presentations); Fit to Screen by default.
 - **Background**
   - **Image Background** — Transparent, Black, White, or Checkerboard; Checkerboard by default.
   - **Vector Background** — the same backdrops for a drawing: an SVG document, or a metafile; Checkerboard by default.
@@ -217,7 +220,7 @@ The item a setting starts at carries `(Default)` after its name, so a menu says 
 - **Volume** — Max, High, Medium, Low, Very Low, Mute: 100% down to 0%.
 - **Performance**
   - **Confirm File Type** — check a file's content against its name before it is previewed: a file whose bytes are another kind is previewed as that kind, and one whose content is a format this app has no reader for shows nothing. On by default.
-  - **Cache** — memory held between hovers, 2 GB down to 0 MB: Image, Text, PDF, Office caches.
+  - **Cache** — memory held between hovers, 2 GB down to 0 MB: Image, Text, Ebook, Office and Libre caches.
   - **Decode Budget** — 16 GB down to 512 MB, 1 GB default: a file past it gets no preview.
   - **Tick** — how often the app looks at Explorer while a folder window is in focus: 15 ms (default), 31, 47, 63 or 78 ms, one to five Windows timer ticks. Lower answers a move sooner; higher is lighter on the CPU and on Explorer.
 - **Engine**
@@ -252,12 +255,10 @@ run_at_startup=true
 ; Preview Types
 archive_preview_enabled=true
 design_preview_enabled=true
+document_preview_enabled=true
+ebook_preview_enabled=true
 font_preview_enabled=true
 image_preview_enabled=true
-magick_preview_enabled=true
-office_preview_enabled=true
-pdf_preview_enabled=true
-peazip_preview_enabled=true
 text_preview_enabled=true
 vector_preview_enabled=true
 video_preview_enabled=true
@@ -283,9 +284,9 @@ follow_cursor=false
 ; Scaling
 animated_scale=100
 design_scale=fit
+document_scale=fit
+ebook_scale=fit
 font_scale=50
-office_scale=fit
-pdf_scale=fit
 preview_scale=100
 vector_scale=fit
 video_scale=100
@@ -305,7 +306,7 @@ confirm_file_type=true
 decode_budget_gb=1
 image_cache_mb=32
 office_cache_mb=64
-pdf_cache_mb=32
+ebook_cache_mb=32
 text_cache_mb=0
 tick_ms=15
 
@@ -336,7 +337,7 @@ Key settings, in plain terms:
 - `image_extensions`, `video_extensions`, `archive_extensions`, `office_extensions`, `font_extensions`, `design_extensions`, `vector_extensions` — per-type preview gates, written without dots. An entry with a dot in it, like `tar.gz`, is matched against the end of the file name. `libre_extensions`, `magick_extensions` and `peazip_extensions`, in their own sections, are the documents LibreOffice draws, the pictures ImageMagick develops, and the archives PeaZip lists.
 - `image_cache_mb` — memory for decoded image frames: default `32`, max `2048`; `0` holds nothing.
 - `office_cache_mb` — memory for Office-rendered pages: default `64`, max `2048`; `0` holds nothing between hovers but still renders for the current hover.
-- `pdf_cache_mb` — memory for PDF pages as pixels: default `32`, max `2048`; the same file at two preview sizes is held as two pages.
+- `ebook_cache_mb` — memory for PDF pages as pixels: default `32`, max `2048`; the same file at two preview sizes is held as two pages.
 - `text_cache_mb` — memory for text frames: default `0`, max `2048`; the text itself is already cached.
 - `decode_budget_gb` — the most memory one hover may decode or read for: default `1`, smallest `0.25`, largest `64`. A file past it shows no preview.
 - `hdr_tone_map` — how HDR/EXR light values become screen values: `reinhard` (default), `aces` (filmic), `srgb` (clips), or `off` (bare clamp). Pictures already in screen values, like PNG or JPEG, are never affected.
@@ -354,18 +355,16 @@ Key settings, in plain terms:
 - `video_scale` — the same for a video, `100` by default.
 - `animated_scale` — the same for an animated GIF, WebP, or PNG, `100` by default; a still GIF or PNG follows `preview_scale`.
 - `vector_scale` — percentage or `fit`, read against the screen. `fit` is default, is all of the room, and `100` or more reads as it. It covers every drawing the Vector kind holds. The name it used to be written under (`svg_scale`) is not read: a line like that is removed the next time the file is written, and the setting goes back to its default.
-- `libre_scale` — the same for a document LibreOffice draws, `fit` by default: the engine hands back a page, so the share is of the display the way a PDF page’s is.
 - `libre_cache_mb` — megabytes of converted pages kept on disk, `32` by default; `0` keeps nothing between hovers. A page whose budget gave it up is converted again the next time it is hovered.
-- `libre_preview_enabled` — whether documents LibreOffice can draw are previewed at all; `true` by default.
-- `magick_preview_enabled` — whether pictures ImageMagick develops, camera raw above all, are previewed at all; `true` by default. The list behind it is `[magick] extensions`.
+- `magick_preview_enabled` and `peazip_preview_enabled` are not read: a picture the ImageMagick engine develops is gated by `image_preview_enabled` and an archive the PeaZip engine lists by `archive_preview_enabled`, since what either is previewed as is a picture or an archive. `libre_preview_enabled` and `libre_scale` are gone the same way — what draws those documents is `document_preview_enabled` and `document_scale`. Lines left under the old names are removed the next time the file is written.
 - There is no TTL for ImageMagick, and no `magick_idle` key: it is the one engine here that is a converter rather than a process this app can hold open, so what a file costs is a conversion or a hit in the picture cache (`image_cache_mb`) and never a file of the app's own.
-- `peazip_preview_enabled` — whether the archives PeaZip lists, the cabinet files and isos and disk images above all, are previewed at all; `true` by default. The list behind it is `[peazip] extensions`.
 - There is no TTL for PeaZip either, and no `peazip_idle` key, for the same reason: what this app runs of it are the tools PeaZip carries, each of which prints an archive’s table of contents and exits — and for the three single-stream names whose tools have no listing to print, `br`, `bcm` and `lpaq8`, nothing is run at all. What a file costs is a listing or a hit in the listing cache, and a second hover of the same archive starts nothing at all.
-- `pdf_scale` / `office_scale` — the same for a PDF page and an Office-rendered page, both `fit` by default as well as a percentage. A workbook’s fallback bitmap follows its own size and is never enlarged.
+- `ebook_scale` — percentage or `fit`, read against the screen, for a PDF page; `fit` by default. `100` or more reads as `fit`.
+- `document_scale` — the same for a document drawn as a page, `fit` by default, whichever drew it: an Office document’s own application, or LibreOffice for the formats beside it. A workbook’s fallback bitmap follows its own size and is never enlarged.
 - `font_scale` — percentage or `fit`, read against the screen. `50` is default, `fit` is all of it, and `100` or more reads as `fit`. A font has no size of its own, so the share is of the display.
 - `design_scale` — the same for a design document, `fit` by default. A design preview is the picture the file keeps of the whole document, so the share is of the screen the way a page’s is rather than of the document’s own size.
 - `ttc_face` — which face of a `.ttc` collection is drawn: `1` is the first face, and the highest setting is `10`. The heading says which face came out.
-- `image_background` — `checkerboard` (default), `black`, `white`, or `transparent`: what a picture is drawn over, and with it a PDF page, a painted text frame and a page Office rendered. The one name every kind used to share (`transparent_background`) is not read: lines like that are removed the next time the file is written.
+- `image_background` — `checkerboard` (default), `black`, `white`, or `transparent`: what a picture is drawn over, and with it a PDF page, a painted text frame and a page a document was drawn as. The one name every kind used to share (`transparent_background`) is not read: lines like that are removed the next time the file is written.
 - `font_background` — `white` (default), `black`, `checkerboard`, or `transparent`.
 - `dds_background` — `white` (default) or `black`, and only those two: a texture's alpha channel is as often a mask, a height or a roughness as it is transparency, so the backdrops that show what stands behind a preview are not offered for one, and a file that names one of them is read as `white`.
 - `vector_background` — `checkerboard` (default), `white`, `black`, or `transparent`: what an SVG document's page, or a metafile drawing, is drawn over. The name it used to be written under (`svg_background`) is not read: a line like that is removed the next time the file is written.

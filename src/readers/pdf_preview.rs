@@ -1,5 +1,5 @@
 use crate::config::config::{
-    image_decode_limits, sanitize_pdf_cache_mb, PreviewType, DEFAULT_PDF_CACHE_MB,
+    image_decode_limits, sanitize_ebook_cache_mb, PreviewType, DEFAULT_EBOOK_CACHE_MB,
 };
 use crate::shell::cloud_files;
 use crate::CONFIG;
@@ -91,9 +91,9 @@ pub fn is_pdf_file(path: &Path) -> bool {
 }
 
 /// Whether a PDF preview may be shown for `path`: the file a page would be read
-/// from, and the `PDF` gate in the tray's `Preview Types` submenu.
+/// from, and the `Ebook` gate in the tray's `Preview Types` submenu.
 pub fn is_pdf_preview(path: &Path) -> bool {
-    is_pdf_file(path) && PreviewType::Pdf.enabled()
+    is_pdf_file(path) && PreviewType::Ebook.enabled()
 }
 
 /// Page 1's size in DIPs, from the cache when the file has been seen before.
@@ -182,12 +182,12 @@ struct PageCache {
 static RENDERED_PAGES: Lazy<Mutex<PageCache>> = Lazy::new(|| Mutex::new(PageCache::default()));
 
 /// The memory the cache may hold, read from the configuration each time rather
-/// than captured, so an edit to `pdf_cache_mb` applies without a restart.
+/// than captured, so an edit to `ebook_cache_mb` applies without a restart.
 fn page_cache_limit_bytes() -> usize {
     let megabytes = CONFIG
         .lock()
-        .map(|config| sanitize_pdf_cache_mb(config.pdf_cache_mb))
-        .unwrap_or(DEFAULT_PDF_CACHE_MB);
+        .map(|config| sanitize_ebook_cache_mb(config.ebook_cache_mb))
+        .unwrap_or(DEFAULT_EBOOK_CACHE_MB);
 
     megabytes as usize * 1024 * 1024
 }
