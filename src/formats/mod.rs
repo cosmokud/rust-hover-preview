@@ -5,6 +5,7 @@ pub(crate) mod content_type;
 pub(crate) mod design_formats;
 pub(crate) mod ebook_formats;
 pub(crate) mod font_formats;
+pub(crate) mod head;
 pub(crate) mod image_formats;
 pub(crate) mod libre_formats;
 pub(crate) mod magick_formats;

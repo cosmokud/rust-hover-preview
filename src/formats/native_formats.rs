@@ -24,7 +24,6 @@
 //! those is named by `routing::chain` rather than by this table.
 
 use crate::config::config::{AppConfig, PreviewType};
-use crate::formats::text_formats;
 use crate::readers::{
     archive_listing, metafile_image, pdf_preview, psd_image, svg_preview, wic_image,
 };
@@ -103,6 +102,16 @@ pub enum NativeJob {
 /// asks its questions with the configuration already held, and a question that went and read
 /// it a second time would be a lock taken twice on one thread (see
 /// `explorer_hook::is_media_file`).
+///
+/// A picture is the one job here the name does not settle, so it is the one that reads the
+/// file: the front of it, through `head`, where the still `.gif` and the moving one are told
+/// apart by their own frame blocks and a `.png` holding more than one frame is the animated
+/// reader's. Nothing is decoded to answer it and nothing past the head is read.
+///
+/// There is no setting behind any of this and no gate: what a file's own bytes say is asked
+/// always, which is also what the content tier does before this one (see `content_type::of`).
+/// A file whose head could not be read — one that is not there — is answered by the still choice
+/// below, the same way it was when the name was the whole of the answer.
 pub fn job_for(path: &Path, kind: PreviewType, config: &AppConfig) -> Option<NativeJob> {
     match kind {
         PreviewType::Images => Some(picture_job(path)),
@@ -126,22 +135,28 @@ pub fn job_for(path: &Path, kind: PreviewType, config: &AppConfig) -> Option<Nat
 }
 
 /// A picture: the crate's decoder where it carries the format, the codec Windows has where it
-/// does not, and the animated reader first of all where the name is one of the three that can
-/// move.
+/// does not, and the animated reader first of all where the file's own bytes say it moves.
 ///
-/// The order is the one thing here that a name alone cannot settle. A `.gif`, a `.webp` and an
-/// `apng` are each answered by the animated reader *first* — it is the file's own header that
-/// says whether it moves, and the reader answers nothing for a file that does not, which is
-/// what leaves the still picture behind it to decode the same file (see
-/// `preview_window::load_picture`). An `.apng` is the only one of the three whose name is not
-/// the animated answer on its own: a `.png` may be one, so it is listed as the picture it is
-/// and the header is what promotes it.
+/// This is the one job in this table that the name cannot settle. A `.gif`, a `.webp` and a
+/// `.png` each cover a still file and a moving one, and what tells them apart is the file's own
+/// structure — its frame blocks, its `ANIM` chunk, its `acTL` chunk — which `head` reads out of
+/// the front of the file without decoding any of it (see `head::PictureNature`).
+///
+/// A file whose own bytes say *still* is the still job, which is what a `.gif` with one frame in
+/// it is: the animated reader is not asked about it at all, and the frame it used to decode and
+/// throw away before the still path drew the same picture is not decoded. A file whose head
+/// could not be read — one that is not there, one whose content is still in the cloud — is the
+/// still job too, which is the path that would have failed to read it in any case.
 fn picture_job(path: &Path) -> NativeJob {
-    match text_formats::lookup_extension(path).as_deref() {
-        Some("gif") => return NativeJob::AnimatedGif,
-        Some("webp") => return NativeJob::AnimatedWebp,
-        Some("apng") => return NativeJob::AnimatedApng,
-        _ => {}
+    use crate::formats::head::{PictureFamily, PictureForm};
+
+    if let Some(nature) = crate::formats::head::picture_nature(path) {
+        match nature.form {
+            PictureForm::Plays(PictureFamily::Gif) => return NativeJob::AnimatedGif,
+            PictureForm::Plays(PictureFamily::Webp) => return NativeJob::AnimatedWebp,
+            PictureForm::Plays(PictureFamily::Apng) => return NativeJob::AnimatedApng,
+            PictureForm::Still | PictureForm::Unplayable | PictureForm::Paged => {}
+        }
     }
 
     if wic_image::is_codec_file(path) {
@@ -217,7 +232,8 @@ mod tests {
     }
 
     /// A picture is the crate where the crate carries the format and the codec where it does
-    /// not, and the three names that can move are the animated reader's first.
+    /// not. The three names that *can* move are not decided here: whether one of them moves is
+    /// its own bytes' answer rather than its name's, and that is the test below.
     #[test]
     fn a_picture_is_the_decoder_that_carries_the_format() {
         for (name, job) in [
@@ -227,10 +243,10 @@ mod tests {
             ("texture.dds", NativeJob::PictureCodec),
             ("shot.heic", NativeJob::PictureCodec),
             ("picture.avif", NativeJob::PictureCodec),
-            ("clip.gif", NativeJob::AnimatedGif),
-            ("motion.webp", NativeJob::AnimatedWebp),
-            ("moving.apng", NativeJob::AnimatedApng),
+            // A `.png` is a picture unless its own `acTL` chunk says otherwise, and a path
+            // with no file behind it has no chunk to say it with.
             ("page.png", NativeJob::Picture),
+            ("clip.gif", NativeJob::Picture),
         ] {
             assert_eq!(
                 job_for_name(name, PreviewType::Images),
@@ -366,5 +382,64 @@ mod tests {
                 "`{name}` reaches {kind:?}, which has a reader of this app's own"
             );
         }
+    }
+
+    /// A picture's job is its own bytes' answer rather than its name's, which is the whole
+    /// point of this table reading the head. A `.gif` with one frame in it is the still job, so
+    /// the animated reader is never asked about one and the frame it used to decode on the way
+    /// to finding that out is not decoded at all; a file whose name says *document* but whose
+    /// bytes are an animation is the animated reader's, with no setting to switch it on; and a
+    /// `.png` whose bytes are a container is still the picture job here, because what a
+    /// container *is* is the kind's question and it is asked before this one.
+    #[test]
+    fn a_picture_job_is_what_the_bytes_say_rather_than_what_the_name_says() {
+        use crate::formats::head::tests as sample;
+
+        let config = AppConfig::default();
+        let folder = std::env::temp_dir().join("rust-hover-preview-native-jobs");
+        std::fs::create_dir_all(&folder).expect("a test folder");
+
+        let job_of = |name: &str, bytes: &[u8]| {
+            let path = folder.join(name);
+            std::fs::write(&path, bytes).expect("a test file");
+
+            job_for(&path, PreviewType::Images, &config)
+        };
+
+        let still_gif = [sample::gif_open(), sample::gif_frame(), vec![0x3B]].concat();
+        let moving_gif = [
+            sample::gif_open(),
+            sample::gif_frame(),
+            sample::gif_frame(),
+            vec![0x3B],
+        ]
+        .concat();
+        let moving_png = [
+            sample::png_open(),
+            sample::png_chunk(b"IHDR", &[0u8; 13]),
+            sample::png_chunk(b"acTL", &[0u8; 8]),
+            sample::png_chunk(b"IDAT", &[0]),
+        ]
+        .concat();
+
+        assert_eq!(
+            job_of("clip.gif", &still_gif),
+            Some(NativeJob::Picture),
+            "a `.gif` with one frame in it is a still, and is decoded once rather than twice"
+        );
+        assert_eq!(
+            job_of("named-document.docx", &moving_gif),
+            Some(NativeJob::AnimatedGif),
+            "the file's own bytes are the answer, whatever it is called"
+        );
+        assert_eq!(
+            job_of("frames.png", &moving_png),
+            Some(NativeJob::AnimatedApng)
+        );
+        assert_eq!(
+            job_of("not-really.png", b"PK\x03\x04the rest of a container"),
+            Some(NativeJob::Picture),
+            "what this table answers for a picture kind, with the kind itself decided earlier"
+        );
     }
 }

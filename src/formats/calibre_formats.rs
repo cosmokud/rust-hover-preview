@@ -367,7 +367,6 @@ mod tests {
     #[test]
     fn asks_the_engine_about_a_file_by_its_bytes_before_its_name() {
         if let Ok(mut config) = crate::CONFIG.lock() {
-            config.confirm_file_type = true;
             config.calibre_extensions = sanitize_calibre_extensions(DEFAULT_CALIBRE_EXTENSIONS);
         }
 
