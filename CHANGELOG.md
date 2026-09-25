@@ -19,6 +19,7 @@
 
 ### Fixed
 
+- **A book whose first page says nothing is previewed from the page behind it.** A cover is what an EPub and a Kindle file both put first, and a cover is very often one flat colour — the quick start guide Calibre ships inside its own installation carries a cover that is a single pixel, stretched over a whole page — so hovering one of those books showed a rectangle of that colour, which is what the book's first page *is* and says nothing whatever about the book. What a converted book is previewed from is now the first of its opening pages that holds more than one colour, which is the cover where there is one and the title page or the first page of text where there is not. A page with anything at all on it — a line, a photograph, a page of text — is never skipped, and a book whose opening pages are all one colour is still shown from its first page.
 - A `.pdb` that is a **Mobipocket book** is no longer handed to the render engine, which cannot read one. The two identifiers the format is defined by are read off the file's own header, and a book of that kind is converted by the engine that reads books. A `.pdb` that is the other thing the name means — an AportisDoc, or a compiler's program database — is answered exactly as it was.
 
 ## [0.3.3] - 2026-09-24

@@ -621,9 +621,9 @@ enum MediaType {
     Magick,
     /// A page an installed Calibre converted a book into — a Kindle or Mobipocket file, an EPub,
     /// a FictionBook, a scanned book — drawn exactly as a PDF page is: a frame of this app's own,
-    /// made from the first page of the PDF the engine wrote, at the share of the display a book is
-    /// drawn over. It is the book kind's second half, and the switch over it is the switch for
-    /// books; see `calibre_formats` and `calibre_render`.
+    /// made from the first page of the PDF the engine wrote that says anything about the book, at
+    /// the share of the display a book is drawn over. It is the book kind's second half, and the
+    /// switch over it is the switch for books; see `calibre_formats` and `calibre_render`.
     ///
     /// It is a kind of its own rather than `Pdf` because the two are gated apart: the switch a user
     /// throws over a book the app drew itself is not the switch over one an engine had to convert,
@@ -3986,6 +3986,41 @@ fn load_engine_page(
     ))
 }
 
+/// The page a converted book is drawn from, drawn into the box the layout measured it for.
+///
+/// It is `load_engine_page` for the one engine whose page is a whole book rather than a page of a
+/// document: what is drawn is the first page of that book which says anything about it, and the box
+/// is that page's own size, so a book whose first page is a cover of one colour is previewed from
+/// the page behind it rather than as the colour (see `pdf_preview::book_page`).
+fn load_book_page(
+    page: &Path,
+    max_width: u32,
+    max_height: u32,
+    preview_scale: PreviewScale,
+) -> Option<MediaData> {
+    let book = pdf_preview::book_page(page)?;
+    let (page_width, page_height) = book.size;
+
+    let (target_width, target_height) = scale_dimensions(
+        page_width,
+        page_height,
+        max_width,
+        max_height,
+        preview_scale,
+    );
+    let (pixels, width, height) = pdf_preview::render_book_page(page, target_width, target_height)?;
+
+    Some(static_image_media(
+        ImageFrame {
+            pixels,
+            width,
+            height,
+            delay_ms: 0,
+        },
+        MediaType::Calibre,
+    ))
+}
+
 /// The page the render engine has drawn for an Office document — the fallback for a document
 /// whose own application is not installed, and the page itself where the tray has asked the
 /// engine for every Office document. Shown as the Office document it is either way.
@@ -5362,15 +5397,8 @@ fn load_media(
     // `calibre_render_is_due`) — so what it gets here is nothing, which is the spinner it is
     // already showing.
     if calibre_formats::is_calibre_file(path) {
-        return calibre_render::rendered_page(path).and_then(|page| {
-            load_engine_page(
-                &page,
-                MediaType::Calibre,
-                max_width,
-                max_height,
-                preview_scale,
-            )
-        });
+        return calibre_render::rendered_page(path)
+            .and_then(|page| load_book_page(&page, max_width, max_height, preview_scale));
     }
 
     if office_formats::is_office_file(path) {
@@ -5536,15 +5564,8 @@ fn load_media_of_kind(
             MediaType::Peazip,
             &cancel,
         ),
-        PreviewType::Calibre => calibre_render::rendered_page(path).and_then(|page| {
-            load_engine_page(
-                &page,
-                MediaType::Calibre,
-                max_width,
-                max_height,
-                preview_scale,
-            )
-        }),
+        PreviewType::Calibre => calibre_render::rendered_page(path)
+            .and_then(|page| load_book_page(&page, max_width, max_height, preview_scale)),
         PreviewType::Design => load_design_preview(path, max_width, max_height, preview_scale),
         // Which half of the drawing kind this is, is the name's to say here rather than the
         // content's: a document is drawn by the browser engine and a metafile by the drawing
@@ -5913,7 +5934,7 @@ fn calibre_box(path: &Path) -> Option<(u32, u32)> {
     }
 
     if let Some(page) = calibre_render::rendered_page(path) {
-        return pdf_preview::page_dimensions(&page);
+        return pdf_preview::book_page(&page).map(|book| book.size);
     }
 
     // A book the engine has already turned down is not one to wait for.
@@ -13007,6 +13028,13 @@ mod tests {
         let dpi = 96;
         let (cursor_x, cursor_y) = (900, 500);
 
+        // The threads a preview really runs on are in an apartment before they ask for a page
+        // (see `spawn_load_worker` and `run_preview_window`), and a probe asks for one from a test
+        // thread that is not: a page's size is read through `Windows.Data.Pdf`, so the probe has to
+        // put itself in one first, exactly as the two threads do.
+        pdf_preview::initialize_apartment();
+        wic_image::initialize_apartment();
+
         for path in list
             .split(';')
             .map(str::trim)
@@ -13070,9 +13098,10 @@ mod tests {
 
             if let Some(page) = &page {
                 println!(
-                    "page: {} bytes, {:?}",
+                    "page: {} bytes, {:?} — previewed from {:?}",
                     std::fs::metadata(page).map(|meta| meta.len()).unwrap_or(0),
-                    pdf_preview::page_dimensions(page)
+                    pdf_preview::page_dimensions(page),
+                    pdf_preview::book_page(page)
                 );
             }
 
