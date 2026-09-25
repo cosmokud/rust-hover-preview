@@ -6259,10 +6259,17 @@ fn spawn_load_worker(
             }))
             .unwrap_or(None);
 
+            // Every engine a hover can be waiting on is asked here, and a kind left out is
+            // not merely a wait that is not shown: the loop reads this as "there is nothing
+            // to draw and nothing coming", which is the branch that hides the window and
+            // drops the hover — so the engine is never asked for its answer and the file
+            // has no preview at all. The listing the PeaZip engine owes is such a wait (see
+            // `peazip_render_is_due`).
             let awaiting_render = media.is_none()
                 && (office_render_is_due(&request.path, request.max_width)
                     || libre_render_is_due(&request.path)
-                    || magick_render_is_due(&request.path));
+                    || magick_render_is_due(&request.path)
+                    || peazip_render_is_due(&request.path));
 
             let _ = result_tx.send(LoadResult {
                 generation: request.generation,
@@ -12357,6 +12364,171 @@ mod tests {
                 println!("layout: none — the hover shows no preview");
                 continue;
             };
+
+            let cancel = Arc::new(AtomicBool::new(false));
+            let started = Instant::now();
+            match load_media(
+                &path,
+                layout.max_width,
+                layout.max_height,
+                scale,
+                dpi,
+                Arc::clone(&cancel),
+            ) {
+                Some(media) => println!(
+                    "loaded: {}x{}, {} frame(s), in {:?}",
+                    media.current_width(),
+                    media.current_height(),
+                    media.frames.len(),
+                    started.elapsed()
+                ),
+                None => println!(
+                    "loaded: nothing — the hover blinks, in {:?}",
+                    started.elapsed()
+                ),
+            }
+        }
+    }
+
+    /// The whole path a hover takes for an archive an installed PeaZip lists, which is the
+    /// third path with a wait in the middle of it: measured as the wait for a listing, the
+    /// listing asked for, the wait watched, and then — when the engine has answered —
+    /// measured and loaded from the listing itself. Ignored, and driven by `RHP_PEAZIP_PROBE` —
+    /// `$env:RHP_PEAZIP_PROBE = "C:\downloads\backup.cab"; cargo test -- --ignored --nocapture peazip_hover_probe`
+    /// — for an archive whose preview does not appear.
+    ///
+    /// It also answers the routing, which is what such a preview is usually about: the name the
+    /// configured list carries, what the file's bytes and its name together make of it, whether
+    /// the engine is installed to list it, and whether this hover is the wait for one at all.
+    /// That last question is asked here of the loader's own predicate rather than of the list,
+    /// because the list is only half of it: a file the engine will be asked about is still a
+    /// file with no preview if the load that missed it is not read as a wait (see
+    /// `awaiting_render` in the loader worker).
+    #[test]
+    #[ignore = "reads the files named in RHP_PEAZIP_PROBE and starts the installed PeaZip"]
+    fn peazip_hover_probe() {
+        let Ok(list) = std::env::var("RHP_PEAZIP_PROBE") else {
+            println!("set RHP_PEAZIP_PROBE to one or more paths, separated by ';'");
+            return;
+        };
+
+        let bounds = ScreenBounds {
+            left: 0,
+            top: 0,
+            right: 1920,
+            bottom: 1080,
+        };
+        let dpi = 96;
+        let (cursor_x, cursor_y) = (900, 500);
+
+        for path in list
+            .split(';')
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+        {
+            let path = PathBuf::from(path);
+            println!("\n--- {} ---", path.display());
+
+            let claimed = crate::CONFIG
+                .lock()
+                .map(|config| peazip_formats::matches_peazip_list(&path, &config.peazip_extensions))
+                .unwrap_or(false);
+
+            println!(
+                "kinds: peazip list = {claimed}, engine archive = {}, engine available = {}",
+                peazip_formats::is_engine_archive(&path),
+                peazip_render::available()
+            );
+            println!(
+                "state: refused = {}, listed = {}, render due = {}",
+                peazip_render::refused(&path),
+                peazip_render::listed(&path),
+                peazip_render_is_due(&path)
+            );
+
+            let scale = effective_preview_scale(&path, current_hover_scales());
+            println!("scale: {scale:?}");
+            println!(
+                "measure before the listing: {:?} — the spinner's own box is {}",
+                media_dimensions(&path, bounds, dpi),
+                office_preview::WAITING_BOX
+            );
+
+            // The hover the listing is asked for, which is what the loop does the moment an
+            // archive like this is missed. A file this kind does not hold — one another list
+            // reads, one whose bytes are another kind, or one the engine has already turned
+            // down — has nothing to ask for and nothing to wait on.
+            let Some(_waiting) = request_peazip_render(&path, 0) else {
+                println!("request: nothing — the engine is not asked about this file");
+                continue;
+            };
+
+            let started = Instant::now();
+            let mut listing = None;
+            while listing.is_none()
+                && !peazip_render::refused(&path)
+                && started.elapsed() < Duration::from_secs(90)
+            {
+                std::thread::sleep(Duration::from_millis(250));
+                listing = crate::readers::archive_listing::listing_for(&path, None);
+            }
+
+            println!(
+                "engine: listed = {}, refused = {}, after {:?}",
+                listing.is_some(),
+                peazip_render::refused(&path),
+                started.elapsed()
+            );
+
+            if let Some(listing) = &listing {
+                println!(
+                    "listing: {} entries, {} bytes over them, packed {:?}, file {}",
+                    listing.entries.len(),
+                    listing.total_size,
+                    listing.packed_total,
+                    listing.file_size
+                );
+                for entry in listing.entries.iter().take(4) {
+                    println!(
+                        "  {} ({} bytes, packed {:?}, dir {})",
+                        entry.name, entry.size, entry.packed, entry.is_dir
+                    );
+                }
+            }
+
+            // The replay, which is what the loop does when the listing lands: the hover is
+            // measured again — this time from the listing — placed, and loaded.
+            let Some(dimensions) = media_dimensions(&path, bounds, dpi) else {
+                println!("measure after the listing: nothing — the hover shows no preview");
+                continue;
+            };
+            println!("measure after the listing: {dimensions:?}");
+
+            let Some(layout) = compute_mouse_layout(
+                cursor_x,
+                cursor_y,
+                HoverPlacement {
+                    orig_dims: dimensions,
+                    avoid: None,
+                    follow_cursor: false,
+                    preview_scale: scale,
+                    flush_at_cursor: false,
+                },
+                bounds,
+                dpi,
+            ) else {
+                println!("layout: none — the hover shows no preview");
+                continue;
+            };
+            println!(
+                "layout: {}x{} at ({}, {}), free room {}x{}",
+                layout.preview_w,
+                layout.preview_h,
+                layout.pos_x,
+                layout.pos_y,
+                layout.max_width,
+                layout.max_height
+            );
 
             let cancel = Arc::new(AtomicBool::new(false));
             let started = Instant::now();
