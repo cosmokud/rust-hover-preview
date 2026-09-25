@@ -5750,10 +5750,10 @@ fn picture_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
 /// document, a document the render engine draws or a book the ebook engine converts, with
 /// nothing drawn for it yet and a page on the way.
 ///
-/// A hover like that is placed by the spinner's own box, flush at the pointer, rather than
-/// by the size a preview would take: it is the wait for the file under the hand, which
-/// belongs at the hand. The page is laid out again by the replay that arrives with it, so
-/// nothing here has to guess how large it will be.
+/// A hover like that is placed by the spinner's own box, a pointer gap off the hand,
+/// rather than by the size a preview would take: it is the wait for the file under the
+/// hand, which belongs at the hand. The page is laid out again by the replay that arrives
+/// with it, so nothing here has to guess how large it will be.
 fn page_is_on_the_way(path: &Path) -> bool {
     // A file whose bytes are another kind is not a document a page is coming for, which is
     // the same question the render tier is asked before it is asked for one: a picture left
@@ -5846,8 +5846,8 @@ fn archive_box(path: &Path, bounds: ScreenBounds, dpi: u32) -> Option<(u32, u32)
 /// listing, and where it came from is not something the layout is told (see
 /// `archive_listing::listing_for`). What is waited for is a page that does not exist yet — the box
 /// an engine's answer has not arrived for says nothing about how large it will be — so it is
-/// placed as the spinner, flush at the pointer, and laid out again by the replay that arrives with
-/// the answer.
+/// placed as the spinner, at the pointer's own corner, and laid out again by the replay that
+/// arrives with the answer.
 fn peazip_box(path: &Path, bounds: ScreenBounds, dpi: u32) -> Option<(u32, u32)> {
     if !peazip_render::available_for(path) {
         // Nothing to list it with, so there is nothing to show: a machine without the engine — or
@@ -6267,24 +6267,30 @@ struct HoverPlacement {
     follow_cursor: bool,
     preview_scale: PreviewScale,
     /// Whether this placement is the waiting spinner's own box rather than a
-    /// preview's: it is then placed flush at the pointer's own corner and kept there
-    /// while the wait runs. See `compute_mouse_layout` and `waiting_placement`.
-    flush_at_cursor: bool,
+    /// preview's: it is then placed at the pointer's own corner — a pointer gap off
+    /// the cursor, in the quadrant the display has room for it, with the name it
+    /// covers left alone — and kept there while the wait runs. See
+    /// `compute_mouse_layout` and `waiting_placement`.
+    at_the_pointer_corner: bool,
 }
 
-/// The placement a hover's waiting spinner is given: the arc's own box, flush at the
-/// pointer's corner, whatever the preview it is waiting for is.
+/// The placement a hover's waiting spinner is given: the arc's own box at the pointer's
+/// own corner — a pointer gap off the hand — whatever the preview it is waiting for is.
 ///
 /// It is the placement a document waiting on a page has always been placed by, and
 /// every other kind of load is shown the same way: what a hover shows while it waits
 /// is the arc at the hand that hovered the file — which is what says the wait is for
 /// the file under it — rather than a preview-sized frame with a spinner in the middle
 /// of it, placed where the preview will land and saying nothing about the hand.
+///
+/// The gap is what keeps the arc off the cursor. The window it is drawn in is the one
+/// the pointer's own messages land on, and a hand kept off the arc is a hand still
+/// clicking and probing the file the wait is for.
 fn waiting_placement(placement: HoverPlacement) -> HoverPlacement {
     HoverPlacement {
         orig_dims: (office_preview::WAITING_BOX, office_preview::WAITING_BOX),
         preview_scale: PreviewScale::Percent(100),
-        flush_at_cursor: true,
+        at_the_pointer_corner: true,
         ..placement
     }
 }
@@ -7811,14 +7817,13 @@ fn avoiding_text(
 }
 
 /// How far off the pointer a preview is placed, in logical pixels: the margin the
-/// position modes are written around.
+/// position modes are written around, and the gap the waiting spinner is kept at as well.
+///
+/// The spinner is the preview window with an arc in it, so a pointer that lands on it is a
+/// pointer that has stopped clicking and probing the file it is waiting on: what a wait is
+/// owed is the hand's own corner and not the hand itself, and the same gap every other
+/// preview keeps is a gap the arc can be touched across but not spawned in.
 const POINTER_STANDOFF_PIXELS: f32 = 20.0;
-
-/// How far off the pointer the waiting spinner is placed, in logical pixels: a
-/// single pixel, because the preview window is what a mouse message at the pointer
-/// lands on, and the pointer has to keep clicking and probing the file it is waiting
-/// on rather than the spinner that is waiting on it.
-const SPINNER_STANDOFF_PIXELS: f32 = 1.0;
 
 /// Compute preview layout for mouse hover (relative to cursor position)
 ///
@@ -7828,14 +7833,14 @@ const SPINNER_STANDOFF_PIXELS: f32 = 1.0;
 /// pointer moves (see `HoverPlacement`). `dpi` is the display the pointer is on,
 /// which is what the margins the placement is written around are scaled by.
 ///
-/// A placement that is the waiting spinner (`flush_at_cursor`) is placed by its own
-/// rule: the corner nearest the pointer is put at the pointer — a single logical
-/// pixel off it, which is what `offset` below is — in whichever of the four
-/// quadrants the display has room for the spinner, and the name it covers is not
-/// stepped around: a spinner waiting on the page of the file under the hand says
-/// what it is by being at the hand, and one placed a row away from it says nothing
-/// about what is being waited on. Every other preview keeps the margin its position
-/// mode leaves and the room the `Avoid` setting asks for.
+/// A placement that is the waiting spinner (`at_the_pointer_corner`) is placed by its own
+/// rule: the corner nearest the pointer is put a pointer gap off it — the same gap every
+/// other preview keeps, so the arc is beside the hand rather than under it — in whichever
+/// of the four quadrants the display has room for the spinner, and the name it covers is
+/// not stepped around: a spinner waiting on the page of the file under the hand says what
+/// it is by being at the hand's own corner, and one placed a row away from it says nothing
+/// about what is being waited on. Every other preview keeps the margin its position mode
+/// leaves and the room the `Avoid` setting asks for.
 fn compute_mouse_layout(
     cursor_x: i32,
     cursor_y: i32,
@@ -7848,17 +7853,13 @@ fn compute_mouse_layout(
         avoid,
         follow_cursor,
         preview_scale,
-        flush_at_cursor,
+        at_the_pointer_corner,
     } = placement;
 
-    let offset = if flush_at_cursor {
-        logical_px(dpi, SPINNER_STANDOFF_PIXELS)
-    } else {
-        logical_px(dpi, POINTER_STANDOFF_PIXELS)
-    };
+    let offset = logical_px(dpi, POINTER_STANDOFF_PIXELS);
     let (orig_w, orig_h) = (orig_dims.0 as i32, orig_dims.1 as i32);
 
-    if follow_cursor || flush_at_cursor {
+    if follow_cursor || at_the_pointer_corner {
         let quadrants = [
             (
                 bounds.right - cursor_x - offset,
@@ -7948,9 +7949,9 @@ fn compute_mouse_layout(
             preview_h,
         };
 
-        // The spinner is placed and left there: the step off the name is what the
-        // flush rule is instead of.
-        if flush_at_cursor {
+        // The spinner is placed and left there: the step off the name is what being at
+        // the pointer's own corner is instead of.
+        if at_the_pointer_corner {
             return Some(layout);
         }
 
@@ -8882,10 +8883,30 @@ pub fn run_preview_window() {
                             // `spinner_pos`), so the frame is installed at the
                             // preview's place — the paint below is what takes the
                             // window from one box to the other.
-                            let pending = pending_load
+                            let mut pending = pending_load
                                 .take()
                                 .filter(|pl| pl.generation == result.generation);
                             pending_load_cancel = None;
+
+                            // Placed once more before it is painted, from the pointer as it is
+                            // now: the box this frame lands in was decided when the hover was
+                            // asked for, and the hand has had the whole load to move on since.
+                            // A preview that arrives under the hand is taken down again by the
+                            // touch rule at the next tick — the spawn and the dismissal are one
+                            // event for the eye — while one that lands clear of it stays. This
+                            // is the placement every tick of the wait already makes (see
+                            // `PendingLoad::follow_pointer`), one read before the paint, so what
+                            // is painted is the preview of the file under the hand rather than
+                            // one under the hand itself. A keyboard hover carries no placement
+                            // and is left where the item put it.
+                            if let Some(pl) = pending.as_mut() {
+                                if let Some(cursor) = cursor_position() {
+                                    pl.follow_pointer(
+                                        cursor,
+                                        monitor_dpi_from_point(cursor.x, cursor.y),
+                                    );
+                                }
+                            }
 
                             // What this load was planned for: the box the layout
                             // came out with, which is the size a slide is
@@ -9478,17 +9499,17 @@ pub fn run_preview_window() {
                         // measure but the wait, so its preview is laid out as the
                         // spinner's own box (see `office_preview::measure` and the
                         // `libre` arm of `get_media_dimensions`) and that box is placed
-                        // flush at the pointer rather than a margin away from it: the
-                        // page it waits for is laid out again by the replay that arrives
-                        // with it, so until then the hover is the wait for the file under
-                        // the hand, which belongs at the hand.
+                        // at the pointer's own corner rather than a preview's way out
+                        // beside it: the page it waits for is laid out again by the replay
+                        // that arrives with it, so until then the hover is the wait for the
+                        // file under the hand, which belongs at the hand.
                         let waiting_spinner = page_is_on_the_way(&path);
 
                         // A video whose shape the probe has not answered for yet is the
                         // same kind of wait, and for the same reason: there is nothing to
                         // lay out as a video until the probe answers, so the hover is the
-                        // wait for it — the spinner at the pointer — and is replayed when
-                        // the answer lands (see `video_probe_due`).
+                        // wait for it — the spinner at the pointer's own corner — and is
+                        // replayed when the answer lands (see `video_probe_due`).
                         let probing = video_probe_due(&path);
 
                         if let Some(orig_dims) = media_dimensions(&path, bounds, dpi) {
@@ -9498,7 +9519,7 @@ pub fn run_preview_window() {
                                 avoid,
                                 follow_cursor,
                                 preview_scale,
-                                flush_at_cursor: waiting_spinner || probing,
+                                at_the_pointer_corner: waiting_spinner || probing,
                             };
                             let placed = compute_mouse_layout(x, y, placement, bounds, dpi);
                             if let Some(layout) = placed {
@@ -11332,7 +11353,7 @@ mod tests {
 
     /// The waiting frame is the size of the spinner in it: over a turn of the
     /// spinner, the arc and its halo reach each of the box's edges, so a spinner
-    /// placed flush at the pointer is the spinner at the pointer rather than an
+    /// placed at the pointer's corner is the spinner at the pointer rather than an
     /// empty frame around one.
     #[test]
     fn the_waiting_frame_is_the_size_of_the_spinner_in_it() {
@@ -11525,7 +11546,7 @@ mod tests {
             avoid: None,
             follow_cursor: false,
             preview_scale: PreviewScale::FitToScreen,
-            flush_at_cursor: false,
+            at_the_pointer_corner: false,
         };
 
         let mut pl = pending(Some(placement));
@@ -11550,15 +11571,17 @@ mod tests {
 
         // A wait is the spinner's own box rather than the preview's, whatever the
         // preview is: an 800 by 600 picture is waited for in the arc's own box at the
-        // pointer's corner — the box a document waiting on a page is placed in — while
-        // the preview keeps the place and the size its own layout gave it.
+        // pointer's own corner, a pointer gap off it — the box a document waiting on a
+        // page is placed in — while the preview keeps the place and the size its own
+        // layout gave it.
         let mut waiting = pending(Some(placement));
         let followed = waiting.follow_pointer(POINT { x: 300, y: 300 }, TEST_DPI);
         assert!(followed.spinner);
+        let gap = logical_px(TEST_DPI, POINTER_STANDOFF_PIXELS);
         assert_eq!(
             waiting.spinner_pos,
-            (301, 301),
-            "the spinner's own corner is at the cursor"
+            (300 + gap, 300 + gap),
+            "the spinner's own corner is a gap off the cursor, not under it"
         );
         assert_eq!(waiting.spinner_side, office_preview::WAITING_BOX);
         let preview = compute_mouse_layout(
@@ -11581,10 +11604,10 @@ mod tests {
         );
 
         // A cursor moving along the item takes the spinner with it — still the arc's
-        // own box, still at the hand — and the preview's place with it.
+        // own box, still a gap off the hand — and the preview's place with it.
         let followed = waiting.follow_pointer(POINT { x: 500, y: 300 }, TEST_DPI);
         assert!(followed.spinner);
-        assert_eq!(waiting.spinner_pos, (501, 301));
+        assert_eq!(waiting.spinner_pos, (500 + gap, 300 + gap));
         assert_eq!(waiting.spinner_side, office_preview::WAITING_BOX);
 
         // A keyboard hover's placement is the item's own: it follows nothing.
@@ -11610,7 +11633,7 @@ mod tests {
             avoid: None,
             follow_cursor: false,
             preview_scale,
-            flush_at_cursor: false,
+            at_the_pointer_corner: false,
         };
 
         let full = compute_mouse_layout(
@@ -11636,15 +11659,16 @@ mod tests {
         );
     }
 
-    /// The spinner a hover is waiting on is placed flush at the pointer's own
-    /// corner — the one of the four the display has room for, a pixel off the
-    /// pointer so the window is not under it — with no margin between the two and
-    /// no step off the name it covers, so the wait stays at the hand that is
-    /// waiting on it.
+    /// The spinner a hover is waiting on is placed at the pointer's own corner — the one
+    /// of the four the display has room for, a pointer gap off the cursor so the window is
+    /// not under it — with no step off the name it covers, so the wait stays at the hand
+    /// that is waiting on it while leaving that hand free to click and probe the file
+    /// underneath (see `waiting_placement`).
     #[test]
-    fn places_the_waiting_spinner_flush_at_the_pointers_corner() {
+    fn places_the_waiting_spinner_at_the_pointers_own_corner() {
         let side = office_preview::WAITING_BOX;
         let name = (100, 300, 400, 320);
+        let gap = logical_px(TEST_DPI, POINTER_STANDOFF_PIXELS);
         let spinner = |cursor_x: i32, cursor_y: i32| {
             compute_mouse_layout(
                 cursor_x,
@@ -11654,7 +11678,7 @@ mod tests {
                     avoid: Some(name),
                     follow_cursor: false,
                     preview_scale: PreviewScale::Percent(100),
-                    flush_at_cursor: true,
+                    at_the_pointer_corner: true,
                 },
                 bounds(),
                 TEST_DPI,
@@ -11662,10 +11686,10 @@ mod tests {
             .expect("a placed spinner")
         };
 
-        // Room in every quadrant: the spinner sits in the pointer's own corner,
-        // over the name it is waiting on, rather than a gap away from the cursor.
+        // Room in every quadrant: the spinner sits in the pointer's own corner, over the
+        // name it is waiting on, one pointer gap off the cursor rather than in it.
         let placement = spinner(300, 300);
-        assert_eq!((placement.pos_x, placement.pos_y), (301, 301));
+        assert_eq!((placement.pos_x, placement.pos_y), (300 + gap, 300 + gap));
         assert_eq!((placement.preview_w, placement.preview_h), (side, side));
 
         // And the room that layout comes out at is that corner of the display rather than
@@ -11674,17 +11698,20 @@ mod tests {
         // engine that draws that preview is asked for (see `PendingLoad::room`).
         assert_eq!(
             (placement.max_width, placement.max_height),
-            (699, 499),
+            (
+                (bounds().right - 300 - gap) as u32,
+                (bounds().bottom - 300 - gap) as u32,
+            ),
             "the room is the corner the spinner was put in, not the display"
         );
 
         // With the display ending just past the pointer there is no room in the
         // quadrant it grows into, so the spinner takes the corner that is visible:
-        // its box placed to the pointer's left, still touching it.
+        // its box placed to the pointer's left, the same gap off it.
         let placement = spinner(980, 300);
         assert_eq!(
             (placement.pos_x, placement.pos_y),
-            (980 - side as i32 - 1, 301)
+            (980 - gap - side as i32, 300 + gap)
         );
     }
 
@@ -12043,9 +12070,9 @@ mod tests {
                                     avoid,
                                     follow_cursor,
                                     preview_scale,
-                                    // Only the waiting spinner is placed flush at the
-                                    // pointer, and only it is ever that size.
-                                    flush_at_cursor: (orig_width, orig_height) == (36, 36),
+                                    // Only the waiting spinner is placed at the
+                                    // pointer's own corner, and only it is ever that size.
+                                    at_the_pointer_corner: (orig_width, orig_height) == (36, 36),
                                 };
 
                                 let layout = compute_mouse_layout(
@@ -12457,7 +12484,7 @@ mod tests {
                     avoid: None,
                     follow_cursor: false,
                     preview_scale: scale,
-                    flush_at_cursor: false,
+                    at_the_pointer_corner: false,
                 },
                 bounds,
                 dpi,
@@ -12630,7 +12657,7 @@ mod tests {
                     avoid: None,
                     follow_cursor: false,
                     preview_scale: scale,
-                    flush_at_cursor: false,
+                    at_the_pointer_corner: false,
                 },
                 bounds,
                 dpi,
@@ -12786,7 +12813,7 @@ mod tests {
                     avoid: None,
                     follow_cursor: false,
                     preview_scale: scale,
-                    flush_at_cursor: false,
+                    at_the_pointer_corner: false,
                 },
                 bounds,
                 dpi,
@@ -12911,7 +12938,7 @@ mod tests {
                     avoid: None,
                     follow_cursor: false,
                     preview_scale: scale,
-                    flush_at_cursor: false,
+                    at_the_pointer_corner: false,
                 },
                 bounds,
                 dpi,
@@ -13079,7 +13106,7 @@ mod tests {
                     avoid: None,
                     follow_cursor: false,
                     preview_scale: scale,
-                    flush_at_cursor: false,
+                    at_the_pointer_corner: false,
                 },
                 bounds,
                 dpi,
