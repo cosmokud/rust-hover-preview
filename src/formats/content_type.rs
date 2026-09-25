@@ -65,7 +65,7 @@
 //! same reason: what it is is what the text lists decide, and a name another kind already
 //! read is not improved by a prefix match.
 //!
-//! The probe is one read of [`PROBE_BYTES`] and every question asked here is about the
+//! The probe is one read of [`crate::formats::head::PROBE_BYTES`] and every question asked here is about the
 //! head of a file. A file whose content is not on this machine is not opened at all, which
 //! is the rule every other read in this app follows (see `cloud_files`).
 //!
@@ -96,16 +96,8 @@ use crate::CONFIG;
 use infer::{MatcherType, Type};
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
-use std::fs::File;
-use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::time::SystemTime;
-
-/// How much of a file is read to answer: the front of it, which is where every signature
-/// is. Nothing further is ever asked for — the questions here are all about the head of a
-/// file — so a hover onto a video costs this and not the video.
-const PROBE_BYTES: usize = 4096;
 
 /// How many answers are held between hovers. One hover of one file asks for one answer,
 /// and a folder is swept a file at a time, so the list is a session's worth of files
@@ -137,14 +129,10 @@ pub enum Content {
 ///
 /// Asked where a file's kind is decided — the hook's gate, the loader and the layout —
 /// and answered from the cache where the same file has been asked about already in this
-/// hover. Where the setting is off this is [`Content::Unknown`] without reading anything,
-/// which leaves every kind to the lists it has always been decided by.
+/// hover. `Content::Unknown`, where that is the answer, leaves the kind to the list the
+/// name is written in.
 pub fn of(path: &Path) -> Content {
-    if !is_confirmed() {
-        return Content::Unknown;
-    }
-
-    let key = answer_key(path);
+    let key = crate::formats::head::key(path);
 
     if let Ok(answers) = ANSWERS.lock() {
         if let Some(answer) = answers.get(&key) {
@@ -164,21 +152,6 @@ pub fn of(path: &Path) -> Content {
     answer
 }
 
-/// Whether a file's content is confirmed at all: the tray's `Confirm File Type`, which is
-/// what every question in this module is behind.
-///
-/// It is the setting the picture paths already ask — a picture is decoded by its header
-/// rather than by its name where it is on (see `preview_window`) — and it is read from the
-/// configuration each time rather than captured, so an edit applies to the next hover
-/// rather than to the next start. Every caller that asks it through this module must not
-/// be holding the configuration itself: the lock is not reentrant.
-pub fn is_confirmed() -> bool {
-    CONFIG
-        .lock()
-        .map(|config| config.confirm_file_type)
-        .unwrap_or(false)
-}
-
 /// What the file holds, read once and not held.
 ///
 /// The tables are asked in the order they can answer in: the bytes first, through the
@@ -186,17 +159,34 @@ pub fn is_confirmed() -> bool {
 /// such table carries, and the name the file is under last, for the formats whose own head
 /// is nothing either table knows — see [`KIND_BY_NAME`] for what is in that one.
 fn read(path: &Path) -> Content {
-    // A file whose content is still in the cloud is not opened, because the open is what
-    // starts the transfer: the same rule the hook and every reader follow.
-    if crate::shell::cloud_files::needs_download(path) {
-        return Content::Unknown;
+    // The front of the file first, and the kind its own form settles by itself: the bytes
+    // at the front of a picture are a picture's, whatever the file is called, and nothing
+    // further is read of one. A front that settles nothing — a container a camera raw is
+    // written in, a file whose signature is further in, a file whose form says nothing at
+    // all — is the front the whole window is read for.
+    if let Some(head) = crate::formats::head::of(path) {
+        if let Some(names) = head.front() {
+            if !head
+                .nature()
+                .is_some_and(|nature| nature.container_of_a_raw)
+            {
+                let Ok(config) = CONFIG.lock() else {
+                    return Content::Unknown;
+                };
+
+                if let Some(kind) = kind_claiming(names, &config) {
+                    return Content::Kind(kind);
+                }
+            }
+        }
     }
 
-    let Some(probe) = probe(path) else {
+    let Some(head) = crate::formats::head::full(path) else {
         return Content::Unknown;
     };
+    let probe = head.bytes();
 
-    if let Some(names) = detected_names(&probe) {
+    if let Some(names) = detected_names(probe) {
         let Ok(config) = CONFIG.lock() else {
             return Content::Unknown;
         };
@@ -208,23 +198,8 @@ fn read(path: &Path) -> Content {
     // ask. A file with no name to ask about — one with no extension at all — has nothing
     // here to disagree with either, and is left to the lists.
     crate::formats::text_formats::lookup_extension(path)
-        .and_then(|extension| kind_by_name(&extension, &probe))
+        .and_then(|extension| kind_by_name(&extension, probe))
         .unwrap_or(Content::Unknown)
-}
-
-/// The front of the file, or nothing where it could not be read.
-///
-/// One read of a bounded buffer rather than a read to the end: a file this app is asked
-/// about may be a video of many gigabytes, and what it is is decided by its first
-/// kilobytes. What is read is taken up to the bound rather than asked for in one read,
-/// because a single read is free to come back with less than was asked for and a signature
-/// sits at an offset — a short answer would be read as a file nothing here can name.
-fn probe(path: &Path) -> Option<Vec<u8>> {
-    let file = File::open(path).ok()?;
-    let mut probe = Vec::new();
-    file.take(PROBE_BYTES as u64).read_to_end(&mut probe).ok()?;
-
-    Some(probe)
 }
 
 /// What the file's own bytes say it is: the names the format is known by to the lists, or
@@ -2463,34 +2438,11 @@ fn kind_claiming(names: &[&str], config: &AppConfig) -> Option<PreviewType> {
     })
 }
 
-/// The file an answer belongs to: its path, and the version of it that was read.
-fn answer_key(path: &Path) -> AnswerKey {
-    let metadata = std::fs::metadata(path).ok();
-
-    AnswerKey {
-        path: path.to_path_buf(),
-        modified: metadata
-            .as_ref()
-            .and_then(|metadata| metadata.modified().ok()),
-        len: metadata
-            .as_ref()
-            .map(|metadata| metadata.len())
-            .unwrap_or(0),
-    }
-}
-
-/// The file and the version of it an answer was read from. A file saved again is a file to
-/// ask about again, and what says so is what says it everywhere else in this app: when it
-/// was last written and what it weighed.
-#[derive(Clone, PartialEq, Eq, Hash)]
-struct AnswerKey {
-    path: PathBuf,
-    modified: Option<SystemTime>,
-    len: u64,
-}
-
-/// What has been asked and answered, for the hovers of this run.
-static ANSWERS: Lazy<Mutex<HashMap<AnswerKey, Content>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+/// What has been asked and answered, for the hovers of this run. A file saved again is a
+/// file to ask about again, and what says so is what says it everywhere else in this app:
+/// when it was last written and what it weighed (see `head::key`).
+static ANSWERS: Lazy<Mutex<HashMap<crate::formats::head::Key, Content>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
 
 #[cfg(test)]
 mod tests {
@@ -3716,13 +3668,6 @@ mod tests {
     #[test]
     #[ignore = "reads the files named in RHP_CONTENT_PROBE"]
     fn content_probe() {
-        // The configuration is the machine's own, and a file already written holds the
-        // value it was written with — so the setting this module is behind is turned on
-        // here rather than taken as it lies: what the probe asks about is the tables.
-        if let Ok(mut config) = CONFIG.lock() {
-            config.confirm_file_type = true;
-        }
-
         let folder = std::env::var("RHP_CONTENT_PROBE").expect("RHP_CONTENT_PROBE is not set");
 
         let mut paths: Vec<_> = std::fs::read_dir(&folder)

@@ -442,7 +442,6 @@ mod tests {
     #[test]
     fn asks_about_the_books_its_own_list_names() {
         if let Ok(mut config) = crate::CONFIG.lock() {
-            config.confirm_file_type = true;
             config.calibre_extensions =
                 crate::formats::calibre_formats::sanitize_calibre_extensions(
                     crate::formats::calibre_formats::DEFAULT_CALIBRE_EXTENSIONS,

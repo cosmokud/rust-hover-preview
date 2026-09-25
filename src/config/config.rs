@@ -1119,7 +1119,6 @@ pub struct AppConfig {
     /// Whether the trigger key is watched at all. Off means previews behave as if
     /// no key were held, whatever the mode says.
     pub trigger_key_enabled: bool,
-    pub confirm_file_type: bool,
     pub follow_cursor: bool,
     /// How far a preview is placed clear of the item it is about, so the file the
     /// pointer is on or the keyboard is focused on stays readable while its preview is
@@ -1461,7 +1460,6 @@ impl Default for AppConfig {
             trigger_key: "alt".to_string(),
             trigger_key_mode: TriggerKeyMode::Disable,
             trigger_key_enabled: true,
-            confirm_file_type: true,
             follow_cursor: DEFAULT_FOLLOW_CURSOR,
             avoid_mode: DEFAULT_AVOID_MODE,
             same_file_rehover_delay_ms: DEFAULT_SAME_FILE_REHOVER_DELAY_MS,
@@ -1620,7 +1618,6 @@ const SETTING_GROUPS: &[(&str, &[&str])] = &[
     (
         "Performance",
         &[
-            "confirm_file_type",
             "decode_budget_gb",
             "document_cache_mb",
             "image_cache_mb",
@@ -2084,11 +2081,6 @@ impl AppConfig {
         );
         ini.set(
             CONFIG_SECTION,
-            "confirm_file_type",
-            Some(self.confirm_file_type.to_string()),
-        );
-        ini.set(
-            CONFIG_SECTION,
             "follow_cursor",
             Some(self.follow_cursor.to_string()),
         );
@@ -2463,9 +2455,6 @@ impl AppConfig {
         }
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "trigger_key_enabled") {
             self.trigger_key_enabled = value;
-        }
-        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "confirm_file_type") {
-            self.confirm_file_type = value;
         }
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "follow_cursor") {
             self.follow_cursor = value;
@@ -4287,7 +4276,7 @@ extensions=png,jpg
         ] {
             assert!(under_engine.contains(key), "`{key}` is under `Engine`");
         }
-        for key in ["confirm_file_type", "decode_budget_gb", "image_cache_mb"] {
+        for key in ["decode_budget_gb", "image_cache_mb"] {
             assert!(!under_engine.contains(key), "`{key}` is not under `Engine`");
         }
 
