@@ -1378,247 +1378,16 @@ pub fn preview_screen_rect() -> Option<(i32, i32, i32, i32)> {
     None
 }
 
-fn is_gif_file(path: &Path) -> bool {
-    path.extension()
-        .and_then(|ext| ext.to_str())
-        .map(|ext| ext.to_lowercase() == "gif")
-        .unwrap_or(false)
-}
-
-fn is_webp_file(path: &Path) -> bool {
-    path.extension()
-        .and_then(|ext| ext.to_str())
-        .map(|ext| ext.to_lowercase() == "webp")
-        .unwrap_or(false)
-}
-
-/// True when a `.png` file carries an animation control chunk. An APNG is an
-/// ordinary PNG plus an `acTL` chunk ahead of its first `IDAT`, so the chunk list
-/// is walked instead of decoding anything.
-fn png_has_animation_control_chunk(path: &Path) -> bool {
-    use std::io::{Read, Seek, SeekFrom};
-
-    const SIGNATURE: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
-
-    let Ok(file) = File::open(path) else {
-        return false;
-    };
-    let mut reader = BufReader::new(file);
-
-    let mut signature = [0u8; 8];
-    if reader.read_exact(&mut signature).is_err() || signature != SIGNATURE {
-        return false;
-    }
-
-    let mut header = [0u8; 8];
-    while reader.read_exact(&mut header).is_ok() {
-        let length = u32::from_be_bytes([header[0], header[1], header[2], header[3]]) as i64;
-        let chunk_type = &header[4..8];
-
-        if chunk_type == b"acTL" {
-            return true;
-        }
-
-        // The animation chunks precede the image data, so once the pixels start
-        // there is nothing left to find.
-        if chunk_type == b"IDAT" || chunk_type == b"IEND" {
-            return false;
-        }
-
-        // Step over the chunk body and its CRC.
-        if reader.seek(SeekFrom::Current(length + 4)).is_err() {
-            return false;
-        }
-    }
-
-    false
-}
-
-fn is_apng_file(path: &Path) -> bool {
-    match path
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .map(|ext| ext.to_lowercase())
-        .as_deref()
-    {
-        Some("apng") => true,
-        // An animated PNG keeps the `.png` extension whenever it was written by
-        // an ordinary PNG encoder, so those are decided by content.
-        Some("png") => png_has_animation_control_chunk(path),
-        _ => false,
-    }
-}
-
-/// Whether a GIF holds more than its first frame, which is the whole of what makes
-/// one an animation rather than a picture: the frames are the file's own blocks, and
-/// whether there is a second one is a thing its structure says.
+/// Decode an image by sniffing its magic bytes rather than by the name it is written under.
 ///
-/// Nothing is decoded here. The blocks are walked by their own lengths — an
-/// extension's sub-blocks are stepped over the same way, since they carry lengths
-/// too — so what this costs is a few seeks and no pixels: the same rule the PNG
-/// probe above follows, and the one the decoder follows when it does decode the
-/// file for real.
-fn gif_is_animated(path: &Path) -> bool {
-    use std::io::{Read, Seek, SeekFrom};
-
-    let Ok(file) = File::open(path) else {
-        return false;
-    };
-    let mut reader = BufReader::new(file);
-
-    // The signature and the logical screen descriptor: `GIF87a` or `GIF89a`, then
-    // seven bytes of screen size, colour table and background.
-    let mut header = [0u8; 13];
-    if reader.read_exact(&mut header).is_err() || &header[..3] != b"GIF" {
-        return false;
-    }
-
-    // A global colour table follows the descriptor, and the frame blocks after it:
-    // `0x2C` opens one and carries its own bounds and local table, `0x21` opens an
-    // extension whose sub-blocks carry lengths, and `0x3B` ends the file.
-    if header[10] & 0x80 != 0 {
-        let table_bytes = 3 * (1u64 << ((header[10] & 0x07) + 1));
-        if reader.seek(SeekFrom::Current(table_bytes as i64)).is_err() {
-            return false;
-        }
-    }
-
-    let mut frames = 0usize;
-    let mut block = [0u8; 1];
-
-    while reader.read_exact(&mut block).is_ok() {
-        match block[0] {
-            0x2C => {
-                frames += 1;
-                if frames > 1 {
-                    return true;
-                }
-
-                // The frame's bounds and flags: the local colour table, where it has
-                // one, sits between the flags and the frame's pixels.
-                let mut descriptor = [0u8; 9];
-                if reader.read_exact(&mut descriptor).is_err() {
-                    return false;
-                }
-                if descriptor[8] & 0x80 != 0 {
-                    let table_bytes = 3 * (1u64 << ((descriptor[8] & 0x07) + 1));
-                    if reader.seek(SeekFrom::Current(table_bytes as i64)).is_err() {
-                        return false;
-                    }
-                }
-
-                // The LZW code size byte, then the pixel data as sub-blocks.
-                if reader.read_exact(&mut block).is_err() || !skip_gif_sub_blocks(&mut reader) {
-                    return false;
-                }
-            }
-            0x21 => {
-                // An extension's label byte, then its own sub-blocks.
-                if reader.read_exact(&mut block).is_err() || !skip_gif_sub_blocks(&mut reader) {
-                    return false;
-                }
-            }
-            0x3B => return false,
-            // Anything else is not where the next block can be, so the walk is over.
-            _ => return false,
-        }
-    }
-
-    false
-}
-
-/// Step a GIF reader over one run of sub-blocks: a length byte per block, ending at
-/// a zero-length one. The pixels and the extensions a specimen of either is skipped
-/// by are both held this way, so the one walk serves both.
-fn skip_gif_sub_blocks(reader: &mut BufReader<File>) -> bool {
-    use std::io::{Read, Seek, SeekFrom};
-
-    let mut length = [0u8; 1];
-    loop {
-        if reader.read_exact(&mut length).is_err() {
-            return false;
-        }
-        if length[0] == 0 {
-            return true;
-        }
-        if reader.seek(SeekFrom::Current(length[0] as i64)).is_err() {
-            return false;
-        }
-    }
-}
-
-/// Whether a WebP file holds an animation, which its container says: an extended
-/// WebP that animates carries an `ANIM` chunk, and its frames are `ANMF` chunks
-/// after it.
-///
-/// The chunks are walked by their own lengths for the same reason the GIF's blocks
-/// are: what is asked is what the file holds, and nothing has to be decoded to
-/// answer it. A plain `VP8 ` or `VP8L` WebP has no chunk list at all — its picture
-/// data is the chunk itself — so the walk stops where the picture starts.
-fn webp_has_animation(path: &Path) -> bool {
-    use std::io::{Read, Seek, SeekFrom};
-
-    let Ok(file) = File::open(path) else {
-        return false;
-    };
-    let mut reader = BufReader::new(file);
-
-    // `RIFF`, the file's own length, and the form type every WebP carries.
-    let mut header = [0u8; 12];
-    if reader.read_exact(&mut header).is_err() || &header[..4] != b"RIFF" || &header[8..] != b"WEBP"
-    {
-        return false;
-    }
-
-    let mut chunk = [0u8; 8];
-    while reader.read_exact(&mut chunk).is_ok() {
-        let length = u32::from_le_bytes([chunk[4], chunk[5], chunk[6], chunk[7]]) as i64;
-
-        if &chunk[..4] == b"ANIM" {
-            return true;
-        }
-
-        // The picture data is the end of anything worth walking: an extended WebP
-        // that animates names its animation ahead of its frames, and a plain one is
-        // nothing but the picture.
-        if &chunk[..4] == b"VP8 " || &chunk[..4] == b"VP8L" {
-            return false;
-        }
-
-        // Chunks are padded to an even length.
-        if reader.seek(SeekFrom::Current(length + length % 2)).is_err() {
-            return false;
-        }
-    }
-
-    false
-}
-
-/// Guess image format from header bytes instead of file extension.
-fn guessed_image_format(path: &PathBuf) -> Option<image::ImageFormat> {
-    image::ImageReader::open(path)
-        .ok()?
-        .with_guessed_format()
-        .ok()?
-        .format()
-}
-
-/// Decode an image by sniffing magic bytes instead of trusting the extension.
+/// A picture is decoded by its header always: a `.dat` holding a PNG is a picture, and a
+/// `.png` holding a container is a container — which is the kind's question, and it has been
+/// asked by the time anything here is reached.
 fn decode_image_with_header_check(path: &PathBuf) -> Option<image::DynamicImage> {
     let mut reader = image::ImageReader::open(path)
         .ok()?
         .with_guessed_format()
         .ok()?;
-    reader.limits(image_decode_limits());
-
-    reader.decode().ok()
-}
-
-/// Decode an image by the extension it is named with, for the files whose own
-/// bytes are not asked what they are. Read under the same budget as every other
-/// decoder, so the path is chosen by the setting and not by what it costs.
-fn decode_image_by_extension(path: &PathBuf) -> Option<image::DynamicImage> {
-    let mut reader = image::ImageReader::open(path).ok()?;
     reader.limits(image_decode_limits());
 
     reader.decode().ok()
@@ -2521,29 +2290,17 @@ fn animated_scale_for(path: &Path, scales: HoverScales) -> Option<PreviewScale> 
     image_is_animated(path).then_some(scales.animated)
 }
 
-/// Whether a picture file holds an animation rather than a single frame: a GIF with
-/// more than one frame, a WebP with an animation chunk, or a PNG with an animation
-/// control chunk.
+/// Whether a picture file holds a sequence rather than a single frame: a GIF with more than one
+/// frame, a WebP with an animation chunk, a PNG with an animation control chunk, or one of the
+/// sequences this app has no reader for.
 ///
-/// Nothing is decoded, and the question is asked of the file's own structure rather
-/// than of its name alone: a still `.gif` and an animated `.png` are both files a name
-/// cannot settle, which is the same reason the loader asks the file and not its
-/// extension what it is. A file that is none of the three formats — whatever it is
-/// called — is answered by the bytes its reader sees, and a format whose containers do
-/// not animate, a JPEG or a `.bmp`, is answered without opening anything at all.
+/// Nothing is decoded, and the question is asked of the file's own bytes rather than of its
+/// name: a still `.gif` and an animated `.png` are both files a name cannot settle, which is the
+/// same reason the loader asks the file and not its extension what it is (see
+/// `head::PictureNature`). It is asked of the head, which the router has read already by the
+/// time a picture reaches this question, so the answer costs a lookup rather than a read.
 fn image_is_animated(path: &Path) -> bool {
-    let extension = path
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .map(|ext| ext.to_ascii_lowercase());
-
-    match extension.as_deref() {
-        Some("gif") => gif_is_animated(path),
-        Some("webp") => webp_has_animation(path),
-        Some("apng") => true,
-        Some("png") => png_has_animation_control_chunk(path),
-        _ => false,
-    }
+    crate::formats::head::picture_nature(path).is_some_and(|nature| nature.moves)
 }
 
 /// The scale a bitmap is drawn at, for a share of the display it is asked to follow.
@@ -3830,11 +3587,7 @@ fn load_static_image(
 
         (pixels, width, height)
     } else {
-        let img = if crate::formats::content_type::is_confirmed() {
-            decode_image_with_header_check(path)?
-        } else {
-            decode_image_by_extension(path)?
-        };
+        let img = decode_image_with_header_check(path)?;
 
         // A picture whose samples are light rather than levels — an EXR, a Radiance HDR —
         // is brought into eight bits before anything else is done with it. It is the one
@@ -5570,13 +5323,13 @@ fn load_media_of_kind(
     }
 }
 
-/// The picture path: the animated formats tried first, and everything else as the still
-/// picture it is.
+/// The picture path: the animated reader the file's own bytes call for, and everything else as
+/// the still picture it is.
 ///
-/// It is where the chain above ends for every name that reaches it, and the arm a picture
-/// the content named is loaded by. Which of the animated formats is asked about is settled
-/// by the file's own header where the content is confirmed — see `guessed_image_format` —
-/// and by the name where it is not.
+/// It is where the chain above ends for every name that reaches it, and the arm a picture the
+/// content named is loaded by. Which reader is asked about it is the job the router gives a
+/// picture (`native_formats::job_for`), and that job is the file's own bytes first: a `.gif`
+/// with one frame in it is a still here, and the animated reader is never asked about one.
 fn load_picture(
     path: &PathBuf,
     max_width: u32,
@@ -5584,69 +5337,67 @@ fn load_picture(
     preview_scale: PreviewScale,
     cancel: &Arc<AtomicBool>,
 ) -> Option<MediaData> {
-    let guessed_format = if crate::formats::content_type::is_confirmed() {
-        guessed_image_format(path)
-    } else {
-        None
-    };
+    let job = CONFIG
+        .lock()
+        .ok()
+        .and_then(|config| native_formats::job_for(path, PreviewType::Images, &config))
+        .unwrap_or(native_formats::NativeJob::Picture);
 
-    if matches!(guessed_format, Some(image::ImageFormat::Gif)) || is_gif_file(path) {
-        // Try animated GIF first
-        if let Some(media) = load_animated_gif(
-            path,
-            max_width,
-            max_height,
-            preview_scale,
-            Arc::clone(cancel),
-        ) {
-            return Some(media);
+    match job {
+        native_formats::NativeJob::AnimatedGif => {
+            if let Some(media) = load_animated_gif(
+                path,
+                max_width,
+                max_height,
+                preview_scale,
+                Arc::clone(cancel),
+            ) {
+                return Some(media);
+            }
         }
-        if cancel.load(Ordering::Acquire) {
-            return None;
+        native_formats::NativeJob::AnimatedWebp => {
+            if let Some(media) = load_animated_webp(
+                path,
+                max_width,
+                max_height,
+                preview_scale,
+                Arc::clone(cancel),
+            ) {
+                return Some(media);
+            }
         }
-        // Fall back to static for single-frame GIFs
-        return load_static_image(path, max_width, max_height, preview_scale);
+        native_formats::NativeJob::AnimatedApng => {
+            if let Some(media) = load_animated_apng(
+                path,
+                max_width,
+                max_height,
+                preview_scale,
+                Arc::clone(cancel),
+            ) {
+                return Some(media);
+            }
+        }
+        native_formats::NativeJob::Picture
+        | native_formats::NativeJob::PictureCodec
+        | native_formats::NativeJob::Text
+        | native_formats::NativeJob::SvgDocument
+        | native_formats::NativeJob::Metafile
+        | native_formats::NativeJob::Eps
+        | native_formats::NativeJob::FontSpecimen
+        | native_formats::NativeJob::Pdf
+        | native_formats::NativeJob::Comic
+        | native_formats::NativeJob::Psd
+        | native_formats::NativeJob::Project
+        | native_formats::NativeJob::ArchiveZip
+        | native_formats::NativeJob::ArchiveSevenZ
+        | native_formats::NativeJob::ArchiveRar
+        | native_formats::NativeJob::ArchiveTar
+        | native_formats::NativeJob::ArchiveTarGz
+        | native_formats::NativeJob::VideoMediaFoundation => {}
     }
 
-    if matches!(guessed_format, Some(image::ImageFormat::WebP)) || is_webp_file(path) {
-        // Try animated WebP first
-        if let Some(media) = load_animated_webp(
-            path,
-            max_width,
-            max_height,
-            preview_scale,
-            Arc::clone(cancel),
-        ) {
-            return Some(media);
-        }
-        if cancel.load(Ordering::Acquire) {
-            return None;
-        }
-        // What is left is a still, and a still is not decoded here either: it is the
-        // picture the codec Windows has for WebP draws, at the box the layout planned,
-        // which is what `load_static_image` asks for; see `wic_image`.
-        return load_static_image(path, max_width, max_height, preview_scale);
-    }
-
-    if is_apng_file(path) {
-        // Try animated APNG first
-        if let Some(media) = load_animated_apng(
-            path,
-            max_width,
-            max_height,
-            preview_scale,
-            Arc::clone(cancel),
-        ) {
-            return Some(media);
-        }
-        if cancel.load(Ordering::Acquire) {
-            return None;
-        }
-        // Fall back to static for single-frame APNGs
-        return load_static_image(path, max_width, max_height, preview_scale);
-    }
-
-    // Default to static image
+    // What is left is a still: a picture that never moved, or one whose animated reader
+    // answered nothing for it. Nothing is decoded twice to find that out.
     if cancel.load(Ordering::Acquire) {
         return None;
     }
@@ -5979,20 +5730,10 @@ fn magick_box(path: &Path) -> Option<(u32, u32)> {
     Some((office_preview::WAITING_BOX, office_preview::WAITING_BOX))
 }
 
-/// A picture's own size, read the way this app reads one: the file's header where its
-/// content is confirmed, and its name where it is not.
+/// A picture's own size, read the way this app reads one: its own header, and the codec
+/// Windows keeps for the picture formats this app's decoder has no reader for.
 fn picture_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
-    if crate::formats::content_type::is_confirmed() {
-        return image_dimensions_with_header_check(path);
-    }
-
-    // The same two readers, asked the way this path asks them: the name first, since a
-    // file whose content is not confirmed is taken for what it is called, and then the
-    // codec Windows has — which is the only reader there is for the picture formats this
-    // app's decoder cannot read at all.
-    image::image_dimensions(path)
-        .ok()
-        .or_else(|| codec_dimensions(path))
+    image_dimensions_with_header_check(path)
 }
 
 /// Whether this hover is the wait for a page rather than a preview of one: an Office
@@ -10437,10 +10178,6 @@ mod tests {
     /// question is asked of the file's own header.
     #[test]
     fn a_share_follows_the_content_rather_than_the_name() {
-        if let Ok(mut config) = CONFIG.lock() {
-            config.confirm_file_type = true;
-        }
-
         let folder = std::env::temp_dir().join("rust-hover-preview-content-share");
         std::fs::create_dir_all(&folder).expect("a test folder");
 
@@ -10483,10 +10220,6 @@ mod tests {
     /// that would otherwise be drawn.
     #[test]
     fn a_box_follows_the_content_rather_than_the_name() {
-        if let Ok(mut config) = CONFIG.lock() {
-            config.confirm_file_type = true;
-        }
-
         let folder = std::env::temp_dir().join("rust-hover-preview-content-box");
         std::fs::create_dir_all(&folder).expect("a test folder");
 
@@ -10554,7 +10287,6 @@ mod tests {
     #[test]
     fn a_foreign_engine_is_never_started_for_a_file_that_is_not_its_own() {
         if let Ok(mut config) = CONFIG.lock() {
-            config.confirm_file_type = true;
             config.document_preview_enabled = true;
             config.video_preview_enabled = true;
         }
@@ -10631,7 +10363,6 @@ mod tests {
     #[test]
     fn an_office_document_is_asked_of_one_engine_and_not_the_other() {
         if let Ok(mut config) = CONFIG.lock() {
-            config.confirm_file_type = true;
             config.document_preview_enabled = true;
             // What the app's own `config.ini` holds is not what this test is about: it asks
             // the machine, and the setting is pinned to the one that asks the machine.
@@ -11313,10 +11044,10 @@ mod tests {
         let still_path = folder.join("still.webp");
         std::fs::write(&still_path, riff(chunk(b"VP8 ", &[0; 4]))).expect("a written WebP");
 
-        assert!(webp_has_animation(&animated_path), "an `ANIM` chunk");
-        assert!(!webp_has_animation(&still_path), "a plain picture");
+        assert!(image_is_animated(&animated_path), "an `ANIM` chunk");
+        assert!(!image_is_animated(&still_path), "a plain picture");
         assert!(
-            !webp_has_animation(&folder.join("missing.webp")),
+            !image_is_animated(&folder.join("missing.webp")),
             "a file that is not there is not an animation"
         );
 
@@ -11333,8 +11064,8 @@ mod tests {
         let still = folder.join("still.gif");
         write_test_gif(&still, 1);
 
-        assert!(gif_is_animated(&gif), "two frame blocks in the file");
-        assert!(!gif_is_animated(&still), "one frame block in the file");
+        assert!(image_is_animated(&gif), "two frame blocks in the file");
+        assert!(!image_is_animated(&still), "one frame block in the file");
 
         // The same file the loader sees, so the size a hover is placed at is the size its
         // frames are decoded at: two frames are what makes it an animation there as well.

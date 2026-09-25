@@ -575,10 +575,6 @@ mod tests {
     /// nothing recognizes is left to the list the name is written in.
     #[test]
     fn asks_the_engine_about_a_file_by_its_bytes_before_its_name() {
-        if let Ok(mut config) = crate::CONFIG.lock() {
-            config.confirm_file_type = true;
-        }
-
         let folder = std::env::temp_dir().join("rust-hover-preview-peazip-engine-archive");
         std::fs::create_dir_all(&folder).expect("a test folder");
 

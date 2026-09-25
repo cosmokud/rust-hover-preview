@@ -49,7 +49,6 @@ const WM_TRAYICON: u32 = WM_USER + 1;
 const ID_TRAY_EXIT: u16 = 1001;
 const ID_TRAY_STARTUP: u16 = 1002;
 const ID_TRAY_ENABLE: u16 = 1003;
-const ID_TRAY_CONFIRM_FILE_TYPE: u16 = 1004;
 const ID_TRAY_TRIGGER_DISABLE: u16 = 1005; // Hold the trigger key to stop previews
 const ID_TRAY_TRIGGER_ENABLE: u16 = 1006; // Hold the trigger key to allow previews
 const ID_TRAY_TRIGGER_ENABLED: u16 = 1068; // Whether the trigger key is watched at all
@@ -431,9 +430,6 @@ unsafe extern "system" fn tray_window_proc(
                 }
                 ID_TRAY_ENABLE => {
                     toggle_preview_enabled();
-                }
-                ID_TRAY_CONFIRM_FILE_TYPE => {
-                    toggle_confirm_file_type();
                 }
                 ID_TRAY_TRIGGER_DISABLE => set_trigger_key_mode(TriggerKeyMode::Disable),
                 ID_TRAY_TRIGGER_ENABLE => set_trigger_key_mode(TriggerKeyMode::Enable),
@@ -1365,25 +1361,9 @@ unsafe fn show_context_menu(hwnd: HWND) {
     );
 
     // Add the "Performance" submenu: what the app costs while it is working — the memory it
-    // holds on to between hovers — with the one setting here that is about what a preview is
-    // read as rather than what it costs. It is the block above `Engine`, where the engines
+    // holds on to between hovers. It is the block above `Engine`, where the engines
     // themselves are named: what is here is what is spent while they work.
     let performance_menu = CreatePopupMenu().unwrap();
-
-    // Add "Confirm File Type" with checkmark (content/header sniffing)
-    let confirm_file_type = CONFIG.lock().map(|c| c.confirm_file_type).unwrap_or(false);
-    let confirm_flags = MF_STRING
-        | if confirm_file_type {
-            MF_CHECKED
-        } else {
-            MF_UNCHECKED
-        };
-    let _ = AppendMenuW(
-        performance_menu,
-        confirm_flags,
-        ID_TRAY_CONFIRM_FILE_TYPE as usize,
-        w!("Confirm File Type"),
-    );
 
     // Add the "Cache" submenu: what a preview's own data may cost between hovers — the frames
     // a decoded image was shown as, which are held in memory, and the pages a document was
@@ -1778,13 +1758,6 @@ fn toggle_trigger_key_enabled() {
         config.save();
     }
     refresh_preview();
-}
-
-fn toggle_confirm_file_type() {
-    if let Ok(mut config) = CONFIG.lock() {
-        config.confirm_file_type = !config.confirm_file_type;
-        config.save();
-    }
 }
 
 /// What a picture is drawn over — and every preview that is not a document: a page,

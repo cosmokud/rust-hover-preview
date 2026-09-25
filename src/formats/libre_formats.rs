@@ -367,7 +367,6 @@ mod tests {
     #[test]
     fn a_page_the_engine_draws_answers_with_the_kind_it_is_shown_under() {
         if let Ok(mut config) = crate::CONFIG.lock() {
-            config.confirm_file_type = true;
             config.libre_extensions = sanitize_libre_extensions(DEFAULT_LIBRE_EXTENSIONS);
         }
 

@@ -237,7 +237,6 @@ The item a setting starts at carries `(Default)` after its name, so a menu says 
   - **Design Background** — the same backdrops as a picture's, for a design document; Checkerboard by default.
 - **Volume** — Max, High, Medium, Low, Very Low, Mute: 100% down to 0%.
 - **Performance**
-  - **Confirm File Type** — check a file's content against its name before it is previewed: a file whose bytes are another kind is previewed as that kind, and one whose content is a format this app has no reader for shows nothing. On by default.
   - **Cache** — what a preview may cost between hovers, 2 GB down to 0 MB: **`Image (RAM)`**, the decoded frames held in memory, and **`Document (Disk)`**, the pages an engine drew, kept as files under the temp folder so a document drawn once is not drawn again.
   - **Decode Budget** — 16 GB down to 512 MB, 1 GB default: a file past it gets no preview.
   - **Tick** — how often the app looks at Explorer while a folder window is in focus: 15 ms (default), 31, 47, 63 or 78 ms, one to five Windows timer ticks. Lower answers a move sooner; higher is lighter on the CPU and on Explorer.
@@ -321,7 +320,6 @@ vector_background=checkerboard
 video_volume=0
 
 ; Performance
-confirm_file_type=true
 decode_budget_gb=1
 document_cache_mb=128
 image_cache_mb=32
