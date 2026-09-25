@@ -2106,7 +2106,7 @@ fn peazip_render_is_due(path: &Path) -> bool {
     // `peazip_formats::is_engine_archive`).
     peazip_formats::is_engine_archive(path)
         && PreviewType::Peazip.enabled()
-        && peazip_render::available()
+        && peazip_render::available_for(path)
         && !peazip_render::refused(path)
         && !peazip_render::listed(path)
 }
@@ -2245,10 +2245,7 @@ fn effective_preview_scale(path: &Path, scales: HoverScales) -> PreviewScale {
 
     if pdf_preview::is_pdf_file(path) {
         scale_of_kind(PreviewType::Pdf, path, scales)
-    } else if is_text_preview(path)
-        || archive_formats::is_archive_file(path)
-        || peazip_formats::is_peazip_file(path)
-    {
+    } else if page_is_painted(path) {
         // A listing is a page of text painted to the box it is given, whether this app read the
         // archive itself or an engine listed it, so both are the text rule.
         scale_of_kind(PreviewType::Text, path, scales)
@@ -2483,6 +2480,27 @@ fn is_text_preview(path: &Path) -> bool {
         && !libre_formats::is_libre_file(path)
         && !design_formats::is_design_file(path)
         && !vector_formats::is_vector_file(path)
+}
+
+/// Whether a preview of this file is painted into the box it is given rather than scaled within
+/// it: a text file, an archive this app read itself, and an archive an engine listed are pages of
+/// one kind — painted at a fixed font size, so the box the layout planned for one is the box it
+/// draws into, and the frame that comes back is that box rather than a size to be fitted to a
+/// space.
+///
+/// One question, asked in the two places that have to agree about a kind: the share it is drawn
+/// at (`effective_preview_scale`) and the box the loader is handed, which is what the window ends
+/// up sized to. Asking it in one place is the point — a kind left out of one of them is a preview
+/// that is drawn at the planned size and loaded against the free room of the display, which is a
+/// page stretched to the screen, and that is exactly what an archive an engine listed was.
+///
+/// The engine's own question is the third term, asked the way the engine asks it — the file's
+/// bytes first and the name after them — so an archive it lists under a name no list holds (a
+/// `.cab` renamed to `.dat`) is a page here too.
+fn page_is_painted(path: &Path) -> bool {
+    is_text_preview(path)
+        || archive_formats::is_archive_file(path)
+        || peazip_formats::is_engine_archive(path)
 }
 
 fn effective_frame_delay_ms(media_type: &MediaType, source_delay_ms: u32) -> u32 {
@@ -5896,9 +5914,10 @@ fn archive_box(path: &Path, bounds: ScreenBounds, dpi: u32) -> Option<(u32, u32)
 /// placed as the spinner, flush at the pointer, and laid out again by the replay that arrives with
 /// the answer.
 fn peazip_box(path: &Path, bounds: ScreenBounds, dpi: u32) -> Option<(u32, u32)> {
-    if !peazip_render::available() {
-        // Nothing to list it with, so there is nothing to show: a machine without the engine shows
-        // no preview for these names rather than a page of something else.
+    if !peazip_render::available_for(path) {
+        // Nothing to list it with, so there is nothing to show: a machine without the engine — or
+        // with an installation that does not carry the one tool this name is read by — shows no
+        // preview for it rather than a page of something else.
         return None;
     }
 
@@ -9585,11 +9604,13 @@ pub fn run_preview_window() {
                     video_replay = None;
 
                     // A text or archive preview is rendered at the size the
-                    // layout planned for it: both are painted at a fixed font
-                    // size, so the planned box is the box they draw into rather
-                    // than a space to be scaled within. Every other format is
-                    // loaded against the free space it may be scaled within.
-                    let painted = is_text_preview(&path) || archive_formats::is_archive_file(&path);
+                    // layout planned for it: it is painted at a fixed font
+                    // size, so the planned box is the box it draws into rather
+                    // than a space to be scaled within — and what the window
+                    // is sized to is the frame that comes back. Every other
+                    // format is loaded against the free space it may be
+                    // scaled within.
+                    let painted = page_is_painted(&path);
                     let (load_width, load_height) = if painted {
                         (preview_w, preview_h)
                     } else {
@@ -10202,6 +10223,46 @@ mod tests {
             media_dimensions(&path, bounds(), TEST_DPI),
             picture_dimensions(&path),
             "so the box is the picture's rather than the text measure's nothing"
+        );
+
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    /// A page is painted into the box the layout planned for it, and an archive an engine listed is
+    /// one of those pages rather than a size to fit the room it was given. It is the one question
+    /// the share a kind is drawn at and the box the loader is handed both ask, and a kind left out
+    /// of either is a listing stretched to the display: what an engine's own archive was, for as
+    /// long as the two places listed their kinds by hand.
+    #[test]
+    fn a_page_is_painted_whether_this_app_read_the_archive_or_an_engine_listed_it() {
+        let folder = std::env::temp_dir().join("rust-hover-preview-painted");
+        std::fs::create_dir_all(&folder).expect("a test folder");
+        let path = |name: &str| folder.join(name);
+
+        // A text file, an archive this app reads itself, and archives an engine lists — a cabinet,
+        // a FreeArc archive and a stream its tool weighs: every one of them is a page.
+        for name in [
+            "notes.txt",
+            "photos.zip",
+            "backup.cab",
+            "backup.arc",
+            "readme.bz2",
+        ] {
+            let file = path(name);
+            std::fs::write(&file, b"a file, of a sort").expect("a written file");
+
+            assert!(
+                page_is_painted(&file),
+                "`{name}` is a page painted into the box it is given"
+            );
+        }
+
+        // And a picture is not: it is a size of its own, drawn into whatever room it is given.
+        let picture = path("tomcat.png");
+        write_test_png(&picture, false);
+        assert!(
+            !page_is_painted(&picture),
+            "a picture is a size of its own rather than a page"
         );
 
         let _ = std::fs::remove_dir_all(&folder);

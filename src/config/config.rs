@@ -29,7 +29,9 @@ use crate::formats::magick_formats::{
     sanitize_magick_extensions, DEFAULT_MAGICK_EXTENSIONS, MAGICK_EXTENSIONS_BEFORE_THE_REST,
 };
 use crate::formats::office_formats::{sanitize_office_extensions, DEFAULT_OFFICE_EXTENSIONS};
-use crate::formats::peazip_formats::{sanitize_peazip_extensions, DEFAULT_PEAZIP_EXTENSIONS};
+use crate::formats::peazip_formats::{
+    sanitize_peazip_extensions, DEFAULT_PEAZIP_EXTENSIONS, PEAZIP_EXTENSIONS_BEFORE_THE_BACKENDS,
+};
 use crate::formats::text_formats::{
     sanitize_extensions, sanitize_names, DEFAULT_TEXT_EXTENSIONS, DEFAULT_TEXT_NAMES,
 };
@@ -1835,6 +1837,12 @@ fn repair_older_lists(ini: &mut Ini) -> bool {
             sanitize_magick_extensions as fn(&str) -> Vec<String>,
         ),
         (
+            PEAZIP_SECTION,
+            DEFAULT_PEAZIP_EXTENSIONS,
+            &[PEAZIP_EXTENSIONS_BEFORE_THE_BACKENDS][..],
+            sanitize_peazip_extensions as fn(&str) -> Vec<String>,
+        ),
+        (
             VECTOR_SECTION,
             DEFAULT_VECTOR_EXTENSIONS,
             &[
@@ -3450,6 +3458,36 @@ mod tests {
             sanitize_image_extensions(DEFAULT_IMAGE_EXTENSIONS),
             "the list the app shipped before is read as the list it ships now"
         );
+    }
+
+    /// And the same for the `[peazip]` list, which is new to this table with the backends beside
+    /// the console archiver: a file holding the entries this app shipped before those tools were
+    /// driven has never been edited, so it is brought up to the list of now — which is how an
+    /// installation that already exists is given the names the archiver's own table never
+    /// declared, and is what keeps a `.arc` or a `.br` from previewing on a fresh installation
+    /// only.
+    #[test]
+    fn a_list_holding_the_apps_own_peazip_entries_takes_the_backends_added_to_them() {
+        let mut ini = Ini::new();
+        ini.set(
+            PEAZIP_SECTION,
+            "extensions",
+            Some(PEAZIP_EXTENSIONS_BEFORE_THE_BACKENDS.to_string()),
+        );
+
+        let config = read_file(&mut ini);
+
+        assert_eq!(
+            config.peazip_extensions,
+            sanitize_peazip_extensions(DEFAULT_PEAZIP_EXTENSIONS),
+            "the list the app shipped before is read as the list it ships now"
+        );
+        for name in ["arc", "zpaq", "br", "bcm", "lpaq8"] {
+            assert!(
+                config.peazip_extensions.iter().any(|entry| entry == name),
+                "`{name}` is one of the names added with the backends"
+            );
+        }
     }
 
     /// Names taken out of a built-in list leave the files already written with them: the

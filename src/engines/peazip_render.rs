@@ -7,42 +7,64 @@
 //! `.zst` a file is put through before it is sent. PeaZip is the tool that opens them, and what it
 //! is asked for here is the one thing that page needs: what is in the file.
 //!
-//! What it hands back is the answer its own console archiver prints for an archive — the archive's
-//! table of contents, entry by entry, as text — and that text is what this module carries back to
-//! the rest of the app. It is read into the same listing every other archive's is read into (see
-//! `archive_listing::engine_listing`), held in the same cache under the same key, and drawn by
-//! the same page: a `.cab` is previewed exactly like a `.zip`, because that is what it is, a list
-//! of what the file holds. Nothing of the engine reaches the screen and nothing of it is kept:
-//! what is kept between hovers is the listing, and a second hover of the same archive is a lookup
-//! that starts nothing at all.
+//! What is asked, and of which of the tools PeaZip ships, is settled by the name a file carries —
+//! see `peazip_formats::Backend`, which answers it for every name this kind is gated by. Most
+//! names are the console archiver's: the 7-Zip console PeaZip carries in `res\bin\7z`, which reads
+//! more formats than anything else it ships and can be asked for a report meant to be read by
+//! something other than a person. Three belong to the backends beside it, each of which reads a
+//! format that one cannot open at all — FreeArc's archiver for an `.arc`, zpaq for a `.zpaq`, and
+//! Zstandard's own tool for a `.zst`, which the archiver reads too but without saying how large the
+//! stream was before it was compressed, which is the whole of what a hover on one is for.
 //!
-//! Nothing is bundled with this app and nothing is linked against: the engine is the user's own
+//! And three have no listing to ask for at all. A `.br`, a `.bcm` and an `.lpaq8` are single
+//! streams: the tools that write them put one file into one file and have no command that prints
+//! what is inside, because there is nothing inside but the bytes. What this module answers for one
+//! of those is the member an extraction would write — its name, taken from the file's own name the
+//! way every single-stream name here is, and no size, since the only way to learn that one is to
+//! decompress — and no process is started for it: the page is this app's own answer, and what says
+//! the name may be previewed at all is the tool being there.
+//!
+//! What a tool hands back is the answer it prints for an archive — the archive's table of contents,
+//! entry by entry, as text — and that text is what this module carries back to the rest of the app.
+//! It is read into the same listing every other archive's is read into (see `archive_listing`),
+//! held in the same cache under the same key, and drawn by the same page: a `.cab` is previewed
+//! exactly like a `.zip`, because that is what it is, a list of what the file holds. Nothing of a
+//! tool reaches the screen and nothing of it is kept: what is kept between hovers is the listing,
+//! and a second hover of the same archive is a lookup that starts nothing at all.
+//!
+//! Nothing is bundled with this app and nothing is linked against: the tools are the user's own
 //! installation of PeaZip, looked for where it installs and beside `config.ini` for a portable
-//! copy, and run as the user runs it. What a listing costs is a launch — a fraction of a second
-//! for an ordinary archive — and it is not one a preview can wait on: the caller is the preview
-//! loop, and a loop held inside a launch is a hover that does not come up, a tray that does not
-//! answer and a pointer that cannot leave the file it is on. So the engine runs on a thread of its
-//! own. What the loop asks is [`request`], which returns at once, and what it waits for is the
-//! answer that thread sends back through the preview channel — the same wait a page an engine drew
-//! has, in the same box, with the hover replayed when the answer lands. One listing runs at a
-//! time, and the file waiting behind it is the newest one asked for.
+//! copy, and run as the user runs them. A name is answered only where the tool that reads it is
+//! there, so a portable copy carrying a few of them shows the names those few read and no others.
+//! What a listing costs is a launch — a fraction of a second for an ordinary archive — and it is
+//! not one a preview can wait on: the caller is the preview loop, and a loop held inside a launch
+//! is a hover that does not come up, a tray that does not answer and a pointer that cannot leave
+//! the file it is on. So a tool runs on a thread of its own. What the loop asks is [`request`],
+//! which returns at once, and what it waits for is the answer that thread sends back through the
+//! preview channel — the same wait a page an engine drew has, in the same box, with the hover
+//! replayed when the answer lands. One listing runs at a time, and the file waiting behind it is
+//! the newest one asked for.
 //!
-//! An engine that has stopped answering is the other half of that. A file the archiver cannot open
-//! does not always fail quickly — a damaged archive, or one whose format it reads through a
+//! An engine that has stopped answering is the other half of that. A file one of these tools cannot
+//! open does not always fail quickly — a damaged archive, or one whose format it reads through a
 //! delegate this machine was never given, can leave a listing running past any bound a hover is
 //! owed — so a listing that has outrun [`LISTING_GIVE_UP`] is ended where it stands, and the file
 //! it was on is remembered as one the engine will not list: the launch is paid for once and never
 //! again, and the hover that asked for it is answered rather than left spinning. What is
-//! remembered lives for the run rather than on disk, like the answer itself.
+//! remembered lives for the run rather than on disk, like the answer itself. One of these tools was
+//! measured doing exactly that rather than failing, and it is worth naming: the zpaq PeaZip 10.9.0
+//! ships — zpaqfranz — does not come back at all from a file that is not a zpaq, so a `.zpaq` whose
+//! bytes are something else is a hover the give-up answers.
 //!
 //! What this module is *not* is a process the app keeps. It is the shape `imagemagick_render` has
-//! rather than the shape `libreoffice_render` has, and for the same reason: the engine is a
-//! converter — it is handed an archive, prints what is inside it and exits — so there is nothing
+//! rather than the shape `libreoffice_render` has, and for the same reason: each of these tools is
+//! a converter — it is handed an archive, prints what is inside it and exits — so there is nothing
 //! to hold open between files and nothing for an idle time to bound. What a user who wants their
-//! archives to open faster changes is not a TTL but the listing cache: a second hover of an
-//! archive whose listing is still held costs no engine at all. See the `Engine` submenu, where
-//! the engines that *are* kept have their `… TTL` rows and this one has none.
+//! archives to open faster changes is not a TTL but the listing cache: a second hover of an archive
+//! whose listing is still held costs no tool at all. See the `Engine` submenu, where the engines
+//! that *are* kept have their `… TTL` rows and this one has none.
 
+use crate::formats::peazip_formats::Backend;
 use once_cell::sync::Lazy;
 use std::io::Read;
 use std::os::windows::process::CommandExt;
@@ -93,26 +115,53 @@ const ANSWERS_MAX_ENTRIES: usize = 512;
 /// The folder PeaZip installs into, under each program directory.
 const ENGINE_FOLDER: &str = "PeaZip";
 
-/// The console archiver PeaZip carries, by the path it keeps it at inside its own folder.
+/// The tools of this machine's PeaZip, looked for under the folders it installs into.
 ///
-/// It is not PeaZip's own executable that is run: `peazip.exe` is the windowed frontend, and what
-/// it does when it is pointed at an archive is open a window — which is not a preview and not
-/// something a hover may do. The work is done by the archivers PeaZip ships, and this is the one
-/// among them that reads the most formats and can be asked for a listing in a form meant to be
-/// read by something other than a person. The extra codecs PeaZip puts beside it are what make it
-/// PeaZip's build rather than stock: asked without them it would not open a `.zst` at all.
-const ENGINE_IMAGE: &str = r"res\bin\7z\7z.exe";
+/// It is not PeaZip's own executable that is looked for. `peazip.exe` is the windowed frontend, and
+/// what it does when it is pointed at an archive is open a window — its `-ext2list` switch has it
+/// *show* a listing rather than print one, in a window of its own, which is neither a preview nor
+/// something a hover may do, and nothing of it would reach a pipe anyway. The work is done by the
+/// archivers PeaZip carries beside it, and which of them a file is handed to is settled by the name
+/// it carries — see `Backend`.
+///
+/// Each tool is looked for separately, so an installation missing one of them — a portable copy
+/// carrying a few — still answers for the names the others read, and a name whose own tool is not
+/// there shows nothing rather than a page of something else.
+struct Backends {
+    seven_zip: Option<PathBuf>,
+    arc: Option<PathBuf>,
+    zpaq: Option<PathBuf>,
+    zstd: Option<PathBuf>,
+    brotli: Option<PathBuf>,
+    bcm: Option<PathBuf>,
+    lpaq: Option<PathBuf>,
+}
 
-/// Where PeaZip keeps its archiver, for the two places it installs and for a portable copy a user
-/// may have put beside `config.ini` or beside the app.
+impl Backends {
+    /// The tool this machine has for a file, or nothing where the installation carries none.
+    fn program(&self, backend: Backend) -> Option<&Path> {
+        match backend {
+            Backend::SevenZip => self.seven_zip.as_deref(),
+            Backend::Arc => self.arc.as_deref(),
+            Backend::Zpaq => self.zpaq.as_deref(),
+            Backend::Zstd => self.zstd.as_deref(),
+            Backend::Brotli => self.brotli.as_deref(),
+            Backend::Bcm => self.bcm.as_deref(),
+            Backend::Lpaq => self.lpaq.as_deref(),
+        }
+    }
+}
+
+/// The folders a PeaZip installation is looked for under: the two the installer writes to, and the
+/// two a portable copy sits in.
 ///
-/// The two program directories are where the installer puts it — `C:\Program Files\PeaZip` and
-/// its 32-bit sibling — and the portable copies are the two places every other engine of this
-/// app's is looked for beside: the folder `config.ini` lives in, and the folder the app runs from.
-/// Nothing is guessed at from the `PATH`: the tool this app runs is the one inside a PeaZip
-/// installation, and a `7z.exe` found on the `PATH` is another program's copy of the same
-/// archiver — one with no PeaZip codecs beside it and no PeaZip the user installed.
-fn find_engine() -> Option<PathBuf> {
+/// The two program directories are where the installer puts it — `C:\Program Files\PeaZip` and its
+/// 32-bit sibling — and the portable copies are the two places every other engine of this app's is
+/// looked for beside: the folder `config.ini` lives in, and the folder the app runs from. Nothing
+/// is guessed at from the `PATH`: a tool this app runs is the one inside a PeaZip installation, and
+/// a `7z.exe` found on the `PATH` is another program's copy of the same archiver — one with no
+/// PeaZip codecs beside it and no PeaZip the user installed.
+fn installation_folders() -> Vec<PathBuf> {
     let mut roots: Vec<PathBuf> = vec![
         Path::new(r"C:\Program Files").join(ENGINE_FOLDER),
         Path::new(r"C:\Program Files (x86)").join(ENGINE_FOLDER),
@@ -129,8 +178,13 @@ fn find_engine() -> Option<PathBuf> {
     }
 
     roots
+}
+
+/// One tool of the installation, looked for under each folder in turn.
+fn find_program(backend: Backend) -> Option<PathBuf> {
+    installation_folders()
         .into_iter()
-        .map(|root| root.join(ENGINE_IMAGE))
+        .map(|folder| folder.join(backend.program()))
         .find(|program| program.is_file())
 }
 
@@ -140,13 +194,30 @@ fn config_folder() -> Option<PathBuf> {
         .and_then(|path| path.parent().map(Path::to_path_buf))
 }
 
-/// The engine this machine has, looked for once: the answer is a fact about an installation
-/// rather than a question about a hover.
-static ENGINE: Lazy<Option<PathBuf>> = Lazy::new(find_engine);
+/// Every tool this machine has, looked for once: the answer is a fact about an installation rather
+/// than a question about a hover.
+static BACKENDS: Lazy<Backends> = Lazy::new(|| Backends {
+    seven_zip: find_program(Backend::SevenZip),
+    arc: find_program(Backend::Arc),
+    zpaq: find_program(Backend::Zpaq),
+    zstd: find_program(Backend::Zstd),
+    brotli: find_program(Backend::Brotli),
+    bcm: find_program(Backend::Bcm),
+    lpaq: find_program(Backend::Lpaq),
+});
 
-/// Whether an engine is installed to list these archives with.
+/// Whether an engine is installed to list these archives with: the console archiver, which is what
+/// the list is mostly made of and what the tray's own row is about. A name one of the other tools
+/// reads is asked about where it is routed, by `available_for`.
 pub fn available() -> bool {
-    ENGINE.is_some()
+    BACKENDS.seven_zip.is_some()
+}
+
+/// Whether the tool that reads this file is installed, which is what says a hover onto it may be
+/// answered at all. A machine without PeaZip has none of them, and a portable copy carrying a few
+/// answers for the names those few read.
+pub fn available_for(path: &Path) -> bool {
+    BACKENDS.program(Backend::of(path)).is_some()
 }
 
 /// Whether the engine is the one that lists this file: a name of its own list, or the bytes of an
@@ -218,7 +289,7 @@ pub fn listed(path: &Path) -> bool {
 /// what a caller watches for is the message it sends when it is done — or the mark that says the
 /// listing is not coming. A hover that asked for one is replayed when the answer lands.
 pub fn request(path: &Path, generation: u64) {
-    if !imports(path) || !available() || refused(path) || listed(path) {
+    if !imports(path) || !available_for(path) || refused(path) || listed(path) {
         return;
     }
 
@@ -344,54 +415,96 @@ fn next_request() -> Option<Requested> {
     }
 }
 
-/// List a file, by running the engine the way a user would.
+/// List a file, by asking the tool of the installation that reads it the way a user would.
 ///
-/// What comes back is the archive's table of contents read into the shape the rest of the app
-/// reads a listing in, or nothing where the engine reported none — which is the answer for an
-/// archive it cannot open, one whose own headers are encrypted, a run that was given up on, and a
-/// process that could not be started at all.
+/// What comes back is the archive's table of contents read into the shape the rest of the app reads
+/// a listing in, or nothing where the tool reported none — which is the answer for an archive it
+/// cannot open, one whose own table of contents is encrypted, a run that was given up on, and a
+/// process that could not be started at all. And for a single-stream file — a `.br`, a `.bcm`, an
+/// `.lpaq8` — there is no tool to ask and nothing to ask it: what comes back is the member an
+/// extraction would write, derived from the file's own name (see
+/// `archive_listing::stream_listing`).
 fn list(path: &Path) -> Option<crate::readers::archive_listing::Listing> {
-    let program = ENGINE.as_ref()?;
+    let backend = Backend::of(path);
     let file_size = std::fs::metadata(path).ok()?.len();
 
-    let (report, status) = contents(program, path)?;
+    if !backend.has_a_listing() {
+        return crate::readers::archive_listing::stream_listing(path, file_size);
+    }
+
+    let program = BACKENDS.program(backend)?;
+    let (report, status) = contents(backend, program, path)?;
+
+    let mut listing = match backend {
+        Backend::SevenZip => {
+            crate::readers::archive_listing::engine_listing(&report, path, file_size)
+        }
+        Backend::Arc => crate::readers::archive_listing::arc_listing(&report, file_size),
+        Backend::Zpaq => crate::readers::archive_listing::zpaq_listing(&report, file_size),
+        Backend::Zstd => crate::readers::archive_listing::zstd_listing(&report, path, file_size),
+        // A tool with no listing is never run, so there is never a report of its to read: the arm
+        // is here because a name has to be routed to something.
+        Backend::Brotli | Backend::Bcm | Backend::Lpaq => None,
+    }?;
 
     // A run that reported a table of contents and then ended badly — an archive it could read part
-    // of and not the rest — is a listing that stops where the engine stopped, which is the caveat
-    // the page states in its own words.
-    let mut listing = crate::readers::archive_listing::engine_listing(&report, path, file_size)?;
+    // of and not the rest — is a listing that stops where the tool stopped, which is the caveat the
+    // page states in its own words.
     listing.read_truncated = !status.success() || listing.read_truncated;
 
     Some(listing)
 }
 
-/// Ask the engine what is in `source`, and answer the report it printed and how it ended.
+/// Ask a tool what is in `source`, and answer the report it printed and how it ended.
 ///
-/// What is asked for is a technical listing — `-slt`, the form meant to be read by something other
-/// than a person — of the file named after the switches are over. Every one of those is a
-/// decision:
+/// What each is asked is a decision of its own, measured against PeaZip 10.9.0:
 ///
-/// * `--` ends the switches, so a file whose own name begins with a dash is still a file rather
-///   than an argument.
-/// * The report is read from the engine's own output as it is written, on a thread of its own, so
-///   that an archive holding twenty thousand entries does not deadlock against the pipe between
-///   the two processes. It is bounded like every other read of this app, by the ceiling one hover
-///   may decode for, so an engine answering with more text than any listing is costs the budget
-///   rather than the machine.
+/// * The console archiver is asked for a technical listing — `-slt`, the form meant to be read by
+///   something other than a person — and FreeArc for its verbose one, `v`, which is the only one of
+///   its three listings that carries a folder's attributes. Both are given `--` to end the
+///   switches, so a file whose own name begins with a dash is still a file rather than an argument.
+/// * zpaq is asked to list (`l`) with no `--` after it, because it takes none: given one it prints
+///   its usage instead, which this side reads as no report at all and remembers as a file that
+///   could not be listed.
+/// * And zstd is asked for `-l`, its frame table, which is the whole reason `.zst` is routed to it
+///   rather than to the archiver: the archiver lists a `.zst` too, and leaves the sizes blank.
+///
+/// What is shared is what every one of them needs:
+///
+/// * The report is read from the tool's own output as it is written, on a thread of its own, so that
+///   an archive holding twenty thousand entries does not deadlock against the pipe between the two
+///   processes. It is bounded like every other read of this app, by the ceiling one hover may
+///   decode for, so a tool answering with more text than any listing is costs the budget rather
+///   than the machine.
 /// * Its input is closed (`Stdio::null()`) and that is not a detail: an archive whose table of
-///   contents is encrypted makes this tool ask for a password on its own input, and a process
-///   asking a question nobody can answer is a preview that never comes up. Reading from nothing,
-///   it is answered with an end of input and gives up on the file, which is the answer this side
-///   wants and the reason it is safe to ask at all.
-/// * And it is started without a console window of its own (`CREATE_NO_WINDOW`): the engine is a
-///   console program and this app is not, so Windows would otherwise give every listing a window
-///   of its own — a black rectangle over whatever the pointer was on, for as long as the launch
-///   lasted. See `engine_processes` for the flag and for what it is said of.
-fn contents(program: &Path, source: &Path) -> Option<(String, ExitStatus)> {
-    let mut child = Command::new(program)
-        .arg("l")
-        .arg("-slt")
-        .arg("--")
+///   contents is encrypted makes one of these ask for a password on its own input, and a process
+///   asking a question nobody can answer is a preview that never comes up. Reading from nothing, it
+///   is answered with an end of input and gives up on the file, which is the answer this side wants
+///   and the reason it is safe to ask at all.
+/// * And it is started without a console window of its own (`CREATE_NO_WINDOW`): these are console
+///   programs and this app is not, so Windows would otherwise give every listing a window of its
+///   own — a black rectangle over whatever the pointer was on, for as long as the launch lasted.
+///   See `engine_processes` for the flag and for what it is said of.
+fn contents(backend: Backend, program: &Path, source: &Path) -> Option<(String, ExitStatus)> {
+    let mut command = Command::new(program);
+
+    match backend {
+        Backend::SevenZip => {
+            command.args(["l", "-slt", "--"]);
+        }
+        Backend::Arc => {
+            command.args(["v", "--"]);
+        }
+        Backend::Zpaq => {
+            command.arg("l");
+        }
+        Backend::Zstd => {
+            command.arg("-l");
+        }
+        Backend::Brotli | Backend::Bcm | Backend::Lpaq => return None,
+    }
+
+    let mut child = command
         .arg(source)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -690,44 +803,82 @@ mod tests {
         assert!(is_hung(&running(LISTING_GIVE_UP + Duration::from_secs(30))));
     }
 
-    /// The engine's own program is found inside a PeaZip installation and nowhere else: what the
-    /// app runs is the archiver PeaZip ships, beside the codecs that make it PeaZip's build, and a
-    /// `7z.exe` another program installed is not this engine. Whatever this machine has is what
-    /// the expectations are written from, and the rule is what is asserted.
+    /// Every tool of the installation is found inside a PeaZip folder and nowhere else: what the app
+    /// runs are the archivers PeaZip carries, and a `7z.exe` another program installed is not one
+    /// of them. Whatever this machine has is what the expectations are written from, and the rule
+    /// is what is asserted.
     #[test]
-    fn finds_the_engine_inside_an_installation_and_never_a_tool_of_its_own() {
-        let found = find_engine();
+    fn finds_the_tools_inside_an_installation_and_never_one_of_its_own() {
+        for backend in [
+            Backend::SevenZip,
+            Backend::Arc,
+            Backend::Zpaq,
+            Backend::Zstd,
+            Backend::Brotli,
+            Backend::Bcm,
+            Backend::Lpaq,
+        ] {
+            let program = match backend {
+                Backend::SevenZip => &BACKENDS.seven_zip,
+                Backend::Arc => &BACKENDS.arc,
+                Backend::Zpaq => &BACKENDS.zpaq,
+                Backend::Zstd => &BACKENDS.zstd,
+                Backend::Brotli => &BACKENDS.brotli,
+                Backend::Bcm => &BACKENDS.bcm,
+                Backend::Lpaq => &BACKENDS.lpaq,
+            };
 
-        if let Some(program) = &found {
+            // A tool this installation does not carry is nothing to have expectations about: the
+            // names it reads are answered with no preview, which the routing test in
+            // `peazip_formats` is the one that says.
+            let Some(program) = program else {
+                continue;
+            };
+
             assert!(
                 program.is_file(),
-                "the engine found is a program that is there"
+                "a tool that was found is a program that is there"
             );
             assert_eq!(
                 program.file_name().and_then(|name| name.to_str()),
-                ENGINE_IMAGE
+                backend
+                    .program()
                     .rsplit('\\')
                     .next()
                     .map(str::to_string)
                     .as_deref(),
-                "the engine runs under its own name"
+                "{backend:?} runs under the name its own path inside the installation ends with"
             );
 
-            // And it is inside a folder called what the installation root is called, which is
-            // what a copy on the `PATH` would not be.
+            // And it is inside a folder called what the installation root is called, which is what
+            // a copy on the `PATH` would not be.
             let inside = program.to_string_lossy().replace('/', "\\");
             assert!(
                 inside
                     .to_lowercase()
                     .contains(&format!("\\{}\\", ENGINE_FOLDER.to_lowercase())),
-                "the engine found is inside a PeaZip folder: {inside}"
+                "{backend:?} is inside a PeaZip folder: {inside}"
             );
         }
 
         assert_eq!(
             available(),
-            found.is_some(),
-            "and whether an engine is installed is the answer this app goes by"
+            BACKENDS.seven_zip.is_some(),
+            "and whether an engine is installed is the answer the tray's own row goes by"
+        );
+
+        // A name is asked about where it is routed rather than of the installation as a whole, so
+        // a machine carrying the archiver and not the backends still answers for the archiver's
+        // names and shows nothing for the others.
+        assert_eq!(
+            available_for(Path::new("backup.zpaq")),
+            BACKENDS.zpaq.is_some(),
+            "a `.zpaq` is answered where zpaq is installed"
+        );
+        assert_eq!(
+            available_for(Path::new("backup.cab")),
+            BACKENDS.seven_zip.is_some(),
+            "and a `.cab` where the console archiver is"
         );
     }
 
@@ -739,7 +890,7 @@ mod tests {
     #[test]
     #[ignore = "starts the installed PeaZip"]
     fn engine_listing_probe() {
-        let Some(program) = ENGINE.as_ref() else {
+        let Some(program) = BACKENDS.program(Backend::SevenZip) else {
             println!("no PeaZip installed: nothing to measure");
             return;
         };

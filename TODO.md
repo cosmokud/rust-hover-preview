@@ -138,25 +138,37 @@ Beside each name is the one thing that would change it.
 
 **A format PeaZip handles with another of its own tools** — the engine this app drives is the
 console archiver PeaZip carries, and these are the formats its other backends handle: `pea`
-(PeaZip's own format), `arc` (FreeArc), `zpaq` and `paq`/`lpaq`, `upx`, and the codecs its build
-carries no format for — `br` (Brotli), `lz4`, `lz5`, `lizard`, `flzma2`. Asking the engine for
-one of them is answered with `Cannot open the file as archive`, measured against PeaZip 10.9.0
-for a `.arc`, a `.zpaq` and a `.br`. What would show them:
+(PeaZip's own format), `paq8`, `upx`, and the codecs its build carries no format for — `lz4`,
+`lz5`, `lizard`, `flzma2`. Asking the archiver for one of them is answered with `Cannot open the
+file as archive`, measured against PeaZip 10.9.0. The tools beside it are driven now — `arc`,
+`zpaq`, `zst`, `br`, `bcm` and `lpaq8` are entries of `[peazip]`, and each is read by the tool
+inside the installation that reads it (see `peazip_formats::Backend`) — so what is left here is
+the rest:
 
-- `arc`, `zpaq`: the backend tools PeaZip ships list their own archives — `Arc.exe l` and
-  `zpaq.exe l` — each with a syntax and an output of its own, so each is a second and a third
-  listing parser beside the one `archive_listing` reads. What they are asked for would then be
-  settled per format, since a file is not one of theirs by its bytes alone.
 - `pea`: there is no list command to drive. The PEA documentation says so — "there is no
   separate list/test command" — and what the format holds is written in object headers that its
   extractor walks. A reader here would be a walk of those headers (they are not compressed), or
   a preview built by extracting a copy to a temp folder, which is an extraction this app makes
   for nothing else.
-- `br`, `lz4`, `lz5`, `lizard`, `flzma2`: single-stream codecs. PeaZip's `brotli.exe` and
-  `zstd.exe` compress and decompress one file at a time, so a preview of a `.br` is a preview of
-  one member rather than of a container — the same shape the `.gz`, `.bz2`, `.xz` and `.zst`
-  entries have, and a second engine rather than a list entry. (`zstd` is in the list already:
-  PeaZip's build declares it as a *format* as well as a codec, which is the difference.)
+- `lz4`, `lz5`, `lizard`, `flzma2`: single-stream codecs the console archiver carries and no
+  tool of the installation opens a file of. `br` was the same case until `brotli.exe` was routed
+  for it; these four have no executable beside them at all — measured, the whole of `res\bin`
+  holds `7z`, `arc`, `brotli`, `lpaq`, `quad` and `zstd` — so there is nothing to route them to.
+- `paq8`: the PAQ8 family's tool is not in this installation. `res\bin\paq` holds no executable
+  while `res\bin\lpaq` beside it holds the `lpaq8.exe` that reads an `.lpaq8`, which is why that
+  name is in the list and this one is not; a build that ships `paq\paq8.exe` would be one entry
+  in the list and one arm of the routing away.
+- `upx`: not an archive at all. UPX packs an executable, and what it lists of a file is how that
+  one file was packed rather than what is inside it — and a program is not an archive, which is
+  the same reason `exe` and `dll` are not entries of the list.
+
+What showed `arc` and `zpaq`, and what is worth knowing about them now that they are here:
+`Arc.exe v` is FreeArc's verbose listing, its one listing that carries the attributes a folder is
+told by, and its packed column is block accounting rather than a size per entry — the second file
+of a solid block is reported as taking nothing — so no packed total is read out of it; `zpaq.exe l`
+lists the latest version of every name it holds; and the zpaq PeaZip 10.9.0 ships is zpaqfranz,
+which does not come back at all from a file that is not a zpaq, so a `.zpaq` whose bytes are
+something else is a hover the give-up answers.
 
 **And a format whose marker a hover cannot reach.** An `.iso` and a `.udf` say what they are
 thirty-two kilobytes into the file — `CD001` at 32769, a UDF descriptor at 32768 — and what a

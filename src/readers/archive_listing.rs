@@ -364,6 +364,248 @@ fn push_engine_entry(listing: &mut Listing, fields: &[(&str, &str)], archive: &P
     }
 }
 
+/// The listing of a single-stream file whose own tool has nothing to say: the member an extraction
+/// would write.
+///
+/// This is the one answer here that no tool produced. Brotli, BCM and LPAQ put one file into one
+/// file and print nothing about what is inside — there is nothing inside but the bytes — so there
+/// is nothing to ask, and what a hover on one of their files shows is what is true without asking:
+/// that there is one member, what an extraction would call it, and how much the file it came from
+/// weighs. What is *not* stated is the member's own size: none of those three streams keeps one,
+/// and the only way to learn it is to decompress the whole file, which is not a hover's work. The
+/// page says what it knows and no more — the name, and the file's weight on disk.
+pub(crate) fn stream_listing(path: &Path, file_size: u64) -> Option<Listing> {
+    let name = normalize_name(&stream_member_name(path)?)?;
+
+    let mut listing = Listing::new();
+    listing.file_size = file_size;
+    listing.push(name, 0, None, false, false);
+    listing.settle_totals();
+
+    Some(listing)
+}
+
+/// The listing `zstd -l` gives for a `.zst`, read into the shape every reader here produces.
+///
+/// What the tool prints is a header and one line for the file it was given: how many frames the
+/// stream holds, how much it weighs, how much it weighed before it was compressed, and where it
+/// is. The member is the one the stream is — a `.zst` keeps no name inside itself any more than a
+/// `bzip2` does, so it is named the way every single-stream member here is (see
+/// [`stream_member_name`]) — and what the tool adds is the size, which is what this route is for:
+/// the console archiver lists a `.zst` too and leaves that column blank.
+///
+/// A file zstd will not read is answered with the header and a line of its own saying so rather
+/// than with a data line, and that is no listing — the same answer an archive the archiver cannot
+/// open gets from it.
+pub(crate) fn zstd_listing(report: &str, archive: &Path, file_size: u64) -> Option<Listing> {
+    let name = normalize_name(&stream_member_name(archive)?)?;
+
+    // The data line is the one whose first two columns are counts: the header's are words, and a
+    // complaint's first word is not a number.
+    let line = report.lines().find(|line| {
+        let mut fields = line.split_whitespace();
+        matches!((fields.next(), fields.next()),
+            (Some(frames), Some(skips))
+                if frames.parse::<u64>().is_ok() && skips.parse::<u64>().is_ok())
+    })?;
+
+    let mut fields = line.split_whitespace().skip(2).peekable();
+    let packed = stream_size(&mut fields)?;
+    // A stream whose frame header states no size is one the tool cannot weigh, and a member of
+    // unknown size is shown as nothing rather than as a number this side does not have.
+    let size = stream_size(&mut fields).unwrap_or(0);
+
+    let mut listing = Listing::new();
+    listing.file_size = file_size;
+    listing.push(name, size, Some(packed), false, false);
+    listing.settle_totals();
+
+    Some(listing)
+}
+
+/// The listing zpaq gives for a `.zpaq`, read into the shape every reader here produces.
+///
+/// zpaq is a journaling archiver, and what it prints for a name is the latest version of it — one
+/// line for a file, with the date and time it was saved, how large it is, and a flag before the
+/// name: `#` for a folder and `+` for a file. A name is the last thing on the line and may hold
+/// spaces, so it is taken as what is left of the line after the flag rather than as a column, and
+/// only lines that open with a date and a time are read at all: the header above them, the totals
+/// below them and the tool's own closing line are not entries.
+///
+/// Nothing else of a line is kept. What zpaq stores of a file is a date, its attributes and the
+/// fragments its contents were split into, and none of that is what a page of contents is made of
+/// — the sizes are the whole of what a hover shows.
+pub(crate) fn zpaq_listing(report: &str, file_size: u64) -> Option<Listing> {
+    let mut listing = Listing::new();
+    listing.file_size = file_size;
+
+    for line in report.lines() {
+        let words = words_of(line);
+        if !opens_with_a_timestamp(&words) {
+            continue;
+        }
+
+        // What follows the timestamp: the size, the ratio, the flag and then the name. A folder is
+        // marked by a bracket before its size, which is the one line whose fields do not start
+        // where every other line's do.
+        let fields = if words.get(2).is_some_and(|(_, word)| *word == "[") {
+            &words[3..]
+        } else {
+            &words[2..]
+        };
+
+        let (Some((_, size)), Some((_, ratio)), Some((_, flag)), Some((name_start, _))) =
+            (fields.first(), fields.get(1), fields.get(2), fields.get(3))
+        else {
+            continue;
+        };
+
+        // The ratio column is a percentage or the word a folder is marked with, and the flag is
+        // one of the two characters the tool marks a line with. A line that is neither is a line
+        // of another shape, and it is skipped rather than guessed at.
+        let Ok(size) = size.parse::<u64>() else {
+            continue;
+        };
+        if !(ratio.ends_with('%') || *ratio == "dir") || !matches!(*flag, "+" | "#") {
+            continue;
+        }
+
+        let is_dir = *flag == "#";
+        if let Some(name) = normalize_name(line[*name_start..].trim()) {
+            listing.push(name, if is_dir { 0 } else { size }, None, is_dir, false);
+        }
+    }
+
+    if listing.entries.is_empty() {
+        return None;
+    }
+
+    listing.settle_totals();
+    Some(listing)
+}
+
+/// The listing FreeArc's verbose report gives for an `.arc`, read into the shape every reader here
+/// produces.
+///
+/// What it is asked for is `v` — its verbose listing — and what it prints is a line per entry with
+/// the date, the attributes, the size, the space the entry takes and its CRC, and then the name.
+/// It is the one of FreeArc's three listings that carries the attributes, which is where a folder
+/// is told from a file: a directory's are marked with a `D`, a file's are dots.
+///
+/// The packed column is deliberately not read. What FreeArc reports there is block accounting
+/// rather than a size per entry — the second file of a solid block is reported as taking nothing,
+/// because the block it shares was paid for by the first — so a sum of that column is not the
+/// archive's compressed size, and a page built on one would state a saving that is not a saving.
+/// What the page gives instead is what the file itself weighs on disk.
+pub(crate) fn arc_listing(report: &str, file_size: u64) -> Option<Listing> {
+    let mut listing = Listing::new();
+    listing.file_size = file_size;
+
+    for line in report.lines() {
+        let words = words_of(line);
+        if !opens_with_a_timestamp(&words) {
+            continue;
+        }
+
+        // Attributes, the size, the space taken and the CRC — that is four columns — and then the
+        // name, which is the last of them and may hold spaces, so it is what is left of the line
+        // after the CRC rather than a column of its own.
+        let (Some((_, attributes)), Some((_, size)), Some(_), Some((crc_start, crc))) =
+            (words.get(2), words.get(3), words.get(4), words.get(5))
+        else {
+            continue;
+        };
+
+        let Ok(size) = size.parse::<u64>() else {
+            continue;
+        };
+
+        let is_dir = attributes.contains('D');
+        let name = line[crc_start + crc.len()..].trim();
+
+        if let Some(name) = normalize_name(name) {
+            listing.push(name, if is_dir { 0 } else { size }, None, is_dir, false);
+        }
+    }
+
+    if listing.entries.is_empty() {
+        return None;
+    }
+
+    listing.settle_totals();
+    Some(listing)
+}
+
+/// The words on a line, each with the index it starts at, which is what a name that may hold
+/// spaces is taken as the rest of the line from.
+fn words_of(line: &str) -> Vec<(usize, &str)> {
+    let mut words: Vec<(usize, &str)> = Vec::new();
+    let mut start: Option<usize> = None;
+
+    for (index, character) in line.char_indices() {
+        if character.is_whitespace() {
+            if let Some(start) = start.take() {
+                words.push((start, &line[start..index]));
+            }
+        } else if start.is_none() {
+            start = Some(index);
+        }
+    }
+
+    if let Some(start) = start {
+        words.push((start, &line[start..]));
+    }
+
+    words
+}
+
+/// Whether a line opens with the date and the time both FreeArc and zpaq put in front of an entry
+/// — `2026-09-25` and `12:15:27` — which is what an entry line is told by, since nothing else in
+/// either report opens with one.
+fn opens_with_a_timestamp(words: &[(usize, &str)]) -> bool {
+    let (Some((_, date)), Some((_, time))) = (words.first(), words.get(1)) else {
+        return false;
+    };
+
+    let at =
+        |value: &str, index: usize, separator: u8| value.as_bytes().get(index) == Some(&separator);
+
+    date.len() == 10
+        && at(date, 4, b'-')
+        && at(date, 7, b'-')
+        && time.len() == 8
+        && at(time, 2, b':')
+        && at(time, 5, b':')
+}
+
+/// One size out of `zstd -l`'s table: a number and, where the tool wrote one, the unit it is in.
+fn stream_size<'a>(fields: &mut std::iter::Peekable<impl Iterator<Item = &'a str>>) -> Option<u64> {
+    let value: f64 = fields.next()?.parse().ok()?;
+
+    let multiplier = match fields.peek().and_then(|unit| unit_in_bytes(unit)) {
+        Some(multiplier) => {
+            fields.next();
+            multiplier
+        }
+        None => 1.0,
+    };
+
+    Some((value * multiplier).round() as u64)
+}
+
+/// What one of the units `zstd -l` writes after a size is worth in bytes, and nothing for a token
+/// that is not one — that token is the next column's and is left where it is.
+fn unit_in_bytes(unit: &str) -> Option<f64> {
+    match unit {
+        "B" => Some(1.0),
+        "KiB" => Some(1024.0),
+        "MiB" => Some(1024.0 * 1024.0),
+        "GiB" => Some(1024.0 * 1024.0 * 1024.0),
+        "TiB" => Some(1024.0 * 1024.0 * 1024.0 * 1024.0),
+        _ => None,
+    }
+}
+
 /// What the one member of a single-stream format is called: the archive's own name with the
 /// extension it was compressed under taken off, which is the name an extraction writes it under
 /// and the name the file had before it was compressed.
@@ -813,6 +1055,169 @@ Size = \nPacked Size = \n\n";
         assert!(engine_listing(not_an_archive, Path::new("notes.txt"), 12).is_none());
 
         assert!(engine_listing("", Path::new("empty.cab"), 0).is_none());
+    }
+
+    /// FreeArc's verbose listing, as FreeArc 0.67 — the archiver PeaZip 10.9.0 carries — writes it:
+    /// a timestamped line per entry, with the attributes a folder is told by, the size, the space
+    /// the entry takes and its CRC, and the name last, backslashes and all. Captured from the tool.
+    const ARC_REPORT: &str =
+        "FreeArc 0.67 (March 15 2014) listing archive: C:\\downloads\\backup.arc\n\
+Date/time              Attr            Size          Packed      CRC Filename\n\
+-----------------------------------------------------------------------------\n\
+2026-09-25 12:15:27 .D.....               0               0 00000000 inner\n\
+2026-09-25 12:15:27 .......              30              77 86e5f392 notes.txt\n\
+2026-09-25 12:15:27 .......              12               0 c3dbba13 inner\\deep.txt\n\
+-----------------------------------------------------------------------------\n\
+3 files, 42 bytes, 77 compressed\n\
+All OK\n";
+
+    #[test]
+    fn reads_the_entries_out_of_freearcs_verbose_listing() {
+        let listing = arc_listing(ARC_REPORT, 367).expect("a listing");
+
+        assert_eq!(listing.entries.len(), 3);
+        assert_eq!(listing.file_size, 367);
+
+        let names: Vec<&str> = listing
+            .entries
+            .iter()
+            .map(|entry| entry.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["inner", "notes.txt", "inner/deep.txt"]);
+
+        // The attributes are what a folder is told by here: it is the only column that says so,
+        // and the rule lines and the totals the tool closes with are not entries at all.
+        assert!(listing.entries[0].is_dir);
+        assert!(!listing.entries[1].is_dir);
+        assert_eq!(listing.entries[1].size, 30);
+        assert_eq!(listing.total_size, 42);
+
+        // The packed column is block accounting rather than a size per entry — the second file of
+        // a solid block is reported as taking nothing, the block having been paid for by the first
+        // — so neither a size nor a total is stated from it.
+        assert_eq!(listing.entries[1].packed, None);
+        assert_eq!(listing.packed_total, None);
+    }
+
+    /// And a file that is not one of its archives is a line of its own with no entries under it,
+    /// which is no listing here rather than an empty one.
+    #[test]
+    fn answers_an_arc_the_archiver_could_not_read_with_no_listing() {
+        let report = "FreeArc 0.67 (March 15 2014) listing archive: C:\\downloads\\notes.txt\n\n\
+ERROR: C:\\downloads\\notes.txt isn't archive or this archive is corrupt: archive signature not found at the end of archive.\n";
+
+        assert!(arc_listing(report, 30).is_none());
+    }
+
+    /// What zpaq prints for an archive, as the zpaq PeaZip 10.9.0 carries — zpaqfranz — writes it:
+    /// the latest version of every name it holds, one line each, with a folder marked by a bracket
+    /// before its size and by a `#`, and a file by a `+`. Captured from the tool.
+    const ZPAQ_REPORT: &str =
+        "zpaqfranz v62.5h-JIT,SFTP-L,HW BLAKE3,SHA1/2,4,SFX64 v55.1,(2025-07-29)\n\n\
+<<C:/downloads/backup.zpaq>>: 1 versions, 3 files, 1.254 bytes (1.22 KB)\n\n\n\
+   Date      Time   Size Ratio Name\n\
+---------- --------  ---- ----- -----\n\
+2026-09-25 12:15:27 [  12   dir # inner/\n\
+2026-09-25 12:15:27    12 >999% + inner/deep.txt\n\
+2026-09-25 12:15:27    30 >999% + notes.txt\n\n\
+                    42 (42.00  B) of 42 (42.00  B) in 3 files shown\n\
+                 1.254 compressed  Ratio 29.857 <<C:/downloads/backup.zpaq>>\n\
+0.000s (00:00:00,13.07KB) (all OK)\n";
+
+    #[test]
+    fn reads_the_names_out_of_zpaqs_own_listing() {
+        let listing = zpaq_listing(ZPAQ_REPORT, 1254).expect("a listing");
+
+        assert_eq!(listing.entries.len(), 3);
+
+        let names: Vec<&str> = listing
+            .entries
+            .iter()
+            .map(|entry| entry.name.as_str())
+            .collect();
+        // The folder is stored with the slash that marks it and is named without it, the way every
+        // other reader of this app's names one.
+        assert_eq!(names, vec!["inner", "inner/deep.txt", "notes.txt"]);
+
+        assert!(listing.entries[0].is_dir);
+        assert_eq!(listing.entries[2].size, 30);
+        assert_eq!(listing.total_size, 42);
+
+        // zpaq states what an archive weighs, not what one name in it took, so the page gives the
+        // file's own weight rather than a saving it cannot state.
+        assert_eq!(listing.packed_total, None);
+    }
+
+    /// And what zpaq prints for a file that is not its own is its usage screen with no entry lines
+    /// in it, which is the same answer: no listing.
+    #[test]
+    fn answers_a_zpaq_it_could_not_read_with_no_listing() {
+        let usage = "zpaqfranz v62.5h-JIT,SFTP-L,HW BLAKE3,SHA1/2,4,SFX64 v55.1,(2025-07-29)\n\
+Usage: zpaqfranz command archive.zpaq files|directories -switches\n\
+  a: Append files     | x: Extract            |   t: Test\n";
+
+        assert!(zpaq_listing(usage, 30).is_none());
+        assert!(zpaq_listing("", 30).is_none());
+    }
+
+    /// What `zstd -l` prints for a stream, captured from the tool: a header and one line carrying
+    /// how many frames the file holds, what it weighs and what it weighed before it was compressed.
+    const ZSTD_REPORT: &str = "Frames  Skips  Compressed  Uncompressed  Ratio  Check  Filename\n\
+     1      0      43   B        30   B  0.698  XXH64  C:\\downloads\\notes.txt.zst\n";
+
+    #[test]
+    fn reads_the_size_the_zstd_tool_reports_for_a_stream() {
+        let listing = zstd_listing(ZSTD_REPORT, Path::new(r"C:\downloads\notes.txt.zst"), 43)
+            .expect("a listing");
+
+        assert_eq!(listing.entries.len(), 1);
+        assert_eq!(listing.entries[0].name, "notes.txt");
+        assert_eq!(listing.entries[0].size, 30);
+        assert_eq!(listing.entries[0].packed, Some(43));
+        assert_eq!(listing.total_size, 30);
+        assert_eq!(listing.packed_total, Some(43));
+    }
+
+    /// The sizes in that table are a number and a unit, and a unit larger than bytes is a size
+    /// this side reads rather than one it mistakes for a number of bytes.
+    #[test]
+    fn reads_the_units_the_zstd_table_writes_its_sizes_in() {
+        let report = "Frames  Skips  Compressed  Uncompressed  Ratio  Check  Filename\n\
+     1      0     168   B      3.50 KiB  21.333  XXH64  C:\\downloads\\sample.tar.zst\n";
+
+        let listing = zstd_listing(report, Path::new(r"C:\downloads\sample.tar.zst"), 168)
+            .expect("a listing");
+
+        assert_eq!(listing.entries[0].size, 3584, "3.50 KiB is 3584 bytes");
+        assert_eq!(listing.entries[0].packed, Some(168));
+    }
+
+    /// A file the tool will not read is answered with the header and a line saying so, which is no
+    /// data line and so no listing.
+    #[test]
+    fn answers_a_stream_the_zstd_tool_will_not_read_with_no_listing() {
+        let report = "Frames  Skips  Compressed  Uncompressed  Ratio  Check  Filename\n\
+File \"C:\\downloads\\notes.txt\" not compressed by zstd \n";
+
+        assert!(zstd_listing(report, Path::new(r"C:\downloads\notes.txt.zst"), 30).is_none());
+    }
+
+    /// The one answer here that no tool produced: a single-stream file whose own tool has no
+    /// listing to give is the member an extraction would write — named after the file, and with no
+    /// size of its own, since nothing but a decompression of the whole file knows one.
+    #[test]
+    fn derives_the_member_of_a_stream_no_tool_can_report_on() {
+        let listing =
+            stream_listing(Path::new(r"C:\downloads\notes.txt.br"), 31).expect("a listing");
+
+        assert_eq!(listing.entries.len(), 1);
+        assert_eq!(listing.entries[0].name, "notes.txt");
+        assert_eq!(listing.entries[0].size, 0);
+        assert_eq!(listing.entries[0].packed, None);
+        assert!(!listing.entries[0].is_dir);
+        assert_eq!(listing.file_size, 31);
+        assert_eq!(listing.total_size, 0);
+        assert_eq!(listing.packed_total, None);
     }
 
     /// What is held for a file is what the two passes of one hover read, and an archive saved

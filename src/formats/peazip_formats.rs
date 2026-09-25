@@ -9,22 +9,38 @@
 //! is sent — and a hover onto one shows nothing at all today.
 //!
 //! PeaZip is the tool that opens them. It is a frontend rather than a decoder: the archivers it
-//! ships are what actually read these formats, and the console one among them — the 7-Zip
-//! console PeaZip carries in `res\bin\7z`, with PeaZip's own extra codecs beside it — answers
-//! the one question this app needs, which is what is in the file. So where PeaZip is installed
-//! it is asked, and what comes back is the archive's own table of contents, read into the same
-//! shape every other listing is and drawn as the same page: a `.cab` is previewed like a `.zip`,
-//! because that is what it is — a list of what the file holds, and not a rendering of it. See
-//! `peazip_render` for the engine and `archive_listing` for the reading of its answer.
+//! ships are what actually read these formats, and which of them is asked is a question about the
+//! name a file carries — see `Backend`, which answers it for every name. Most are the console
+//! archiver's: the 7-Zip console PeaZip carries in `res\bin\7z`, with PeaZip's own extra codecs
+//! beside it, which reads more formats than anything else it ships and can be asked for a report
+//! meant to be read by something other than a person. The rest belong to the backends PeaZip
+//! carries for formats that one cannot open at all: FreeArc's archiver for an `.arc`, zpaq for a
+//! `.zpaq`, and Zstandard's own tool for a `.zst` — which the archiver reads too, but without
+//! saying how large the stream was before it was compressed, which is the whole of what a hover on
+//! one is for.
 //!
-//! The list below is built from the engine's own registry rather than from what PeaZip is said
-//! to support: every name in it is declared by the build PeaZip ships's own format table (the
-//! one its console tool prints when it is asked what it reads), and a name belongs here only
-//! where that table declares a *format* for it rather than a codec. That distinction is the
-//! whole reason the list is narrower than PeaZip's own file-type list — PeaZip ships codecs
-//! (Brotli, LZ4, LZ5, Lizard, Fast-LZMA2) that its console tool can *unpack inside a container*
-//! and cannot open a file of: asked for one of those by name, it answers that it cannot open the
-//! file as an archive. Measured against PeaZip 10.9.0, a `.zst` lists and a `.br` does not.
+//! Three of them have no listing to ask for at all. A `.br`, a `.bcm` and an `.lpaq8` are single
+//! streams: the tools that write them — Brotli, BCM and LPAQ, each of them carried by PeaZip — put
+//! one file into one file and have no command that prints what is inside, because there is nothing
+//! inside but the bytes. What a hover on one shows is the member an extraction would write: its
+//! name, taken from the file's own name the way every single-stream name here is, and no size,
+//! since the only way to learn that one is to decompress. Nothing is started for one — the page is
+//! this app's own answer — and what says the name may be previewed at all is the tool being there.
+//!
+//! So where PeaZip is installed it is asked, and what comes back is the archive's own table of
+//! contents, read into the same shape every other listing is and drawn as the same page: a `.cab`
+//! is previewed like a `.zip`, because that is what it is — a list of what the file holds, and not
+//! a rendering of it. See `peazip_render` for the engines and `archive_listing` for the reading of
+//! their answers.
+//!
+//! The list below is built from what the tools of an installation can be asked about rather than
+//! from what PeaZip is said to support. The console archiver's own table settled most of it — the
+//! one it prints when it is asked what it reads — and a name belongs here only where that table
+//! declares a *format* for it rather than a codec: PeaZip ships codecs (LZ4, LZ5, Lizard,
+//! Fast-LZMA2) that its console tool can *unpack inside a container* and cannot open a file of,
+//! and nothing beside it opens one either, so none of them is here. Brotli was measured the same
+//! way and is here for the opposite reason: the archiver refuses a `.br` too, and `brotli.exe`,
+//! which PeaZip carries beside it, is what reads one.
 //!
 //! What is *not* here is a judgement rather than a gap, and each group is worth naming:
 //!
@@ -55,42 +71,50 @@
 //!   it should show, so `001` is an entry of the list and nothing would be gained by naming the
 //!   rest.
 //!
-//! Nothing is bundled with this app and nothing is linked against: the engine is the user's own
+//! Nothing is bundled with this app and nothing is linked against: the tools are the user's own
 //! installation of PeaZip, looked for where it installs and beside `config.ini` for a portable
 //! copy, and where there is none a hover onto one of these names shows nothing at all — the same
-//! answer a camera raw gets on a machine without ImageMagick. The list lives in `config.ini` as
-//! `[peazip] extensions`, written from the built-in list on first run and read back from there,
-//! so a user can add a format the engine reads and this app does not know, or take one out.
+//! answer a camera raw gets on a machine without ImageMagick. A name is answered only where the
+//! tool that reads it is there, so a portable copy carrying a few of them shows the names those
+//! few read and no others. The list lives in `config.ini` as `[peazip] extensions`, written from
+//! the built-in list on first run and read back from there, so a user can add a format a tool of
+//! theirs reads and this app does not know, or take one out.
 //!
-//! The question here is only what a file is *called*. What it *is* — whether the engine can read
-//! it at all — is settled by the engine, and a name it cannot read is answered with no preview
-//! once and then remembered, so a name put in this list by mistake costs one launch and never
-//! another. See `is_engine_archive`, which asks the file's own bytes before its name and is the
-//! one question every side asks before the engine is started.
+//! The question here is only what a file is *called*, and for most of these names that is the
+//! whole of it: what the file *is* — whether a tool can read it at all — is settled by the tool,
+//! and a name it cannot read is answered with no preview once and then remembered, so a name put
+//! in this list by mistake costs one launch and never another. The three single-stream names are
+//! the exception, and the reason is the one written above: nothing is started for one, so there
+//! is no answer to remember and nothing to refuse. See `is_engine_archive`, which asks the file's
+//! own bytes before its name and is the one question every side asks before a tool is started.
 
 use crate::config::config::PreviewType;
 use crate::formats::text_formats;
 use crate::CONFIG;
 use std::path::Path;
 
-/// The extensions written to `config.ini` on first run: every format the console archiver PeaZip
-/// ships declares, that no list of this app's own already claims, and that is a container of
-/// files rather than a program.
+/// The extensions written to `config.ini` on first run: the names the tools of an installed
+/// PeaZip can be asked about, that no list of this app's own already claims, and that are
+/// containers of files rather than programs.
 ///
 /// Three groups, in the order they are written:
 ///
-/// * The archives and installers nothing else on the machine opens: `001`, `ar`, `arj`, `cab`,
-///   `chm`, `cpio`, `deb`, `esd`, `hfs`, `hfsx`, `hxs`, `iso`, `lha`, `lit`, `lzh`, `msi`, `msp`,
-///   `pkg`, `ppkg`, `rpm`, `swm`, `udf`, `wim`, `xar` and `xip`. Some are containers of files in
-///   the ordinary sense (an installer, a help file, a Linux package, a disk image), some are the
-///   volume of a backup, and all of them are read by the engine and by nothing this app has.
-/// * The single-stream compressors: `bz2`, `bzip2`, `gz`, `gzip`, `lzma`, `xz`, `z` and `zst`,
-///   with the tarball spellings that name them (`taz`, `tbz`, `tbz2`, `tpz`, `tzst`). One of
-///   these is a file put through a compressor rather than a container, so the engine's answer is
-///   one member, often one whose name is not in the stream at all — and the reading of that
-///   answer is what puts a name to it (see `archive_listing`). They are here because the engine
-///   reads them and this app does not, and because what a hover shows for one — the name, the
-///   size, and how much smaller it was made — is the useful part of opening it.
+/// * The archives and installers nothing else on the machine opens: `001`, `ar`, `arc`, `arj`,
+///   `cab`, `chm`, `cpio`, `deb`, `esd`, `hfs`, `hfsx`, `hxs`, `iso`, `lha`, `lit`, `lzh`, `msi`,
+///   `msp`, `pkg`, `ppkg`, `rpm`, `swm`, `udf`, `wim`, `xar`, `xip` and `zpaq`. Some are
+///   containers of files in the ordinary sense (an installer, a help file, a Linux package, a
+///   disk image), some are the volume of a backup, and all of them are read by a tool of PeaZip's
+///   and by nothing this app has. Two of them are that tool's rather than the console archiver's:
+///   an `arc` is FreeArc's and a `zpaq` is zpaq's, and neither is read by the archiver at all.
+/// * The single-stream compressors: `bcm`, `br`, `bz2`, `bzip2`, `gz`, `gzip`, `lpaq8`, `lzma`,
+///   `xz`, `z` and `zst`, with the tarball spellings that name them (`taz`, `tbz`, `tbz2`, `tpz`,
+///   `tzst`). One of these is a file put through a compressor rather than a container, so the
+///   answer is one member, often one whose name is not in the stream at all — and the reading of
+///   that answer is what puts a name to it (see `archive_listing`). They are here because a tool
+///   of PeaZip's reads them and this app does not, and because what a hover shows for one — the
+///   name, the size where the tool knows it, and how much smaller it was made — is the useful
+///   part of opening it. `bcm`, `br` and `lpaq8` are the three whose tools cannot say even that
+///   much; nothing is started for one of them.
 /// * And the disk images whose names are their own: `apfs`, `cramfs`, `dmg`, `qcow`, `qcow2`,
 ///   `squashfs`, `vdi`, `vhd`, `vhdx`, `vmdk`.
 ///
@@ -99,14 +123,109 @@ use std::path::Path;
 /// `xpi`, `cbz`, `tgz`, `pmd`, `swf`, `flv`, `doc`, `xls`, `ppt`), the programs the engine lists
 /// as resources (`exe`, `dll`, `sys`, `obj`, `elf`, `macho`, `te`, `b64`, `ihex`, `simg`,
 /// `uefif`, `scap`, `lpimg`, `nsis`, `mslz`, `mub`), the extensions that are words rather than
-/// formats (`img`, `ext`, `ext2`, `ext3`, `ext4`, `fat`, `ntfs`, `apm`, `mbr`, `gpt`), the
-/// codecs its build carries no format for (`br`, `lz4`, `lz5`, `lizard`, `flzma2`), and the
-/// compression formats this app has no need of an engine for (`xz` is here, `lzma86` and
-/// `base64` are not).
+/// formats (`img`, `ext`, `ext2`, `ext3`, `ext4`, `fat`, `ntfs`, `apm`, `mbr`, `gpt`), the codecs
+/// its build carries no format for and no tool of its own opens (`lz4`, `lz5`, `lizard`,
+/// `flzma2`), the two names this installation carries no tool for at all (`pea`, which no tool of
+/// PeaZip's lists, and `paq8`, whose folder holds no executable — both are written down in
+/// TODO.md), and the compression formats this app has no need of an engine for (`xz` is here,
+/// `lzma86` and `base64` are not).
 pub const DEFAULT_PEAZIP_EXTENSIONS: &str =
+    "001,apfs,ar,arc,arj,bcm,br,bz2,bzip2,cab,chm,cpio,cramfs,deb,dmg,esd,gz,gzip,\
+hfs,hfsx,hxs,iso,lha,lit,lpaq8,lzh,lzma,msi,msp,pkg,ppkg,qcow,qcow2,rpm,squashfs,swm,\
+taz,tbz,tbz2,tpz,txz,tzst,udf,udeb,vdi,vhd,vhdx,vmdk,wim,xar,xip,xz,z,zpaq,zst";
+
+/// The list this app wrote before the tools beside the console archiver were driven: the names
+/// that list held, which is what tells a file written by that build from one a user has edited
+/// (see `crate::config::config::repair_older_lists`).
+///
+/// A list holding exactly these entries is this app's own — nobody typed it — and is brought up
+/// to `DEFAULT_PEAZIP_EXTENSIONS`, which is how an installation that already exists is given the
+/// names the archiver's own table never declared: `arc`, `zpaq`, `br`, `bcm` and `lpaq8`. The
+/// entries are written in the order they were written then, since that is what a file holds.
+pub const PEAZIP_EXTENSIONS_BEFORE_THE_BACKENDS: &str =
     "001,apfs,ar,arj,bz2,bzip2,cab,chm,cpio,cramfs,deb,dmg,esd,gz,gzip,\
 hfs,hfsx,hxs,iso,lha,lit,lzh,lzma,msi,msp,pkg,ppkg,qcow,qcow2,rpm,squashfs,swm,\
 taz,tbz,tbz2,tpz,txz,tzst,udf,udeb,vdi,vhd,vhdx,vmdk,wim,xar,xip,xz,z,zst";
+
+/// The tool inside an installed PeaZip that reads a file, and so the tool this app runs to list it.
+///
+/// The console archiver answers for every name but a handful: it reads more formats than anything
+/// else PeaZip ships and can be asked for a report meant to be read by something other than a
+/// person. The others are the backends it carries beside it for the formats that one cannot open
+/// — and they are not interchangeable with it: FreeArc and zpaq each read their own format and no
+/// other, and the three single-stream compressors have no listing at all (see `has_a_listing`).
+///
+/// A name is routed by the extension it carries and never by its bytes, which is the line TODO.md
+/// draws for these formats: a file is not one of theirs by its bytes alone. What that costs is a
+/// renamed archive — an `.arc` called a `.dat` is a file none of these tools is asked about, and it
+/// shows nothing — and what it buys is that a picture or a document whose bytes a marker of one of
+/// these formats happens to resemble is never handed to an archiver on the strength of it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Backend {
+    /// The console archiver PeaZip carries in `res\bin\7z`, asked for the technical listing of a
+    /// name its own format table declares.
+    SevenZip,
+    /// FreeArc, PeaZip's backend for the `.arc` it has read-write support for, asked for its
+    /// verbose listing.
+    Arc,
+    /// zpaq, the journaling archiver, asked to list the names it holds — the latest version of
+    /// each, since that is what a hover is for.
+    Zpaq,
+    /// Zstandard's own tool, which reports what the archiver leaves blank for a `.zst`: how many
+    /// frames the stream holds, and how large it was before it was compressed.
+    Zstd,
+    /// And the three whose tools cannot answer: Brotli, BCM and LPAQ. Each puts one file into one
+    /// stream, so what is previewed is the single member an extraction would write, and nothing is
+    /// started to find that out.
+    Brotli,
+    Bcm,
+    Lpaq,
+}
+
+impl Backend {
+    /// The tool that reads a file, settled by the extension its name carries.
+    ///
+    /// It is the extension the lists are matched by — `text_formats::lookup_extension`, shared
+    /// rather than copied so that routing and the gate cannot disagree about what a file is called
+    /// — so a name here is the same one `[peazip] extensions` is written with. A name no arm below
+    /// names is the console archiver's, which is what the list is mostly made of and what a user's
+    /// own added entry is read by.
+    pub fn of(path: &Path) -> Backend {
+        match text_formats::lookup_extension(path).as_deref() {
+            Some("arc") => Backend::Arc,
+            Some("zpaq") => Backend::Zpaq,
+            Some("zst" | "tzst" | "zstd") => Backend::Zstd,
+            Some("br") => Backend::Brotli,
+            Some("bcm") => Backend::Bcm,
+            Some("lpaq8") => Backend::Lpaq,
+            _ => Backend::SevenZip,
+        }
+    }
+
+    /// The path this tool keeps inside a PeaZip installation, which is where it is looked for.
+    pub fn program(self) -> &'static str {
+        match self {
+            Backend::SevenZip => r"res\bin\7z\7z.exe",
+            Backend::Arc => r"res\bin\arc\Arc.exe",
+            Backend::Zpaq => r"res\bin\zpaq\zpaq.exe",
+            Backend::Zstd => r"res\bin\zstd\zstd.exe",
+            Backend::Brotli => r"res\bin\brotli\brotli.exe",
+            Backend::Bcm => r"res\bin\quad\bcm.exe",
+            Backend::Lpaq => r"res\bin\lpaq\lpaq8.exe",
+        }
+    }
+
+    /// Whether this tool has a listing of its own to give.
+    ///
+    /// The three that do not are single-stream compressors: one file goes in, one comes out, and
+    /// no command of theirs prints what is inside, because there is nothing inside but the bytes.
+    /// What the app shows for one of their files is derived from the file's own name rather than
+    /// read out of an answer (see `peazip_render`), and no process is started for it — so the
+    /// presence of the tool, and not a launch, is what says the name may be previewed at all.
+    pub fn has_a_listing(self) -> bool {
+        !matches!(self, Backend::Brotli | Backend::Bcm | Backend::Lpaq)
+    }
+}
 
 /// Whether the configured list claims `path`.
 pub fn matches_peazip_list(path: &Path, extensions: &[String]) -> bool {
@@ -295,6 +414,7 @@ mod tests {
 
         for name in [
             "backup.arj",
+            "backup.arc",
             "backup.cab",
             "help.chm",
             "linux.deb",
@@ -312,12 +432,83 @@ mod tests {
             "readme.xz",
             "readme.zst",
             "readme.z",
+            "readme.br",
+            "readme.bcm",
+            "readme.lpaq8",
+            "backup.zpaq",
             "archive.001",
             "archive.lzh",
         ] {
             assert!(
                 matches_peazip_list(Path::new(name), &list),
                 "`{name}` is one of the engine's archives"
+            );
+        }
+    }
+
+    /// And every name is routed to the tool inside an installation that reads it: the console
+    /// archiver for the formats its own table declares, and the backend PeaZip carries beside it
+    /// for the names that one cannot open at all.
+    #[test]
+    fn routes_a_name_to_the_tool_that_reads_it() {
+        let routed = |name: &str| Backend::of(Path::new(name));
+
+        assert_eq!(routed("backup.arc"), Backend::Arc);
+        assert_eq!(routed("backup.zpaq"), Backend::Zpaq);
+        assert_eq!(routed("notes.txt.zst"), Backend::Zstd);
+        assert_eq!(routed("notes.tzst"), Backend::Zstd);
+        assert_eq!(routed("notes.txt.br"), Backend::Brotli);
+        assert_eq!(routed("notes.txt.bcm"), Backend::Bcm);
+        assert_eq!(routed("notes.txt.lpaq8"), Backend::Lpaq);
+
+        // The console archiver's is every other name in the list, and every name a user adds to
+        // it: it reads the most formats of anything PeaZip ships, so a name no arm above names is
+        // its own rather than nothing's.
+        for name in [
+            "backup.cab",
+            "system.iso",
+            "readme.bz2",
+            "image.vhd",
+            "archive.001",
+            "something-a-user-added.xyz",
+        ] {
+            assert_eq!(
+                routed(name),
+                Backend::SevenZip,
+                "`{name}` is the archiver's to read"
+            );
+        }
+
+        // And a name is routed by the same extension the lists are matched by, which is why that
+        // lookup is one function: `ZST` is the `zst` entry, and the tool is the same one.
+        assert_eq!(routed("notes.txt.ZST"), Backend::Zstd);
+    }
+
+    /// Of those tools, three have no listing of their own to give, and each of them is a
+    /// single-stream compressor. What the app does instead of asking one is written where the
+    /// routing is; what is asserted here is which of them it is.
+    #[test]
+    fn knows_which_tools_have_a_listing_to_give() {
+        for backend in [Backend::Brotli, Backend::Bcm, Backend::Lpaq] {
+            assert!(
+                !backend.has_a_listing(),
+                "{backend:?} compresses one file to one stream and has nothing to print"
+            );
+            assert!(
+                backend.program().ends_with(".exe"),
+                "{backend:?} still names the tool that reads its format"
+            );
+        }
+
+        for backend in [
+            Backend::SevenZip,
+            Backend::Arc,
+            Backend::Zpaq,
+            Backend::Zstd,
+        ] {
+            assert!(
+                backend.has_a_listing(),
+                "{backend:?} lists what it reads and is asked for it"
             );
         }
     }

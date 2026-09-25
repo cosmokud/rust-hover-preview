@@ -118,7 +118,12 @@ pub fn sanitize_extensions(list: &str) -> Vec<String> {
 /// has no extension — the dot begins its name — so a leading dot is stripped and
 /// what follows is the name the lists are written with, which is what makes
 /// `gitignore` in the extension list mean `.gitignore`.
-fn lookup_extension(path: &Path) -> Option<String> {
+///
+/// It is shared rather than copied for the one other caller that has to agree with a list about
+/// what a file is called: the tool a name is routed to inside an installed PeaZip (see
+/// `peazip_formats::Backend::of`), which has to read a name the same way the list that claims it
+/// did.
+pub(crate) fn lookup_extension(path: &Path) -> Option<String> {
     if let Some(extension) = path.extension().and_then(|ext| ext.to_str()) {
         return Some(extension.to_lowercase());
     }
