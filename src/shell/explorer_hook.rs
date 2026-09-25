@@ -1217,6 +1217,15 @@ fn is_media_file(path: &Path) -> bool {
     if is_pdf_file(path) {
         return PreviewType::Ebook.enabled_in(&config);
     }
+
+    // And a comic, which is the other half of the same kind and is claimed by the same list: what a
+    // hover on one shows is a page of it rather than the page of contents a box of files used to be,
+    // and what a user turns off for either is books. A container with no plate in it is a box this
+    // side reads and answers nothing for, which the box measurement is what settles; see
+    // `ebook_formats`.
+    if crate::formats::ebook_formats::matches_ebook_list(path, &config.ebook_extensions) {
+        return PreviewType::Ebook.enabled_in(&config);
+    }
     if matches_archive_list(path, &config.archive_extensions) {
         return PreviewType::Archives.enabled_in(&config);
     }

@@ -20,6 +20,7 @@ use crate::formats::archive_formats;
 use crate::formats::calibre_formats;
 use crate::formats::codecs;
 use crate::formats::design_formats;
+use crate::formats::ebook_formats;
 use crate::formats::font_formats;
 use crate::formats::libre_formats;
 use crate::formats::magick_formats;
@@ -28,6 +29,7 @@ use crate::formats::peazip_formats;
 use crate::formats::text_formats;
 use crate::formats::vector_formats;
 use crate::formats::video_formats::{self, is_video_file};
+use crate::readers::comic_preview;
 use crate::readers::dds_image;
 use crate::readers::eps_image;
 use crate::readers::font_preview;
@@ -629,6 +631,14 @@ enum MediaType {
     /// throws over a book the app drew itself is not the switch over one an engine had to convert,
     /// and only one of the two costs a conversion to show.
     Calibre,
+    /// The first plate of a comic book, read out of the container it is filed in — a `.cbz`, a
+    /// `.cbr` or a `.cbc`: a plate is decoded the way a picture is, and then drawn the way a page
+    /// is, at the share of the display a book is drawn over. It is the book kind's *other* half,
+    /// and what it has in common with the two above is the whole of why it is here: what a hover on
+    /// a book shows is a page, whichever reader drew one. See `ebook_formats` and `comic_preview`,
+    /// and note that what draws it is this window rather than an engine — there is nothing to wait
+    /// for and nothing to keep.
+    Comic,
     Loading,
 }
 
@@ -666,6 +676,10 @@ impl MediaType {
             // And a book an engine converted: a page like any other, at the gate over books,
             // because what a user turns off is books.
             Self::Calibre => Some(PreviewType::Calibre),
+            // And a comic, which is the same kind of preview as a PDF — a page of a book — drawn by
+            // a reader of this app's own rather than by an engine, so the switch over it is the
+            // switch for books and nothing else.
+            Self::Comic => Some(PreviewType::Ebook),
             Self::Vector => Some(PreviewType::Vector),
             Self::Loading => None,
         }
@@ -2328,6 +2342,12 @@ fn effective_preview_scale(path: &Path, scales: HoverScales) -> PreviewScale {
 
     if pdf_preview::is_pdf_file(path) {
         scale_of_kind(PreviewType::Ebook, path, scales)
+    } else if ebook_formats::is_comic_name(path) {
+        // A comic is the book rule at the book kind's share, the same one a PDF page keeps: what is
+        // drawn is a plate of a printed page, so the room the display has is what it is drawn over
+        // rather than a size of its own to be scaled from — and a manga is a page at book size, not
+        // a picture to be looked at at 100%.
+        scale_of_kind(PreviewType::Ebook, path, scales)
     } else if page_is_painted(path) {
         // A listing is a page of text painted to the box it is given, whether this app read the
         // archive itself or an engine listed it, so both are the text rule.
@@ -2569,10 +2589,11 @@ fn is_text_preview(path: &Path) -> bool {
     // that a name in two lists is measured as the kind the hook called it: the text lists
     // reach further than the others — a `.md` in the `[libre]` list is a Markdown document
     // the engine would be asked to draw — and a preview measured as text would be placed
-    // as one and drawn as the other. A name in the video, PDF, archive or office list is
+    // as one and drawn as the other. A name in the video, book, archive or office list is
     // excluded the same way, and `libre` is the newest of them.
     !is_video_file(path)
         && !pdf_preview::is_pdf_file(path)
+        && !ebook_formats::is_comic_name(path)
         && !archive_formats::is_archive_file(path)
         && !office_formats::is_office_file(path)
         && !libre_formats::is_libre_file(path)
@@ -3986,6 +4007,57 @@ fn load_engine_page(
     ))
 }
 
+/// The box a comic is placed at: the first plate's own size, and nothing at all for a container
+/// with no plate in it.
+///
+/// It is the one box of the book kind that is not waited for. A PDF page exists and is measured, a
+/// book an engine converted does not exist yet and is the wait for one, and a comic is neither: the
+/// plate is inside the file and this side is the reader, so the only two answers are the size of
+/// that plate and nothing — and nothing is a hover that shows no preview and starts no engine,
+/// which is what a box of text under a comic's name gets (see `comic_preview`).
+///
+/// The size is read once per version of the comic, because it costs a read of the plate out of the
+/// container rather than a header read of a file: the answer is held where the reader holds it and
+/// the plate itself is not (see `comic_preview::dimensions`).
+fn comic_box(path: &Path) -> Option<(u32, u32)> {
+    comic_preview::dimensions(path)
+}
+
+/// The first plate of a comic, drawn into the box the layout measured it for.
+///
+/// It is `load_pdf_first_page` for a book that is a container rather than a document: what is drawn
+/// is a picture that is already in the file, decoded at the size the box asks for and composited
+/// over the backdrop the book kind is drawn over. Nothing is waited on and nothing is converted —
+/// the plate is read out of the archive, decoded and scaled in one go — so this is the one book of
+/// the kind whose preview is made on the side that shows it.
+fn load_comic_page(
+    path: &Path,
+    max_width: u32,
+    max_height: u32,
+    preview_scale: PreviewScale,
+) -> Option<MediaData> {
+    let (page_width, page_height) = comic_preview::dimensions(path)?;
+
+    let (target_width, target_height) = scale_dimensions(
+        page_width,
+        page_height,
+        max_width,
+        max_height,
+        preview_scale,
+    );
+    let pixels = comic_preview::decode(path, target_width, target_height)?;
+
+    Some(static_image_media(
+        ImageFrame {
+            pixels,
+            width: target_width,
+            height: target_height,
+            delay_ms: 0,
+        },
+        MediaType::Comic,
+    ))
+}
+
 /// The page a converted book is drawn from, drawn into the box the layout measured it for.
 ///
 /// It is `load_engine_page` for the one engine whose page is a whole book rather than a page of a
@@ -5354,6 +5426,14 @@ fn load_media(
         return load_pdf_first_page(path, max_width, max_height, preview_scale);
     }
 
+    // And a comic, which is the other half of the same kind and is asked beside the PDF: what a
+    // hover on one shows is a page of it, which is a picture inside the container this app reads
+    // itself — so there is nothing to wait for here, and a box with no plate in it is a hover that
+    // shows nothing rather than one waiting on an answer (see `comic_preview`).
+    if ebook_formats::is_comic_name(path) {
+        return load_comic_page(path, max_width, max_height, preview_scale);
+    }
+
     if archive_formats::is_archive_file(path) {
         return load_archive_preview(
             path,
@@ -5525,6 +5605,10 @@ fn load_media_of_kind(
 ) -> Option<MediaData> {
     match kind {
         PreviewType::Videos => load_video_thumbnail(path, max_width, max_height, preview_scale),
+        // A book whose kind came from its *content* rather than from its name is a page the PDF
+        // reader is the one that reads: the bytes said PDF, whatever the file is called. A comic is
+        // never answered this way — a zip and a rar are boxes, and a box is not a kind — so the
+        // comic reader is asked about one by name in the chain above instead.
         PreviewType::Ebook => load_pdf_first_page(path, max_width, max_height, preview_scale),
         PreviewType::Archives => load_archive_preview(
             path,
@@ -5743,6 +5827,14 @@ fn get_media_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
     // PDF reports no dimensions, which drops the preview instead of guessing.
     if pdf_preview::is_pdf_preview(path) {
         return pdf_preview::page_dimensions(path);
+    }
+
+    // And a comic, whose page is a picture inside the container: it is measured where the hook asks
+    // it, beside the PDF, because the two are the same kind of preview — a page of a book — and are
+    // told apart by the reader rather than by the user. A box with no plate in it is measured as
+    // nothing, which is the hover that shows no preview at all (see `comic_box`).
+    if ebook_formats::is_ebook_preview(path) {
+        return comic_box(path);
     }
 
     // An Office document is measured from the page that has been drawn for it — by Office
@@ -12950,6 +13042,127 @@ mod tests {
                 cursor_y,
                 HoverPlacement {
                     orig_dims: dimensions,
+                    avoid: None,
+                    follow_cursor: false,
+                    preview_scale: scale,
+                    flush_at_cursor: false,
+                },
+                bounds,
+                dpi,
+            ) else {
+                println!("layout: none — the hover shows no preview");
+                continue;
+            };
+            println!(
+                "layout: {}x{} at ({}, {}), free room {}x{}",
+                layout.preview_w,
+                layout.preview_h,
+                layout.pos_x,
+                layout.pos_y,
+                layout.max_width,
+                layout.max_height
+            );
+
+            let cancel = Arc::new(AtomicBool::new(false));
+            let started = Instant::now();
+            match load_media(
+                &path,
+                layout.max_width,
+                layout.max_height,
+                scale,
+                dpi,
+                Arc::clone(&cancel),
+            ) {
+                Some(media) => println!(
+                    "loaded: {}x{}, {} frame(s), in {:?}",
+                    media.current_width(),
+                    media.current_height(),
+                    media.frames.len(),
+                    started.elapsed()
+                ),
+                None => println!(
+                    "loaded: nothing — the hover blinks, in {:?}",
+                    started.elapsed()
+                ),
+            }
+        }
+    }
+
+    /// The whole path a hover takes for a comic, which is the book kind's fastest path: what the
+    /// file's name and its bytes together make of it, which plate the reader chooses out of the
+    /// container, the size it is placed at, and the frame it is drawn into. Ignored, and driven by
+    /// `RHP_COMIC_PROBE` —
+    /// `$env:RHP_COMIC_PROBE = "F:\manga\vol1.cbz;F:\manga\vol2.cbr"; cargo test -- --ignored --nocapture comic_hover_probe`
+    /// — for a comic whose preview does not appear, and for working through a folder of them one at
+    /// a time.
+    ///
+    /// Nothing here waits on anything: a comic is read rather than converted, so the whole of what a
+    /// hover does is a listing and one plate — and the timings printed are what says so.
+    #[test]
+    #[ignore = "reads the files named in RHP_COMIC_PROBE"]
+    fn comic_hover_probe() {
+        let Ok(list) = std::env::var("RHP_COMIC_PROBE") else {
+            println!("set RHP_COMIC_PROBE to one or more paths, separated by ';'");
+            return;
+        };
+
+        let bounds = ScreenBounds {
+            left: 0,
+            top: 0,
+            right: 1920,
+            bottom: 1080,
+        };
+        let dpi = 96;
+        let (cursor_x, cursor_y) = (900, 500);
+
+        for path in list
+            .split(';')
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+            .map(PathBuf::from)
+        {
+            println!("\n--- {} ---", path.display());
+
+            let claimed = crate::CONFIG
+                .lock()
+                .map(|config| ebook_formats::matches_ebook_list(&path, &config.ebook_extensions))
+                .unwrap_or(false);
+
+            println!(
+                "kinds: ebook list = {claimed}, page name = {}, comic name = {}, preview = {}",
+                ebook_formats::is_page_name(&path),
+                ebook_formats::is_comic_name(&path),
+                ebook_formats::is_ebook_preview(&path)
+            );
+
+            let started = Instant::now();
+            let Some(plate) = comic_preview::first_page_name(&path) else {
+                println!(
+                    "plate: none — the container holds no page this app can draw, after {:?}",
+                    started.elapsed()
+                );
+                continue;
+            };
+            println!("plate: `{plate}` chosen in {:?}", started.elapsed());
+
+            let started = Instant::now();
+            let dimensions = comic_preview::dimensions(&path);
+            println!("size: {dimensions:?} read in {:?}", started.elapsed());
+
+            let scale = effective_preview_scale(&path, current_hover_scales());
+            println!("scale: {scale:?}");
+
+            let Some(measured) = media_dimensions(&path, bounds, dpi) else {
+                println!("measure: nothing — the hover shows no preview");
+                continue;
+            };
+            println!("measure: {measured:?}");
+
+            let Some(layout) = compute_mouse_layout(
+                cursor_x,
+                cursor_y,
+                HoverPlacement {
+                    orig_dims: measured,
                     avoid: None,
                     follow_cursor: false,
                     preview_scale: scale,

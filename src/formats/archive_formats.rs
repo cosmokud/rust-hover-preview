@@ -24,7 +24,22 @@ use std::path::Path;
 /// `tar.gz` is a name rather than an extension — the last dot of `sources.tar.gz`
 /// is `gz`, which is not an archive on its own — so an entry containing a dot is
 /// matched against the end of the file's name instead.
-pub const DEFAULT_ARCHIVE_EXTENSIONS: &str = "7z,apk,cbz,jar,rar,tar,tar.gz,tgz,xpi,zip,zipx";
+pub const DEFAULT_ARCHIVE_EXTENSIONS: &str = "7z,apk,jar,rar,tar,tar.gz,tgz,xpi,zip,zipx";
+
+/// The built-in `[archive]` list as it stood while `cbz` was an archive rather than a comic.
+///
+/// A file holding exactly these entries is the app's own older list rather than a user's edit —
+/// nobody has typed it — so it is brought up to the built-in list rather than kept as written,
+/// which is what takes the name out of every `config.ini` already written. What it costs is the
+/// page of contents a `.cbz` used to be shown as: the name is a comic's now, and what a hover on
+/// one shows is its first page (see `ebook_formats` and `comic_preview`). A user who would rather
+/// have the listing back adds `cbz` to this list again — both lists are theirs — and the order the
+/// two are asked in is what decides; see `content_type::kind_claiming`.
+///
+/// An archive this app still reads itself, in the order it was written then: the dotted `tar.gz`
+/// is what a tarball is claimed by, so it is written as it was.
+pub const ARCHIVE_EXTENSIONS_BEFORE_THE_COMICS: &str =
+    "7z,apk,cbz,jar,rar,tar,tar.gz,tgz,xpi,zip,zipx";
 
 /// Whether either form of the configured list claims `path`: its last extension,
 /// or a dotted tail of its name for the two-part formats.

@@ -1,5 +1,6 @@
 pub(crate) mod archive_listing;
 pub(crate) mod bcn;
+pub(crate) mod comic_preview;
 pub(crate) mod dds_image;
 pub(crate) mod eps_image;
 pub(crate) mod font_preview;

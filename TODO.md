@@ -194,27 +194,12 @@ what each would take is beside it.
 
 **A name another list of this app's already reads** — the engine is never asked about one of these, and
 the file is shown by the kind that holds it, which for most of them is a preview at least as good as a
-converted page: `cbz` (a comic — the `[archive]` list's, which this app reads itself and shows what is
-inside), `chm` and `lit` (`[peazip]`, listed as the archives they are), `docx` (the Office list), `odt`
-and `pdb` (`[libre]` — LibreOffice's own filters read AportisDoc and OpenDocument), `html`, `rtf` and
-`txt` (the text lists, which read and highlight them), and `pdf`, which is this app's own book reader.
-Adding one to `[calibre]` would be a second engine asked about a file another already answers, which is
-the one thing the lists exist to prevent.
-
-**A comic book, whose family is the archive list's** — `cbr` and `cbc` are the same thing as `cbz` in a
-RAR and in the engine's own container, and neither is in any list today, so a hover on one shows
-nothing at all. Two ways to change that, and they are not the same answer:
-
-- **`cbr` as an archive.** It *is* a RAR archive, and this app reads RAR already (`unrar`), so one
-  entry in the `[archive]` list — with the `ARCHIVE_EXTENSIONS_BEFORE_*` constant that brings a file
-  nobody has edited up to the list of now — gives a `.cbr` the instant page of contents a `.cbz` gets.
-  This is the cheap answer and the consistent one: the three comic containers are one thing, and a
-  listing is what this app does with all of them.
-- **`cbr` and `cbc` as books.** One entry each in `[calibre]`, and what comes back is the comic's own
-  pages. It works, and what it costs is a conversion of *hundreds of plates* rather than of a book of
-  text — the one shape of file the engine's give-up is not calibrated for (see `calibre_render`) — so a
-  long comic is a conversion ended at the bound and a file remembered as one the engine will not
-  convert, which is worse than the listing would have been.
+converted page: `cbz`, `cbr` and `cbc` (comics — the `[ebook]` list's, which this app reads itself and
+shows the first plate of; see **Unsupported Comic Formats** below for what is left of them), `docx`
+(the Office list), `odt` and `pdb` (`[libre]` — LibreOffice's own filters read AportisDoc and
+OpenDocument), `html`, `rtf` and `txt` (the text lists, which read and highlight them), and `pdf`,
+which is this app's own page reader. Adding one to `[calibre]` would be a second engine asked about a
+file another already answers, which is the one thing the lists exist to prevent.
 
 **A format the engine does not read at all** — no list entry can reach these, and the work is a reader
 or a plugin rather than a name: `tpz`, Amazon's Topaz, which the engine detects and *refuses* with a
@@ -234,6 +219,49 @@ one: what a hover on it shows is the spinner and then nothing, once, and then no
 refusal ages out. That is the answer the engine gives rather than a gap in the list, and it is written
 down here because it is the file a user is most likely to hover first — a protected book is a book no
 engine this app drives can convert, whatever list its name is in.
+
+## Unsupported Comic Formats
+
+A comic's first plate is read out of the container by this app itself — the `[ebook]` list's comics are
+`cbz`, `cbr` and `cbc`, and what a hover shows is the first picture inside one (see `comic_preview`).
+What is below is everything that reader does not reach, with what each would take.
+
+**A plate written in a format only the codec Windows has can decode** — `webp` and `avif`, and with them
+`heic` and `jxl`. It is the one gap a reader of real comics meets: a `.cbz` of plates is very often a
+WebP set on the sites that publish digital manga, and a hover on one shows nothing at all today. The
+reason is not the format but the *side*: every plate is decoded from **bytes read out of a member**
+rather than from a file, and this app's decoders for those four formats are handed a path — the codec
+Windows has is asked for a file through the WIC factory, and the app's own libwebp binding reads a file
+too. What it would take is a stream over memory for each: an `IStream` over the buffer the member was
+inflated into — the in-memory sibling of the file stream this app already builds a page out of — and a
+decoder taken from that rather than from a path. Until then those four names are deliberately *not* in
+`PAGE_NAMES`, so a container whose plates are all WebP is answered with no preview rather than with a
+page that failed to decode.
+
+**A comic in one of the other boxes** — `cb7` (a 7z), `cbt` (a tar) and `cbz`'s cousins are the same
+thing in another container, and neither of the two is in `[ebook]`: what `archive_listing::entry_bytes`
+reads is a zip and a rar, because those are what a comic is published in. Both would be small pieces of
+work rather than new readers — the `sevenz-rust2` and `tar` crates this app already links can each hand
+over one member by name — and a name added to `[ebook]` by hand shows nothing today for exactly this
+reason: the container is the comic reader's to read, and it reads two of them.
+
+**A `.cbc` whose comics are boxes inside it rather than pages.** Calibre's own container is a zip with a
+`comics.txt` index, and the two descriptions of what the index names disagree: one tool writes the
+**plates** of every comic into the archive under a folder per comic, and Calibre's own documentation
+speaks of the comic *files* it holds. This reader assumes the first — the plates — and it is the shape
+that makes a CBC one step rather than two. A CBC that holds whole `.cbz` and `.cbr` files instead is a
+file with no plate at the top level, so it shows nothing; what it would take is a nested read, which for
+an inner **zip** is a reader over bytes this app already has but for an inner **rar** is a spill to a
+temp file, because UnRAR is handed a path. No sample of the format was available to settle which shape
+it is, so the first is what was coded against and this is written down rather than guessed at twice.
+
+**And a first plate that says nothing.** A converted book is previewed from the first of its pages that
+holds more than one colour, so a cover that is a colour swatch — which is what Calibre's quick start
+guides carry — is skipped for the page behind it (see `pdf_preview::book_page`). A comic's plate is
+chosen by *name* and shown as it is, so a scan that opens on a blank leaf, or a container whose `000.jpg`
+is a solid colour, shows that. The same walk would answer it — read the next plate by name when the
+first is one colour — and what it costs is one more decode per plate, which is why it is a change of its
+own rather than part of the reader.
 
 ## Configuration
 
