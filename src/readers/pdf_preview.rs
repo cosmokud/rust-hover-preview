@@ -629,9 +629,8 @@ mod tests {
             "a name the list does not hold is not a page"
         );
 
-        let without_the_page_names = crate::formats::ebook_formats::sanitize_ebook_extensions(
-            "cbc,cbr,cbz",
-        );
+        let without_the_page_names =
+            crate::formats::ebook_formats::sanitize_ebook_extensions("cbc,cbr,cbz");
         assert!(
             !is_pdf_file_in(Path::new("report.pdf"), &without_the_page_names),
             "and a name taken out of the list is answered by what it is rather than by a list"

@@ -143,6 +143,7 @@ struct Node {
     name: String,
     is_dir: bool,
     size: u64,
+    encrypted: bool,
     children: Vec<usize>,
 }
 
@@ -167,6 +168,7 @@ impl Tree {
                 name: String::new(),
                 is_dir: true,
                 size: 0,
+                encrypted: false,
                 children: Vec::new(),
             }],
         };
@@ -192,6 +194,7 @@ impl Tree {
                             name: (*segment).to_string(),
                             is_dir: true,
                             size: 0,
+                            encrypted: false,
                             children: Vec::new(),
                         });
                         let node = tree.nodes.len() - 1;
@@ -211,6 +214,7 @@ impl Tree {
                     let node = &mut tree.nodes[node];
                     node.is_dir = false;
                     node.size = entry.size;
+                    node.encrypted = entry.encrypted;
                 } else if !last {
                     // A segment with something under it is a folder, whatever a
                     // member of the same name said first.
@@ -286,6 +290,7 @@ impl Tree {
                     name: node.name.clone(),
                     is_dir: false,
                     size: node.size,
+                    encrypted: node.encrypted,
                     covers: 1,
                 });
             }
@@ -321,6 +326,7 @@ impl Tree {
             name,
             is_dir: true,
             size: 0,
+            encrypted: false,
             covers,
         });
 
@@ -334,10 +340,18 @@ struct TreeRow {
     name: String,
     is_dir: bool,
     size: u64,
+    /// Whether the entry behind this row has to be unlocked before it can be read. A
+    /// folder row is never one: a container's own headers are encrypted or they are not,
+    /// which is the listing's answer rather than a row's.
+    encrypted: bool,
     /// Tree nodes this row stands for, which is more than one where a chain of
     /// single-child folders was collapsed.
     covers: usize,
 }
+
+/// What a row says about an entry that needs a password to be read. It is written beside the
+/// name rather than in a column of its own: it is rare, and the name is what it applies to.
+const ENCRYPTED_MARK: &str = " (encrypted)";
 
 /// Compare two names the way a person reads a list: without case, and with the
 /// numbers in them counting as numbers.
@@ -541,13 +555,31 @@ fn build_page(
         let mut name_style = plain_style(BODY_LEVEL);
         name_style.foreground = foreground;
         name_style.bold = row.is_dir;
-        let name = cut_to_width(&row.name, name_room - name_left, body_advance);
+
+        // An entry that cannot be read without a password says so beside its name, and the
+        // name gives way to the mark rather than the mark being cut off with it: what the
+        // mark says is not in the name, so a long name must not be what hides it.
+        let mark = if row.encrypted { ENCRYPTED_MARK } else { "" };
+        let room = name_room - name_left - text_width(mark, body_advance);
+        let name = cut_to_width(&row.name, room, body_advance);
+        let name_width = text_width(&name, body_advance);
         runs.push(PageRun {
-            text: name.clone(),
+            text: name,
             x: name_left,
-            width: text_width(&name, body_advance),
+            width: name_width,
             style: name_style,
         });
+
+        if !mark.is_empty() {
+            let mut mark_style = plain_style(BODY_LEVEL);
+            mark_style.foreground = muted;
+            runs.push(PageRun {
+                text: mark.to_string(),
+                x: name_left + name_width,
+                width: text_width(mark, body_advance),
+                style: mark_style,
+            });
+        }
 
         if !row.is_dir {
             let mut size_style = plain_style(BODY_LEVEL);
@@ -958,6 +990,42 @@ mod tests {
     use crate::readers::archive_listing::listing_for;
     use std::fs;
     use std::io::Write;
+
+    /// A row says which of the entries behind it cannot be read without a password, and a
+    /// folder row does not: the container's own headers are encrypted or they are not, which
+    /// is the listing's line rather than a row of the tree.
+    #[test]
+    fn a_row_says_when_its_entry_needs_a_password() {
+        use crate::readers::archive_listing::ArchiveEntry;
+
+        let entry = |name: &str, encrypted: bool| ArchiveEntry {
+            name: name.to_string(),
+            size: 8,
+            packed: None,
+            is_dir: false,
+            encrypted,
+        };
+
+        let tree = Tree::build(&[
+            entry("locked.txt", true),
+            entry("open.txt", false),
+            entry("folder/locked.txt", true),
+        ]);
+        let rows = tree.rows();
+
+        let row = |name: &str| {
+            rows.iter()
+                .find(|row| row.name == name)
+                .unwrap_or_else(|| panic!("a row for `{name}`"))
+        };
+
+        assert!(row("locked.txt").encrypted, "a locked entry says so");
+        assert!(!row("open.txt").encrypted, "an ordinary one does not");
+        assert!(
+            !row("folder").encrypted,
+            "and the folder a locked entry sits in is not locked itself"
+        );
+    }
 
     /// Where one test's fixtures and the pictures of them are written. The
     /// scratchpad the session hands out, so a render can be looked at rather

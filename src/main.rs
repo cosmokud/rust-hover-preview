@@ -174,4 +174,17 @@ fn sync_startup_setting() {
     if should_enable_startup {
         app::startup::enable_startup();
     }
+
+    // And the configuration is brought into step with what the registry holds, which is what
+    // actually starts this app: a `run_at_startup` that says yes while the entry is gone is a
+    // value that lies about the machine, and the tray's own toggle is where the choice is
+    // made after the first run anyway. Nothing else reads this value but the tray.
+    let registered = app::startup::is_startup_enabled();
+
+    if let Ok(mut config) = CONFIG.lock() {
+        if config.run_at_startup != registered {
+            config.run_at_startup = registered;
+            config.save();
+        }
+    }
 }
