@@ -252,10 +252,8 @@ fn clear_pointer_item_box() {
 
 /// Whether a box on screen holds a point. Half-open, so a point on the box's right or
 /// bottom edge is outside it — which is how a window hit-test reads a rectangle, and
-/// what the dismissal of a mouse preview is decided by. The Explorer hook asks the same
-/// question of the box a dismissed preview left behind, so the two sides of the
-/// dismissal cannot disagree about what "the pointer is still there" means.
-pub(crate) fn box_holds(x: i32, y: i32, region: (i32, i32, i32, i32)) -> bool {
+/// what the dismissal of a mouse preview is decided by.
+fn box_holds(x: i32, y: i32, region: (i32, i32, i32, i32)) -> bool {
     let (left, top, right, bottom) = region;
 
     x >= left && x < right && y >= top && y < bottom
@@ -6855,6 +6853,12 @@ pub fn text_preview_scrollable() -> bool {
 /// wait is owed is the question the item box answers: a pointer still inside the item the
 /// hover was resolved from is a pointer still waiting for that file, and one outside it
 /// has gone wherever it liked, spinner or no spinner (see `HOVER_POINTER_BOX`).
+///
+/// An item box nobody could be read for is *not* a hold here, which is the reverse of the
+/// rule a reveal follows, and for the reason the hold exists: a hold is the hook leaving
+/// the mouse alone, so it is only ever taken on an answer. A wait whose item could not be
+/// read is a wait the pointer may still dismiss — what it costs is a page read again from
+/// the cache, and what the other reading costs is a preview nothing can close.
 pub fn preview_pointer_hold(x: i32, y: i32) -> bool {
     if TEXT_PREVIEW_HOLDING.load(Ordering::Acquire) {
         let Ok(published) = POINTER_HOLD_REGIONS.lock() else {
@@ -6871,7 +6875,8 @@ pub fn preview_pointer_hold(x: i32, y: i32) -> bool {
             .unwrap_or(false);
     }
 
-    WAITING_PREVIEW_HOLDING.load(Ordering::Acquire) && pointer_item_holds(x, y)
+    WAITING_PREVIEW_HOLDING.load(Ordering::Acquire)
+        && pointer_item_box().is_some_and(|item| box_holds(x, y, item))
 }
 
 /// The published preview region, without blocking. The wheel hook runs inside a
@@ -10143,13 +10148,13 @@ mod tests {
             "a pointer below that item has left the file it was waiting for"
         );
 
-        // An item that was never read is nothing to hold a wait back with, which is the
-        // rule the reveal follows too: a pointer whose item could not be told has not
-        // gone anywhere.
+        // A wait whose item nobody could be read for is not a hold: a hold is the hook
+        // leaving the mouse alone, so it is only ever taken on an answer, and the reading
+        // that cannot happen is a preview nothing can close.
         clear_pointer_item_box();
         assert!(
-            preview_pointer_hold(150, 230),
-            "an item nothing was read for holds anything"
+            !preview_pointer_hold(150, 210),
+            "a wait with no item box of its own holds nothing"
         );
 
         // A hold that is no longer noted holds nothing, whatever region was left behind.
