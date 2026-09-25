@@ -12,7 +12,7 @@ use crate::formats::office_formats::matches_office_list;
 use crate::formats::text_formats::matches_text_lists;
 use crate::formats::vector_formats::matches_vector_list;
 use crate::formats::video_formats::{is_video_file, matches_video_list};
-use crate::readers::pdf_preview::is_pdf_file;
+use crate::readers::pdf_preview::is_pdf_file_in;
 use crate::readers::svg_preview;
 use crate::shell::cloud_files;
 use crate::shell::wheel_input;
@@ -1214,7 +1214,10 @@ fn is_media_file(path: &Path) -> bool {
     if matches_video_list(path, &config.video_extensions) {
         return PreviewType::Videos.enabled_in(&config);
     }
-    if is_pdf_file(path) {
+    // The PDF's own names are asked of the copy in hand rather than of the gate, for the reason
+    // this function's documentation gives above: the configuration is held here, and the gate
+    // that reads it would be a lock taken twice on this thread (see `is_pdf_file_in`).
+    if is_pdf_file_in(path, &config.ebook_extensions) {
         return PreviewType::Ebook.enabled_in(&config);
     }
 
