@@ -53,7 +53,7 @@ pub fn sanitize_video_extensions(list: &str) -> Vec<String> {
 /// list says it is, and a file without one falls through to the text preview of the
 /// TypeScript source it is.
 pub fn matches_video_list(path: &Path, extensions: &[String]) -> bool {
-    let Some(extension) = lookup_extension(path) else {
+    let Some(extension) = crate::formats::text_formats::lookup_extension(path) else {
         return false;
     };
 
@@ -76,15 +76,8 @@ pub fn matches_video_list(path: &Path, extensions: &[String]) -> bool {
 /// question this half does not ask — and a caller holding the content's own answer has
 /// already had it settled (see `content_type`).
 pub fn claims_video_name(path: &Path, extensions: &[String]) -> bool {
-    lookup_extension(path).is_some_and(|extension| extensions.contains(&extension))
-}
-
-/// The extension a file is named by, in the form the list carries: lowercase, and with
-/// the dot stripped.
-fn lookup_extension(path: &Path) -> Option<String> {
-    path.extension()
-        .and_then(|ext| ext.to_str())
-        .map(|ext| ext.to_lowercase())
+    crate::formats::text_formats::lookup_extension(path)
+        .is_some_and(|extension| extensions.contains(&extension))
 }
 
 /// Whether the configured list claims `path`, without asking whether video previews
