@@ -65,8 +65,6 @@ Raw sample dumps: `rgb` `rgba` `gray` `cmyk` `ycbcr` `mono` `group4` and the res
 
 The archives this app has no reader of its own for, listed by an installed PeaZip and shown as the same page of contents a `.zip` is shown as, all of them: `001` `apfs` `ar` `arj` `bz2` `bzip2` `cab` `chm` `cpio` `cramfs` `deb` `dmg` `esd` `gz` `gzip` `hfs` `hfsx` `hxs` `iso` `lha` `lit` `lzh` `lzma` `msi` `msp` `pkg` `ppkg` `qcow` `qcow2` `rpm` `squashfs` `swm` `taz` `tbz` `tbz2` `tpz` `txz` `tzst` `udf` `udeb` `vdi` `vhd` `vhdx` `vmdk` `wim` `xar` `xip` `xz` `z` `zst`. A `.tar.gz` and a `.tgz` are the archive list’s above and stay this app’s own.
 
-A single-stream format — a `.gz`, a `.bz2`, a `.xz`, a `.zst`, a `.z` — is shown as the one member it holds, under the name the file had before it was compressed. What is **not** in that list is written down with its reason in [TODO.md](TODO.md): PeaZip’s own `.pea`, FreeArc’s `.arc`, `.zpaq`, and the codecs its build carries no format for — `br`, `lz4`, `lz5`, `lizard`, `flzma2` — are formats its *other* tools handle, and the archiver this app drives cannot open one as an archive.
-
 ### Themes
 
 Text, code, and archive listings use Atom One Light by default, One Dark Pro, or any `.tmTheme` file placed in:
@@ -157,11 +155,6 @@ winget install -e --id TheDocumentFoundation.LibreOffice
 winget install -e --id ImageMagick.ImageMagick
 ```
 
-> [!WARNING]
-> If `winget` reports an error, the package sources are usually why: run `winget source reset --force`.
->
-> If that is refused as well, open **Terminal as administrator** (right-click the Start button → _Terminal (Admin)_) and run the same command from there.
-
 ### Optional: Enable Niche Archives (PeaZip)
 
 `cab` and everything else in the `[peazip]` list is listed by **PeaZip**, which this app runs where it finds it — nothing is bundled with the app and there is nothing to configure. Install it once:
@@ -170,7 +163,10 @@ winget install -e --id ImageMagick.ImageMagick
 winget install -e --id Giorgiotani.Peazip
 ```
 
-A portable copy is looked for too, in a `peazip` folder beside `config.ini` or beside the app. What the app runs is the archiver PeaZip ships inside itself (`res\bin\7z\7z.exe`) and never the PeaZip window: a hover opens nothing, prints nothing, and leaves nothing behind. A second hover of the same archive costs no launch at all.
+> [!WARNING]
+> If `winget` reports an error, the package sources are usually why: run `winget source reset --force`.
+>
+> If that is refused as well, open **Terminal as administrator** (right-click the Start button → _Terminal (Admin)_) and run the same command from there.
 
 ## Usage
 
