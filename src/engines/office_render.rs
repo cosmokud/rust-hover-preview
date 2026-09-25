@@ -305,14 +305,14 @@ static WORKER_THREAD: AtomicU32 = AtomicU32::new(0);
 /// rather than about one call in it.
 static WORKER_BUSY: Lazy<Mutex<Option<(u64, Instant)>>> = Lazy::new(|| Mutex::new(None));
 
-/// Whether the render tier may run at all: the `Office` gate in the tray's
+/// Whether the render tier may run at all: the `Document` gate in the tray's
 /// `Preview Types` submenu.
 ///
 /// A cache budget of nothing is not a switch. An Office document has no other
 /// source for its preview, so a page still has to be rendered to be shown — it is
 /// simply not kept once the hover that asked for it is over.
 pub(crate) fn enabled() -> bool {
-    PreviewType::Office.enabled()
+    PreviewType::Document.enabled()
 }
 
 fn cache_limit_bytes() -> usize {

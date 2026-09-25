@@ -1215,7 +1215,7 @@ fn is_media_file(path: &Path) -> bool {
         return PreviewType::Videos.enabled_in(&config);
     }
     if is_pdf_file(path) {
-        return PreviewType::Pdf.enabled_in(&config);
+        return PreviewType::Ebook.enabled_in(&config);
     }
     if matches_archive_list(path, &config.archive_extensions) {
         return PreviewType::Archives.enabled_in(&config);
@@ -1224,33 +1224,34 @@ fn is_media_file(path: &Path) -> bool {
     // An archive no reader of this app's own opens is listed by the PeaZip engine where one is
     // installed — a cabinet file, an iso, a disk image, a Linux package — and it is asked beside
     // the archive list above it, which is where the two are told apart: a name in that list is
-    // read by this app itself, and one in this list is read by an engine. It is a kind of its own
-    // rather than a second list of names for the archive gate, so a user who wants these left
-    // alone is not asking for their zips to be left alone; see `peazip_formats`.
+    // read by this app itself, and one in this list is read by an engine. What it is gated by is
+    // the archive switch itself, since what either is shown as is the same page of contents; see
+    // `peazip_formats`.
     if crate::formats::peazip_formats::matches_peazip_list(path, &config.peazip_extensions) {
         return PreviewType::Peazip.enabled_in(&config);
     }
     if matches_office_list(path, &config.office_extensions) {
-        return PreviewType::Office.enabled_in(&config);
+        return PreviewType::Document.enabled_in(&config);
     }
 
     // A design document is a kind of its own — what its preview is made of comes out
     // of the file itself rather than out of a decoder its extension names — and it is
     // asked where the renderer asks it: after the office list, ahead of the text and
     // image lists that would not have claimed a `.psd` anyway.
-    // A document this app hands to a render engine — CorelDRAW above all — is a kind of its
-    // own, and it is asked before the design list because a name can sit in both: what
-    // draws such a file is the engine, and what this app reads of one by itself is a
-    // thumbnail rather than a preview; see `libre_formats`.
+    //
+    // A document this app hands to a render engine — CorelDRAW above all — is one of the two
+    // halves of the `Document` kind, and it is asked before the design list because a name can
+    // sit in both: what draws such a file is the engine, and what this app reads of one by
+    // itself is a thumbnail rather than a preview; see `libre_formats`.
     if crate::formats::libre_formats::matches_libre_list(path, &config.libre_extensions) {
         return PreviewType::Libre.enabled_in(&config);
     }
 
-    // A picture an image converter develops — a camera raw above all — is a kind of its own
-    // as well, asked where the renderer asks it: after the documents an engine draws, ahead
-    // of the design, text, font and image lists, none of which would have claimed a `.nef`
-    // anyway. What such a file keeps of itself is nothing a reader here opens, which is the
-    // whole reason the name is in that list; see `magick_formats`.
+    // A picture an image converter develops — a camera raw above all — is one of the two halves
+    // of the picture kind as well, asked where the renderer asks it: after the documents an
+    // engine draws, ahead of the design, text, font and image lists, none of which would have
+    // claimed a `.nef` anyway. What such a file keeps of itself is nothing a reader here opens,
+    // which is the whole reason the name is in that list; see `magick_formats`.
     if crate::formats::magick_formats::matches_magick_list(path, &config.magick_extensions) {
         return PreviewType::Magick.enabled_in(&config);
     }
