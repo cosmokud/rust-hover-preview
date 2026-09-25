@@ -1674,8 +1674,10 @@ unsafe fn show_context_menu(hwnd: HWND) {
         );
     }
 
-    // Add "Run at Startup" with checkmark
-    let startup_enabled = CONFIG.lock().map(|c| c.run_at_startup).unwrap_or(false);
+    // Add "Run at Startup" with checkmark, which is the registry's answer rather than the
+    // configuration's: what starts this app is the entry, and the two can be made to differ
+    // from outside this app.
+    let startup_enabled = startup::is_startup_enabled();
     let flags = MF_STRING
         | if startup_enabled {
             MF_CHECKED
@@ -1719,15 +1721,22 @@ unsafe fn show_context_menu(hwnd: HWND) {
 }
 
 fn toggle_startup() {
-    if let Ok(mut config) = CONFIG.lock() {
-        config.run_at_startup = !config.run_at_startup;
-        config.save();
+    // What is flipped is the registry, and what is read to decide which way to flip is the
+    // registry too: an entry can be taken away from outside this app, and a toggle that
+    // trusted the configuration would then need two clicks to put back — the first turning
+    // off something already off. The configuration is the record of the choice, written to
+    // agree with what was just done.
+    let enable = !startup::is_startup_enabled();
 
-        if config.run_at_startup {
-            startup::enable_startup();
-        } else {
-            startup::disable_startup();
-        }
+    if enable {
+        startup::enable_startup();
+    } else {
+        startup::disable_startup();
+    }
+
+    if let Ok(mut config) = CONFIG.lock() {
+        config.run_at_startup = enable;
+        config.save();
     }
 }
 
