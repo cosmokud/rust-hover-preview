@@ -6410,6 +6410,19 @@ struct PendingLoad {
     /// upgrade never shows the spinner: what is there stays where it is, at its own
     /// size, until the page is ready.
     upgrade: bool,
+    /// Whether this load is waiting on an engine to produce what no reader here could
+    /// draw: the page Office is rendering, the page the render engine beside it is
+    /// converting, the picture the image converter is developing, the listing Peazip is
+    /// printing. Set where a load comes back with nothing to draw and one of those
+    /// engines is owed the file (see `awaiting_render` in the loader).
+    ///
+    /// It is what the cap on waiting is read against, and it is on the wait rather than
+    /// on the request for a reason: an engine answers a file once, so a hover whose
+    /// request was folded into one already in flight — the file the engine is working on
+    /// is the file this hover asked about — has nothing left that would ever answer it,
+    /// and a wait that is not bounded is a spinner that runs for good (see
+    /// `OFFICE_RENDER_WAIT_SECS`).
+    awaiting_engine: bool,
 }
 
 impl PendingLoad {
@@ -6476,6 +6489,28 @@ impl PendingLoad {
 
         followed
     }
+}
+
+/// Whether an engine's answer belongs to the wait under the spinner even though it names
+/// another hover: the answer is about the file that wait is on, it is an answer that
+/// produced what that wait is for, and the wait is one an engine owes the file.
+///
+/// An engine answers a file once — a request made while it was already working on the
+/// same file is folded into that work, and what comes back names the request before it.
+/// Read as an answer about a hover that has gone, it would leave the wait with no request
+/// that could answer it and no cap that could end it, and the page, picture or listing it
+/// names — which is in hand — would not be shown until the file was hovered afresh. It is
+/// what `hovered` is not: an answer that is the wait's own without naming its generation
+/// (see `awaiting_engine`).
+fn answer_belongs_to_the_wait(
+    ready_path: &Path,
+    ready_ok: bool,
+    shown: Option<&Path>,
+    pending: Option<&PendingLoad>,
+) -> bool {
+    ready_ok
+        && shown == Some(ready_path)
+        && pending.is_some_and(|pl| pl.awaiting_engine && pl.path == ready_path)
 }
 
 /// Reusable layered-window surface: one memory DC with one DIB section selected
@@ -8719,6 +8754,15 @@ pub fn run_preview_window() {
                 render_layered_preview(hwnd);
             }
 
+            // A page an engine has finished with, held apart from the hovers: it is
+            // not a hover to act on but an answer about the one on screen. Office's
+            // tier and the engines beside it send it as a message, a page the render
+            // engine draws is read from the folder it lands in — below — and a load
+            // that comes back with nothing to draw because the engine has already
+            // finished the work has the answer in hand rather than in a message (see
+            // the `awaiting_render` arm of the load below).
+            let mut page_ready: Option<(PathBuf, u64, bool)> = None;
+
             // Check for completed background loads
             while let Ok(result) = load_rx.try_recv() {
                 // A load the pointer has left since it was started is not this
@@ -8945,6 +8989,17 @@ pub fn run_preview_window() {
                                 .as_ref()
                                 .map(|pl| pl.room)
                                 .unwrap_or_else(|| office_formats::default_page_size(&result.path));
+
+                            // The wait is on an engine from here, whatever was asked
+                            // for below: what the loader could not draw is a page, a
+                            // picture or a listing that only an engine can produce, and
+                            // that is what the cap on waiting is read against — a wait
+                            // whose request is answered as part of another's has nothing
+                            // else that would ever end it (see `awaiting_engine`).
+                            if let Some(pl) = pending_load.as_mut() {
+                                pl.awaiting_engine = true;
+                            }
+
                             // A document the render engine draws is asked for the same
                             // way, and in the same breath: neither page exists until an
                             // engine has drawn it, and this is the one hover that is
@@ -8957,7 +9012,7 @@ pub fn run_preview_window() {
                             // which is what makes its room a ceiling rather than a hint: a
                             // picture developed into a box smaller than the display can
                             // never be drawn any larger than that box.
-                            page_render_pending = request_office_render(
+                            let requested = request_office_render(
                                 &result.path,
                                 result.generation,
                                 width,
@@ -8977,6 +9032,27 @@ pub fn run_preview_window() {
                             // because no name sits in more than one of their lists (see
                             // `peazip_formats`).
                             .or_else(|| request_peazip_render(&result.path, result.generation));
+
+                            // Nothing was asked for because there is nothing left to ask
+                            // about: every engine that could owe this file something has
+                            // already produced it. The page, the picture, the listing is
+                            // in hand — it landed between the load that came back without
+                            // it and this check, which is the one moment the two questions
+                            // can disagree about — so the answer is read by having the
+                            // file loaded again, and the replay below (`page_upgrade` and
+                            // all) is the one a page arriving as a message is given. Left
+                            // as a wait with nothing behind it, the hover would be a
+                            // spinner that no answer and no cap could ever take down.
+                            //
+                            // A file the engine turned down while the load ran is answered
+                            // by that same replay and by nothing else: the load that reads
+                            // it finds no page and no wait to be in, which is the branch
+                            // that takes the spinner down rather than leaving it up.
+                            if requested.is_none() {
+                                page_ready = Some((result.path.clone(), result.generation, true));
+                            }
+
+                            page_render_pending = requested;
                         }
                         None => {
                             // Loading failed, hide window
@@ -9086,11 +9162,6 @@ pub fn run_preview_window() {
             // layouts for files the cursor has already left.
             let mut latest_preview_msg: Option<PreviewMessage> = None;
             let mut refresh_requested = false;
-            // A page an engine has finished with, held apart from the hovers: it is
-            // not a hover to act on but an answer about the one on screen. Office's
-            // tier is the one that sends it; a page the render engine draws is read
-            // from the folder it lands in, below, and lands in the same place.
-            let mut page_ready: Option<(PathBuf, u64, bool)> = None;
             // A probe's answer, held apart the same way and for the same reason.
             let mut video_probed: Option<(PathBuf, u64)> = None;
             let mut next_preview_msg = carried_preview_msg.take();
@@ -9225,7 +9296,28 @@ pub fn run_preview_window() {
                 let hovered = ready_generation == current_generation
                     && shown.map(|path| path.as_path()) == Some(ready_path.as_path());
 
-                if hovered && ready_ok {
+                // Which request the answer belongs to, so that a page landing for a hover
+                // that has gone cannot clear a wait another hover is still in.
+                let answers_the_request =
+                    page_render_pending
+                        .as_ref()
+                        .is_some_and(|(path, generation)| {
+                            *path == ready_path && *generation == ready_generation
+                        });
+
+                // An answer for the file the hover on screen is waiting on, naming the
+                // hover before it, is that wait's own answer: the request it made was
+                // folded into the work this one belongs to, and what it answers is the
+                // page, picture or listing the wait is for (see `answer_belongs_to_the_wait`).
+                let waiting_for_this_file = !hovered
+                    && answer_belongs_to_the_wait(
+                        &ready_path,
+                        ready_ok,
+                        shown.map(|path| path.as_path()),
+                        pending_load.as_ref(),
+                    );
+
+                if (hovered || waiting_for_this_file) && ready_ok {
                     if latest_preview_msg.is_none() {
                         // The wait is over, so the request stops being the pending
                         // one here — where the page is actually taken up.
@@ -9284,7 +9376,13 @@ pub fn run_preview_window() {
                     // rendered is kept as far as the budget allows and no further — at
                     // a size of nothing it is dropped here rather than held for a
                     // hover that has already gone.
-                    page_render_pending = None;
+                    //
+                    // Only the wait this answer belongs to is cleared with it: a hover
+                    // that is still waiting for a page of its own keeps the request it
+                    // was made for, which is what the cap on waiting is read against.
+                    if answers_the_request {
+                        page_render_pending = None;
+                    }
                     office_render::hover_ended(&ready_path);
                 }
             }
@@ -9695,6 +9793,7 @@ pub fn run_preview_window() {
                             spinner_side,
                             placement: show_placement,
                             upgrade,
+                            awaiting_engine: false,
                         });
                         video_probe = Some((path.clone(), gen));
                         spawn_video_probe(path, gen);
@@ -9798,6 +9897,7 @@ pub fn run_preview_window() {
                                         spinner_side,
                                         placement: show_placement,
                                         upgrade: false,
+                                        awaiting_engine: false,
                                     });
                                 } else if let Ok(mut current) = CURRENT_MEDIA.lock() {
                                     // A player that would not start is no preview:
@@ -9870,6 +9970,7 @@ pub fn run_preview_window() {
                             spinner_side,
                             placement: show_placement,
                             upgrade: upgrading,
+                            awaiting_engine: false,
                         });
 
                         queue_load_request(
@@ -9929,44 +10030,51 @@ pub fn run_preview_window() {
             // the render engine, whose conversion runs on and is kept the same way.
             let shown_path = current_show.as_ref().and_then(show_path).cloned();
 
-            let render_wait = page_render_pending.as_ref().map(|(path, generation)| {
-                let hovered = *generation == current_generation
-                    && shown_path.as_deref() == Some(path.as_path());
-                let waited = pending_load
-                    .as_ref()
-                    .map(|pl| pl.started.elapsed() >= Duration::from_secs(OFFICE_RENDER_WAIT_SECS))
-                    .unwrap_or(false);
+            // How long the hover on screen has been waiting, which is what the cap is
+            // read of, and whether what it is waiting on is an engine at all.
+            let (waited, awaiting_engine) = pending_load
+                .as_ref()
+                .map(|pl| {
+                    (
+                        pl.started.elapsed() >= Duration::from_secs(OFFICE_RENDER_WAIT_SECS),
+                        pl.awaiting_engine,
+                    )
+                })
+                .unwrap_or((false, false));
 
-                (hovered, waited)
+            let render_wait = page_render_pending.as_ref().map(|(path, generation)| {
+                *generation == current_generation && shown_path.as_deref() == Some(path.as_path())
             });
 
-            match render_wait {
-                Some((false, _)) => page_render_pending = None,
-                Some((true, true)) => {
-                    // The preview has waited as long as it waits — a page that has
-                    // not arrived by now may still be coming, a very large document
-                    // takes as long as it takes — so the spinner comes down and the
-                    // hover is left to itself. The render is not abandoned with it:
-                    // it runs on and its page is cached, so the next hover of that
-                    // file shows it. Only the engine itself can say a render failed,
-                    // and it remembers that for the file.
-                    let abandoned = page_render_pending
-                        .take()
-                        .map(|(path, _)| path)
-                        .filter(|path| shown_path.as_deref() == Some(path.as_path()));
+            // A request made for a hover that has gone is not waited for any longer: the
+            // page it produces is kept by the engine and the next hover of the file reads
+            // it. A wait the hover on screen is still in is left standing.
+            if render_wait == Some(false) {
+                page_render_pending = None;
+            }
 
-                    if abandoned.is_some() {
-                        pending_load = None;
-                        if let Some(cancel) = pending_load_cancel.take() {
-                            cancel.store(true, Ordering::Release);
-                        }
-                        let _ = ShowWindow(hwnd, SW_HIDE);
-                        if let Ok(mut current) = CURRENT_MEDIA.lock() {
-                            *current = None;
-                        }
-                    }
+            // The preview has waited as long as it waits — a page that has not arrived by
+            // now may still be coming, a very large document takes as long as it takes —
+            // so the spinner comes down and the hover is left to itself. The render is not
+            // abandoned with it: it runs on and its page is cached, so the next hover of
+            // that file shows it. Only the engine itself can say a render failed, and it
+            // remembers that for the file.
+            //
+            // What is read here is the wait rather than the request. An engine answers a
+            // file once, so a hover whose request was folded into one already in flight is
+            // never answered on its own — its request has been read and left, and a cap
+            // that was read of the request would be no cap at all: the spinner would stand
+            // there for good (see `awaiting_engine`).
+            if waited && awaiting_engine {
+                page_render_pending = None;
+                pending_load = None;
+                if let Some(cancel) = pending_load_cancel.take() {
+                    cancel.store(true, Ordering::Release);
                 }
-                _ => {}
+                let _ = ShowWindow(hwnd, SW_HIDE);
+                if let Ok(mut current) = CURRENT_MEDIA.lock() {
+                    *current = None;
+                }
             }
 
             // Keep the pointer region in step with the window rather than only
@@ -11263,6 +11371,7 @@ mod tests {
             spinner_side: office_preview::WAITING_BOX,
             placement: None,
             upgrade,
+            awaiting_engine: false,
         };
         let default_delay = Duration::from_millis(DEFAULT_SPINNER_DELAY_MS);
 
@@ -11283,6 +11392,84 @@ mod tests {
         let mut showing = load(Duration::from_secs(10), default_delay, false);
         showing.spinner_shown = true;
         assert!(!showing.spinner_due());
+    }
+
+    /// An engine answers a file once: the answer to a request that was folded into work
+    /// already in flight names the hover before the one that is waiting, and it is still
+    /// that wait's own answer. Read as an answer about a hover that has gone, it would
+    /// leave the spinner standing over work the engine has already finished.
+    #[test]
+    fn an_engine_answer_names_the_hover_before_the_one_waiting_on_it() {
+        let page = PathBuf::from(r"C:\docs\notes.docx");
+        let other = PathBuf::from(r"C:\docs\other.docx");
+
+        let load = |path: PathBuf, awaiting_engine: bool| PendingLoad {
+            generation: 2,
+            hide_epoch: 0,
+            path,
+            started: Instant::now(),
+            pos_x: 0,
+            pos_y: 0,
+            width: 64,
+            height: 64,
+            room: (1920, 1040),
+            spinner_shown: true,
+            spinner_delay: Duration::from_millis(DEFAULT_SPINNER_DELAY_MS),
+            spinner_pos: (0, 0),
+            spinner_side: office_preview::WAITING_BOX,
+            placement: None,
+            upgrade: false,
+            awaiting_engine,
+        };
+
+        let waiting = load(page.clone(), true);
+
+        // The answer to the hover before this one, for the same file, is this wait's own.
+        assert!(answer_belongs_to_the_wait(
+            &page,
+            true,
+            Some(page.as_path()),
+            Some(&waiting)
+        ));
+
+        // An engine that drew nothing has nothing to replay — the load that reads the
+        // file again is what takes the spinner down, so this is not an answer to hand on.
+        assert!(!answer_belongs_to_the_wait(
+            &page,
+            false,
+            Some(page.as_path()),
+            Some(&waiting)
+        ));
+
+        // Another file's page is not this wait's, and a wait that is not on an engine at
+        // all — a decode, a probe — is not one an engine's answer belongs to.
+        assert!(!answer_belongs_to_the_wait(
+            &other,
+            true,
+            Some(page.as_path()),
+            Some(&waiting)
+        ));
+        assert!(!answer_belongs_to_the_wait(
+            &page,
+            true,
+            Some(page.as_path()),
+            Some(&load(page.clone(), false))
+        ));
+
+        // And nothing waiting is nothing to answer: a page that lands after the pointer
+        // has left belongs to the hover that has gone.
+        assert!(!answer_belongs_to_the_wait(
+            &page,
+            true,
+            Some(page.as_path()),
+            None
+        ));
+        assert!(!answer_belongs_to_the_wait(
+            &page,
+            true,
+            None,
+            Some(&waiting)
+        ));
     }
 
     /// A preview that is still on its way follows the pointer: it is placed again
@@ -11311,6 +11498,7 @@ mod tests {
             spinner_side: 0,
             placement,
             upgrade: false,
+            awaiting_engine: false,
         };
         let placement = HoverPlacement {
             orig_dims: (800, 600),

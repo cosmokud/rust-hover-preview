@@ -26,6 +26,7 @@
 - The update row appears whether or not the installer could be fetched, and a download that fails says so instead of leaving no row at all.
 - An installation made from a pre-release is offered the stable release its version names, instead of never being offered an update again.
 - A preview of an archive PeaZip listed was drawn at the size of the screen’s free room instead of the size the layout planned, so a `.cab` or an `.iso` came up as a page stretched to the display rather than as the page a `.zip` of the same kind comes up as.
+- Hovering a file whose preview an engine makes — an Office document, a `cdr` the render engine draws, a camera raw, an archive PeaZip lists — no longer leaves the spinner up for good when the file is left and taken up again while that engine is still working. The answer the engine had already produced was read as belonging to a hover that had gone, because it named the hover before the one waiting: the wait under the spinner was cleared with it, and the page, picture or listing in hand was not shown until the file was hovered again. An answer for the file a hover is waiting on is now that wait’s own, and a hover waiting on an engine is bounded by the same timeout whether or not the request it made is the one being watched for.
 
 ## [0.3.2] - 2026-09-24
 
