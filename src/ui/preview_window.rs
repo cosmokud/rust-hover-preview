@@ -1959,8 +1959,8 @@ fn office_render_is_due(path: &Path, width: u32) -> bool {
         return false;
     }
 
-    match office_render::cached_render(path) {
-        Some(cached) => office_render::page_is_narrower_than(&cached, width),
+    match office_render::held_page(path) {
+        Some(page) => office_render::page_is_narrower_than(path, &page, width),
         None => true,
     }
 }

@@ -180,39 +180,19 @@ pub const MAX_SPINNER_DELAY_MS: u64 = 10_000;
 /// the preview-sized frame rather than the pixels it was decoded from.
 pub const DEFAULT_IMAGE_CACHE_MB: u32 = 32;
 pub const MAX_IMAGE_CACHE_MB: u32 = 2048;
-/// Memory the rendered Office pages may hold. A render is what the preview shows
-/// for a document, and producing one costs an Office start and an export, so what
-/// has been rendered is kept by default: a page that has been drawn comes back
-/// without another render.
-pub const DEFAULT_OFFICE_CACHE_MB: u32 = 64;
-pub const MAX_OFFICE_CACHE_MB: u32 = 2048;
-/// Memory the pages an `Ebook` preview — a PDF — was drawn as may hold. A page is stored as
-/// the pixels it was rendered into, so the size the layout asked for is part of what
-/// is kept rather than only the file it came from.
+/// The folder a document's page is kept in may hold, in megabytes. What a page costs is the
+/// size of the file it is kept as — a PDF the engine that drew it exported, a slide's PNG, a
+/// workbook's picture — and what is kept is the working set of the documents a user previews,
+/// least recently used first: a page that has been given up is drawn again the next time the
+/// document is hovered, and drawing one costs an Office start or a conversion rather than a
+/// read, which is what makes holding them worth a folder of their own (see `document_cache`).
 ///
-/// A small budget is kept by default — a hit skips the document load, the raster
-/// and the renderer's own encode — and a page's own pixels are what it costs, so a
-/// budget holds fewer pages than it would frames of anything smaller.
-pub const DEFAULT_EBOOK_CACHE_MB: u32 = 32;
-pub const MAX_EBOOK_CACHE_MB: u32 = 2048;
-/// How much of what the render engine drew may be kept, in megabytes. A document the engine
-/// drew is a PDF written under the app's own folder, so what one costs once it has been
-/// converted is the size of that file, and what is kept is the working set of the folders a
-/// user previews: the oldest are given up first, and a document whose page has been given up
-/// is converted again the next time it is hovered. Thirty-two megabytes is eight or ten
-/// converted drawings.
-pub const DEFAULT_LIBRE_CACHE_MB: u32 = 32;
-pub const MAX_LIBRE_CACHE_MB: u32 = 2048;
-/// Memory the frames a text preview was painted as may hold. A frame is stored as
-/// the pixels it was painted into, so the box it was painted in and the scroll
-/// position it starts at are part of what is kept rather than only the file it came
-/// from.
-///
-/// Nothing is held by default: a frame is painted for the hover that asks for it,
-/// and keeping the frames of the files that are hovered most is a choice the user
-/// makes.
-pub const DEFAULT_TEXT_CACHE_MB: u32 = 0;
-pub const MAX_TEXT_CACHE_MB: u32 = 2048;
+/// A hundred and twenty-eight megabytes by default. A converted page is a couple of hundred
+/// kilobytes and a document that exports badly can be a couple of megabytes, so the budget is
+/// hundreds of documents either way — and being on disk rather than in memory, what it costs
+/// the machine when nothing is being read from it is nothing.
+pub const DEFAULT_DOCUMENT_CACHE_MB: u32 = 128;
+pub const MAX_DOCUMENT_CACHE_MB: u32 = 2048;
 /// What one hover may decode or read for, in gigabytes: the ceiling every reader is
 /// handed before it allocates — a picture's decode, a document's bytes, the page
 /// Office exported, a theme a preview is painted with.
@@ -301,41 +281,13 @@ pub fn sanitize_tick_ms(value: u64) -> u64 {
     value.clamp(MIN_TICK_MS, MAX_TICK_MS)
 }
 
-/// The rendered-page cache size in megabytes.
+/// The page cache's size in megabytes, which is the budget of the `Document` kind.
 ///
-/// `0` is a cache that holds nothing rather than a render tier that is switched
-/// off: a page is rendered for the hover that asks for it and dropped when that
-/// hover is over, so the only question a size answers is how much of it is kept
-/// between hovers.
-pub fn sanitize_office_cache_mb(value: u32) -> u32 {
-    value.min(MAX_OFFICE_CACHE_MB)
-}
-
-/// The rendered-PDF-page cache size in megabytes, which is the cache of the `Ebook` kind.
-///
-/// `0` is a cache that holds nothing rather than a preview tier that is switched
-/// off: a page is rendered for the hover that asks for it either way, so the only
-/// question a size answers is how much of what was drawn is kept between hovers.
-pub fn sanitize_ebook_cache_mb(value: u32) -> u32 {
-    value.min(MAX_EBOOK_CACHE_MB)
-}
-
-/// How much of what the render engine drew is kept, in megabytes.
-///
-/// `0` is a cache that holds nothing rather than a kind of preview that is switched off: a
+/// `0` is a cache that holds nothing rather than a preview tier that is switched off: a
 /// document is drawn for the hover that asks for it either way, and the only question a size
 /// answers is how much of what was drawn is kept between hovers.
-pub fn sanitize_libre_cache_mb(value: u32) -> u32 {
-    value.min(MAX_LIBRE_CACHE_MB)
-}
-
-/// The painted-text-frame cache size in megabytes.
-///
-/// `0` is a cache that holds nothing rather than a text preview that is switched
-/// off: a frame is painted for the hover that asks for it either way, so the only
-/// question a size answers is how much of what was painted is kept between hovers.
-pub fn sanitize_text_cache_mb(value: u32) -> u32 {
-    value.min(MAX_TEXT_CACHE_MB)
+pub fn sanitize_document_cache_mb(value: u32) -> u32 {
+    value.min(MAX_DOCUMENT_CACHE_MB)
 }
 
 /// The text preview font scale, where `0` and nonsense land back on the default.
@@ -1361,14 +1313,11 @@ pub struct AppConfig {
     /// Whether vector drawings are previewed at all, ahead of the vector list their names
     /// are entries of, and of the browser engine a document of that kind is drawn by.
     pub vector_preview_enabled: bool,
-    /// Memory the rendered pages may hold, in megabytes, between hovers. A page is
-    /// still rendered at `0` — a document has no other source for its preview — it
-    /// is simply not kept once the hover it was rendered for is over.
-    pub office_cache_mb: u32,
-    /// How much of what the render engine drew is kept between hovers, in megabytes. What
-    /// is kept is the converted pages themselves, written under the app's own folder; see
-    /// `Performance → Cache → Libre` in the tray.
-    pub libre_cache_mb: u32,
+    /// How much of what the engines drew is kept between hovers, in megabytes: the pages the
+    /// render tier exported and the pages the engine beside it converted, kept as files under
+    /// the temp folder and given up least recently used first. See
+    /// `Performance → Cache → Document` in the tray.
+    pub document_cache_mb: u32,
     /// Which engine draws an Office document's page, which is the tray's
     /// `Engine → Select Engine → Office` setting.
     pub office_engine: OfficeEngine,
@@ -1405,14 +1354,6 @@ pub struct AppConfig {
     /// The same for the engine the documents beside Office are drawn by, under
     /// `Engine → LibreOffice TTL`.
     pub libreoffice_persistent: bool,
-    /// Memory the pages PDF previews — the `Ebook` kind — were drawn as may hold, in
-    /// megabytes, between hovers. A page is rendered at `0` like at any other size; it is
-    /// simply not kept once the hover that asked for it is over.
-    pub ebook_cache_mb: u32,
-    /// Memory the frames text previews were painted as may hold, in megabytes,
-    /// between hovers. A frame is painted at `0` like at any other size; it is
-    /// simply not kept once the hover that asked for it is over.
-    pub text_cache_mb: u32,
     /// What one hover may decode or read for, in gigabytes.
     ///
     /// The one setting here that bounds a file rather than a cache: a reader is
@@ -1515,8 +1456,7 @@ impl Default for AppConfig {
             font_preview_enabled: true,
             design_preview_enabled: true,
             vector_preview_enabled: true,
-            office_cache_mb: DEFAULT_OFFICE_CACHE_MB,
-            libre_cache_mb: DEFAULT_LIBRE_CACHE_MB,
+            document_cache_mb: DEFAULT_DOCUMENT_CACHE_MB,
             office_engine: DEFAULT_OFFICE_ENGINE,
             office_engine_idle: EngineIdle::Seconds(DEFAULT_OFFICE_ENGINE_IDLE_SECS),
             webview_idle: EngineIdle::Seconds(DEFAULT_WEBVIEW_IDLE_SECS),
@@ -1525,8 +1465,6 @@ impl Default for AppConfig {
             office_engine_persistent: false,
             webview_persistent: false,
             libreoffice_persistent: false,
-            ebook_cache_mb: DEFAULT_EBOOK_CACHE_MB,
-            text_cache_mb: DEFAULT_TEXT_CACHE_MB,
             decode_budget_gb: DEFAULT_DECODE_BUDGET_GB,
             hdr_tone_map: DEFAULT_HDR_TONE_MAP,
             hdr_exposure: DEFAULT_HDR_EXPOSURE,
@@ -1642,11 +1580,8 @@ const SETTING_GROUPS: &[(&str, &[&str])] = &[
         &[
             "confirm_file_type",
             "decode_budget_gb",
-            "ebook_cache_mb",
+            "document_cache_mb",
             "image_cache_mb",
-            "libre_cache_mb",
-            "office_cache_mb",
-            "text_cache_mb",
             "tick_ms",
         ],
     ),
@@ -1944,13 +1879,6 @@ impl AppConfig {
     /// The folder the user's `.tmTheme` files live in, beside `config.ini`.
     pub fn theme_dir() -> Option<PathBuf> {
         Self::folder().map(|folder| folder.join("theme"))
-    }
-
-    /// The folder rendered pages are kept in, beside `config.ini`: a design document an
-    /// installed render engine drew is kept there as the PDF it was drawn as, so a
-    /// document is converted once and every hover after that is a read of a file.
-    pub fn rendered_dir() -> Option<PathBuf> {
-        Self::folder().map(|folder| folder.join("rendered"))
     }
 
     /// The configuration as the file has it, with whatever the file had wrong or missing put
@@ -2258,13 +2186,8 @@ impl AppConfig {
         );
         ini.set(
             CONFIG_SECTION,
-            "office_cache_mb",
-            Some(sanitize_office_cache_mb(self.office_cache_mb).to_string()),
-        );
-        ini.set(
-            CONFIG_SECTION,
-            "libre_cache_mb",
-            Some(sanitize_libre_cache_mb(self.libre_cache_mb).to_string()),
+            "document_cache_mb",
+            Some(sanitize_document_cache_mb(self.document_cache_mb).to_string()),
         );
         ini.set(
             CONFIG_SECTION,
@@ -2305,16 +2228,6 @@ impl AppConfig {
             CONFIG_SECTION,
             "libreoffice_persistent",
             Some(self.libreoffice_persistent.to_string()),
-        );
-        ini.set(
-            CONFIG_SECTION,
-            "ebook_cache_mb",
-            Some(sanitize_ebook_cache_mb(self.ebook_cache_mb).to_string()),
-        );
-        ini.set(
-            CONFIG_SECTION,
-            "text_cache_mb",
-            Some(sanitize_text_cache_mb(self.text_cache_mb).to_string()),
         );
         ini.set(
             CONFIG_SECTION,
@@ -2666,14 +2579,24 @@ impl AppConfig {
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "vector_preview_enabled") {
             self.vector_preview_enabled = value;
         }
-        if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "office_cache_mb") {
+        // The budget of the folder both engines' pages are kept in, which is one setting where
+        // there used to be two — each engine had a cache of its own. A file an older build
+        // wrote names one or both of those keys, and what it asks for is honoured once: the
+        // larger of the two, since one budget now replaces both, and neither key is written
+        // again by this build.
+        if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "document_cache_mb") {
             if let Ok(value) = u32::try_from(value) {
-                self.office_cache_mb = sanitize_office_cache_mb(value);
+                self.document_cache_mb = sanitize_document_cache_mb(value);
             }
-        }
-        if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "libre_cache_mb") {
-            if let Ok(value) = u32::try_from(value) {
-                self.libre_cache_mb = sanitize_libre_cache_mb(value);
+        } else {
+            let older = ["libre_cache_mb", "office_cache_mb"]
+                .iter()
+                .filter_map(|key| ini.getuint(CONFIG_SECTION, key).ok().flatten())
+                .filter_map(|value| u32::try_from(value).ok())
+                .map(sanitize_document_cache_mb)
+                .max();
+            if let Some(value) = older {
+                self.document_cache_mb = value;
             }
         }
         if let Some(value) = ini.get(CONFIG_SECTION, "office_engine") {
@@ -2707,16 +2630,6 @@ impl AppConfig {
         }
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "libreoffice_persistent") {
             self.libreoffice_persistent = value;
-        }
-        if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "ebook_cache_mb") {
-            if let Ok(value) = u32::try_from(value) {
-                self.ebook_cache_mb = sanitize_ebook_cache_mb(value);
-            }
-        }
-        if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "text_cache_mb") {
-            if let Ok(value) = u32::try_from(value) {
-                self.text_cache_mb = sanitize_text_cache_mb(value);
-            }
         }
         // A budget is written in gigabytes and may be fractional — `0.5` is a small
         // machine's ceiling — so it is read as the number it is rather than as a
@@ -3602,6 +3515,50 @@ mod tests {
         );
     }
 
+    /// The one budget where an older build had two — each engine had a cache of its own. A file
+    /// that still names either key is read once for the larger of the two, since one budget
+    /// replaces both, and neither line is written again.
+    #[test]
+    fn one_document_cache_replaces_the_two_budgets_an_older_file_names() {
+        let older = |keys: &[(&str, &str)]| {
+            let written = written_file();
+            let mut ini = Ini::new();
+            for (section, held) in written.get_map_ref() {
+                for (key, value) in held {
+                    if key != "document_cache_mb" {
+                        ini.set(section, key, value.clone());
+                    }
+                }
+            }
+            for (key, value) in keys {
+                ini.set(CONFIG_SECTION, key, Some((*value).to_string()));
+            }
+
+            ini
+        };
+
+        let mut config = AppConfig::default();
+        config.apply_ini(&older(&[
+            ("office_cache_mb", "1024"),
+            ("libre_cache_mb", "32"),
+        ]));
+        assert_eq!(
+            config.document_cache_mb, 1024,
+            "the larger of the two budgets is the one a single cache is given"
+        );
+
+        let mut config = AppConfig::default();
+        config.apply_ini(&older(&[("libre_cache_mb", "64")]));
+        assert_eq!(
+            config.document_cache_mb, 64,
+            "and a file naming one of them alone is read as it stands"
+        );
+        assert!(
+            config.differs(&older(&[("libre_cache_mb", "64")])),
+            "a file naming a budget this build does not write is one to write again"
+        );
+    }
+
     /// A file holding everything this app writes, as `save` would write it: what a file on disk
     /// is once it has been through the app, and what the tests below change one key of.
     fn written_file() -> Ini {
@@ -3732,7 +3689,7 @@ mod tests {
             ebook_scale: PreviewScale::Percent(25),
             image_background: TransparentBackground::Transparent,
             text_scroll_far_edge_grace_pixels: 12.5,
-            office_cache_mb: 1024,
+            document_cache_mb: 1024,
             tick_ms: 47,
             ..Default::default()
         };
