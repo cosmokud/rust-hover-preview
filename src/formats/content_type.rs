@@ -2880,8 +2880,8 @@ mod tests {
         );
         assert_eq!(
             classified("film.docx", b"ITSF\x03\x00\x00\x00\x60\x00\x00\x00"),
-            Content::Kind(PreviewType::Calibre),
-            "a compiled help file, which the ebook engine is the one that draws"
+            Content::Kind(PreviewType::Peazip),
+            "a compiled help file"
         );
         assert_eq!(
             classified("film.docx", b"07070100000000"),
