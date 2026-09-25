@@ -14,10 +14,10 @@
 //! Nothing is bundled with this app and nothing is linked against: the engine is the
 //! user's own installation, looked for where it installs — and beside `config.ini` for a
 //! portable copy — and run as the user runs it. What that costs is a launch, which is
-//! seconds, so a conversion happens once per document: the PDF it wrote is kept under
-//! [`AppConfig::rendered_dir`], named for the document's path and the version of it that
-//! was converted, and every hover after the first is a read of that file. One conversion
-//! runs at a time, because one LibreOffice at a time is what its own profile allows.
+//! seconds, so a conversion happens once per document: the PDF it wrote is kept as a page,
+//! named for the document, the version of it that was converted and this engine, and every
+//! hover after the first is a read of that file (see `document_cache`). One conversion runs at
+//! a time, because one LibreOffice at a time is what its own profile allows.
 //!
 //! The engine is asked about the names its filters read and no others — the formats of
 //! the libraries above, CorelDRAW's and the rest — so a Photoshop document, a Krita
@@ -74,11 +74,11 @@
 //! names how long past its last conversion the engine is kept, and `0 seconds` is the
 //! setting switched off, which is an engine per document, exactly as it was.
 
-use crate::config::config::{AppConfig, EngineIdle, DEFAULT_LIBREOFFICE_IDLE_SECS};
+use crate::config::config::{AppConfig, EngineIdle, OfficeEngine, DEFAULT_LIBREOFFICE_IDLE_SECS};
+use crate::engines::document_cache::{self, Page, PageKind};
 use crate::CONFIG;
+use directories::BaseDirs;
 use once_cell::sync::Lazy;
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -106,11 +106,6 @@ const ENGINE_IMAGE: &str = "soffice.exe";
 /// The engine behind it: the application itself runs as a child of that small launcher, and
 /// it is the half that holds a document open (see `let_go` and `engine_child`).
 const ENGINE_BIN_IMAGE: &str = "soffice.bin";
-/// What a name is remembered as when the engine would not draw it: the conversion is not
-/// tried again for that version of the document, because a name this app was wrong about —
-/// one in the list the engine has no filter for — would otherwise start an engine on every
-/// hover to reach the same answer.
-const REFUSED_SUFFIX: &str = "none";
 
 /// The document the kept engine holds: the name it is written under, beside the profile, and
 /// the document itself — one paragraph of flat OpenDocument text, which is everything an
@@ -156,7 +151,7 @@ fn soffice() -> Option<PathBuf> {
             }
         }
 
-        let portable = AppConfig::rendered_dir()?
+        let portable = AppConfig::config_path()?
             .parent()?
             .join("libreoffice")
             .join("program")
@@ -168,32 +163,51 @@ fn soffice() -> Option<PathBuf> {
     FOUND.clone()
 }
 
+/// The folder the engine works in: the profile it runs under, the stub document a kept instance
+/// holds open, and the folder a conversion is staged in.
+///
+/// It is this app's own folder under `%LOCALAPPDATA%`, where the other engine state lives —
+/// the profiles a run of the browser is kept in, and the records of the processes an earlier run
+/// started — rather than beside the pages: none of what is here is a page, and where pages are
+/// kept is the cache's own business (see `document_cache`). Nothing of the user's stays in it
+/// longer than a conversion takes: the stage folder is emptied before every conversion, and the
+/// document a kept engine holds is a stub of this app's own.
+fn workspace() -> Option<PathBuf> {
+    Some(
+        BaseDirs::new()?
+            .data_local_dir()
+            .join("rust-hover-preview")
+            .join("libreoffice"),
+    )
+}
+
 /// Whether an engine is installed to render these documents with.
 pub fn available() -> bool {
     soffice().is_some()
 }
 
-/// The page already drawn for this version of the document, if there is one: a PDF under
-/// the app's own folder, which the PDF path reads the way it reads any other.
+/// The page already drawn for this version of the document, if there is one: a PDF the PDF path
+/// reads the way it reads any other.
 ///
 /// Nothing is started and nothing is waited on here. This is the question "has the engine
-/// answered yet?" asked of the folder the answers are kept in — a preview is laid out from
-/// what it finds, and a hover that is waiting for one keeps asking it until the answer is
-/// there (see [`request`]).
+/// answered yet?" asked of the document cache — a preview is laid out from what it finds, and a
+/// hover that is waiting for one keeps asking it until the answer is there (see [`request`]).
 pub fn rendered_page(path: &Path) -> Option<PathBuf> {
-    let page = rendered_path(path)?;
+    let page = document_cache::page(path, OfficeEngine::LibreOffice)?;
 
-    usable(&page).then_some(page)
+    usable(&page).then_some(page.path)
 }
 
 /// Whether the engine has already turned this version of the document down: the mark a
 /// conversion that wrote no page leaves where a page would have been.
 ///
 /// It is what a hover waiting on that document reads as "nothing is coming" — the spinner
-/// comes down rather than running out its wait — and what keeps the launch from being paid
-/// for a second time.
+/// comes down rather than running out its wait — and what keeps the launch from being paid for
+/// a second time. A mark ages out, so a document that was undrawable for a while — locked, or
+/// half-copied, or read while a filter was still being installed — is asked about again (see
+/// `document_cache`).
 pub fn refused(path: &Path) -> bool {
-    rendered_path(path).is_some_and(|page| refused_marker(&page).is_some())
+    document_cache::refused(path, OfficeEngine::LibreOffice)
 }
 
 /// Ask the engine for a page for `path`.
@@ -289,11 +303,11 @@ struct Kept {
 
 static KEPT: Lazy<Mutex<Option<Kept>>> = Lazy::new(|| Mutex::new(None));
 
-/// The profile the engine runs under: one of this app's own, beside the pages, so that a
-/// LibreOffice the user has open is untouched by a conversion and its documents by this
-/// app's engine. One string, made once and used by everything that runs the engine: a
-/// launch only finds the instance to hand its work to when the profile it names is the one
-/// that instance was started with, character for character.
+/// The profile the engine runs under: one of this app's own, beside the document it holds, so
+/// that a LibreOffice the user has open is untouched by a conversion and its documents by this
+/// app's engine. One string, made once and used by everything that runs the engine: a launch
+/// only finds the instance to hand its work to when the profile it names is the one that
+/// instance was started with, character for character.
 fn profile_url(folder: &Path) -> String {
     let profile = folder.join("profile");
     format!("file:///{}", profile.to_string_lossy().replace('\\', "/"))
@@ -303,7 +317,7 @@ fn profile_url(folder: &Path) -> String {
 /// beside the profile, which is what makes the instance a running one rather than one that
 /// yields its profile to the next launch (see the module docs).
 fn holder_document() -> Option<PathBuf> {
-    let folder = AppConfig::rendered_dir()?;
+    let folder = workspace()?;
     std::fs::create_dir_all(&folder).ok()?;
 
     // It is not written over an engine that has it open: what the engine holds is its
@@ -404,7 +418,7 @@ fn keep_engine(program: &Path) -> Option<u32> {
 /// is answered for by the next one. It is also left running rather than waited on — what
 /// holds it is the document it has open.
 fn start_kept_engine(program: &Path) -> Option<u32> {
-    let folder = AppConfig::rendered_dir()?;
+    let folder = workspace()?;
     let holder = holder_document()?;
 
     // One engine at a time is what one profile allows: an engine this app still holds — one
@@ -635,14 +649,16 @@ fn imports(path: &Path) -> bool {
     crate::formats::libre_formats::engine_page_kind(path).is_some()
 }
 
-/// The rendered page of a document, converting it if it has not been converted before.
+/// Convert a document whose page is not kept yet, and keep what the engine drew.
+///
+/// The answer is the file the page is kept as; a document the engine would not draw is answered
+/// with nothing, and that is written down so the launch is not paid for twice.
 fn rendered(path: &Path) -> Option<PathBuf> {
     let program = soffice()?;
-    let page = rendered_path(path)?;
-    if usable(&page) {
+    if let Some(page) = kept_page(path) {
         return Some(page);
     }
-    if refused_marker(&page).is_some() {
+    if document_cache::refused(path, OfficeEngine::LibreOffice) {
         return None;
     }
 
@@ -653,81 +669,55 @@ fn rendered(path: &Path) -> Option<PathBuf> {
     end_hung_engine();
 
     let _seat = CONVERTING.lock().ok()?;
-    if usable(&page) {
+    if let Some(page) = kept_page(path) {
         return Some(page);
     }
-    if refused_marker(&page).is_some() {
+    if document_cache::refused(path, OfficeEngine::LibreOffice) {
         return None;
     }
 
-    if convert(&program, path, &page).is_none() {
-        // An engine that would not draw this document is not asked again: what it answered
-        // is written down beside the page it did not write.
-        std::fs::write(refused_path(&page), b"").ok();
+    let Some(page) = convert(&program, path) else {
+        // An engine that would not draw this document is not asked again for a while: what it
+        // answered is written down where the page it did not write would have been.
+        document_cache::refuse(path, OfficeEngine::LibreOffice);
         return None;
-    }
+    };
 
-    Some(page)
+    Some(page.path)
 }
 
-/// Where the rendered page of `path` is kept: named for the document — its path, the
-/// version of it that was converted, and nothing else — so a document saved again is
-/// rendered again and a document that has not been is a read.
-fn rendered_path(path: &Path) -> Option<PathBuf> {
-    let folder = AppConfig::rendered_dir()?;
-    std::fs::create_dir_all(&folder).ok()?;
+/// The page kept for this document, where the engine has drawn one for this version of it and
+/// it can be read.
+///
+/// The header is the check rather than a re-conversion: what is read back is a file this app
+/// wrote, and a file that is not a PDF is not a page.
+fn kept_page(path: &Path) -> Option<PathBuf> {
+    let page = document_cache::page(path, OfficeEngine::LibreOffice)?;
 
-    let mut hasher = DefaultHasher::new();
-    path.to_string_lossy().to_lowercase().hash(&mut hasher);
-    let metadata = std::fs::metadata(path).ok();
-    metadata
-        .as_ref()
-        .map(|metadata| metadata.len())
-        .hash(&mut hasher);
-    metadata
-        .and_then(|metadata| metadata.modified().ok())
-        .and_then(|modified| modified.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|since| since.as_secs())
-        .hash(&mut hasher);
-
-    Some(folder.join(format!("{:016x}.pdf", hasher.finish())))
+    usable(&page).then_some(page.path)
 }
 
-/// Whether a rendered page is there and is a PDF: what is read back is a file this app
-/// wrote, so the header is the check and not a re-render.
-fn usable(rendered: &Path) -> bool {
-    let Ok(mut file) = std::fs::File::open(rendered) else {
+/// Whether a kept page is there and is a PDF.
+fn usable(page: &Page) -> bool {
+    let Ok(mut file) = std::fs::File::open(&page.path) else {
         return false;
     };
     let mut header = [0u8; 5];
     std::io::Read::read_exact(&mut file, &mut header).is_ok() && &header == b"%PDF-"
 }
 
-/// The mark left beside a page that was not written, for the same document and the same
-/// version of it, or nothing when the engine has not been asked about it yet.
-fn refused_marker(page: &Path) -> Option<PathBuf> {
-    let refused = refused_path(page);
-
-    refused.is_file().then_some(refused)
-}
-
-fn refused_path(page: &Path) -> PathBuf {
-    page.with_extension(REFUSED_SUFFIX)
-}
-
-/// Convert `source` into `rendered`, by running the engine the way a user would: headless,
-/// with a profile of this app's own so that a LibreOffice the user has open is untouched,
-/// and with a wait that ends rather than holding a hover for good.
-fn convert(program: &Path, source: &Path, rendered: &Path) -> Option<()> {
-    let folder = rendered.parent()?;
+/// Convert `source` into a page, by running the engine the way a user would: headless, with a
+/// profile of this app's own so that a LibreOffice the user has open is untouched, and with a
+/// wait that ends rather than holding a hover for good.
+fn convert(program: &Path, source: &Path) -> Option<Page> {
+    let folder = workspace()?;
     let stage = folder.join("stage");
     // Whatever a run before this one left behind is not read: the engine names what it
     // writes after what it was given, and only the file of this conversion is looked for.
     std::fs::remove_dir_all(&stage).ok();
     std::fs::create_dir_all(&stage).ok()?;
 
-    let profile = folder.join("profile");
-    let profile_url = format!("file:///{}", profile.to_string_lossy().replace('\\', "/"));
+    let profile_url = profile_url(&folder);
 
     // The engine the setting keeps holds a document of this app's own, and a page asked for
     // beside it is drawn by it rather than by an engine started for this one document. A
@@ -795,11 +785,9 @@ fn convert(program: &Path, source: &Path, rendered: &Path) -> Option<()> {
         return None;
     }
 
-    std::fs::write(rendered, &page).ok()?;
     std::fs::remove_file(&written).ok();
-    prune(folder);
 
-    Some(())
+    document_cache::store(source, OfficeEngine::LibreOffice, PageKind::Pdf, &page)
 }
 
 /// Wait for a process, ending it rather than waiting past `limit`.
@@ -814,49 +802,6 @@ fn wait(child: &mut Child, limit: Duration) -> bool {
                 let _ = child.wait();
                 return false;
             }
-        }
-    }
-}
-
-/// Keep the folder within the size the `Performance → Cache → Libre` setting names, oldest
-/// first: a rendered page is built again from its document whenever it is wanted, so nothing
-/// here is worth growing a folder for. A budget of nothing drops every page, which is what
-/// the setting means — nothing is kept between hovers.
-fn prune(folder: &Path) {
-    let budget = crate::CONFIG
-        .lock()
-        .map(|config| config.libre_cache_mb as u64 * 1024 * 1024)
-        .unwrap_or(0);
-    let Ok(entries) = std::fs::read_dir(folder) else {
-        return;
-    };
-
-    let mut pages: Vec<(std::time::SystemTime, u64, PathBuf)> = entries
-        .flatten()
-        .filter(|entry| {
-            entry
-                .path()
-                .extension()
-                .is_some_and(|extension| extension == "pdf" || extension == REFUSED_SUFFIX)
-        })
-        .filter_map(|entry| {
-            let metadata = entry.metadata().ok()?;
-            Some((metadata.modified().ok()?, metadata.len(), entry.path()))
-        })
-        .collect();
-
-    let mut total: u64 = pages.iter().map(|(_, size, _)| size).sum();
-    if total <= budget {
-        return;
-    }
-
-    pages.sort_by_key(|(modified, _, _)| *modified);
-    for (_, size, path) in pages {
-        if total <= budget {
-            break;
-        }
-        if std::fs::remove_file(&path).is_ok() {
-            total = total.saturating_sub(size);
         }
     }
 }
@@ -1154,30 +1099,34 @@ mod tests {
             println!("no folder for the stub document");
             return;
         };
-        let Some(folder) = AppConfig::rendered_dir() else {
+        let Some(folder) = workspace() else {
+            println!("no folder for the engine to work in");
             return;
         };
+        std::fs::create_dir_all(&folder).ok();
 
         let source = folder.join("probe-source.fodt");
         std::fs::write(&source, HOLDER_DOCUMENT).ok();
-        let page = folder.join("probe-page.pdf");
 
         // Nothing is kept to begin with, so the first row is the launch every document paid
         // for on its own before there was a setting.
+        document_cache::forget(&source, OfficeEngine::LibreOffice);
         let_go();
         let started = Instant::now();
-        let first = convert(&program, &source, &page);
+        let first = convert(&program, &source);
         println!(
-            "first document: {first:?} in {:?} — the engine started and handed the page",
+            "first document: {} in {:?} — the engine started and handed the page",
+            first.is_some(),
             started.elapsed()
         );
 
         // And the same document again, with the engine the first one started.
-        std::fs::remove_file(&page).ok();
+        document_cache::forget(&source, OfficeEngine::LibreOffice);
         let started = Instant::now();
-        let next = convert(&program, &source, &page);
+        let next = convert(&program, &source);
         println!(
-            "next document: {next:?} in {:?} — the engine kept, the page handed to it",
+            "next document: {} in {:?} — the engine kept, the page handed to it",
+            next.is_some(),
             started.elapsed()
         );
 
@@ -1213,8 +1162,8 @@ mod tests {
             config.libreoffice_idle = EngineIdle::Seconds(DEFAULT_LIBREOFFICE_IDLE_SECS);
         }
 
+        document_cache::forget(&source, OfficeEngine::LibreOffice);
         std::fs::remove_file(&source).ok();
-        std::fs::remove_file(&page).ok();
         std::fs::remove_file(lock_file(&holder)).ok();
     }
 }

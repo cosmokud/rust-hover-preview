@@ -1,38 +1,36 @@
 //! Measuring and drawing the page rendered for an Office document.
 //!
-//! A preview is drawn from one source and one only: the page the render tier
-//! produced and is holding in memory (see `office_render`). The picture a document
-//! saves inside itself is deliberately not read — it is a thumbnail-sized metafile
-//! or bitmap, a couple of hundred pixels across, and a preview drawn from one is
-//! either tiny or an enlargement of something that small — so a document whose page
-//! is not there yet is answered with a spinner in a box of its own, and the page
-//! itself the moment it arrives.
+//! A preview is drawn from one source and one only: the page an engine drew and the document
+//! cache keeps (see `office_render` and `document_cache`). The picture a document saves inside
+//! itself is deliberately not read — it is a thumbnail-sized metafile or bitmap, a couple of
+//! hundred pixels across, and a preview drawn from one is either tiny or an enlargement of
+//! something that small — so a document whose page is not there yet is answered with a spinner
+//! in a box of its own, and the page itself the moment it arrives.
 //!
 //! One document is drawn by the render engine beside Office rather than by an application of
 //! its own: one whose own application is not installed, where there is no Word, Excel or
 //! PowerPoint to ask for a page — and one the tray has asked the engine for outright, under
-//! `Engine → Select Engine → Office`. That engine writes a PDF under the app's own folder
-//! rather than holding anything in memory, and it is a page like any other here — measured
-//! from its own first page, laid out beside the cursor, and drawn at whatever size the layout
-//! asks for — which is what `engine_page` reads and what `measure` and `source_kind` ask
+//! `Engine → Select Engine → Office`. What that engine writes is a page like any other here —
+//! measured from its own first page, laid out beside the cursor, and drawn at whatever size the
+//! layout asks for — which is what `engine_page` reads and what `measure` and `source_kind` ask
 //! about before they answer with the wait (see `libre_formats::engine_page_kind` for which
 //! documents those are).
 //!
-//! Which of the two sources is the document's own is one question, asked of the
-//! configuration and the machine together (`office_formats::page_engine`), and the
-//! answer is what both sources are read through here: a page the render tier still holds
-//! from before the choice was changed is not the page a document is previewed from now,
-//! and neither is a PDF the engine wrote when it was the one being asked.
+//! Which of the two engines is the document's own is one question, asked of the configuration
+//! and the machine together (`office_formats::page_engine`), and the answer is what both
+//! sources are read through here: a page the tier drew is not the page a hover in the engine's
+//! mode is shown, and neither is a page the engine drew when it was the one being asked.
 //!
-//! Nothing is kept *here*: the page belongs to the render tier, which holds it up to
-//! the memory the user configured and drops it when that hover is over. What this
-//! module does with it is cheap either way — a page already in memory costs a header
-//! parse to measure and one raster to draw — and the size it reads is kept on the
-//! page itself, so it cannot outlive the page it was read from.
+//! Nothing is kept *here*: a page belongs to the document cache, which holds what the user's
+//! budget allows and nothing else, and what this module does with one is cheap either way — a
+//! page costs a header parse to measure and one raster to draw. The size it reads is
+//! remembered by the document it was drawn for, so it cannot outlive the page it was read from
+//! (see `document_cache::size`).
 
-use crate::config::config::{image_decode_limits, OfficeEngine};
+use crate::config::config::{image_decode_limits, read_within_budget, OfficeEngine};
+use crate::engines::document_cache::{self, Page, PageKind};
 use crate::engines::libreoffice_render;
-use crate::engines::office_render::{self, CachedRender, RenderedKind};
+use crate::engines::office_render;
 use crate::formats::office_formats;
 use crate::readers::pdf_preview;
 use std::io::Cursor;
@@ -75,13 +73,13 @@ impl SourceKind {
 /// Which of the document's sources a preview would be drawn from, asked by the
 /// layout before it decides how large the preview may be.
 pub(crate) fn source_kind(path: &Path) -> SourceKind {
-    if let Some(cached) = usable_render(path) {
+    if let Some((page, _)) = usable_page(path) {
         // A page Office exported is drawn at whatever size it is asked for; the picture
         // a workbook is answered with on a machine that cannot export a page is a screen
         // bitmap, and enlarging that would only stretch it.
-        return match cached.kind {
-            RenderedKind::Pdf | RenderedKind::Png => SourceKind::Page,
-            RenderedKind::Bmp => SourceKind::Raster,
+        return match page.kind {
+            PageKind::Pdf | PageKind::Png => SourceKind::Page,
+            PageKind::Bmp => SourceKind::Raster,
         };
     }
 
@@ -115,33 +113,33 @@ fn engine_page(path: &Path) -> Option<PathBuf> {
     .flatten()
 }
 
-/// The page waiting for this document, if there is one and it can be read.
+/// The page the render tier holds for this document, and its own size, where there is one that
+/// can be read.
 ///
-/// A page that cannot be read is not a page: one a render cut short, or one
-/// something else corrupted, would otherwise be handed to a preview that blinks away
-/// the moment it tries to draw it — and it would be trusted forever, because "a page
-/// is already rendered for this file" is what stops another render. So a page that
-/// will not give up its size is dropped here, which is what gets the document
-/// rendered again. This is the side that may ask the PDF engine — its threads are
-/// multithreaded apartments — which is why the check lives here rather than where the
-/// page is held.
+/// A page that cannot be read is not a page: one a render cut short, or one something else
+/// corrupted, would otherwise be handed to a preview that blinks away the moment it tries to
+/// draw it — and it would be trusted for good, because "a page is already kept for this file"
+/// is what stops another render. So a page whose size will not come out of it is given up here,
+/// which is what gets the document rendered again. This is the side that may ask the PDF engine
+/// — its threads are multithreaded apartments — which is why the check lives here rather than
+/// where the page is kept.
 ///
-/// It answers with nothing at all where the page held is not one this document is previewed
+/// It answers with nothing at all where the page kept is not one this document is previewed
 /// from any more: a page the render tier produced while it was the engine being asked is not
 /// the page a hover in the engine's mode is shown, and what this side drew would be the other
-/// engine's work under the current choice (see `office_formats::page_engine`). The page is
-/// left where it is rather than dropped, so a choice that comes back to the tier finds it.
-fn usable_render(path: &Path) -> Option<CachedRender> {
+/// engine's work under the current choice (see `office_formats::page_engine`). The page is left
+/// where it is rather than dropped, so a choice that comes back to the tier finds it.
+fn usable_page(path: &Path) -> Option<(Page, (u32, u32))> {
     if office_formats::page_engine(path) != Some(OfficeEngine::MicrosoftOffice) {
         return None;
     }
 
-    let cached = office_render::cached_render(path)?;
-    if rendered_dimensions(&cached).is_some() {
-        return Some(cached);
+    let page = office_render::held_page(path)?;
+    if let Some(size) = document_cache::size(path, OfficeEngine::MicrosoftOffice) {
+        return Some((page, size));
     }
 
-    office_render::forget(path);
+    document_cache::forget(path, OfficeEngine::MicrosoftOffice);
     None
 }
 
@@ -152,10 +150,8 @@ fn usable_render(path: &Path) -> Option<CachedRender> {
 /// switched off, is answered with no preview rather than with a box that would
 /// spin forever.
 pub(crate) fn measure(path: &Path) -> Option<(u32, u32)> {
-    if let Some(cached) = usable_render(path) {
-        if let Some(dimensions) = rendered_dimensions(&cached) {
-            return Some(dimensions);
-        }
+    if let Some((_, size)) = usable_page(path) {
+        return Some(size);
     }
 
     // Nothing of Office's has been drawn, but the render engine beside it may have drawn a
@@ -192,47 +188,22 @@ pub(crate) fn render(
         return None;
     }
 
-    let cached = usable_render(path)?;
-    render_cached(&cached, target_width, target_height)
+    let (page, _) = usable_page(path)?;
+    render_page(&page, target_width, target_height)
 }
 
-/// The page's own size, read from the bytes the first time it is asked for and kept
-/// on the page from then on: the layout asks for it more than once per hover, and a
-/// PDF page is parsed to be measured.
-fn rendered_dimensions(cached: &CachedRender) -> Option<(u32, u32)> {
-    *cached.dimensions.get_or_init(|| match cached.kind {
-        RenderedKind::Pdf => pdf_preview::page_dimensions_of_bytes(&cached.bytes),
-        // A slide's PNG and a workbook's bitmap are both read the way any image is.
-        RenderedKind::Png | RenderedKind::Bmp => image_dimensions_of(&cached.bytes),
-    })
-}
-
-/// An image's own size, read from the header of bytes already in memory — the
-/// decode itself is not paid for to answer a question about a size.
-fn image_dimensions_of(bytes: &[u8]) -> Option<(u32, u32)> {
-    image::ImageReader::new(Cursor::new(bytes))
-        .with_guessed_format()
-        .ok()?
-        .into_dimensions()
-        .ok()
-}
-
-fn render_cached(
-    cached: &CachedRender,
-    target_width: u32,
-    target_height: u32,
-) -> Option<(Vec<u8>, u32, u32)> {
-    match cached.kind {
+/// Draw the page the engine drew into the box the layout planned.
+fn render_page(page: &Page, target_width: u32, target_height: u32) -> Option<(Vec<u8>, u32, u32)> {
+    match page.kind {
         // The page is rendered at the size it is shown at rather than enlarged
         // afterwards, which is what keeps a scaled-up preview sharp.
-        RenderedKind::Pdf => {
-            pdf_preview::render_first_page_of_bytes(&cached.bytes, target_width, target_height)
-        }
-        RenderedKind::Png | RenderedKind::Bmp => {
-            // Read under the same limits as every other decode: the bytes are this
-            // app's own render's, but the decoder asking is the same decoder, and this
-            // is a decode like any other.
-            let mut reader = image::ImageReader::new(Cursor::new(&cached.bytes[..]))
+        PageKind::Pdf => pdf_preview::render_first_page(&page.path, target_width, target_height),
+        PageKind::Png | PageKind::Bmp => {
+            // Read under the same limits as every other decode: the file is this app's own
+            // render's, but the decoder asking is the same decoder, and this is a decode like
+            // any other.
+            let bytes = read_within_budget(&page.path)?;
+            let mut reader = image::ImageReader::new(Cursor::new(&bytes[..]))
                 .with_guessed_format()
                 .ok()?;
             reader.limits(image_decode_limits());
@@ -294,25 +265,26 @@ mod tests {
         file
     }
 
-    /// A page as the render tier holds one: the bytes Office wrote, and which kind
-    /// of page they are. Nothing is written to disk to make one.
-    fn held_page(kind: RenderedKind, bytes: Vec<u8>) -> CachedRender {
-        CachedRender {
-            kind,
-            bytes: std::sync::Arc::new(bytes),
-            // A page a document drew is the size its document makes it, whatever
-            // width the render was asked for.
-            export_width: 0,
-            dimensions: std::sync::Arc::new(std::sync::OnceLock::new()),
-        }
+    /// A page as the document cache keeps one: the bytes written where a page is kept, under
+    /// the name the kind of page gives them.
+    fn kept_page(kind: PageKind, bytes: &[u8]) -> Page {
+        let folder = std::env::temp_dir()
+            .join("rust-hover-preview-office-tests")
+            .join("preview-pages");
+        std::fs::create_dir_all(&folder).expect("a test folder");
+
+        let path = folder.join(format!("page.{}", kind.extension()));
+        std::fs::write(&path, bytes).expect("a written page");
+
+        Page { path, kind }
     }
 
     /// The picture a workbook is answered with is drawn like any other frame, and
     /// it is opaque whatever its own alpha bytes say.
     #[test]
     fn draws_a_workbook_picture_opaquely() {
-        let cached = held_page(RenderedKind::Bmp, bmp_bytes(2, 2, [40, 90, 200, 0]));
-        let (pixels, width, height) = render_cached(&cached, 4, 4).expect("a drawn picture");
+        let page = kept_page(PageKind::Bmp, &bmp_bytes(2, 2, [40, 90, 200, 0]));
+        let (pixels, width, height) = render_page(&page, 4, 4).expect("a drawn picture");
 
         assert_eq!((width, height), (4, 4));
         assert_eq!(pixels.len(), 4 * 4 * 4);
@@ -337,8 +309,8 @@ mod tests {
             .write_to(&mut written, image::ImageFormat::Png)
             .expect("a written slide");
 
-        let cached = held_page(RenderedKind::Png, written.into_inner());
-        let (pixels, width, height) = render_cached(&cached, 32, 16).expect("a drawn slide");
+        let page = kept_page(PageKind::Png, &written.into_inner());
+        let (pixels, width, height) = render_page(&page, 32, 16).expect("a drawn slide");
 
         assert_eq!((width, height), (32, 16));
         assert_eq!(pixels.len(), 32 * 16 * 4);

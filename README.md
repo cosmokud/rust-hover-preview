@@ -220,7 +220,7 @@ The item a setting starts at carries `(Default)` after its name, so a menu says 
 - **Volume** — Max, High, Medium, Low, Very Low, Mute: 100% down to 0%.
 - **Performance**
   - **Confirm File Type** — check a file's content against its name before it is previewed: a file whose bytes are another kind is previewed as that kind, and one whose content is a format this app has no reader for shows nothing. On by default.
-  - **Cache** — memory held between hovers, 2 GB down to 0 MB: Image, Text, Ebook, Office and Libre caches.
+  - **Cache** — what a preview may cost between hovers, 2 GB down to 0 MB: **`Image (RAM)`**, the decoded frames held in memory, and **`Document (Disk)`**, the pages an engine drew, kept as files under the temp folder so a document drawn once is not drawn again.
   - **Decode Budget** — 16 GB down to 512 MB, 1 GB default: a file past it gets no preview.
   - **Tick** — how often the app looks at Explorer while a folder window is in focus: 15 ms (default), 31, 47, 63 or 78 ms, one to five Windows timer ticks. Lower answers a move sooner; higher is lighter on the CPU and on Explorer.
 - **Engine**
@@ -304,10 +304,8 @@ video_volume=0
 ; Performance
 confirm_file_type=true
 decode_budget_gb=1
+document_cache_mb=128
 image_cache_mb=32
-office_cache_mb=64
-ebook_cache_mb=32
-text_cache_mb=0
 tick_ms=15
 
 ; Engine
@@ -336,9 +334,7 @@ Key settings, in plain terms:
 - `extensions` / `names` — the text-preview gates. Extensions are written without dots. Names match extensionless files.
 - `image_extensions`, `video_extensions`, `archive_extensions`, `office_extensions`, `font_extensions`, `design_extensions`, `vector_extensions` — per-type preview gates, written without dots. An entry with a dot in it, like `tar.gz`, is matched against the end of the file name. `libre_extensions`, `magick_extensions` and `peazip_extensions`, in their own sections, are the documents LibreOffice draws, the pictures ImageMagick develops, and the archives PeaZip lists.
 - `image_cache_mb` — memory for decoded image frames: default `32`, max `2048`; `0` holds nothing.
-- `office_cache_mb` — memory for Office-rendered pages: default `64`, max `2048`; `0` holds nothing between hovers but still renders for the current hover.
-- `ebook_cache_mb` — memory for PDF pages as pixels: default `32`, max `2048`; the same file at two preview sizes is held as two pages.
-- `text_cache_mb` — memory for text frames: default `0`, max `2048`; the text itself is already cached.
+- `document_cache_mb` — disk for the pages an engine drew — an Office export, a slide’s image, a workbook’s picture, a converted PDF: default `128`, max `2048`; `0` keeps nothing between hovers but still draws for the current one. The pages live under `%TEMP%\rust-hover-preview\document`, named for the document, the version of it and the engine that drew it, and the page that has not been read for longest is the one given up first.
 - `decode_budget_gb` — the most memory one hover may decode or read for: default `1`, smallest `0.25`, largest `64`. A file past it shows no preview.
 - `hdr_tone_map` — how HDR/EXR light values become screen values: `reinhard` (default), `aces` (filmic), `srgb` (clips), or `off` (bare clamp). Pictures already in screen values, like PNG or JPEG, are never affected.
 - `hdr_exposure` — how many stops those pictures are shifted before that curve: default `0`, clamped to `-10`–`10`.
@@ -355,8 +351,7 @@ Key settings, in plain terms:
 - `video_scale` — the same for a video, `100` by default.
 - `animated_scale` — the same for an animated GIF, WebP, or PNG, `100` by default; a still GIF or PNG follows `preview_scale`.
 - `vector_scale` — percentage or `fit`, read against the screen. `fit` is default, is all of the room, and `100` or more reads as it. It covers every drawing the Vector kind holds. The name it used to be written under (`svg_scale`) is not read: a line like that is removed the next time the file is written, and the setting goes back to its default.
-- `libre_cache_mb` — megabytes of converted pages kept on disk, `32` by default; `0` keeps nothing between hovers. A page whose budget gave it up is converted again the next time it is hovered.
-- `magick_preview_enabled` and `peazip_preview_enabled` are not read: a picture the ImageMagick engine develops is gated by `image_preview_enabled` and an archive the PeaZip engine lists by `archive_preview_enabled`, since what either is previewed as is a picture or an archive. `libre_preview_enabled` and `libre_scale` are gone the same way — what draws those documents is `document_preview_enabled` and `document_scale`. Lines left under the old names are removed the next time the file is written.
+- `magick_preview_enabled` and `peazip_preview_enabled` are not read: a picture the ImageMagick engine develops is gated by `image_preview_enabled` and an archive the PeaZip engine lists by `archive_preview_enabled`, since what either is previewed as is a picture or an archive. `libre_preview_enabled` and `libre_scale` are gone the same way — what draws those documents is `document_preview_enabled` and `document_scale`. Lines left under the old names are removed the next time the file is written. `office_cache_mb` and `libre_cache_mb` are gone the same way: one `document_cache_mb` replaces both, and a file that still holds either is read once for the larger of the two and written without them.
 - There is no TTL for ImageMagick, and no `magick_idle` key: it is the one engine here that is a converter rather than a process this app can hold open, so what a file costs is a conversion or a hit in the picture cache (`image_cache_mb`) and never a file of the app's own.
 - There is no TTL for PeaZip either, and no `peazip_idle` key, for the same reason: what this app runs of it are the tools PeaZip carries, each of which prints an archive’s table of contents and exits — and for the three single-stream names whose tools have no listing to print, `br`, `bcm` and `lpaq8`, nothing is run at all. What a file costs is a listing or a hit in the listing cache, and a second hover of the same archive starts nothing at all.
 - `ebook_scale` — percentage or `fit`, read against the screen, for a PDF page; `fit` by default. `100` or more reads as `fit`.
@@ -392,7 +387,7 @@ See [TODO.md](TODO.md) for planned work, known bugs, and other issues.
 
 ## Privacy
 
-Rust Hover Preview works fully offline — no telemetry, analytics, ads, accounts, or crash reporting. It reads only the item you hover or focus in Explorer, locally and only for enabled preview types. Cloud-only placeholders are skipped on purpose; password-protected files are never bypassed. Settings and themes live under `%APPDATA%\rust-hover-preview`; optional previews use your local FFmpeg, LibreOffice or ImageMagick if installed, Microsoft Office, Windows’ own media engine, and the Windows PDF engine. Caches are in-memory and bounded by `config.ini`. The only network request is an update check, which runs only when you open the tray menu and at most once an hour. See `PRIVACY.md` for full details.
+Rust Hover Preview works fully offline — no telemetry, analytics, ads, accounts, or crash reporting. It reads only the item you hover or focus in Explorer, locally and only for enabled preview types. Cloud-only placeholders are skipped on purpose; password-protected files are never bypassed. Settings and themes live under `%APPDATA%\rust-hover-preview`; optional previews use your local FFmpeg, LibreOffice or ImageMagick if installed, Microsoft Office, Windows’ own media engine, and the Windows PDF engine. Caches are bounded by `config.ini`: decoded images stay in memory, while the page an engine drew for a document — an Office export, a converted PDF — is kept as a file under the temp folder, where Windows is free to clear it. The only network request is an update check, which runs only when you open the tray menu and at most once an hour. See `PRIVACY.md` for full details.
 
 ## License
 
