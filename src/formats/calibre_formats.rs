@@ -34,8 +34,10 @@
 //! * `chm` and `lit`, the two books whose text is packed rather than stored: a compiled help file
 //!   is HTML compressed with LZX inside an ITSF container, and a Microsoft Reader book is the same
 //!   compression inside an OLE compound file. Neither is a container of pictures and neither is a
-//!   format whose text any reader here unpacks, so both are the engine's — and both were the
-//!   listing engine's names once, which is what `[peazip]`'s own older list is written down for.
+//!   format whose text any reader here unpacks, so both are the engine's. Both were the listing
+//!   engine's names before that — which is what `[peazip]`'s own older list is written down for — and
+//!   a file written between the two changes holds this list without them, which is what
+//!   `CALIBRE_EXTENSIONS_BEFORE_THE_EBOOKS` below is written down for.
 //! * The open one, `epub`, which is the format most ebooks are sold in.
 //! * `fb2`, the FictionBook the Russian ebook sites write.
 //! * `djvu`, the scanned book, in the same family as a PDF: what a hover shows is a page of the
@@ -100,6 +102,21 @@ use std::path::Path;
 /// the names the engine does not read at all (`tpz`, and the `kfx` a plugin would be needed for).
 pub const DEFAULT_CALIBRE_EXTENSIONS: &str =
     "azw,azw3,azw4,chm,djvu,epub,fb2,htmlz,lit,lrf,mobi,pml,prc,snb,tcr";
+
+/// The built-in `[calibre]` list as it stood before `chm` and `lit` became the engine's names.
+///
+/// A file holding exactly these entries is this app's own earlier list rather than a user's edit —
+/// nobody has typed it — so it is brought up to the built-in list rather than kept as written, which
+/// is what gives an installation that already exists the two names. Without it those two would reach
+/// a fresh installation only: every `config.ini` already written holds the list as it was, and a list
+/// nobody has touched is indistinguishable from one a user edited unless the older spellings of it
+/// are written down here (see `config::repair_older_lists`).
+///
+/// The two names were the `[peazip]` list's until then, so the same change takes them out of that
+/// list — and a file written before both moves is one neither of the repairs can finish on its own,
+/// which is why each list has the one it needs rather than the pair being written down once.
+pub const CALIBRE_EXTENSIONS_BEFORE_THE_EBOOKS: &str =
+    "azw,azw3,azw4,djvu,epub,fb2,htmlz,lrf,mobi,pml,prc,snb,tcr";
 
 /// Whether the configured list claims `path`.
 pub fn matches_calibre_list(path: &Path, extensions: &[String]) -> bool {

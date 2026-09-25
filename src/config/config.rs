@@ -13,7 +13,9 @@ use crate::config::theme_files;
 use crate::formats::archive_formats::{
     sanitize_archive_extensions, ARCHIVE_EXTENSIONS_BEFORE_THE_COMICS, DEFAULT_ARCHIVE_EXTENSIONS,
 };
-use crate::formats::calibre_formats::{sanitize_calibre_extensions, DEFAULT_CALIBRE_EXTENSIONS};
+use crate::formats::calibre_formats::{
+    sanitize_calibre_extensions, CALIBRE_EXTENSIONS_BEFORE_THE_EBOOKS, DEFAULT_CALIBRE_EXTENSIONS,
+};
 use crate::formats::design_formats::{
     sanitize_design_extensions, DEFAULT_DESIGN_EXTENSIONS, DESIGN_EXTENSIONS_BEFORE_AI,
     DESIGN_EXTENSIONS_BEFORE_CDR_AND_PROCREATE, DESIGN_EXTENSIONS_WITH_CDR,
@@ -1831,6 +1833,12 @@ fn repair_older_lists(ini: &mut Ini) -> bool {
             sanitize_magick_extensions as fn(&str) -> Vec<String>,
         ),
         (
+            CALIBRE_SECTION,
+            DEFAULT_CALIBRE_EXTENSIONS,
+            &[CALIBRE_EXTENSIONS_BEFORE_THE_EBOOKS][..],
+            sanitize_calibre_extensions as fn(&str) -> Vec<String>,
+        ),
+        (
             PEAZIP_SECTION,
             DEFAULT_PEAZIP_EXTENSIONS,
             &[
@@ -3555,12 +3563,17 @@ mod tests {
         }
     }
 
-    /// And the same for the lists a name moved *out of* when the book kind grew a list of its own:
-    /// `cbz` was the `[archive]` list's until a comic became a book, and `chm` and `lit` were the
-    /// `[peazip]` list's until the ebook engine was the one asked about them. A file holding either
-    /// list as this app shipped it has never been edited — nobody types these — so both are brought
-    /// up to the lists of now, which is what takes the three names out of every `config.ini` already
-    /// written, and the list the names went to is a section the file has never held.
+    /// And the same for the lists a name moved *out of* when the book kind grew a list of its own, and
+    /// for the list one moved *into*: `cbz` was the `[archive]` list's until a comic became a book,
+    /// `chm` and `lit` were the `[peazip]` list's until the ebook engine was the one asked about them,
+    /// and the list the three of them ended up in is one this app had already written once without
+    /// two of them. A file holding any of those as this app shipped it has never been edited — nobody
+    /// types these — so all three are brought up to the lists of now, which is what takes the names
+    /// out of the listing lists and puts the whole of them into the book lists.
+    ///
+    /// It is the case worth having a test for rather than the two repairs separately: a file written
+    /// between the changes holds one list of each pair, and it is what every installation that has
+    /// been running for a day holds.
     #[test]
     fn a_list_holding_the_apps_own_entries_loses_the_names_that_became_books() {
         let mut ini = Ini::new();
@@ -3573,6 +3586,11 @@ mod tests {
             PEAZIP_SECTION,
             "extensions",
             Some(PEAZIP_EXTENSIONS_BEFORE_THE_EBOOKS.to_string()),
+        );
+        ini.set(
+            CALIBRE_SECTION,
+            "extensions",
+            Some(CALIBRE_EXTENSIONS_BEFORE_THE_EBOOKS.to_string()),
         );
 
         let config = read_file(&mut ini);
@@ -3587,6 +3605,11 @@ mod tests {
             sanitize_peazip_extensions(DEFAULT_PEAZIP_EXTENSIONS),
             "and a help file is not an archive either"
         );
+        assert_eq!(
+            config.calibre_extensions,
+            sanitize_calibre_extensions(DEFAULT_CALIBRE_EXTENSIONS),
+            "and the list that had been written without them is given them"
+        );
 
         for name in ["cbz", "chm", "lit"] {
             assert!(
@@ -3596,17 +3619,19 @@ mod tests {
             );
         }
 
-        // And the list the names went to is the one the file has never held, so the built-in
+        for name in ["chm", "lit"] {
+            assert!(
+                config.calibre_extensions.iter().any(|entry| entry == name),
+                "`{name}` is the engine's now, and an installation that already exists is given it"
+            );
+        }
+
+        // And the list the comics went to is a section the file has never held, so the built-in
         // entries come back with the key rather than the names being lost on the way over.
         assert_eq!(
             config.ebook_extensions,
             sanitize_ebook_extensions(DEFAULT_EBOOK_EXTENSIONS),
             "a file with no `[ebook]` section is given the built-in list"
-        );
-        assert_eq!(
-            config.calibre_extensions,
-            sanitize_calibre_extensions(DEFAULT_CALIBRE_EXTENSIONS),
-            "and the engine's list is what the two names moved into"
         );
         assert!(
             config.differs(&ini),
