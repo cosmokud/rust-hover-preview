@@ -46,6 +46,16 @@ type PageDimensionCache = HashMap<PageDimensionKey, Option<(u32, u32)>>;
 
 static PAGE_DIMENSIONS: Lazy<Mutex<PageDimensionCache>> = Lazy::new(|| Mutex::new(HashMap::new()));
 
+/// Which page of a converted book a preview is drawn from, keyed by the file and its version the
+/// way a size is: a book converted again is a book to look at again.
+///
+/// `None` records a file that could not be opened at all, so a document that is not a PDF is not
+/// parsed on every hover of it. What is *not* remembered is a book whose pages are all one colour:
+/// that is an answer about the pages, and it is written down like any other.
+type BookPageCache = HashMap<PageDimensionKey, Option<BookPage>>;
+
+static BOOK_PAGES: Lazy<Mutex<BookPageCache>> = Lazy::new(|| Mutex::new(HashMap::new()));
+
 /// Initialize the apartment this module's WinRT calls need. Every thread that
 /// probes or renders a page has to call this once before its first call.
 pub fn initialize_apartment() {
@@ -139,6 +149,16 @@ fn remember_page_dimensions(key: PageDimensionKey, dimensions: Option<(u32, u32)
     }
 }
 
+/// The same, for the page a book is previewed from.
+fn remember_book_page(key: PageDimensionKey, page: Option<BookPage>) {
+    if let Ok(mut cache) = BOOK_PAGES.lock() {
+        if !cache.contains_key(&key) && cache.len() >= PAGE_DIMENSION_CACHE_MAX_ENTRIES {
+            cache.clear();
+        }
+        cache.insert(key, page);
+    }
+}
+
 /// Render page 1 into the largest box that fits `max_width` x `max_height`
 /// without changing the page's aspect ratio, and return BGRA pixels with the
 /// size they were rendered at.
@@ -172,10 +192,173 @@ fn render_opened_first_page(
     let (render_width, render_height) = fit_page(size.Width, size.Height, max_width, max_height)?;
 
     let bytes = render_page(&page, render_width, render_height)?;
-    // The page the engine encoded is read under the same limits as every other decode,
-    // so what a hover can ask an allocator for is one question with one answer whatever
-    // the file was.
-    let mut reader = image::ImageReader::new(std::io::Cursor::new(&bytes[..]))
+
+    decode_rendered_page(&bytes, render_width, render_height)
+}
+
+/// How many of a converted book's opening pages are looked at before its own first page is kept
+/// whatever it holds.
+const BOOK_PAGES_MAX: u32 = 8;
+
+/// How large a page is drawn to answer whether it says anything. Small, because the question is
+/// only whether the page holds more than one colour, and what it costs is paid before every
+/// preview of the page it is asked about.
+const BOOK_PAGE_PROBE: u32 = 48;
+
+/// The page a converted book is previewed from: which page of the document it is, and that page's
+/// own size in DIPs.
+///
+/// The size is that page's rather than the document's first, because the two are not always the
+/// same and it is this page that is drawn (see [`book_page`]).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct BookPage {
+    pub index: u32,
+    pub size: (u32, u32),
+}
+
+/// The page of a converted book a preview is drawn from: the first of its opening pages that is
+/// not one flat colour, with that page's own size.
+///
+/// A book's first page is very often not a page of the book. What an EPub, a Kindle file and a
+/// Mobipocket one all put first is the cover, and a cover is as likely to be one colour as it is to
+/// be artwork: the quick start guide Calibre ships inside its own installation carries a cover that
+/// is a single pixel, stretched over a whole page, so what a hover on one of those books shows is a
+/// rectangle — which is honestly the book's first page, and says nothing whatever about the book.
+/// What is asked of each page in turn is therefore whether it holds more than one colour, and the
+/// first one that does is the page the preview is made from.
+///
+/// What is *not* skipped is a page that has anything at all on it: a title page, a page of text, a
+/// photograph, a page with one line drawn on it are all answers to "what is this book", and only a
+/// page that is a single colour is not. The walk stops after [`BOOK_PAGES_MAX`] pages, so a book
+/// whose opening pages are all one colour — a scan of blank leaves, a cover that is a colour
+/// swatch — is still previewed from its own first page rather than from nothing, and a document
+/// that cannot be walked at all is answered with page one exactly as it always was.
+///
+/// What this costs is a small render per page looked at, which is why the answer is held between
+/// asks: a hover asks for this twice — the layout to place the preview, the loader to draw it —
+/// and a page that has been looked at once is not looked at again (see `BOOK_PAGES`).
+pub fn book_page(path: &Path) -> Option<BookPage> {
+    let key = page_dimension_key(path);
+    if let Ok(cache) = BOOK_PAGES.lock() {
+        if let Some(cached) = cache.get(&key) {
+            return *cached;
+        }
+    }
+
+    let chosen = probe_book_page(path);
+    remember_book_page(key, chosen);
+
+    chosen
+}
+
+fn probe_book_page(path: &Path) -> Option<BookPage> {
+    if !has_pdf_header(path) {
+        return None;
+    }
+
+    let document = open_document(path)?;
+
+    // The first page's size is what a PDF is measured by, and this is the same opening: what is
+    // read here is handed to that cache rather than left for it to find a second time.
+    remember_opened_dimensions(path, &document);
+
+    let mut first: Option<BookPage> = None;
+
+    for index in 0..BOOK_PAGES_MAX {
+        let Ok(page) = document.GetPage(index) else {
+            break;
+        };
+        let Some(size) = page
+            .Size()
+            .ok()
+            .and_then(|size| page_size_in_dips(size.Width, size.Height))
+        else {
+            break;
+        };
+
+        let candidate = BookPage { index, size };
+
+        if first.is_none() {
+            first = Some(candidate);
+        }
+
+        if !is_flat_page(&page) {
+            return Some(candidate);
+        }
+    }
+
+    first
+}
+
+/// Whether a page holds one colour and nothing else: nothing but the colour its own background is,
+/// which is a page with nothing on it.
+///
+/// The page is drawn small rather than read for its content: a PDF's content is a program, and
+/// what it draws is the answer — a page whose every pixel comes out the same is a page that says
+/// nothing, whatever the program that drew it looks like. A page that cannot be drawn at all is
+/// answered with `false`, which keeps it: a page this side cannot look at is not a page it may
+/// decide the book is without.
+fn is_flat_page(page: &PdfPage) -> bool {
+    let Some(bytes) = render_page(page, BOOK_PAGE_PROBE, BOOK_PAGE_PROBE) else {
+        return false;
+    };
+    let Ok(image) = image::load_from_memory(&bytes) else {
+        return false;
+    };
+
+    is_one_colour(&image.to_rgba8())
+}
+
+/// Whether a drawn page holds one colour and nothing else.
+fn is_one_colour(image: &image::RgbaImage) -> bool {
+    let mut pixels = image.pixels();
+    let Some(first) = pixels.next() else {
+        return false;
+    };
+
+    pixels.all(|pixel| pixel == first)
+}
+
+/// The page a converted book is drawn from, fitted into the box the caller asks for.
+///
+/// What is drawn is the page [`book_page`] chose rather than the document's first, and it is drawn
+/// into the box the caller names rather than at the page's own size — so the frame that comes back
+/// is the shape the layout measured, made of the page the book is previewed from.
+pub fn render_book_page(
+    path: &Path,
+    max_width: u32,
+    max_height: u32,
+) -> Option<(Vec<u8>, u32, u32)> {
+    let book = book_page(path)?;
+
+    let document = open_document(path)?;
+    let page = document.GetPage(book.index).ok()?;
+
+    let (render_width, render_height) = fit_page(
+        book.size.0 as f32,
+        book.size.1 as f32,
+        max_width,
+        max_height,
+    )?;
+
+    let bytes = render_page(&page, render_width, render_height)?;
+
+    decode_rendered_page(&bytes, render_width, render_height)
+}
+
+/// The page the engine encoded, read into the frame this module hands on.
+///
+/// The page is read under the same limits as every other decode of this app, so what a hover can
+/// ask an allocator for is one question with one answer whatever the file was, and the box it was
+/// drawn into is the one this side asked for — a page left at the size the display's own scale
+/// would make of it is a page drawn past the edge of the display the layout fitted it into (see
+/// `fit_drawn_page`).
+fn decode_rendered_page(
+    bytes: &[u8],
+    render_width: u32,
+    render_height: u32,
+) -> Option<(Vec<u8>, u32, u32)> {
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes))
         .with_guessed_format()
         .ok()?;
     reader.limits(image_decode_limits());
@@ -485,8 +668,46 @@ mod tests {
         );
     }
 
+    /// A page with one colour on it is a page that says nothing, and a page with anything else on
+    /// it — one line, one dot, one shade beside another — is a page of the book.
+    ///
+    /// It is the whole of what a converted book's opening pages are judged by, so what it is worth
+    /// saying is where the line is: one colour is not a page, and every other page is.
+    #[test]
+    fn reads_a_page_of_one_colour_as_a_page_with_nothing_on_it() {
+        let flat = image::RgbaImage::from_pixel(64, 64, image::Rgba([130, 41, 45, 255]));
+        assert!(
+            is_one_colour(&flat),
+            "the cover the quick start guide ships is one pixel of one colour, stretched over a page"
+        );
+
+        let blank = image::RgbaImage::from_pixel(64, 64, image::Rgba([255, 255, 255, 255]));
+        assert!(is_one_colour(&blank), "and a blank page is one colour too");
+
+        let mut lined = flat.clone();
+        lined.put_pixel(32, 32, image::Rgba([129, 41, 45, 255]));
+        assert!(
+            !is_one_colour(&lined),
+            "a page with one pixel of another shade is a page with something on it"
+        );
+
+        assert!(
+            !is_one_colour(&image::RgbaImage::from_fn(64, 64, |x, _| image::Rgba([
+                x as u8, 0, 0, 255
+            ]))),
+            "and so is a page drawn in a gradient"
+        );
+
+        assert!(
+            !is_one_colour(&image::RgbaImage::new(0, 0)),
+            "a page with no pixels at all is not a page to judge"
+        );
+    }
+
     /// Page 1 of the PDFs named in `RHP_PDF_PROBE` (separated by `;`), drawn into a 1000
-    /// by 1400 box through the real engine, reporting both sizes.
+    /// by 1400 box through the real engine, reporting both sizes — and the page a converted book
+    /// would be previewed from, which is the first of its opening pages that holds more than one
+    /// colour (see `book_page`).
     ///
     /// Ignored because it needs files, and because the size the engine draws a page at
     /// is the one thing about it that depends on the display the machine is on: a display
@@ -513,9 +734,10 @@ mod tests {
             .map(PathBuf::from)
         {
             println!(
-                "\n--- {} ---\npage: {:?} dips\ndrawn into: {max_width} by {max_height}",
+                "\n--- {} ---\npage: {:?} dips\ndrawn into: {max_width} by {max_height}\nbook page: {:?}",
                 path.display(),
-                page_dimensions(&path)
+                page_dimensions(&path),
+                book_page(&path)
             );
 
             let drawn = render_first_page(&path, max_width, max_height);
@@ -533,6 +755,19 @@ mod tests {
             assert!(
                 width <= max_width && height <= max_height,
                 "the page is drawn inside the box it was given, not {width} by {height}"
+            );
+
+            let Some((pixels, width, height)) = render_book_page(&path, max_width, max_height)
+            else {
+                println!("no page of the book was drawn");
+                continue;
+            };
+
+            println!("book drawn: {width} by {height}");
+            assert_eq!(
+                pixels.len(),
+                width as usize * height as usize * 4,
+                "the pixels of the book's page are the size it reports"
             );
         }
     }
