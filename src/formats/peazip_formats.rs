@@ -45,14 +45,17 @@
 //! What is *not* here is a judgement rather than a gap, and each group is worth naming:
 //!
 //! * **A name another kind already reads is not here.** `7z`, `zip`, `rar`, `tar`, `zipx`,
-//!   `jar`, `apk`, `xpi` and `cbz` are the `[archive]` list's, and they are read by this app
+//!   `jar`, `apk` and `xpi` are the `[archive]` list's, and they are read by this app
 //!   itself — asking an engine for one would be a launch spent on a file this side reads faster
 //!   and with nothing to install. `tar.gz` and `tgz` are that list's too, which is why the bare
 //!   `gz` here is only ever reached by a file that is *not* a tarball: the archive list is asked
 //!   first, so a `.tar.gz` stays the archive it was. `pmd` is the `[libre]` list's (PageMaker's
 //!   document, not the PPMd archive the engine's table also spells that way), `swf` and `flv`
-//!   are the video list's, and `doc`, `xls` and `ppt` — which the engine reads inside its
-//!   compound-file format — are the Office list's. A name sits in exactly one list so that a
+//!   are the video list's, `doc`, `xls` and `ppt` — which the engine reads inside its
+//!   compound-file format — are the Office list's, `cbz`, `cbr` and `cbc` are the `[ebook]`
+//!   list's, which is where a comic is a book rather than a box of files, and `chm` and `lit` are
+//!   `[calibre]`'s, because a compiled help file and a Microsoft Reader book are pages the ebook
+//!   engine draws rather than archives to list. A name sits in exactly one list so that a
 //!   preview of one cannot come back by two routes.
 //! * **A program is not an archive.** The engine lists a `.exe`, a `.dll`, a `.sys`, an `.obj`,
 //!   an `.elf`, a Mach-O binary and a firmware capsule too — what it is reading is the resources
@@ -100,12 +103,16 @@ use std::path::Path;
 /// Three groups, in the order they are written:
 ///
 /// * The archives and installers nothing else on the machine opens: `001`, `ar`, `arc`, `arj`,
-///   `cab`, `chm`, `cpio`, `deb`, `esd`, `hfs`, `hfsx`, `hxs`, `iso`, `lha`, `lit`, `lzh`, `msi`,
+///   `cab`, `cpio`, `deb`, `esd`, `hfs`, `hfsx`, `hxs`, `iso`, `lha`, `lzh`, `msi`,
 ///   `msp`, `pkg`, `ppkg`, `rpm`, `swm`, `udf`, `wim`, `xar`, `xip` and `zpaq`. Some are
-///   containers of files in the ordinary sense (an installer, a help file, a Linux package, a
+///   containers of files in the ordinary sense (an installer, a Linux package, a
 ///   disk image), some are the volume of a backup, and all of them are read by a tool of PeaZip's
 ///   and by nothing this app has. Two of them are that tool's rather than the console archiver's:
 ///   an `arc` is FreeArc's and a `zpaq` is zpaq's, and neither is read by the archiver at all.
+///   A compiled help file and a Microsoft Reader book were of this group once and are not any
+///   more: both are read by the ebook engine and previewed as a page of one, so they are
+///   `[calibre]`'s, and `PEAZIP_EXTENSIONS_BEFORE_THE_EBOOKS` below is what takes them out of a
+///   file this app wrote before that.
 /// * The single-stream compressors: `bcm`, `br`, `bz2`, `bzip2`, `gz`, `gzip`, `lpaq8`, `lzma`,
 ///   `xz`, `z` and `zst`, with the tarball spellings that name them (`taz`, `tbz`, `tbz2`, `tpz`,
 ///   `tzst`). One of these is a file put through a compressor rather than a container, so the
@@ -120,16 +127,30 @@ use std::path::Path;
 ///
 /// Deliberately absent, and each for a reason the module documentation above gives: the names
 /// another list of this app's already reads (`7z`, `zip`, `rar`, `tar`, `zipx`, `jar`, `apk`,
-/// `xpi`, `cbz`, `tgz`, `pmd`, `swf`, `flv`, `doc`, `xls`, `ppt`), the programs the engine lists
-/// as resources (`exe`, `dll`, `sys`, `obj`, `elf`, `macho`, `te`, `b64`, `ihex`, `simg`,
-/// `uefif`, `scap`, `lpimg`, `nsis`, `mslz`, `mub`), the extensions that are words rather than
-/// formats (`img`, `ext`, `ext2`, `ext3`, `ext4`, `fat`, `ntfs`, `apm`, `mbr`, `gpt`), the codecs
-/// its build carries no format for and no tool of its own opens (`lz4`, `lz5`, `lizard`,
-/// `flzma2`), the two names this installation carries no tool for at all (`pea`, which no tool of
-/// PeaZip's lists, and `paq8`, whose folder holds no executable — both are written down in
-/// TODO.md), and the compression formats this app has no need of an engine for (`xz` is here,
-/// `lzma86` and `base64` are not).
+/// `xpi`, `cbz`, `cbr`, `cbc`, `chm`, `lit`, `tgz`, `pmd`, `swf`, `flv`, `doc`, `xls`, `ppt`),
+/// the programs the engine lists as resources (`exe`, `dll`, `sys`, `obj`, `elf`, `macho`, `te`,
+/// `b64`, `ihex`, `simg`, `uefif`, `scap`, `lpimg`, `nsis`, `mslz`, `mub`), the extensions that
+/// are words rather than formats (`img`, `ext`, `ext2`, `ext3`, `ext4`, `fat`, `ntfs`, `apm`,
+/// `mbr`, `gpt`), the codecs its build carries no format for and no tool of its own opens (`lz4`,
+/// `lz5`, `lizard`, `flzma2`), the two names this installation carries no tool for at all (`pea`,
+/// which no tool of PeaZip's lists, and `paq8`, whose folder holds no executable — both are written
+/// down in TODO.md), and the compression formats this app has no need of an engine for (`xz` is
+/// here, `lzma86` and `base64` are not).
 pub const DEFAULT_PEAZIP_EXTENSIONS: &str =
+    "001,apfs,ar,arc,arj,bcm,br,bz2,bzip2,cab,cpio,cramfs,deb,dmg,esd,gz,gzip,\
+hfs,hfsx,hxs,iso,lha,lpaq8,lzh,lzma,msi,msp,pkg,ppkg,qcow,qcow2,rpm,squashfs,swm,\
+taz,tbz,tbz2,tpz,txz,tzst,udf,udeb,vdi,vhd,vhdx,vmdk,wim,xar,xip,xz,z,zpaq,zst";
+
+/// The built-in `[peazip]` list as it stood while `chm` and `lit` were the archiver's names.
+///
+/// A file holding exactly these entries is the app's own older list rather than a user's edit, so it
+/// is brought up to the built-in list rather than kept as written — which is what takes the two
+/// names out of every `config.ini` already written. Both are books rather than archives: a
+/// compiled help file and a Microsoft Reader book are read by the ebook engine and previewed as a
+/// page of one, which needs Calibre installed, where the archiver listed what they hold (see
+/// `calibre_formats`). A user who would rather have the listing back adds the name to this list
+/// again, and takes it out of `[calibre]` with it.
+pub const PEAZIP_EXTENSIONS_BEFORE_THE_EBOOKS: &str =
     "001,apfs,ar,arc,arj,bcm,br,bz2,bzip2,cab,chm,cpio,cramfs,deb,dmg,esd,gz,gzip,\
 hfs,hfsx,hxs,iso,lha,lit,lpaq8,lzh,lzma,msi,msp,pkg,ppkg,qcow,qcow2,rpm,squashfs,swm,\
 taz,tbz,tbz2,tpz,txz,tzst,udf,udeb,vdi,vhd,vhdx,vmdk,wim,xar,xip,xz,z,zpaq,zst";
@@ -346,6 +367,11 @@ mod tests {
                     path,
                     &config.office_extensions,
                 )
+                || crate::formats::ebook_formats::matches_ebook_list(path, &config.ebook_extensions)
+                || crate::formats::calibre_formats::matches_calibre_list(
+                    path,
+                    &config.calibre_extensions,
+                )
                 || crate::formats::text_formats::matches_text_lists(
                     path,
                     &config.text_extensions,
@@ -365,6 +391,8 @@ mod tests {
             "package.xpi",
             "comic.cbz",
             "document.pmd",
+            "help.chm",
+            "book.lit",
             "animation.swf",
             "clip.flv",
             "report.doc",
@@ -416,7 +444,6 @@ mod tests {
             "backup.arj",
             "backup.arc",
             "backup.cab",
-            "help.chm",
             "linux.deb",
             "linux.rpm",
             "image.iso",

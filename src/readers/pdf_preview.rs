@@ -75,20 +75,25 @@ fn named(path: &Path, extension: &str) -> bool {
 /// Whether a page may be read from `path`.
 ///
 /// A `.pdf` is one by its name, and with it the two other spellings of the same document the
-/// format's own world writes: `pdfa`, the archival profile of a PDF, and `epdf`, the
-/// encapsulated one, are both pages the Windows engine opens exactly as it opens a `.pdf`. A
-/// `.ai` is one when Illustrator saved it the way it saves one by default — with `Create PDF
+/// format's own world writes: `pdfa`, the archival profile of a PDF, and `epdf`, the encapsulated
+/// one, are both pages the Windows engine opens exactly as it opens a `.pdf`. Those three names are
+/// the `[ebook]` list's rather than a rule of this module's — they are the half of the book kind
+/// this reader draws, written down beside the comics it does not (see `ebook_formats`) — so a name
+/// taken out of that list is a name this app stops drawing.
+///
+/// A `.ai` is one when Illustrator saved it the way it saves one by default — with `Create PDF
 /// Compatible File` on, which has been the default since Illustrator 9 — because the document
 /// *is* page 1 of a PDF then, and the private data the application writes beside the artwork is
 /// what the OS engine reads past. Saved without that compatibility the file is PostScript,
 /// which is not a page any engine here can draw, so the bytes are asked rather than believed and
-/// a file that answers no is a file with no preview.
+/// a file that answers no is a file with no preview. That name is a drawing's rather than a book's,
+/// so the answer comes from the file rather than from a list.
 ///
 /// Only the name that needs the question pays for it: the three page spellings are answered
-/// without opening anything, and a cloud placeholder is not opened to answer either, which is
-/// the rule every gate in this app follows.
+/// without opening anything, and a cloud placeholder is not opened to answer either, which is the
+/// rule every gate in this app follows.
 pub fn is_pdf_file(path: &Path) -> bool {
-    if named(path, "pdf") || named(path, "pdfa") || named(path, "epdf") {
+    if crate::formats::ebook_formats::is_page_name(path) {
         return true;
     }
 

@@ -2462,7 +2462,10 @@ fn kind_claiming(names: &[&str], config: &AppConfig) -> Option<PreviewType> {
 
         // A PDF is a kind of its own rather than a list: the one name is the whole of what
         // the PDF path claims, and what a page is read from is the file's own header.
-        if name.eq_ignore_ascii_case("pdf") {
+        // And a book of the kind's other half — a comic, which is a container of plates — is
+        // claimed by the same list, which is where the names of a page are written down (see
+        // `ebook_formats`).
+        if crate::formats::ebook_formats::matches_ebook_list(&named, &config.ebook_extensions) {
             return Some(PreviewType::Ebook);
         }
 
@@ -2877,8 +2880,8 @@ mod tests {
         );
         assert_eq!(
             classified("film.docx", b"ITSF\x03\x00\x00\x00\x60\x00\x00\x00"),
-            Content::Kind(PreviewType::Peazip),
-            "a compiled help file"
+            Content::Kind(PreviewType::Calibre),
+            "a compiled help file, which the ebook engine is the one that draws"
         );
         assert_eq!(
             classified("film.docx", b"07070100000000"),
