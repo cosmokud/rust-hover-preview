@@ -722,7 +722,8 @@ unsafe fn show_context_menu(hwnd: HWND) {
     //
     // One gate covers each pair of a kind this app reads and the kind an engine draws for
     // it: an ImageMagick picture is a picture, a document LibreOffice drew is a document,
-    // and an archive PeaZip listed is an archive, so none of the three has a row here.
+    // an archive PeaZip listed is an archive, and a book Calibre converted is a book, so
+    // none of the four has a row here.
     let kinds = [
         (PreviewType::Images, ID_TRAY_TYPE_IMAGES, w!("Images")),
         (PreviewType::Videos, ID_TRAY_TYPE_VIDEOS, w!("Videos")),
@@ -1627,6 +1628,14 @@ unsafe fn show_context_menu(hwnd: HWND) {
     // of contents and exits. There is no instance to keep and nothing an idle time would bound
     // — and what a second hover of the same archive costs is no engine at all, since the
     // listing it produced is held under the file's own key (see `peazip_render`).
+    //
+    // Calibre TTL: and none again, for the engine's own answer a third time. `ebook-convert.exe`
+    // is a converter as well — handed a book it writes a PDF of it and exits, booting a whole
+    // Python application to do it — so there is no instance to hold and nothing an idle time
+    // could keep warm. It is the engine a TTL would suit best on paper, since a launch costs
+    // seconds, and it is the one engine that has nothing to hold: what a second hover of the
+    // same book costs is a read of the page it converted, kept in the page cache under the
+    // budget documents are kept under (see `calibre_render`).
 
     // WebView2 TTL: the same question about the browser that draws a document — every
     // document, still or not. It is greyed out on a machine with no WebView2 runtime, since

@@ -11,6 +11,7 @@ use std::time::Duration;
 
 use crate::config::theme_files;
 use crate::formats::archive_formats::{sanitize_archive_extensions, DEFAULT_ARCHIVE_EXTENSIONS};
+use crate::formats::calibre_formats::{sanitize_calibre_extensions, DEFAULT_CALIBRE_EXTENSIONS};
 use crate::formats::design_formats::{
     sanitize_design_extensions, DEFAULT_DESIGN_EXTENSIONS, DESIGN_EXTENSIONS_BEFORE_AI,
     DESIGN_EXTENSIONS_BEFORE_CDR_AND_PROCREATE, DESIGN_EXTENSIONS_WITH_CDR,
@@ -70,6 +71,9 @@ const MAGICK_SECTION: &str = "magick";
 /// And the list of archives the PeaZip engine is asked about, for the same reason: the
 /// formats this app hands to it rather than reading itself.
 const PEAZIP_SECTION: &str = "peazip";
+/// And the list of books the Calibre engine is asked about, for the same reason: the ebook formats
+/// this app hands to it rather than reading itself.
+const CALIBRE_SECTION: &str = "calibre";
 pub const DEFAULT_WEBP_PLAYBACK_FPS: u32 = 90;
 pub const MAX_WEBP_PLAYBACK_FPS: u32 = 90;
 /// The volume a video is played at unless the file says otherwise: silent, so a hover
@@ -867,11 +871,11 @@ impl MarkdownMode {
 /// left untouched by it, so switching a kind off and back on restores exactly
 /// what was configured.
 ///
-/// The last three kinds are not rows of that submenu, because what they name is a rendering
+/// The last four kinds are not rows of that submenu, because what they name is a rendering
 /// path rather than something a user asks for: a document an installed engine draws, a
-/// picture an installed converter develops, an archive an installed listing engine reads.
-/// Each is the same preview as the kind it belongs to — a page, a picture, a page of
-/// contents — and is switched by that kind's gate.
+/// picture an installed converter develops, an archive an installed listing engine reads, and a
+/// book an installed ebook engine converts. Each is the same preview as the kind it belongs to — a
+/// page, a picture, a page of contents, a book — and is switched by that kind's gate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PreviewType {
     Images,
@@ -931,6 +935,18 @@ pub enum PreviewType {
     /// It is the `Archives` kind's second half rather than a switch of its own: what a user
     /// turns off is archives.
     Peazip,
+    /// Books this app hands to an installed Calibre rather than reading — the Kindle and
+    /// Mobipocket formats above all, the open EPUB, the FictionBook and the scanned book, none of
+    /// which the PDF reader here opens. What comes back is a PDF of the book, drawn as a PDF page
+    /// is: at the book kind's scale, over the book kind's backdrop, held in the page cache. See
+    /// `calibre_formats` for what is listed and `calibre_render` for how one is converted.
+    ///
+    /// It is the `Ebook` kind's second half rather than a kind of its own: what a user turns off
+    /// is books, and what is on screen for either is a page of one. The switch is a row of its own
+    /// all the same — the way the picture a converter develops and the page a render engine draws
+    /// have theirs — because an engine a user did not install is a setting worth being able to
+    /// reach, and because `[calibre]` and the PDF reader answer for different files entirely.
+    Calibre,
 }
 
 impl PreviewType {
@@ -944,16 +960,17 @@ impl PreviewType {
 
     /// Whether this kind of preview is switched on in `config`.
     ///
-    /// Three of the kinds share a gate with the kind they belong to — a document an engine
+    /// Four of the kinds share a gate with the kind they belong to — a document an engine
     /// drew with the documents, a picture a converter developed with the pictures, an archive
-    /// a listing engine read with the archives — so there is one switch for each pair rather
-    /// than one for the reader and one for the engine.
+    /// a listing engine read with the archives, and a book an ebook engine converted with the
+    /// books — so there is one switch for each pair rather than one for the reader and one for
+    /// the engine.
     pub fn enabled_in(self, config: &AppConfig) -> bool {
         match self {
             Self::Images | Self::Magick => config.image_preview_enabled,
             Self::Videos => config.video_preview_enabled,
             Self::Text => config.text_preview_enabled,
-            Self::Ebook => config.ebook_preview_enabled,
+            Self::Ebook | Self::Calibre => config.ebook_preview_enabled,
             Self::Archives | Self::Peazip => config.archive_preview_enabled,
             Self::Document | Self::Libre => config.document_preview_enabled,
             Self::Fonts => config.font_preview_enabled,
@@ -962,14 +979,14 @@ impl PreviewType {
         }
     }
 
-    /// Switch this kind of preview on or off, which for the three engine-drawn kinds is the
+    /// Switch this kind of preview on or off, which for the four engine-drawn kinds is the
     /// switch of the kind they belong to — see `enabled_in`.
     pub fn set_enabled_in(self, config: &mut AppConfig, enabled: bool) {
         match self {
             Self::Images | Self::Magick => config.image_preview_enabled = enabled,
             Self::Videos => config.video_preview_enabled = enabled,
             Self::Text => config.text_preview_enabled = enabled,
-            Self::Ebook => config.ebook_preview_enabled = enabled,
+            Self::Ebook | Self::Calibre => config.ebook_preview_enabled = enabled,
             Self::Archives | Self::Peazip => config.archive_preview_enabled = enabled,
             Self::Document | Self::Libre => config.document_preview_enabled = enabled,
             Self::Fonts => config.font_preview_enabled = enabled,
@@ -1403,10 +1420,15 @@ pub struct AppConfig {
     /// reader of its own for — the camera raw formats above all. See `magick_formats`.
     pub magick_extensions: Vec<String>,
     /// The names of the archives the PeaZip engine is asked about, as `[peazip] extensions` in
-    /// `config.ini`: the formats its console archiver reads and this app has no reader of its
-    /// own for — the cabinet files, isos, disk images and single-stream compressors. See
+    /// `config.ini`: the formats its console archiver reads and this app has no reader of its own
+    /// for — the cabinet files, isos, disk images and single-stream compressors. See
     /// `peazip_formats`.
     pub peazip_extensions: Vec<String>,
+    /// The names of the books the Calibre engine is asked about, as `[calibre] extensions` in
+    /// `config.ini`: the ebook formats its converter reads and this app has no reader of its own
+    /// for — the Kindle and Mobipocket families, the open EPUB, the FictionBook, the scanned book
+    /// and the containers of the dedicated readers. See `calibre_formats`.
+    pub calibre_extensions: Vec<String>,
     /// Extensions previewed as vector drawings, already normalized for lookup.
     pub vector_extensions: Vec<String>,
 }
@@ -1482,6 +1504,7 @@ impl Default for AppConfig {
             libre_extensions: sanitize_libre_extensions(DEFAULT_LIBRE_EXTENSIONS),
             magick_extensions: sanitize_magick_extensions(DEFAULT_MAGICK_EXTENSIONS),
             peazip_extensions: sanitize_peazip_extensions(DEFAULT_PEAZIP_EXTENSIONS),
+            calibre_extensions: sanitize_calibre_extensions(DEFAULT_CALIBRE_EXTENSIONS),
             vector_extensions: sanitize_vector_extensions(DEFAULT_VECTOR_EXTENSIONS),
         }
     }
@@ -2318,6 +2341,11 @@ impl AppConfig {
             Some(sanitize_peazip_extensions(&self.peazip_extensions.join(",")).join(",")),
         );
         ini.set(
+            CALIBRE_SECTION,
+            "extensions",
+            Some(sanitize_calibre_extensions(&self.calibre_extensions.join(",")).join(",")),
+        );
+        ini.set(
             VECTOR_SECTION,
             "extensions",
             Some(sanitize_vector_extensions(&self.vector_extensions.join(",")).join(",")),
@@ -2778,6 +2806,18 @@ impl AppConfig {
             sanitize_peazip_extensions,
         );
         self.peazip_extensions = list;
+        // And the Calibre engine's, the same shape once more: the ebook formats its converter
+        // reads and this app has no reader of its own for, written from the built-in list on the
+        // first run and read back from there. It is new with its kind, so an older file has no
+        // section at all and the built-in entries come back with the key.
+        let list = configured_list(
+            ini,
+            CALIBRE_SECTION,
+            "extensions",
+            DEFAULT_CALIBRE_EXTENSIONS,
+            sanitize_calibre_extensions,
+        );
+        self.calibre_extensions = list;
         // And the vector list, new with its kind: an older file has no section at all, so
         // the key is gone and the built-in entries come back with it. Its entries have
         // grown since — `svg` and `svgz`, which were entries of the image list until the
@@ -3326,9 +3366,66 @@ mod tests {
         assert!(PreviewType::Magick.enabled_in(&config));
     }
 
-    /// The two other engine-drawn kinds share their gate the same way: a document an engine
-    /// drew is switched by the `Document` gate and an archive a listing engine read by the
-    /// `Archives` gate, whichever of the pair the switch is thrown from.
+    /// And the books the ebook engine is asked about are the same shape once more: a section of
+    /// their own in `config.ini`, read back the way it is written, behind a gate that is the one
+    /// books have always had.
+    ///
+    /// The engine's own work costs nothing to bound and has no setting of its own, which is why
+    /// there is none to assert about: a book it converted is kept as a page, under the budget pages
+    /// have always been kept under, and there is no idle time because there is no process — see
+    /// `calibre_render`, which is why the `Engine` submenu has no `Calibre TTL` row.
+    #[test]
+    fn the_books_the_calibre_engine_is_asked_about_are_a_list_and_a_gate_of_their_own() {
+        let config = AppConfig::default();
+        assert_eq!(
+            config.calibre_extensions,
+            sanitize_calibre_extensions(DEFAULT_CALIBRE_EXTENSIONS)
+        );
+
+        let mut ini = Ini::new();
+        ini.set(
+            CALIBRE_SECTION,
+            "extensions",
+            Some(".MOBI, epub".to_string()),
+        );
+
+        let config = read_file(&mut ini);
+        assert_eq!(config.calibre_extensions, vec!["mobi", "epub"]);
+
+        // A section that is gone is answered with the built-in list, and the file is one to write
+        // out again with it, since a key that is gone is not what the app is using.
+        let mut ini = Ini::new();
+        ini.set(CONFIG_SECTION, "run_at_startup", Some("true".to_string()));
+
+        let config = read_file(&mut ini);
+        assert_eq!(
+            config.calibre_extensions,
+            sanitize_calibre_extensions(DEFAULT_CALIBRE_EXTENSIONS)
+        );
+        assert!(
+            config.differs(&ini),
+            "and the file, which has no such section, is one to write"
+        );
+
+        // And the gate is over the list rather than through it: a user who switches books off has
+        // not edited which books the engine is asked about, so switching them back on restores
+        // exactly what was configured.
+        let mut config = AppConfig::default();
+        PreviewType::Calibre.set_enabled_in(&mut config, false);
+        assert!(!PreviewType::Ebook.enabled_in(&config));
+        assert_eq!(
+            config.calibre_extensions,
+            sanitize_calibre_extensions(DEFAULT_CALIBRE_EXTENSIONS)
+        );
+
+        PreviewType::Ebook.set_enabled_in(&mut config, true);
+        assert!(PreviewType::Calibre.enabled_in(&config));
+    }
+
+    /// The three other engine-drawn kinds share their gate the same way: a document an engine
+    /// drew is switched by the `Document` gate, an archive a listing engine read by the
+    /// `Archives` gate and a book an ebook engine converted by the `Ebook` gate, whichever of
+    /// the pair the switch is thrown from.
     #[test]
     fn an_engine_drawn_kind_is_switched_by_the_kind_it_belongs_to() {
         let mut config = AppConfig::default();
@@ -3337,6 +3434,7 @@ mod tests {
             (PreviewType::Libre, PreviewType::Document),
             (PreviewType::Peazip, PreviewType::Archives),
             (PreviewType::Magick, PreviewType::Images),
+            (PreviewType::Calibre, PreviewType::Ebook),
         ] {
             kind.set_enabled_in(&mut config, false);
 
