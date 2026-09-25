@@ -53,10 +53,15 @@
 //!   document, not the PPMd archive the engine's table also spells that way), `swf` and `flv`
 //!   are the video list's, `doc`, `xls` and `ppt` — which the engine reads inside its
 //!   compound-file format — are the Office list's, `cbz`, `cbr` and `cbc` are the `[ebook]`
-//!   list's, which is where a comic is a book rather than a box of files, and `chm` and `lit` are
-//!   `[calibre]`'s, because a compiled help file and a Microsoft Reader book are pages the ebook
-//!   engine draws rather than archives to list. A name sits in exactly one list so that a
-//!   preview of one cannot come back by two routes.
+//!   list's, which is where a comic is a book rather than a box of files, and `lit` is
+//!   `[calibre]`'s, because a Microsoft Reader book is a page the ebook engine draws. A name sits
+//!   in exactly one list so that a preview of one cannot come back by two routes.
+//! * **A name an engine *can* draw is not always here, and `chm` is the one that is.** A compiled
+//!   help file was the ebook engine's for a build and is the archiver's again: the page that engine
+//!   draws for one is right, and the two to three seconds it takes to draw it is not — a help file
+//!   is a file a pointer crosses on its way somewhere else, and a listing is there before a hover
+//!   has finished settling. The judgement is not about whether a page can be drawn but about what
+//!   the file is hovered *for*, and it is the only name here that has been on both sides of it.
 //! * **A program is not an archive.** The engine lists a `.exe`, a `.dll`, a `.sys`, an `.obj`,
 //!   an `.elf`, a Mach-O binary and a firmware capsule too — what it is reading is the resources
 //!   inside them — and a hover onto one of those is a hover onto a program, not onto a container
@@ -103,16 +108,17 @@ use std::path::Path;
 /// Three groups, in the order they are written:
 ///
 /// * The archives and installers nothing else on the machine opens: `001`, `ar`, `arc`, `arj`,
-///   `cab`, `cpio`, `deb`, `esd`, `hfs`, `hfsx`, `hxs`, `iso`, `lha`, `lzh`, `msi`,
+///   `cab`, `chm`, `cpio`, `deb`, `esd`, `hfs`, `hfsx`, `hxs`, `iso`, `lha`, `lzh`, `msi`,
 ///   `msp`, `pkg`, `ppkg`, `rpm`, `swm`, `udf`, `wim`, `xar`, `xip` and `zpaq`. Some are
-///   containers of files in the ordinary sense (an installer, a Linux package, a
-///   disk image), some are the volume of a backup, and all of them are read by a tool of PeaZip's
+///   containers of files in the ordinary sense (an installer, a compiled help file, a Linux package,
+///   a disk image), some are the volume of a backup, and all of them are read by a tool of PeaZip's
 ///   and by nothing this app has. Two of them are that tool's rather than the console archiver's:
 ///   an `arc` is FreeArc's and a `zpaq` is zpaq's, and neither is read by the archiver at all.
-///   A compiled help file and a Microsoft Reader book were of this group once and are not any
-///   more: both are read by the ebook engine and previewed as a page of one, so they are
-///   `[calibre]`'s, and `PEAZIP_EXTENSIONS_BEFORE_THE_EBOOKS` below is what takes them out of a
-///   file this app wrote before that.
+///   A Microsoft Reader book was of this group once and is not any more: the ebook engine draws a
+///   page of one, so it is `[calibre]`'s, and `PEAZIP_EXTENSIONS_BEFORE_THE_EBOOKS` below is what
+///   takes it out of a file this app wrote before that. A compiled help file went the other way —
+///   out of this group and back into it — which is what `PEAZIP_EXTENSIONS_BEFORE_THE_HELP_FILE` is
+///   written down for.
 /// * The single-stream compressors: `bcm`, `br`, `bz2`, `bzip2`, `gz`, `gzip`, `lpaq8`, `lzma`,
 ///   `xz`, `z` and `zst`, with the tarball spellings that name them (`taz`, `tbz`, `tbz2`, `tpz`,
 ///   `tzst`). One of these is a file put through a compressor rather than a container, so the
@@ -137,6 +143,20 @@ use std::path::Path;
 /// down in TODO.md), and the compression formats this app has no need of an engine for (`xz` is
 /// here, `lzma86` and `base64` are not).
 pub const DEFAULT_PEAZIP_EXTENSIONS: &str =
+    "001,apfs,ar,arc,arj,bcm,br,bz2,bzip2,cab,chm,cpio,cramfs,deb,dmg,esd,gz,gzip,\
+hfs,hfsx,hxs,iso,lha,lpaq8,lzh,lzma,msi,msp,pkg,ppkg,qcow,qcow2,rpm,squashfs,swm,\
+taz,tbz,tbz2,tpz,txz,tzst,udf,udeb,vdi,vhd,vhdx,vmdk,wim,xar,xip,xz,z,zpaq,zst";
+
+/// The built-in `[peazip]` list as it stood while a compiled help file was the ebook engine's.
+///
+/// A file holding exactly these entries is this app's own earlier list rather than a user's edit, so
+/// it is brought up to the built-in list rather than kept as written — which is what gives the name
+/// back to the archiver, on an installation that ran the build that had taken it away. `chm` is the
+/// only name to have moved twice, and the reason it moved back is worth putting beside it: what the
+/// engine draws for one is a page and takes two to three seconds to draw, and what a help file is
+/// hovered for is usually nothing at all — so the listing that is there immediately is the better
+/// answer, and the page it gives up is one nobody was waiting for (see `calibre_formats`).
+pub const PEAZIP_EXTENSIONS_BEFORE_THE_HELP_FILE: &str =
     "001,apfs,ar,arc,arj,bcm,br,bz2,bzip2,cab,cpio,cramfs,deb,dmg,esd,gz,gzip,\
 hfs,hfsx,hxs,iso,lha,lpaq8,lzh,lzma,msi,msp,pkg,ppkg,qcow,qcow2,rpm,squashfs,swm,\
 taz,tbz,tbz2,tpz,txz,tzst,udf,udeb,vdi,vhd,vhdx,vmdk,wim,xar,xip,xz,z,zpaq,zst";
@@ -391,7 +411,6 @@ mod tests {
             "package.xpi",
             "comic.cbz",
             "document.pmd",
-            "help.chm",
             "book.lit",
             "animation.swf",
             "clip.flv",
@@ -444,6 +463,7 @@ mod tests {
             "backup.arj",
             "backup.arc",
             "backup.cab",
+            "help.chm",
             "linux.deb",
             "linux.rpm",
             "image.iso",

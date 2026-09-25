@@ -197,9 +197,19 @@ the file is shown by the kind that holds it, which for most of them is a preview
 converted page: `cbz`, `cbr` and `cbc` (comics — the `[ebook]` list's, which this app reads itself and
 shows the first plate of; see **Unsupported Comic Formats** below for what is left of them), `docx`
 (the Office list), `odt` and `pdb` (`[libre]` — LibreOffice's own filters read AportisDoc and
-OpenDocument), `html`, `rtf` and `txt` (the text lists, which read and highlight them), and `pdf`,
-which is this app's own page reader. Adding one to `[calibre]` would be a second engine asked about a
-file another already answers, which is the one thing the lists exist to prevent.
+OpenDocument), `html`, `rtf` and `txt` (the text lists, which read and highlight them), `chm` (the
+`[peazip]` list's), and `pdf`, which is this app's own page reader. Adding one to `[calibre]` would be a
+second engine asked about a file another already answers, which is the one thing the lists exist to
+prevent.
+
+A compiled help file is the one name in that group whose other preview is *not* the better one, and the
+judgement is worth writing down because it is the only place this app trades a page for a wait: the engine
+draws a real page for a `.chm` and takes two to three seconds to draw it, and what a help file is hovered
+for is usually nothing — so it is listed instead, immediately, and the page is given up knowingly. It was
+in `[calibre]` for one build and is `[peazip]`'s again, while `lit` beside it and the comics below stayed
+where the page was worth having — the difference between them is what the file is hovered *for*, not what
+can be drawn. A machine that would rather have the page has it by moving `chm` into `[calibre]` by hand,
+which is a line, and an immediate answer is exactly what that line costs.
 
 **A format the engine does not read at all** — no list entry can reach these, and the work is a reader
 or a plugin rather than a name: `tpz`, Amazon's Topaz, which the engine detects and *refuses* with a

@@ -231,21 +231,25 @@ mod tests {
             "and it is not the archive list's any more: one name, one answer"
         );
 
-        for name in ["help.chm", "book.lit"] {
+        // And the two books that are not this app's at all: a Microsoft Reader book is a page the
+        // ebook engine draws, and a compiled help file is the listing engine's, which answers
+        // immediately — the reason it is not the engine's is the wait, not the format.
+        for (name, claimed_by_calibre) in [("book.lit", true), ("help.chm", false)] {
             let path = Path::new(name);
-            assert!(
+            assert_eq!(
                 crate::formats::calibre_formats::matches_calibre_list(
                     path,
                     &config.calibre_extensions
                 ),
-                "`{name}` needs the engine, so it is the engine's list's"
+                claimed_by_calibre,
+                "`{name}`: whether the ebook engine is the one asked about it"
             );
             assert!(
-                !crate::formats::peazip_formats::matches_peazip_list(
+                crate::formats::peazip_formats::matches_peazip_list(
                     path,
                     &config.peazip_extensions
-                ),
-                "and it is not the listing engine's any more"
+                ) != claimed_by_calibre,
+                "`{name}` and the listing engine are the other way round"
             );
             assert!(
                 !matches_ebook_list(path, &list),
