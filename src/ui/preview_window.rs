@@ -252,8 +252,10 @@ fn clear_pointer_item_box() {
 
 /// Whether a box on screen holds a point. Half-open, so a point on the box's right or
 /// bottom edge is outside it — which is how a window hit-test reads a rectangle, and
-/// what the dismissal of a mouse preview is decided by.
-fn box_holds(x: i32, y: i32, region: (i32, i32, i32, i32)) -> bool {
+/// what the dismissal of a mouse preview is decided by. The Explorer hook asks the same
+/// question of the box a dismissed preview left behind, so the two sides of the
+/// dismissal cannot disagree about what "the pointer is still there" means.
+pub(crate) fn box_holds(x: i32, y: i32, region: (i32, i32, i32, i32)) -> bool {
     let (left, top, right, bottom) = region;
 
     x >= left && x < right && y >= top && y < bottom
@@ -381,11 +383,13 @@ static TEXT_PREVIEW_HOLDING: AtomicBool = AtomicBool::new(false);
 /// The pointer is held by this the way it is held by a text preview, and for a
 /// reason of its own: there is nothing under the spinner to hand the pointer back
 /// to, and a hover that is dismissed while its page is on the way loses the page
-/// it was waiting for — the render finishes, but the hover it was for is gone. The
-/// spinner is placed a pixel off the pointer and follows it, which is what keeps
-/// the pointer on the file it is waiting on; a pointer that moves into the box
-/// anyway — a hand settling, or a move the box has not caught up with — is a
-/// pointer still waiting for that file, not one leaving it.
+/// it was waiting for — the render finishes, but the hover it was for is gone.
+///
+/// What it holds the pointer *through* is the item the wait is for and not the box
+/// the spinner occupies: the spinner is placed a pixel off the pointer and follows
+/// it, so a box of its own is one the pointer can never leave — which would be a
+/// preview no fast hand could close on its way to somewhere else (see
+/// `preview_pointer_hold`).
 static WAITING_PREVIEW_HOLDING: AtomicBool = AtomicBool::new(false);
 
 /// The regions that keep a preview alive: the journey to it, and the preview.
@@ -6725,15 +6729,17 @@ unsafe fn show_loading_spinner(hwnd: HWND, pl: &PendingLoad) {
 }
 
 /// Publish — or withdraw — the regions in which the pointer keeps what is on
-/// screen alive.
+/// screen alive, and note which of the two things that hold a pointer is on screen.
 ///
 /// The Explorer hook polls this to decide whether the pointer over the preview
 /// means "the user is reading this" or "dismiss it and show what is underneath",
 /// and the wheel hook asks the same question before it decides whether the wheel
-/// belongs to Explorer or to the preview. Two things hold the pointer: a text
-/// preview in full mode, which the pointer can rest on to select from and scroll,
-/// and the spinner a page is being rendered behind, which has nothing under it to
-/// hand the pointer back to and no page yet to be shown in its place.
+/// belongs to Explorer or to the preview. One thing holds the pointer through a
+/// region: a text preview in full mode, which the pointer can rest on to select from
+/// and scroll. The other — the spinner a page is being rendered behind, which has
+/// nothing under it to hand the pointer back to and no page yet to be shown in its
+/// place — is noted here rather than drawn, because what it holds the pointer through
+/// is the item the wait is for (see `preview_pointer_hold`).
 unsafe fn publish_pointer_hold(hwnd: HWND) {
     // The pointer can only be on a window that is on screen, and while this one is not —
     // a document is drawn by the engine, in a window of its own — nothing of this app's is
@@ -6794,18 +6800,12 @@ unsafe fn publish_pointer_hold(hwnd: HWND) {
                 )
                 .to_vec()
             })
-    } else if waiting {
-        // The box the spinner itself occupies: the one place on screen where the
-        // pointer is over this app's own window rather than over the file, and so
-        // the one place where what is under the pointer cannot say whether the
-        // pointer is still on the file it is waiting for. It is placed a pixel off
-        // the pointer, so a pointer that ends up inside this box has not gone
-        // anywhere.
-        let mut rect = RECT::default();
-        GetWindowRect(hwnd, &mut rect)
-            .ok()
-            .map(|_| vec![(rect.left, rect.top, rect.right, rect.bottom)])
     } else {
+        // A wait publishes no region of its own. It holds the pointer through the item
+        // it is waiting for, which is a question the hook asks of its own item box rather
+        // than a rectangle this side hands it (see `preview_pointer_hold`): the spinner
+        // is placed at the hand and follows it, so a box of its own would be one the
+        // pointer could never leave.
         None
     };
 
@@ -6840,28 +6840,38 @@ pub fn text_preview_scrollable() -> bool {
     TEXT_PREVIEW_SCROLLABLE.load(Ordering::Acquire)
 }
 
-/// Whether the pointer is inside a region that keeps what is on screen alive.
-/// Answered from a published rectangle, so the Explorer hook can ask on every poll
-/// tick.
+/// Whether the pointer is inside a region that keeps what is on screen alive, without
+/// waiting on a lock the preview thread may be holding, so the Explorer hook can ask on
+/// every poll tick.
+///
+/// A text preview holds the pointer through the regions it published — the journey to it
+/// and the preview itself — because a hand reading or selecting from one is on its way
+/// there or already there.
+///
+/// A wait holds the pointer through the *file* it is waiting for rather than through the
+/// box its spinner occupies. The spinner is placed at the hand and follows it, so a
+/// region of its own would be a box the pointer could never leave — and a preview the
+/// hook could never close, however fast the hand is moving on to something else. What a
+/// wait is owed is the question the item box answers: a pointer still inside the item the
+/// hover was resolved from is a pointer still waiting for that file, and one outside it
+/// has gone wherever it liked, spinner or no spinner (see `HOVER_POINTER_BOX`).
 pub fn preview_pointer_hold(x: i32, y: i32) -> bool {
-    if !TEXT_PREVIEW_HOLDING.load(Ordering::Acquire)
-        && !WAITING_PREVIEW_HOLDING.load(Ordering::Acquire)
-    {
-        return false;
+    if TEXT_PREVIEW_HOLDING.load(Ordering::Acquire) {
+        let Ok(published) = POINTER_HOLD_REGIONS.lock() else {
+            return false;
+        };
+
+        return (*published)
+            .as_ref()
+            .map(|regions| {
+                regions.iter().any(|(left, top, right, bottom)| {
+                    x >= *left && x < *right && y >= *top && y < *bottom
+                })
+            })
+            .unwrap_or(false);
     }
 
-    let Ok(published) = POINTER_HOLD_REGIONS.lock() else {
-        return false;
-    };
-
-    (*published)
-        .as_ref()
-        .map(|regions| {
-            regions.iter().any(|(left, top, right, bottom)| {
-                x >= *left && x < *right && y >= *top && y < *bottom
-            })
-        })
-        .unwrap_or(false)
+    WAITING_PREVIEW_HOLDING.load(Ordering::Acquire) && pointer_item_holds(x, y)
 }
 
 /// The published preview region, without blocking. The wheel hook runs inside a
@@ -8701,13 +8711,66 @@ pub fn run_preview_window() {
                 // (see `HOVER_POINTER_BOX`). Either way the answer is dropped here
                 // rather than built — no frame installed, no engine window put up,
                 // no player started — for a hover that has already gone.
+                //
+                // What the wait itself put on screen comes down with it, and that is not
+                // the same thing as dropping the answer: a spinner left standing is a wait
+                // with nothing left to end it — the load that would have answered it is
+                // gone from here, and the pointer cannot dismiss it either, because a wait
+                // holds the pointer it is waiting for (see `WAITING_PREVIEW_HOLDING`) and
+                // the pointer sitting on that spinner is the one thing the hold refuses. A
+                // hand that crossed off the file while the load ran would be left with a
+                // preview under it that nothing would ever take down.
+                //
+                // Asked first is whether this is the hover's own load: a keyboard hover
+                // carries no placement, a newer hover is another generation, and a stale
+                // answer for a load already dropped is nothing to take down twice
+                // (see `HoverPlacement`).
                 if pending_load
                     .as_ref()
                     .is_some_and(|pl| pl.hide_epoch != hidden_epoch())
                     || !pointer_on_the_hovered_item()
                 {
+                    let abandoned = pending_load.as_ref().is_some_and(|pl| {
+                        pl.generation == result.generation && pl.placement.is_some()
+                    });
+
                     pending_load = None;
-                    pending_load_cancel = None;
+
+                    if abandoned {
+                        // The take-down the `Hide` message performs, for the same reason and
+                        // in the same order: the wait is over, so its window, its media, the
+                        // hold it published and anything it had asked for go with it.
+                        current_generation += 1;
+                        clear_load_request(&load_request_slot);
+                        if let Some(cancel) = pending_load_cancel.take() {
+                            cancel.store(true, Ordering::Release);
+                        }
+
+                        let _ = ShowWindow(hwnd, SW_HIDE);
+                        clear_pointer_hold();
+                        webview_preview::hide();
+
+                        if let Ok(mut current) = CURRENT_MEDIA.lock() {
+                            if let Some(ref mut media) = *current {
+                                media.cancel_background_work();
+                                stop_video_playback(media);
+                            }
+                            *current = None;
+                        }
+                        current_video_path = None;
+                        video_pos = (0, 0, 0, 0);
+
+                        if let Some(path) = current_show.as_ref().and_then(self::show_path) {
+                            office_render::hover_ended(path);
+                        }
+
+                        current_show = None;
+                        page_render_pending = None;
+                        page_upgrade = None;
+                    } else {
+                        pending_load_cancel = None;
+                    }
+
                     continue;
                 }
 
@@ -10046,21 +10109,50 @@ mod tests {
         }
     }
 
-    /// A waiting spinner holds the pointer the way a scrollable text preview does:
-    /// inside the box it published, and only while it says it is holding — which is
-    /// what keeps a pointer that drifts onto the spinner from dismissing the hover
-    /// whose page is on its way.
+    /// A lock the tests that publish the pointer's own state take, so that one of them
+    /// runs at a time: the item box and the hold regions are one set for the whole
+    /// process, so two of these tests at once is one test's box answering another test's
+    /// question.
+    static POINTER_STAND_IN: Mutex<()> = Mutex::new(());
+
+    /// A wait holds the pointer through the item it is waiting for rather than through the
+    /// box its spinner occupies: the spinner is placed at the hand and follows it, so a box
+    /// of its own is one the pointer can never leave — and the wait would be a preview no
+    /// fast hand could close on its way to somewhere else (see `preview_pointer_hold`).
     #[test]
-    fn holds_the_pointer_over_a_waiting_spinner() {
+    fn holds_the_pointer_through_the_item_a_wait_is_for() {
+        let _stand_in = POINTER_STAND_IN.lock().expect("the pointer's own state");
+
+        // A spinner box at the pointer, as one on screen is, and the item the hover was
+        // resolved from a row away from it.
         let spinner = (100, 100, 136, 136);
         *POINTER_HOLD_REGIONS.lock().expect("the published regions") = Some(vec![spinner]);
+        publish_pointer_item_box((100, 200, 300, 220));
 
         WAITING_PREVIEW_HOLDING.store(true, Ordering::Release);
-        assert!(preview_pointer_hold(118, 118), "inside the spinner's box");
-        assert!(!preview_pointer_hold(99, 99), "outside it");
+        assert!(
+            !preview_pointer_hold(118, 118),
+            "the spinner's own box is not a hold"
+        );
+        assert!(
+            preview_pointer_hold(150, 210),
+            "the item the wait is for holds the pointer"
+        );
+        assert!(
+            !preview_pointer_hold(150, 230),
+            "a pointer below that item has left the file it was waiting for"
+        );
 
-        // A published region with nothing holding the pointer is not a hold: it is
-        // what one left behind by a preview that has gone would look like.
+        // An item that was never read is nothing to hold a wait back with, which is the
+        // rule the reveal follows too: a pointer whose item could not be told has not
+        // gone anywhere.
+        clear_pointer_item_box();
+        assert!(
+            preview_pointer_hold(150, 230),
+            "an item nothing was read for holds anything"
+        );
+
+        // A hold that is no longer noted holds nothing, whatever region was left behind.
         WAITING_PREVIEW_HOLDING.store(false, Ordering::Release);
         assert!(
             !preview_pointer_hold(118, 118),
@@ -10078,6 +10170,8 @@ mod tests {
     /// is not theirs (see `HOVER_POINTER_BOX`).
     #[test]
     fn holds_a_reveal_to_the_item_the_hover_was_resolved_from() {
+        let _stand_in = POINTER_STAND_IN.lock().expect("the pointer's own state");
+
         publish_pointer_item_box((100, 200, 300, 220));
 
         assert!(pointer_item_holds(100, 200), "the item's own corner holds");
