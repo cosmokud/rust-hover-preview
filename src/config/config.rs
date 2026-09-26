@@ -4768,12 +4768,14 @@ something_new=1
     /// the way and put back exactly as they were.
     #[test]
     fn the_settings_reset_leaves_the_extension_lists_alone() {
-        let mut config = AppConfig::default();
+        let mut config = AppConfig {
+            image_cache_mb: 16,
+            document_cache_mb: 2048,
+            preview_enabled: false,
+            image_extensions: sanitize_image_extensions("png,dng"),
+            ..Default::default()
+        };
 
-        config.image_cache_mb = 16;
-        config.document_cache_mb = 2048;
-        config.preview_enabled = false;
-        config.image_extensions = sanitize_image_extensions("png,dng");
         config.text_names.push("notes".to_string());
 
         let image = config.image_extensions.clone();
@@ -4798,11 +4800,12 @@ something_new=1
     /// built-in one again, and no setting moves.
     #[test]
     fn the_lists_reset_restores_the_built_in_lists_alone() {
-        let mut config = AppConfig::default();
-
-        config.image_cache_mb = 16;
-        config.image_extensions = sanitize_image_extensions("png,dng");
-        config.ebook_extensions = Vec::new();
+        let mut config = AppConfig {
+            image_cache_mb: 16,
+            image_extensions: sanitize_image_extensions("png,dng"),
+            ebook_extensions: Vec::new(),
+            ..Default::default()
+        };
 
         config.reset_extension_lists();
 
@@ -4831,10 +4834,11 @@ something_new=1
 
     #[test]
     fn the_differences_are_named_by_the_keys_the_file_writes() {
-        let mut config = AppConfig::default();
-
-        config.image_cache_mb = 16;
-        config.image_extensions = sanitize_image_extensions("png,dng");
+        let config = AppConfig {
+            image_cache_mb: 16,
+            image_extensions: sanitize_image_extensions("png,dng"),
+            ..Default::default()
+        };
 
         assert_eq!(
             config.settings_apart_from_recommended(),
