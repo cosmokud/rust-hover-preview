@@ -28,6 +28,7 @@
 - **A preview no longer outlives the folder it belongs to.** Enter now hides what is on screen at once, as Backspace already did, and a click ends a keyboard preview, so a folder opened with Enter or picked from the address bar no longer leaves the old preview up.
 - **A key pressed onto a file with no preview of its own no longer takes the pointer's preview down and puts it back.** With `Prioritize Keyboard` off there is no keyboard preview to put in its place, so the preview of the file the pointer is on is left standing until the keyboard reaches a file that has one.
 - **A sound no longer plays on when the keyboard takes the screen from a mouse hover.** Moving off a hovered audio file with the arrow keys or a typed name left its sound playing with nothing on screen — until another audio file was hovered, which is what finally ended it — because the preview that took the screen did not stop what it replaced.
+- **A preview no longer sticks when Show Desktop is pressed (Win+D).** The shell's own windows are explorer.exe as well — the desktop, the taskbar, the Start menu, the search box — and one of them in front was read as Explorer being focused, so the check that takes a preview down when Explorer goes away was never reached. Only a folder window counts as Explorer now, so the preview goes with the windows it was over.
 
 ### Changed
 
