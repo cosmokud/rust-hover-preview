@@ -12,9 +12,12 @@
 //! card is drawn from (`audio_track`), so a repaint of the clock is a layout rather than a
 //! probe, and a second hover of the file is a layout rather than a probe as well.
 //!
-//! The one thing that changes while the card is on screen is the clock, and the bar under it:
-//! a painted preview of this app's is otherwise drawn once and held, so the preview loop is
-//! what asks for the card again while a sound is playing (see `repaint_audio_card`).
+//! Two things change while the card is on screen, and both are the preview loop's: the clock,
+//! with the bar under it, which is drawn from a player that is running, and a name the card
+//! has no room for, which is scrolled across the card sideways rather than being cut short
+//! (see [`NameScroll`] and `Card::name_offset`). A painted preview of this app's is otherwise
+//! drawn once and held, so the preview loop is what asks for the card again while a sound is
+//! playing (see `repaint_audio_card`).
 
 use crate::config::config::TextTheme;
 use crate::readers::audio_track::Track;
@@ -24,6 +27,7 @@ use crate::text::text_paint::{
 };
 use crate::text::text_theme::{self, LoadedTheme};
 use std::path::Path;
+use std::time::{Duration, Instant};
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Gdi::{CreateCompatibleDC, DeleteDC};
 
@@ -68,6 +72,13 @@ const BAR_GAP_PIXELS: i32 = 10;
 const CHASE_SECONDS: f64 = 2.0;
 const CHASE_DIVISOR: i32 = 5;
 
+/// How long a name rests at either end of its travel before it turns around.
+const NAME_HOLD: Duration = Duration::from_millis(1000);
+
+/// The time one advance of a name's own font is worth: the speed a scroll is counted in, so
+/// that a card drawn at any scale is scrolled across at the same speed to the eye.
+const NAME_ADVANCE_MS: u128 = 100;
+
 /// The options a card is built with, passed in rather than read from the configuration here so
 /// a caller's intent cannot drift from what is drawn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -108,6 +119,131 @@ pub(crate) struct Card {
     pub facts: Vec<Fact>,
     pub duration: Option<f64>,
     pub elapsed: Option<f64>,
+    /// How far the name is scrolled, in pixels, where the card has no room for the whole of
+    /// it: what a repaint of a card whose name moves hands over, and nothing at all for the
+    /// card a hover is measured with or the first frame of one (see [`NameScroll`]).
+    pub name_offset: i32,
+}
+
+/// A name scrolled across a card that has no room for it: how far it has moved, which way it
+/// is going, when the hold at either end runs out, and the two numbers the motion comes out
+/// of — how far the name travels before the end of it is in sight, and the advance of the font
+/// it is set in, which the speed is counted in.
+///
+/// The page never moves a name by itself: it draws the name at whatever offset it is handed,
+/// whole, clipped to the card (see `Card::name_offset`). This is the state a tick advances,
+/// and it lives beside the card rather than inside it because both the page and the loop need
+/// to ask it things: the page is handed the offset, and the loop asks whether the name moves
+/// at all, which is what its cadence is read from (see `AUDIO_NAME_REPAINT`).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct NameScroll {
+    /// Pixels the name has been moved left from its resting place.
+    offset: i32,
+    /// Pixels it may move before the end of it is in sight, which is nothing at all for a
+    /// name the card has room for — a name that never moves.
+    travel: i32,
+    /// Pixels one advance of the name's font is: the unit the speed is counted in, so that a
+    /// card at 200% scrolls the same characters a second as one at 100%.
+    advance: i32,
+    /// Which way it is going: one for left, minus one for back right.
+    direction: i32,
+    /// When the name may move again: the hold at the start, and the hold at either end.
+    hold_until: Instant,
+}
+
+impl NameScroll {
+    /// The scroll a card of `width` pixels draws `name` with: how far the name runs past the
+    /// room the card leaves for it, at the font the card is drawn in, and nothing at all where
+    /// the name fits — a card whose name is drawn once and held.
+    pub(crate) fn of(name: &str, width: u32, dpi: u32, options: AudioPreviewOptions) -> Self {
+        let Some((advance, room)) = name_room(width, dpi, options) else {
+            return Self {
+                offset: 0,
+                travel: 0,
+                advance: 1,
+                direction: 1,
+                hold_until: Instant::now(),
+            };
+        };
+
+        Self {
+            offset: 0,
+            travel: (text_width(name, advance) - room).max(0),
+            advance,
+            direction: 1,
+            hold_until: Instant::now() + NAME_HOLD,
+        }
+    }
+
+    /// Whether the name moves at all, which is what the cadence it is repainted at is read
+    /// from: a card that has to scroll cannot be redrawn at the rate the clock's own seconds
+    /// are worth watching at.
+    pub(crate) fn moves(&self) -> bool {
+        self.travel > 0
+    }
+
+    /// How far the name is scrolled right now, in pixels.
+    pub(crate) fn offset(&self) -> i32 {
+        self.offset
+    }
+
+    /// Move the name on by one repaint, `cadence` after the last one: it rests at either end
+    /// for `NAME_HOLD`, and between the holds it travels at about an advance a `NAME_ADVANCE_MS`
+    /// — ping-ponging for as long as the card is up, so the end of a long name is shown and the
+    /// beginning comes back rather than the name being read once and left where it stopped.
+    ///
+    /// The run's own start is held for the same time as its ends: a name that has just appeared
+    /// is a name a person is reading, and a card that started moving the moment it was put up
+    /// would begin at the one instant the reading starts.
+    pub(crate) fn advance(&mut self, now: Instant, cadence: Duration) {
+        if !self.moves() || now < self.hold_until {
+            return;
+        }
+
+        // The advance is the font's own, so the speed is the same at every scale: at ten
+        // advances a second, one repaint of `cadence` is that share of an advance — never less
+        // than a pixel, because a step of nothing is a name repainted forever without moving.
+        let step = ((self.advance as u128 * cadence.as_millis()) / NAME_ADVANCE_MS).max(1) as i32;
+        let next = self.offset + step * self.direction;
+
+        if next >= self.travel {
+            self.offset = self.travel;
+            self.direction = -1;
+            self.hold_until = now + NAME_HOLD;
+        } else if next <= 0 {
+            self.offset = 0;
+            self.direction = 1;
+            self.hold_until = now + NAME_HOLD;
+        } else {
+            self.offset = next;
+        }
+    }
+}
+
+/// The room a card of `width` pixels leaves for its name, and the advance of the font the name
+/// is set in: the two numbers a scroll is made of (see [`NameScroll`]).
+///
+/// It is the card's own layout, counted the way `build_page` counts it — the content box less
+/// the mark's cell, both in advances of the header's font — and it is worked out here for the
+/// one caller that has none of that in hand: the preview loop, which owns the scroll and needs
+/// to know both where it turns around and how fast to move it.
+fn name_room(width: u32, dpi: u32, options: AudioPreviewOptions) -> Option<(i32, i32)> {
+    let dc = unsafe { CreateCompatibleDC(None) };
+    if dc.0.is_null() {
+        return None;
+    }
+
+    let result = TextMetrics::new(dc, dpi, options.font_scale_percent).map(|metrics| {
+        let advance = metrics.advance[HEADER_LEVEL as usize].max(1);
+        let room = width as i32 - metrics.padding * 2 - advance * BULLET_CELL_ADVANCES;
+
+        (advance, room)
+    });
+    unsafe {
+        let _ = DeleteDC(dc);
+    }
+
+    result
 }
 
 /// The box the card wants, bounded by what the display can give it.
@@ -188,6 +324,19 @@ pub(crate) fn facts_of(track: &Track, path: &Path) -> Vec<Fact> {
     facts
 }
 
+/// The name a card is headed with: the file's own name, which is what a person looking at the
+/// card is identifying — the folder it is in is already said by the hover that put the card up,
+/// and a card is not wide enough for a whole path.
+///
+/// It is the card's business rather than a caller's because two of them need it and they have
+/// to agree: the card is drawn with it, and the scroll a card too narrow for it needs is
+/// measured from it (see [`NameScroll::of`]).
+pub(crate) fn name_of(path: &Path) -> String {
+    path.file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_default()
+}
+
 fn extension_of(path: &Path) -> String {
     path.extension()
         .map(|extension| extension.to_string_lossy().to_string())
@@ -246,11 +395,19 @@ fn clock(seconds: f64) -> String {
 
 // ----------------------------------------------------------------------- page
 
-/// One run of the card: a piece of text drawn at `x`, in one style.
+/// One run of the card: a piece of text drawn from `origin` into the box `x`–`x + width`, in
+/// one style.
 struct PageRun {
     text: String,
+    /// The box the run is laid out in and drawn in: how the runs beside it are placed, and
+    /// what the run is clipped to.
     x: i32,
     width: i32,
+    /// Where the text itself starts. It is the box's own left edge for every run of the card
+    /// but one — a name the card has no room for, which is drawn whole and scrolled under the
+    /// box, so what moves is the origin and what stays is the box that clips it (see
+    /// `Card::name_offset`).
+    origin: i32,
     style: TextStyle,
 }
 
@@ -315,17 +472,18 @@ fn build_page(
         page_color,
     );
 
-    // The width the card would like: the name line, the facts line with the clock beside it,
-    // or the narrowest bar there is, whichever asks for more — clamped to the box the way
-    // every preview's size is.
+    // The width the card would like: the facts line with the clock beside it, or the narrowest
+    // bar there is, whichever asks for more — clamped to the box the way every preview's size
+    // is. The name is not in that count, and that is the one rule this line is: a name too long
+    // for the card is not a reason to ask the display for a card a hundred advances wide, so
+    // what gives way is the name, which is drawn whole and scrolled across the card (see
+    // `Card::name_offset`). A name the card *does* have room for is inside these two anyway,
+    // since the width is the line beneath it.
     let bullet_cell = header_advance * BULLET_CELL_ADVANCES;
-    let name_line = bullet_cell + text_width(&card.name, header_advance);
     let facts_line = facts_width(&card.facts, body_advance)
         + body_advance * TIME_GAP_ADVANCES
         + body_advance * CLOCK_ADVANCES;
-    let content = name_line
-        .max(facts_line)
-        .max(body_advance * MIN_CONTENT_ADVANCES);
+    let content = facts_line.max(body_advance * MIN_CONTENT_ADVANCES);
     let width = (content + padding * 2).clamp(1, box_width.max(1) as i32) as u32;
 
     // A card with no room for a name and a line under it is a card that cannot be drawn, which
@@ -339,18 +497,18 @@ fn build_page(
     let content_left = padding;
     let content_right = width as i32 - padding;
 
-    // The name is cut to the room the mark leaves rather than wrapped, the way a name is cut
-    // everywhere else in this app.
-    let name = cut_to_width(
-        &card.name,
-        content_right - content_left - bullet_cell,
-        header_advance,
-    );
+    // The name is drawn whole and clipped to the box the mark leaves it, and one the box has no
+    // room for is scrolled under that box rather than cut short: what moves is where the run
+    // starts, and the box that clips it never does. A run's own origin is its box's left edge
+    // for every other run of the card, so this is the one place the two are told apart (see
+    // `PageRun::origin` and `Card::name_offset`).
+    let name_left = content_left + bullet_cell;
     let header = vec![
         PageRun {
             text: BULLET.to_string(),
             x: content_left,
             width: bullet_cell,
+            origin: content_left,
             style: {
                 let mut style = plain_style(HEADER_LEVEL);
                 style.foreground = accent;
@@ -358,9 +516,10 @@ fn build_page(
             },
         },
         PageRun {
-            text: name.clone(),
-            x: content_left + bullet_cell,
-            width: text_width(&name, header_advance),
+            text: card.name.clone(),
+            x: name_left,
+            width: content_right - name_left,
+            origin: name_left - card.name_offset.max(0),
             style: {
                 let mut style = plain_style(HEADER_LEVEL);
                 style.foreground = foreground;
@@ -512,6 +671,7 @@ fn clock_runs(
                 text,
                 x,
                 width,
+                origin: x,
                 style: {
                     let mut style = plain_style(BODY_LEVEL);
                     style.foreground = color;
@@ -556,6 +716,7 @@ fn fact_runs(
                 text: separator.to_string(),
                 x,
                 width: separator_width,
+                origin: x,
                 style: {
                     let mut style = plain_style(BODY_LEVEL);
                     style.foreground = muted;
@@ -571,6 +732,7 @@ fn fact_runs(
             text,
             x,
             width,
+            origin: x,
             style: {
                 let mut style = plain_style(BODY_LEVEL);
                 style.foreground = match fact.kind {
@@ -619,6 +781,7 @@ fn paint(surface: &DibSurface, page: &Page, theme: &LoadedTheme, scale: f32) {
         for run in runs {
             painter.draw(
                 &run.text,
+                run.origin,
                 RECT {
                     left: run.x,
                     top,
@@ -740,7 +903,26 @@ mod tests {
             ],
             duration: Some(562.0),
             elapsed: Some(67.0),
+            name_offset: 0,
         }
+    }
+
+    /// The name of a card too narrow for it is scrolled rather than cut short: the page is
+    /// built at the box the layout settled on, so the test's card is the one a card of a
+    /// measured box is built from, with the offset a tick would have reached.
+    fn scrolled(card: &Card, width: u32, offset: i32) -> Page {
+        let dc = unsafe { CreateCompatibleDC(None) };
+        let metrics = TextMetrics::new(dc, 96, options().font_scale_percent).expect("metrics");
+        let theme = text_theme::loaded(options().theme).expect("the bundled theme");
+        let mut card = card.clone();
+        card.name_offset = offset;
+
+        let page = build_page(&card, theme, &metrics, width, width);
+        unsafe {
+            let _ = DeleteDC(dc);
+        }
+
+        page
     }
 
     fn options() -> AudioPreviewOptions {
@@ -889,5 +1071,121 @@ mod tests {
             clock_runs(&card, 400, 8, colors.0, colors.1).is_empty(),
             "and a card with no player behind it has nothing to say about time"
         );
+    }
+
+    /// A name the card has no room for is not a reason to draw a wider card: the width comes
+    /// from the facts line and the bar under it, and the name is the thing that gives way.
+    #[test]
+    fn a_name_that_does_not_fit_does_not_widen_the_card() {
+        let mut long = card();
+        long.name = "18 - The Longest Track Name On This Album (Remastered, 2026).flac".to_string();
+        let mut short = card();
+        short.name = "2.flac".to_string();
+
+        let long_box = measure(&long, 4096, 2160, 96, options()).expect("a measured card");
+        let short_box = measure(&short, 4096, 2160, 96, options()).expect("a measured card");
+        assert_eq!(
+            long_box, short_box,
+            "the card is the size its facts ask for whatever its name is"
+        );
+
+        // And the card really has no room for the name, which is what makes the two above the
+        // same box rather than two names that both fit.
+        let (width, _) = long_box;
+        assert!(
+            NameScroll::of(&long.name, width, 96, options()).moves(),
+            "the name the test is about is one the card cannot fit"
+        );
+        assert!(
+            !NameScroll::of(&short.name, width, 96, options()).moves(),
+            "and one it can is left where it is"
+        );
+    }
+
+    /// The name is drawn whole and clipped to the box the card leaves it — never cut short —
+    /// and the offset a tick has reached is the whole of what moves: the origin of the run.
+    #[test]
+    fn draws_the_whole_name_where_the_offset_puts_it() {
+        let mut long = card();
+        long.name = "18 - The Longest Track Name On This Album (Remastered, 2026).flac".to_string();
+        let (width, _) = measure(&long, 4096, 2160, 96, options()).expect("a measured card");
+
+        let resting = scrolled(&long, width, 0);
+        let name = resting.header.last().expect("the run the name is drawn in");
+        assert_eq!(name.text, long.name, "the name is drawn whole, not cut short");
+        assert_eq!(
+            name.origin, name.x,
+            "a name at rest starts at the left edge of the box the mark leaves it"
+        );
+        assert!(
+            name.x + name.width <= width as i32,
+            "and that box is the card's own content box: it ends inside the card"
+        );
+
+        let moved = scrolled(&long, width, 40);
+        let name = moved.header.last().expect("the run the name is drawn in");
+        assert_eq!(name.text, long.name, "a scrolled name is still the whole name");
+        assert_eq!(name.origin, name.x - 40, "the offset is what moves it");
+        assert_eq!(
+            (
+                resting.header.last().expect("the name").x,
+                resting.header.last().expect("the name").width
+            ),
+            (name.x, name.width),
+            "and the box it is clipped to stays where it is"
+        );
+    }
+
+    /// The scroll starts at the beginning of the name, holds there, runs to the end of it,
+    /// holds again and comes back — ping-ponging for as long as the card is up — and each end
+    /// is where the page draws it.
+    #[test]
+    fn scrolls_the_name_from_one_end_of_itself_to_the_other_and_back() {
+        let mut long = card();
+        long.name = "18 - The Longest Track Name On This Album (Remastered, 2026).flac".to_string();
+        let (width, _) = measure(&long, 4096, 2160, 96, options()).expect("a measured card");
+        let step = Duration::from_millis(33);
+
+        let mut scroll = NameScroll::of(&long.name, width, 96, options());
+        assert!(scroll.moves() && scroll.offset() == 0, "it starts at the start");
+
+        // The hold a card is put up with: repaints inside it move nothing at all.
+        scroll.advance(Instant::now(), step);
+        assert_eq!(scroll.offset(), 0, "the name rests before it begins to move");
+
+        let first_end = scroll.travel;
+        assert!(first_end > 0, "the name has an end past the box to reach");
+
+        // Left until the end of the name comes into sight, where it stops and holds.
+        let arrival = Instant::now() + NAME_HOLD + Duration::from_millis(1);
+        for _ in 0..first_end + 1 {
+            scroll.advance(arrival, step);
+        }
+        assert_eq!(scroll.offset(), first_end, "the name stops at the end of itself");
+        scroll.advance(arrival, step);
+        assert_eq!(
+            scroll.offset(),
+            first_end,
+            "and holds there rather than turning at once"
+        );
+
+        let far = scrolled(&long, width, scroll.offset());
+        let name = far.header.last().expect("the run the name is drawn in");
+        assert_eq!(
+            name.origin,
+            name.x - first_end,
+            "the far end of the ping-pong is the whole name shown"
+        );
+
+        // And back to the beginning, once the hold at the far end is over.
+        let returning = arrival + NAME_HOLD + Duration::from_millis(1);
+        for _ in 0..first_end {
+            scroll.advance(returning, step);
+        }
+        assert_eq!(scroll.offset(), 0, "the name comes back to where it started");
+
+        let home = scrolled(&long, width, scroll.offset());
+        let name = home.header.last().expect("the run the name is drawn in");
+        assert_eq!(name.origin, name.x, "and the near end is its resting place");
     }
 }

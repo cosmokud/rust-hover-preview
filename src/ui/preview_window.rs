@@ -935,24 +935,25 @@ impl MediaData {
     /// Repaint a sound's card with the clock as it stands, answering whether the frame on
     /// screen changed.
     ///
-    /// A painted preview is drawn once and held, so the one thing about a card that moves is
+    /// A painted preview is drawn once and held, so the two things about a card that move are
     /// drawn by asking for the page again — the same arrangement a text preview's scrolling has
     /// (see `repaint_text_preview`), and what keeps the card's own layout in one place: the box
-    /// it was painted in is the box it is painted in again, and only the clock and the bar
-    /// under it differ.
+    /// it was painted in is the box it is painted in again, and only the clock, the bar under
+    /// it and the scroll of a name the card has no room for differ.
     fn refresh_audio_card(
         &mut self,
         path: &Path,
         elapsed: Option<f64>,
         duration: Option<f64>,
         dpi: u32,
+        name_offset: i32,
     ) -> bool {
         let Some(frame) = self.frames.first() else {
             return false;
         };
         let (width, height) = (frame.width, frame.height);
 
-        let Some(card) = audio_card(path, elapsed, duration) else {
+        let Some(card) = audio_card(path, elapsed, duration, name_offset) else {
             return false;
         };
         let Some((pixels, width, height)) =
@@ -6176,6 +6177,14 @@ const AUDIO_PROBE_TIMEOUT_SECS: u64 = 10;
 /// to the eye and a fraction of what a video's own frames cost.
 const AUDIO_CARD_REPAINT: Duration = Duration::from_millis(250);
 
+/// How often a card whose name does not fit is painted again, which is the same question asked
+/// for the one thing about a card that moves faster than a clock: a name is scrolled across it
+/// at about an advance a 100 ms, and a cadence coarse enough for a clock to read smoothly would
+/// show that as a slideshow. A card is some four hundred pixels square, so what thirty of them
+/// a second costs is a fraction of what the spinner's own overlay costs at the same rate (see
+/// `AUDIO_CARD_REPAINT`).
+const AUDIO_NAME_REPAINT: Duration = Duration::from_millis(33);
+
 /// The box a sound's card asks for, with the probe that fills it beside it on the same thread.
 ///
 /// Two things a hover on a sound waits for, and both of them are here. The first is the probe:
@@ -6218,7 +6227,7 @@ fn audio_box(path: &Path, bounds: ScreenBounds, dpi: u32) -> Option<(u32, u32)> 
                 );
             }
 
-            let card = audio_card(&source, None, None)?;
+            let card = audio_card(&source, None, None, 0)?;
             audio_preview::measure(&card, cap_width, cap_height, dpi, options)
         },
     )
@@ -6252,25 +6261,32 @@ fn drawn_as_audio(path: &Path) -> bool {
 
 /// What a sound's card says, with the clock as it stands — or nothing for a file with no track
 /// behind it, which is a file no probe has answered for or one nothing here can play.
-fn audio_card(path: &Path, elapsed: Option<f64>, duration: Option<f64>) -> Option<Card> {
+///
+/// `name_offset` is how far a name the card has no room for has been scrolled: it is nothing
+/// for the card a hover is measured with and for the first frame of one, and what the repaints
+/// of a moving card hand over (see `audio_preview::NameScroll`).
+fn audio_card(
+    path: &Path,
+    elapsed: Option<f64>,
+    duration: Option<f64>,
+    name_offset: i32,
+) -> Option<Card> {
     let Probed::Track(track) = audio_track::probed(path) else {
         return None;
     };
 
     Some(Card {
-        name: path
-            .file_name()
-            .map(|name| name.to_string_lossy().to_string())
-            .unwrap_or_default(),
+        name: audio_preview::name_of(path),
         facts: audio_preview::facts_of(&track, path),
         duration: duration.or(track.duration),
         elapsed,
+        name_offset,
     })
 }
 
 /// The card a sound is previewed as, painted into the box the layout settled on.
 fn load_audio_card(path: &Path, width: u32, height: u32, dpi: u32) -> Option<MediaData> {
-    let card = audio_card(path, None, None)?;
+    let card = audio_card(path, None, None, 0)?;
     let (pixels, width, height) =
         audio_preview::render(&card, width, height, dpi, current_audio_options())?;
 
@@ -9678,6 +9694,10 @@ pub fn run_preview_window() {
         // is drawn at (see `audio_clock` and `AUDIO_CARD_REPAINT`).
         let mut audio_started: Option<Instant> = None;
         let mut audio_repaint_at = Instant::now();
+        // The name of the sound on screen, scrolled sideways while the card has no room for it:
+        // the scroll is put up with the card it belongs to and advanced by the repaints below,
+        // so a hover that changes begins at the beginning again (see `audio_preview::NameScroll`).
+        let mut audio_name_scroll: Option<audio_preview::NameScroll> = None;
         // The hover the preview on screen came from, so a theme or Markdown
         // switch can rebuild it without waiting for the next hover.
         let mut current_show: Option<PreviewMessage> = None;
@@ -9891,22 +9911,41 @@ pub fn run_preview_window() {
                     }
                     // A sound's card is the one painted preview that changes while it is on
                     // screen: the clock and the bar under it are drawn from a player that is
-                    // running, so the page is asked for again at the cadence the clock's own
-                    // seconds are worth watching at. What a card with no player behind it —
-                    // `Volume → Audio` at 0% — costs nothing at all.
-                    if media.media_type.is_audio() && audio_repaint_at.elapsed() >= AUDIO_CARD_REPAINT
-                    {
-                        audio_repaint_at = Instant::now();
+                    // running, and a name the card has no room for is scrolled across it. The
+                    // clock's own seconds are worth watching four times a second and a scroll
+                    // is not, so a card with a name to move is painted at the cadence the
+                    // spinner's overlay uses and one whose whole name fits keeps the slower one
+                    // (see `AUDIO_CARD_REPAINT` and `AUDIO_NAME_REPAINT`). What a card with no
+                    // player behind it — `Volume → Audio` at 0% — costs is its scroll and
+                    // nothing else.
+                    if media.media_type.is_audio() {
+                        let cadence = match &audio_name_scroll {
+                            Some(scroll) if scroll.moves() => AUDIO_NAME_REPAINT,
+                            _ => AUDIO_CARD_REPAINT,
+                        };
 
-                        if let Some(path) = current_show.as_ref().and_then(self::show_path) {
-                            let (elapsed, duration) = audio_clock(path, audio_started);
-                            if media.refresh_audio_card(
-                                path,
-                                elapsed,
-                                duration,
-                                audio_card_dpi,
-                            ) {
-                                needs_repaint = true;
+                        if audio_repaint_at.elapsed() >= cadence {
+                            audio_repaint_at = Instant::now();
+
+                            let name_offset = match audio_name_scroll.as_mut() {
+                                Some(scroll) => {
+                                    scroll.advance(Instant::now(), cadence);
+                                    scroll.offset()
+                                }
+                                None => 0,
+                            };
+
+                            if let Some(path) = current_show.as_ref().and_then(self::show_path) {
+                                let (elapsed, duration) = audio_clock(path, audio_started);
+                                if media.refresh_audio_card(
+                                    path,
+                                    elapsed,
+                                    duration,
+                                    audio_card_dpi,
+                                    name_offset,
+                                ) {
+                                    needs_repaint = true;
+                                }
                             }
                         }
                     }
@@ -10116,6 +10155,17 @@ pub fn run_preview_window() {
 
                                 audio_started = Some(Instant::now());
                                 audio_repaint_at = Instant::now();
+                                // The marquee the card's name is drawn with, if it needs one:
+                                // what a name is scrolled by is the card's own box, which is
+                                // the frame that has just arrived, and a scroll is put up with
+                                // the card rather than left over from the hover before it (see
+                                // `audio_preview::NameScroll`).
+                                audio_name_scroll = Some(audio_preview::NameScroll::of(
+                                    &audio_preview::name_of(&result.path),
+                                    media_data.current_width(),
+                                    audio_card_dpi,
+                                    current_audio_options(),
+                                ));
                             }
 
                             let mw = media_data.current_width() as i32;
@@ -13761,7 +13811,7 @@ mod tests {
 
             println!("the card says: {:?}", audio_preview::facts_of(&track, &path));
             for (elapsed, duration) in [(None, None), (Some(67.0), track.duration), (Some(0.5), None)] {
-                let Some(card) = audio_card(&path, elapsed, duration) else {
+                let Some(card) = audio_card(&path, elapsed, duration, 0) else {
                     continue;
                 };
                 let options = current_audio_options();
@@ -13774,6 +13824,34 @@ mod tests {
                     "card at {elapsed:?} / {duration:?}: {width}x{height}, {} bytes of frame",
                     painted.0.len()
                 );
+            }
+
+            // And what the engine actually does with the file, which is the question the probe
+            // beside it does not answer: a probe says this machine has a decoder, and what a
+            // hover needs is a player that gets somewhere. The two came apart once — a name the
+            // engine resolved as a URL was refused after `Play` had already answered, so a file
+            // probed as playable drew a card whose clock never moved (see `Session::begin`) —
+            // and what tells that apart from a file that plays is the position below: a session
+            // that failed reports a state of not playing and a position stuck at nothing, and
+            // one that is playing reports both moving. Only the engine is asked: FFmpeg's
+            // player is a process of its own and nothing on this side is drawn from it.
+            if track.player == Player::Native {
+                let volume = current_audio_volume().max(1);
+                video_player::play_audio(&path, volume);
+                std::thread::sleep(Duration::from_millis(500));
+
+                println!(
+                    "playing natively: {}, at {:?} of {:?} ({})",
+                    video_player::is_playing(),
+                    video_player::position(),
+                    video_player::duration(),
+                    if video_player::playing_path().as_deref() == Some(path.as_path()) {
+                        "the file that was asked for"
+                    } else {
+                        "not the file that was asked for"
+                    },
+                );
+                video_player::stop();
             }
         }
     }

@@ -459,7 +459,21 @@ impl Session {
         // and that form is not a URL anything will open. The path comes with the stream as
         // the name to read it by, since a stream has no name of its own and the handler
         // that opens one is chosen by what the file is called.
-        let url = BSTR::from(path.to_string_lossy().as_ref());
+        //
+        // That name is the *plain* form and not the verbatim one the stream is opened
+        // with above, which is a difference that was measured rather than reasoned about:
+        // handed the verbatim path the engine resolves the name it is given as a URL, the
+        // resolution fails, and the failure arrives *after* `Play` has already answered —
+        // as `MF_MEDIA_ENGINE_ERR_SRC_NOT_SUPPORTED` on the notify callback a moment
+        // later — so what a hover got was a card whose clock never moved and a sound that
+        // never played, with nothing on this side able to say why. Every sound the native
+        // engine plays was that way; the ones FFmpeg plays were not, because a command
+        // line takes a verbatim path happily, which is what made the report look like a
+        // bug about formats rather than about the form of a path. The stream itself is
+        // still opened on the verbatim path — long paths and odd names open by it, and it
+        // is not a name anything parses — so what changes here is only the name handed to
+        // the engine beside it.
+        let url = BSTR::from(plain_name(path).as_str());
         unsafe { engine_ex.SetSourceFromByteStream(&byte_stream, &url) }.ok()?;
 
         unsafe { engine.SetLoop(true) }.ok()?;
@@ -526,6 +540,28 @@ impl Session {
         .ok()?;
 
         copy_locked(bitmap, pixels, self.width, self.height).then_some((self.width, self.height))
+    }
+}
+
+/// A path as the name a media source is read by, which is the Shell's verbatim form with
+/// its prefix taken off.
+///
+/// The engine resolves this name as a URL while it opens the stream, and a verbatim path
+/// is not one: `\\?\C:\music\track.mp3` is refused where `C:\music\track.mp3` is read, and
+/// a share comes back as the UNC path it names rather than as `\\?\UNC\…`. It is the same
+/// adjustment `webview_preview` makes before it points a browser at a file, and it is
+/// asked for here for the same reason — the Shell's spelling of a path is not every
+/// consumer's (see `plain_path` in `office_render`, which reads paths rather than URLs
+/// but strips the same prefix for the same reason).
+fn plain_name(path: &Path) -> String {
+    let text = path.to_string_lossy();
+
+    match text.strip_prefix(r"\\?\UNC\") {
+        Some(share) => format!(r"\\{share}"),
+        None => text
+            .strip_prefix(r"\\?\")
+            .map(str::to_string)
+            .unwrap_or_else(|| text.to_string()),
     }
 }
 
@@ -624,4 +660,36 @@ fn copy_locked(bitmap: &IWICBitmap, pixels: &mut Vec<u8>, width: u32, height: u3
     }
 
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The name a media source is read by is the Shell's path with the verbatim prefix
+    /// taken off, which is the whole of what the engine was failing on: a verbatim path
+    /// is not a URL, and the engine resolves this name as one.
+    #[test]
+    fn reads_the_plain_form_of_a_verbatim_path() {
+        assert_eq!(
+            plain_name(Path::new(r"\\?\C:\Music\track.mp3")),
+            r"C:\Music\track.mp3",
+            "the verbatim form of a local path is the path it is written around"
+        );
+        assert_eq!(
+            plain_name(Path::new(r"\\?\UNC\server\share\track.mp3")),
+            r"\\server\share\track.mp3",
+            "and the verbatim form of a share keeps its server"
+        );
+        assert_eq!(
+            plain_name(Path::new(r"C:\Music\track.mp3")),
+            r"C:\Music\track.mp3",
+            "a path that was never verbatim is left exactly as it is"
+        );
+        assert_eq!(
+            plain_name(Path::new(r"\\server\share\track.mp3")),
+            r"\\server\share\track.mp3",
+            "and so is a share written the ordinary way"
+        );
+    }
 }
