@@ -184,7 +184,24 @@ pub fn is_libre_preview(path: &Path) -> bool {
 pub fn engine_page_kind(path: &Path) -> Option<PreviewType> {
     use crate::formats::content_type::{self, Content};
 
-    match content_type::of(path) {
+    // The file's own entry first and the configuration after it: the question is asked with the
+    // lists in hand, and the head it reads is read outside the lock (see `content_type::of`).
+    // What follows the question asks the machine rather than a list — the name's own list, and
+    // which of the two kinds the page belongs to — and takes its own answers.
+    let facts = crate::formats::head::Facts::read(path);
+
+    let content = {
+        let Ok(config) = crate::CONFIG.lock() else {
+            return None;
+        };
+
+        match &facts {
+            Some(facts) => content_type::of_with_facts(path, facts, &config),
+            None => content_type::of(path, &config),
+        }
+    };
+
+    match content {
         Content::Kind(PreviewType::Libre) => return Some(PreviewType::Libre),
         Content::Kind(_) | Content::Foreign => return None,
         Content::Unknown => {}

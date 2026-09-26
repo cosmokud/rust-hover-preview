@@ -1891,9 +1891,13 @@ fn engine_kind_of(path: &Path) -> Option<PreviewType> {
     // kind whose two halves have to be told apart by the name as well — the browser draws a
     // document, and the drawing layer replays a metafile or a PostScript program, which is
     // no engine window at all — so the name answers which half of that kind a file is.
-    if let crate::formats::content_type::Content::Kind(kind) =
-        crate::formats::content_type::of(path)
-    {
+    let content = CONFIG
+        .lock()
+        .ok()
+        .map(|config| crate::formats::content_type::of(path, &config))
+        .unwrap_or(crate::formats::content_type::Content::Unknown);
+
+    if let crate::formats::content_type::Content::Kind(kind) = content {
         return match kind {
             PreviewType::Vector if svg_preview::is_svg_file(path) => Some(PreviewType::Vector),
             PreviewType::Fonts => Some(PreviewType::Fonts),
@@ -2100,8 +2104,14 @@ fn office_render_is_due(path: &Path, width: u32) -> bool {
 /// opinion at all, and only a disagreement — a picture under a document's name — is a file
 /// whose engine must not be started.
 fn content_names_another_kind(path: &Path, kind: PreviewType) -> bool {
+    let content = CONFIG
+        .lock()
+        .ok()
+        .map(|config| crate::formats::content_type::of(path, &config))
+        .unwrap_or(crate::formats::content_type::Content::Unknown);
+
     matches!(
-        crate::formats::content_type::of(path),
+        content,
         crate::formats::content_type::Content::Kind(named) if named != kind
     )
 }
@@ -2499,9 +2509,13 @@ fn effective_preview_scale(path: &Path, scales: HoverScales) -> PreviewScale {
     // at the picture's share, and one under a document's name at the picture's share too.
     // Where the bytes have nothing to say the name decides below, which is every file that
     // is called what it is.
-    if let crate::formats::content_type::Content::Kind(kind) =
-        crate::formats::content_type::of(path)
-    {
+    let content = CONFIG
+        .lock()
+        .ok()
+        .map(|config| crate::formats::content_type::of(path, &config))
+        .unwrap_or(crate::formats::content_type::Content::Unknown);
+
+    if let crate::formats::content_type::Content::Kind(kind) = content {
         return scale_of_kind(kind, path, scales);
     }
 
@@ -2707,7 +2721,11 @@ fn fit_reduced(preview_scale: PreviewScale) -> PreviewScale {
 /// whatever it is called, and one whose content is text is drawn as text even where the name
 /// is a kind the lists would have claimed first.
 fn is_text_preview(path: &Path) -> bool {
-    match crate::formats::content_type::of(path) {
+    let Ok(config) = CONFIG.lock() else {
+        return false;
+    };
+
+    match crate::formats::content_type::of(path, &config) {
         crate::formats::content_type::Content::Kind(PreviewType::Text) => return true,
         // Another kind, or a format no kind here previews at all: neither is drawn as text,
         // and the second is drawn as nothing.
@@ -2721,10 +2739,6 @@ fn is_text_preview(path: &Path) -> bool {
     // as text would be placed as one and drawn as the other. The switch is part of the
     // question, as it is wherever the text lists are asked — a kind turned off in the tray is
     // not drawn at all.
-    let Ok(config) = CONFIG.lock() else {
-        return false;
-    };
-
     PreviewType::Text.enabled_in(&config)
         && crate::formats::routing::kind_of(path, &config) == Some(PreviewType::Text)
 }
@@ -5659,7 +5673,13 @@ fn load_media(
     // disagree: a `.docx` whose bytes are an MP4 is loaded as the video it is, and a format
     // no kind of this app previews is loaded as nothing at all — see `content_type` for
     // what settles that, and `load_media_of_kind` for where the kind is handed on.
-    match crate::formats::content_type::of(path) {
+    let content = CONFIG
+        .lock()
+        .ok()
+        .map(|config| crate::formats::content_type::of(path, &config))
+        .unwrap_or(crate::formats::content_type::Content::Unknown);
+
+    match content {
         crate::formats::content_type::Content::Kind(kind) => {
             return load_media_of_kind(
                 kind,
@@ -5815,8 +5835,10 @@ fn load_media_of_kind(
 ///
 /// It is where the chain above ends for every name that reaches it, and the arm a picture the
 /// content named is loaded by. Which reader is asked about it is the job the router gives a
-/// picture (`native_formats::job_for`), and that job is the file's own bytes first: a `.gif`
-/// with one frame in it is a still here, and the animated reader is never asked about one.
+/// picture (`native_formats::picture_job`), and that job is the file's own bytes first: a `.gif`
+/// with one frame in it is a still here, and the animated reader is never asked about one. That
+/// job is the file's answer alone, so nothing here takes the configuration or holds its lock
+/// across the read of the head.
 fn load_picture(
     path: &PathBuf,
     max_width: u32,
@@ -5824,11 +5846,7 @@ fn load_picture(
     preview_scale: PreviewScale,
     cancel: &Arc<AtomicBool>,
 ) -> Option<MediaData> {
-    let job = CONFIG
-        .lock()
-        .ok()
-        .and_then(|config| native_formats::job_for(path, PreviewType::Images, &config))
-        .unwrap_or(native_formats::NativeJob::Picture);
+    let job = native_formats::picture_job(path);
 
     match job {
         native_formats::NativeJob::AnimatedGif => {
@@ -5934,8 +5952,14 @@ fn video_probe_due(path: &Path) -> bool {
 /// name, and a hover whose picture is played but whose frames are awaited would sit on a
 /// first frame that nothing ever replaces.
 fn drawn_as_video(path: &Path) -> bool {
+    let content = CONFIG
+        .lock()
+        .ok()
+        .map(|config| crate::formats::content_type::of(path, &config))
+        .unwrap_or(crate::formats::content_type::Content::Unknown);
+
     if matches!(
-        crate::formats::content_type::of(path),
+        content,
         crate::formats::content_type::Content::Kind(PreviewType::Videos)
     ) {
         return PreviewType::Videos.enabled();
@@ -6023,7 +6047,13 @@ fn get_media_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
     // What the file's content says it is comes ahead of what its name does, where the two
     // disagree: the box a file is placed at is the box of the kind its content belongs to,
     // and a format no kind previews is placed nowhere at all — see `content_type`.
-    match crate::formats::content_type::of(path) {
+    let content = CONFIG
+        .lock()
+        .ok()
+        .map(|config| crate::formats::content_type::of(path, &config))
+        .unwrap_or(crate::formats::content_type::Content::Unknown);
+
+    match content {
         crate::formats::content_type::Content::Kind(kind) => {
             return media_dimensions_of_kind(kind, path)
         }
@@ -6333,9 +6363,13 @@ fn media_dimensions(path: &PathBuf, bounds: ScreenBounds, dpi: u32) -> Option<(u
     // as the picture it is rather than read as a page of text it is not — which for a file
     // whose bytes are not text is no measurement at all, and a preview that never appears
     // for a file that would otherwise be drawn.
-    if let crate::formats::content_type::Content::Kind(kind) =
-        crate::formats::content_type::of(path)
-    {
+    let content = CONFIG
+        .lock()
+        .ok()
+        .map(|config| crate::formats::content_type::of(path, &config))
+        .unwrap_or(crate::formats::content_type::Content::Unknown);
+
+    if let crate::formats::content_type::Content::Kind(kind) = content {
         return match kind {
             // The three kinds measured against the room they are drawn in, which is a question
             // this side has the answer to and `media_dimensions_of_kind` does not.
