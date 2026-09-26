@@ -6533,17 +6533,33 @@ fn start_audio_playback(path: &Path, media: &mut MediaData, start: f64) -> bool 
 ///
 /// Where the sound starts is `-ss`, and it is an option of the *input* rather than of the
 /// player: what it does is seek the file before anything of it is read, which is a player that
-/// begins at that second rather than one that plays its way there — and it is also where the
-/// loop returns to, so a sound dropped in the middle of a file wraps back to the middle of it
-/// rather than to its beginning. What it costs is nothing: the seek is the player's own, and
-/// nothing is decoded before it.
+/// begins at that second rather than one that plays its way there. What it costs is nothing:
+/// the seek is the player's own, and nothing is decoded before it.
+///
+/// A player given such a second is given no loop, and that is `ffplay`'s arrangement rather than
+/// this side's: the position its own loop seeks back to *is* the position it was started at —
+/// `-ss` is the one value that seek-back reads — so a sound dropped half way into a file would
+/// go round the second half of it for as long as it was hovered. That pass is played once
+/// instead, `-autoexit` being what ends it at the end of the file, and what this side starts in
+/// its place plays the whole file and loops from the beginning of it (see
+/// `wrap_audio_player`): every pass after the first goes back to 0:00 whatever the file is and
+/// whatever the setting started it at. It is the same rule the engine Windows has is held to,
+/// where `SetLoop` restarts the whole presentation rather than a seek into it — one answer for
+/// both players, and this side's own hand under the half that has none.
+///
+/// A sound that starts at the beginning of its file is that second player already, so it is
+/// given that player's own loop rather than a pass for this side to restart after.
 fn start_audio_player(path: &Path, volume: u32, start: f64) -> Option<Child> {
     let mut command = Command::new("ffplay");
-    command.args(["-nodisp", "-loop", "0", "-autoexit", "-loglevel", "quiet"]);
+    command.args(["-nodisp", "-autoexit", "-loglevel", "quiet"]);
     command.args(["-volume", &volume.min(100).to_string()]);
 
     if start.is_finite() && start > 0.0 {
         command.args(["-ss", &format!("{start:.3}")]);
+    } else {
+        // The whole file, looped by the player itself: with no position given to it, the
+        // position its loop returns to is the beginning of the file.
+        command.args(["-loop", "0"]);
     }
 
     let child = command
@@ -6564,6 +6580,102 @@ fn start_audio_player(path: &Path, volume: u32, start: f64) -> Option<Child> {
     VIDEO_HWND.store(0, Ordering::SeqCst);
 
     Some(child)
+}
+
+/// How long a player has to have lived before its exit is read as the end of the file it was
+/// given, where the file's own length says nothing shorter than this.
+///
+/// A player that has stopped is either one that played its file through or one that never played
+/// it at all — a machine with no output device, a decoder that will not have the file — and the
+/// second of those stops within a moment of starting. Time is the only thing that tells the two
+/// apart, and what it is spent on is the difference between a sound that goes round again and a
+/// process spawned a tick apart for as long as the file is hovered. What this sits at is past
+/// every failure a player of these files has and under the pass any file is hovered for, and it
+/// is a ceiling on what is asked rather than the bar itself: a pass shorter than it — the last
+/// moment of a short file, which `Random` can land in — is asked only to have been played (see
+/// `reached_the_end`).
+const AUDIO_WRAP_MINIMUM: f64 = 1.0;
+
+/// Whether a player that has stopped is one that reached the end of the file it was handed.
+///
+/// What the player was given is the file from the second the sound was dropped in to its own
+/// end, so the length the file says it has is what that pass takes — except that a length is a
+/// container's own reading of a header and is a little out for some formats, which is why it is
+/// used as a ceiling on what is asked for rather than as the answer itself: a stop is read as the
+/// end of the file where the player lived for [`AUDIO_WRAP_MINIMUM`], or for the whole of a pass
+/// shorter than that. A player cannot have lived past the end of the pass it was given, and the
+/// last moment of a short file is a pass of its own.
+fn reached_the_end(played: Duration, length: Option<f64>, offset: f64) -> bool {
+    let pass = length
+        .map(|length| (length - offset).max(0.0))
+        .unwrap_or(AUDIO_WRAP_MINIMUM);
+
+    played.as_secs_f64() >= pass.min(AUDIO_WRAP_MINIMUM)
+}
+
+/// Put a sound FFmpeg plays round to the beginning of its file where the player it was given has
+/// reached the end of it.
+///
+/// The player this side starts for a sound dropped into the middle of a file plays that pass and
+/// stops — see `start_audio_player` for why the loop cannot be the player's own — so the end of
+/// the file is the player's exit, and what is started in its place is a player of the whole file
+/// which loops from the beginning of it. Every pass after the first therefore goes back to 0:00,
+/// whatever the file is and whatever the setting started it at.
+///
+/// What the card's clock is drawn from moves with the player, and that is the whole of what a
+/// wrap is on this side: the moment the sound was put in at is replaced by the moment the new
+/// player started, and the position the clock is counted from by the beginning of the file. A
+/// player that reports nothing at all is a clock of this app's, and a clock still counted from
+/// the second the *old* pass was dropped in at would have the card say the sound was a minute
+/// into a file whose playing was heard to begin.
+///
+/// A player whose stop is not read as the end of its file by `reached_the_end` — one that never
+/// played anything — is not started again: the card is left with no clock rather than with
+/// another player, which is the answer a file this machine will not play gets.
+fn wrap_audio_player(
+    media: &mut MediaData,
+    path: &Path,
+    started: &mut Option<Instant>,
+    offset: &mut f64,
+) {
+    let Some(process) = media.video_process.as_mut() else {
+        return;
+    };
+
+    // The field holds the player this hover started and no other, and a process that has been
+    // waited on is a process that has ended: a player that is still going is not one to replace.
+    if matches!(process.try_wait(), Ok(None)) {
+        return;
+    }
+
+    let played = started.map(|at| at.elapsed()).unwrap_or_default();
+    let length = audio_track::playable(path).and_then(|track| track.duration);
+
+    // The player is confirmed gone — a process that has been waited on has ended — so the record
+    // of it goes with it rather than being left for the leftover-process sweep to find, exactly
+    // as the end of a video's player is answered for (see `is_video_process_running`).
+    let pid = process.id();
+    media.video_process = None;
+    VIDEO_HWND.store(0, Ordering::SeqCst);
+    VIDEO_PID.store(0, Ordering::SeqCst);
+    engine_processes::forget(pid);
+
+    if !reached_the_end(played, length, *offset) {
+        *started = None;
+        return;
+    }
+
+    // The pass after this one is the whole file, started the way the hover started the player it
+    // replaces: the same volume, the same care about a process left behind, and the same answer
+    // as to whether a player arrived at all.
+    start_audio_playback(path, media, 0.0);
+
+    if media.video_process.is_some() {
+        *started = Some(Instant::now());
+        *offset = 0.0;
+    } else {
+        *started = None;
+    }
 }
 
 /// Where the sound is and how long it is: the engine's own clock where Windows plays it, and
@@ -9999,6 +10111,21 @@ pub fn run_preview_window() {
                         // quarter of a second away, and what is heard of the beginning in
                         // between is that much and no more (see `video_player::apply_seek`).
                         video_player::apply_seek();
+
+                        // A sound FFmpeg plays whose pass has ended is put round to the
+                        // beginning of its file here, on the tick the player's own exit is
+                        // found rather than on the next card repaint a quarter of a second
+                        // away: what stands between two passes is the time it takes to start
+                        // a player, and nothing of this side is to be added to it (see
+                        // `wrap_audio_player`).
+                        if let Some(path) = current_show.as_ref().and_then(self::show_path) {
+                            wrap_audio_player(
+                                media,
+                                path,
+                                &mut audio_started,
+                                &mut audio_start_offset,
+                            );
+                        }
 
                         let cadence = match &audio_name_scroll {
                             Some(scroll) if scroll.moves() => AUDIO_NAME_REPAINT,
@@ -14088,6 +14215,46 @@ mod tests {
             player_wait(true, true, cap),
             Some(PlayerWait::Arrived),
             "and a window that is up has arrived, cap or no cap"
+        );
+    }
+
+    /// A player that has stopped is read as one that reached the end of the file it was handed or
+    /// as one that never played it, and the difference is time: a stop well into the pass the
+    /// player was given is the end of the file, and a stop within a moment of starting is a
+    /// player that failed rather than a file that ended. What the file says about its length
+    /// bounds the pass and never overrules the moment, so the last of a short file — a pass
+    /// shorter than a moment — is asked only to have been played.
+    #[test]
+    fn a_player_that_has_stopped_is_read_as_the_end_of_its_file_or_not() {
+        let length = Some(200.0);
+
+        assert!(
+            reached_the_end(Duration::from_secs(200), length, 0.0),
+            "a player that played the whole file reached the end of it"
+        );
+        assert!(
+            reached_the_end(Duration::from_secs(31), length, 170.0),
+            "and so did one given only the last half minute of it"
+        );
+        assert!(
+            !reached_the_end(Duration::from_millis(80), length, 0.0),
+            "a player that stopped the moment it started never played the file, long or not"
+        );
+        assert!(
+            !reached_the_end(Duration::from_millis(80), Some(2_000.0), 0.0),
+            "and a file of any length is not read from a stop that short"
+        );
+        assert!(
+            reached_the_end(Duration::from_millis(900), Some(0.5), 0.0),
+            "a pass shorter than the moment is read by its own length: it cannot be lived past"
+        );
+        assert!(
+            reached_the_end(Duration::from_secs(2), None, 0.0),
+            "a file that says nothing about its length is read by the moment alone"
+        );
+        assert!(
+            !reached_the_end(Duration::from_millis(200), None, 0.0),
+            "which is still a moment a player that failed has stopped inside of"
         );
     }
 

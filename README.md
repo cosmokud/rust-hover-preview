@@ -26,24 +26,26 @@ Almost everything is previewed by **Windows 11 and this app alone** — a codec 
 
 ### Runs on Windows 11 alone
 
+
 | Kind | Extensions |
 | --- | --- |
-| Pictures | `jpg` `jpeg` `jfif` `jpe` `png` `apng` `gif` `bmp` `ico` `tif` `tiff` `tga` `hdr` `exr` `ff` `qoi` `pnm` `pam` `pbm` `pgm` `ppm` `dds` `webp` |
-| Pictures through a Windows codec extension | `heic` `heif` `avif` `avci` `jxl` |
-| Videos Windows 11 plays itself | `mp4` `m4v` `mov` `qt` `avi` `wmv` `asf` `dvr-ms` `mkv` `webm` `ts` `m2ts` `mts` `m2t` `mpg` `mpeg` `mpe` `m2v` `m1v` `vob` `3gp` `3g2` `3gpp` |
-| Sounds Windows 11 plays itself | `mp3` `wav` `wave` `m4a` `m4b` `aac` `wma` `aif` `aifc` `aiff` `amr` `awb` `flac` `dsf` |
-| Drawings | `svg` `svgz` (WebView2) · `wmf` `emf` (the drawing layer) · `eps` `epsi` `epsf` `epi` `ept` `ept2` `ept3` (the preview the file carries) |
-| Design documents | `psd` `psb` `ai` `kra` `ora` `procreate` `sketch` `fig` `xd` |
-| Fonts | `ttf` `otf` `ttc` `woff` `woff2` (WebView2) |
-| Ebook | `pdf` `pdfa` `epdf` (the Windows PDF engine) · `cbz` `cbr` `cbc` |
-| Text and code | `adb` `adoc` `ads` `asciidoc` `asm` `asp` `aspx` `astro` `awk` `bash` `bat` `bib` `bzl` `c` `cc` `cfg` `cg` `cjs` `clj` `cljc` `cljs` `cmake` `cmd` `comp` `conf` `cpp` `cs` `csh` `cshtml` `css` `csv` `csx` `cts` `cxx` `d` `dart` `diff` `diz` `edn` `ejs` `el` `elm` `env` `erb` `erl` `ex` `exs` `f` `f03` `f77` `f90` `f95` `fish` `for` `frag` `fs` `fsi` `fsx` `ftn` `fx` `geom` `glsl` `go` `gql` `gradle` `graphql` `groovy` `h` `haml` `hbs` `hcl` `hh` `hlsl` `hpp` `hrl` `hs` `htm` `html` `hxx` `inc` `ini` `ipynb` `java` `jl` `js` `json` `json5` `jsonc` `jsonl` `jsp` `jsx` `ksh` `kt` `kts` `latex` `less` `lhs` `liquid` `lisp` `ll` `lock` `log` `lsp` `lua` `m` `mak` `man` `markdown` `md` `mdown` `metal` `mjs` `mk` `mkd` `ml` `mli` `mm` `mts` `mustache` `nasm` `nfo` `nim` `ninja` `nix` `njk` `org` `pas` `patch` `php` `phtml` `pl` `plist` `pm` `properties` `proto` `ps1` `psd1` `psm1` `py` `pyi` `pyw` `r` `rake` `rb` `rkt` `rmd` `rs` `rst` `rtf` `s` `sass` `scala` `scm` `scss` `sh` `slim` `sol` `sql` `srt` `ss` `styl` `sv` `svelte` `svh` `swift` `tcl` `tex` `text` `tf` `tfvars` `toml` `ts` `tsv` `tsx` `twig` `txt` `v` `vbs` `vert` `vhd` `vhdl` `vtt` `vue` `wat` `wgsl` `xhtml` `xml` `xsd` `xsl` `xslt` `yaml` `yml` `zig` `zsh` — and these extensionless names: `authors` `.babelrc` `brewfile` `caddyfile` `changelog` `changes` `.clang-format` `.clang-tidy` `cmakelists.txt` `code_of_conduct` `containerfile` `contributing` `contributors` `copying` `copyright` `dockerfile` `.dockerignore` `.editorconfig` `.env` `.env.example` `.env.local` `.eslintignore` `.eslintrc` `gemfile` `.gitattributes` `.gitconfig` `.gitignore` `.gitkeep` `.gitmodules` `gnumakefile` `.golangci.yml` `history` `.htaccess` `install` `jenkinsfile` `justfile` `licence` `license` `.mailmap` `makefile` `makefile.am` `makefile.in` `notice` `.npmignore` `.prettierignore` `.prettierrc` `procfile` `rakefile` `readme` `.rustfmt.toml` `security` `.stylelintrc` `unlicense` `vagrantfile` |
-| Archives | `7z` `apk` `jar` `rar` `tar` `tar.gz` `tgz` `xpi` `zip` `zipx` |
+| Pictures | jpg jpeg jfif jpe png apng gif bmp ico tif tiff tga hdr exr ff qoi pnm pam pbm pgm ppm dds webp |
+| Pictures through a Windows codec extension | heic heif avif avci jxl |
+| Videos Windows 11 plays itself | mp4 m4v mov qt avi wmv asf dvr-ms mkv webm ts m2ts mts m2t mpg mpeg mpe m2v m1v vob 3gp 3g2 3gpp |
+| Sounds Windows 11 plays itself | mp3 wav wave m4a m4b aac wma aif aifc aiff amr awb flac dsf |
+| Drawings | svg svgz (WebView2) · wmf emf (the drawing layer) · eps epsi epsf epi ept ept2 ept3 (the preview the file carries) |
+| Design documents | psd psb ai kra ora procreate sketch fig xd |
+| Fonts | ttf otf ttc woff woff2 (WebView2) |
+| Ebook | pdf pdfa epdf (the Windows PDF engine) · cbz cbr cbc |
+| Text and code | adb adoc ads asciidoc asm asp aspx astro awk bash bat bib bzl c cc cfg cg cjs clj cljc cljs cmake cmd comp conf cpp cs csh cshtml css csv csx cts cxx d dart diff diz edn ejs el elm env erb erl ex exs f f03 f77 f90 f95 fish for frag fs fsi fsx ftn fx geom glsl go gql gradle graphql groovy h haml hbs hcl hh hlsl hpp hrl hs htm html hxx inc ini ipynb java jl js json json5 jsonc jsonl jsp jsx ksh kt kts latex less lhs liquid lisp ll lock log lsp lua m mak man markdown md mdown metal mjs mk mkd ml mli mm mts mustache nasm nfo nim ninja nix njk org pas patch php phtml pl plist pm properties proto ps1 psd1 psm1 py pyi pyw r rake rb rkt rmd rs rst rtf s sass scala scm scss sh slim sol sql srt ss styl sv svelte svh swift tcl tex text tf tfvars toml ts tsv tsx twig txt v vbs vert vhd vhdl vtt vue wat wgsl xhtml xml xsd xsl xslt yaml yml zig zshExtensionless / Specific Files:authors .babelrc brewfile caddyfile changelog changes .clang-format .clang-tidy cmakelists.txt code_of_conduct containerfile contributing contributors copying copyright dockerfile .dockerignore .editorconfig .env .env.example .env.local .eslintignore .eslintrc gemfile .gitattributes .gitconfig .gitignore .gitkeep .gitmodules gnumakefile .golangci.yml history .htaccess install jenkinsfile justfile licence license .mailmap makefile makefile.am makefile.in notice .npmignore .prettierignore .prettierrc procfile rakefile readme .rustfmt.toml security .stylelintrc unlicense vagrantfile |
+| Archives | 7z apk jar rar tar tar.gz tgz xpi zip zipx |
+
 
 ### Notes on the table
 
 Animated GIF, APNG and WebP play. `hdr` and `exr` are tone-mapped for preview. `dds` previews BC1–BC7, both BC6H variants and uncompressed textures — including packed HDR and depth — at the first face and the nearest-size mip.
 
-### Needs FFmpeg, or the media engine Windows has
+### Needs FFmpeg
 
 Videos the table does not already cover need FFmpeg, and these are all of them: `264` `265` `266` `apv` `av1` `avc` `avs` `avs2` `avs3` `bik` `bk2` `c93` `cavs` `cdg` `cdxl` `cin` `cpk` `dav` `dif` `divx` `drc` `dv` `evc` `f4v` `flm` `flv` `gxf` `h261` `h263` `h264` `h265` `h266` `h26l` `hevc` `ifv` `imx` `ismv` `ivf` `ivr` `kux` `m2p` `mj2` `mjpeg` `mjpg` `mk3d` `moflex` `mpv` `mve` `mvi` `mxf` `mxg` `nsv` `nut` `obu` `ogm` `ogv` `pmp` `psp` `rcv` `rm` `rmvb` `roq` `rsd` `smk` `str` `swf` `thp` `tod` `tp` `tr` `ty` `ty+` `usm` `vc1` `vc2` `viv` `vro` `vvc` `vw` `wtv` `xl` `xmv` `y4m` `yop`.
 
@@ -110,7 +112,7 @@ winget install --id Gyan.FFmpeg -e
 
 **Option B: manual**
 
-1. Download a Windows build from https://ffmpeg.org/download.html
+1. Download a Windows build from [https://ffmpeg.org/download.html](https://ffmpeg.org/download.html)
 2. Extract it, for example to `C:\ffmpeg`
 3. Add `C:\ffmpeg\bin` to your user `PATH`
 
@@ -125,6 +127,7 @@ ffprobe -version
 
 The media engine decodes H.264, MPEG-4, and WMV out of the box. Each codec below is a separate free extension from the Microsoft Store:
 
+
 | Codec                                  | Needs                                                                    |
 | -------------------------------------- | ------------------------------------------------------------------------ |
 | HEVC (H.265)                           | [HEVC Video Extensions](https://apps.microsoft.com/detail/9N4WGH0Z6VHQ)  |
@@ -133,11 +136,13 @@ The media engine decodes H.264, MPEG-4, and WMV out of the box. Each codec below
 | MPEG-1 and MPEG-2                      | [MPEG-2 Video Extension](https://apps.microsoft.com/detail/9N95Q1ZZPMH4) |
 | Theora, Vorbis and Opus in an Ogg file | [Web Media Extensions](https://apps.microsoft.com/detail/9N5TDP8VCMHS)   |
 
+
 All are free. Windows 11 usually has HEVC, VP9, and AV1 already. Installing one takes effect the next time the tray’s **Codecs** menu is opened — no restart, nothing to configure.
 
 ### Optional: Enable HEIC, AVIF, JPEG XL and WebP Preview (Windows Codecs)
 
 `heic`, `heif`, `avif`, `jxl`, and still `webp` are decoded by a codec Windows provides rather than one shipped with the app. Each needs its extension installed once from the Microsoft Store:
+
 
 | Format         | Needs                                                                                                                                            |
 | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -145,6 +150,7 @@ All are free. Windows 11 usually has HEVC, VP9, and AV1 already. Installing one 
 | `avif`         | [HEIF Image Extension](https://apps.microsoft.com/detail/9PMMSR1CGPWG) + [AV1 Video Extension](https://apps.microsoft.com/detail/9MVZQVXJBQ9V)   |
 | `jxl`          | [JPEG XL Image Extension](https://apps.microsoft.com/detail/9MZPRTH5C0TB), or the **JXL support** optional feature on Windows 11 24H2            |
 | `webp`         | [WebP Image Extension](https://apps.microsoft.com/detail/9PG2DK419DRG) — optional: the app decodes WebP without it                               |
+
 
 All are free. Windows 11 often has HEIF, AV1, and WebP already. Where one is missing, hovering such a file shows no preview rather than an error, and a multi-image file — a HEIC burst, an animated AVIF, an animated JPEG XL — shows its first frame. A `.webp` is the exception: it needs none of them, because the app carries its own libwebp decoder, so WebP previews even on Windows 10.
 
@@ -156,7 +162,7 @@ All are free. Windows 11 often has HEIF, AV1, and WebP already. Where one is mis
 winget install -e --id TheDocumentFoundation.LibreOffice
 ```
 
-Or download the official installer from https://www.libreoffice.org/download/ and run the suggested file (`LibreOffice_*_Win_x86-64.msi`; LibreOffice ships an `.msi`, not an `.exe`).
+Or download the official installer from [https://www.libreoffice.org/download/](https://www.libreoffice.org/download/) and run the suggested file (`LibreOffice_*_Win_x86-64.msi`; LibreOffice ships an `.msi`, not an `.exe`).
 
 ### Optional: Enable Camera Raw and More Pictures (ImageMagick)
 
@@ -166,7 +172,7 @@ Or download the official installer from https://www.libreoffice.org/download/ an
 winget install -e --id ImageMagick.ImageMagick
 ```
 
-Or download the official installer from https://imagemagick.org/download/ and run the suggested file (`ImageMagick-*-Q16-HDRI-x64-dll.exe`).
+Or download the official installer from [https://imagemagick.org/download/](https://imagemagick.org/download/) and run the suggested file (`ImageMagick-*-Q16-HDRI-x64-dll.exe`).
 
 ### Optional: Enable Niche Archives (PeaZip)
 
@@ -176,7 +182,7 @@ Or download the official installer from https://imagemagick.org/download/ and ru
 winget install -e --id Giorgiotani.Peazip
 ```
 
-Or download the official installer from https://peazip.github.io/peazip-64bit.html and run the suggested file (`peazip-*.WIN64.exe`).
+Or download the official installer from [https://peazip.github.io/peazip-64bit.html](https://peazip.github.io/peazip-64bit.html) and run the suggested file (`peazip-*.WIN64.exe`).
 
 ### Optional: Enable Ebooks (Calibre)
 
@@ -186,12 +192,12 @@ Or download the official installer from https://peazip.github.io/peazip-64bit.ht
 winget install -e --id calibre.calibre
 ```
 
-Or download the official installer from https://calibre-ebook.com/download_windows and run the suggested file (`calibre-*-64bit.msi`).
+Or download the official installer from [https://calibre-ebook.com/download\_windows](https://calibre-ebook.com/download_windows) and run the suggested file (`calibre-*-64bit.msi`).
 
-> [!WARNING]
+> \[!WARNING\]
 > If `winget` reports an error, the package sources are usually why: run `winget source reset --force`.
 >
-> If that is refused as well, open **Terminal as administrator** (right-click the Start button → _Terminal (Admin)_) and run the same command from there.
+> If that is refused as well, open **Terminal as administrator** (right-click the Start button → *Terminal (Admin)*) and run the same command from there.
 
 ## Usage
 
@@ -206,55 +212,55 @@ Here is a concise, plain-language version:
 
 A setting marked `(Default)` is what an untouched setting would be. The check or radio mark shows what is set now.
 
-* **Enable Preview** — Turn previews on or off.
-* **Preview Types** — Choose which file kinds can preview: Images, Videos, Audio, Text, Ebook, Archives, Document, Vector, Fonts, Design. One switch covers both the original file and the engine-drawn preview. Examples: camera raw uses **Images**; LibreOffice document uses **Document**; PeaZip archive uses **Archives**; Calibre book uses **Ebook** — also the app-drawn PDF and comic pages.
-* **Text Preview**
-  * **Full Mode** — Adds scrolling, selection, and copy. Off by default.
-  * **Theme** — Atom One Light, One Dark Pro, or any `.tmTheme` in the theme folder.
-  * **Font Size** — `400%` at the top down to `70%` at the bottom.
-  * **Markdown** — Rendered or Source.
-* **Timing**
-  * **Trigger Key (Alt)** — The key is named in the item.
-    * **Enable Trigger Key** — Whether the key is watched.
-    * **Hold to Disable Preview** / **Hold to Enable Preview** — What holding the key does.
-  * **Delay** — How long the pointer rests before a preview opens: `0 ms` at the top down to `1000 ms` at the bottom. Default `0 ms`.
-  * **Rehover Delay** — Wait before the same file can preview again. Default `200 ms`.
-  * **Settling Delay** — How still the pointer must be before previewing what it is on. Default `0 ms` means a new file can preview while the hand is still moving. Keyboard previews ignore this.
-* **Placement**
-  * **Position** — Follow Cursor or Best Position. Default **Best Position**.
-  * **Avoid** — Avoid Nothing, Avoid Filename (`default`), Avoid Filename Column, or Avoid Details. Keeps a preview off the item it is about. Keyboard previews have no cursor, so **Avoid Nothing** acts like **Avoid Filename**.
-* **Scaling**
-  * **Image Scaling** — Fit to Screen or `25%`–`400%` of the image’s own size.
-  * **Video Scaling** — Same shares for a video. Default `100%`.
-  * **Animated Scaling** — Same shares for an animated GIF, WebP, or PNG. A still GIF or PNG uses **Image Scaling**. Default `100%`.
-  * **Vector Scaling** — Fit to Screen (`default`), or `75%`, `50%`, `25%`, `10%` of the display.
-  * **Ebook Scaling** — Fit to Screen (`default`), or the same display shares for a PDF page, a comic’s first page, and a Calibre-converted book.
-  * **Document Scaling** — Same display shares for a document drawn as a page, whether by its own Office app or by LibreOffice. A workbook’s fallback bitmap is never enlarged.
-  * **Font Scaling** — Same shares for a font specimen. Default `50%`.
-  * **Design Scaling** — Same display shares for design documents: Photoshop, Illustrator, Krita, OpenRaster, Procreate. Default **Fit to Screen**.
-* **Background**
-  * **Image Background** — Transparent, Black, White, or Checkerboard. Default **Checkerboard**.
-  * **Vector Background** — Same backdrops for an SVG document or metafile. Default **Checkerboard**.
-  * **Font Background** — Same backdrops for a font specimen. Default **White**.
-  * **DDS Background** — Black or White for `.dds` textures. Default **White**. The two see-through backdrops are not offered.
-  * **Design Background** — Same as picture backdrops for a design document. Default **Checkerboard**.
-* **Volume** — **Video** and **Audio**, each offering `0%`, `1%`, `5%`, `10%`, `20%`, `35%`, `50%`, `65%`, `80%` and `100%`. A video's soundtrack starts at `0%` — silent, so a hover never makes a sound the pointer did not ask for — and a sound file at `10%`: a video is looked at and a song is listened to, so the two are settings of their own. A sound at `0%` still shows its card, silently.
-  * **Audio Seek** — Where in a file a hovered sound starts playing: **Remember** (`default`) picks it up where the last hover left it, **From the Start** always begins at the beginning, **From the Middle** drops it half way in, and **Random** anywhere at all. The remembered positions are kept in a small file under `%TEMP%\rust-hover-preview\audio`, so they survive a restart; nothing is remembered while another mode is chosen. A video is always played from its beginning.
-* **Performance**
-  * **Cache** — What a preview may cost between hovers: `2 GB` down to `0 MB`. **`Image (RAM)`** = decoded frames kept in memory. **`Document (Disk)`** = engine-drawn pages kept as temp files. **`Image (Disk)`** = the pictures ImageMagick developed, kept as temp files.
-  * **Decode Budget** — `16 GB` down to `512 MB`; default `1 GB`. A file past it gets no preview.
-  * **Tick** — How often the app checks Explorer while a folder window is focused: `15 ms` (`default`), `31`, `47`, `63`, or `78 ms`. Lower answers a move sooner; higher is lighter on CPU and Explorer.
-* **Engine**
-  * **AFK Timer** — How long Explorer may be unreachable before a non-**Persistent** engine is let go: `1 hour`, `30 minutes`, `10 minutes`, `5 minutes`, `1 minute` (`default`), `30 seconds`, `15 seconds`. Counts time when no Explorer window is reachable on any monitor. A second Explorer window keeps engines warm. Each **`… TTL`** submenu has a **Persistent** toggle at the top.
-  * **Select Engine → Office** — Which engine draws Office documents: **Microsoft Office** (`default`) uses the format’s own app and falls back to LibreOffice; **LibreOffice** draws every Office document. LibreOffice is greyed out if not installed.
-  * **Microsoft Office TTL** — With **Persistent** on: how long a family’s Office app stays warm: Indefinitely, `1 hour`, `30 minutes`, `10 minutes` (`default`), `5 minutes`, `1 minute`, `0 seconds`. Off: kept while Explorer is reachable, then let go by **AFK Timer**.
-  * **LibreOffice TTL** — Same for the engine that draws CorelDRAW and nearby formats. A kept engine converts the next document faster: `1.2 s` cold vs `0.2 s`, but uses a few hundred MB. `0 seconds` means one engine per document. Both TTLs apply to **Persistent** engines; non-persistent ones use **AFK Timer**. Greyed out if LibreOffice is not installed.
-  * **WebView2 TTL** — With **Persistent** on: how long the SVG browser stays warm. Off: let go by **AFK Timer**. Greyed out if WebView2 is missing.
-  * No `ImageMagick TTL`, `PeaZip TTL`, or `Calibre TTL`: those tools run once and exit, so idle time cannot bound them. A second hover is a cache hit.
-* **Codecs** — What this machine has: Videos, Audio, Images, Engines. A missing one carries a cross, and where the README names a page for it, picking the row offers to open that page — nothing is installed or downloaded by the app itself.
-* **Run at Startup** — Add or remove the Windows startup entry.
-* **Config.ini** — Open the configuration file; named for the running version.
-* **Exit** — Close the app.
+- **Enable Preview** — Turn previews on or off.
+- **Preview Types** — Choose which file kinds can preview: Images, Videos, Audio, Text, Ebook, Archives, Document, Vector, Fonts, Design. One switch covers both the original file and the engine-drawn preview. Examples: camera raw uses **Images**; LibreOffice document uses **Document**; PeaZip archive uses **Archives**; Calibre book uses **Ebook** — also the app-drawn PDF and comic pages.
+- **Text Preview**
+  - **Full Mode** — Adds scrolling, selection, and copy. Off by default.
+  - **Theme** — Atom One Light, One Dark Pro, or any `.tmTheme` in the theme folder.
+  - **Font Size** — `400%` at the top down to `70%` at the bottom.
+  - **Markdown** — Rendered or Source.
+- **Timing**
+  - **Trigger Key (Alt)** — The key is named in the item.
+    - **Enable Trigger Key** — Whether the key is watched.
+    - **Hold to Disable Preview** / **Hold to Enable Preview** — What holding the key does.
+  - **Delay** — How long the pointer rests before a preview opens: `0 ms` at the top down to `1000 ms` at the bottom. Default `0 ms`.
+  - **Rehover Delay** — Wait before the same file can preview again. Default `200 ms`.
+  - **Settling Delay** — How still the pointer must be before previewing what it is on. Default `0 ms` means a new file can preview while the hand is still moving. Keyboard previews ignore this.
+- **Placement**
+  - **Position** — Follow Cursor or Best Position. Default **Best Position**.
+  - **Avoid** — Avoid Nothing, Avoid Filename (`default`), Avoid Filename Column, or Avoid Details. Keeps a preview off the item it is about. Keyboard previews have no cursor, so **Avoid Nothing** acts like **Avoid Filename**.
+- **Scaling**
+  - **Image Scaling** — Fit to Screen or `25%`–`400%` of the image’s own size.
+  - **Video Scaling** — Same shares for a video. Default `100%`.
+  - **Animated Scaling** — Same shares for an animated GIF, WebP, or PNG. A still GIF or PNG uses **Image Scaling**. Default `100%`.
+  - **Vector Scaling** — Fit to Screen (`default`), or `75%`, `50%`, `25%`, `10%` of the display.
+  - **Ebook Scaling** — Fit to Screen (`default`), or the same display shares for a PDF page, a comic’s first page, and a Calibre-converted book.
+  - **Document Scaling** — Same display shares for a document drawn as a page, whether by its own Office app or by LibreOffice. A workbook’s fallback bitmap is never enlarged.
+  - **Font Scaling** — Same shares for a font specimen. Default `50%`.
+  - **Design Scaling** — Same display shares for design documents: Photoshop, Illustrator, Krita, OpenRaster, Procreate. Default **Fit to Screen**.
+- **Background**
+  - **Image Background** — Transparent, Black, White, or Checkerboard. Default **Checkerboard**.
+  - **Vector Background** — Same backdrops for an SVG document or metafile. Default **Checkerboard**.
+  - **Font Background** — Same backdrops for a font specimen. Default **White**.
+  - **DDS Background** — Black or White for `.dds` textures. Default **White**. The two see-through backdrops are not offered.
+  - **Design Background** — Same as picture backdrops for a design document. Default **Checkerboard**.
+- **Volume** — **Video** and **Audio**, each offering `0%`, `1%`, `5%`, `10%`, `20%`, `35%`, `50%`, `65%`, `80%` and `100%`. A video's soundtrack starts at `0%` — silent, so a hover never makes a sound the pointer did not ask for — and a sound file at `10%`: a video is looked at and a song is listened to, so the two are settings of their own. A sound at `0%` still shows its card, silently.
+  - **Audio Seek** — Where in a file a hovered sound starts playing: **Remember** (`default`) picks it up where the last hover left it, **From the Start** always begins at the beginning, **From the Middle** drops it half way in, and **Random** anywhere at all. The remembered positions are kept in a small file under `%TEMP%\rust-hover-preview\audio`, so they survive a restart; nothing is remembered while another mode is chosen. Whatever a sound is started at, it goes back to the beginning of the file when it reaches the end of it and loops from there for as long as the hover lasts. A video is always played from its beginning.
+- **Performance**
+  - **Cache** — What a preview may cost between hovers: `2 GB` down to `0 MB`. **`Image (RAM)`** = decoded frames kept in memory. **`Document (Disk)`** = engine-drawn pages kept as temp files. **`Image (Disk)`** = the pictures ImageMagick developed, kept as temp files.
+  - **Decode Budget** — `16 GB` down to `512 MB`; default `1 GB`. A file past it gets no preview.
+  - **Tick** — How often the app checks Explorer while a folder window is focused: `15 ms` (`default`), `31`, `47`, `63`, or `78 ms`. Lower answers a move sooner; higher is lighter on CPU and Explorer.
+- **Engine**
+  - **AFK Timer** — How long Explorer may be unreachable before a non-**Persistent** engine is let go: `1 hour`, `30 minutes`, `10 minutes`, `5 minutes`, `1 minute` (`default`), `30 seconds`, `15 seconds`. Counts time when no Explorer window is reachable on any monitor. A second Explorer window keeps engines warm. Each **`… TTL`** submenu has a **Persistent** toggle at the top.
+  - **Select Engine → Office** — Which engine draws Office documents: **Microsoft Office** (`default`) uses the format’s own app and falls back to LibreOffice; **LibreOffice** draws every Office document. LibreOffice is greyed out if not installed.
+  - **Microsoft Office TTL** — With **Persistent** on: how long a family’s Office app stays warm: Indefinitely, `1 hour`, `30 minutes`, `10 minutes` (`default`), `5 minutes`, `1 minute`, `0 seconds`. Off: kept while Explorer is reachable, then let go by **AFK Timer**.
+  - **LibreOffice TTL** — Same for the engine that draws CorelDRAW and nearby formats. A kept engine converts the next document faster: `1.2 s` cold vs `0.2 s`, but uses a few hundred MB. `0 seconds` means one engine per document. Both TTLs apply to **Persistent** engines; non-persistent ones use **AFK Timer**. Greyed out if LibreOffice is not installed.
+  - **WebView2 TTL** — With **Persistent** on: how long the SVG browser stays warm. Off: let go by **AFK Timer**. Greyed out if WebView2 is missing.
+  - No `ImageMagick TTL`, `PeaZip TTL`, or `Calibre TTL`: those tools run once and exit, so idle time cannot bound them. A second hover is a cache hit.
+- **Codecs** — What this machine has: Videos, Audio, Images, Engines. A missing one carries a cross, and where the README names a page for it, picking the row offers to open that page — nothing is installed or downloaded by the app itself.
+- **Run at Startup** — Add or remove the Windows startup entry.
+- **Config.ini** — Open the configuration file; named for the running version.
+- **Exit** — Close the app.
 
 ## Configuration
 
@@ -351,70 +357,81 @@ spinner_delay_ms=250
 Here’s what this .INI does:
 
 **Look and text**
-* `theme`: `light`, `dark`, or `custom:<name>`.
-* `markdown_mode`: show Markdown as `rendered` or `source`.
-* `text_preview_full_mode`: `true` adds scrolling, selection, and copy.
-* `text_font_scale`: 1–1000%, default `125`; archive lists follow it too.
+
+- `theme`: `light`, `dark`, or `custom:<name>`.
+- `markdown_mode`: show Markdown as `rendered` or `source`.
+- `text_preview_full_mode`: `true` adds scrolling, selection, and copy.
+- `text_font_scale`: 1–1000%, default `125`; archive lists follow it too.
 
 **What can preview**
-* `*_preview_enabled`: turn each preview type on or off. File lists stay normal.
-* `extensions` / `names`: which files get text previews. Extensions have no dots. `names` matches files with no extension.
-* `image_extensions`, `video_extensions`, `archive_extensions`, `office_extensions`, `font_extensions`, `design_extensions`, `vector_extensions`: per-type preview filters. No dots. An entry with a dot, like `tar.gz`, matches the end of the file name.
-* `audio_extensions`: which files are previewed as sounds. One list rather than two, because which engine plays a file is the machine's answer and not a setting: Windows' own decoders are asked first and an installed FFmpeg second.
-* `ebook_extensions`, `libre_extensions`, `magick_extensions`, `peazip_extensions`, `calibre_extensions`: pages this app draws itself — PDFs, comic covers, LibreOffice documents, ImageMagick pictures, PeaZip archives, and Calibre books.
+
+- `*_preview_enabled`: turn each preview type on or off. File lists stay normal.
+- `extensions` / `names`: which files get text previews. Extensions have no dots. `names` matches files with no extension.
+- `image_extensions`, `video_extensions`, `archive_extensions`, `office_extensions`, `font_extensions`, `design_extensions`, `vector_extensions`: per-type preview filters. No dots. An entry with a dot, like `tar.gz`, matches the end of the file name.
+- `audio_extensions`: which files are previewed as sounds. One list rather than two, because which engine plays a file is the machine's answer and not a setting: Windows' own decoders are asked first and an installed FFmpeg second.
+- `ebook_extensions`, `libre_extensions`, `magick_extensions`, `peazip_extensions`, `calibre_extensions`: pages this app draws itself — PDFs, comic covers, LibreOffice documents, ImageMagick pictures, PeaZip archives, and Calibre books.
 
 **Memory and cache**
-* `image_cache_mb`: memory for decoded image frames. Default `64`, max `2048`; `0` holds nothing.
-* `document_cache_mb`: disk cache for rendered document pages. Default `256`, max `2048`; `0` keeps nothing between hovers but still draws the current one. Pages live under `%TEMP%\rust-hover-preview\document`; the least recently read page is removed first.
-* `image_disk_cache_mb`: disk cache for the pictures ImageMagick developed. Default `512`, max `2048`; `0` keeps nothing between hovers but still develops the current one. Pictures live under `%TEMP%\rust-hover-preview\image`; the least recently read one is removed first, and they survive a restart.
-* `decode_budget_gb`: most memory one hover may use. Default `1`, range `0.25`–`64`. A file over the limit shows no preview.
+
+- `image_cache_mb`: memory for decoded image frames. Default `64`, max `2048`; `0` holds nothing.
+- `document_cache_mb`: disk cache for rendered document pages. Default `256`, max `2048`; `0` keeps nothing between hovers but still draws the current one. Pages live under `%TEMP%\rust-hover-preview\document`; the least recently read page is removed first.
+- `image_disk_cache_mb`: disk cache for the pictures ImageMagick developed. Default `512`, max `2048`; `0` keeps nothing between hovers but still develops the current one. Pictures live under `%TEMP%\rust-hover-preview\image`; the least recently read one is removed first, and they survive a restart.
+- `decode_budget_gb`: most memory one hover may use. Default `1`, range `0.25`–`64`. A file over the limit shows no preview.
 
 **HDR**
-* `hdr_tone_map`: how HDR/EXR light becomes screen values: `reinhard` default, `aces`, `srgb`, or `off`. PNG/JPEG are not affected.
-* `hdr_exposure`: stops shifted before that curve. Default `0`, range `-10` to `10`.
+
+- `hdr_tone_map`: how HDR/EXR light becomes screen values: `reinhard` default, `aces`, `srgb`, or `off`. PNG/JPEG are not affected.
+- `hdr_exposure`: stops shifted before that curve. Default `0`, range `-10` to `10`.
 
 **Waiting and engines**
-* `spinner_delay_ms`: wait before showing the loading spinner. Default `250`; `0` shows it immediately. One delay covers all preview types.
-* `office_engine`: `microsoft_office` default, falls back to LibreOffice when needed; or `libreoffice`, which always uses LibreOffice. If LibreOffice is missing, it falls back and the tray row is greyed out.
-* `libreoffice_idle`: seconds LibreOffice is kept after its last page, or `indefinitely`. Default `600`; `0` launches it per document.
-* `office_engine_idle`: same idea for the Office engine. Default `600`; `0` lets it go after drawing a page.
-* `afk_timer_seconds`: seconds with no Explorer window before a non-persistent engine is released. Default `60`, max one day. `0` releases immediately.
-* `office_engine_persistent`, `libreoffice_persistent`, `webview_persistent`: `true` keeps that engine always, bounded only by its `…_idle` time. `false` default keeps it while Explorer is reachable, bounded by `afk_timer_seconds`.
+
+- `spinner_delay_ms`: wait before showing the loading spinner. Default `250`; `0` shows it immediately. One delay covers all preview types.
+- `office_engine`: `microsoft_office` default, falls back to LibreOffice when needed; or `libreoffice`, which always uses LibreOffice. If LibreOffice is missing, it falls back and the tray row is greyed out.
+- `libreoffice_idle`: seconds LibreOffice is kept after its last page, or `indefinitely`. Default `600`; `0` launches it per document.
+- `office_engine_idle`: same idea for the Office engine. Default `600`; `0` lets it go after drawing a page.
+- `afk_timer_seconds`: seconds with no Explorer window before a non-persistent engine is released. Default `60`, max one day. `0` releases immediately.
+- `office_engine_persistent`, `libreoffice_persistent`, `webview_persistent`: `true` keeps that engine always, bounded only by its `…_idle` time. `false` default keeps it while Explorer is reachable, bounded by `afk_timer_seconds`.
 
 **Trigger and position**
-* `trigger_key` / `trigger_key_mode` / `trigger_key_enabled`: the key (`alt`, `ctrl`, `shift`, `win`), what it does (`disable` or `enable`), and whether it is watched. Default `true`.
-* `follow_cursor`: `true` = Follow Cursor; `false` = Best Position.
-* `avoid_mode`: `filename` default, `filename_column`, `details`, or `off` — what the preview avoids.
+
+- `trigger_key` / `trigger_key_mode` / `trigger_key_enabled`: the key (`alt`, `ctrl`, `shift`, `win`), what it does (`disable` or `enable`), and whether it is watched. Default `true`.
+- `follow_cursor`: `true` = Follow Cursor; `false` = Best Position.
+- `avoid_mode`: `filename` default, `filename_column`, `details`, or `off` — what the preview avoids.
 
 **Scaling**
-* `preview_scale`: percentage or `fit`, based on the picture’s own size.
-* `video_scale`: same for video. Default `100`.
-* `animated_scale`: same for animated GIF, WebP, or PNG. Default `100`. Still GIF/PNG follow `preview_scale`.
-* `vector_scale`: percentage or `fit`, based on the screen. Default `fit`; `100` or more reads as `fit`. Covers all Vector drawings. Old `svg_scale` is ignored and removed.
-* `ebook_scale`: PDF page scale against the screen. Default `fit`; `100` or more reads as `fit`.
-* `document_scale`: document page scale against the screen. Default `fit`. A workbook’s fallback bitmap keeps its own size and is never enlarged.
-* `font_scale`: font preview scale against the screen. Default `50`; `fit` means all of it; `100` or more reads as `fit`.
-* `design_scale`: design document scale against the screen. Default `fit`.
+
+- `preview_scale`: percentage or `fit`, based on the picture’s own size.
+- `video_scale`: same for video. Default `100`.
+- `animated_scale`: same for animated GIF, WebP, or PNG. Default `100`. Still GIF/PNG follow `preview_scale`.
+- `vector_scale`: percentage or `fit`, based on the screen. Default `fit`; `100` or more reads as `fit`. Covers all Vector drawings. Old `svg_scale` is ignored and removed.
+- `ebook_scale`: PDF page scale against the screen. Default `fit`; `100` or more reads as `fit`.
+- `document_scale`: document page scale against the screen. Default `fit`. A workbook’s fallback bitmap keeps its own size and is never enlarged.
+- `font_scale`: font preview scale against the screen. Default `50`; `fit` means all of it; `100` or more reads as `fit`.
+- `design_scale`: design document scale against the screen. Default `fit`.
 
 **Fonts**
-* `ttc_face`: which face of a `.ttc` is drawn. `1` is first, max `10`. The heading shows which face came out.
+
+- `ttc_face`: which face of a `.ttc` is drawn. `1` is first, max `10`. The heading shows which face came out.
 
 **Backgrounds**
-* `image_background`: `checkerboard` default, `black`, `white`, or `transparent`. Also used for PDF pages, painted text frames, and document pages. Old `transparent_background` is ignored and removed.
-* `font_background`: `white` default, `black`, `checkerboard`, or `transparent`.
-* `dds_background`: `white` default or `black`, and only those two. Any other value reads as `white`.
-* `vector_background`: `checkerboard` default, `white`, `black`, or `transparent`. Used for SVG pages and metafiles. Old `svg_background` is ignored and removed.
-* `design_background`: `checkerboard` default, `white`, `black`, or `transparent`.
+
+- `image_background`: `checkerboard` default, `black`, `white`, or `transparent`. Also used for PDF pages, painted text frames, and document pages. Old `transparent_background` is ignored and removed.
+- `font_background`: `white` default, `black`, `checkerboard`, or `transparent`.
+- `dds_background`: `white` default or `black`, and only those two. Any other value reads as `white`.
+- `vector_background`: `checkerboard` default, `white`, `black`, or `transparent`. Used for SVG pages and metafiles. Old `svg_background` is ignored and removed.
+- `design_background`: `checkerboard` default, `white`, `black`, or `transparent`.
 
 **Old or removed names**
-* `magick_preview_enabled` and `peazip_preview_enabled`: not read. ImageMagick pictures use `image_preview_enabled`; PeaZip archives use `archive_preview_enabled`.
-* `libre_preview_enabled` and `libre_scale`: gone. Use `document_preview_enabled` and `document_scale`.
-* `office_cache_mb` and `libre_cache_mb`: gone. Use `document_cache_mb`. If both old ones exist, the larger is read once, then both are removed.
-* No `magick_idle`, `peazip_idle`, or `calibre_idle`. ImageMagick, PeaZip, and Calibre are converters, not engines kept open. A second hover usually costs only a cache hit.
+
+- `magick_preview_enabled` and `peazip_preview_enabled`: not read. ImageMagick pictures use `image_preview_enabled`; PeaZip archives use `archive_preview_enabled`.
+- `libre_preview_enabled` and `libre_scale`: gone. Use `document_preview_enabled` and `document_scale`.
+- `office_cache_mb` and `libre_cache_mb`: gone. Use `document_cache_mb`. If both old ones exist, the larger is read once, then both are removed.
+- No `magick_idle`, `peazip_idle`, or `calibre_idle`. ImageMagick, PeaZip, and Calibre are converters, not engines kept open. A second hover usually costs only a cache hit.
 
 **Extension list behavior**
-* A deleted `extensions=` line or whole section comes back with built-in entries.
-* An `extensions=` line left empty stays empty.
+
+- A deleted `extensions=` line or whole section comes back with built-in entries.
+- An `extensions=` line left empty stays empty.
 
 ## Build from Source
 
