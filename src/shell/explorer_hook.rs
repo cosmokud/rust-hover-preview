@@ -2549,6 +2549,17 @@ fn shell_window_count(resolver: &ItemResolver) -> Option<i32> {
 /// view holding another folder, and which of a frame's views is showing what the item
 /// is, is a question about the window the item is drawn in rather than about the set
 /// (see `ItemWindow`).
+///
+/// What is *not* kept is a walk that found no view at all. A window showing a folder has
+/// a view in it, so no views means the shell was met between two of them — a window that
+/// has just opened, or a folder change with the old view let go of and the new one not
+/// up yet — and a set of no views is not an answer, it is the absence of one: it can be
+/// asked for no item and it describes no place, and kept it would go on answering that
+/// for as long as the window was up, since neither of the two reasons above follows from
+/// it (the count has not moved, and the window is as live as it ever was). What that
+/// costs is a walk per caller while the shell is between views, which is what the walk
+/// is there for; what it saves is every preview in that window until the next tab, the
+/// next window, or the window being minimized (see `item_file_path`).
 fn frame_views(
     resolver: &mut ItemResolver,
     frame: isize,
@@ -2569,7 +2580,10 @@ fn frame_views(
         let views = folder_views_for_window(resolver, frame, registrations);
         note_probe_ms(&PROBE_VIEW_SLOWEST_MS, started.elapsed());
 
-        resolver.window_views = Some(WindowViews {
+        // A walk that found none is a shell between two views rather than a set to keep,
+        // and what is left in hand is nothing so that the next caller reads again (see
+        // the note on an empty walk above).
+        resolver.window_views = (!views.is_empty()).then(|| WindowViews {
             frame,
             // A collection that will not say how many windows it holds leaves the number
             // of views it produced, which the next probe's count will disagree with — the
@@ -2606,6 +2620,14 @@ fn frame_views(
 /// belongs to a tab — and there the views are told apart the way all of them were before
 /// the item's own window was read: each is asked, and what they answer has to agree.
 ///
+/// A set that cannot answer for the window the item is drawn in — no view of it claims that
+/// window, or the one that does says the item at that position is another name — is read
+/// again once before the item is answered with nothing. The item is drawn in this window, so
+/// some view of it holds the item, and what answers otherwise is a set read while the window
+/// was between the two views of a folder change: the view the folder was left from, which
+/// goes on answering for its own folder and which nothing else can tell from a right one (see
+/// `frame_views`).
+///
 /// Then the item: a candidate view is asked whether the item at that position is the
 /// item we are on, by name and nothing else. That is an identity question, and a folder
 /// answers it exactly as a file does — what the item *is* says nothing about which view
@@ -2631,22 +2653,43 @@ fn item_file_path(
         return None;
     }
 
-    // The view the item is drawn in answers alone. A view that cannot be asked is read
-    // again, once: a view whose calls fail is what a set that may be describing a window
-    // that has moved on looks like, and what the re-read costs is one walk of a
-    // collection this is holding for exactly that reason.
+    // The view the item is drawn in answers alone. A set that cannot answer for the window
+    // the item is drawn in is read again, once, before what it answered is taken: no view
+    // of it claims that window at all, or the one that does says the item at that position
+    // is another name. Neither is an answer the item can be given — the item is drawn in
+    // this window, so some view of it holds the item — and both are what a set read while
+    // the window was between two views answers with: the walk met the shell as a folder was
+    // being changed, and what it collected was the view the folder was left from. Nothing
+    // else tells that set from a right one — a folder probe asks its place of the same
+    // view, so the view it describes as the place is the one that has been left — which is
+    // why the re-read is here rather than in the walk: it is the item that says the set is
+    // wrong, and every look at the item makes the question askable again (see `frame_views`).
+    // What the re-read costs is one walk of a collection this is holding for exactly that.
     for attempt in 0..2 {
-        let (asked, anchored) = {
+        let (asked, anchored, unclaimed) = {
             let views = frame_views(resolver, window.frame, registrations);
             match window.view_holding(views) {
                 Some(position) => {
                     note_probe(&PROBE_VIEW_ANCHORED);
                     (
-                        view_item(&views[position].folder_view, index, &item.name),
+                        Some(view_item(&views[position].folder_view, index, &item.name)),
                         Some(position),
+                        false,
                     )
                 }
-                None => break,
+                // No view of the set claims the window the item is drawn in. Whether that is
+                // the set having been read wrong — which is what the re-read below is for — or
+                // a set whose views cannot be told apart by their windows at all: a set that
+                // names no window can be matched against the item's by nothing, and one whose
+                // windows the item is inside of more than once is a reading that is not
+                // trusted rather than one of several (see `ItemWindow`). Both answer through
+                // the questions below, so neither is read again.
+                None => (
+                    None,
+                    None,
+                    views.iter().any(|view| view.view_hwnd != 0)
+                        && !views.iter().any(|view| window.draws_inside(view.view_hwnd)),
+                ),
             }
         };
 
@@ -2659,13 +2702,27 @@ fn item_file_path(
         }
 
         match asked {
-            ViewItem::File(path) => return Some(path),
-            // Whatever that view answered is the answer: the item the pointer is on is
-            // not at the position the accessibility tree reported, or it is an item with
-            // no file to preview. Neither is a reason to ask a tab the pointer is not in.
-            ViewItem::NotHeld | ViewItem::NoFile => return None,
-            ViewItem::Unaskable if attempt == 1 => return None,
-            ViewItem::Unaskable => resolver.forget_window_views(),
+            Some(ViewItem::File(path)) => return Some(path),
+            // A view that holds the item and has no file to show for it answered what the
+            // item is: a folder, an application, a name no kind claims. That is an answer
+            // and not a reason to ask a tab the pointer is not in.
+            Some(ViewItem::NoFile) => return None,
+            // A view that will not answer, and a view that answers that the item at that
+            // position is another name, are the two answers a set that does not describe
+            // this window gives (see above): both are read again, once.
+            Some(ViewItem::Unaskable | ViewItem::NotHeld) if attempt == 1 => return None,
+            Some(ViewItem::Unaskable | ViewItem::NotHeld) => {
+                // The item an answer was read from goes with the set: an answer read
+                // through the views that have been left is about the item of the folder
+                // that has been left, which the pointer may be standing on all the same.
+                resolver.forget_window_views();
+                resolver.forget_item();
+            }
+            None if attempt == 0 && unclaimed => {
+                resolver.forget_window_views();
+                resolver.forget_item();
+            }
+            None => break,
         }
     }
 
@@ -5824,18 +5881,33 @@ mod tests {
         // The second probe of an unmoved pointer is answered out of the set the first
         // one read: a window's views are its own until a tab or a window is opened or
         // closed, and reading them again for every probe is the cost that grows with
-        // how many tabs are open.
+        // how many tabs are open. What is not kept is a walk that found no view at all —
+        // the shell met between two of them — and there the second probe reads again
+        // rather than being answered from a set that has nothing in it (see `frame_views`).
+        let held_views = resolver
+            .window_views
+            .as_ref()
+            .map(|set| set.views.len())
+            .unwrap_or(0);
+
         let _ = anchored_view_context(&mut resolver, &pointer, true);
 
-        assert_eq!(
-            PROBE_VIEW_WALKS.load(Ordering::Relaxed),
-            walks,
-            "a probe of the same place reads no view set again"
-        );
-        assert!(
-            PROBE_VIEW_SETS_KEPT.load(Ordering::Relaxed) > kept,
-            "and the set the first probe read is what answered it"
-        );
+        if held_views > 0 {
+            assert_eq!(
+                PROBE_VIEW_WALKS.load(Ordering::Relaxed),
+                walks,
+                "a probe of the same place reads no view set again"
+            );
+            assert!(
+                PROBE_VIEW_SETS_KEPT.load(Ordering::Relaxed) > kept,
+                "and the set the first probe read is what answered it"
+            );
+        } else {
+            assert!(
+                PROBE_VIEW_WALKS.load(Ordering::Relaxed) > walks,
+                "a walk that found no view is not an answer to keep"
+            );
+        }
 
         // Said out loud rather than only asserted: a run whose pointer is in none of the
         // Shell windows passes the assertions above without describing anything, and the
