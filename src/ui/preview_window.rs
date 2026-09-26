@@ -55,9 +55,10 @@ use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::fs::File;
 use std::io::BufReader;
+use std::os::windows::io::AsRawHandle;
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command, Output, Stdio};
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
@@ -65,7 +66,8 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant, SystemTime};
 use windows::core::{w, PCWSTR, PWSTR};
 use windows::Win32::Foundation::{
-    CloseHandle, GlobalFree, COLORREF, HANDLE, HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM,
+    CloseHandle, GlobalFree, COLORREF, HANDLE, HWND, LPARAM, LRESULT, POINT, RECT, SIZE,
+    WAIT_TIMEOUT, WPARAM,
 };
 use windows::Win32::Graphics::Gdi::{
     BeginPaint, ClientToScreen, CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject,
@@ -481,6 +483,21 @@ enum ProbedGeometry {
 
 static VIDEO_GEOMETRY_CACHE: Lazy<Mutex<HashMap<VideoGeometryKey, ProbedGeometry>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
+
+/// The geometry cache's own guard, a poisoned lock included.
+///
+/// What is behind it is a map of facts — a shape, a crop, the answer that there is neither —
+/// and there is no invariant a panic could have left half applied, so a lock a panicked probe
+/// poisoned is one to read anyway rather than one that reads as an empty cache for the rest
+/// of the run: an empty cache is `video_probe_due` true on every hover, which is a probe
+/// started, and waited on, for every file that is hovered (see `hidden_epoch` for the same
+/// reading of a lock that holds a fact).
+fn video_geometry_cache() -> MutexGuard<'static, HashMap<VideoGeometryKey, ProbedGeometry>> {
+    match VIDEO_GEOMETRY_CACHE.lock() {
+        Ok(cache) => cache,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
 
 #[derive(Clone)]
 pub enum PreviewMessage {
@@ -1317,9 +1334,16 @@ pub fn notify_peazip_ready(path: &Path, generation: u64, ok: bool) {
 /// `video_probe_due` and `video_probe` in the preview loop). A probe whose hover has moved
 /// on is not wasted — what it answers is held for the next hover of the file — so nothing
 /// here is cancelled or waited for.
+///
+/// What is not left to the probe is whether the hover is answered at all: the wait is not
+/// one an engine or a cap will ever end, so the answer is sent whatever the probe did —
+/// including a probe that panicked, which is a thread that would otherwise unwind past the
+/// notify and leave the spinner standing over a file it has finished with (see
+/// `video_probe_due` and `awaiting_engine`).
 fn spawn_video_probe(path: PathBuf, generation: u64) {
     std::thread::spawn(move || {
-        let _ = probe_video_geometry(&path);
+        let _ =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| probe_video_geometry(&path)));
         notify_video_probed(&path, generation);
     });
 }
@@ -4648,12 +4672,54 @@ const VIDEO_CROPDETECT_FRAMES: &str = "48";
 const VIDEO_CROP_MAX_AXIS_TRIM_RATIO: f32 = 0.10;
 const VIDEO_CROP_MAX_ASYMMETRY_PX: i32 = 12;
 
+/// How long either of a video's two probes is given before it is killed and the file is
+/// answered as one that could not be measured.
+///
+/// The wait this bounds is the one wait in the preview that nothing else ends: the hover is
+/// in a `PendingLoad` that is not waiting on an engine, so the cap a page is waited for under
+/// is not standing behind it, and a file no probe ever answers for is a spinner that stands
+/// at the pointer until the pointer moves. Ten seconds is what a player's own start is given
+/// (`VIDEO_START_WAIT_SECS`) and the same order as the work — forty-eight decoded frames of a
+/// 4K file is the slow case — and what a file slower than this is answered with is a video
+/// placed without its crop, which is what a file `ffprobe` could not read has always been
+/// given. If a file of the user's turns out to be slower than this, it is one constant.
+const VIDEO_PROBE_TIMEOUT_SECS: u64 = 10;
+
+/// Wait for one of a probe's children, giving up after `timeout`, and answer with what it
+/// wrote or with nothing at all.
+///
+/// A child that is still running at the deadline is killed *before* anything is read of it,
+/// because what is being stopped is not the answer but the work: a cropdetect pass over a
+/// file whose frames it cannot keep up with runs until the file ends, and a hover that has
+/// given up on it is a hover that must not leave it running. The wait that follows the kill
+/// is what reaps it, and the output a killed child leaves behind is a partial line — which
+/// is the answer arm both callers already have for a probe that answered nothing.
+///
+/// A child that has finished needs no kill and no second wait: `wait_with_output` drains the
+/// pipes and is what closes them, and the handle being signalled is what says there is
+/// something to drain. Nothing here is recorded to strike off — the probes are adopted and
+/// never written down, a process of a few dozen milliseconds having no file to leave.
+fn wait_bounded(mut child: Child, timeout: Duration) -> Option<Output> {
+    let handle = HANDLE(child.as_raw_handle());
+    let waited = unsafe { WaitForSingleObject(handle, timeout.as_millis() as u32) };
+
+    if waited == WAIT_TIMEOUT {
+        let _ = child.kill();
+        let _ = child.wait();
+        return None;
+    }
+
+    child.wait_with_output().ok()
+}
+
 /// Get video dimensions using ffprobe
 fn get_video_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
     // Spawned rather than run through `Command::output`, which is these two calls
     // under one name, so that the probe is in the job before it is waited on: a
     // probe left behind by a crash would otherwise go on reading a file that nobody
-    // is waiting for. Nothing else about it differs.
+    // is waiting for. The wait that follows is bounded rather than the plain one, so
+    // that a file this probe cannot finish with is answered rather than waited on
+    // (see `wait_bounded`).
     let child = Command::new("ffprobe")
         .args([
             "-v",
@@ -4678,7 +4744,7 @@ fn get_video_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
 
     engine_processes::adopt(child.id());
 
-    let output = child.wait_with_output().ok()?;
+    let output = wait_bounded(child, Duration::from_secs(VIDEO_PROBE_TIMEOUT_SECS))?;
 
     let output_str = String::from_utf8_lossy(&output.stdout);
     let mut parts = output_str.trim().split('x').filter(|part| !part.is_empty());
@@ -4787,9 +4853,9 @@ fn collect_video_crop_candidates(path: &PathBuf) -> HashMap<(u32, u32, u32, u32)
 
     engine_processes::adopt(child.id());
 
-    let output = match child.wait_with_output() {
-        Ok(output) => output,
-        Err(_) => return HashMap::new(),
+    let output = match wait_bounded(child, Duration::from_secs(VIDEO_PROBE_TIMEOUT_SECS)) {
+        Some(output) => output,
+        None => return HashMap::new(),
     };
 
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -4853,7 +4919,7 @@ fn cached_video_geometry(path: &Path) -> Option<ProbedGeometry> {
         version: file_version(path),
     };
 
-    VIDEO_GEOMETRY_CACHE.lock().ok()?.get(&key).copied()
+    video_geometry_cache().get(&key).copied()
 }
 
 /// Probe a video's geometry, from the cache when the file and its version have been
@@ -4869,10 +4935,8 @@ fn probe_video_geometry(path: &PathBuf) -> ProbedGeometry {
         version: file_version(path),
     };
 
-    if let Ok(cache) = VIDEO_GEOMETRY_CACHE.lock() {
-        if let Some(cached) = cache.get(&key) {
-            return *cached;
-        }
+    if let Some(cached) = video_geometry_cache().get(&key) {
+        return *cached;
     }
 
     // Reading the dimensions and detecting the crop are two external processes,
@@ -4894,12 +4958,11 @@ fn probe_video_geometry(path: &PathBuf) -> ProbedGeometry {
     // the whole of the fallback's geometry: there is no crop to detect, because cropdetect
     // is an FFmpeg filter and the engine is handed the frame as the file holds it.
     let Some((src_w, src_h)) = dimensions.or_else(|| video_player::dimensions(path)) else {
-        if let Ok(mut cache) = VIDEO_GEOMETRY_CACHE.lock() {
-            if !cache.contains_key(&key) && cache.len() >= VIDEO_GEOMETRY_CACHE_MAX_ENTRIES {
-                cache.clear();
-            }
-            cache.insert(key, ProbedGeometry::Unmeasurable);
+        let mut cache = video_geometry_cache();
+        if !cache.contains_key(&key) && cache.len() >= VIDEO_GEOMETRY_CACHE_MAX_ENTRIES {
+            cache.clear();
         }
+        cache.insert(key, ProbedGeometry::Unmeasurable);
 
         return ProbedGeometry::Unmeasurable;
     };
@@ -4919,12 +4982,11 @@ fn probe_video_geometry(path: &PathBuf) -> ProbedGeometry {
         }
     };
 
-    if let Ok(mut cache) = VIDEO_GEOMETRY_CACHE.lock() {
-        if !cache.contains_key(&key) && cache.len() >= VIDEO_GEOMETRY_CACHE_MAX_ENTRIES {
-            cache.clear();
-        }
-        cache.insert(key, ProbedGeometry::Measured(geometry));
+    let mut cache = video_geometry_cache();
+    if !cache.contains_key(&key) && cache.len() >= VIDEO_GEOMETRY_CACHE_MAX_ENTRIES {
+        cache.clear();
     }
+    cache.insert(key, ProbedGeometry::Measured(geometry));
 
     ProbedGeometry::Measured(geometry)
 }
@@ -6884,6 +6946,12 @@ struct PendingLoad {
     /// is the file this hover asked about — has nothing left that would ever answer it,
     /// and a wait that is not bounded is a spinner that runs for good (see
     /// `OFFICE_RENDER_WAIT_SECS`).
+    ///
+    /// A video's probe is the other wait marked this way, and for the reason above rather
+    /// than a reason of its own: what it waits on is outside this side, and a probe that
+    /// answered nothing would leave the hover with nothing here that ends it. The probe is
+    /// given a bound of its own (`VIDEO_PROBE_TIMEOUT_SECS`), so the cap behind this is
+    /// the second line rather than the first.
     awaiting_engine: bool,
 }
 
@@ -10401,7 +10469,13 @@ pub fn run_preview_window() {
                             spinner_side,
                             placement: show_placement,
                             upgrade,
-                            awaiting_engine: false,
+                            // The probe a video waits on is marked as an engine's wait is:
+                            // what it is waiting for is outside this side, and what is read
+                            // against this flag is the cap on a wait that nothing else ends
+                            // (see `awaiting_engine`). A box measured off this thread is
+                            // not marked — what it waits for is a read that finishes
+                            // (see `measured_off_the_tick`).
+                            awaiting_engine: show_video_probe,
                         });
                         // The probe a hover is waiting on is the one this message asked for: a
                         // measured box started its own thread where it was measured, so what is
@@ -11655,19 +11729,17 @@ mod tests {
 
         // The probe's answer is held per file and version, which is the state a hover
         // the probe has already answered for is in by the time its replay is laid out.
-        if let Ok(mut cache) = VIDEO_GEOMETRY_CACHE.lock() {
-            cache.insert(
-                VideoGeometryKey {
-                    path: video.clone(),
-                    version: file_version(&video),
-                },
-                ProbedGeometry::Measured(VideoGeometry {
-                    width: 1920,
-                    height: 1080,
-                    crop: None,
-                }),
-            );
-        }
+        video_geometry_cache().insert(
+            VideoGeometryKey {
+                path: video.clone(),
+                version: file_version(&video),
+            },
+            ProbedGeometry::Measured(VideoGeometry {
+                width: 1920,
+                height: 1080,
+                crop: None,
+            }),
+        );
 
         assert_eq!(
             effective_preview_scale(
@@ -12946,24 +13018,20 @@ mod tests {
 
         // The answer the probe gives is what the hover is placed at, and it is read from
         // the cache rather than measured again.
-        if let Ok(mut cache) = VIDEO_GEOMETRY_CACHE.lock() {
-            cache.insert(
-                key.clone(),
-                ProbedGeometry::Measured(VideoGeometry {
-                    width: 640,
-                    height: 360,
-                    crop: None,
-                }),
-            );
-        }
+        video_geometry_cache().insert(
+            key.clone(),
+            ProbedGeometry::Measured(VideoGeometry {
+                width: 640,
+                height: 360,
+                crop: None,
+            }),
+        );
         assert_eq!(video_box(&path), Some((640, 360)));
 
         // A file the probe could not measure is not a file to probe again: it is the box
         // the player that would try the file anyway is given, and no preview at all where
         // the engine that plays it cannot open it either.
-        if let Ok(mut cache) = VIDEO_GEOMETRY_CACHE.lock() {
-            cache.insert(key, ProbedGeometry::Unmeasurable);
-        }
+        video_geometry_cache().insert(key, ProbedGeometry::Unmeasurable);
         assert_eq!(
             video_box(&path),
             (!codecs::plays_video_natively()).then_some((1920, 1080))
@@ -13009,6 +13077,51 @@ mod tests {
             player_wait(true, true, cap),
             Some(PlayerWait::Arrived),
             "and a window that is up has arrived, cap or no cap"
+        );
+    }
+
+    /// A probe's child is waited for with a deadline, and what a child that has outrun it
+    /// leaves behind is an answer of its own rather than a wait that goes on: the process is
+    /// ended where it stands and the caller is told there is nothing from this one, which is
+    /// the arm both probes already have for a child that answered nothing.
+    ///
+    /// What stands in for the two children is an ordinary console program, since what the
+    /// helper does with a child is the same whatever the child is and a test is not going to
+    /// start ffmpeg. Neither stand-in reaches the network: a command that prints a line
+    /// finishes however loaded the machine is, and a ping of thirty replies is still there a
+    /// moment later whatever it is told.
+    #[test]
+    fn waits_for_a_probes_child_only_until_the_deadline() {
+        let quick = Command::new("cmd")
+            .args(["/C", "echo", "a line from the child"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("a child that finishes");
+
+        let answered = wait_bounded(quick, Duration::from_secs(VIDEO_PROBE_TIMEOUT_SECS))
+            .expect("a child that ends inside the deadline answers with its output");
+        assert!(answered.status.success());
+        assert!(
+            String::from_utf8_lossy(&answered.stdout).contains("a line from the child"),
+            "and what it wrote is in the answer, which is the pipe that was drained"
+        );
+
+        let slow = Command::new("ping")
+            .args(["-n", "30", "127.0.0.1"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("a child that does not finish");
+        let pid = slow.id();
+
+        assert!(
+            wait_bounded(slow, Duration::from_millis(50)).is_none(),
+            "a child that has outrun the deadline is not waited for any longer"
+        );
+        assert!(
+            !engine_processes::is_running(pid),
+            "and it is ended rather than left reading a file nobody is waiting for"
         );
     }
 
