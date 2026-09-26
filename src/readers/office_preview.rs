@@ -76,10 +76,16 @@ pub(crate) fn source_kind(path: &Path) -> SourceKind {
     if let Some((page, _)) = usable_page(path) {
         // A page Office exported is drawn at whatever size it is asked for; the picture
         // a workbook is answered with on a machine that cannot export a page is a screen
-        // bitmap, and enlarging that would only stretch it.
+        // bitmap, and enlarging that would only stretch it. Which of the two a PNG is is not
+        // something the kind says any more — a slide's export and a workbook's picture are both
+        // PNGs — so the family is asked, exactly as the render tier asks it before drawing
+        // anything (see `office_render::page_is_workbook_picture`).
         return match page.kind {
-            PageKind::Pdf | PageKind::Png => SourceKind::Page,
-            PageKind::Bmp => SourceKind::Raster,
+            PageKind::Pdf => SourceKind::Page,
+            PageKind::Png if !office_render::page_is_workbook_picture(path, &page) => {
+                SourceKind::Page
+            }
+            PageKind::Png | PageKind::Bmp => SourceKind::Raster,
         };
     }
 

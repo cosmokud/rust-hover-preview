@@ -19,16 +19,20 @@
 //! the whole point of the kind — a developed raw shown at the size it hovers as a photograph
 //! rather than as a thumbnail.
 //!
-//! Nothing of it reaches the disk either. The engine is a converter rather than an
-//! application: `magick.exe` reads a file, writes one and exits, so there is nothing to hold
-//! open between files, and what it writes is written to its own standard output rather than
-//! to a path — read on this side as the bytes of a picture, decoded from memory, and gone
-//! when the frame is built. What is kept between hovers is what every other picture is kept
-//! in: the frame, in the image cache, bounded by `image_cache_mb` and dropped least recently
-//! used first. A raw whose frame is still there is a hover that costs nothing at all — no
-//! engine, no decode — and one whose frame has been given up is developed again, which is
-//! the price of holding no file of our own rather than a setting nobody has to make; see
-//! Magick Previews for what that costs in memory.
+//! The engine is a converter rather than an application: `magick.exe` reads a file, writes
+//! one and exits, so there is nothing to hold open between files, and what it writes is
+//! written to its own standard output rather than to a path. What is read there is decoded
+//! into the frame the hover that asked is drawn from, and written down as a page for the
+//! hovers after it — the cache `document_cache` keeps for every engine, in a folder and
+//! against a budget of this tier's own (`Cache → Image (Disk)`, `image_disk_cache_mb`),
+//! because the one thing that makes the next hover cheap is the picture this one already
+//! developed. Two things are therefore kept, and they are worth different things: the frame,
+//! in the image cache every picture is kept in, bounded by `image_cache_mb`, which answers a
+//! hover with no read at all; and the page, which answers the hovers the frame could not —
+//! one whose frame the budget has given up, one larger than the whole frame budget, which is
+//! never held there, and the first hover after a restart. What either of them saves is a
+//! launch, a fraction of a second to a second, on a file that has not changed; see Magick
+//! Previews.
 //!
 //! Nothing is bundled with this app and nothing is linked against: the engine is the user's
 //! own installation, looked for where it installs and beside `config.ini` for a portable
@@ -52,6 +56,7 @@
 //! run rather than on disk, like the answer itself.
 
 use crate::config::config::decode_budget_bytes;
+use crate::engines::document_cache::{self, PageKind};
 use once_cell::sync::Lazy;
 use std::io::Read;
 use std::os::windows::process::CommandExt;
@@ -111,6 +116,11 @@ const LEGACY_ENGINE_IMAGE: &str = "convert.exe";
 /// dragged across a large folder of raws, and what it costs when it is reached is everything
 /// held, the way every other cache of this app's shape answers that.
 const ANSWERS_MAX_ENTRIES: usize = 512;
+
+/// The name this engine's pages are kept under, which is what tells one of its pictures from the
+/// page an Office application, an installed render engine or the ebook engine drew for the same
+/// file (see `document_cache::key`).
+const ENGINE_NAME: &str = "imagemagick";
 
 /// What one pixel of a raw sample dump weighs, in bits, by the name it is written under, or
 /// nothing for a name that is not a dump.
@@ -399,17 +409,66 @@ static DEVELOPED_SIZE: Lazy<Mutex<Vec<DevelopedSize>>> = Lazy::new(|| Mutex::new
 /// is called — from starting an engine on every hover to reach the same answer.
 static REFUSED: Lazy<Mutex<Vec<Key>>> = Lazy::new(|| Mutex::new(Vec::new()));
 
-/// The size a picture the engine developed for this file turned out to be, if it has
-/// developed one.
+/// The size a picture the engine developed for this file turned out to be, if it has developed
+/// one — in this run, or in an earlier one whose page is still there to be measured.
+///
+/// A page that answers no size is not a page: one a temp cleaner took between two hovers, or one
+/// a run ended before it was written whole. It is given up here, at the ask that found it — what
+/// that leaves is a file with no picture and a hover that develops one, rather than a preview
+/// that waits for a page nothing will read.
 pub fn dimensions(path: &Path) -> Option<(u32, u32)> {
     let key = key_of(path);
 
-    DEVELOPED_SIZE
-        .lock()
-        .ok()?
-        .iter()
-        .find(|(known, _)| *known == key)
-        .map(|(_, size)| *size)
+    if let Ok(developed) = DEVELOPED_SIZE.lock() {
+        if let Some((_, size)) = developed.iter().find(|(known, _)| *known == key) {
+            return Some(*size);
+        }
+    }
+
+    let size = document_cache::size_image(path, ENGINE_NAME);
+    let Some(size) = size else {
+        document_cache::forget_image(path, ENGINE_NAME);
+        return None;
+    };
+
+    remember(&key, size);
+
+    Some(size)
+}
+
+/// Whether a page the engine developed for this version of the file is there, waiting to be read
+/// — which is the answer that keeps a hover from starting the engine over a picture that has
+/// already been developed.
+pub fn has_page(path: &Path) -> bool {
+    document_cache::image_page(path, ENGINE_NAME).is_some()
+}
+
+/// The picture this version of the file was developed into, read back from the page the engine
+/// wrote — what answers a hover whose frame the image cache could not, and what makes the first
+/// hover after a restart a read rather than a launch.
+///
+/// A page that cannot be read is given up here, so that the file is developed again instead of
+/// answering nothing once the hover has already been placed by it.
+pub fn read_page(path: &Path) -> Option<Developed> {
+    let page = document_cache::image_page(path, ENGINE_NAME)?;
+
+    let Ok(png) = std::fs::read(&page.path) else {
+        forget_page(path);
+        return None;
+    };
+    let Some((width, height)) = png_dimensions(&png) else {
+        forget_page(path);
+        return None;
+    };
+
+    Some(Developed { width, height, png })
+}
+
+/// Give up the page kept for this version of this file, which is what the loader asks for when
+/// the bytes a page holds are not a picture it can draw: what is left is developed again rather
+/// than read into the same nothing on every hover.
+pub fn forget_page(path: &Path) {
+    document_cache::forget_image(path, ENGINE_NAME);
 }
 
 /// Whether the engine has already turned this file down, for this version of it.
@@ -486,8 +545,10 @@ pub fn request(path: &Path, room: (u32, u32), generation: u64) {
 
     // A picture already in hand is one there is nothing to ask for: it is the hover that
     // asked, waiting to be drawn, and a second conversion beside it would be a launch spent
-    // on a picture nothing would look at.
-    if developed(path) {
+    // on a picture nothing would look at. A page written for this version of the file is the
+    // same answer a hover later: what the engine developed once is read back rather than
+    // developed again, and the reader that finds the page unreadable gives it up itself.
+    if developed(path) || has_page(path) {
         return;
     }
 
@@ -578,6 +639,17 @@ fn start_engine() {
             let ok = picture.is_some();
             if let Some(picture) = picture {
                 remember(&picture.key, (picture.width, picture.height));
+                // The bytes are in hand, so the page costs a write and nothing else: it is what
+                // the hovers after this one read, and the next run, which has no memory of the
+                // conversion at all. The hover that asked is drawn from the frame held below,
+                // so nothing here waits on the write — and at a budget of nothing the page is
+                // not written at all (see `document_cache::store_image`).
+                document_cache::store_image(
+                    &requested.path,
+                    ENGINE_NAME,
+                    PageKind::Png,
+                    &picture.png,
+                );
                 hold(picture);
             } else {
                 refuse(&key_of(&requested.path));

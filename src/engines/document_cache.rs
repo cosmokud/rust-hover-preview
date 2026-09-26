@@ -27,8 +27,19 @@
 //! volume for every read of every page and a walk of the folder to find the oldest one; the
 //! table is read off the folder once, when a run first asks it anything, and after that neither
 //! a read nor a trim is a question for the disk (see `with_index` and `prune`).
+//!
+//! Two folders are kept this way, a table each. The one the documents' pages are kept in is
+//! bounded by `document_cache_mb`; the one beside it holds the pictures an image-developing
+//! engine developed a file into, and is bounded by `image_disk_cache_mb` (see `image_folder`).
+//! They are folders of their own rather than one shared folder because a run seeds its table
+//! from the names a folder holds, and a page's name is a hash that cannot say which budget the
+//! file under it was written under — two budgets in one folder would each be unenforceable
+//! across a restart.
 
-use crate::config::config::{sanitize_document_cache_mb, AppConfig, DEFAULT_DOCUMENT_CACHE_MB};
+use crate::config::config::{
+    sanitize_document_cache_mb, sanitize_image_disk_cache_mb, AppConfig, DEFAULT_DOCUMENT_CACHE_MB,
+    DEFAULT_IMAGE_DISK_CACHE_MB,
+};
 use crate::readers::pdf_preview;
 use crate::CONFIG;
 use directories::BaseDirs;
@@ -51,6 +62,10 @@ pub(crate) enum PageKind {
     Png,
     /// A bitmap of a workbook's used range, for a machine whose Excel cannot export a page at
     /// all (see `office_render::render_excel`).
+    ///
+    /// It is not written any more — the picture is a PNG now — but it is still read and still
+    /// cleared away: a page a run before this one left keeps working until a new one replaces it
+    /// or a trim gives it up, and `store` and `forget` still remove the file under this name.
     Bmp,
 }
 
@@ -271,6 +286,35 @@ fn folder() -> Option<PathBuf> {
     Some(root)
 }
 
+/// The folder the pictures an image-developing engine developed are kept in.
+///
+/// A folder of its own beside the documents' one rather than a share of it: what a run reads a
+/// folder by is the names its files carry, and a page's name is a hash that says nothing about
+/// which budget it was written under, so two budgets in one folder would each be unenforceable
+/// across a restart (see `image_disk_cache_mb`).
+fn image_folder() -> PathBuf {
+    // The same split the documents' folder makes, and for the same reason: what a test writes is
+    // kept where the thread that asked for it can find it, and never in the folder the app writes.
+    #[cfg(test)]
+    let root = std::env::temp_dir().join("rust-hover-preview-image-tests");
+    #[cfg(not(test))]
+    let root = temp_folder().join("image");
+
+    root
+}
+
+/// The budget the image folder is kept within, read from the configuration each time rather than
+/// captured: the tray can change it at any moment, and the next picture stored and the next trim
+/// both ask for it again.
+fn image_limit_bytes() -> u64 {
+    CONFIG
+        .lock()
+        .map(|config| sanitize_image_disk_cache_mb(config.image_disk_cache_mb))
+        .unwrap_or(DEFAULT_IMAGE_DISK_CACHE_MB) as u64
+        * 1024
+        * 1024
+}
+
 /// The name the page drawn for this version of this document by this engine is kept under.
 ///
 /// The engine is named by the name it writes its own setting under — `microsoft_office`,
@@ -316,10 +360,25 @@ fn refused_path(folder: &Path, key: &str) -> PathBuf {
 /// answers with the page a previous read found, and one something else has taken away is
 /// dropped here so that the document is drawn again rather than hovered into nothing.
 pub(crate) fn page(source: &Path, engine: &str) -> Option<Page> {
-    let folder = folder()?;
+    page_in(&folder()?, source, engine)
+}
+
+/// The page kept for this version of this file in the image folder, if there is one.
+///
+/// It is the question above asked of the folder the developed pictures are kept in rather than
+/// the documents' one, and it is what the image tier's own due question is answered by: a hover
+/// that has a picture to read is one the engine is not started for again.
+pub(crate) fn image_page(source: &Path, engine: &str) -> Option<Page> {
+    page_in(&image_folder(), source, engine)
+}
+
+/// The page kept for this version of this document in the folder the caller names, which is the
+/// documents' own for every page an engine drew and the image folder for the one an image is
+/// developed into.
+fn page_in(folder: &Path, source: &Path, engine: &str) -> Option<Page> {
     let key = key(source, engine);
 
-    with_index(&folder, |index| {
+    with_index(folder, |index| {
         let IndexEntry::Page {
             kind, last_used, ..
         } = index.entries.get_mut(&key)?
@@ -332,7 +391,7 @@ pub(crate) fn page(source: &Path, engine: &str) -> Option<Page> {
         let kind = *kind;
         *last_used = SystemTime::now();
 
-        let path = path_of(&folder, &key, kind);
+        let path = path_of(folder, &key, kind);
         if std::fs::metadata(&path).is_err() {
             index.entries.remove(&key);
             return None;
@@ -344,24 +403,78 @@ pub(crate) fn page(source: &Path, engine: &str) -> Option<Page> {
 }
 
 /// Keep a page an engine has just drawn, replacing whatever was kept for the same version of
-/// the same document.
+/// the same document, and hold it for the hover that asked.
 pub(crate) fn store(source: &Path, engine: &str, kind: PageKind, bytes: &[u8]) -> Option<Page> {
     let folder = folder()?;
-    std::fs::create_dir_all(&folder).ok()?;
+    let page = write_page(&folder, source, engine, kind, bytes)?;
+
+    // The page just drawn is the one a hover is waiting for, so it is held whatever the budget
+    // says: giving it up here would leave the spinner with nothing to replace it. It is
+    // released when that hover ends.
+    if let Ok(mut held) = HELD.lock() {
+        *held = Some((key(source, engine), source.to_path_buf()));
+    }
+
+    prune();
+
+    Some(page)
+}
+
+/// Keep the picture an image-developing engine has just developed, in the folder those pictures
+/// are kept in and within that folder's own budget.
+///
+/// Nothing is held here, and nothing needs to be: the picture is in the engine's own hand until
+/// the hover that asked for it draws it, so a page given up before then costs that hover nothing.
+/// What the page is for is the hovers after it and the next run.
+pub(crate) fn store_image(
+    source: &Path,
+    engine: &str,
+    kind: PageKind,
+    bytes: &[u8],
+) -> Option<Page> {
+    let folder = image_folder();
+    let limit = image_limit_bytes();
+
+    // At a budget of nothing no page is written at all, rather than written and given up inside
+    // the same hover: that size means there is nothing kept between hovers, and the picture in
+    // the engine's hand is what answers the hover that asked.
+    if limit == 0 {
+        return None;
+    }
+
+    let page = write_page(&folder, source, engine, kind, bytes)?;
+    prune_folder(&folder, limit, None);
+
+    Some(page)
+}
+
+/// Write a page into `folder` and take it into that folder's table, replacing whatever was kept
+/// for the same version of the same document. Which folder a page goes into is the caller's
+/// question — `store` is the pages an engine drew, `store_image` the picture an image converter
+/// developed — and what the two do differently is what happens to the page afterwards rather
+/// than how it is written.
+fn write_page(
+    folder: &Path,
+    source: &Path,
+    engine: &str,
+    kind: PageKind,
+    bytes: &[u8],
+) -> Option<Page> {
+    std::fs::create_dir_all(folder).ok()?;
 
     let key = key(source, engine);
 
     // Whatever was kept under this name is not the page any more: this render drew over it, and
     // a page of another kind left beside it would be found first (see `page`).
     for other in [PageKind::Pdf, PageKind::Png, PageKind::Bmp] {
-        let _ = std::fs::remove_file(path_of(&folder, &key, other));
+        let _ = std::fs::remove_file(path_of(folder, &key, other));
     }
-    let _ = std::fs::remove_file(refused_path(&folder, &key));
+    let _ = std::fs::remove_file(refused_path(folder, &key));
 
-    let path = path_of(&folder, &key, kind);
+    let path = path_of(folder, &key, kind);
     write_whole(&path, bytes)?;
 
-    with_index(&folder, |index| {
+    with_index(folder, |index| {
         index.entries.insert(
             key.clone(),
             IndexEntry::Page {
@@ -378,15 +491,6 @@ pub(crate) fn store(source: &Path, engine: &str, kind: PageKind, bytes: &[u8]) -
     if let Ok(mut sizes) = SIZES.lock() {
         sizes.remove(&key);
     }
-
-    // The page just drawn is the one a hover is waiting for, so it is held whatever the budget
-    // says: giving it up here would leave the spinner with nothing to replace it. It is
-    // released when that hover ends.
-    if let Ok(mut held) = HELD.lock() {
-        *held = Some((key, source.to_path_buf()));
-    }
-
-    prune();
 
     Some(Page { path, kind })
 }
@@ -410,13 +514,25 @@ pub(crate) fn forget(source: &Path, engine: &str) {
         return;
     };
 
+    forget_in(&folder, source, engine);
+}
+
+/// Give up the page kept for this version of this file in the image folder, for the reason the
+/// function above gives up a document's page: a page that cannot be read is not a page, and what
+/// this gets is the picture developed again rather than a hover that shows nothing.
+pub(crate) fn forget_image(source: &Path, engine: &str) {
+    forget_in(&image_folder(), source, engine);
+}
+
+/// Give up the page kept for this version of this file in `folder`.
+fn forget_in(folder: &Path, source: &Path, engine: &str) {
     let key = key(source, engine);
 
     for kind in [PageKind::Pdf, PageKind::Png, PageKind::Bmp] {
-        let _ = std::fs::remove_file(path_of(&folder, &key, kind));
+        let _ = std::fs::remove_file(path_of(folder, &key, kind));
     }
 
-    with_index(&folder, |index| {
+    with_index(folder, |index| {
         index.entries.remove(&key);
     });
 
@@ -508,6 +624,13 @@ pub(crate) fn trim_now() {
     prune();
 }
 
+/// The same, for the image folder: what the tray asks for when a smaller `image_disk_cache_mb` is
+/// chosen, so what is over the new budget goes when it is set rather than at the next picture
+/// that happens to be stored.
+pub(crate) fn trim_image_now() {
+    prune_folder(&image_folder(), image_limit_bytes(), None);
+}
+
 /// The size of the page kept for this document: what a layout places a preview by, and what a
 /// wider display compares a slide's export against.
 ///
@@ -517,6 +640,16 @@ pub(crate) fn trim_now() {
 /// rather than by the file the page is kept as: that file's timestamp says when the page was
 /// last *used*, which is not a version to read a size against (see `touch`).
 pub(crate) fn size(source: &Path, engine: &str) -> Option<(u32, u32)> {
+    size_in(&folder()?, source, engine)
+}
+
+/// The size of the page kept for this version of this file in `folder`, read the way the size of
+/// any page is and remembered the same way.
+pub(crate) fn size_image(source: &Path, engine: &str) -> Option<(u32, u32)> {
+    size_in(&image_folder(), source, engine)
+}
+
+fn size_in(folder: &Path, source: &Path, engine: &str) -> Option<(u32, u32)> {
     let key = key(source, engine);
 
     if let Ok(sizes) = SIZES.lock() {
@@ -525,7 +658,7 @@ pub(crate) fn size(source: &Path, engine: &str) -> Option<(u32, u32)> {
         }
     }
 
-    let size = read_size(&page(source, engine)?)?;
+    let size = read_size(&page_in(folder, source, engine)?)?;
     if let Ok(mut sizes) = SIZES.lock() {
         if sizes.len() >= SIZE_MEMO_MAX_ENTRIES {
             sizes.clear();

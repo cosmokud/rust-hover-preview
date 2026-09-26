@@ -189,10 +189,14 @@ pub const MAX_SPINNER_DELAY_MS: u64 = 10_000;
 /// layout asked for, so this is a ceiling on retained pixels rather than on
 /// files: how many images fit depends entirely on how large they are shown.
 ///
-/// A small budget is kept by default: a hit skips a full-resolution decode and its
-/// resample, which is the most expensive thing a hover does, and what is held is
-/// the preview-sized frame rather than the pixels it was decoded from.
-pub const DEFAULT_IMAGE_CACHE_MB: u32 = 32;
+/// Sixty-four megabytes by default, which is one full-screen frame at 4K: a hit skips a
+/// full-resolution decode and its resample, which is the most expensive thing a hover does,
+/// and what is held is the preview-sized frame in BGRA — a picture filling a large display
+/// is about thirty-three megabytes of it. A budget below that holds nothing at all for such
+/// a picture, because a frame larger than the whole budget is not trimmed to fit but left
+/// out of the cache, so every hover of it paid the decode again; sixty-four holds that frame
+/// and the one after it.
+pub const DEFAULT_IMAGE_CACHE_MB: u32 = 64;
 pub const MAX_IMAGE_CACHE_MB: u32 = 2048;
 /// The folder a document's page is kept in may hold, in megabytes. What a page costs is the
 /// size of the file it is kept as — a PDF the engine that drew it exported, a slide's PNG, a
@@ -201,12 +205,30 @@ pub const MAX_IMAGE_CACHE_MB: u32 = 2048;
 /// document is hovered, and drawing one costs an Office start or a conversion rather than a
 /// read, which is what makes holding them worth a folder of their own (see `document_cache`).
 ///
-/// A hundred and twenty-eight megabytes by default. A converted page is a couple of hundred
-/// kilobytes and a document that exports badly can be a couple of megabytes, so the budget is
-/// hundreds of documents either way — and being on disk rather than in memory, what it costs
-/// the machine when nothing is being read from it is nothing.
-pub const DEFAULT_DOCUMENT_CACHE_MB: u32 = 128;
+/// Two hundred and fifty-six megabytes by default, because the folder carries pages of three
+/// different weights at once: a text page is a couple of hundred kilobytes, an ordinary
+/// document a couple of megabytes, and the illustrated documents the engines that convert a
+/// whole file leave — a LibreOffice drawing, a comic, and above all a scanned book — five to
+/// thirty megabytes apiece, with a book of plates reaching a hundred. A budget of a hundred
+/// and twenty-eight was one fat page away from full, and a page the trim gives up is the
+/// Office start or the conversion that drew it paid again to bring it back. What holding
+/// twice as much costs is disk rather than memory: nothing is read from the volume while it
+/// is not in use.
+pub const DEFAULT_DOCUMENT_CACHE_MB: u32 = 256;
 pub const MAX_DOCUMENT_CACHE_MB: u32 = 2048;
+/// The folder a developed picture is kept in may hold, in megabytes. What a picture costs is the
+/// size of the PNG the image engine wrote — a few hundred kilobytes to a few megabytes at the
+/// size a preview is shown — and what is kept is the pictures a user hovers, least recently used
+/// first, so that a second hover and the next run are a read rather than a conversion.
+///
+/// Five hundred and twelve megabytes by default, because this budget covers the one thing the
+/// image cache beside it cannot: a picture the engine developed for a preview larger than
+/// `image_cache_mb` is not held in memory at all, so without a page here every hover of it pays
+/// the launch again — a fraction of a second to a second, per hover, for a file that never
+/// changed. It is disk rather than memory: nothing is read from the folder while it is not in
+/// use. See `document_cache`.
+pub const DEFAULT_IMAGE_DISK_CACHE_MB: u32 = 512;
+pub const MAX_IMAGE_DISK_CACHE_MB: u32 = 2048;
 /// What one hover may decode or read for, in gigabytes: the ceiling every reader is
 /// handed before it allocates — a picture's decode, a document's bytes, the page
 /// Office exported, a theme a preview is painted with.
@@ -302,6 +324,16 @@ pub fn sanitize_tick_ms(value: u64) -> u64 {
 /// answers is how much of what was drawn is kept between hovers.
 pub fn sanitize_document_cache_mb(value: u32) -> u32 {
     value.min(MAX_DOCUMENT_CACHE_MB)
+}
+
+/// The budget of the folder a developed picture is kept in, which is the image converter's own
+/// cache rather than the pages the document engines write.
+///
+/// `0` is a cache that holds nothing between hovers, the same as the one above: a picture is
+/// developed for the hover that asks for it either way, and the only question a size answers is
+/// whether the hover after it reads one back or pays for it again.
+pub fn sanitize_image_disk_cache_mb(value: u32) -> u32 {
+    value.min(MAX_IMAGE_DISK_CACHE_MB)
 }
 
 /// The text preview font scale, where `0` and nonsense land back on the default.
@@ -1344,6 +1376,15 @@ pub struct AppConfig {
     /// the temp folder and given up least recently used first. See
     /// `Performance → Cache → Document` in the tray.
     pub document_cache_mb: u32,
+    /// How much of what an image-developing engine developed is kept between hovers, in
+    /// megabytes: the PNG the engine wrote for a file, kept as a page under the temp folder
+    /// beside the documents' pages and given up least recently used first. See
+    /// `Performance → Cache → Image (Disk)` in the tray.
+    ///
+    /// It is the one cache a developed picture has of its own: the frame it was drawn as is
+    /// `image_cache_mb`, and a page of a *document* is `document_cache_mb` whatever it is drawn
+    /// as — a slide's PNG and a workbook's picture included.
+    pub image_disk_cache_mb: u32,
     /// Which engine draws an Office document's page, which is the tray's
     /// `Engine → Select Engine → Office` setting.
     pub office_engine: OfficeEngine,
@@ -1495,6 +1536,7 @@ impl Default for AppConfig {
             design_preview_enabled: true,
             vector_preview_enabled: true,
             document_cache_mb: DEFAULT_DOCUMENT_CACHE_MB,
+            image_disk_cache_mb: DEFAULT_IMAGE_DISK_CACHE_MB,
             office_engine: DEFAULT_OFFICE_ENGINE,
             office_engine_idle: EngineIdle::Seconds(DEFAULT_OFFICE_ENGINE_IDLE_SECS),
             webview_idle: EngineIdle::Seconds(DEFAULT_WEBVIEW_IDLE_SECS),
@@ -1621,6 +1663,7 @@ const SETTING_GROUPS: &[(&str, &[&str])] = &[
             "decode_budget_gb",
             "document_cache_mb",
             "image_cache_mb",
+            "image_disk_cache_mb",
             "tick_ms",
         ],
     ),
@@ -2244,6 +2287,11 @@ impl AppConfig {
         );
         ini.set(
             CONFIG_SECTION,
+            "image_disk_cache_mb",
+            Some(sanitize_image_disk_cache_mb(self.image_disk_cache_mb).to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
             "office_engine",
             Some(self.office_engine.as_str().to_string()),
         );
@@ -2657,6 +2705,14 @@ impl AppConfig {
                 .max();
             if let Some(value) = older {
                 self.document_cache_mb = value;
+            }
+        }
+        // The budget of the folder the image converter's developed pictures are kept in, which is
+        // a cache of its own and not the one above: what it holds are pictures, and what the
+        // documents' budget holds are pages — see `document_cache`.
+        if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "image_disk_cache_mb") {
+            if let Ok(value) = u32::try_from(value) {
+                self.image_disk_cache_mb = sanitize_image_disk_cache_mb(value);
             }
         }
         if let Some(value) = ini.get(CONFIG_SECTION, "office_engine") {
