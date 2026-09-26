@@ -16,6 +16,7 @@
 
 ### Fixed
 
+- **A sound no longer goes on playing after the pointer leaves its file.** Sounds played by the media engine kept looping with their card gone; they are ended with the preview now, as sounds played by FFmpeg already were.
 - **Sounds played by the media engine now play at all.** The name the engine was handed to resolve a file by was the Shell's verbatim path — `\\?\C:\…` — and a verbatim path is not a URL: the engine refused it, and the refusal arrives on its notify callback *after* `Play` has already answered, so what a hover got was the card it was owed with a clock that never moved and nothing audible, with nothing on this side able to say why. Every sound the native engine plays was that way; the ones FFmpeg plays were not, because a command line takes a verbatim path happily — which is what made it look like a bug about formats rather than about the form of a path. The stream is still opened on the verbatim path, and only the name handed to the engine beside it is the plain form now. A video the engine plays on a machine without FFmpeg was refused the same way.
 
 ### Changed
