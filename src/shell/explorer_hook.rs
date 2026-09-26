@@ -3330,10 +3330,12 @@ fn is_explorer_navigation_shortcut_key(key_vk: i32, alt_down: bool, ctrl_down: b
 
 /// Everything one poll of the keyboard says about navigation.
 ///
-/// `active` is true while a navigation key is held or was pressed since the previous poll,
-/// and `pressed` is the fresh press transition alone: a held key keeps reporting `active`
-/// forever, so a folder change uses `pressed` to tell a new key press apart from state left
-/// over from the navigation that opened the folder (see `keyboard_navigation_press_seq`).
+/// `active` is true while a navigation key — or one of the keys a file name is typed
+/// with, which is what Explorer's own type-ahead answers — is held or was pressed since
+/// the previous poll, and `pressed` is the fresh press transition alone: a held key keeps
+/// reporting `active` forever, so a folder change uses `pressed` to tell a new key press
+/// apart from state left over from the navigation that opened the folder (see
+/// `keyboard_navigation_press_seq`).
 ///
 /// `shortcut` is Explorer's own navigation being *asked* for — a Backspace, an arrow under
 /// Alt, a Ctrl+T — which is input the app acts on rather than state it waits out.
@@ -3344,7 +3346,23 @@ struct NavigationInput {
     shortcut: bool,
 }
 
-/// The navigation keys and the shortcuts made of them, read in one pass.
+/// The keys a file name is typed with: the letters and the digits, the numpad's own among
+/// them. Explorer answers a name being typed with its type-ahead, which moves the selection
+/// to the item the name matches — an item the keyboard is on changing with no navigation key
+/// touched — and these are the keys that say it is happening (see `navigation_input`).
+///
+/// The codes are the keys rather than the characters, so a name typed on a layout that is
+/// not this one is read as the same keys: what has to be noticed is that the keyboard has
+/// moved the item, and not what the name spells. They are read only where neither Ctrl nor
+/// Alt is held — a letter under one of those is a command, and a command is not a name —
+/// which is what keeps the press bit of `C` where it belongs: the text preview's own Ctrl+C
+/// reads that key for itself, and a press bit is consumed by whoever reads it first.
+fn type_ahead_keys() -> impl Iterator<Item = i32> {
+    (0x30..=0x39).chain(0x60..=0x69).chain(0x41..=0x5a)
+}
+
+/// The navigation keys, the keys a file name is typed with, and the shortcuts made of
+/// them, read in one pass.
 ///
 /// One pass because the keys overlap: the arrows are navigation keys *and* half of a
 /// shortcut, and the press bit `GetAsyncKeyState` reports is consumed by whoever reads a key
@@ -3354,13 +3372,24 @@ struct NavigationInput {
 /// the shortcut asks its question of the same reading: whether the key is *down*, which is
 /// what the second read would have found.
 ///
-/// The two keys that are not navigation keys are read whatever the modifiers are, and that
-/// is not an oversight. A Backspace navigates with no modifier at all, so gating it on a
-/// modifier would lose the shortcut outright; and a `T` typed anywhere on the machine sets
-/// its own press bit, so gating *that* read on Ctrl being held would leave the bit standing
-/// until Ctrl was next pressed — and a Ctrl pressed for something else would then read as a
-/// Ctrl+T that opens a tab. What leaving a press bit standing costs is the read that
-/// consumes it, which is why both are read every tick.
+/// The keys a name is typed with are read with them, and they are not navigation keys at
+/// all: Explorer answers a name being typed with its own type-ahead, which moves the
+/// selection — and with it the item the keyboard is on — with none of the keys above
+/// touched. A preview that did not read them would stay on the item the keyboard came from,
+/// because the focus is only probed for a moment after input
+/// (`should_probe_keyboard_focus`) and typing would never open that moment again. They open
+/// it as a navigation key does, and their fresh press is the same fresh press: what the
+/// typing selected is the user's own choice and must not be swallowed as a baseline. They
+/// are read only where neither Ctrl nor Alt is held, so a command is not read as a name and
+/// the keys a command is made of are left to whoever reads them (see `type_ahead_keys`).
+///
+/// The two keys that make a shortcut and are not navigation keys are read whatever the
+/// modifiers are, and that is not an oversight. A Backspace navigates with no modifier at
+/// all, so gating it on a modifier would lose the shortcut outright; and a `T` typed
+/// anywhere on the machine sets its own press bit, so gating *that* read on Ctrl being held
+/// would leave the bit standing until Ctrl was next pressed — and a Ctrl pressed for
+/// something else would then read as a Ctrl+T that opens a tab. What leaving a press bit
+/// standing costs is the read that consumes it, which is why both are read every tick.
 fn navigation_input() -> NavigationInput {
     let alt_down = is_key_down(VK_MENU_CODE);
     let ctrl_down = is_key_down(VK_CONTROL_CODE);
@@ -3394,6 +3423,19 @@ fn navigation_input() -> NavigationInput {
             && is_explorer_navigation_shortcut_key(key_vk, alt_down, ctrl_down)
         {
             input.shortcut = true;
+        }
+    }
+
+    if !ctrl_down && !alt_down {
+        for key_vk in type_ahead_keys() {
+            let state = unsafe { GetAsyncKeyState(key_vk) as u16 };
+
+            if is_pressed_or_down_state(state) {
+                input.active = true;
+            }
+            if (state & 0x0001) != 0 {
+                input.pressed = true;
+            }
         }
     }
 
