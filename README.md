@@ -220,7 +220,7 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
   - **Font Size** — `400%` at the top down to `70%` at the bottom.
   - **Markdown** — Rendered or Source.
 - **Timing**
-  - **Prioritize Keyboard** — Off by default. When on, the file under a pointer that has not been moved does not preview of its own while the keyboard is driving Explorer, so pressing a key onto a file with no preview of its own behaves like pressing one onto a file that has a preview. The pointer takes the screen back when it is moved, when the wheel is turned, or when a folder change hands it over.
+  - **Prioritize Keyboard** — On by default. The file under a pointer that has not been moved does not preview of its own while the keyboard is driving Explorer, so pressing a key onto a file with no preview of its own behaves like pressing one onto a file that has a preview. The pointer takes the screen back when it is moved, when the wheel is turned, or when a folder change hands it over. Off, the pointer's own hover always wins.
   - **Trigger Key (Alt)** — The key is named in the item.
     - **Enable Trigger Key** — Whether the key is watched.
     - **Hold to Disable Preview** / **Hold to Enable Preview** — What holding the key does.
@@ -300,7 +300,7 @@ theme=light
 
 ; Timing
 hover_delay_ms=0
-prioritize_keyboard=false
+prioritize_keyboard=true
 same_file_rehover_delay_ms=200
 settling_delay_ms=0
 trigger_key=alt

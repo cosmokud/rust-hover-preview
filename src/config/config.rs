@@ -1275,9 +1275,10 @@ pub struct AppConfig {
     /// been moved since a key press does not preview of its own — a key pressed onto an
     /// item with no preview to give reads exactly as one pressed onto an item that has a
     /// preview — until the pointer takes its turn back with a move or a wheel, or a
-    /// folder change hands it over. Off, where the app starts: the pointer's own hover
-    /// raises a preview whenever a file is under it, whatever the keyboard is doing (see
-    /// `explorer_hook`).
+    /// folder change hands it over. It is on where the app starts; switched off, the
+    /// pointer's own hover raises a preview whenever a file is under it, whatever the
+    /// keyboard is doing, and a key pressed onto an item with no preview to give leaves
+    /// that hover standing (see `explorer_hook`).
     pub prioritize_keyboard: bool,
     /// How often the app looks at the pointer's world while Explorer has focus, in
     /// milliseconds (see `DEFAULT_TICK_MS`).
@@ -1638,7 +1639,7 @@ impl Default for AppConfig {
             avoid_mode: DEFAULT_AVOID_MODE,
             same_file_rehover_delay_ms: DEFAULT_SAME_FILE_REHOVER_DELAY_MS,
             settling_delay_ms: DEFAULT_SETTLING_DELAY_MS,
-            prioritize_keyboard: false,
+            prioritize_keyboard: true,
             tick_ms: DEFAULT_TICK_MS,
             spinner_delay_ms: DEFAULT_SPINNER_DELAY_MS,
             webp_playback_fps: DEFAULT_WEBP_PLAYBACK_FPS,
