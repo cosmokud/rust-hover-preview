@@ -132,15 +132,30 @@ pub enum Content {
 /// hover. `Content::Unknown`, where that is the answer, leaves the kind to the list the
 /// name is written in.
 pub fn of(path: &Path) -> Content {
-    let key = crate::formats::head::key(path);
+    answered(crate::formats::head::key(path), path, None)
+}
 
+/// The same for a caller that has already read the file's own entry: the answer is held under
+/// the version that entry names, and the head is read from that entry as well, so a hover that
+/// has asked a file's own claim is not asking the volume for the same metadata twice (see
+/// `crate::formats::head::Facts`).
+pub fn of_with_facts(path: &Path, facts: &crate::formats::head::Facts) -> Content {
+    answered(facts.key().clone(), path, Some(facts))
+}
+
+/// The kind a file's content belongs to, held under the key it was read at.
+fn answered(
+    key: crate::formats::head::Key,
+    path: &Path,
+    facts: Option<&crate::formats::head::Facts>,
+) -> Content {
     if let Ok(answers) = ANSWERS.lock() {
         if let Some(answer) = answers.get(&key) {
             return *answer;
         }
     }
 
-    let answer = read(path);
+    let answer = read(path, facts);
 
     if let Ok(mut answers) = ANSWERS.lock() {
         if answers.len() >= ANSWERS_MAX_ENTRIES {
@@ -158,13 +173,13 @@ pub fn of(path: &Path) -> Content {
 /// formats every tool agrees on and then through the ones an engine here reads that no
 /// such table carries, and the name the file is under last, for the formats whose own head
 /// is nothing either table knows — see [`KIND_BY_NAME`] for what is in that one.
-fn read(path: &Path) -> Content {
+fn read(path: &Path, facts: Option<&crate::formats::head::Facts>) -> Content {
     // The front of the file first, and the kind its own form settles by itself: the bytes
     // at the front of a picture are a picture's, whatever the file is called, and nothing
     // further is read of one. A front that settles nothing — a container a camera raw is
     // written in, a file whose signature is further in, a file whose form says nothing at
     // all — is the front the whole window is read for.
-    if let Some(head) = crate::formats::head::of(path) {
+    if let Some(head) = head_of(path, facts) {
         if let Some(names) = head.front() {
             if !head
                 .nature()
@@ -181,7 +196,7 @@ fn read(path: &Path) -> Content {
         }
     }
 
-    let Some(head) = crate::formats::head::full(path) else {
+    let Some(head) = head_full(path, facts) else {
         return Content::Unknown;
     };
     let probe = head.bytes();
@@ -200,6 +215,29 @@ fn read(path: &Path) -> Content {
     crate::formats::text_formats::lookup_extension(path)
         .and_then(|extension| kind_by_name(&extension, probe))
         .unwrap_or(Content::Unknown)
+}
+
+/// The front of a file's head, read from the entry its caller already has where it has one
+/// (see `crate::formats::head::Facts`).
+fn head_of(
+    path: &Path,
+    facts: Option<&crate::formats::head::Facts>,
+) -> Option<std::sync::Arc<crate::formats::head::Head>> {
+    match facts {
+        Some(facts) => crate::formats::head::of_with_facts(path, facts),
+        None => crate::formats::head::of(path),
+    }
+}
+
+/// The same for the whole window the tables are asked about.
+fn head_full(
+    path: &Path,
+    facts: Option<&crate::formats::head::Facts>,
+) -> Option<std::sync::Arc<crate::formats::head::Head>> {
+    match facts {
+        Some(facts) => crate::formats::head::full_with_facts(path, facts),
+        None => crate::formats::head::full(path),
+    }
 }
 
 /// What the file's own bytes say it is: the names the format is known by to the lists, or
