@@ -25,6 +25,7 @@
 //! afterwards. The app ends itself as it hands over, so the copy the installer
 //! has to terminate is one that is already leaving.
 
+use crate::app::dialogs;
 use crate::RUNNING;
 use once_cell::sync::Lazy;
 use std::ffi::c_void;
@@ -35,7 +36,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use windows::core::{w, PCWSTR};
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+use windows::Win32::Foundation::HWND;
 use windows::Win32::Networking::WinHttp::{
     WinHttpCloseHandle, WinHttpConnect, WinHttpOpen, WinHttpOpenRequest, WinHttpQueryDataAvailable,
     WinHttpQueryHeaders, WinHttpReadData, WinHttpReceiveResponse, WinHttpSendRequest,
@@ -46,9 +47,8 @@ use windows::Win32::Networking::WinHttp::{
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, GetDlgItem, MessageBoxW, SetWindowTextW, SetWindowsHookExW,
-    UnhookWindowsHookEx, HCBT_ACTIVATE, IDNO, IDYES, MB_ICONINFORMATION, MB_ICONWARNING, MB_OK,
-    MB_SETFOREGROUND, MB_YESNOCANCEL, SW_SHOWNORMAL, WH_CBT,
+    MessageBoxW, SetWindowsHookExW, UnhookWindowsHookEx, IDNO, IDYES, MB_ICONINFORMATION,
+    MB_ICONWARNING, MB_OK, MB_SETFOREGROUND, MB_YESNOCANCEL, SW_SHOWNORMAL, WH_CBT,
 };
 
 /// Where this app's releases are published, and the two files a check asks for.
@@ -114,11 +114,6 @@ static LAST_CHECK: Lazy<Mutex<Option<Instant>>> = Lazy::new(|| Mutex::new(None))
 /// does not start two of them.
 static CHECKING: AtomicBool = AtomicBool::new(false);
 
-/// Whether the confirmation is on screen. The tray asks before it opens its
-/// menu: the dialog is not modal to the menu, so a menu opened over it would be
-/// a second way into the same question.
-static CONFIRMING: AtomicBool = AtomicBool::new(false);
-
 /// Ask for a check, without waiting for one. The app's own start is one caller:
 /// a run that has just started has asked nothing, and the answer is worth having
 /// before anyone opens the menu for it. The tray menu is the other: an opening
@@ -139,11 +134,6 @@ pub(crate) fn request_check() {
 /// from, and `None` where there is nothing to say.
 pub(crate) fn available() -> Option<String> {
     OFFER.lock().ok().and_then(|offer| offer.clone())
-}
-
-/// Whether the update is being asked about right now.
-pub(crate) fn is_confirming() -> bool {
-    CONFIRMING.load(Ordering::SeqCst)
 }
 
 /// Put the update on, once the user has said so — which is the `Auto` answer and
@@ -206,8 +196,8 @@ pub(crate) enum Answer {
 /// click it follows may end the app: what a user is agreeing to with `Auto` is an
 /// update that puts itself on, and a window that comes back as the new version,
 /// while `Manual` is the release page in their browser and `Cancel` is a click
-/// that does nothing. It is the first of the app's two dialogs, and the other is
-/// only ever reached past `Auto`.
+/// that does nothing. The app's other dialog, the one about a download that
+/// failed, is only ever reached past `Auto`.
 ///
 /// The dialog is given no owner, and is set to the foreground, for the same
 /// reason: the one window this app owns is the tray's, which is never shown and
@@ -215,7 +205,7 @@ pub(crate) enum Answer {
 ///
 /// The question is asked with a message box — the platform's own dialog for one —
 /// which carries the three buttons this question needs but names two of them for
-/// a question this app is not asking; see `name_buttons` for what is done about
+/// a question this app is not asking; see `dialogs::hook` for what is done about
 /// that. A click with nothing on offer is answered `Cancel` without a dialog at
 /// all, which is the same click that does nothing.
 pub(crate) fn ask() -> Answer {
@@ -230,9 +220,11 @@ pub(crate) fn ask() -> Answer {
          Manual: Open the release page in your browser."
     ));
 
-    CONFIRMING.store(true, Ordering::SeqCst);
+    dialogs::set_button_names("Auto", "Manual");
+    dialogs::begin();
 
-    let hook = unsafe { SetWindowsHookExW(WH_CBT, Some(name_buttons), None, GetCurrentThreadId()) };
+    let hook =
+        unsafe { SetWindowsHookExW(WH_CBT, Some(dialogs::hook), None, GetCurrentThreadId()) };
 
     let answer = unsafe {
         MessageBoxW(
@@ -249,7 +241,7 @@ pub(crate) fn ask() -> Answer {
         }
     }
 
-    CONFIRMING.store(false, Ordering::SeqCst);
+    dialogs::end();
 
     if answer == IDYES {
         Answer::Auto
@@ -260,37 +252,10 @@ pub(crate) fn ask() -> Answer {
     }
 }
 
-/// Name the update dialog's buttons as it is created. `Yes` and `No` are the
-/// platform's names for a question this app is not asking, and the answers it
-/// does ask for are `Auto`, `Manual` and `Cancel` — of which the message box
-/// already carries the last, so the two it names are the two renamed.
-///
-/// The hook belongs to one thread, the one asking, and its life is one dialog:
-/// the message box is created by the thread that calls for it, so what it names
-/// is a window of this process's own, and no other process can meet it or be
-/// reached by it. `HCBT_ACTIVATE` is the moment the dialog is whole — every
-/// button of it exists by the time it is about to be shown — and a window that is
-/// not this dialog has no button under these ids, which is how the two lookups
-/// answer nothing and it is left exactly as it is.
-unsafe extern "system" fn name_buttons(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    if code == HCBT_ACTIVATE as i32 {
-        let dialog = HWND(wparam.0 as *mut c_void);
-
-        for (id, label) in [(IDYES, "Auto"), (IDNO, "Manual")] {
-            if let Ok(button) = GetDlgItem(dialog, id.0) {
-                let text = wide(label);
-                let _ = SetWindowTextW(button, PCWSTR(text.as_ptr()));
-            }
-        }
-    }
-
-    CallNextHookEx(None, code, wparam, lparam)
-}
-
 /// What a click that asked for the update and could not have it is told. It is
-/// the app's second dialog and its only one about something going wrong: without
-/// it, a download that failed would be a click that did nothing, and the row it
-/// was clicked on is still there to be clicked again.
+/// the app's only dialog about something going wrong: without it, a download that
+/// failed would be a click that did nothing, and the row it was clicked on is
+/// still there to be clicked again.
 fn download_failed(version: &str) {
     let caption = wide("Rust Hover Preview");
     let text = wide(&format!(

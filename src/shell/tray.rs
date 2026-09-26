@@ -1,4 +1,4 @@
-use crate::app::updates;
+use crate::app::{dialogs, updates};
 use crate::config::config::{
     sanitize_decode_budget_gb, sanitize_document_cache_mb, sanitize_image_cache_mb,
     sanitize_image_disk_cache_mb, sanitize_text_font_scale_percent, sanitize_tick_ms, AvoidMode,
@@ -28,8 +28,8 @@ use once_cell::sync::Lazy;
 use std::os::windows::ffi::OsStrExt;
 use std::sync::atomic::Ordering;
 use std::sync::Mutex;
-use windows::core::{w, PCWSTR};
-use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
+use windows::core::{w, PCWSTR, PWSTR};
+use windows::Win32::Foundation::{BOOL, HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Shell::{
     ShellExecuteW, Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE,
@@ -37,10 +37,11 @@ use windows::Win32::UI::Shell::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CheckMenuRadioItem, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu,
-    DispatchMessageW, GetCursorPos, GetMessageW, LoadImageW, PostQuitMessage, RegisterClassExW,
-    RegisterWindowMessageW, SetForegroundWindow, TrackPopupMenu, TranslateMessage, CS_HREDRAW,
-    CS_VREDRAW, HICON, HMENU, IMAGE_ICON, LR_DEFAULTSIZE, LR_SHARED, MENU_ITEM_FLAGS, MF_BYCOMMAND,
-    MF_CHECKED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MSG,
+    DispatchMessageW, GetCursorPos, GetMenuItemCount, GetMessageW, InsertMenuItemW, LoadImageW,
+    PostQuitMessage, RegisterClassExW, RegisterWindowMessageW, SetForegroundWindow, TrackPopupMenu,
+    TranslateMessage, CS_HREDRAW, CS_VREDRAW, HICON, HMENU, IMAGE_ICON, LR_DEFAULTSIZE, LR_SHARED,
+    MENUITEMINFOW, MENU_ITEM_FLAGS, MFT_STRING, MF_BYCOMMAND, MF_CHECKED, MF_GRAYED, MF_POPUP,
+    MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MIIM_ID, MIIM_STRING, MIIM_SUBMENU, MSG,
     PBT_APMRESUMEAUTOMATIC, PBT_APMRESUMESUSPEND, SW_SHOWNORMAL, TPM_BOTTOMALIGN, TPM_LEFTALIGN,
     WM_COMMAND, WM_DESTROY, WM_LBUTTONUP, WM_POWERBROADCAST, WM_RBUTTONUP, WM_USER, WNDCLASSEXW,
     WS_EX_TOOLWINDOW, WS_POPUP,
@@ -156,6 +157,14 @@ const ID_TRAY_TICK_BASE: u16 = 1500;
 /// shown with nothing checked rather than rounded to the nearest.
 const TICK_CHOICES_MS: [u64; 5] = [15, 31, 47, 63, 78];
 const ID_TRAY_OPEN_CONFIG: u16 = 1040;
+/// The two rows inside the `Config.ini` submenu, beside the one that opens the file: the
+/// first puts every setting back at what this build recommends and leaves the extension
+/// lists alone, the second puts the lists back and leaves every other setting alone.
+///
+/// They sit above every range the submenus share — the highest command in use is `1514` —
+/// so neither can be read as a click on one of those.
+const ID_TRAY_RESET_SETTINGS: u16 = 1520;
+const ID_TRAY_RESET_LISTS: u16 = 1521;
 /// The row above `Run at Startup`, which is in the menu only while a newer release is
 /// waiting: it puts the installer `updates` fetched on, and the app ends itself as the
 /// installer takes over rather than being the copy that has to be terminated.
@@ -397,10 +406,10 @@ unsafe extern "system" fn tray_window_proc(
         }
         WM_TRAYICON => {
             let event = lparam.0 as u32;
-            // While the update's confirmation is on screen the tray answers nothing: a menu
-            // opened over it would be a second way into the same question, and the dialog —
+            // While one of the app's dialogs is on screen the tray answers nothing: a menu
+            // opened over it would be a second way into the same question, and a dialog —
             // which owns no window of this app's — is not modal to anything.
-            if (event == WM_RBUTTONUP || event == WM_LBUTTONUP) && !updates::is_confirming() {
+            if (event == WM_RBUTTONUP || event == WM_LBUTTONUP) && !dialogs::is_confirming() {
                 show_context_menu(hwnd);
             }
             LRESULT(0)
@@ -518,6 +527,8 @@ unsafe extern "system" fn tray_window_proc(
                     set_tick_ms(cmd - ID_TRAY_TICK_BASE)
                 }
                 ID_TRAY_OPEN_CONFIG => open_config_file(),
+                ID_TRAY_RESET_SETTINGS => reset_settings_from_tray(),
+                ID_TRAY_RESET_LISTS => reset_lists_from_tray(),
                 // How large a picture is drawn, by the position its item was listed at.
                 cmd if (ID_TRAY_SCALE_BASE
                     ..ID_TRAY_SCALE_BASE + BITMAP_SCALE_CHOICES.len() as u16)
@@ -1711,17 +1722,80 @@ unsafe fn show_context_menu(hwnd: HWND) {
         };
     let _ = AppendMenuW(menu, flags, ID_TRAY_STARTUP as usize, w!("Run at Startup"));
 
-    // Add "Config.ini", the label carrying the version that is running
+    // Add "Config.ini", the label carrying the version that is running. It is a submenu now,
+    // with the two resets under it and the row that opens the file above them, and it is put
+    // in with `InsertMenuItemW` rather than `AppendMenuW` for the sake of that row: an item
+    // of a menu can carry a command and a submenu at once, and the version label is the row a
+    // user looks for to open `config.ini` by hand, so it keeps the command it always had.
+    // `AppendMenuW` gives a submenu's item the handle for an id instead, which is a command
+    // no one can act on. `Open Config.ini` inside is the same command, so the file is
+    // reachable whichever way a click on an item that opens a submenu is answered.
+    let config_menu = CreatePopupMenu().unwrap();
+    let _ = AppendMenuW(
+        config_menu,
+        MF_STRING,
+        ID_TRAY_OPEN_CONFIG as usize,
+        w!("Open Config.ini"),
+    );
+    let _ = AppendMenuW(config_menu, MF_SEPARATOR, 0, PCWSTR::null());
+
+    // What each of the two would change, which is also the answer to whether it is offered:
+    // a reset with nothing behind it is greyed rather than shown as a click that would do
+    // nothing, and the question it asks is the difference counted here.
+    let (settings_apart, lists_apart) = CONFIG
+        .lock()
+        .map(|config| {
+            (
+                config.settings_apart_from_recommended(),
+                config.lists_apart_from_built_in(),
+            )
+        })
+        .unwrap_or_default();
+
+    let settings_flags = if settings_apart.is_empty() {
+        MF_STRING | MF_GRAYED
+    } else {
+        MF_STRING
+    };
+    let _ = AppendMenuW(
+        config_menu,
+        settings_flags,
+        ID_TRAY_RESET_SETTINGS as usize,
+        w!("Reset to Recommended Settings..."),
+    );
+
+    let lists_flags = if lists_apart.is_empty() {
+        MF_STRING | MF_GRAYED
+    } else {
+        MF_STRING
+    };
+    let _ = AppendMenuW(
+        config_menu,
+        lists_flags,
+        ID_TRAY_RESET_LISTS as usize,
+        w!("Reset Extension Lists..."),
+    );
+
     let config_label = format!("Config.ini (v{})", env!("CARGO_PKG_VERSION"));
     let config_label_wide: Vec<u16> = config_label
         .encode_utf16()
         .chain(std::iter::once(0))
         .collect();
-    let _ = AppendMenuW(
+    let config_item = MENUITEMINFOW {
+        cbSize: std::mem::size_of::<MENUITEMINFOW>() as u32,
+        fMask: MIIM_ID | MIIM_SUBMENU | MIIM_STRING,
+        fType: MFT_STRING,
+        wID: ID_TRAY_OPEN_CONFIG as u32,
+        hSubMenu: config_menu,
+        dwTypeData: PWSTR(config_label_wide.as_ptr() as *mut u16),
+        cch: 0,
+        ..Default::default()
+    };
+    let _ = InsertMenuItemW(
         menu,
-        MF_STRING,
-        ID_TRAY_OPEN_CONFIG as usize,
-        PCWSTR(config_label_wide.as_ptr()),
+        GetMenuItemCount(menu).max(0) as u32,
+        BOOL(1),
+        &config_item,
     );
 
     // Add Exit
@@ -1925,6 +1999,81 @@ fn toggle_preview_type(kind: PreviewType) {
     }
 
     refresh_preview_types();
+}
+
+/// Put every setting back at what this build recommends, with the extension lists left
+/// exactly as they are.
+///
+/// The reset itself is the configuration's own (`reset_to_recommended`), and everything
+/// after it is the rest of the app being told what a reset means: it is every tray toggle
+/// at once, so a setting whose truth lives somewhere other than the file has to be put
+/// back on the machine as well, and what a setting was measuring has to be asked again.
+/// The question comes first and names what would change, which is the same difference the
+/// row is offered on.
+fn reset_settings_from_tray() {
+    let changes = CONFIG
+        .lock()
+        .map(|config| config.settings_apart_from_recommended())
+        .unwrap_or_default();
+
+    if !dialogs::confirm_reset_settings(&changes) {
+        return;
+    }
+
+    let run_at_startup = {
+        let Ok(mut config) = CONFIG.lock() else {
+            return;
+        };
+
+        config.reset_to_recommended();
+        config.save();
+        config.run_at_startup
+    };
+
+    // The entry is the registry's and the configuration is the record of the choice, the
+    // same way round as the toggle beside it: a reset that turns it back on writes the
+    // entry, or the file and the machine would disagree about what starts this app.
+    if run_at_startup != startup::is_startup_enabled() {
+        if run_at_startup {
+            startup::enable_startup();
+        } else {
+            startup::disable_startup();
+        }
+    }
+
+    // What a reset can turn off as easily as on, and the one setting whose engines are
+    // ended from here when it does — the same call its own toggle makes.
+    if !PreviewType::Document.enabled() {
+        office_render::stop_engines();
+    }
+
+    refresh_preview_types();
+    refresh_preview();
+}
+
+/// Put every extension list back at the built-in one, with every other setting left alone.
+///
+/// It is the same question over the other half of the configuration. What a kind of
+/// preview matches a file against is its list, so what is on screen is asked whether it
+/// still measures — and nothing outside the file reads these, which is why this one has no
+/// registry to write and no engine to let go.
+fn reset_lists_from_tray() {
+    let sections = CONFIG
+        .lock()
+        .map(|config| config.lists_apart_from_built_in())
+        .unwrap_or_default();
+
+    if !dialogs::confirm_reset_lists(&sections) {
+        return;
+    }
+
+    if let Ok(mut config) = CONFIG.lock() {
+        config.reset_extension_lists();
+        config.save();
+    }
+
+    refresh_preview_types();
+    refresh_preview();
 }
 
 /// One `Timing` submenu: an item per delay the setting offers, in the order the table

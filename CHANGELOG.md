@@ -5,6 +5,9 @@
 ### Added
 
 - **`Cache → Image (Disk)`**: a budget for the pictures the image converter develops. Each is kept as a file under `%TEMP%\rust-hover-preview\image` (`image_disk_cache_mb`, `512` by default), so hovering a camera raw a second time — or again after a restart — is a read rather than another conversion. `0` keeps nothing between hovers.
+- **`Reset to Recommended Settings`** and **`Reset Extension Lists`**: two rows inside the tray's `Config.ini` item, each asking first and each offered only while there is something to put back. The first returns every setting to what this build recommends and leaves the extension lists alone; the second returns the lists and leaves every other setting alone.
+- The installer asks the same two questions on a page of its own, with both boxes clear and neither one shown to a silent install — so an update taken with `Auto` changes nothing. What a box asks for is applied the next time the app starts.
+
 
 ### Fixed
 

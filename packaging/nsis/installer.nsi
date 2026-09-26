@@ -2,11 +2,16 @@
 ; `[package.metadata.packager.nsis] template` in Cargo.toml. The placeholders
 ; in double braces are filled in by cargo-packager.
 ;
-; This is cargo-packager 0.11.8's own template with two differences:
+; This is cargo-packager 0.11.8's own template with three differences:
 ;   - there is no "Already Installed" page: a previous installation is removed
 ;     automatically, before anything is written, instead of being offered as a
 ;     choice;
-;   - a running copy of the app is terminated rather than prompted for.
+;   - a running copy of the app is terminated rather than prompted for;
+;   - a page of its own is shown after the shortcuts page, asking whether the
+;     app's settings are to be put back to the defaults this version recommends
+;     (see "Recommended settings page" below). It writes no configuration of its
+;     own: it leaves two files for the app to find, and the app is what puts the
+;     settings back.
 ; Upgrading cargo-packager means diffing this file against the upstream
 ; template at crates/packager/src/package/nsis/installer.nsi.
 
@@ -146,10 +151,29 @@ VIAddVersionKey "ProductVersion" "${VERSION}"
 Var AppStartMenuFolder
 !insertmacro MUI_PAGE_STARTMENU Application $AppStartMenuFolder
 
-; 6. Installation page
+; 6. Recommended settings page
+;
+; Two boxes, both clear, and nothing else asked: what is offered is a reset of the app's
+; own settings, and a reinstall is not a reason to want one. This installer writes no
+; configuration — a second writer of `config.ini` would carry the defaults of whenever the
+; installer was built, and an installation made that way would keep them for good — so what
+; a box does is leave a file beside that configuration, and the app reads it as it starts.
+;
+; The page is not shown to an unattended installer at all: an update put on by the app's
+; own `Auto` answer runs this installer silently, and must never change a setting.
+;
+; nsDialogs is not included here because MUI2 already brings it in — the uninstaller's own
+; checkbox below is built out of its constants.
+Var RecommendedSettingsCheckbox
+Var RecommendedListsCheckbox
+Var RecommendedSettingsState
+Var RecommendedListsState
+Page custom RecommendedShow RecommendedLeave
+
+; 7. Installation page
 !insertmacro MUI_PAGE_INSTFILES
 
-; 7. Finish page
+; 8. Finish page
 ;
 ; Don't auto jump to finish page after installation page,
 ; because the installation page has useful info that can be used debug any issues with the installer.
@@ -199,6 +223,17 @@ FunctionEnd
 {{#each language_files}}
   !include "{{this}}"
 {{/each}}
+
+; The words this installer's own page carries. Every other string it shows is an id one of
+; the language files above defines — `$(createDesktop)`, `$(deleteAppData)` — and these are
+; the page's own, so they are written here. A build that adds a language needs a line for it
+; here as much as it needs the language file above.
+LangString recommendedTitle ${LANG_ENGLISH} "Recommended settings"
+LangString recommendedSubtitle ${LANG_ENGLISH} "Put the app's settings back to this version's defaults"
+LangString recommendedIntro ${LANG_ENGLISH} "Put the app's settings back to the defaults this version recommends. A box left clear changes nothing."
+LangString recommendedSettings ${LANG_ENGLISH} "Reset to Recommended Settings"
+LangString recommendedLists ${LANG_ENGLISH} "Reset Extension Lists"
+LangString recommendedNote ${LANG_ENGLISH} "The first puts the settings back and leaves your extension lists alone. The second puts the lists back and leaves every other setting alone."
 
 !macro SetContext
   !if "${INSTALLMODE}" == "currentUser"
@@ -397,6 +432,26 @@ Section Install
       Call CreateStartMenuShortcut
   shortcuts_done:
 
+  ; What the recommended-settings page's boxes asked for, left where the app will find it:
+  ; the folder the app keeps its own configuration in. It is the path `appdata-paths` names
+  ; in the packaging metadata in Cargo.toml, written out here because it is not a file the
+  ; app ships — and it is the only place this installer writes anything about the app's
+  ; settings, which is why the boxes are files rather than a configuration of its own.
+  ;
+  ; A box left clear writes nothing, so a reinstall leaves the app's settings alone.
+  SetShellVarContext current
+  CreateDirectory "$APPDATA\rust-hover-preview"
+
+  ${If} $RecommendedSettingsState == 1
+    FileOpen $0 "$APPDATA\rust-hover-preview\reset-settings.marker" w
+    FileClose $0
+  ${EndIf}
+
+  ${If} $RecommendedListsState == 1
+    FileOpen $0 "$APPDATA\rust-hover-preview\reset-extensions.marker" w
+    FileClose $0
+  ${EndIf}
+
   ; Auto close this page for passive mode
   ${IfThen} $PassiveMode == 1 ${|} SetAutoClose true ${|}
 SectionEnd
@@ -562,6 +617,46 @@ FunctionEnd
 
 Function SkipIfPassive
   ${IfThen} $PassiveMode == 1  ${|} Abort ${|}
+FunctionEnd
+
+; The recommended-settings page: two boxes and nothing else, both clear. What they were set
+; to is read as the page is left, and the files they stand for are written once the
+; installation has gone through (see the end of the Install section).
+;
+; A custom page is skipped by aborting where it is built, which is where an unattended
+; installer leaves it: no page is ever shown to one, so an update put on silently cannot
+; change a setting.
+Function RecommendedShow
+  ${If} ${Silent}
+    Abort
+  ${EndIf}
+  ${IfThen} $PassiveMode == 1 ${|} Abort ${|}
+
+  !insertmacro MUI_HEADER_TEXT "$(recommendedTitle)" "$(recommendedSubtitle)"
+
+  nsDialogs::Create 1018
+  Pop $0
+  ${If} $0 == error
+    Abort
+  ${EndIf}
+
+  ${NSD_CreateLabel} 0 0 100% 20u "$(recommendedIntro)"
+  Pop $0
+
+  ${NSD_CreateCheckbox} 0 26u 100% 12u "$(recommendedSettings)"
+  Pop $RecommendedSettingsCheckbox
+  ${NSD_CreateCheckbox} 0 40u 100% 12u "$(recommendedLists)"
+  Pop $RecommendedListsCheckbox
+
+  ${NSD_CreateLabel} 0 60u 100% 24u "$(recommendedNote)"
+  Pop $0
+
+  nsDialogs::Show
+FunctionEnd
+
+Function RecommendedLeave
+  SendMessage $RecommendedSettingsCheckbox ${BM_GETCHECK} 0 0 $RecommendedSettingsState
+  SendMessage $RecommendedListsCheckbox ${BM_GETCHECK} 0 0 $RecommendedListsState
 FunctionEnd
 
 Function CreateDesktopShortcut

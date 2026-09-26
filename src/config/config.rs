@@ -1966,6 +1966,100 @@ fn headings_are_old(text: &str) -> bool {
     listed != written
 }
 
+/// Every extension list the configuration holds, moved as one piece.
+///
+/// The two resets are the reason it exists: one puts every setting back at what this build
+/// recommends and must leave the lists exactly as they are, the other puts the lists back and
+/// must leave everything else alone, and both are one move with this in between. A list added
+/// to `AppConfig` later belongs here too — a field this does not name is one the settings
+/// reset would reset along with the settings.
+struct ExtensionLists {
+    image: Vec<String>,
+    video: Vec<String>,
+    text: Vec<String>,
+    names: Vec<String>,
+    archive: Vec<String>,
+    office: Vec<String>,
+    font: Vec<String>,
+    design: Vec<String>,
+    libre: Vec<String>,
+    magick: Vec<String>,
+    peazip: Vec<String>,
+    calibre: Vec<String>,
+    ebook: Vec<String>,
+    vector: Vec<String>,
+}
+
+impl ExtensionLists {
+    /// The lists taken out of a configuration, which is left holding empty ones.
+    fn take(config: &mut AppConfig) -> Self {
+        Self {
+            image: std::mem::take(&mut config.image_extensions),
+            video: std::mem::take(&mut config.video_extensions),
+            text: std::mem::take(&mut config.text_extensions),
+            names: std::mem::take(&mut config.text_names),
+            archive: std::mem::take(&mut config.archive_extensions),
+            office: std::mem::take(&mut config.office_extensions),
+            font: std::mem::take(&mut config.font_extensions),
+            design: std::mem::take(&mut config.design_extensions),
+            libre: std::mem::take(&mut config.libre_extensions),
+            magick: std::mem::take(&mut config.magick_extensions),
+            peazip: std::mem::take(&mut config.peazip_extensions),
+            calibre: std::mem::take(&mut config.calibre_extensions),
+            ebook: std::mem::take(&mut config.ebook_extensions),
+            vector: std::mem::take(&mut config.vector_extensions),
+        }
+    }
+
+    /// Put them back, one field each.
+    fn put(self, config: &mut AppConfig) {
+        config.image_extensions = self.image;
+        config.video_extensions = self.video;
+        config.text_extensions = self.text;
+        config.text_names = self.names;
+        config.archive_extensions = self.archive;
+        config.office_extensions = self.office;
+        config.font_extensions = self.font;
+        config.design_extensions = self.design;
+        config.libre_extensions = self.libre;
+        config.magick_extensions = self.magick;
+        config.peazip_extensions = self.peazip;
+        config.calibre_extensions = self.calibre;
+        config.ebook_extensions = self.ebook;
+        config.vector_extensions = self.vector;
+    }
+
+    /// The lists a configuration that has just been made holds: the built-in ones.
+    fn built_in() -> Self {
+        Self::take(&mut AppConfig::default())
+    }
+}
+
+/// The two files the installer leaves behind for the app to find, taken as it starts.
+///
+/// The installer never writes `config.ini` — a second writer of that file would carry the
+/// defaults of whenever the installer was built, and an installation made that way would keep
+/// them for good (see the packaging metadata in `Cargo.toml`) — so a box on its page is a file
+/// beside `config.ini` instead, and the app is what reads it. Each is removed as it is read:
+/// what it asks for is applied once, and one left behind would be applied again on a later
+/// start, after the user had set something of their own.
+fn take_reset_markers(folder: &Path) -> (bool, bool) {
+    let settings = folder.join("reset-settings.marker");
+    let extensions = folder.join("reset-extensions.marker");
+
+    let reset_settings = settings.exists();
+    let reset_extensions = extensions.exists();
+
+    if reset_settings {
+        let _ = fs::remove_file(&settings);
+    }
+    if reset_extensions {
+        let _ = fs::remove_file(&extensions);
+    }
+
+    (reset_settings, reset_extensions)
+}
+
 impl AppConfig {
     /// The app's own folder under the roaming profile, holding `config.ini` and
     /// the `theme` folder beside it.
@@ -2042,6 +2136,25 @@ impl AppConfig {
             config.save();
         }
 
+        // What the installer left behind, if it left anything: the two boxes on its page are two
+        // files beside this one, and this is where they are read — after the file itself, so what
+        // they ask for is what the configuration ends up holding, and before it is handed out, so
+        // nothing is ever read out of a configuration that is about to be replaced.
+        if let Some(folder) = Self::folder() {
+            let (reset_settings, reset_extensions) = take_reset_markers(&folder);
+
+            if reset_settings || reset_extensions {
+                if reset_settings {
+                    config.reset_to_recommended();
+                }
+                if reset_extensions {
+                    config.reset_extension_lists();
+                }
+
+                config.save();
+            }
+        }
+
         config
     }
 
@@ -2082,6 +2195,83 @@ impl AppConfig {
 
             let _ = fs::write(&path, ordered_text(&self.to_ini()));
         }
+    }
+
+    /// Every setting back at what this build recommends, with the extension lists left exactly
+    /// as they are.
+    ///
+    /// What is recommended is what a configuration that has just been made holds (`Default`),
+    /// so this is the file a fresh installation would be given — written as values rather than
+    /// as a removal of the file, since a `config.ini` that is missing is a first run and all
+    /// that follows from one. `is_first_run` is not a setting and is carried across: a reset
+    /// asked for during a first run is still a first run.
+    pub fn reset_to_recommended(&mut self) {
+        let lists = ExtensionLists::take(self);
+        let is_first_run = self.is_first_run;
+
+        *self = Self::default();
+        self.is_first_run = is_first_run;
+        lists.put(self);
+    }
+
+    /// Every extension list back at the built-in one, with every other setting left alone.
+    pub fn reset_extension_lists(&mut self) {
+        ExtensionLists::built_in().put(self);
+    }
+
+    /// The settings that do not hold what this build recommends, as `(key, now, recommended)`.
+    ///
+    /// Both sides are read out of `to_ini`, so what is named is what the user would see change
+    /// in the file, under the key the file writes it as. The extension lists are not part of the
+    /// question — they are the other reset's business — and the answer is sorted by key, so the
+    /// dialog built out of it reads the same way every time.
+    pub fn settings_apart_from_recommended(&self) -> Vec<(String, String, String)> {
+        let recommended = Self::default().to_ini();
+        let mine = self.to_ini();
+        let mut apart = Vec::new();
+
+        let Some(keys) = recommended.get_map_ref().get(CONFIG_SECTION) else {
+            return apart;
+        };
+
+        for (key, wanted) in keys {
+            let now = mine.get(CONFIG_SECTION, key);
+
+            if now != *wanted {
+                apart.push((
+                    key.clone(),
+                    now.unwrap_or_default(),
+                    wanted.clone().unwrap_or_default(),
+                ));
+            }
+        }
+
+        apart.sort();
+        apart
+    }
+
+    /// The extension lists that are not the built-in ones, named by the section they are written
+    /// under — `text` once, though that section holds two lists (`extensions` and `names`).
+    pub fn lists_apart_from_built_in(&self) -> Vec<String> {
+        let built_in = Self::default().to_ini();
+        let mine = self.to_ini();
+        let mut apart = Vec::new();
+
+        for (section, keys) in mine.get_map_ref() {
+            if section == CONFIG_SECTION {
+                continue;
+            }
+
+            if keys
+                .keys()
+                .any(|key| mine.get(section, key) != built_in.get(section, key))
+            {
+                apart.push(section.clone());
+            }
+        }
+
+        apart.sort();
+        apart
     }
 
     /// The settings as the file holds them: every key this build writes, with the value it
@@ -4571,5 +4761,129 @@ something_new=1
         let config = read_file(&mut ini);
 
         assert_eq!(config.dds_background, DEFAULT_DDS_BACKGROUND);
+    }
+
+    /// The settings reset puts every setting back where this build starts it, and the lists
+    /// are not settings: what a user has made of one is theirs, so the lists are moved out of
+    /// the way and put back exactly as they were.
+    #[test]
+    fn the_settings_reset_leaves_the_extension_lists_alone() {
+        let mut config = AppConfig::default();
+
+        config.image_cache_mb = 16;
+        config.document_cache_mb = 2048;
+        config.preview_enabled = false;
+        config.image_extensions = sanitize_image_extensions("png,dng");
+        config.text_names.push("notes".to_string());
+
+        let image = config.image_extensions.clone();
+        let names = config.text_names.clone();
+
+        config.reset_to_recommended();
+
+        assert_eq!(
+            config.image_cache_mb, DEFAULT_IMAGE_CACHE_MB,
+            "the cache this release moved is the release's to move"
+        );
+        assert_eq!(config.document_cache_mb, DEFAULT_DOCUMENT_CACHE_MB);
+        assert!(config.preview_enabled);
+        assert_eq!(
+            config.image_extensions, image,
+            "and the lists stay the user's"
+        );
+        assert_eq!(config.text_names, names);
+    }
+
+    /// The lists reset is the other half and the whole of what it does: an edited list is the
+    /// built-in one again, and no setting moves.
+    #[test]
+    fn the_lists_reset_restores_the_built_in_lists_alone() {
+        let mut config = AppConfig::default();
+
+        config.image_cache_mb = 16;
+        config.image_extensions = sanitize_image_extensions("png,dng");
+        config.ebook_extensions = Vec::new();
+
+        config.reset_extension_lists();
+
+        assert_eq!(
+            config.image_extensions,
+            sanitize_image_extensions(DEFAULT_IMAGE_EXTENSIONS)
+        );
+        assert_eq!(
+            config.ebook_extensions,
+            sanitize_ebook_extensions(DEFAULT_EBOOK_EXTENSIONS),
+            "a list emptied by hand is a list this puts back"
+        );
+        assert_eq!(config.image_cache_mb, 16, "and nothing else was touched");
+    }
+
+    /// What the two reset rows are offered on, and what the question each of them asks is
+    /// written from: the difference between the configuration and the one this build
+    /// recommends, named by the keys the file writes it under.
+    #[test]
+    fn a_configuration_at_the_recommended_values_has_nothing_apart() {
+        let config = AppConfig::default();
+
+        assert!(config.settings_apart_from_recommended().is_empty());
+        assert!(config.lists_apart_from_built_in().is_empty());
+    }
+
+    #[test]
+    fn the_differences_are_named_by_the_keys_the_file_writes() {
+        let mut config = AppConfig::default();
+
+        config.image_cache_mb = 16;
+        config.image_extensions = sanitize_image_extensions("png,dng");
+
+        assert_eq!(
+            config.settings_apart_from_recommended(),
+            vec![(
+                "image_cache_mb".to_string(),
+                "16".to_string(),
+                DEFAULT_IMAGE_CACHE_MB.to_string(),
+            )]
+        );
+        assert_eq!(
+            config.lists_apart_from_built_in(),
+            vec!["image".to_string()],
+            "the section the edit sits under, and only that one"
+        );
+    }
+
+    /// A marker is answered once and gone with the answer: what it asks for is applied by the
+    /// load that finds it, so one left behind would be applied again on a later start, after
+    /// the user had set something of their own.
+    #[test]
+    fn a_reset_marker_is_taken_once_and_removed() {
+        let folder = std::env::temp_dir().join("rust-hover-preview-marker-test");
+
+        let _ = fs::remove_dir_all(&folder);
+        fs::create_dir_all(&folder).unwrap();
+
+        assert_eq!(
+            take_reset_markers(&folder),
+            (false, false),
+            "an installation that left nothing has nothing to apply"
+        );
+
+        fs::write(folder.join("reset-settings.marker"), b"").unwrap();
+
+        assert_eq!(take_reset_markers(&folder), (true, false));
+        assert!(
+            !folder.join("reset-settings.marker").exists(),
+            "and the marker went with the answer"
+        );
+        assert_eq!(
+            take_reset_markers(&folder),
+            (false, false),
+            "so the next start applies nothing"
+        );
+
+        fs::write(folder.join("reset-extensions.marker"), b"").unwrap();
+
+        assert_eq!(take_reset_markers(&folder), (false, true));
+
+        let _ = fs::remove_dir_all(&folder);
     }
 }
