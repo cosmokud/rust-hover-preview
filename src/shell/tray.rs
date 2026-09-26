@@ -36,13 +36,13 @@ use windows::Win32::UI::Shell::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CheckMenuRadioItem, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu,
-    DispatchMessageW, GetCursorPos, LoadImageW, PeekMessageW, PostQuitMessage, RegisterClassExW,
+    DispatchMessageW, GetCursorPos, GetMessageW, LoadImageW, PostQuitMessage, RegisterClassExW,
     RegisterWindowMessageW, SetForegroundWindow, TrackPopupMenu, TranslateMessage, CS_HREDRAW,
     CS_VREDRAW, HICON, HMENU, IMAGE_ICON, LR_DEFAULTSIZE, LR_SHARED, MENU_ITEM_FLAGS, MF_BYCOMMAND,
     MF_CHECKED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MSG,
-    PBT_APMRESUMEAUTOMATIC, PBT_APMRESUMESUSPEND, PM_REMOVE, SW_SHOWNORMAL, TPM_BOTTOMALIGN,
-    TPM_LEFTALIGN, WM_COMMAND, WM_DESTROY, WM_LBUTTONUP, WM_POWERBROADCAST, WM_RBUTTONUP, WM_USER,
-    WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_POPUP,
+    PBT_APMRESUMEAUTOMATIC, PBT_APMRESUMESUSPEND, SW_SHOWNORMAL, TPM_BOTTOMALIGN, TPM_LEFTALIGN,
+    WM_COMMAND, WM_DESTROY, WM_LBUTTONUP, WM_POWERBROADCAST, WM_RBUTTONUP, WM_USER, WNDCLASSEXW,
+    WS_EX_TOOLWINDOW, WS_POPUP,
 };
 
 const WM_TRAYICON: u32 = WM_USER + 1;
@@ -3240,18 +3240,28 @@ pub fn run_tray() {
             return;
         }
 
-        // Message loop
+        // Message loop.
+        //
+        // The loop blocks on the window's own messages rather than polling for them: a
+        // window's messages are queued whether or not anyone looks, so there is nothing a
+        // poll would find that a wait does not — and every wake this thread has is a
+        // message. The icon's own clicks, the menu's commands, Explorer restarting, the
+        // system coming back from sleep, and the quit the exit paths post are all of them,
+        // and a poll is a hundred wakeups a second spent finding none.
+        //
+        // Nothing else ends this loop, and nothing has to: the threads that follow it are
+        // signalled by the shutdown after it rather than by a flag looked at here.
         let mut msg = MSG::default();
         while RUNNING.load(Ordering::SeqCst) {
-            while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
-                if msg.message == windows::Win32::UI::WindowsAndMessaging::WM_QUIT {
-                    RUNNING.store(false, Ordering::SeqCst);
-                    break;
-                }
-                let _ = TranslateMessage(&msg);
-                DispatchMessageW(&msg);
+            // Zero is `WM_QUIT`, and −1 a failure that leaves the message empty: neither
+            // is a message to dispatch, and both mean the loop is over.
+            if GetMessageW(&mut msg, None, 0, 0).0 <= 0 {
+                RUNNING.store(false, Ordering::SeqCst);
+                break;
             }
-            std::thread::sleep(std::time::Duration::from_millis(10));
+
+            let _ = TranslateMessage(&msg);
+            DispatchMessageW(&msg);
         }
 
         // Cleanup

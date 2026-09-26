@@ -80,8 +80,8 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
 use windows::Win32::System::Ole::CF_UNICODETEXT;
 use windows::Win32::System::Threading::{
-    OpenProcess, QueryFullProcessImageNameW, TerminateProcess, PROCESS_NAME_WIN32,
-    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE,
+    CreateEventW, OpenProcess, QueryFullProcessImageNameW, SetEvent, TerminateProcess,
+    WaitForSingleObject, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE,
 };
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
@@ -5050,6 +5050,14 @@ unsafe fn try_apply_noactivate_style(pid: u32) -> bool {
 /// Set WS_EX_NOACTIVATE on a window belonging to the given process
 /// This prevents the window from stealing focus
 /// Uses a singleton monitor thread so repeated previews don't spawn extra workers.
+///
+/// The thread spends its time between players waiting on an event rather than polling: a
+/// window belongs to the player that is playing, and while none is, there is nothing to
+/// re-assert — so what the wait is for is the hand-over a new player makes (see
+/// `set_noactivate_for_process`), and a thread that woke every eighty milliseconds to find
+/// that nothing had changed is a thread this app does not need. A wait that is never
+/// signalled is not a lost wake-up either: the timeout it is given is the cadence the
+/// window is kept in step at, so a hand-over that raced the wait is caught by the next one.
 fn ensure_noactivate_monitor() {
     if NOACTIVATE_MONITOR_STARTED
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -5086,14 +5094,62 @@ fn ensure_noactivate_monitor() {
                 } else {
                     100
                 };
-                std::thread::sleep(Duration::from_millis(delay_ms));
+                wait_for_noactivate_wake(delay_ms);
             } else {
-                std::thread::sleep(Duration::from_millis(80));
+                // Nothing is playing: the wait is the player's own start, which is what
+                // signals this thread rather than a clock.
+                wait_for_noactivate_wake(NOACTIVATE_IDLE_WAIT_MS);
             }
         }
 
         NOACTIVATE_MONITOR_STARTED.store(false, Ordering::Release);
     });
+}
+
+/// How long the monitor thread waits while nothing is playing, which is a bound on how long
+/// it takes to notice the run ending rather than a cadence anything is kept in step at.
+const NOACTIVATE_IDLE_WAIT_MS: u64 = 500;
+
+/// The event the monitor thread waits on: signalling it is a player's window having been
+/// handed over (see `set_noactivate_for_process`). A handle that could not be created is the
+/// null one, and a wait on that fails at once — which leaves the thread polling at the
+/// timeout it was given, the way it did before there was an event at all.
+///
+/// It is kept as the number a handle is rather than as the handle, for the reason
+/// `VIDEO_HWND` is: a handle is a raw pointer, and what is shared across threads here is a
+/// number that the calls it is handed to take as a handle.
+static NOACTIVATE_WAKE: Lazy<isize> = Lazy::new(|| {
+    unsafe { CreateEventW(None, false, false, None) }
+        .map(|handle| handle.0 as isize)
+        .unwrap_or_default()
+});
+
+/// The wake event as the handle a Windows call takes.
+fn noactivate_wake_handle() -> HANDLE {
+    HANDLE(*NOACTIVATE_WAKE as *mut core::ffi::c_void)
+}
+
+/// Wait for a player's window to be handed over, or for `timeout_ms` to pass.
+fn wait_for_noactivate_wake(timeout_ms: u64) {
+    let handle = noactivate_wake_handle();
+    if handle.0.is_null() {
+        // An event that could not be created is not one to wait on: a failed wait returns
+        // at once, and a thread that returned at once every time is a thread spinning on a
+        // machine that has no event. What is left is the sleep this was before there was an
+        // event at all, which costs the wakeups it always did and nothing more.
+        std::thread::sleep(Duration::from_millis(timeout_ms));
+        return;
+    }
+
+    // A failed wait is the timeout's, and it leaves the caller doing what it would have done
+    // anyway: looking at the process it is watching.
+    let _ = unsafe { WaitForSingleObject(handle, timeout_ms as u32) };
+}
+
+/// Wake the monitor thread: a player is playing, and the window it draws in is the
+/// monitor's to keep in step (see `ensure_noactivate_monitor`).
+fn wake_noactivate_monitor() {
+    let _ = unsafe { SetEvent(noactivate_wake_handle()) };
 }
 
 fn set_noactivate_for_process(pid: u32) {
@@ -5113,6 +5169,11 @@ fn set_noactivate_for_process(pid: u32) {
     }
 
     ensure_noactivate_monitor();
+    // The monitor is woken rather than left to notice on its own clock: between players it
+    // is waiting on this, and a player whose window appears while that wait runs is one the
+    // thread would otherwise look at up to half a second later (see
+    // `ensure_noactivate_monitor`).
+    wake_noactivate_monitor();
 }
 
 /// Start ffplay for video preview with configurable volume
@@ -6277,7 +6338,7 @@ fn text_preview_layout(
     place(size).unwrap_or(layout)
 }
 
-/// Effective DPI of the display nearest `(x, y)`, which is what a text preview's
+/// The effective DPI of the display nearest `(x, y)`, which is what a text preview's
 /// font size is scaled by — and what every margin a layout is written around is
 /// scaled by (see `logical_px`). Falls back to the 96 DPI baseline when no display
 /// can be named, the same way the placement falls back to the primary display.
@@ -6286,22 +6347,51 @@ fn text_preview_layout(
 /// window carries the scale its own process was told about — a UWP one can answer a
 /// scale that is not the display's at all — while the display under the point is one
 /// question with one answer, whatever is drawn on it.
+///
+/// The answer is kept per display, because the scale of a display does not change while
+/// it is the display: the pointer's own probe asks this every tick and every layout asks
+/// it again, and a pointer that has not crossed to another display is answered from here
+/// rather than by asking the DPI interface for a number that cannot have moved. A display
+/// whose scale does change — a monitor switched to another scaling — is a display whose
+/// handle is the same and whose answer is not, so the cache holds one display: the next
+/// one named is asked about, and the one after that is asked again.
 pub(crate) fn monitor_dpi_from_point(x: i32, y: i32) -> u32 {
+    const BASELINE_DPI: u32 = 96;
+
     unsafe {
         let monitor = MonitorFromPoint(POINT { x, y }, MONITOR_DEFAULTTONEAREST);
-        if !monitor.is_invalid() {
-            let mut dpi_x = 0u32;
-            let mut dpi_y = 0u32;
-            if GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y).is_ok()
-                && dpi_x > 0
-            {
-                return dpi_x;
+        if monitor.is_invalid() {
+            return BASELINE_DPI;
+        }
+
+        let handle = monitor.0 as isize;
+        if let Ok(cached) = MONITOR_DPI.lock() {
+            if let Some((cached_monitor, dpi)) = *cached {
+                if cached_monitor == handle {
+                    return dpi;
+                }
             }
         }
-    }
 
-    96
+        let mut dpi = BASELINE_DPI;
+        let mut dpi_x = 0u32;
+        let mut dpi_y = 0u32;
+        if GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y).is_ok() && dpi_x > 0
+        {
+            dpi = dpi_x;
+        }
+
+        if let Ok(mut cached) = MONITOR_DPI.lock() {
+            *cached = Some((handle, dpi));
+        }
+
+        dpi
+    }
 }
+
+/// The last display asked about and the scale it answered with — one display's worth, for
+/// the reason `monitor_dpi_from_point` gives.
+static MONITOR_DPI: Lazy<Mutex<Option<(isize, u32)>>> = Lazy::new(|| Mutex::new(None));
 
 /// Render a single frame of the loading spinner animation (BGRA pixels).
 ///
