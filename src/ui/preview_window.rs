@@ -11604,6 +11604,18 @@ pub fn run_preview_window() {
                             if let Ok(mut media_guard) = CURRENT_MEDIA.lock() {
                                 if let Some(ref mut media) = *media_guard {
                                     media.cancel_background_work();
+                                    // What is being replaced goes with it, and for a sound
+                                    // that is more than bookkeeping: the engine playing one
+                                    // is this app's own and this thread's alone, so a media
+                                    // dropped here without this call plays on with nothing on
+                                    // screen that could stop it. The take-down the `Hide`
+                                    // would have performed is not a second chance at it: a
+                                    // keyboard preview replacing a hovered one sends its
+                                    // `Hide` and its show in the same breath, and the drain
+                                    // above keeps only the newest of them (see the collapse
+                                    // there). Every other branch that replaces a preview
+                                    // stops what it replaces; this one did not.
+                                    stop_video_playback(media);
                                 }
                                 // Clear immediately so old pixels never flash while
                                 // the new target is being decoded.
