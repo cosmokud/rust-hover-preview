@@ -67,11 +67,36 @@ const DECODER_ENUM_FLAGS: MFT_ENUM_FLAG = MFT_ENUM_FLAG(
         | MFT_ENUM_FLAG_LOCALMFT.0,
 );
 
-/// One row of the tray's `Codecs` submenu: what the engine or codec is called, and
-/// whether this machine has it.
+/// Where each thing a machine can be missing is got from: the pages the README names for them,
+/// kept beside the rows so that picking one opens exactly what the README tells a user to
+/// install rather than a search for it.
+///
+/// The `apps.microsoft.com` ones are the Store's own pages and are opened as pages: what a row
+/// hands over is a link, and what answers it is the browser the user already has.
+const FFMPEG_PAGE: &str = "https://ffmpeg.org/download.html";
+const MPEG2_PAGE: &str = "https://apps.microsoft.com/detail/9N95Q1ZZPMH4";
+const HEVC_PAGE: &str = "https://apps.microsoft.com/detail/9N4WGH0Z6VHQ";
+const VP9_PAGE: &str = "https://apps.microsoft.com/detail/9N4D0MSMP0PT";
+const AV1_PAGE: &str = "https://apps.microsoft.com/detail/9MVZQVXJBQ9V";
+const THEORA_PAGE: &str = "https://apps.microsoft.com/detail/9N5TDP8VCMHS";
+const HEIF_PAGE: &str = "https://apps.microsoft.com/detail/9PMMSR1CGPWG";
+const JXL_PAGE: &str = "https://apps.microsoft.com/detail/9MZPRTH5C0TB";
+const LIBREOFFICE_PAGE: &str = "https://www.libreoffice.org/download/";
+const IMAGEMAGICK_PAGE: &str = "https://imagemagick.org/download/";
+const PEAZIP_PAGE: &str = "https://peazip.github.io/peazip-64bit.html";
+const CALIBRE_PAGE: &str = "https://calibre-ebook.com/download_windows";
+
+/// One row of the tray's `Codecs` submenu: what the engine or codec is called, whether this
+/// machine has it, and where it is got from where it does not.
 pub struct Row {
     pub name: &'static str,
     pub available: bool,
+    /// Where a row this machine does not have is got from: the page the README names for it,
+    /// opened in the browser when the row is picked. `None` where there is nowhere to send
+    /// anyone — a component Windows ships, and an application this app cannot point at — and,
+    /// for the two picture formats that arrive in two packages, the page of whichever package
+    /// this machine is missing.
+    pub link: Option<&'static str>,
 }
 
 /// The engines and the codecs a video preview leans on.
@@ -84,40 +109,49 @@ pub fn video() -> Vec<Row> {
         Row {
             name: "FFmpeg (ffplay)",
             available: ffplay_available(),
+            link: Some(FFMPEG_PAGE),
         },
         Row {
             name: "Windows Media Foundation",
             available: mf_started(),
+            link: None,
         },
         Row {
             name: "H.264",
             available: video_decoder(&MFVideoFormat_H264),
+            link: None,
         },
         // One row for the two, because one decoder answers for both: Windows' MPEG-4
         // Part 2 decoder is what plays a DivX or Xvid file as well.
         Row {
             name: "MPEG-4 / WMV",
             available: video_decoder(&MFVideoFormat_MP4V) || video_decoder(&MFVideoFormat_WMV3),
+            link: None,
         },
         Row {
             name: "MPEG-2",
             available: video_decoder(&MFVideoFormat_MPEG2),
+            link: Some(MPEG2_PAGE),
         },
         Row {
             name: "HEVC (H.265)",
             available: video_decoder(&MFVideoFormat_HEVC),
+            link: Some(HEVC_PAGE),
         },
         Row {
             name: "VP9",
             available: video_decoder(&MFVideoFormat_VP90),
+            link: Some(VP9_PAGE),
         },
         Row {
             name: "AV1",
             available: video_decoder(&MFVideoFormat_AV1),
+            link: Some(AV1_PAGE),
         },
         Row {
             name: "Theora (Ogg)",
             available: video_decoder(&MFVideoFormat_Theora),
+            link: Some(THEORA_PAGE),
         },
     ]
 }
@@ -131,19 +165,44 @@ pub fn video() -> Vec<Row> {
 /// two-package answer the README gives, asked of the machine rather than told to it.
 pub fn images() -> Vec<Row> {
     let heif = image_codec(HEIF_MIME_TYPES);
+    let hevc = video_decoder(&MFVideoFormat_HEVC);
+    let av1 = video_decoder(&MFVideoFormat_AV1);
+
+    let heif_available = heif && hevc;
+    let avif_available = image_codec(AVIF_MIME_TYPES) || (heif && av1);
 
     vec![
         Row {
             name: "HEIF (HEIC)",
-            available: heif && video_decoder(&MFVideoFormat_HEVC),
+            available: heif_available,
+            // Two packages carry this format — the container and the compression inside it —
+            // and a row opens one page, so what is offered is the page for whichever of the
+            // two is missing: the container's extension where there is no container, and the
+            // codec's where only the codec is gone.
+            link: if heif_available {
+                None
+            } else if !heif {
+                Some(HEIF_PAGE)
+            } else {
+                Some(HEVC_PAGE)
+            },
         },
         Row {
             name: "AVIF",
-            available: image_codec(AVIF_MIME_TYPES) || (heif && video_decoder(&MFVideoFormat_AV1)),
+            available: avif_available,
+            // The same two-package answer as the row above, with AV1 in the codec's place.
+            link: if avif_available {
+                None
+            } else if !heif {
+                Some(HEIF_PAGE)
+            } else {
+                Some(AV1_PAGE)
+            },
         },
         Row {
             name: "JPEG XL",
             available: image_codec(JXL_MIME_TYPES),
+            link: Some(JXL_PAGE),
         },
         // The one picture here that needs nothing: this app carries its own libwebp,
         // which is what plays an animated one and what decodes a still one where the
@@ -153,6 +212,7 @@ pub fn images() -> Vec<Row> {
         Row {
             name: "WebP",
             available: true,
+            link: None,
         },
     ]
 }
@@ -165,38 +225,49 @@ pub fn engines() -> Vec<Row> {
         Row {
             name: "WebView2 Runtime",
             available: crate::engines::webview_preview::is_available(),
+            link: None,
         },
         Row {
             name: "LibreOffice",
             available: crate::engines::libreoffice_render::available(),
+            link: Some(LIBREOFFICE_PAGE),
         },
         Row {
             name: "ImageMagick",
             available: crate::engines::imagemagick_render::available(),
+            link: Some(IMAGEMAGICK_PAGE),
         },
         Row {
             name: "PeaZip",
             available: crate::engines::peazip_render::available(),
+            link: Some(PEAZIP_PAGE),
         },
         Row {
             name: "Calibre",
             available: crate::engines::calibre_render::available(),
+            link: Some(CALIBRE_PAGE),
         },
+        // The Office applications are the one group here with no page to open: they are not
+        // free downloads, so a row that is missing one stays a row that cannot be picked.
         Row {
             name: "Microsoft Word",
             available: prog_id_installed("Word.Application"),
+            link: None,
         },
         Row {
             name: "Microsoft Excel",
             available: prog_id_installed("Excel.Application"),
+            link: None,
         },
         Row {
             name: "Microsoft PowerPoint",
             available: prog_id_installed("PowerPoint.Application"),
+            link: None,
         },
         Row {
             name: "Windows PDF Engine",
             available: winrt_class_registered(PDF_ENGINE_CLASS),
+            link: None,
         },
     ]
 }
