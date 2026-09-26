@@ -1283,9 +1283,15 @@ pub fn hide_preview() {
     if let Ok(mut current) = CURRENT_MEDIA.try_lock() {
         if let Some(ref mut media) = *current {
             media.cancel_background_work();
-            stop_video_playback(media);
+            // The player process is ended here and the media engine is not: a session
+            // belongs to the thread that made it, which is the preview loop's and not this
+            // one (see `video_player`), so a stop asked for from this thread would touch
+            // nothing while the sound went on playing. What ends the engine is the loop's
+            // own take-down, and the `Hide` below is what calls for it — the media is left
+            // where it is for that take-down to find rather than taken away, because a
+            // media taken here is one nothing is left to stop.
+            kill_player_process(media);
         }
-        *current = None;
     } else {
         // The media state is locked elsewhere; kill the recorded ffplay by PID
         // instead (verified to still be ffplay before terminating it).
@@ -5555,7 +5561,7 @@ fn player_wait(window_up: bool, player_alive: bool, waited: Duration) -> Option<
     None
 }
 
-/// Stop video playback process
+/// Stop video playback, on the thread the engine belongs to.
 fn stop_video_playback(media: &mut MediaData) {
     // A video the media engine is playing has no process and no window of its own: letting
     // the engine go is the whole of stopping it, and it is done here because this is where
@@ -5567,10 +5573,25 @@ fn stop_video_playback(media: &mut MediaData) {
     // one is this app's own, and a sound FFmpeg plays instead is a process in `video_process`
     // below — the same field, killed the same way, because what ends either is the hover
     // ending.
+    //
+    // The engine's ending is this thread's to perform and no other's — a session belongs to
+    // the thread that started it (see `video_player`'s `SESSION`) — so a take-down that runs
+    // on some other thread kills the player process and leaves the media engine for the
+    // thread that owns it (see `kill_player_process` and `hide_preview`).
     if media.media_type.is_native_video() || media.media_type.is_audio() {
         video_player::stop();
     }
 
+    kill_player_process(media);
+}
+
+/// End the player process a preview holds, if it has one, and forget its window.
+///
+/// It is the half of a take-down that any thread may perform — a process is ended with a
+/// handle, whatever thread holds it — which is what lets the hide on the Explorer hook's
+/// thread end the `ffplay` a hover started without reaching for the media engine, whose
+/// session is the preview thread's alone (see `stop_video_playback` and `hide_preview`).
+fn kill_player_process(media: &mut MediaData) {
     if let Some(ref mut process) = media.video_process {
         // Kill only, never wait: a process stuck in kernel I/O would block the
         // caller (possibly the Explorer hook thread) indefinitely. The leftover
