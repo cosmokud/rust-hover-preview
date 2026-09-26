@@ -1497,6 +1497,16 @@ fn measure_waiting(path: &Path) -> bool {
 ///
 /// A measure whose hover has moved on is not wasted: what it answered is held for the next
 /// hover of the file, so nothing here is cancelled or waited for.
+///
+/// What a hover waits for is the answer rather than the read, and the answer is sent whatever
+/// became of the read — a measure that panicked included. A thread that unwound past the two
+/// calls below would leave the file on the list of reads running with nothing to take it off
+/// it, and what a hover on that file would be from then on is a spinner nothing ends: the
+/// layout goes on placing the wait, since a read for the file is running, and the cap a wait
+/// is given is the engines' and does not stand behind a read (see `measured_off_the_tick`
+/// and `awaiting_engine`). A read that came apart is answered with the reader's own "nothing
+/// for this file" and held like it, so a file whose read comes apart is not read again on
+/// every hover either (see `spawn_video_probe`, whose probe answers through the same guard).
 fn spawn_measure_probe(
     path: PathBuf,
     version: FileVersion,
@@ -1504,7 +1514,9 @@ fn spawn_measure_probe(
     measure: impl FnOnce() -> Option<(u32, u32)> + Send + 'static,
 ) {
     std::thread::spawn(move || {
-        let size = measure();
+        // A read that panicked is no box, and no box is an answer; what it must not be is an
+        // unwind past the mark that says the read is done with (see above).
+        let size = std::panic::catch_unwind(std::panic::AssertUnwindSafe(measure)).unwrap_or(None);
 
         // The box is held before the read is marked done, so a hover that arrives while this
         // thread is between the two finds the answer rather than starting a read of its own.
