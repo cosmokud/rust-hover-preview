@@ -4005,7 +4005,12 @@ pub fn run_explorer_hook() {
 
     // State for optimized polling
     let mut last_state_check = Instant::now();
-    let mut current_state = ExplorerState::NoExplorerWindows;
+    // Read rather than assumed: a state assumed here is one the loop only corrects
+    // when its recheck comes round, and the deepest state's recheck is two seconds
+    // off — so an app started with Explorer already up spent that long unable to
+    // answer the pointer at all. This is the read the first recheck would have made,
+    // made before the first tick instead.
+    let mut current_state = read_explorer_state();
 
     // Polling intervals based on state. How fast the loop runs while Explorer has focus
     // is the `tick_ms` setting rather than a constant here — the one number that trades
