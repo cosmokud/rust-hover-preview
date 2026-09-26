@@ -451,12 +451,15 @@ fn colorref(color: [u8; 3]) -> COLORREF {
 
 /// Draw one piece of a run into `rect`, filling that rectangle with its
 /// background as it goes, so a piece of a selected run carries the highlight
-/// instead of the page. The text is drawn at the rectangle's own corner and
-/// clipped to it: a run's box is the room it was given, and nothing of it has any
-/// business outside.
+/// instead of the page. The text starts at `origin` and is clipped to `rect`:
+/// a run's box is the room it was given, and nothing of it has any business
+/// outside. The two are one corner for every run of this app but one — the name
+/// of a sound's card, which is drawn whole under a box that does not move while
+/// its own origin does (see `audio_preview`).
 pub(crate) unsafe fn paint_run(
     surface: &DibSurface,
     text: &str,
+    origin: i32,
     rect: RECT,
     foreground: [u8; 3],
     background: [u8; 3],
@@ -472,7 +475,7 @@ pub(crate) unsafe fn paint_run(
 
     let _ = ExtTextOutW(
         surface.dc,
-        rect.left,
+        origin,
         rect.top,
         ETO_OPAQUE | ETO_CLIPPED,
         Some(&rect),
@@ -504,11 +507,15 @@ impl<'a> RunPainter<'a> {
         }
     }
 
-    /// Draw a run of text into `rect`, with its own background, which is also
-    /// what fills the part of the rectangle the glyphs do not reach.
+    /// Draw a run of text from `origin` into `rect`, with its own background,
+    /// which is also what fills the part of the rectangle the glyphs do not
+    /// reach. The origin is the rectangle's own corner for a run that is drawn
+    /// where it belongs, and left of it for one that is being scrolled under its
+    /// box (see `paint_run`).
     pub(crate) fn draw(
         &mut self,
         text: &str,
+        origin: i32,
         rect: RECT,
         style: &TextStyle,
         foreground: [u8; 3],
@@ -531,7 +538,7 @@ impl<'a> RunPainter<'a> {
         }
 
         unsafe {
-            paint_run(self.surface, text, rect, foreground, background);
+            paint_run(self.surface, text, origin, rect, foreground, background);
         }
     }
 }

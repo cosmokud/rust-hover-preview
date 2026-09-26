@@ -815,6 +815,7 @@ fn paint(surface: &DibSurface, page: &Page, theme: &LoadedTheme, scale: f32) {
         for run in &line.runs {
             painter.draw(
                 &run.text,
+                run.x,
                 RECT {
                     left: run.x,
                     top: line.top,
