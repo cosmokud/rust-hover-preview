@@ -4015,10 +4015,11 @@ pub fn run_explorer_hook() {
     // deliberate pointer input — a move past the pointer tolerance or a wheel
     // tick — or by a reset that ends the keyboard's turn outright (previews
     // switched off, a display change, Explorer leaving the foreground, a folder
-    // change handing the screen back to the pointer). While it holds, the parked
-    // pointer may neither raise a preview nor take one over: a focused item with
-    // no preview to give must not hand the pointer the screen, so a key pressed
-    // onto a file nothing can show reads as one pressed onto a file that can.
+    // change handing the screen back to the pointer). While it holds — and where the
+    // tray's `Prioritize Keyboard` is on — the parked pointer may neither raise a
+    // preview nor take one over: a focused item with no preview to give must not hand
+    // the pointer the screen, so a key pressed onto a file nothing can show reads as
+    // one pressed onto a file that can.
     // What it also holds is the pointer tolerance: for the whole of the keyboard's
     // turn a move has to clear the wider distance before it counts as the mouse
     // taking over, because a keyboard preview is placed beside the focused item
@@ -4102,7 +4103,7 @@ pub fn run_explorer_hook() {
                 TriggerKeyMode::Disable,
                 DEFAULT_SAME_FILE_REHOVER_DELAY_MS,
                 DEFAULT_SETTLING_DELAY_MS,
-                false,
+                true,
                 true,
                 DEFAULT_TICK_MS,
             ),
@@ -5283,9 +5284,9 @@ pub fn run_explorer_hook() {
             // keyboard is walking. The turn ends when the pointer is used on purpose —
             // moved past the tolerance, or given a wheel tick — or when a folder change
             // hands the screen back to it. With the setting off the pointer's own hover
-            // wins, as it always has: a parked pointer previews the file it is on while
-            // the keyboard drives, and a key pressed onto an item with no preview to give
-            // leaves that hover standing rather than taking it down and putting it back.
+            // wins: a parked pointer previews the file it is on while the keyboard
+            // drives, and a key pressed onto an item with no preview to give leaves that
+            // hover standing rather than taking it down and putting it back.
             if is_keyboard_hover
                 || (prioritize_keyboard && keyboard_screen_owner)
                 || pointer_pause.freezes_pointer()

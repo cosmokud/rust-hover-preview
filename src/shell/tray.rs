@@ -1040,11 +1040,11 @@ unsafe fn show_context_menu(hwnd: HWND) {
 
     // Whether the keyboard driving Explorer holds a parked pointer back instead of the file
     // under it previewing: the first row here, the one switch among the submenu's delays and
-    // keys, and it starts off, where the pointer's own hover wins.
+    // keys, and it is on where the app starts.
     let prioritize_keyboard = CONFIG
         .lock()
         .map(|c| c.prioritize_keyboard)
-        .unwrap_or(false);
+        .unwrap_or(true);
 
     let _ = AppendMenuW(
         timing_menu,
