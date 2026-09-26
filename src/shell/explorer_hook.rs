@@ -4085,6 +4085,7 @@ pub fn run_explorer_hook() {
                 c.trigger_key_mode,
                 c.same_file_rehover_delay_ms,
                 c.settling_delay_ms,
+                c.prioritize_keyboard,
                 c.trigger_key_enabled,
                 c.tick_ms,
             );
@@ -4101,6 +4102,7 @@ pub fn run_explorer_hook() {
                 TriggerKeyMode::Disable,
                 DEFAULT_SAME_FILE_REHOVER_DELAY_MS,
                 DEFAULT_SETTLING_DELAY_MS,
+                false,
                 true,
                 DEFAULT_TICK_MS,
             ),
@@ -4317,6 +4319,7 @@ pub fn run_explorer_hook() {
                 config.trigger_key_mode,
                 config.same_file_rehover_delay_ms,
                 config.settling_delay_ms,
+                config.prioritize_keyboard,
                 config.trigger_key_enabled,
                 config.tick_ms,
             );
@@ -4336,8 +4339,9 @@ pub fn run_explorer_hook() {
         let trigger_key_mode = config_snapshot.2;
         let same_file_rehover_delay_ms = config_snapshot.3;
         let settling_delay_ms = config_snapshot.4;
-        let trigger_key_enabled = config_snapshot.5;
-        let tick_ms = config_snapshot.6;
+        let prioritize_keyboard = config_snapshot.5;
+        let trigger_key_enabled = config_snapshot.6;
+        let tick_ms = config_snapshot.7;
 
         // One question, two settings: the key either stops previews while it is
         // held, or is the only thing that lets them happen. Either way, what is left
@@ -4565,9 +4569,10 @@ pub fn run_explorer_hook() {
                     last_focused_key = None;
                     allow_keyboard_preview_on_first_observation = true;
                     last_keyboard_navigation_input_at = None;
-                } else if keyboard_screen_owner {
+                } else if prioritize_keyboard && keyboard_screen_owner {
                     // A keyboard turn with no preview of its own to close ends the
-                    // same way: the wheel is the pointer taking the screen back, so
+                    // same way, where `Prioritize Keyboard` is what was holding the
+                    // pointer back: the wheel is the pointer taking the screen back, so
                     // the item the scroll brings under it is previewed like any
                     // other. Nothing of the keyboard's is on screen, so nothing is
                     // taken down with it — and the recent-keyboard-input window ends
@@ -4607,6 +4612,57 @@ pub fn run_explorer_hook() {
                 // move what is under a parked pointer: a click on a column header sorts
                 // it. The item an answer was read from is dropped with it.
                 resolver.forget_item();
+            }
+
+            // Enter opens the item the keyboard is on, so the view is about to change under
+            // whatever is on screen the way it changes under a Backspace: the hover goes
+            // with the press rather than waiting for the folder probe to notice, which is
+            // what used to leave a preview of the file that was being hovered over an empty
+            // folder with nothing left to take it down. The folder-change gate below is
+            // left to arm itself, so the item that lands under a parked cursor still
+            // previews in the new listing without a move: an Enter that opened a folder is
+            // navigation, not a reason to hold the pointer off the listing it opened.
+            if activation_key_press {
+                if last_file.is_some() || keyboard_file.is_some() || is_keyboard_hover {
+                    hide_preview();
+                }
+                // The file that was on screen is latched the way a dismissed hover is,
+                // so the hover below cannot put it straight back up in the moment before
+                // the view this press opened has changed: a pointer left on it is a user
+                // asking for it again once the rehover delay has passed.
+                match last_file.clone().or_else(|| keyboard_file.clone()) {
+                    Some(file) => suppressed.suppress(file),
+                    None => suppressed.clear(),
+                }
+                last_file = None;
+                keyboard_file = None;
+                is_keyboard_hover = false;
+                pointer_pause.clear();
+                stationary_search_miss_started_at = None;
+                resolver.forget_item();
+                hover_start = None;
+                last_focused_key = None;
+                video_hover_guard_until = None;
+            }
+
+            // A click is the pointer acting on the view, and the one press that can change
+            // the folder without the pointer having moved: the address bar's breadcrumbs are
+            // clicked where the pointer already is. A keyboard preview cannot be told about
+            // that by the folder probe — that probe is the pointer's own and is skipped for
+            // as long as a keyboard preview is up — so the press ends the keyboard's turn
+            // itself: what is on screen goes, and the new listing is read as the place it is
+            // rather than as the listing the preview belongs to. A press on the preview is
+            // not this: a text frame is clicked to read it, not to leave it.
+            if mouse_button_press
+                && (is_keyboard_hover || keyboard_file.is_some())
+                && !pointer_hold
+                && !cursor_preview_hover().any()
+            {
+                hide_preview();
+                keyboard_file = None;
+                is_keyboard_hover = false;
+                video_hover_guard_until = None;
+                pointer_pause.clear();
             }
 
             if explorer_navigation_shortcut_input || mouse_navigation_input {
@@ -4786,20 +4842,21 @@ pub fn run_explorer_hook() {
                     // Whether the file the preview on screen is about is still the one
                     // under the pointer, asked of the view that has just answered. A
                     // place re-read in another spelling, a handle taken again, a walk
-                    // that failed once and succeeded the next time are all changes to the
-                    // *view*, and the file the pointer stands on is a question of its
-                    // own: a preview taken down for one of them and put back a moment
-                    // later is the blink this reads to avoid, and what a view that
-                    // changed under an unmoved pointer is owed is the question asked
-                    // again rather than the preview taken away.
+                    // that failed once and succeeded the next time are all changes to
+                    // the *view*, and the file the pointer stands on is a question of its
+                    // own, so what the view says now is what answers it. The box the
+                    // preview was resolved from is not asked here: it belongs to the
+                    // listing that has been left, and a look that answers nothing against
+                    // it is not a read that failed — the file is not there any more.
+                    // Read the other way, a folder change with nothing under the pointer
+                    // left the preview of the old file on screen with nothing to take it
+                    // down, which is what an empty folder and a folder pressed into with
+                    // Enter both came to look like (see `read_failure_is_the_same_item`
+                    // for the hover the box is still the right question for).
                     let still_on_the_file = last_file.as_ref().is_some_and(|file| {
                         get_file_under_cursor(&mut resolver, &pointer)
                             .is_some_and(|current| same_path(file, &current))
-                    }) || read_failure_is_the_same_item(
-                        hover_item_box,
-                        pointer_item_box(),
-                        cursor_pos,
-                    );
+                    });
 
                     if !still_on_the_file {
                         // Nothing released the gate yet: the view the place describes is
@@ -4861,8 +4918,13 @@ pub fn run_explorer_hook() {
                     // that landed under a parked cursor previews in the new listing
                     // without a mouse move, the way it always has. A press is the
                     // exception — that is the user asking for the keyboard again —
-                    // and takes the screen for the new folder with it.
-                    keyboard_screen_owner = navigation_press;
+                    // and takes the screen for the new folder with it. Only the turn
+                    // `Prioritize Keyboard` keeps is handed over here; with the setting
+                    // off the flag is not what holds the pointer back, and what it says
+                    // about the pointer's tolerance is left as the keyboard left it.
+                    if prioritize_keyboard {
+                        keyboard_screen_owner = navigation_press;
+                    }
                     folder_change_user_initiated = false;
                     hover_start = Some(Instant::now());
                     stationary_hover_probe_done = false;
@@ -4903,10 +4965,13 @@ pub fn run_explorer_hook() {
                         allow_keyboard_preview_on_first_observation = true;
                         // No press released the gate, so this is the new view
                         // settling — the focus moving as the listing is built —
-                        // rather than the keyboard taking the screen: the folder
-                        // change stays the pointer's, and the keyboard's turn comes
-                        // back with the user's own next press.
-                        keyboard_screen_owner = false;
+                        // rather than the keyboard taking the screen: where the turn
+                        // is what holds the pointer back, the folder change stays the
+                        // pointer's, and the keyboard's turn comes back with the
+                        // user's own next press.
+                        if prioritize_keyboard {
+                            keyboard_screen_owner = false;
+                        }
                         folder_change_user_initiated = false;
                         suspended_initial_focus = None;
                         folder_change_time = None;
@@ -5184,17 +5249,19 @@ pub fn run_explorer_hook() {
             // text preview, or on the spinner it is waiting behind: the file under
             // it is not what the user is looking at, so nothing is hovered over.
             //
-            // A pointer parked since the keyboard last drove is in the same
-            // position for the same reason: the keyboard owns the screen, so a file
-            // it left behind — or one it landed on that has no preview to give — is
-            // not a reason for the pointer to raise a preview of whatever it
-            // happens to sit on. That is the answer a key pressed onto a file that
-            // can be previewed already gets, and it is what keeps the two previews
-            // from fighting over a list the keyboard is walking. The turn ends when
-            // the pointer is used on purpose — moved past the tolerance, or given a
-            // wheel tick — or when a folder change hands the screen back to it.
+            // A pointer parked since the keyboard last drove is held back by it where
+            // `Prioritize Keyboard` asks for that: the keyboard owns the screen, so a file
+            // it left behind — or one it landed on that has no preview to give — is not a
+            // reason for the pointer to raise a preview of whatever it happens to sit on.
+            // That is the answer a key pressed onto a file that can be previewed already
+            // gets, and it is what keeps the two previews from fighting over a list the
+            // keyboard is walking. The turn ends when the pointer is used on purpose —
+            // moved past the tolerance, or given a wheel tick — or when a folder change
+            // hands the screen back to it. With the setting off the pointer's own hover
+            // wins, as it always has: a parked pointer previews the file it is on while
+            // the keyboard drives.
             if is_keyboard_hover
-                || keyboard_screen_owner
+                || (prioritize_keyboard && keyboard_screen_owner)
                 || pointer_pause.freezes_pointer()
                 || pointer_hold
             {
