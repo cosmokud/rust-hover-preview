@@ -203,7 +203,7 @@ Or download the official installer from [https://calibre-ebook.com/download\_win
 
 1. Start the app — a tray icon appears.
 2. Hover media files in Explorer to preview them.
-3. Or navigate with the keyboard — arrow keys or Tab — to preview the focused item.
+3. Or navigate with the keyboard — arrow keys, Tab, or a file's name typed to jump to it — to preview the focused item.
 4. Right-click the tray icon to configure behavior.
 
 Here is a concise, plain-language version:

@@ -48,8 +48,9 @@ encrypted. Nothing bypasses a password, and no password is ever stored.
   your machine, or anything you have previewed beyond what any HTTPS request
   carries. No telemetry, no analytics, no crash reports.
 - No keylogging. The app polls the pressed-or-not state of a few specific
-  keys (your trigger key, arrow keys, mouse buttons, Ctrl+C while text is
-  selected) to drive previews. Keystrokes are never recorded, stored, or sent.
+  keys (your trigger key, the navigation keys, the letters and digits a name is
+  typed with in Explorer, mouse buttons, and Ctrl+C while text is selected) to
+  drive previews. Keystrokes are never recorded, stored, or sent.
 - No screen scraping of other apps. The preview is the app's own window,
   painted by itself.
 - No code injection into Explorer. It asks Explorer which item is under the
