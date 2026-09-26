@@ -26,11 +26,15 @@ use windows::Win32::Graphics::Imaging::{
     IWICBitmapCodecInfo, WICComponentEnumerateDefault, WICDecoder,
 };
 use windows::Win32::Media::MediaFoundation::{
-    IMFActivate, MFMediaType_Video, MFStartup, MFTEnumEx, MFVideoFormat_AV1, MFVideoFormat_H264,
-    MFVideoFormat_HEVC, MFVideoFormat_MP4V, MFVideoFormat_MPEG2, MFVideoFormat_Theora,
-    MFVideoFormat_VP90, MFVideoFormat_WMV3, MFSTARTUP_FULL, MFT_CATEGORY_VIDEO_DECODER,
-    MFT_ENUM_FLAG, MFT_ENUM_FLAG_ASYNCMFT, MFT_ENUM_FLAG_HARDWARE, MFT_ENUM_FLAG_LOCALMFT,
-    MFT_ENUM_FLAG_SYNCMFT, MFT_REGISTER_TYPE_INFO, MF_VERSION,
+    IMFActivate, MFMediaType_Audio, MFMediaType_Video, MFStartup, MFTEnumEx, MFVideoFormat_AV1,
+    MFVideoFormat_H264, MFVideoFormat_HEVC, MFVideoFormat_MP4V, MFVideoFormat_MPEG2,
+    MFVideoFormat_Theora, MFVideoFormat_VP90, MFVideoFormat_WMV3, MFAudioFormat_AAC,
+    MFAudioFormat_ADTS, MFAudioFormat_ALAC, MFAudioFormat_DTS, MFAudioFormat_Dolby_AC3,
+    MFAudioFormat_FLAC, MFAudioFormat_MP3, MFAudioFormat_Opus, MFAudioFormat_Vorbis,
+    MFAudioFormat_WMAudioV8, MFAudioFormat_WMAudioV9,
+    MFAudioFormat_WMAudio_Lossless, MFSTARTUP_FULL, MFT_CATEGORY_AUDIO_DECODER,
+    MFT_CATEGORY_VIDEO_DECODER, MFT_ENUM_FLAG, MFT_ENUM_FLAG_ASYNCMFT, MFT_ENUM_FLAG_HARDWARE,
+    MFT_ENUM_FLAG_LOCALMFT, MFT_ENUM_FLAG_SYNCMFT, MFT_REGISTER_TYPE_INFO, MF_VERSION,
 };
 use windows::Win32::System::Com::{
     CLSIDFromProgID, CoInitializeEx, CoTaskMemFree, COINIT_MULTITHREADED,
@@ -78,6 +82,8 @@ const MPEG2_PAGE: &str = "https://apps.microsoft.com/detail/9N95Q1ZZPMH4";
 const HEVC_PAGE: &str = "https://apps.microsoft.com/detail/9N4WGH0Z6VHQ";
 const VP9_PAGE: &str = "https://apps.microsoft.com/detail/9N4D0MSMP0PT";
 const AV1_PAGE: &str = "https://apps.microsoft.com/detail/9MVZQVXJBQ9V";
+/// The one package that carries both halves of the Ogg family: Theora for a video and Vorbis
+/// and Opus for a sound are the same extension, which is why the rows for all three name it.
 const THEORA_PAGE: &str = "https://apps.microsoft.com/detail/9N5TDP8VCMHS";
 const HEIF_PAGE: &str = "https://apps.microsoft.com/detail/9PMMSR1CGPWG";
 const JXL_PAGE: &str = "https://apps.microsoft.com/detail/9MZPRTH5C0TB";
@@ -152,6 +158,81 @@ pub fn video() -> Vec<Row> {
             name: "Theora (Ogg)",
             available: video_decoder(&MFVideoFormat_Theora),
             link: Some(THEORA_PAGE),
+        },
+    ]
+}
+
+/// The engines and the codecs a sound preview leans on.
+///
+/// The same shape as the video list above it: what Windows decodes out of the box is listed
+/// first, and what a machine usually has to be given after it. The decoders are asked of the
+/// machine rather than told to it — one package carries the whole Ogg family, and FFmpeg is
+/// what plays everything neither it nor Windows reads — and the rows are the codecs a file is
+/// most likely to hold, not every format the list of sound names has an entry for.
+///
+/// The one row that is not a decoder is the engine Windows has, which is what plays a sound
+/// where a decoder above it reaches one, and which is what a hover on such a file is played
+/// by: a machine with no Media Foundation at all is a machine whose sounds are played by
+/// FFmpeg or not at all.
+pub fn audio() -> Vec<Row> {
+    vec![
+        Row {
+            name: "FFmpeg (ffplay)",
+            available: ffplay_available(),
+            link: Some(FFMPEG_PAGE),
+        },
+        Row {
+            name: "Windows Media Foundation",
+            available: mf_started(),
+            link: None,
+        },
+        Row {
+            name: "MP3",
+            available: audio_decoder(&MFAudioFormat_MP3),
+            link: None,
+        },
+        // One row for the two spellings of AAC, because one decoder answers for both: an
+        // `.aac` file is the raw stream and an `.m4a` the same codec in a container.
+        Row {
+            name: "AAC / M4A",
+            available: audio_decoder(&MFAudioFormat_AAC) || audio_decoder(&MFAudioFormat_ADTS),
+            link: None,
+        },
+        // And one for the WMA family, whose three decoders are one format to a person.
+        Row {
+            name: "WMA",
+            available: audio_decoder(&MFAudioFormat_WMAudioV8)
+                || audio_decoder(&MFAudioFormat_WMAudioV9)
+                || audio_decoder(&MFAudioFormat_WMAudio_Lossless),
+            link: None,
+        },
+        Row {
+            name: "FLAC",
+            available: audio_decoder(&MFAudioFormat_FLAC),
+            link: None,
+        },
+        Row {
+            name: "ALAC",
+            available: audio_decoder(&MFAudioFormat_ALAC),
+            link: None,
+        },
+        // The one row here that is a package rather than something Windows ships: Vorbis and
+        // Opus are the Ogg family's audio half, and the extension that carries Theora carries
+        // them (see `THEORA_PAGE`).
+        Row {
+            name: "Vorbis & Opus (Ogg)",
+            available: audio_decoder(&MFAudioFormat_Vorbis) || audio_decoder(&MFAudioFormat_Opus),
+            link: Some(THEORA_PAGE),
+        },
+        Row {
+            name: "Dolby Digital (AC-3)",
+            available: audio_decoder(&MFAudioFormat_Dolby_AC3),
+            link: None,
+        },
+        Row {
+            name: "DTS",
+            available: audio_decoder(&MFAudioFormat_DTS),
+            link: None,
         },
     ]
 }
@@ -410,6 +491,49 @@ fn video_decoder(subtype: &GUID) -> bool {
 
     // The array is the caller's to free whether or not anything was found, and each entry
     // holds a reference until it is dropped.
+    unsafe {
+        if !activates.is_null() {
+            for index in 0..count as usize {
+                drop((*activates.add(index)).take());
+            }
+            CoTaskMemFree(Some(activates as *const std::ffi::c_void));
+        }
+    }
+
+    enumerated.is_ok() && count > 0
+}
+
+/// Whether a decoder for one audio codec is registered.
+///
+/// The same question as the video one above and asked the same way, of the audio category
+/// rather than the video's: an input type of the codec and the machine's own answer, with the
+/// activation array freed whether or not anything was found. What it answers for a hover is
+/// asked by playing rather than by enumerating (see `video_player::audio_probe`), because a
+/// registered decoder is not the whole of whether a file plays.
+fn audio_decoder(subtype: &GUID) -> bool {
+    if !mf_started() {
+        return false;
+    }
+
+    let input = MFT_REGISTER_TYPE_INFO {
+        guidMajorType: MFMediaType_Audio,
+        guidSubtype: *subtype,
+    };
+
+    let mut activates: *mut Option<IMFActivate> = std::ptr::null_mut();
+    let mut count: u32 = 0;
+
+    let enumerated = unsafe {
+        MFTEnumEx(
+            MFT_CATEGORY_AUDIO_DECODER,
+            DECODER_ENUM_FLAGS,
+            Some(&input),
+            None,
+            &mut activates,
+            &mut count,
+        )
+    };
+
     unsafe {
         if !activates.is_null() {
             for index in 0..count as usize {

@@ -7,7 +7,6 @@
   - More design & project files (`.xcf`, ...)
   - CAD files (`.dwg`, `.step`, `.stl`, ...)
   - 3D files (`.obj`, `.fbx`, `.gltf`, `.glb`, ...)
-  - Audio files (`.mp3`, `.opus`, ...)
 
 ## Multi-Frame Formats The Front Does Not Count
 
@@ -33,6 +32,50 @@ each would take a reader rather than a byte to change:
 - **A `.dds` with more than one surface (`.dds`), and a multi-extension FITS (`.fits`).** Both
   carry more than one picture behind a header this app reads only the first surface of; what
   each is drawn as is that first surface, which is the picture either way.
+
+## Unsupported Audio Formats
+
+A sound is played by the engine Windows has where its decoders reach the format and by an
+installed FFmpeg where they do not, so what is below is not "this machine cannot play it" —
+that is the question `Codecs → Audio` answers per machine, and a format neither engine reaches
+on the machine in hand is a card that never appears rather than a broken one. What is here is
+what *no* installation reaches. Beside each name is the one thing that would change it.
+
+**A format neither engine decodes at all**
+
+- **MIDI** (`.mid`, `.midi`, `.rmi`, `.kar`). The GS Wavetable synthesizer Windows ships is a
+  MIDI *out* device and not a decoder: Media Foundation is never handed a `.mid`, and FFmpeg's
+  own demuxer produces MIDI events that no decoder of its consumes — its player shows the
+  file's name and plays silence. What it would take is a synthesizer rather than a decoder: a
+  SoundFont engine (FluidSynth, or `munt` for the MT-32 files) driven beside the two players
+  the way the engines of the other kinds are driven, which is another program to detect.
+- **The tracker modules** (`.mod`, `.xm`, `.it`, `.s3m`, `.669`, `.stm`, `.amf`, `.far`). Their
+  instruments are samples inside the file and the player *is* the synthesizer, which is why no
+  decoder for one is in FFmpeg's default build: libopenmpt is a build option there, and an
+  FFmpeg built with it plays every one of them. A machine whose `ffplay` carries libopenmpt
+  needs only the name added to `[audio]` by hand; everyone else needs another program
+  (OpenMPT) driven as an engine.
+- **The protected files** (`.m4p`, `.aa`, `.aax`). DRM: an iTunes purchase and an Audible book
+  are encrypted, and neither engine decrypts one. No list entry reaches them, and what it would
+  take is a decryption this app has no business doing.
+
+**A file that is not a sound under a name that says it is**
+
+- **The playlists** (`.m3u`, `.m3u8`, `.pls`, `.wpl`, `.asx`, `.cue`). They are text that
+  *names* other files, so what a preview of one could show is the list rather than a sound —
+  and the text preview already reads them as the text they are, which is a better answer than
+  a card with nothing behind it. Adding one to `[audio]` is a line, and the answer it buys is
+  a card for a file with no audio in it.
+- **A CD audio track** (`.cda`). Forty-four bytes naming a track on a disc, with no audio in
+  the file at all: an honest preview is a card with the disc's name on it, and there is no
+  disc to read here.
+
+**And the two that are a question about the machine rather than about the format.** A name
+whose decoder is missing is a name that shows nothing until the codec is installed — the
+`Codecs → Audio` menu is where that is seen, and the **Web Media Extensions** package is what
+Vorbis and Opus are waiting for. A name whose engine is missing is the same question one
+level up: a `.flac` on a machine with no Media Foundation and no FFmpeg is a file with no
+preview at all, which is the answer every engine-drawn kind gives when its engine is gone.
 
 ## Unsupported LibreOffice Format
 

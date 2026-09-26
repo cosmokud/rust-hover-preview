@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.3.6]
+
+### Added
+
+- **`Audio` previews**: hovering a sound file now shows a card of what it holds — its name, its format, the sample rate, the channels, the bitrate — with the sound itself played behind it and a clock and a bar under the title. The card is painted with the text layer from the same theme as a text preview or an archive listing, so it follows **Theme** and **Text Size** like the rest of the painted previews, and nothing of the player is on screen.
+- Sounds are played by **the media engine Windows has** where its decoders reach the format and by **FFmpeg's `ffplay`** where they do not — the reverse of the order a video is asked in, because the engine plays in this app's own process with no window to manage and a clock that can be read back out of it. A machine with neither still previews a sound's card; a format neither engine can play shows nothing at all, as every format with no reader does.
+- Which engine a file is played by is asked of the machine rather than assumed: Windows' own decoders are probed through a source reader that is asked for decoded PCM, and FFmpeg is asked through `ffprobe`. The answer is held per file and per version of it, so a second hover costs no probe. A container whose streams hold a sound and no picture — an `.mp4`, a `.mka`, an `.ogg` that is really a song — is now answered as the sound it is rather than dropped as a video with no shape.
+- **`Volume → Video`** and **`Volume → Audio`**: the one volume setting becomes two, because a video is looked at and its soundtrack is as likely to be a distraction as anything while a sound file *is* the sound. Both offer the same levels — `0%`, `1%`, `5%`, `10%`, `20%`, `35%`, `50%`, `65%`, `80%`, `100%` — and both are marked with their own default: a video starts at `0%` (silent, as before) and a sound at `20%`. A sound at `0%` still shows its card, with the clock still and the bar empty: the facts without the noise.
+- **`Audio`** joins **Preview Types**, and **`Codecs`** gains an **Audio** group: FFmpeg, the media stack, and the decoders for MP3, AAC/M4A, WMA, FLAC, ALAC, Vorbis and Opus (the **Web Media Extensions** package), Dolby Digital and DTS. A row that is missing and has a page asks before opening it, exactly as the video and image rows do.
+- **`[audio] extensions`** in `config.ini` is the list of what is previewed as a sound, written from the built-in list on first run and read back after. `audio_volume` joins `video_volume` under the same `; Volume` heading.
+- Sounds are recognized by their own bytes as well as by their names: the magic of FLAC, WavPack, Monkey's Audio, True Audio, TAK, OptimFROG, Shorten, CAF, AU, VOC, Musepack, RealAudio, the DSD containers, AC-3 and DTS, the `ftypM4B` audiobook brand, and the Ogg page that carries Vorbis, Opus, Speex or FLAC rather than Theora. A renamed sound is still previewed as the sound it is, and a renamed *video* that holds only a song is answered as one too.
+- `TODO.md` gains **`Unsupported Audio Formats`**: MIDI (the GS Wavetable synthesizer is a MIDI *out* device and not a decoder, and FFmpeg's player is silent on one), the tracker modules (libopenmpt is an FFmpeg build option), the protected files (`m4p`, `aa`, `aax`), the playlists (`m3u`, `pls`, …) and `.cda` — each with what it would take.
+
+### Changed
+
+- `README.md` and `ARCHITECTURE.md` describe the sound kind, its two engines and the two volumes.
+
 ## [0.3.5] - 2026-09-26
 
 ### Added

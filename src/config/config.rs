@@ -47,6 +47,7 @@ use crate::formats::vector_formats::{
     sanitize_vector_extensions, DEFAULT_VECTOR_EXTENSIONS, VECTOR_EXTENSIONS_BEFORE_SVG,
     VECTOR_EXTENSIONS_BEFORE_THE_EPS_SPELLINGS,
 };
+use crate::formats::audio_formats::{sanitize_audio_extensions, DEFAULT_AUDIO_EXTENSIONS};
 use crate::formats::video_formats::{sanitize_video_extensions, DEFAULT_VIDEO_EXTENSIONS};
 use crate::readers::tone_map::Curve;
 
@@ -56,6 +57,9 @@ const CONFIG_SECTION: &str = "settings";
 const IMAGE_SECTION: &str = "image";
 /// The video extension list lives in its own section for the same reason.
 const VIDEO_SECTION: &str = "video";
+/// And the sound list beside it, for the same reason: the formats this app plays rather than
+/// one it draws.
+const AUDIO_SECTION: &str = "audio";
 /// The text-preview extension list lives in its own section so the one long
 /// value stays easy to find and edit by hand.
 const TEXT_SECTION: &str = "text";
@@ -89,6 +93,37 @@ pub const MAX_WEBP_PLAYBACK_FPS: u32 = 90;
 /// The volume a video is played at unless the file says otherwise: silent, so a hover
 /// never makes a sound the pointer did not ask for.
 pub const DEFAULT_VIDEO_VOLUME: u32 = 0;
+/// The volume a sound file is played at unless the file says otherwise.
+///
+/// It is not the video's zero, and the difference is deliberate: a video is hovered for its
+/// picture, and its soundtrack is as likely to be a distraction as anything — while a sound
+/// file *is* the sound, and a preview of one at zero is a card with nothing behind it. Quiet
+/// rather than loud, so a pointer crossing a folder of music is a few seconds of something
+/// half-heard rather than a jukebox.
+pub const DEFAULT_AUDIO_VOLUME: u32 = 20;
+/// The levels either volume is offered at, in the order the tray lists them: silence, the one
+/// step above it, and the decades between.
+///
+/// One table for both menus rather than one apiece, because the question a user asks of either
+/// is the same — how loud is this — and the two are the same setting applied to two kinds of
+/// preview. `1%` is in the list because a hover that makes a sound at all is sometimes wanted
+/// without its being audible across a room, and the list stops at `100%` because past it is an
+/// amplification this app has no business applying to someone else's file.
+pub const VOLUME_CHOICES: [u32; 10] = [0, 1, 5, 10, 20, 35, 50, 65, 80, 100];
+
+/// A volume reduced to what the app allows.
+///
+/// A hand-edited `config.ini` is the only way past the menu's own list, and what it can ask for
+/// is an amplification (`volume=10.0` on FFmpeg's filter is ten times the file) or a number the
+/// players read differently from a percentage. What is kept is anything from silence to the
+/// whole of it, so a level the menu does not offer — `37` — is honoured as written rather than
+/// rounded to the nearest, the same way a delay the menu does not offer is.
+pub fn sanitize_volume(volume: u32) -> u32 {
+    volume.min(MAX_VOLUME)
+}
+
+/// The loudest a preview may play at.
+pub const MAX_VOLUME: u32 = 100;
 pub const DEFAULT_PREVIEW_SCALE_PERCENT: u32 = 100;
 pub const MIN_PREVIEW_SCALE_PERCENT: u32 = 1;
 pub const MAX_PREVIEW_SCALE_PERCENT: u32 = 1000;
@@ -922,6 +957,12 @@ impl MarkdownMode {
 pub enum PreviewType {
     Images,
     Videos,
+    /// Sound files: what this app plays rather than draws, previewed as a card of what the
+    /// file holds with the sound behind it — played by the media engine Windows has where its
+    /// decoders reach the format and by FFmpeg's player where they do not, both of which are
+    /// the machine's answer rather than the user's. See `audio_formats` for what is listed,
+    /// `audio_track` for the probe, and `audio_preview` for the card.
+    Audio,
     Text,
     /// PDF pages: the one kind this app draws as a page with a reader of its own rather than
     /// by handing the file to an engine, a decoder or the drawing layer. See `pdf_preview`.
@@ -1011,6 +1052,7 @@ impl PreviewType {
         match self {
             Self::Images | Self::Magick => config.image_preview_enabled,
             Self::Videos => config.video_preview_enabled,
+            Self::Audio => config.audio_preview_enabled,
             Self::Text => config.text_preview_enabled,
             Self::Ebook | Self::Calibre => config.ebook_preview_enabled,
             Self::Archives | Self::Peazip => config.archive_preview_enabled,
@@ -1027,6 +1069,7 @@ impl PreviewType {
         match self {
             Self::Images | Self::Magick => config.image_preview_enabled = enabled,
             Self::Videos => config.video_preview_enabled = enabled,
+            Self::Audio => config.audio_preview_enabled = enabled,
             Self::Text => config.text_preview_enabled = enabled,
             Self::Ebook | Self::Calibre => config.ebook_preview_enabled = enabled,
             Self::Archives | Self::Peazip => config.archive_preview_enabled = enabled,
@@ -1239,6 +1282,14 @@ pub struct AppConfig {
     /// else (see `webview_preview::frame_page`).
     pub vector_background: TransparentBackground,
     pub video_volume: u32,
+    /// The volume a sound file is previewed at, as a percentage of what the file holds.
+    ///
+    /// A setting of its own rather than the video's above it, because the two are hovered for
+    /// different things: a video's soundtrack is played while its picture is looked at, and a
+    /// sound file is played instead of being drawn at all. Which of the two a file answers to
+    /// is the kind the router gave it, so a video whose streams hold no picture answers to
+    /// this one — the same answer the card beside it is drawn from.
+    pub audio_volume: u32,
     /// How large a picture is drawn, as a share of its own size: `100%` is the size the
     /// file asks for, `50%` half of it, and `fit` the largest size the room the layout
     /// gives it allows.
@@ -1342,6 +1393,13 @@ pub struct AppConfig {
     pub image_preview_enabled: bool,
     /// Whether video previews may be shown at all.
     pub video_preview_enabled: bool,
+    /// Whether sound files are previewed at all, ahead of the sound list their names are
+    /// entries of, and of the card a preview of one is.
+    ///
+    /// It is the switch over both engines that play a file — the media engine Windows has and
+    /// FFmpeg's player — since which of the two a file is, is the machine's answer rather than
+    /// the user's, exactly as it is for the two halves of the video kind.
+    pub audio_preview_enabled: bool,
     /// Whether text files are previewed at all, ahead of the extension list.
     pub text_preview_enabled: bool,
     /// Whether a PDF — the `Ebook` kind — is previewed at all.
@@ -1447,6 +1505,12 @@ pub struct AppConfig {
     pub image_extensions: Vec<String>,
     /// Extensions previewed as videos, already normalized for lookup.
     pub video_extensions: Vec<String>,
+    /// The names of the sounds this app plays, as `[audio] extensions` in `config.ini`: the
+    /// formats the media engine Windows has decoders for and the ones only an installed FFmpeg
+    /// reads, in one list, because which engine plays a file is the machine's answer rather
+    /// than a setting. A user who wants their music left alone takes names out of it, or
+    /// switches the kind off. See `audio_formats`.
+    pub audio_extensions: Vec<String>,
     /// Extensions previewed as text, already normalized for lookup.
     pub text_extensions: Vec<String>,
     /// File names previewed as text — the ones with no extension to match, like
@@ -1515,6 +1579,7 @@ impl Default for AppConfig {
             design_background: DEFAULT_DESIGN_BACKGROUND,
             vector_background: DEFAULT_VECTOR_BACKGROUND,
             video_volume: DEFAULT_VIDEO_VOLUME,
+            audio_volume: DEFAULT_AUDIO_VOLUME,
             preview_scale: PreviewScale::Percent(DEFAULT_PREVIEW_SCALE_PERCENT),
             video_scale: PreviewScale::Percent(DEFAULT_VIDEO_SCALE_PERCENT),
             animated_scale: PreviewScale::Percent(DEFAULT_ANIMATED_SCALE_PERCENT),
@@ -1528,6 +1593,7 @@ impl Default for AppConfig {
             markdown_mode: MarkdownMode::Rendered,
             image_preview_enabled: true,
             video_preview_enabled: true,
+            audio_preview_enabled: true,
             text_preview_enabled: true,
             ebook_preview_enabled: true,
             archive_preview_enabled: true,
@@ -1553,6 +1619,7 @@ impl Default for AppConfig {
             text_scroll_far_edge_grace_pixels: DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS,
             image_extensions: sanitize_image_extensions(DEFAULT_IMAGE_EXTENSIONS),
             video_extensions: sanitize_video_extensions(DEFAULT_VIDEO_EXTENSIONS),
+            audio_extensions: sanitize_audio_extensions(DEFAULT_AUDIO_EXTENSIONS),
             text_extensions: sanitize_extensions(DEFAULT_TEXT_EXTENSIONS),
             text_names: sanitize_names(DEFAULT_TEXT_NAMES),
             archive_extensions: sanitize_archive_extensions(DEFAULT_ARCHIVE_EXTENSIONS),
@@ -1602,6 +1669,7 @@ const SETTING_GROUPS: &[(&str, &[&str])] = &[
         "Preview Types",
         &[
             "archive_preview_enabled",
+            "audio_preview_enabled",
             "design_preview_enabled",
             "document_preview_enabled",
             "ebook_preview_enabled",
@@ -1656,7 +1724,7 @@ const SETTING_GROUPS: &[(&str, &[&str])] = &[
             "vector_background",
         ],
     ),
-    ("Volume", &["video_volume"]),
+    ("Volume", &["audio_volume", "video_volume"]),
     (
         "Performance",
         &[
@@ -1976,6 +2044,7 @@ fn headings_are_old(text: &str) -> bool {
 struct ExtensionLists {
     image: Vec<String>,
     video: Vec<String>,
+    audio: Vec<String>,
     text: Vec<String>,
     names: Vec<String>,
     archive: Vec<String>,
@@ -1996,6 +2065,7 @@ impl ExtensionLists {
         Self {
             image: std::mem::take(&mut config.image_extensions),
             video: std::mem::take(&mut config.video_extensions),
+            audio: std::mem::take(&mut config.audio_extensions),
             text: std::mem::take(&mut config.text_extensions),
             names: std::mem::take(&mut config.text_names),
             archive: std::mem::take(&mut config.archive_extensions),
@@ -2015,6 +2085,7 @@ impl ExtensionLists {
     fn put(self, config: &mut AppConfig) {
         config.image_extensions = self.image;
         config.video_extensions = self.video;
+        config.audio_extensions = self.audio;
         config.text_extensions = self.text;
         config.text_names = self.names;
         config.archive_extensions = self.archive;
@@ -2376,7 +2447,12 @@ impl AppConfig {
         ini.set(
             CONFIG_SECTION,
             "video_volume",
-            Some(self.video_volume.to_string()),
+            Some(sanitize_volume(self.video_volume).to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
+            "audio_volume",
+            Some(sanitize_volume(self.audio_volume).to_string()),
         );
         ini.set(
             CONFIG_SECTION,
@@ -2434,6 +2510,11 @@ impl AppConfig {
             CONFIG_SECTION,
             "video_preview_enabled",
             Some(self.video_preview_enabled.to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
+            "audio_preview_enabled",
+            Some(self.audio_preview_enabled.to_string()),
         );
         ini.set(
             CONFIG_SECTION,
@@ -2562,6 +2643,11 @@ impl AppConfig {
             VIDEO_SECTION,
             "extensions",
             Some(sanitize_video_extensions(&self.video_extensions.join(",")).join(",")),
+        );
+        ini.set(
+            AUDIO_SECTION,
+            "extensions",
+            Some(sanitize_audio_extensions(&self.audio_extensions.join(",")).join(",")),
         );
         ini.set(
             TEXT_SECTION,
@@ -2771,7 +2857,14 @@ impl AppConfig {
         }
         if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "video_volume") {
             if let Ok(value) = u32::try_from(value) {
-                self.video_volume = value;
+                self.video_volume = sanitize_volume(value);
+            }
+        }
+        // And the sound's own, which a file written before the kind existed has no key for: a
+        // fresh installation's level is what it plays at until someone says otherwise.
+        if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "audio_volume") {
+            if let Ok(value) = u32::try_from(value) {
+                self.audio_volume = sanitize_volume(value);
             }
         }
         if let Some(value) = ini.get(CONFIG_SECTION, "preview_scale") {
@@ -2853,6 +2946,11 @@ impl AppConfig {
         }
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "video_preview_enabled") {
             self.video_preview_enabled = value;
+        }
+        // The sound kind's own switch, read the same way and left where it is where the name
+        // is not written at all — which is every file written before the kind existed.
+        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "audio_preview_enabled") {
+            self.audio_preview_enabled = value;
         }
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "text_preview_enabled") {
             self.text_preview_enabled = value;
@@ -3023,6 +3121,17 @@ impl AppConfig {
             sanitize_office_extensions,
         );
         self.office_extensions = list;
+        // The sound list, new with its kind: an older file has no section at all, so the key is
+        // gone, the built-in entries come back with it, and the file is written out again
+        // holding them.
+        let list = configured_list(
+            ini,
+            AUDIO_SECTION,
+            "extensions",
+            DEFAULT_AUDIO_EXTENSIONS,
+            sanitize_audio_extensions,
+        );
+        self.audio_extensions = list;
         // The font list is one whose built-in entries are new with the kind itself, so an
         // older file simply has no section: the key is gone, the built-in entries come back
         // with it, and the file is written out again with them.
@@ -3527,6 +3636,36 @@ mod tests {
             TransparentBackground::Checkerboard
         );
         assert_eq!(config.image_background, TransparentBackground::White);
+    }
+
+    /// The two volumes are two settings, each read from its own key, and each reduced to what a
+    /// player may be handed: a file written before the kind existed has no key for a sound's
+    /// volume and plays at the level a fresh installation does.
+    #[test]
+    fn reads_each_volume_from_its_own_key() {
+        let mut ini = Ini::new();
+        ini.set(CONFIG_SECTION, "video_volume", Some("35".to_string()));
+        ini.set(CONFIG_SECTION, "audio_volume", Some("80".to_string()));
+
+        let config = read_file(&mut ini);
+        assert_eq!(config.video_volume, 35);
+        assert_eq!(config.audio_volume, 80);
+
+        let mut older = Ini::new();
+        older.set(CONFIG_SECTION, "video_volume", Some("10".to_string()));
+        assert_eq!(
+            read_file(&mut older).audio_volume,
+            DEFAULT_AUDIO_VOLUME,
+            "a file written before the kind existed plays a sound at the level a fresh one does"
+        );
+
+        let mut loud = Ini::new();
+        loud.set(CONFIG_SECTION, "audio_volume", Some("400".to_string()));
+        assert_eq!(
+            read_file(&mut loud).audio_volume,
+            MAX_VOLUME,
+            "a level past the loudest is the loudest, not what the file asked a player for"
+        );
     }
 
     /// The font list is the fifth of them and behaves like the rest: a file that has never

@@ -87,6 +87,14 @@ pub enum NativeJob {
     FontSpecimen,
     /// A video played by the media engine Windows has, in this app's own window.
     VideoMediaFoundation,
+    /// A sound played by the media engine Windows has, with nothing on screen: what comes
+    /// out of it is heard rather than drawn, and what the hover shows is the card painted
+    /// from the same track the player was started for (see `audio_preview`).
+    ///
+    /// It is a job of its own rather than a mode of the one above because the two answer
+    /// differently in every way that matters to the loader: a video has a frame to await and
+    /// a shape to draw it at, and a sound has neither.
+    AudioMediaFoundation,
 }
 
 /// What reads a file of `kind`, or nothing where this app has no reader for it.
@@ -122,6 +130,10 @@ pub fn job_for(path: &Path, kind: PreviewType, config: &AppConfig) -> Option<Nat
         PreviewType::Text => Some(NativeJob::Text),
         PreviewType::Fonts => Some(NativeJob::FontSpecimen),
         PreviewType::Videos => Some(NativeJob::VideoMediaFoundation),
+        // A sound has no reader of this app's own, so the job names the engine that plays it
+        // rather than a decoder: which of the two engines plays a file is the probe's answer
+        // and is read from the track (see `audio_track`).
+        PreviewType::Audio => Some(NativeJob::AudioMediaFoundation),
 
         // The kinds an engine draws, and the one kind that is a reader's own but has its job
         // asked where the engine is: a picture an image converter develops is a PNG of the

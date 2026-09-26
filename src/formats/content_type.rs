@@ -160,6 +160,16 @@ fn answered(
     facts: Option<&crate::formats::head::Facts>,
     config: &AppConfig,
 ) -> Content {
+    // The one answer that is not a table's, and it is asked before the cache rather than after
+    // it: a container whose own streams a probe found a sound in and no picture is a sound
+    // whatever its box is called, and the answer held below was read before that probe ran —
+    // an `.mp4` that is really a song would be cached as the video its brand says it is and
+    // stay one for the version of the file the probe had already corrected (see
+    // `audio_formats::probed_audio_only`).
+    if crate::formats::audio_formats::probed_audio_only(path) {
+        return Content::Kind(PreviewType::Audio);
+    }
+
     if let Ok(answers) = ANSWERS.lock() {
         if let Some(answer) = answers.get(&key) {
             return *answer;
@@ -289,10 +299,31 @@ fn names_of(kind: &Type) -> Option<&'static [&'static str]> {
         // it is named here rather than left to it (see `peazip_formats`).
         "qcow2" => None,
 
-        // Nothing to show at all: a program, or a sound. No kind of this app previews
-        // either, so a document's name that holds one starts no engine — which is the
-        // answer this whole module exists to give for the files that were never documents.
-        _ if matches!(kind.matcher_type(), MatcherType::App | MatcherType::Audio) => Some(&[]),
+        // Nothing to show at all: a program. No kind of this app previews one, so a
+        // document's name that holds one starts no engine — which is the answer this whole
+        // module exists to give for the files that were never documents.
+        _ if matches!(kind.matcher_type(), MatcherType::App) => Some(&[]),
+
+        // A sound, in the names the `[audio]` list carries: what the common table knows about
+        // one is what every file manager agrees on, and what this app does with the file —
+        // which of the two engines plays it, and what the card beside it says — is the list's
+        // and the probe's business (see `audio_formats` and `audio_track`).
+        //
+        // A MIDI sequence is the one the common table names that this app has nothing for:
+        // the GS Wavetable synthesizer is a MIDI *out* device and not a decoder, so neither
+        // engine here plays a `.mid` under any name, and the answer is the no-preview answer
+        // a program gets (see `TODO.md`).
+        "midi" => Some(&[]),
+        "mp3" => Some(&["mp3"]),
+        "m4a" => Some(&["m4a", "m4b"]),
+        "opus" => Some(&["opus", "ogg", "oga"]),
+        "flac" => Some(&["flac"]),
+        "wav" => Some(&["wav", "wave"]),
+        "aac" => Some(&["aac"]),
+        "aiff" => Some(&["aiff", "aif", "aifc"]),
+        "amr" => Some(&["amr", "awb"]),
+        "dsf" => Some(&["dsf"]),
+        "ape" => Some(&["ape"]),
 
         "mp4" | "m4v" => Some(&["mp4", "m4v", "mov", "qt", "3gp", "3g2", "f4v"]),
         "mov" => Some(&["mov", "qt", "mp4"]),
@@ -1065,6 +1096,14 @@ const SIGNATURES: &[Signature] = &[
             starts_with(probe, &[b'L', 0x00, b'R', 0x00, b'F', 0x00, 0x00, 0x00])
         }),
     },
+    // -------------------------------------------------------------------------- sounds
+    // The audiobook brand of the container below: `ftypM4B` is an `.m4b`, which the common
+    // table's M4A test deliberately does not catch — it asks for the brand `M4A` and nothing
+    // else — so without this entry the file would be answered as the MP4 its box is.
+    Signature {
+        names: &["m4b", "m4a"],
+        matches: Matcher::Test(|probe| at(probe, 4, b"ftypM4B")),
+    },
     // -------------------------------------------------------------------------- videos
     // The ISO base media family, for the names the common table leaves out of it: `3gp`,
     // `3g2`, `3gpp`, `mj2` and `ismv` are the same `ftyp` box an MP4 and a MOV are.
@@ -1341,6 +1380,92 @@ const SIGNATURES: &[Signature] = &[
     Signature {
         names: &["ogv", "ogm"],
         matches: Matcher::Test(|probe| starts_with(probe, b"OggS") && contains(probe, b"theora")),
+    },
+    // And the sounds of the same container, which the entry above deliberately leaves to this
+    // one: an Ogg page carrying Vorbis, Opus, Speex or a FLAC stream and no Theora is a song.
+    // The order of the two is the whole of the difference — a Theora film whose audio track is
+    // Vorbis declares both, and it is the video entry that is asked first.
+    Signature {
+        names: &["ogg", "oga", "opus", "spx"],
+        matches: Matcher::Test(is_ogg_sound),
+    },
+    // The sound formats the common table has no signature for, each named by the magic it
+    // writes at the front of a file: the containers FFmpeg's player reads that no file manager
+    // would name. A file of one of these names that says nothing at the front of itself is
+    // answered by the name it carries, which is what the `[audio]` list is for.
+    //
+    // Musepack, in both of the shapes the format is written in: the `MPCK` an SV8 file opens
+    // with, and the `MP+` its predecessor used.
+    Signature {
+        names: &["mpc"],
+        matches: Matcher::Test(|probe| {
+            starts_with(probe, b"MPCK") || starts_with(probe, b"MP+")
+        }),
+    },
+    // WavPack, whose four characters open every file of the format.
+    Signature {
+        names: &["wv"],
+        matches: Matcher::Test(|probe| starts_with(probe, b"wvpk")),
+    },
+    // True Audio, which names itself in the first four bytes.
+    Signature {
+        names: &["tta"],
+        matches: Matcher::Test(|probe| starts_with(probe, b"TTA1")),
+    },
+    // TAK, whose magic is the format's own name backwards and a case apart.
+    Signature {
+        names: &["tak"],
+        matches: Matcher::Test(|probe| starts_with(probe, b"tBaK")),
+    },
+    // OptimFROG, in the two shapes a stream is written in — the one that is only a stream, and
+    // the one that keeps its samples in a separate file.
+    Signature {
+        names: &["ofr", "ofs"],
+        matches: Matcher::Test(|probe| {
+            starts_with(probe, b"OFR ") || starts_with(probe, b"OFS ")
+        }),
+    },
+    // Shorten, whose four letters open every file of it.
+    Signature {
+        names: &["shn"],
+        matches: Matcher::Test(|probe| starts_with(probe, b"ajkg")),
+    },
+    // DSD in the Philips container, which is an IFF form of the format's own name.
+    Signature {
+        names: &["dff"],
+        matches: Matcher::Test(|probe| starts_with(probe, b"FRM8")),
+    },
+    // The two older Unix containers: the `.snd` header every AU file opens with, and the CAF
+    // header Apple's own writer uses.
+    Signature {
+        names: &["au", "snd"],
+        matches: Matcher::Test(|probe| starts_with(probe, b".snd")),
+    },
+    Signature {
+        names: &["caf"],
+        matches: Matcher::Test(|probe| starts_with(probe, b"caff")),
+    },
+    // Creative's sample format, which announces itself in as many words.
+    Signature {
+        names: &["voc"],
+        matches: Matcher::Test(|probe| starts_with(probe, b"Creative Voice File")),
+    },
+    // The two cinema codecs, named by the sync word a frame of each opens with: Dolby's is the
+    // two bytes every AC-3 and E-AC-3 frame begins with, and DTS's is the sixteen-bit sync of
+    // its own framing.
+    Signature {
+        names: &["ac3", "eac3"],
+        matches: Matcher::Test(|probe| starts_with(probe, &[0x0B, 0x77])),
+    },
+    Signature {
+        names: &["dts", "dtshd"],
+        matches: Matcher::Test(|probe| at(probe, 0, &[0x7F, 0xFE, 0x80, 0x01])),
+    },
+    // RealAudio, whose marker every file of the format is written with — the modern one, which
+    // names the codec in its header, and the older `.ra` the extension is for.
+    Signature {
+        names: &["ra"],
+        matches: Matcher::Test(|probe| starts_with(probe, b".ra\xfd")),
     },
     // PostScript, which is what an `.eps` is and what an Illustrator document saved
     // without its compatibility layer is. The PDF half of that family needs no entry here:
@@ -2197,6 +2322,21 @@ fn starts_with(probe: &[u8], prefix: &[u8]) -> bool {
 /// Whether `probe` holds `needle` anywhere in it.
 fn contains(probe: &[u8], needle: &[u8]) -> bool {
     probe.windows(needle.len()).any(|window| window == needle)
+}
+
+/// Whether the front of a file is an Ogg page carrying a sound: the container's own four bytes
+/// and the header one of the audio codecs writes inside it.
+///
+/// What is asked is the codec's own name rather than a guess at the framing, because an Ogg
+/// file's pages are multiplexed and what the first page holds is the first stream's header —
+/// which is why the video entry above is asked before this one: a Theora film's first page
+/// carries Theora's header and not the Vorbis header of its audio track.
+fn is_ogg_sound(probe: &[u8]) -> bool {
+    starts_with(probe, b"OggS")
+        && (contains(probe, b"vorbis")
+            || contains(probe, b"OpusHead")
+            || contains(probe, b"Speex")
+            || contains(probe, b"fLaC"))
 }
 
 /// One of FFmpeg's own formats: a name the video list carries that no signature above
@@ -3675,10 +3815,19 @@ mod tests {
             Content::Foreign,
             "and neither does a Unix one"
         );
+        // And a sound, which is the one that changed its answer: an MP3 under a document's
+        // name is the sound the sound list plays rather than a format with nothing to show,
+        // because the kind exists now (see `audio_formats`). What still has no preview of its
+        // own is a MIDI sequence, which neither engine this app has plays.
         assert_eq!(
             classified("letter.docx", b"ID3\x04\x00\x00\x00\x00\x00\x00"),
+            Content::Kind(PreviewType::Audio),
+            "a song is not a document either — it is a song"
+        );
+        assert_eq!(
+            classified("tune.docx", b"MThd\x00\x00\x00\x06\x00\x01"),
             Content::Foreign,
-            "a song is not a document either"
+            "and a sequence of notes is neither: nothing here plays one"
         );
     }
 
