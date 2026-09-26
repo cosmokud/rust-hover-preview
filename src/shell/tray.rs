@@ -1,13 +1,14 @@
 use crate::app::updates;
 use crate::config::config::{
     sanitize_decode_budget_gb, sanitize_document_cache_mb, sanitize_image_cache_mb,
-    sanitize_text_font_scale_percent, sanitize_tick_ms, AvoidMode, EngineIdle, MarkdownMode,
-    OfficeEngine, PreviewScale, PreviewType, TextTheme, TransparentBackground, TriggerKeyMode,
-    DEFAULT_AFK_TIMER_SECS, DEFAULT_ANIMATED_SCALE, DEFAULT_AVOID_MODE, DEFAULT_DDS_BACKGROUND,
-    DEFAULT_DECODE_BUDGET_GB, DEFAULT_DESIGN_BACKGROUND, DEFAULT_DESIGN_SCALE,
-    DEFAULT_DOCUMENT_CACHE_MB, DEFAULT_DOCUMENT_SCALE, DEFAULT_EBOOK_SCALE, DEFAULT_FOLLOW_CURSOR,
-    DEFAULT_FONT_BACKGROUND, DEFAULT_FONT_SCALE, DEFAULT_HOVER_DELAY_MS, DEFAULT_IMAGE_BACKGROUND,
-    DEFAULT_IMAGE_CACHE_MB, DEFAULT_LIBREOFFICE_IDLE_SECS, DEFAULT_OFFICE_ENGINE,
+    sanitize_image_disk_cache_mb, sanitize_text_font_scale_percent, sanitize_tick_ms, AvoidMode,
+    EngineIdle, MarkdownMode, OfficeEngine, PreviewScale, PreviewType, TextTheme,
+    TransparentBackground, TriggerKeyMode, DEFAULT_AFK_TIMER_SECS, DEFAULT_ANIMATED_SCALE,
+    DEFAULT_AVOID_MODE, DEFAULT_DDS_BACKGROUND, DEFAULT_DECODE_BUDGET_GB,
+    DEFAULT_DESIGN_BACKGROUND, DEFAULT_DESIGN_SCALE, DEFAULT_DOCUMENT_CACHE_MB,
+    DEFAULT_DOCUMENT_SCALE, DEFAULT_EBOOK_SCALE, DEFAULT_FOLLOW_CURSOR, DEFAULT_FONT_BACKGROUND,
+    DEFAULT_FONT_SCALE, DEFAULT_HOVER_DELAY_MS, DEFAULT_IMAGE_BACKGROUND, DEFAULT_IMAGE_CACHE_MB,
+    DEFAULT_IMAGE_DISK_CACHE_MB, DEFAULT_LIBREOFFICE_IDLE_SECS, DEFAULT_OFFICE_ENGINE,
     DEFAULT_OFFICE_ENGINE_IDLE_SECS, DEFAULT_PREVIEW_SCALE, DEFAULT_SAME_FILE_REHOVER_DELAY_MS,
     DEFAULT_SETTLING_DELAY_MS, DEFAULT_TEXT_FONT_SCALE_PERCENT, DEFAULT_TICK_MS,
     DEFAULT_VECTOR_BACKGROUND, DEFAULT_VECTOR_SCALE, DEFAULT_VIDEO_SCALE, DEFAULT_VIDEO_VOLUME,
@@ -243,13 +244,17 @@ const ID_TRAY_TYPE_DESIGN: u16 = 1071;
 /// — and the metafiles and encapsulated PostScript files the same kind grew to hold.
 const ID_TRAY_TYPE_VECTOR: u16 = 1069;
 /// The `Cache` submenu: one command per size it offers, in the order it lists
-/// them, for each of the two caches it sizes. They start past the range the `theme`
+/// them, for each of the three caches it sizes. They start past the range the `theme`
 /// folder's own items occupy (see `ID_TRAY_THEME_CUSTOM_BASE`).
 const ID_TRAY_IMAGE_CACHE_BASE: u16 = 1300;
 /// The `Cache → Document` sizes: how much of what an engine drew is kept between hovers. The
-/// pages are files under the temp folder rather than memory, which is what makes this the one
-/// cache a size is measured in bytes of something on disk.
+/// pages are files under the temp folder rather than memory, which is what makes it one of the
+/// two caches a size is measured in bytes of something on disk.
 const ID_TRAY_DOCUMENT_CACHE_BASE: u16 = 1320;
+/// The `Cache → Image (Disk)` sizes: how much of what the image converter developed is kept
+/// between hovers. The other cache whose size is bytes on disk — pictures of its own, in a
+/// folder beside the documents' pages rather than a share of them (see `document_cache`).
+const ID_TRAY_IMAGE_DISK_CACHE_BASE: u16 = 1340;
 /// The `Performance → Decode Budget` submenu: one command per ceiling it offers, in
 /// the order it lists them. It sits in the slack between the `Cache` sizes and the
 /// document scale's own range.
@@ -574,10 +579,13 @@ unsafe extern "system" fn tray_window_proc(
                 {
                     toggle_engine_persistent(cmd - ID_TRAY_ENGINE_PERSISTENT_BASE)
                 }
-                // A cache size, by the position it was listed at. The document cache is the
-                // last of the two, so its range is bounded by the sizes it offers rather than
-                // by the next base: an item of a submenu added past it is not a cache size.
-                cmd if (ID_TRAY_IMAGE_CACHE_BASE..ID_TRAY_DOCUMENT_CACHE_BASE).contains(&cmd) => {
+                // A cache size, by the position it was listed at. Each cache is bounded by the
+                // sizes it offers rather than by the base of the next one, so an item of a
+                // submenu added past these is not read as a cache size.
+                cmd if (ID_TRAY_IMAGE_CACHE_BASE
+                    ..ID_TRAY_IMAGE_CACHE_BASE + CACHE_SIZE_CHOICES_MB.len() as u16)
+                    .contains(&cmd) =>
+                {
                     set_image_cache_mb(cmd - ID_TRAY_IMAGE_CACHE_BASE)
                 }
                 cmd if (ID_TRAY_DOCUMENT_CACHE_BASE
@@ -585,6 +593,12 @@ unsafe extern "system" fn tray_window_proc(
                     .contains(&cmd) =>
                 {
                     set_document_cache_mb(cmd - ID_TRAY_DOCUMENT_CACHE_BASE)
+                }
+                cmd if (ID_TRAY_IMAGE_DISK_CACHE_BASE
+                    ..ID_TRAY_IMAGE_DISK_CACHE_BASE + CACHE_SIZE_CHOICES_MB.len() as u16)
+                    .contains(&cmd) =>
+                {
+                    set_image_disk_cache_mb(cmd - ID_TRAY_IMAGE_DISK_CACHE_BASE)
                 }
                 // The ceiling one hover is answered under, by the position it was
                 // listed at.
@@ -1366,14 +1380,19 @@ unsafe fn show_context_menu(hwnd: HWND) {
     let performance_menu = CreatePopupMenu().unwrap();
 
     // Add the "Cache" submenu: what a preview's own data may cost between hovers — the frames
-    // a decoded image was shown as, which are held in memory, and the pages a document was
-    // drawn as, which are files under the temp folder — each of them listed largest first,
-    // with the size its own cache starts at marked, and each of them saying which of the two
-    // kinds of storage it is.
-    let (image_cache_mb, document_cache_mb) = CONFIG
+    // a decoded image was shown as, which are held in memory; the pages a document was drawn
+    // as, which are files under the temp folder; and the pictures the image converter developed
+    // a file into, which are files of their own beside those — each of them listed largest
+    // first, with the size its own cache starts at marked, and each of them saying which of the
+    // two kinds of storage it is.
+    let (image_cache_mb, document_cache_mb, image_disk_cache_mb) = CONFIG
         .lock()
-        .map(|c| (c.image_cache_mb, c.document_cache_mb))
-        .unwrap_or((DEFAULT_IMAGE_CACHE_MB, DEFAULT_DOCUMENT_CACHE_MB));
+        .map(|c| (c.image_cache_mb, c.document_cache_mb, c.image_disk_cache_mb))
+        .unwrap_or((
+            DEFAULT_IMAGE_CACHE_MB,
+            DEFAULT_DOCUMENT_CACHE_MB,
+            DEFAULT_IMAGE_DISK_CACHE_MB,
+        ));
 
     let cache_menu = CreatePopupMenu().unwrap();
 
@@ -1393,6 +1412,12 @@ unsafe fn show_context_menu(hwnd: HWND) {
             ID_TRAY_DOCUMENT_CACHE_BASE,
             document_cache_mb,
             DEFAULT_DOCUMENT_CACHE_MB,
+        ),
+        (
+            w!("Image (Disk)"),
+            ID_TRAY_IMAGE_DISK_CACHE_BASE,
+            image_disk_cache_mb,
+            DEFAULT_IMAGE_DISK_CACHE_MB,
         ),
     ] {
         let sizes_menu = CreatePopupMenu().unwrap();
@@ -2805,6 +2830,25 @@ fn set_document_cache_mb(index: u16) {
     document_cache::trim_now();
 }
 
+/// How much of what the image converter developed may be kept, between hovers.
+///
+/// The same shape as the document cache beside it, and for the same reason: a picture is
+/// developed for the hover that asks for it whatever the size, and a size of nothing means the
+/// hover after it pays for the development again. Nothing is rebuilt here either — the pages are
+/// read by the hover that wants one, so what a size does is bound what is left for it to read.
+fn set_image_disk_cache_mb(index: u16) {
+    let Some(megabytes) = cache_size_at(index) else {
+        return;
+    };
+
+    if let Ok(mut config) = CONFIG.lock() {
+        config.image_disk_cache_mb = sanitize_image_disk_cache_mb(megabytes);
+        config.save();
+    }
+
+    document_cache::trim_image_now();
+}
+
 /// What one hover may decode or read for, in gigabytes.
 ///
 /// Nothing is rebuilt here, and nothing already on screen changes: every reader asks
@@ -3648,13 +3692,28 @@ mod tests {
         }
     }
 
-    /// A share of the display is never read as a cache size: the document cache is the
-    /// last of the two, and the items added past it are a range of their own.
+    /// A share of the display is never read as a cache size, and no cache size is read as
+    /// another's: the three caches are a range each, and the shares added beside them are ranges
+    /// of their own.
     #[test]
     fn the_document_scale_ranges_are_not_another_submenus_range() {
-        let document_cache = ID_TRAY_DOCUMENT_CACHE_BASE
-            ..ID_TRAY_DOCUMENT_CACHE_BASE + CACHE_SIZE_CHOICES_MB.len() as u16;
-        let themes = ID_TRAY_THEME_CUSTOM_BASE..ID_TRAY_IMAGE_CACHE_BASE;
+        let caches = [
+            ID_TRAY_IMAGE_CACHE_BASE..ID_TRAY_IMAGE_CACHE_BASE + CACHE_SIZE_CHOICES_MB.len() as u16,
+            ID_TRAY_DOCUMENT_CACHE_BASE
+                ..ID_TRAY_DOCUMENT_CACHE_BASE + CACHE_SIZE_CHOICES_MB.len() as u16,
+            ID_TRAY_IMAGE_DISK_CACHE_BASE
+                ..ID_TRAY_IMAGE_DISK_CACHE_BASE + CACHE_SIZE_CHOICES_MB.len() as u16,
+            ID_TRAY_THEME_CUSTOM_BASE..ID_TRAY_IMAGE_CACHE_BASE,
+        ];
+
+        for (index, cache) in caches.iter().enumerate() {
+            for other in &caches[index + 1..] {
+                assert!(
+                    !cache.contains(&other.start) && !other.contains(&cache.start),
+                    "the ranges {cache:?} and {other:?} overlap"
+                );
+            }
+        }
 
         for base in [
             ID_TRAY_VECTOR_SCALE_BASE,
@@ -3665,7 +3724,7 @@ mod tests {
         ] {
             let scales = base..base + DOCUMENT_SCALE_CHOICES.len() as u16;
 
-            for other in [document_cache.clone(), themes.clone()] {
+            for other in &caches {
                 assert!(
                     !other.contains(&base) && !scales.contains(&other.start),
                     "the ranges {scales:?} and {other:?} overlap"

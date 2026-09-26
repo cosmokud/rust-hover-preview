@@ -2,6 +2,10 @@
 
 ## [0.3.5] - 2026-09-26
 
+### Added
+
+- **`Cache → Image (Disk)`**: a budget for the pictures the image converter develops. Each is kept as a file under `%TEMP%\rust-hover-preview\image` (`image_disk_cache_mb`, `512` by default), so hovering a camera raw a second time — or again after a restart — is a read rather than another conversion. `0` keeps nothing between hovers.
+
 ### Fixed
 
 - **A hover no longer stalls on the files a hover is worst at.** A box measured by a read — a PDF's first page, an archive's table of contents, a comic's first plate, an SVG, a metafile, a font — was measured on the thread that draws the hover, so a large one held the pointer, the spinner and every tick of the loop for as long as the read took, and a `.tar.gz` inflated to reach its listing or a book of a thousand pages was felt at the hand. Those measures run on a thread of their own now: the hover is laid out as the spinner and replayed the moment the answer lands, which is the arrangement a video's geometry probe has had for its own two processes, and the answer is held for the file, its version and the room it was measured in, so a second hover of a file waits for nothing. An answer that the reader has nothing for the file is the one answer a wait comes down on rather than a spinner left standing over nothing.
@@ -19,6 +23,9 @@
 ### Changed
 
 - Version bumped to `0.3.5` in `Cargo.toml` and `Cargo.lock`.
+- `image_cache_mb` starts at `64` rather than `32`, so a picture shown at the size of a large display is held at all; `document_cache_mb` starts at `256` rather than `128`, so one converted drawing or scanned book no longer fills the folder on its own. An installation that already has a `config.ini` keeps the value it wrote — only a new file gets the new defaults.
+- A workbook's fallback page — the picture Excel is asked for where no printer can export a page — is written as a PNG rather than a BMP: the same picture, a few times smaller, and cheaper to read back.
+- The render engine is asked for as soon as the pointer settles on a document it draws, instead of when the page is asked for, so the first hover of a session overlaps the launch with its own wait. Office is not warmed — its tier can be asked for a document and not for an application — and the ebook engine keeps no instance to warm.
 
 ## [0.3.4] - 2026-09-25
 
