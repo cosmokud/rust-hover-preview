@@ -39,6 +39,7 @@ use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use windows::core::{implement, GUID, IUnknown, Interface, BSTR, PCWSTR};
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Imaging::{
@@ -47,6 +48,7 @@ use windows::Win32::Graphics::Imaging::{
 use windows::Win32::Media::MediaFoundation::{
     CLSID_MFMediaEngineClassFactory, IMFAttributes, IMFByteStream, IMFMediaEngine,
     IMFMediaEngineClassFactory, IMFMediaEngineEx, IMFMediaEngineNotify, IMFMediaEngineNotify_Impl,
+    IMFSourceReader,
     MFAudioFormat_AAC, MFAudioFormat_ADTS, MFAudioFormat_ALAC, MFAudioFormat_AMR_NB,
     MFAudioFormat_AMR_WB, MFAudioFormat_DTS, MFAudioFormat_Dolby_AC3, MFAudioFormat_Dolby_DDPlus,
     MFAudioFormat_FLAC, MFAudioFormat_Float, MFAudioFormat_MP3, MFAudioFormat_Opus,
@@ -54,10 +56,11 @@ use windows::Win32::Media::MediaFoundation::{
     MFAudioFormat_WMAudio_Lossless, MFCreateAttributes, MFCreateMFByteStreamOnStream,
     MFCreateMediaType, MFCreateSourceReaderFromByteStream, MFMediaType_Audio, MFVideoFormat_ARGB32,
     MFARGB, MF_BYTESTREAM_ORIGIN_NAME, MF_MEDIA_ENGINE_CALLBACK, MF_MEDIA_ENGINE_EVENT_ERROR,
-    MF_MEDIA_ENGINE_READY_HAVE_CURRENT_DATA, MF_MEDIA_ENGINE_VIDEO_OUTPUT_FORMAT,
-    MF_MT_AUDIO_NUM_CHANNELS, MF_MT_AUDIO_SAMPLES_PER_SECOND, MF_MT_AVG_BITRATE, MF_MT_FRAME_SIZE,
-    MF_MT_MAJOR_TYPE, MF_MT_PIXEL_ASPECT_RATIO, MF_MT_SUBTYPE, MF_SOURCE_READER_FIRST_AUDIO_STREAM,
-    MF_SOURCE_READER_FIRST_VIDEO_STREAM,
+    MF_MEDIA_ENGINE_READY_HAVE_CURRENT_DATA, MF_MEDIA_ENGINE_READY_HAVE_METADATA,
+    MF_MEDIA_ENGINE_VIDEO_OUTPUT_FORMAT, MF_MT_AUDIO_NUM_CHANNELS,
+    MF_MT_AUDIO_SAMPLES_PER_SECOND, MF_MT_AVG_BITRATE, MF_MT_FRAME_SIZE, MF_MT_MAJOR_TYPE,
+    MF_MT_PIXEL_ASPECT_RATIO, MF_MT_SUBTYPE, MF_PD_DURATION, MF_SOURCE_READER_FIRST_AUDIO_STREAM,
+    MF_SOURCE_READER_FIRST_VIDEO_STREAM, MF_SOURCE_READER_MEDIASOURCE,
 };
 use windows::Win32::System::Com::{
     CoCreateInstance, IStream, CLSCTX_INPROC_SERVER, STGM_READ, STGM_SHARE_DENY_NONE,
@@ -73,6 +76,15 @@ const BORDER: MFARGB = MFARGB {
     rgbRed: 0,
     rgbAlpha: 255,
 };
+
+/// How long a seek a session was asked for may wait for the engine to be ready for one.
+///
+/// Reading a file's own header is a fraction of a second's work for a file on this machine —
+/// it is the header, not the file — so this is a give-up rather than a wait anything is
+/// expected to reach. What it is here for is the file the engine never gets to the header of:
+/// what a sound is answered with then is its beginning, rather than a seek asked for again on
+/// every read of its clock for as long as it is hovered.
+const SEEK_GIVE_UP: Duration = Duration::from_secs(3);
 
 /// The engine's event sink, which is what the engine needs before it will run at all —
 /// `MF_MEDIA_ENGINE_CALLBACK` is required in every mode.
@@ -124,6 +136,20 @@ struct Session {
     height: u32,
     path: PathBuf,
     failed: Arc<AtomicBool>,
+    /// Where the sound was asked to start, while the engine has not taken it there yet.
+    ///
+    /// A seek is made of a source the engine has read the header of, and the header is not
+    /// there the instant `Load` answers: a call made before it is one the engine refuses, or
+    /// takes and does nothing with. So the position is kept rather than made once and hoped
+    /// for, and the first tick that finds the engine loaded is the one that makes it — a tick
+    /// of a sound's own preview, which is a sixtieth of a second (see `apply_seek`). It is
+    /// nothing for a video, and nothing for a sound that starts at the beginning — which is
+    /// most of them.
+    pending_seek: Option<f64>,
+    /// When the session was started, which is what bounds the wait for a pending seek: an
+    /// engine that has not read the header of its file in this long is an engine that is not
+    /// going to, and a seek left standing is a seek made on every read of the clock after it.
+    began: Instant,
 }
 
 /// The size a video asks to be shown at — its frame, corrected for the pixel shape the
@@ -189,27 +215,46 @@ pub fn play(path: &Path, width: u32, height: u32, volume: u32) {
         return;
     }
 
-    if let Some(session) = Session::begin(path, Some((width, height)), volume) {
+    if let Some(session) = Session::begin(path, Some((width, height)), volume, 0.0) {
         SESSION.with(|slot| *slot.borrow_mut() = Some(session));
     }
 }
 
-/// Start playing `path` as a sound at `volume` per cent: the same engine, the same file and the
-/// same loop, with no surface and nothing to draw.
+/// Start playing `path` as a sound at `volume` per cent and `start` seconds in: the same engine,
+/// the same file and the same loop, with no surface and nothing to draw.
 ///
 /// Anything already playing is stopped first, so a sound is never two sounds. A call that could
 /// not start one leaves nothing behind rather than a session that will never make a noise:
 /// [`is_playing`] answers for that, and the card the hover shows stands alone.
-pub fn play_audio(path: &Path, volume: u32) {
+///
+/// Where the sound starts is the caller's answer rather than this one's — what a file's own
+/// length is, and what the tray has been asked for, are questions this side is not asked (see
+/// `audio_seek`). What it is handed is a number of seconds, and a sound that starts at the
+/// beginning is handed zero.
+pub fn play_audio(path: &Path, volume: u32, start: f64) {
     stop();
 
     if !codecs::mf_started() {
         return;
     }
 
-    if let Some(session) = Session::begin(path, None, volume) {
+    if let Some(session) = Session::begin(path, None, volume, start) {
         SESSION.with(|slot| *slot.borrow_mut() = Some(session));
     }
+}
+
+/// Take the sound that is playing to `seconds` into its file, which is what a start position
+/// the probe could not work out asks for once the engine has said how long the file is.
+///
+/// It is asked of the session rather than of the engine because the seek may have to wait for
+/// one (see `Session::pending_seek`), and it does nothing where nothing is playing — a sound
+/// whose file has been left by the time the length lands is a sound that is over.
+pub fn seek(seconds: f64) {
+    SESSION.with(|slot| {
+        if let Some(session) = slot.borrow_mut().as_mut() {
+            session.seek(seconds);
+        }
+    });
 }
 
 /// Give the surface a new size, which is what a preview that is placed again at another
@@ -277,6 +322,24 @@ pub fn position() -> Option<f64> {
     })
 }
 
+/// Take the running session to the position it was asked to start at, where the engine has not
+/// taken it there yet.
+///
+/// A seek cannot be made the instant a session is begun — the engine has not read the file's own
+/// header — so it is kept and made here instead, and what this is for is the *moment* it is
+/// made: it is called on the tick a sound is on screen for, which is a sixtieth of a second,
+/// while the clock the card is drawn from is read four times a second. A seek waiting on the
+/// slower of those is a quarter of a second of the file's beginning heard before the sound is
+/// where it was asked to start, and this is what makes what is heard of the beginning the time
+/// it takes to read a header instead (see `Session::take_pending`).
+pub fn apply_seek() {
+    SESSION.with(|slot| {
+        if let Some(session) = slot.borrow_mut().as_mut() {
+            session.take_pending();
+        }
+    });
+}
+
 /// How long the file plays, in seconds, where the running session has said.
 ///
 /// A duration is not known the moment a session exists — the engine reads the container's own
@@ -302,8 +365,14 @@ pub fn duration() -> Option<f64> {
 /// stream: a source reader can only give what a registered decoder can produce, so a yes there
 /// is the whole of "this will play".
 ///
-/// What comes back is a track with no duration in it: how long a file plays is the engine's
-/// answer once one is running, and the engine is not started by a probe.
+/// The last fact is the file's own length, read off the reader's presentation — which is the
+/// container's answer rather than a decoder's, and is what the probe is asked for beyond the
+/// card: where a sound starts is a position or a share of its length, and a share of a length
+/// nothing has read yet is not a place at all (see `audio_seek`). It is read from the media
+/// source rather than from the media engine because the engine is not started by a probe — and
+/// a duration in hundred-nanosecond units, which is the unit the property is written in, is
+/// what the seconds the rest of the app speaks in are made of. A container that does not say
+/// leaves it out, and the engine's own answer is what the card is drawn from then.
 pub fn audio_probe(path: &Path) -> Option<audio_track::Track> {
     if !codecs::mf_started() {
         return None;
@@ -325,6 +394,7 @@ pub fn audio_probe(path: &Path) -> Option<audio_track::Track> {
         .ok()
         .and_then(|channels| u16::try_from(channels).ok());
     let bitrate = unsafe { media_type.GetUINT32(&MF_MT_AVG_BITRATE) }.ok();
+    let duration = presentation_duration(&reader);
 
     // The decoder, asked for the only way that answers it: a stream the reader will hand back
     // as PCM is a stream this machine has a decoder for.
@@ -342,8 +412,28 @@ pub fn audio_probe(path: &Path) -> Option<audio_track::Track> {
         rate: rate.filter(|rate| *rate > 0),
         channels: channels.filter(|channels| *channels > 0),
         bitrate: bitrate.filter(|bitrate| *bitrate > 0),
-        duration: None,
+        duration,
     })
+}
+
+/// How long the file a reader was opened over plays, in seconds, where the container says.
+///
+/// The property is the media source's own rather than a stream's, and it is written in
+/// hundred-nanosecond units — the unit every duration in this API is kept in — so what is
+/// handed back is the number of seconds the rest of the app works in. A file that does not say,
+/// and a reader that will not answer, are one answer here: nothing, which is a card drawn
+/// without a length and a hover that starts a sound at its beginning rather than at a share of
+/// a length nothing knows.
+fn presentation_duration(reader: &IMFSourceReader) -> Option<f64> {
+    let hundred_nanoseconds = unsafe {
+        reader.GetPresentationAttribute(MF_SOURCE_READER_MEDIASOURCE.0 as u32, &MF_PD_DURATION)
+    }
+    .ok()
+    .and_then(|value| u64::try_from(&value).ok())?;
+
+    let seconds = hundred_nanoseconds as f64 / 10_000_000.0;
+
+    (seconds.is_finite() && seconds > 0.0).then_some(seconds)
 }
 
 /// What a stream's own codec is called, where this app has a name for it.
@@ -411,7 +501,12 @@ pub fn stop() {
 }
 
 impl Session {
-    fn begin(path: &Path, surface_size: Option<(u32, u32)>, volume: u32) -> Option<Self> {
+    fn begin(
+        path: &Path,
+        surface_size: Option<(u32, u32)>,
+        volume: u32,
+        start: f64,
+    ) -> Option<Self> {
         let byte_stream = open_stream(path)?;
 
         // A video is played into a surface of its own; a sound is played into nothing, and the
@@ -491,7 +586,7 @@ impl Session {
         unsafe { engine.Load() }.ok()?;
         unsafe { engine.Play() }.ok()?;
 
-        Some(Self {
+        let mut session = Self {
             engine,
             byte_stream,
             bitmap,
@@ -499,7 +594,68 @@ impl Session {
             height,
             path: path.to_path_buf(),
             failed,
-        })
+            pending_seek: None,
+            began: Instant::now(),
+        };
+
+        // A sound that was asked to start somewhere other than the beginning is taken there
+        // before anything is heard of the beginning of it: the engine has the file's header by
+        // the time `Load` has answered for a local file often enough that this call lands, and
+        // a call it was too early for is kept and made again on the first tick after it (see
+        // `take_pending`).
+        session.seek(start);
+
+        Some(session)
+    }
+
+    /// Ask to be taken to `seconds` into the file, making the seek now where the engine is
+    /// ready for it and keeping it otherwise.
+    fn seek(&mut self, seconds: f64) {
+        if !seconds.is_finite() || seconds <= 0.0 {
+            return;
+        }
+
+        self.pending_seek = Some(seconds);
+        self.take_pending();
+    }
+
+    /// The seek this session is still owed, made where the engine is ready for one.
+    ///
+    /// What "ready" means is the engine's own ready state rather than a wait of this side's: a
+    /// seek asked for before the media is loaded is one the engine refuses, and one asked for
+    /// the moment it lands is what this app wants — so what is watched is the state that says
+    /// the file's own header has been read, which is the moment a seek stops being a request to
+    /// seek somewhere in a file nothing knows the shape of.
+    ///
+    /// Three things end it: the seek being made, which happens once and is not checked
+    /// afterwards — a source that will not seek, and a position past the end of a file that
+    /// says nothing about its length, are both answered by the engine playing on from where it
+    /// is, and asking again would be a sound restarted four times a second; a file whose length
+    /// is known and is not past the position asked for, which is a remembered position past the
+    /// end of a file that has been edited since (see `audio_seek::planned`); and the wait
+    /// running out, which is an engine that never read the file's header at all.
+    fn take_pending(&mut self) {
+        let Some(target) = self.pending_seek else {
+            return;
+        };
+
+        if self.began.elapsed() >= SEEK_GIVE_UP {
+            self.pending_seek = None;
+            return;
+        }
+
+        if unsafe { self.engine.GetReadyState() } < MF_MEDIA_ENGINE_READY_HAVE_METADATA.0 as u16 {
+            return;
+        }
+
+        let duration = unsafe { self.engine.GetDuration() };
+        if duration.is_finite() && duration > 0.0 && target >= duration {
+            self.pending_seek = None;
+            return;
+        }
+
+        let _ = unsafe { self.engine.SetCurrentTime(target) };
+        self.pending_seek = None;
     }
 
     fn copy_into(&mut self, pixels: &mut Vec<u8>) -> Option<(u32, u32)> {

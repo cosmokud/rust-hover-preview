@@ -238,7 +238,8 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
   * **Font Background** — Same backdrops for a font specimen. Default **White**.
   * **DDS Background** — Black or White for `.dds` textures. Default **White**. The two see-through backdrops are not offered.
   * **Design Background** — Same as picture backdrops for a design document. Default **Checkerboard**.
-* **Volume** — Two halves, **Video** and **Audio**, each offering `0%`, `1%`, `5%`, `10%`, `20%`, `35%`, `50%`, `65%`, `80%` and `100%`. A video's soundtrack starts at `0%` — silent, so a hover never makes a sound the pointer did not ask for — and a sound file at `20%`: a video is looked at and a song is listened to, so the two are settings of their own. A sound at `0%` still shows its card, silently.
+* **Volume** — **Video** and **Audio**, each offering `0%`, `1%`, `5%`, `10%`, `20%`, `35%`, `50%`, `65%`, `80%` and `100%`. A video's soundtrack starts at `0%` — silent, so a hover never makes a sound the pointer did not ask for — and a sound file at `10%`: a video is looked at and a song is listened to, so the two are settings of their own. A sound at `0%` still shows its card, silently.
+  * **Audio Seek** — Where in a file a hovered sound starts playing: **Remember** (`default`) picks it up where the last hover left it, **From the Start** always begins at the beginning, **From the Middle** drops it half way in, and **Random** anywhere at all. The remembered positions are kept in a small file under `%TEMP%\rust-hover-preview\audio`, so they survive a restart; nothing is remembered while another mode is chosen. A video is always played from its beginning.
 * **Performance**
   * **Cache** — What a preview may cost between hovers: `2 GB` down to `0 MB`. **`Image (RAM)`** = decoded frames kept in memory. **`Document (Disk)`** = engine-drawn pages kept as temp files. **`Image (Disk)`** = the pictures ImageMagick developed, kept as temp files.
   * **Decode Budget** — `16 GB` down to `512 MB`; default `1 GB`. A file past it gets no preview.
@@ -320,7 +321,8 @@ image_background=checkerboard
 vector_background=checkerboard
 
 ; Volume
-audio_volume=20
+audio_seek=remember
+audio_volume=10
 video_volume=0
 
 ; Performance

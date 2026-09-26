@@ -1,10 +1,10 @@
 use crate::app::{dialogs, updates};
 use crate::config::config::{
     sanitize_decode_budget_gb, sanitize_document_cache_mb, sanitize_image_cache_mb,
-    sanitize_image_disk_cache_mb, sanitize_text_font_scale_percent, sanitize_tick_ms, AvoidMode,
-    EngineIdle, MarkdownMode, OfficeEngine, PreviewScale, PreviewType, TextTheme,
+    sanitize_image_disk_cache_mb, sanitize_text_font_scale_percent, sanitize_tick_ms, AudioSeek,
+    AvoidMode, EngineIdle, MarkdownMode, OfficeEngine, PreviewScale, PreviewType, TextTheme,
     TransparentBackground, TriggerKeyMode, DEFAULT_AFK_TIMER_SECS, DEFAULT_ANIMATED_SCALE,
-    DEFAULT_AVOID_MODE, DEFAULT_DDS_BACKGROUND, DEFAULT_DECODE_BUDGET_GB,
+    DEFAULT_AUDIO_SEEK, DEFAULT_AVOID_MODE, DEFAULT_DDS_BACKGROUND, DEFAULT_DECODE_BUDGET_GB,
     DEFAULT_DESIGN_BACKGROUND, DEFAULT_DESIGN_SCALE, DEFAULT_DOCUMENT_CACHE_MB,
     DEFAULT_DOCUMENT_SCALE, DEFAULT_EBOOK_SCALE, DEFAULT_FOLLOW_CURSOR, DEFAULT_FONT_BACKGROUND,
     DEFAULT_FONT_SCALE, DEFAULT_HOVER_DELAY_MS, DEFAULT_IMAGE_BACKGROUND, DEFAULT_IMAGE_CACHE_MB,
@@ -118,6 +118,27 @@ const DDS_BACKGROUND_CHOICES: [TransparentBackground; 2] =
 /// them: a volume is a level of one of two lists now rather than a name of its own.
 const ID_TRAY_VIDEO_VOLUME_BASE: u16 = 1360;
 const ID_TRAY_AUDIO_VOLUME_BASE: u16 = 1370;
+/// The `Volume → Audio Seek` submenu: one command per way a sound can be started, in the order
+/// it lists them. It is the `Volume` submenu's third item, below the two halves above it,
+/// because the two questions belong together — a sound is heard at a level and from a place,
+/// and both are answered the moment a hover starts its player rather than while one is playing.
+///
+/// Its range sits in the slack the `Decode Budget` ceilings leave before the `Vector Scaling`
+/// half begins, and it is four wide because there are four ways a sound can be started. That it
+/// is past the volume halves on the number line rather than beside them is the whole of what
+/// keeps a level of either half from being read as a way of starting a sound — see
+/// `the_two_volume_submenus_carry_a_range_apiece`, which holds all three away from the sounds
+/// gate and from each other.
+const ID_TRAY_AUDIO_SEEK_BASE: u16 = 1390;
+/// The ways a sound can be started, in the order the submenu lists them: where it was left the
+/// last time it was hovered, which is where the setting starts, then its beginning, its middle,
+/// and anywhere in it at all (see `AudioSeek`).
+const AUDIO_SEEK_CHOICES: [AudioSeek; 4] = [
+    AudioSeek::Remember,
+    AudioSeek::Start,
+    AudioSeek::Middle,
+    AudioSeek::Random,
+];
 const ID_TRAY_POSITION_FOLLOW: u16 = 1020; // Follow cursor
 const ID_TRAY_POSITION_BEST: u16 = 1021; // Best position
 /// The `Placement → Avoid` submenu: one command per way a preview is kept off the
@@ -515,6 +536,15 @@ unsafe extern "system" fn tray_window_proc(
                     .contains(&cmd) =>
                 {
                     set_audio_volume(cmd - ID_TRAY_AUDIO_VOLUME_BASE)
+                }
+                // And where a sound starts, by the position the way it names was listed at —
+                // its own range, below both halves of the volume in the menu and past them
+                // here (see `AUDIO_SEEK_CHOICES`).
+                cmd if (ID_TRAY_AUDIO_SEEK_BASE
+                    ..ID_TRAY_AUDIO_SEEK_BASE + AUDIO_SEEK_CHOICES.len() as u16)
+                    .contains(&cmd) =>
+                {
+                    set_audio_seek(cmd - ID_TRAY_AUDIO_SEEK_BASE)
                 }
                 ID_TRAY_POSITION_FOLLOW => set_follow_cursor(true),
                 ID_TRAY_POSITION_BEST => set_follow_cursor(false),
@@ -1389,11 +1419,17 @@ unsafe fn show_context_menu(hwnd: HWND) {
     // to be a distraction as anything, while a sound file *is* the sound — so one setting for
     // both would mean turning a film's soundtrack up to hear a song. Each half lists the same
     // ten levels, in the same order, which is what lets one table and one builder serve them;
-    // the level each setting stands at carries the default mark (see `VOLUME_CHOICES`).
-    let (video_volume, audio_volume) = CONFIG
+    // the level each setting stands at carries the default mark (see `VOLUME_CHOICES`). Below
+    // them is the same submenu's other half of the question, which is a sound's alone: where in
+    // a file it starts playing (see `AUDIO_SEEK_CHOICES`).
+    let (video_volume, audio_volume, audio_seek) = CONFIG
         .lock()
-        .map(|c| (c.video_volume, c.audio_volume))
-        .unwrap_or((DEFAULT_VIDEO_VOLUME, DEFAULT_AUDIO_VOLUME));
+        .map(|c| (c.video_volume, c.audio_volume, c.audio_seek))
+        .unwrap_or((
+            DEFAULT_VIDEO_VOLUME,
+            DEFAULT_AUDIO_VOLUME,
+            DEFAULT_AUDIO_SEEK,
+        ));
 
     let volume_menu = CreatePopupMenu().unwrap();
     let levels_menu = |current: u32, base: u16, default: u32| -> HMENU {
@@ -1433,6 +1469,8 @@ unsafe fn show_context_menu(hwnd: HWND) {
         audio_levels.0 as usize,
         w!("Audio"),
     );
+
+    append_audio_seek_menu(volume_menu, audio_seek);
 
     let _ = AppendMenuW(
         menu,
@@ -2272,6 +2310,84 @@ fn avoid_label(mode: AvoidMode) -> String {
     };
 
     default_label(label, mode == DEFAULT_AVOID_MODE)
+}
+
+/// The `Volume → Audio Seek` submenu: where in a file a sound starts playing, with the way the
+/// setting is on marked.
+///
+/// It is listed under `Volume` rather than in a menu of its own because it is the same moment
+/// and the same question as the level above it — both are read as a player is started, and a
+/// change reaches the next hover rather than the sound on screen — and it is a submenu of its
+/// own inside that one because a sound's volume is not a video's and neither is a video's start
+/// position: a video is looked at from its beginning and nothing else is offered for one.
+fn append_audio_seek_menu(parent: HMENU, seek: AudioSeek) {
+    let menu = unsafe { CreatePopupMenu().unwrap() };
+
+    // The labels are kept for as long as the menu is being filled out, for the same reason the
+    // `Avoid` labels are: `AppendMenuW` is handed a pointer, so the wide strings have to outlive
+    // the call that lists them.
+    let labels: Vec<Vec<u16>> = AUDIO_SEEK_CHOICES
+        .iter()
+        .map(|seek| {
+            audio_seek_label(*seek)
+                .encode_utf16()
+                .chain(std::iter::once(0))
+                .collect()
+        })
+        .collect();
+
+    for (index, label) in labels.iter().enumerate() {
+        let _ = unsafe {
+            AppendMenuW(
+                menu,
+                MF_STRING,
+                (ID_TRAY_AUDIO_SEEK_BASE + index as u16) as usize,
+                PCWSTR(label.as_ptr()),
+            )
+        };
+    }
+
+    // One of the ways is the setting, so one of them carries the radio mark; a way the menu does
+    // not list is marked by nothing rather than by the wrong one.
+    if let Some(index) = AUDIO_SEEK_CHOICES.iter().position(|way| *way == seek) {
+        let _ = unsafe {
+            CheckMenuRadioItem(
+                menu,
+                ID_TRAY_AUDIO_SEEK_BASE as u32,
+                (ID_TRAY_AUDIO_SEEK_BASE + AUDIO_SEEK_CHOICES.len() as u16 - 1) as u32,
+                (ID_TRAY_AUDIO_SEEK_BASE + index as u16) as u32,
+                MF_BYCOMMAND.0,
+            )
+        };
+    }
+
+    let _ = unsafe {
+        AppendMenuW(
+            parent,
+            MF_STRING | MF_POPUP,
+            menu.0 as usize,
+            w!("Audio Seek"),
+        )
+    };
+}
+
+/// What a way of starting a sound is called in the menu: the words the tray lists it under, with
+/// the way this setting starts at marked as the default.
+///
+/// The three that are not a memory are worded as where the sound comes *from* rather than as
+/// where it is — `From the Start` rather than `At Start` — because each one answers the question
+/// the submenu's own name asks, which is where a hover drops the needle; `Remember` answers it
+/// the fourth way, and is left as the one word a user already knows from every player they have
+/// used.
+fn audio_seek_label(seek: AudioSeek) -> String {
+    let label = match seek {
+        AudioSeek::Remember => "Remember",
+        AudioSeek::Start => "From the Start",
+        AudioSeek::Middle => "From the Middle",
+        AudioSeek::Random => "Random",
+    };
+
+    default_label(label, seek == DEFAULT_AUDIO_SEEK)
 }
 
 /// The `Tick` submenu: how often the app looks at the pointer's world while Explorer
@@ -3198,6 +3314,29 @@ fn set_audio_volume(index: u16) {
     }
 }
 
+/// A way of starting a sound, by the position it was listed at: where in a file a hover drops
+/// the needle, which is read as a player is started the way the volume beside it is. An id past
+/// the last way the menu offered is one that is not there.
+///
+/// Nothing on screen is rebuilt: a sound already playing is left where it is, and what a click
+/// here changes is where the *next* sound starts — the same bargain the volume beside it makes.
+fn set_audio_seek(index: u16) {
+    let Some(seek) = audio_seek_at(index) else {
+        return;
+    };
+
+    if let Ok(mut config) = CONFIG.lock() {
+        config.audio_seek = seek;
+        config.save();
+    }
+}
+
+/// The way an item of the `Volume → Audio Seek` submenu stands for, by the position it was
+/// listed at. An id past the last way the menu offered is one that is not there.
+fn audio_seek_at(index: u16) -> Option<AudioSeek> {
+    AUDIO_SEEK_CHOICES.get(index as usize).copied()
+}
+
 fn set_follow_cursor(follow: bool) {
     if let Ok(mut config) = CONFIG.lock() {
         config.follow_cursor = follow;
@@ -3844,6 +3983,72 @@ mod tests {
                 "the sound gate's id is inside the range at {base}"
             );
         }
+
+        // And the third item of the same submenu — where a sound starts — is a range of its
+        // own as well: it shares the menu with both halves rather than a table, and a click on
+        // one of its ways is never a click on a level of either (see the test below).
+        let seek =
+            ID_TRAY_AUDIO_SEEK_BASE..ID_TRAY_AUDIO_SEEK_BASE + AUDIO_SEEK_CHOICES.len() as u16;
+        for base in bases {
+            let range = base..base + width;
+            assert!(
+                !range.contains(&seek.start) && !seek.contains(&range.start),
+                "the ranges {range:?} and {seek:?} overlap"
+            );
+        }
+    }
+
+    /// The `Volume → Audio Seek` submenu lists a way of starting a sound for every way the
+    /// setting has, in the order the ids are handed out in, with the one the setting starts at
+    /// marked as the default — and each id resolves back to the way its item was listed for,
+    /// which is what makes a click start a sound where it named.
+    #[test]
+    fn every_offered_way_of_starting_a_sound_is_one_the_setting_keeps() {
+        assert_eq!(
+            AUDIO_SEEK_CHOICES.map(audio_seek_label),
+            [
+                "Remember (Default)".to_string(),
+                "From the Start".to_string(),
+                "From the Middle".to_string(),
+                "Random".to_string()
+            ]
+        );
+
+        let marked: Vec<AudioSeek> = AUDIO_SEEK_CHOICES
+            .iter()
+            .copied()
+            .filter(|seek| audio_seek_label(*seek).ends_with(" (Default)"))
+            .collect();
+
+        assert_eq!(
+            marked,
+            [DEFAULT_AUDIO_SEEK],
+            "the way the setting starts at is the way the menu marks"
+        );
+
+        for (index, seek) in AUDIO_SEEK_CHOICES.iter().enumerate() {
+            assert_eq!(audio_seek_at(index as u16), Some(*seek));
+        }
+
+        assert_eq!(
+            audio_seek_at(AUDIO_SEEK_CHOICES.len() as u16),
+            None,
+            "an id past the last item is not one the menu offered"
+        );
+
+        // The ways the submenu offers are the ways the setting holds, and each of them is
+        // named: a way the menu has no words for is one a user cannot pick, and a way the
+        // setting has that the menu does not list is one they cannot reach but by editing
+        // `config.ini` — which is the arrangement every other value menu here keeps to.
+        assert_eq!(
+            AUDIO_SEEK_CHOICES.len(),
+            4,
+            "every way of starting a sound is offered: {AUDIO_SEEK_CHOICES:?}"
+        );
+        assert!(
+            AUDIO_SEEK_CHOICES.contains(&DEFAULT_AUDIO_SEEK),
+            "the way the setting starts at is one of the items"
+        );
     }
 
     /// The three `Timing` submenus list the same delays, one range apiece, and a range
