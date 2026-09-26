@@ -524,6 +524,18 @@ pub enum PreviewMessage {
         path: PathBuf,
         generation: u64,
     },
+    /// A measure that reads a file is done: the box it answers with is held, or the answer is
+    /// that the reader has none for the file — which is not a wait that can be answered, so it
+    /// is the one answer a wait comes down on (see `measured_off_the_tick`).
+    ///
+    /// What was waiting on it is the hover that is on screen, and that is the whole of what
+    /// this answer has to be matched to: a box is measured per version of the file, and a hover
+    /// of a file whose version has changed is measured again rather than answered with the box
+    /// of the version before it.
+    MeasureProbed {
+        path: PathBuf,
+        size: Option<(u32, u32)>,
+    },
     /// The ImageMagick engine is done with a file: the picture it developed is in hand, or
     /// there is none — a file it cannot read is remembered as one it will not draw. The
     /// generation is the hover that was waiting on it, so a conversion landing after the
@@ -719,6 +731,55 @@ struct ImageFrame {
     width: u32,
     height: u32,
     delay_ms: u32, // Delay before next frame (for animations)
+    /// Whether every pixel of the frame has an alpha of 255, which is what lets a repaint
+    /// copy the frame instead of blending it pixel by pixel.
+    ///
+    /// A frame that is opaque everywhere is the surface it is drawn on already, whatever the
+    /// backdrop behind it is, so composing it is a copy of its bytes — and at the size of a
+    /// display that is the difference between a few gigabytes a second and a few hundred
+    /// megabytes, on every frame of a video or an animation (see
+    /// `compose_preview_pixels_into`).
+    ///
+    /// It is asked where the pixels are made, off the thread that draws them, and never
+    /// guessed: a frame whose producer has not asked keeps the blend, which is the same
+    /// picture by a longer road. `false` is therefore always safe and `true` never is — the
+    /// one producer that says so without asking is the video path, which forces the alpha of
+    /// every pixel it writes (see `copy_locked`).
+    opaque: bool,
+}
+
+impl ImageFrame {
+    /// A frame of `pixels`, with its opacity asked of the pixels themselves.
+    ///
+    /// The question is a pass over the frame, which is why it is asked here rather than by
+    /// whoever composes it: a pass per repaint would cost what the copy it enables saves.
+    fn new(pixels: Vec<u8>, width: u32, height: u32, delay_ms: u32) -> Self {
+        let opaque = pixels_are_opaque(&pixels);
+
+        Self {
+            pixels,
+            width,
+            height,
+            delay_ms,
+            opaque,
+        }
+    }
+
+    /// Replace the pixels of a frame, with the opacity asked of them again.
+    fn set_pixels(&mut self, pixels: Vec<u8>) {
+        self.opaque = pixels_are_opaque(&pixels);
+        self.pixels = pixels;
+    }
+}
+
+/// Whether every pixel of a frame is opaque, which is what a repaint copies rather than
+/// blends (see `ImageFrame`).
+fn pixels_are_opaque(pixels: &[u8]) -> bool {
+    pixels
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .all(|pixel| pixel[3] == 255)
 }
 
 /// Frames an animated preview streams while it plays. The decoder appends to the
@@ -842,6 +903,12 @@ impl MediaData {
 
     fn current_height(&self) -> u32 {
         self.current_frame().map(|frame| frame.height).unwrap_or(0)
+    }
+
+    /// Whether the frame on screen is opaque everywhere, which is what lets a repaint copy
+    /// it rather than blend it (see `ImageFrame::opaque`).
+    fn current_frame_is_opaque(&self) -> bool {
+        self.current_frame().is_some_and(|frame| frame.opaque)
     }
 
     /// Check if all frames have finished streaming
@@ -1036,7 +1103,7 @@ impl MediaData {
                 if let Some(start) = self.loading_start {
                     let elapsed_secs = start.elapsed().as_secs_f32();
                     let angle = elapsed_secs * 2.0 * std::f32::consts::PI * 1.2;
-                    self.frames[0].pixels = render_loading_frame(width, height, angle);
+                    self.frames[0].set_pixels(render_loading_frame(width, height, angle));
                 }
             }
             self.last_frame_time = Instant::now();
@@ -1070,6 +1137,11 @@ impl MediaData {
 
         frame.width = width;
         frame.height = height;
+        // Every pixel the copy wrote was forced opaque, so the frame a video lands in is one
+        // a repaint can copy rather than blend — which is the whole of what makes a video at
+        // the size of the display affordable to draw sixty times a second (see
+        // `video_player::copy_locked`).
+        frame.opaque = true;
 
         true
     }
@@ -1250,6 +1322,215 @@ fn spawn_video_probe(path: PathBuf, generation: u64) {
         let _ = probe_video_geometry(&path);
         notify_video_probed(&path, generation);
     });
+}
+
+/// What a box measured off this thread was measured against.
+///
+/// It is part of what a held box is keyed by because a box is only the answer for what it was
+/// measured against: a page's own size is the file's, whatever it is drawn on, while a
+/// listing's page is wrapped to the room it is shown in at the text settings it is wrapped
+/// for — and a box held for another room is a page laid out to the wrong one.
+#[derive(Clone, PartialEq, Eq, Hash)]
+enum MeasureScope {
+    /// The file's own size: a page's, a plate's, a drawing's declared extent, a specimen's
+    /// box.
+    File,
+    /// A page wrapped to the room it is drawn in, at the text settings it is wrapped for.
+    Room {
+        cap_width: u32,
+        cap_height: u32,
+        dpi: u32,
+        theme: TextTheme,
+        font_scale_percent: u32,
+    },
+}
+
+/// A box measured off the preview thread, and what it was measured against.
+struct MeasuredBox {
+    path: PathBuf,
+    version: FileVersion,
+    scope: MeasureScope,
+    /// The box, or `None` for a file its reader has no answer for — which is an answer too,
+    /// and one worth holding: a document that will not open is not one to read again on every
+    /// hover.
+    size: Option<(u32, u32)>,
+}
+
+/// The boxes measured off the preview thread, newest first.
+///
+/// It is a table of its own rather than the readers' own memos, and that is the point: what a
+/// reader remembers is dropped wholesale when it fills, and a box that fell out of one of
+/// those memos would be measured again the moment it was asked for — on the thread that draws
+/// the hover, which is what these measures are kept off. What is held here is answered from
+/// here, and the reader's own memo is left to the side that draws the file (see
+/// `measured_off_the_tick`).
+static MEASURED_BOXES: Lazy<Mutex<Vec<MeasuredBox>>> = Lazy::new(|| Mutex::new(Vec::new()));
+
+/// Entries the table of measured boxes holds before it is emptied.
+const MEASURED_BOXES_MAX_ENTRIES: usize = 256;
+
+/// The measures running right now, by the file being measured.
+///
+/// One thread per file rather than one per hover: a hover that lands on a file whose measure is
+/// already running waits for that one instead of starting a second read of the same bytes, and
+/// what the layout asks to place that wait is a question about this list (see
+/// `measure_waiting`). A file whose version changes while it is being read is measured again by
+/// the next hover: this list says a read is running, and what that read answered is held only
+/// for the version it was a read of (see `hold_box`).
+static MEASURING: Lazy<Mutex<Vec<PathBuf>>> = Lazy::new(|| Mutex::new(Vec::new()));
+
+/// Entries the list of running measures holds before it is emptied. It is a list of reads in
+/// flight, so it is never more than a handful long; the ceiling is what a stuck thread would
+/// cost.
+const MEASURING_MAX_ENTRIES: usize = 64;
+
+/// The box held for this version of this file, measured against `scope` — or `None` when
+/// nothing is held for it, which is not the same answer as a held `None`.
+fn held_box(
+    path: &Path,
+    version: &FileVersion,
+    scope: &MeasureScope,
+) -> Option<Option<(u32, u32)>> {
+    let boxes = MEASURED_BOXES.lock().ok()?;
+
+    boxes
+        .iter()
+        .find(|held| held.path == path && held.version == *version && held.scope == *scope)
+        .map(|held| held.size)
+}
+
+/// Hold the box a measure answered with.
+fn hold_box(path: &Path, version: &FileVersion, scope: &MeasureScope, size: Option<(u32, u32)>) {
+    let Ok(mut boxes) = MEASURED_BOXES.lock() else {
+        return;
+    };
+
+    boxes.retain(|held| !(held.path == path && held.version == *version && held.scope == *scope));
+    if boxes.len() >= MEASURED_BOXES_MAX_ENTRIES {
+        boxes.clear();
+    }
+
+    boxes.insert(
+        0,
+        MeasuredBox {
+            path: path.to_path_buf(),
+            version: version.clone(),
+            scope: scope.clone(),
+            size,
+        },
+    );
+}
+
+/// Say that this file is being measured, answering whether one already was.
+fn begin_measure(path: &Path) -> bool {
+    let Ok(mut measuring) = MEASURING.lock() else {
+        return false;
+    };
+
+    if measuring.iter().any(|running| running == path) {
+        return false;
+    }
+
+    if measuring.len() >= MEASURING_MAX_ENTRIES {
+        measuring.clear();
+    }
+
+    measuring.push(path.to_path_buf());
+
+    true
+}
+
+/// Say that the measure of this file is done with.
+fn end_measure(path: &Path) {
+    let Ok(mut measuring) = MEASURING.lock() else {
+        return;
+    };
+
+    measuring.retain(|running| running != path);
+}
+
+/// Whether this file is being measured right now: the question the layout places the wait by.
+///
+/// It is asked of the file the hover is on, straight after the layout measured it, and what it
+/// says is whether that measure handed back the wait for a read rather than a box. The two
+/// cannot disagree — the wait is placed exactly when the measure the layout has just taken
+/// started this file's read (see `measured_off_the_tick`).
+fn measure_waiting(path: &Path) -> bool {
+    MEASURING
+        .lock()
+        .map(|measuring| measuring.iter().any(|running| running == path))
+        .unwrap_or(false)
+}
+
+/// Measure a file on a thread of its own, and tell the preview loop.
+///
+/// The measure is a read that can be felt — a PDF opened, an archive's table of contents
+/// walked, a document parsed, a specimen read — and the hover waits for it, so it is taken
+/// here rather than on the preview thread: what is on screen while it runs is the spinner, and
+/// the hover it belongs to is replayed when the answer lands, laid out at the box that answer
+/// is held under. It is the shape a video's probe has, for the same reason (see
+/// `spawn_video_probe`).
+///
+/// A measure whose hover has moved on is not wasted: what it answered is held for the next
+/// hover of the file, so nothing here is cancelled or waited for.
+fn spawn_measure_probe(
+    path: PathBuf,
+    version: FileVersion,
+    scope: MeasureScope,
+    measure: impl FnOnce() -> Option<(u32, u32)> + Send + 'static,
+) {
+    std::thread::spawn(move || {
+        let size = measure();
+
+        // The box is held before the read is marked done, so a hover that arrives while this
+        // thread is between the two finds the answer rather than starting a read of its own.
+        hold_box(&path, &version, &scope, size);
+        end_measure(&path);
+
+        notify_measured(&path, size);
+    });
+}
+
+/// A measure has been taken off the preview thread, and the box it answered with is held. Sent
+/// from the thread the measure ran on, through the same channel every other answer arrives on,
+/// so the hover that was waiting for it is replayed the moment there is a box to place it with
+/// — or, where the reader has no box for the file at all, told that the wait is over (see
+/// `MeasureProbed`).
+fn notify_measured(path: &Path, size: Option<(u32, u32)>) {
+    if let Ok(sender) = PREVIEW_SENDER.lock() {
+        if let Some(ref tx) = *sender {
+            let _ = tx.send(PreviewMessage::MeasureProbed {
+                path: path.to_path_buf(),
+                size,
+            });
+        }
+    }
+}
+
+/// The box a measure that reads a file answers with: the box this side already holds, or the
+/// wait for one that is being measured now.
+///
+/// `measure` is the reader's own measure — the same call this side would otherwise make on its
+/// own thread — and it runs on a thread of this function's own making, once per file version
+/// and scope. What comes back to the hovering call meanwhile is the spinner's own box, which
+/// is what the layout places a hover at until the answer lands (see `measure_waiting` and
+/// `MeasureProbed`).
+fn measured_off_the_tick(
+    path: &Path,
+    scope: MeasureScope,
+    measure: impl FnOnce() -> Option<(u32, u32)> + Send + 'static,
+) -> Option<(u32, u32)> {
+    let version = file_version(path);
+
+    if let Some(held) = held_box(path, &version, &scope) {
+        return held;
+    }
+
+    if begin_measure(path) {
+        spawn_measure_probe(path.to_path_buf(), version, scope, measure);
+    }
+
+    Some((office_preview::WAITING_BOX, office_preview::WAITING_BOX))
 }
 
 /// Which preview surface the pointer is currently on.
@@ -2431,11 +2712,20 @@ fn checkerboard_color(x: u32, y: u32) -> (u8, u8, u8) {
 /// Writes into the caller's buffer so a repaint can target the layered window's
 /// DIB directly, and walks it row by row so the per-pixel background position is
 /// a row/column counter instead of a division.
+///
+/// `opaque` is the frame's own answer to whether every one of its pixels has an alpha of 255
+/// (see `ImageFrame`). Where it does, the frame *is* the composed surface and the whole of it
+/// is one copy: a pixel the backdrop cannot be seen through is the pixel the blend below would
+/// have written, in every backdrop kind, because both the premultiply a transparent backdrop
+/// asks for and the blend over an opaque one come to the pixel's own bytes where the alpha is
+/// 255. That is the difference between a copy and a division per channel per pixel, on every
+/// frame of a video or an animation drawn at the size of the display.
 fn compose_preview_pixels_into(
     bgra: &[u8],
     width: u32,
     height: u32,
     background: TransparentBackground,
+    opaque: bool,
     out: &mut [u8],
 ) {
     let width = width as usize;
@@ -2450,13 +2740,90 @@ fn compose_preview_pixels_into(
         out[usable..expected].fill(0);
     }
 
+    if opaque && usable >= expected {
+        out[..expected].copy_from_slice(&bgra[..expected]);
+        return;
+    }
+
     let row_bytes = width * 4;
     for (y, (src_row, dst_row)) in bgra
         .chunks_exact(row_bytes)
         .zip(out[..expected].chunks_exact_mut(row_bytes))
         .enumerate()
     {
-        compose_preview_row(src_row, dst_row, background, y as u32);
+        compose_preview_row(src_row, dst_row, background, 0, y as u32);
+    }
+}
+
+/// A box of pixels inside a frame: where it sits in the frame, and how large it is.
+///
+/// It is what the corner spinner is drawn through — the box is copied out of the frame, drawn
+/// into, and composed back at the place it came from — so the four numbers travel together
+/// rather than as an argument to everything that touches one (see `render_layered_preview_at`).
+#[derive(Clone, Copy)]
+struct FrameBox {
+    left: u32,
+    top: u32,
+    width: u32,
+    height: u32,
+}
+
+impl FrameBox {
+    /// The area of the box in bytes, at four bytes to the pixel.
+    fn bytes(self) -> usize {
+        self.width as usize * self.height as usize * 4
+    }
+}
+
+/// The same for a box of a frame rather than the whole of it: the box is where it sits in the
+/// frame, which is both what the checkerboard's squares are placed by and what the destination's
+/// rows are offset by.
+///
+/// It is what the corner spinner is composed back through: what is drawn over a frame is drawn
+/// into a copy of the corner it sits in rather than into a copy of the frame, and the box is
+/// what that copy is (see `render_layered_preview_at`). A box carries what was drawn over the
+/// frame, so it is blended however opaque the frame under it was — it is a few thousand pixels
+/// either way.
+fn compose_preview_block_into(
+    bgra: &[u8],
+    area: FrameBox,
+    background: TransparentBackground,
+    out: &mut [u8],
+    out_width: u32,
+) {
+    let row_bytes = area.width as usize * 4;
+    let out_row_bytes = out_width as usize * 4;
+    let expected = area.bytes();
+
+    if area.width == 0 || area.height == 0 || bgra.len() < expected {
+        return;
+    }
+
+    for (y, src_row) in bgra[..expected].chunks_exact(row_bytes).enumerate() {
+        let row = area.top as usize + y;
+        let start = row * out_row_bytes + area.left as usize * 4;
+        let Some(dst_row) = out.get_mut(start..start + row_bytes) else {
+            return;
+        };
+
+        compose_preview_row(src_row, dst_row, background, area.left, row as u32);
+    }
+}
+
+/// A box of a frame's pixels, copied out whole: the corner a spinner is drawn into.
+fn copy_frame_box_into(frame: &[u8], frame_width: u32, area: FrameBox, out: &mut Vec<u8>) {
+    let row_bytes = area.width as usize * 4;
+    let frame_row_bytes = frame_width as usize * 4;
+    out.clear();
+    out.resize(area.bytes(), 0);
+
+    for y in 0..area.height as usize {
+        let from = (area.top as usize + y) * frame_row_bytes + area.left as usize * 4;
+        let Some(source) = frame.get(from..from + row_bytes) else {
+            return;
+        };
+
+        out[y * row_bytes..(y + 1) * row_bytes].copy_from_slice(source);
     }
 }
 
@@ -2464,6 +2831,7 @@ fn compose_preview_row(
     src_row: &[u8],
     dst_row: &mut [u8],
     background: TransparentBackground,
+    x_offset: u32,
     y: u32,
 ) {
     match background {
@@ -2516,7 +2884,9 @@ fn compose_preview_row(
                 .zip(dst_row.as_chunks_mut::<4>().0.iter_mut())
                 .enumerate()
             {
-                let (r, g, b) = checkerboard_color(x as u32, y);
+                // Squares are placed by where a pixel is in the *frame*, which for a box is
+                // not where it is in the box.
+                let (r, g, b) = checkerboard_color(x as u32 + x_offset, y);
                 blend_pixel_over(px, dst, b as u32, g as u32, r as u32);
             }
         }
@@ -2630,12 +3000,7 @@ fn decode_gif_frame_to_image(
 
     let bgra = rgba_to_bgra(&scaled);
 
-    Some(ImageFrame {
-        pixels: bgra,
-        width: target_width,
-        height: target_height,
-        delay_ms,
-    })
+    Some(ImageFrame::new(bgra, target_width, target_height, delay_ms))
 }
 
 /// Composite a GIF frame onto the canvas
@@ -2910,12 +3275,7 @@ fn decode_apng_frame_to_image(
         source.as_raw().clone()
     };
 
-    ImageFrame {
-        pixels: rgba_to_bgra(&rgba),
-        width: target_width,
-        height: target_height,
-        delay_ms,
-    }
+    ImageFrame::new(rgba_to_bgra(&rgba), target_width, target_height, delay_ms)
 }
 
 fn load_animated_apng(
@@ -3117,12 +3477,12 @@ fn decode_webp_animation_frame_to_image(
         rgba_to_bgra(&resized.into_raw())
     };
 
-    Some(ImageFrame {
+    Some(ImageFrame::new(
         pixels,
-        width: target_width,
-        height: target_height,
+        target_width,
+        target_height,
         delay_ms,
-    })
+    ))
 }
 
 fn load_animated_webp(
@@ -3633,12 +3993,7 @@ fn load_static_image(
         (rgba_to_bgra(rgba.as_raw()), width, height)
     };
 
-    let frame = ImageFrame {
-        pixels,
-        width: target_width,
-        height: target_height,
-        delay_ms: 0,
-    };
+    let frame = ImageFrame::new(pixels, target_width, target_height, 0);
 
     if let Some(key) = cache_key {
         image_cache_put(key, frame.clone());
@@ -3711,12 +4066,7 @@ fn load_design_preview(
         (pixels, target_width, target_height)
     };
 
-    let frame = ImageFrame {
-        pixels,
-        width,
-        height,
-        delay_ms: 0,
-    };
+    let frame = ImageFrame::new(pixels, width, height, 0);
 
     image_cache_put(key, frame.clone());
 
@@ -3777,12 +4127,7 @@ fn load_engine_page(
         pdf_preview::render_first_page(page, target_width, target_height)?;
 
     Some(static_image_media(
-        ImageFrame {
-            pixels,
-            width,
-            height,
-            delay_ms: 0,
-        },
+        ImageFrame::new(pixels, width, height, 0),
         kind,
     ))
 }
@@ -3790,17 +4135,22 @@ fn load_engine_page(
 /// The box a comic is placed at: the first plate's own size, and nothing at all for a container
 /// with no plate in it.
 ///
-/// It is the one box of the book kind that is not waited for. A PDF page exists and is measured, a
-/// book an engine converted does not exist yet and is the wait for one, and a comic is neither: the
-/// plate is inside the file and this side is the reader, so the only two answers are the size of
-/// that plate and nothing — and nothing is a hover that shows no preview and starts no engine,
-/// which is what a box of text under a comic's name gets (see `comic_preview`).
+/// It is the one box of the book kind that is read out of the file rather than out of a page
+/// something drew: the plate is inside the container and this side is the reader, so the two
+/// answers are the size of that plate and nothing at all — and nothing is a hover that shows no
+/// preview and starts no engine, which is what a box of text under a comic's name gets (see
+/// `comic_preview`).
 ///
-/// The size is read once per version of the comic, because it costs a read of the plate out of the
-/// container rather than a header read of a file: the answer is held where the reader holds it and
-/// the plate itself is not (see `comic_preview::dimensions`).
+/// The size is read once per version of the comic, because it costs a walk of the container's
+/// own table of contents and a read of the plate it names rather than a header read of a file.
+/// Both of those are felt on a comic of any size, so the read is taken off the preview thread
+/// and the hover is laid out as the wait for it (see `measured_off_the_tick`).
 fn comic_box(path: &Path) -> Option<(u32, u32)> {
-    comic_preview::dimensions(path)
+    let source = path.to_path_buf();
+
+    measured_off_the_tick(path, MeasureScope::File, move || {
+        comic_preview::dimensions(&source)
+    })
 }
 
 /// The first plate of a comic, drawn into the box the layout measured it for.
@@ -3828,12 +4178,7 @@ fn load_comic_page(
     let pixels = comic_preview::decode(path, target_width, target_height)?;
 
     Some(static_image_media(
-        ImageFrame {
-            pixels,
-            width: target_width,
-            height: target_height,
-            delay_ms: 0,
-        },
+        ImageFrame::new(pixels, target_width, target_height, 0),
         MediaType::Comic,
     ))
 }
@@ -3863,12 +4208,7 @@ fn load_book_page(
     let (pixels, width, height) = pdf_preview::render_book_page(page, target_width, target_height)?;
 
     Some(static_image_media(
-        ImageFrame {
-            pixels,
-            width,
-            height,
-            delay_ms: 0,
-        },
+        ImageFrame::new(pixels, width, height, 0),
         MediaType::Calibre,
     ))
 }
@@ -3989,12 +4329,7 @@ fn load_magick_picture(
     };
 
     let rgba = resized.to_rgba8();
-    let frame = ImageFrame {
-        pixels: rgba_to_bgra(rgba.as_raw()),
-        width: target_width,
-        height: target_height,
-        delay_ms: 0,
-    };
+    let frame = ImageFrame::new(rgba_to_bgra(rgba.as_raw()), target_width, target_height, 0);
 
     if let Some(key) = cache_key {
         image_cache_put(key, frame.clone());
@@ -4062,12 +4397,7 @@ fn load_vector_preview(
             .or_else(|| metafile_image::decode(path, target_width, target_height))
     }?;
 
-    let frame = ImageFrame {
-        pixels,
-        width: target_width,
-        height: target_height,
-        delay_ms: 0,
-    };
+    let frame = ImageFrame::new(pixels, target_width, target_height, 0);
 
     image_cache_put(key, frame.clone());
 
@@ -4106,12 +4436,7 @@ fn load_pdf_first_page(
     let (pixels, width, height) =
         pdf_preview::render_first_page(path, target_width, target_height)?;
 
-    let frame = ImageFrame {
-        pixels,
-        width,
-        height,
-        delay_ms: 0,
-    };
+    let frame = ImageFrame::new(pixels, width, height, 0);
 
     Some(MediaData {
         frames: vec![frame],
@@ -4157,12 +4482,7 @@ fn load_office_preview(
     let (pixels, width, height) =
         office_preview::render(path, target_width, target_height, Some(cancel))?;
 
-    let frame = ImageFrame {
-        pixels,
-        width,
-        height,
-        delay_ms: 0,
-    };
+    let frame = ImageFrame::new(pixels, width, height, 0);
 
     Some(MediaData {
         frames: vec![frame],
@@ -4213,12 +4533,7 @@ fn load_text_preview(
         selecting: false,
     });
 
-    let frame = ImageFrame {
-        pixels: frame.pixels,
-        width: frame.width,
-        height: frame.height,
-        delay_ms: 0,
-    };
+    let frame = ImageFrame::new(frame.pixels, frame.width, frame.height, 0);
 
     Some(MediaData {
         frames: vec![frame],
@@ -4256,12 +4571,7 @@ fn load_archive_preview(
     }
 
     Some(MediaData {
-        frames: vec![ImageFrame {
-            pixels,
-            width,
-            height,
-            delay_ms: 0,
-        }],
+        frames: vec![ImageFrame::new(pixels, width, height, 0)],
         shared_frames: None,
         all_frames_loaded: None,
         current_frame: 0,
@@ -4312,12 +4622,7 @@ fn load_video_thumbnail(
     // Create a placeholder frame (dark gray) while video plays
     let placeholder_pixels = vec![40u8; (target_width * target_height * 4) as usize];
 
-    let frame = ImageFrame {
-        pixels: placeholder_pixels,
-        width: target_width,
-        height: target_height,
-        delay_ms: 0,
-    };
+    let frame = ImageFrame::new(placeholder_pixels, target_width, target_height, 0);
 
     Some(MediaData {
         frames: vec![frame],
@@ -5467,6 +5772,80 @@ fn drawn_as_video(path: &Path) -> bool {
     video_formats::is_video_preview(path)
 }
 
+/// The box a PDF page asks for, measured off the preview thread.
+///
+/// A page's size is read out of the document, and the PDF engine opens it whole to read it —
+/// which on a book of a thousand pages is a read that can be felt — so it is measured the way a
+/// video's shape is: the hover is laid out as the wait and replayed when the answer lands (see
+/// `measured_off_the_tick`).
+fn pdf_page_box(path: &Path) -> Option<(u32, u32)> {
+    let source = path.to_path_buf();
+
+    measured_off_the_tick(path, MeasureScope::File, move || {
+        pdf_preview::page_dimensions(&source)
+    })
+}
+
+/// The box a document the engine draws asks for: the size its own markup declares, read the
+/// same way and for the same reason — a document is read and parsed whole to be measured.
+fn svg_box(path: &Path) -> Option<(u32, u32)> {
+    let source = path.to_path_buf();
+
+    measured_off_the_tick(path, MeasureScope::File, move || {
+        svg_preview::measure(&source)
+    })
+}
+
+/// The box a specimen is drawn in, held for a file that parses as a font.
+///
+/// The box is this app's own — a font has no size it asks to be drawn at — so what the measure
+/// answers is whether the file is a font at all, and that costs a read of it: a collection is
+/// read whole to reach the face the specimen shows (see `font_preview::probe`).
+fn font_box(path: &Path) -> Option<(u32, u32)> {
+    let source = path.to_path_buf();
+
+    measured_off_the_tick(path, MeasureScope::File, move || {
+        font_preview::probe(&source)
+            .map(|_| (font_preview::SPECIMEN_WIDTH, font_preview::SPECIMEN_HEIGHT))
+    })
+}
+
+/// The box a vector drawing asks for, measured the same way: what a metafile declares is read
+/// out of the whole file, which a drawing of any size takes with it (see
+/// `metafile_image::dimensions`).
+fn vector_box(path: &Path) -> Option<(u32, u32)> {
+    let source = path.to_path_buf();
+
+    measured_off_the_tick(path, MeasureScope::File, move || vector_dimensions(&source))
+}
+
+/// The box a listing asks for, measured off the preview thread: an archive's table of contents
+/// is a read that can be felt — every entry of a zip walked, a `.tar.gz` inflated to reach one
+/// — and the wait for it is the same kind of wait (see `measured_off_the_tick`).
+///
+/// It is asked of the archives this app reads itself. An archive an engine lists is measured by
+/// `archive_box` instead: what that side waits for is the engine's own listing, and a listing
+/// that has been remembered is a page measured out of memory rather than out of a file (see
+/// `peazip_box`).
+fn archive_box_off_the_tick(path: &Path, bounds: ScreenBounds, dpi: u32) -> Option<(u32, u32)> {
+    let source = path.to_path_buf();
+    let cap_width = (bounds.right - bounds.left).max(1) as u32;
+    let cap_height = bounds.height().max(1) as u32;
+    let options = current_archive_options();
+
+    measured_off_the_tick(
+        path,
+        MeasureScope::Room {
+            cap_width,
+            cap_height,
+            dpi,
+            theme: options.theme,
+            font_scale_percent: options.font_scale_percent,
+        },
+        move || archive_preview::measure(&source, cap_width, cap_height, dpi, options),
+    )
+}
+
 /// Get original dimensions of media for positioning calculations
 fn get_media_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
     // What the file's content says it is comes ahead of what its name does, where the two
@@ -5487,7 +5866,7 @@ fn get_media_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
     // A PDF is measured from its own first page; one that cannot be read as a
     // PDF reports no dimensions, which drops the preview instead of guessing.
     if pdf_preview::is_pdf_preview(path) {
-        return pdf_preview::page_dimensions(path);
+        return pdf_page_box(path);
     }
 
     // And a comic, whose page is a picture inside the container: it is measured where the hook asks
@@ -5572,13 +5951,13 @@ fn get_media_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
             return None;
         }
 
-        return svg_preview::measure(path);
+        return svg_box(path);
     }
 
     // A vector drawing is measured from the records it holds: what an `.eps` keeps a
     // preview of, or what a metafile's own header declares its drawing to be.
     if vector_formats::is_vector_preview(path) {
-        return vector_dimensions(path);
+        return vector_box(path);
     }
 
     // A font is measured at a box of this app's own rather than by anything the file says:
@@ -5592,8 +5971,7 @@ fn get_media_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
             return None;
         }
 
-        return font_preview::probe(path)
-            .map(|_| (font_preview::SPECIMEN_WIDTH, font_preview::SPECIMEN_HEIGHT));
+        return font_box(path);
     }
 
     // Whatever is left is a picture, so the `Images` gate is what decides it.
@@ -5620,7 +5998,7 @@ fn media_dimensions_of_kind(kind: PreviewType, path: &PathBuf) -> Option<(u32, u
 
     match kind {
         PreviewType::Videos => video_box(path),
-        PreviewType::Ebook => pdf_preview::page_dimensions(path),
+        PreviewType::Ebook => pdf_page_box(path),
         PreviewType::Archives | PreviewType::Text | PreviewType::Peazip => None,
         PreviewType::Document => office_preview::measure(path),
         PreviewType::Libre => libre_box(path),
@@ -5629,17 +6007,14 @@ fn media_dimensions_of_kind(kind: PreviewType, path: &PathBuf) -> Option<(u32, u
         PreviewType::Design => design_dimensions(path),
         PreviewType::Vector => {
             if svg_preview::is_svg_file(path) {
-                webview_preview::can_draw()
-                    .then(|| svg_preview::measure(path))
-                    .flatten()
+                webview_preview::can_draw().then(|| svg_box(path)).flatten()
             } else {
-                vector_dimensions(path)
+                vector_box(path)
             }
         }
         PreviewType::Fonts => webview_preview::can_draw()
-            .then(|| font_preview::probe(path))
-            .flatten()
-            .map(|_| (font_preview::SPECIMEN_WIDTH, font_preview::SPECIMEN_HEIGHT)),
+            .then(|| font_box(path))
+            .flatten(),
         PreviewType::Images => picture_dimensions(path),
     }
 }
@@ -5793,7 +6168,7 @@ fn media_dimensions(path: &PathBuf, bounds: ScreenBounds, dpi: u32) -> Option<(u
             // The three kinds measured against the room they are drawn in, which is a question
             // this side has the answer to and `media_dimensions_of_kind` does not.
             PreviewType::Text => text_box(path, bounds, dpi),
-            PreviewType::Archives => archive_box(path, bounds, dpi),
+            PreviewType::Archives => archive_box_off_the_tick(path, bounds, dpi),
             PreviewType::Peazip => peazip_box(path, bounds, dpi),
             _ => media_dimensions_of_kind(kind, path),
         };
@@ -5804,7 +6179,7 @@ fn media_dimensions(path: &PathBuf, bounds: ScreenBounds, dpi: u32) -> Option<(u
     }
 
     if archive_formats::is_archive_preview(path) {
-        return archive_box(path, bounds, dpi);
+        return archive_box_off_the_tick(path, bounds, dpi);
     }
 
     // And an archive an engine lists, measured where the hook asks it: beside the archive list
@@ -6019,12 +6394,7 @@ fn render_loading_frame(width: u32, height: u32, angle: f32) -> Vec<u8> {
 /// Create a loading animation MediaData for the given dimensions
 fn create_loading_media(width: u32, height: u32) -> MediaData {
     let pixels = render_loading_frame(width, height, 0.0);
-    let frame = ImageFrame {
-        pixels,
-        width,
-        height,
-        delay_ms: 33,
-    };
+    let frame = ImageFrame::new(pixels, width, height, 33);
     MediaData {
         frames: vec![frame],
         shared_frames: None,
@@ -6039,26 +6409,84 @@ fn create_loading_media(width: u32, height: u32) -> MediaData {
     }
 }
 
-/// Render a small loading spinner overlay onto an existing BGRA pixel buffer (in-place).
-/// Draws a spinning arc in the bottom-right corner with a semi-transparent dark backdrop circle.
-fn overlay_loading_spinner(pixels: &mut [u8], width: u32, height: u32, angle: f32) {
+/// The spinner's own geometry, in the frame's coordinates: how large the ring is, how thick
+/// it is, and how far its corner sits from the frame's own.
+const SPINNER_OVERLAY_RADIUS: f32 = 8.0;
+const SPINNER_OVERLAY_THICKNESS: f32 = 2.5;
+const SPINNER_OVERLAY_PADDING: f32 = 12.0;
+
+/// The box the corner spinner is drawn in: where it sits in the frame, and how large a box
+/// holds it whole.
+///
+/// One answer for the copying and for the drawing, which have to agree: what the spinner is
+/// drawn into is exactly what was copied out of the frame (see `overlay_loading_spinner`).
+/// `None` for a frame too small to hold one at all, which is a frame the spinner is not drawn
+/// on.
+fn spinner_overlay_box(width: u32, height: u32) -> Option<FrameBox> {
     if width < 24 || height < 24 {
+        return None;
+    }
+
+    // How far the halo reaches past the centre, and one pixel more for the edge it fades
+    // out over: the same reach the drawing below walks, so the box is never smaller than
+    // what is drawn in it.
+    let reach = SPINNER_OVERLAY_RADIUS + SPINNER_OVERLAY_THICKNESS + 4.0 + 1.0;
+    let cx =
+        width as f32 - SPINNER_OVERLAY_PADDING - SPINNER_OVERLAY_RADIUS - SPINNER_OVERLAY_THICKNESS;
+    let cy = height as f32
+        - SPINNER_OVERLAY_PADDING
+        - SPINNER_OVERLAY_RADIUS
+        - SPINNER_OVERLAY_THICKNESS;
+
+    let left = ((cx - reach).max(0.0)) as u32;
+    let top = ((cy - reach).max(0.0)) as u32;
+    let right = ((cx + reach).min(width as f32 - 1.0)) as u32;
+    let bottom = ((cy + reach).min(height as f32 - 1.0)) as u32;
+
+    Some(FrameBox {
+        left,
+        top,
+        width: right - left + 1,
+        height: bottom - top + 1,
+    })
+}
+
+/// Render a small loading spinner overlay onto a box of BGRA pixels copied out of a frame, in
+/// place: a spinning arc in the bottom-right corner with a semi-transparent dark backdrop
+/// circle.
+///
+/// The pixels are the box's and the geometry is the frame's — the corner the arc sits in is a
+/// padding off the frame's own bottom-right, not off the box's — which is what keeps a spinner
+/// drawn into a corner of a frame the same spinner it was when the whole frame was copied to
+/// draw it (see `spinner_overlay_box`).
+fn overlay_loading_spinner(
+    pixels: &mut [u8],
+    area: FrameBox,
+    frame_width: u32,
+    frame_height: u32,
+    angle: f32,
+) {
+    if pixels.len() < area.bytes() {
         return;
     }
 
-    let radius = 8.0_f32;
-    let thickness = 2.5_f32;
-    let padding = 12.0_f32;
+    let (left, top) = (area.left, area.top);
+    let (width, height) = (area.width, area.height);
+
+    let radius = SPINNER_OVERLAY_RADIUS;
+    let thickness = SPINNER_OVERLAY_THICKNESS;
     let backdrop_r = radius + thickness + 4.0;
 
-    // Center of the spinner in the bottom-right corner
-    let cx = width as f32 - padding - radius - thickness;
-    let cy = height as f32 - padding - radius - thickness;
+    // Center of the spinner in the bottom-right corner of the frame
+    let cx = frame_width as f32 - SPINNER_OVERLAY_PADDING - radius - thickness;
+    let cy = frame_height as f32 - SPINNER_OVERLAY_PADDING - radius - thickness;
 
-    let min_x = ((cx - backdrop_r - 1.0).max(0.0)) as u32;
-    let max_x = ((cx + backdrop_r + 1.0).min(width as f32 - 1.0)) as u32;
-    let min_y = ((cy - backdrop_r - 1.0).max(0.0)) as u32;
-    let max_y = ((cy + backdrop_r + 1.0).min(height as f32 - 1.0)) as u32;
+    let min_x = (((cx - backdrop_r - 1.0).max(0.0)) as u32).max(left);
+    let max_x =
+        (((cx + backdrop_r + 1.0).min(frame_width as f32 - 1.0)) as u32).min(left + width - 1);
+    let min_y = (((cy - backdrop_r - 1.0).max(0.0)) as u32).max(top);
+    let max_y =
+        (((cy + backdrop_r + 1.0).min(frame_height as f32 - 1.0)) as u32).min(top + height - 1);
 
     let two_pi = std::f32::consts::PI * 2.0;
     let arc_length = std::f32::consts::PI * 1.5;
@@ -6068,7 +6496,7 @@ fn overlay_loading_spinner(pixels: &mut [u8], width: u32, height: u32, angle: f3
             let dx = x as f32 + 0.5 - cx;
             let dy = y as f32 + 0.5 - cy;
             let dist = (dx * dx + dy * dy).sqrt();
-            let idx = ((y * width + x) * 4) as usize;
+            let idx = (((y - top) * width + (x - left)) * 4) as usize;
             if idx + 3 >= pixels.len() {
                 continue;
             }
@@ -6486,8 +6914,11 @@ impl Drop for LayeredSurface {
 
 thread_local! {
     static LAYERED_SURFACE: RefCell<Option<LayeredSurface>> = const { RefCell::new(None) };
-    /// Mutable frame copy for the loading spinner, which is overlaid before the
-    /// frame is composed.
+    /// Mutable box for the corner spinner: the small piece of a frame the arc is drawn into
+    /// and then composed back over the frame's own pixels, so that drawing the spinner costs
+    /// a copy of the box rather than a copy of the frame — which at the size of a display is
+    /// the difference between a few kilobytes and thirty megabytes, every eighty milliseconds
+    /// (see `render_layered_preview_at`).
     static OVERLAY_SCRATCH: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
 }
 
@@ -6626,21 +7057,34 @@ unsafe fn render_layered_preview_at(hwnd: HWND, x: i32, y: i32) {
         let bits = ensure_layered_surface(width, height)?;
         let out = unsafe { std::slice::from_raw_parts_mut(bits, expected_size) };
 
+        // The frame is composed once, and the spinner — where there is one — is drawn over
+        // what came out rather than into a copy of the frame that has to be composed again:
+        // what is copied is the box the arc sits in, a few thousand pixels of it, and what is
+        // composed back is that same box (see `OVERLAY_SCRATCH`).
+        compose_preview_pixels_into(
+            media.current_pixels(),
+            width,
+            height,
+            background,
+            media.current_frame_is_opaque(),
+            out,
+        );
+
         if media.should_draw_streaming_overlay() {
             let elapsed = media
                 .loading_start
                 .map(|s| s.elapsed().as_secs_f32())
                 .unwrap_or(0.0);
             let angle = elapsed * 2.0 * std::f32::consts::PI * 1.2;
-            OVERLAY_SCRATCH.with(|cell| {
-                let mut buf = cell.borrow_mut();
-                buf.clear();
-                buf.extend_from_slice(&media.current_pixels()[..expected_size]);
-                overlay_loading_spinner(&mut buf, width, height, angle);
-                compose_preview_pixels_into(&buf, width, height, background, out);
-            });
-        } else {
-            compose_preview_pixels_into(media.current_pixels(), width, height, background, out);
+
+            if let Some(area) = spinner_overlay_box(width, height) {
+                OVERLAY_SCRATCH.with(|cell| {
+                    let mut box_pixels = cell.borrow_mut();
+                    copy_frame_box_into(media.current_pixels(), width, area, &mut box_pixels);
+                    overlay_loading_spinner(&mut box_pixels, area, width, height, angle);
+                    compose_preview_block_into(&box_pixels, area, background, out, width);
+                });
+            }
         }
 
         Some((width, height))
@@ -6972,12 +7416,7 @@ unsafe fn scroll_text_preview(hwnd: HWND, first_line: usize) {
             return;
         }
 
-        media.frames[0] = ImageFrame {
-            pixels: frame.pixels,
-            width: frame.width,
-            height: frame.height,
-            delay_ms: 0,
-        };
+        media.frames[0] = ImageFrame::new(frame.pixels, frame.width, frame.height, 0);
 
         if let Some(state) = media.text_state.as_mut() {
             state.first_line = frame.first_line;
@@ -7032,12 +7471,7 @@ unsafe fn repaint_text_preview(hwnd: HWND) {
             return;
         }
 
-        media.frames[0] = ImageFrame {
-            pixels: frame.pixels,
-            width: frame.width,
-            height: frame.height,
-            delay_ms: 0,
-        };
+        media.frames[0] = ImageFrame::new(frame.pixels, frame.width, frame.height, 0);
 
         if let Some(state) = media.text_state.as_mut() {
             state.lines = frame.lines;
@@ -8521,6 +8955,10 @@ pub fn run_preview_window() {
         // where it is until the video replaces it, the way a page landing on a spinner
         // behaves (see `upgrading`).
         let mut video_replay: Option<PathBuf> = None;
+        // The hover a box measured off the preview thread has just answered for. Its replay is
+        // the same wait carried on rather than a new preview, the way a video's is (see
+        // `measure_replay`).
+        let mut measure_replay: Option<PathBuf> = None;
         // A player that has been started and has not put its window up yet: the wait
         // for a video, which the spinner stands in for until the player's window is
         // there (see `VideoStart`).
@@ -9179,6 +9617,10 @@ pub fn run_preview_window() {
             let mut refresh_requested = false;
             // A probe's answer, held apart the same way and for the same reason.
             let mut video_probed: Option<(PathBuf, u64)> = None;
+            // And a measure's, which is held apart with the box it answered with: what is
+            // waiting on it is a hover, and the box is what that hover is replayed with (see
+            // `MeasureProbed`).
+            let mut measure_probed: Option<(PathBuf, Option<(u32, u32)>)> = None;
             let mut next_preview_msg = carried_preview_msg.take();
             while let Some(preview_msg) = next_preview_msg.or_else(|| rx.try_recv().ok()) {
                 next_preview_msg = None;
@@ -9241,6 +9683,14 @@ pub fn run_preview_window() {
                         // act on but an answer about the one that is waiting.
                         if latest_preview_msg.is_none() && video_probed.is_none() {
                             video_probed = Some((path, generation));
+                        }
+                    }
+                    PreviewMessage::MeasureProbed { path, size } => {
+                        // And a measured box, held apart with the box itself: what is waiting
+                        // on it is a hover, and the box is what that hover is laid out with
+                        // (see `measure_probed`).
+                        if latest_preview_msg.is_none() && measure_probed.is_none() {
+                            measure_probed = Some((path, size));
                         }
                     }
                     PreviewMessage::MagickReady {
@@ -9422,6 +9872,43 @@ pub fn run_preview_window() {
                 }
             }
 
+            // A box measured off the preview thread has answered for the hover that was waiting
+            // on it: that hover is replayed — this time the measure reads the box off the table
+            // rather than out of the file, so the hover goes on as the preview it is — and the
+            // wait it is in goes on as the preview's own rather than as a new one (see
+            // `measured_off_the_tick` and `measure_replay`). An answer for a hover that has gone
+            // is dropped: what the measure answered is held for the next hover of the file
+            // either way.
+            if let Some((measured_path, size)) = measure_probed {
+                let waiting = current_show.as_ref().and_then(show_path) == Some(&measured_path);
+
+                if waiting && latest_preview_msg.is_none() {
+                    if size.is_some() {
+                        measure_replay = Some(measured_path);
+                        latest_preview_msg = replay_where_the_pointer_is(current_show.clone());
+                    } else {
+                        // The reader has nothing for this file, which is not a wait that can be
+                        // answered: the spinner comes down rather than standing over nothing
+                        // until the pointer moves, the way it does for an engine that cannot
+                        // draw the file it was asked for.
+                        let waiting_on_it = pending_load
+                            .as_ref()
+                            .is_some_and(|pl| pl.path == measured_path);
+
+                        if waiting_on_it {
+                            pending_load = None;
+                            pending_load_cancel = None;
+                            let _ = ShowWindow(hwnd, SW_HIDE);
+                            clear_pointer_hold();
+
+                            if let Ok(mut current) = CURRENT_MEDIA.lock() {
+                                *current = None;
+                            }
+                        }
+                    }
+                }
+            }
+
             // The display under the preview changed and the frame that was on screen
             // went with it. The window proc could only discard what was drawn; the
             // hover it came from is what knows how to draw it again, at the scale of
@@ -9466,6 +9953,9 @@ pub fn run_preview_window() {
                 // Whether this hover is waiting on a video's probe rather than on the
                 // video itself (see `video_probe_due`).
                 let mut show_video_probe: bool = false;
+                // Whether this hover is waiting on a measure that reads the file rather than on
+                // the file itself (see `measure_waiting`).
+                let mut show_measure_probe: bool = false;
                 let mut show_requested = false;
                 let mut preview_scale = current_hover_scales().picture;
                 let mut show_dpi = 96u32;
@@ -9513,13 +10003,18 @@ pub fn run_preview_window() {
                         let probing = video_probe_due(&path);
 
                         if let Some(orig_dims) = media_dimensions(&path, bounds, dpi) {
+                            // A box that is being read is placed at the pointer's own corner the
+                            // way every other wait is: what is on screen is the spinner for a
+                            // measure the layout has just started, and it belongs at the hand
+                            // that asked (see `measure_waiting`).
+                            let measuring = measure_waiting(&path);
                             let is_video = drawn_as_video(&path);
                             let placement = HoverPlacement {
                                 orig_dims,
                                 avoid,
                                 follow_cursor,
                                 preview_scale,
-                                at_the_pointer_corner: waiting_spinner || probing,
+                                at_the_pointer_corner: waiting_spinner || probing || measuring,
                             };
                             let placed = compute_mouse_layout(x, y, placement, bounds, dpi);
                             if let Some(layout) = placed {
@@ -9537,6 +10032,7 @@ pub fn run_preview_window() {
                                 });
                                 show_is_video = is_video;
                                 show_video_probe = probing;
+                                show_measure_probe = measuring;
                                 show_layout = Some(layout);
                                 show_placement = Some(placement);
                                 // The wait for this hover is the spinner's own box at
@@ -9590,6 +10086,7 @@ pub fn run_preview_window() {
                                 });
                                 show_is_video = is_video;
                                 show_video_probe = video_probe_due(&path);
+                                show_measure_probe = measure_waiting(&path);
                                 show_layout = Some(layout);
                                 // A keyboard hover has no pointer for a wait to be
                                 // placed at, so its spinner is the arc's own box
@@ -9666,6 +10163,10 @@ pub fn run_preview_window() {
                     // And a probe's answer, which replays the hover that was waiting
                     // on it the same way.
                     PreviewMessage::VideoProbed { .. } => {}
+                    // And a measured box, which replays the hover that was waiting on it in
+                    // the same way — or takes its wait down, where the answer is that there is
+                    // no box to be had.
+                    PreviewMessage::MeasureProbed { .. } => {}
                     // And an engine's, which is the page-shaped answer of a picture
                     // rather than of a page: it replays the hover that was waiting on
                     // it exactly as the render tier's answer does.
@@ -9707,12 +10208,14 @@ pub fn run_preview_window() {
                     // A page that arrived for the hover already on screen is an
                     // upgrade: what is there — the spinner — stays up while the page
                     // is loaded, and is replaced when it lands. A hover replayed for a
-                    // video's probe is the same thing reached another way: it is the
-                    // wait it was already in, carried on.
+                    // video's probe, or for a box measured off this thread, is the same thing
+                    // reached another way: it is the wait it was already in, carried on.
                     let upgrading = page_upgrade.as_deref() == Some(path.as_path())
-                        || video_replay.as_deref() == Some(path.as_path());
+                        || video_replay.as_deref() == Some(path.as_path())
+                        || measure_replay.as_deref() == Some(path.as_path());
                     page_upgrade = None;
                     video_replay = None;
+                    measure_replay = None;
 
                     // A text or archive preview is rendered at the size the
                     // layout planned for it: it is painted at a fixed font
@@ -9739,15 +10242,16 @@ pub fn run_preview_window() {
                     // through the ordinary load and are drawn by this app's own window.
                     let ffplay_plays_video = show_is_video && codecs::ffplay_available();
 
-                    if show_video_probe {
-                        // The hover is waiting on the probe: nothing of the file can be
-                        // laid out or loaded until there is a shape to lay it out with,
+                    if show_video_probe || show_measure_probe {
+                        // The hover is waiting on a probe: nothing of the file can be
+                        // laid out or loaded until there is a shape or a box to lay it out with,
                         // so what is put up is the wait every other preview is given —
                         // the spinner at the pointer — and the hover it came from is
                         // replayed when the answer lands, which is when there is a video
-                        // to load (see `video_probe_due` and `video_probe`). The probe
-                        // itself runs on a thread of its own: it is two external
-                        // processes, and this is the thread that draws the wait.
+                        // to load or a box to lay out (see `video_probe_due`, `video_probe`
+                        // and `measure_waiting`). The probe itself runs on a thread of its
+                        // own: for a video it is two external processes, and for a box it is a
+                        // read of the file, and this is the thread that draws the wait.
                         //
                         // A replay carries the wait it was already in rather than opening
                         // a new one: the same clock — so a probe answered inside
@@ -9809,8 +10313,13 @@ pub fn run_preview_window() {
                             upgrade,
                             awaiting_engine: false,
                         });
-                        video_probe = Some((path.clone(), gen));
-                        spawn_video_probe(path, gen);
+                        // The probe a hover is waiting on is the one this message asked for: a
+                        // measured box started its own thread where it was measured, so what is
+                        // left to start here is a video's (see `measured_off_the_tick`).
+                        if show_video_probe {
+                            video_probe = Some((path.clone(), gen));
+                            spawn_video_probe(path, gen);
+                        }
                     } else if ffplay_plays_video {
                         // Cancel any in-flight image load before switching to video.
                         current_generation += 1;

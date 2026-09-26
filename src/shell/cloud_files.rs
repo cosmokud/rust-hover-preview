@@ -38,5 +38,13 @@ pub fn needs_download(path: &Path) -> bool {
         return false;
     };
 
-    metadata.file_attributes() & REMOTE_ATTRIBUTES != 0
+    is_remote(metadata.file_attributes())
+}
+
+/// The same question asked of attributes a caller has already read: one directory entry
+/// answers whether a file is there, what version it is at and whether its content is on this
+/// machine, and a hover that has read one is not made to read another (see
+/// `crate::formats::head::Facts`).
+pub(crate) fn is_remote(attributes: u32) -> bool {
+    attributes & REMOTE_ATTRIBUTES != 0
 }

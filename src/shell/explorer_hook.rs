@@ -5,7 +5,6 @@ use crate::config::config::{
 };
 use crate::engines::webview_preview;
 use crate::formats::video_formats::is_video_file;
-use crate::shell::cloud_files;
 use crate::shell::wheel_input;
 use crate::ui::preview_window::{
     cursor_preview_hover, hide_preview, kill_stray_video_process, monitor_dpi_from_point,
@@ -1366,7 +1365,17 @@ fn read_failure_is_the_same_item(
 /// configuration is taken, because `content_type` reads the setting it is gated by
 /// through the same lock and a lock taken twice on one thread is a deadlock.
 fn is_media_file(path: &Path) -> bool {
-    let content = crate::formats::content_type::of(path);
+    match crate::formats::head::Facts::read(path) {
+        Some(facts) => is_media_file_with_facts(path, &facts),
+        None => false,
+    }
+}
+
+/// The same question asked of a file whose own entry has already been read: what the file's
+/// content says it is, decided the way it is decided everywhere else (see
+/// `crate::formats::head::Facts`).
+fn is_media_file_with_facts(path: &Path, facts: &crate::formats::head::Facts) -> bool {
+    let content = crate::formats::content_type::of_with_facts(path, facts);
 
     let Ok(config) = CONFIG.lock() else {
         return false;
@@ -1535,7 +1544,9 @@ fn resolve_media_path_candidate(text: &str) -> Option<PathBuf> {
     }
 
     let path = PathBuf::from(normalized);
-    if path.exists() && is_media_file(&path) {
+    // The file's own entry is read once, and it is what says whether there is one to ask
+    // about at all (see `crate::formats::head::Facts`).
+    if is_media_file(&path) {
         Some(path)
     } else {
         None
@@ -1943,11 +1954,17 @@ fn normalize_existing_path(path: PathBuf) -> Option<PathBuf> {
 }
 
 fn normalize_media_path(path: PathBuf) -> Option<PathBuf> {
-    if !path.exists() || !is_media_file(&path) || cloud_files::needs_download(&path) {
+    // One reading of the file's own entry answers every question this asks about it: that it is
+    // there, that it is a file, what version it is at, and whether its content is on this
+    // machine. What follows is the form the rest of the app works in — and the file is not
+    // asked about again for any of it (see `crate::formats::head::Facts`).
+    let facts = crate::formats::head::Facts::read(&path)?;
+
+    if !facts.is_file() || facts.needs_download() || !is_media_file_with_facts(&path, &facts) {
         return None;
     }
 
-    normalize_existing_path(path)
+    std::fs::canonicalize(&path).ok().or(Some(path))
 }
 
 /// The path a Shell item stands for, in the form the rest of the app works in.
@@ -2831,10 +2848,7 @@ fn view_item(folder_view: &IFolderView2, index: i32, expected_name: &str) -> Vie
             return ViewItem::NotHeld;
         }
 
-        match shell_item_filesystem_path(&item)
-            .and_then(normalize_media_path)
-            .filter(|path| path.is_file())
-        {
+        match shell_item_filesystem_path(&item).and_then(normalize_media_path) {
             Some(path) => ViewItem::File(path),
             None => ViewItem::NoFile,
         }
