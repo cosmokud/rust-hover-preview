@@ -17,6 +17,7 @@ use crate::engines::office_render;
 use crate::engines::peazip_render;
 use crate::engines::webview_preview;
 use crate::formats::archive_formats;
+use crate::formats::audio_formats;
 use crate::formats::calibre_formats;
 use crate::formats::codecs;
 use crate::formats::design_formats;
@@ -29,6 +30,7 @@ use crate::formats::office_formats;
 use crate::formats::peazip_formats;
 use crate::formats::vector_formats;
 use crate::formats::video_formats;
+use crate::readers::audio_track::{self, Player, Probed};
 use crate::readers::comic_preview;
 use crate::readers::dds_image;
 use crate::readers::eps_image;
@@ -46,6 +48,7 @@ use crate::readers::wic_image;
 use crate::shell::cloud_files;
 use crate::shell::wheel_input;
 use crate::text::archive_preview::{self, ArchivePreviewOptions};
+use crate::text::audio_preview::{self, AudioPreviewOptions, Card};
 use crate::text::text_preview::{self, TextPreviewOptions};
 use crate::{CONFIG, RUNNING};
 use gif::DecodeOptions;
@@ -612,6 +615,12 @@ enum MediaType {
     /// layered window this app owns is the preview for the other, which is the one
     /// question `render_layered_preview_at` asks of a frame.
     NativeVideo,
+    /// A sound: a card of what the file holds, painted into this window's own frame like an
+    /// archive's page, with the sound itself played by one of the two engines behind it (see
+    /// `audio_preview`). Nothing of the player is drawn — the card is the whole of what is on
+    /// screen — which is why a sound is a kind of its own here rather than a video with no
+    /// frames in it.
+    Audio,
     Pdf,
     Text,
     Archive,
@@ -686,6 +695,9 @@ impl MediaType {
             Self::EngineSvg => Some(PreviewType::Vector),
             Self::EngineFont => Some(PreviewType::Fonts),
             Self::Video | Self::NativeVideo => Some(PreviewType::Videos),
+            // A sound is its own kind in the tray as well as here: the switch over it is the
+            // switch over the sound list, not the video's.
+            Self::Audio => Some(PreviewType::Audio),
             Self::Text => Some(PreviewType::Text),
             Self::Pdf => Some(PreviewType::Ebook),
             Self::Archive => Some(PreviewType::Archives),
@@ -733,11 +745,17 @@ impl MediaType {
         matches!(self, Self::NativeVideo)
     }
 
+    /// Whether this is a sound, whose card is the one painted preview that changes while it is
+    /// on screen: the clock and the bar under it are drawn from a player that is running.
+    fn is_audio(&self) -> bool {
+        matches!(self, Self::Audio)
+    }
+
     /// Whether this preview's appearance is painted into its own frame rather
     /// than recomposited from shared pixels, which is what decides whether a
     /// theme switch means rebuilding it.
     fn is_painted(&self) -> bool {
-        matches!(self, Self::Text | Self::Archive | Self::Peazip)
+        matches!(self, Self::Text | Self::Archive | Self::Peazip | Self::Audio)
     }
 }
 
@@ -912,6 +930,39 @@ impl MediaData {
         self.current_frame()
             .map(|frame| frame.pixels.as_slice())
             .unwrap_or(&[])
+    }
+
+    /// Repaint a sound's card with the clock as it stands, answering whether the frame on
+    /// screen changed.
+    ///
+    /// A painted preview is drawn once and held, so the one thing about a card that moves is
+    /// drawn by asking for the page again — the same arrangement a text preview's scrolling has
+    /// (see `repaint_text_preview`), and what keeps the card's own layout in one place: the box
+    /// it was painted in is the box it is painted in again, and only the clock and the bar
+    /// under it differ.
+    fn refresh_audio_card(
+        &mut self,
+        path: &Path,
+        elapsed: Option<f64>,
+        duration: Option<f64>,
+        dpi: u32,
+    ) -> bool {
+        let Some(frame) = self.frames.first() else {
+            return false;
+        };
+        let (width, height) = (frame.width, frame.height);
+
+        let Some(card) = audio_card(path, elapsed, duration) else {
+            return false;
+        };
+        let Some((pixels, width, height)) =
+            audio_preview::render(&card, width, height, dpi, current_audio_options())
+        else {
+            return false;
+        };
+
+        self.frames[0] = ImageFrame::new(pixels, width, height, 0);
+        true
     }
 
     fn current_width(&self) -> u32 {
@@ -1877,6 +1928,27 @@ fn current_video_volume() -> u32 {
     CONFIG.lock().map(|cfg| cfg.video_volume).unwrap_or(0)
 }
 
+/// The volume a sound is previewed at, read the way the video's is: from the configuration at
+/// the moment a player is started, so a change in the tray reaches the next hover.
+fn current_audio_volume() -> u32 {
+    CONFIG.lock().map(|cfg| cfg.audio_volume).unwrap_or(0)
+}
+
+/// What a sound's card is built with: the theme and the text size, which are the two settings
+/// a painted preview answers to.
+fn current_audio_options() -> AudioPreviewOptions {
+    CONFIG
+        .lock()
+        .map(|cfg| AudioPreviewOptions {
+            theme: cfg.theme,
+            font_scale_percent: cfg.text_font_scale_percent,
+        })
+        .unwrap_or(AudioPreviewOptions {
+            theme: TextTheme::Light,
+            font_scale_percent: DEFAULT_TEXT_FONT_SCALE_PERCENT,
+        })
+}
+
 /// The backdrop an engine-drawn preview of `path` is drawn over: the kind decides it, the
 /// same way it decides everything else about a document. The one engine draws both kinds
 /// this app hands it — an SVG document, which is a vector drawing, and a font file's
@@ -2580,7 +2652,7 @@ fn scale_of_kind(kind: PreviewType, path: &Path, scales: HoverScales) -> Preview
         // the box came out at is the size they are drawn at. An archive an engine listed is
         // the second of those: the same page, painted the same way, from a listing that came
         // back from somewhere else.
-        PreviewType::Text | PreviewType::Archives | PreviewType::Peazip => {
+        PreviewType::Text | PreviewType::Archives | PreviewType::Peazip | PreviewType::Audio => {
             PreviewScale::Percent(100)
         }
 
@@ -2774,6 +2846,7 @@ fn page_is_painted(path: &Path) -> bool {
     is_text_preview(path)
         || archive_formats::is_archive_file(path)
         || peazip_formats::is_engine_archive(path)
+        || drawn_as_audio(path)
 }
 
 fn effective_frame_delay_ms(media_type: &MediaType, source_delay_ms: u32) -> u32 {
@@ -5033,6 +5106,34 @@ fn probe_video_geometry(path: &PathBuf) -> ProbedGeometry {
     // the whole of the fallback's geometry: there is no crop to detect, because cropdetect
     // is an FFmpeg filter and the engine is handed the frame as the file holds it.
     let Some((src_w, src_h)) = dimensions.or_else(|| video_player::dimensions(path)) else {
+        // No picture in the file at all — which leaves two answers, and the one that matters
+        // is asked first. A container of a video's name whose streams hold a sound and no
+        // picture is a song: the sound is probed for, and a machine that can play it is
+        // answered as one from here on, because the router asks this verdict before it asks
+        // the video list — so the hover that is replayed for this probe is laid out as the
+        // card it is rather than dropped as a video with no shape (see
+        // `audio_formats::probed_audio_only`). What is left is a file nothing here can read,
+        // which is the answer this arm always gave it.
+        let playable = match audio_track::probed(path) {
+            Probed::Track(_) => true,
+            Probed::Nothing => false,
+            Probed::NotAsked => {
+                let probed = probe_audio_track(path);
+                audio_track::remember(
+                    path,
+                    match &probed {
+                        Some(track) => Probed::Track(track.clone()),
+                        None => Probed::Nothing,
+                    },
+                );
+                probed.is_some()
+            }
+        };
+
+        if playable {
+            audio_formats::remember_audio_only(path);
+        }
+
         let mut cache = video_geometry_cache();
         if !cache.contains_key(&key) && cache.len() >= VIDEO_GEOMETRY_CACHE_MAX_ENTRIES {
             cache.clear();
@@ -5460,7 +5561,12 @@ fn stop_video_playback(media: &mut MediaData) {
     // every path that ends a video already comes through — the pointer leaving the file,
     // another preview taking its place, the `Videos` gate closing, a display change, a
     // resume from sleep, and the app itself.
-    if media.media_type.is_native_video() {
+    //
+    // A sound is stopped here for the same reason and by the same call: the engine that plays
+    // one is this app's own, and a sound FFmpeg plays instead is a process in `video_process`
+    // below — the same field, killed the same way, because what ends either is the hover
+    // ending.
+    if media.media_type.is_native_video() || media.media_type.is_audio() {
         video_player::stop();
     }
 
@@ -5836,6 +5942,11 @@ fn load_media_of_kind(
         PreviewType::Text => {
             load_text_preview(path, max_width, max_height, dpi, current_text_options())
         }
+        // A sound: a card of what the file holds, painted like an archive's page. The facts are
+        // the probe's and are already in hand — the measure that read them is what laid this
+        // hover out (see `audio_box`) — and the player the card is drawn against is started by
+        // the loop, where every other preview is put up.
+        PreviewType::Audio => load_audio_card(path, max_width, max_height, dpi),
         PreviewType::Fonts => (font_preview::probe(path).is_some() && webview_preview::draws(path))
             .then(engine_font_media),
         PreviewType::Images => load_picture(path, max_width, max_height, preview_scale, &cancel),
@@ -5910,7 +6021,8 @@ fn load_picture(
         | native_formats::NativeJob::ArchiveRar
         | native_formats::NativeJob::ArchiveTar
         | native_formats::NativeJob::ArchiveTarGz
-        | native_formats::NativeJob::VideoMediaFoundation => {}
+        | native_formats::NativeJob::VideoMediaFoundation
+        | native_formats::NativeJob::AudioMediaFoundation => {}
     }
 
     // What is left is a still: a picture that never moved, or one whose animated reader
@@ -6052,6 +6164,360 @@ fn archive_box_off_the_tick(path: &Path, bounds: ScreenBounds, dpi: u32) -> Opti
         },
         move || archive_preview::measure(&source, cap_width, cap_height, dpi, options),
     )
+}
+
+/// How long a sound's probe is given — the source reader's own read of a file, or FFmpeg's
+/// container probe — before the wait for it is over. The same cap a video's probe has, and for
+/// the same reason: a probe that has run this long is a file nothing is coming back from.
+const AUDIO_PROBE_TIMEOUT_SECS: u64 = 10;
+
+/// How often a sound's card is painted again while a player is running. The clock changes once
+/// a second and the bar creeps by a few pixels in that time, so four times a second is smooth
+/// to the eye and a fraction of what a video's own frames cost.
+const AUDIO_CARD_REPAINT: Duration = Duration::from_millis(250);
+
+/// The box a sound's card asks for, with the probe that fills it beside it on the same thread.
+///
+/// Two things a hover on a sound waits for, and both of them are here. The first is the probe:
+/// whether this machine has anything that plays the file at all, and what the file says about
+/// itself — a source reader for the engine's own decoders, an `ffprobe` pass for FFmpeg's —
+/// and a file neither of them can play is a hover answered with nothing rather than with a card
+/// of facts nothing will ever play. The second is the card's own layout, which is a page of
+/// text wrapped to the room the display has.
+///
+/// Both are off the preview thread, and what the hover waits in meanwhile is the spinner: a
+/// probe is a process, and the box it answers with is what the replayed hover is laid out at
+/// (see `measured_off_the_tick`).
+fn audio_box(path: &Path, bounds: ScreenBounds, dpi: u32) -> Option<(u32, u32)> {
+    let source = path.to_path_buf();
+    let cap_width = (bounds.right - bounds.left).max(1) as u32;
+    let cap_height = bounds.height().max(1) as u32;
+    let options = current_audio_options();
+
+    measured_off_the_tick(
+        path,
+        MeasureScope::Room {
+            cap_width,
+            cap_height,
+            dpi,
+            theme: options.theme,
+            font_scale_percent: options.font_scale_percent,
+        },
+        move || {
+            // What the machine has for the file, asked once per file and version and held for
+            // the hovers that follow — a file the engine will not play costs one probe rather
+            // than one per hover.
+            if matches!(audio_track::probed(&source), Probed::NotAsked) {
+                let probed = probe_audio_track(&source);
+                audio_track::remember(
+                    &source,
+                    match &probed {
+                        Some(track) => Probed::Track(track.clone()),
+                        None => Probed::Nothing,
+                    },
+                );
+            }
+
+            let card = audio_card(&source, None, None)?;
+            audio_preview::measure(&card, cap_width, cap_height, dpi, options)
+        },
+    )
+}
+
+/// Whether the preview of `path` is a sound: what the file's own bytes say it is — the verdict a
+/// probe left behind included — and, for a name no table names, the sound list.
+///
+/// It is asked the way `drawn_as_video` is asked and for the same reason: a sound is drawn as a
+/// card by this app rather than by a player, so the layout has to know one when it sees one —
+/// which for a renamed file, or for a container whose streams hold only a song, is a question
+/// about the content rather than about the name.
+fn drawn_as_audio(path: &Path) -> bool {
+    if !PreviewType::Audio.enabled() {
+        return false;
+    }
+
+    let Some(config) = CONFIG.lock().ok() else {
+        return false;
+    };
+
+    if matches!(
+        crate::formats::content_type::of(path, &config),
+        crate::formats::content_type::Content::Kind(PreviewType::Audio)
+    ) {
+        return true;
+    }
+
+    audio_formats::matches_audio_list(path, &config.audio_extensions)
+}
+
+/// What a sound's card says, with the clock as it stands — or nothing for a file with no track
+/// behind it, which is a file no probe has answered for or one nothing here can play.
+fn audio_card(path: &Path, elapsed: Option<f64>, duration: Option<f64>) -> Option<Card> {
+    let Probed::Track(track) = audio_track::probed(path) else {
+        return None;
+    };
+
+    Some(Card {
+        name: path
+            .file_name()
+            .map(|name| name.to_string_lossy().to_string())
+            .unwrap_or_default(),
+        facts: audio_preview::facts_of(&track, path),
+        duration: duration.or(track.duration),
+        elapsed,
+    })
+}
+
+/// The card a sound is previewed as, painted into the box the layout settled on.
+fn load_audio_card(path: &Path, width: u32, height: u32, dpi: u32) -> Option<MediaData> {
+    let card = audio_card(path, None, None)?;
+    let (pixels, width, height) =
+        audio_preview::render(&card, width, height, dpi, current_audio_options())?;
+
+    Some(MediaData {
+        frames: vec![ImageFrame::new(pixels, width, height, 0)],
+        shared_frames: None,
+        all_frames_loaded: None,
+        current_frame: 0,
+        last_frame_time: Instant::now(),
+        media_type: MediaType::Audio,
+        stream_cancel: None,
+        video_process: None,
+        loading_start: None,
+        text_state: None,
+    })
+}
+
+/// What this machine has for playing a sound: Windows' own decoders where one of them reaches
+/// the format, and FFmpeg's player where none does.
+///
+/// The two are asked in the order the chain names them, and the first that answers is the
+/// player the file is played by: the engine answers for a file it can decode — which is the
+/// whole of what its probe is for — and everything else is FFmpeg's, where FFmpeg is installed
+/// at all. A file neither answers for is a file with no preview.
+fn probe_audio_track(path: &Path) -> Option<audio_track::Track> {
+    if let Some(track) = video_player::audio_probe(path) {
+        return Some(track);
+    }
+
+    ffprobe_audio_track(path)
+}
+
+/// What FFmpeg's own probe reports about a file, and the player that would play it.
+///
+/// The container is opened and its streams read rather than the file played to find out, which
+/// is the pair of answers this side wants: whether there is a sound in the file at all, and
+/// what the card beside it says. A machine without FFmpeg is answered by the engine above or
+/// not at all.
+fn ffprobe_audio_track(path: &Path) -> Option<audio_track::Track> {
+    if !codecs::ffplay_available() {
+        return None;
+    }
+
+    // Spawned rather than run through `Command::output` so that the probe is in the job before
+    // it is waited on, and waited for under a cap rather than for as long as it takes — the
+    // same arrangement the video path's own probes have (see `wait_bounded`).
+    let child = Command::new("ffprobe")
+        .args([
+            "-v",
+            "error",
+            "-err_detect",
+            "ignore_err",
+            "-fflags",
+            "+genpts+discardcorrupt+igndts",
+            "-show_entries",
+            "format=duration:stream=codec_type,codec_name,sample_rate,channels,bit_rate",
+            "-of",
+            "default=noprint_wrappers=1",
+        ])
+        .arg(path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .creation_flags(engine_processes::CREATE_NO_WINDOW)
+        .spawn()
+        .ok()?;
+
+    engine_processes::adopt(child.id());
+
+    let output = wait_bounded(child, Duration::from_secs(AUDIO_PROBE_TIMEOUT_SECS))?;
+    let report = String::from_utf8_lossy(&output.stdout);
+
+    audio_track_from_report(&report)
+}
+
+/// The track an `ffprobe` report describes, or nothing where the file holds no sound.
+///
+/// The entries arrive one stream at a time, so what follows a `codec_type=audio` line is that
+/// stream's own fields and nothing of the streams before it — which is what makes a film with a
+/// soundtrack distinguishable from a song.
+fn audio_track_from_report(report: &str) -> Option<audio_track::Track> {
+    let mut in_audio = false;
+    let mut heard_audio = false;
+    let mut codec: Option<String> = None;
+    let mut rate: Option<u32> = None;
+    let mut channels: Option<u16> = None;
+    let mut bitrate: Option<u32> = None;
+    let mut duration: Option<f64> = None;
+
+    for line in report.lines() {
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        let value = value.trim();
+
+        match key.trim() {
+            "codec_type" => {
+                in_audio = value == "audio";
+                heard_audio |= in_audio;
+            }
+            "codec_name" if in_audio => codec = Some(codec_label(value)),
+            "sample_rate" if in_audio => rate = value.parse().ok(),
+            "channels" if in_audio => channels = value.parse().ok(),
+            "bit_rate" if in_audio => bitrate = value.parse().ok(),
+            "duration" => duration = value.parse().ok(),
+            _ => {}
+        }
+    }
+
+    heard_audio.then_some(audio_track::Track {
+        player: Player::Ffmpeg,
+        codec,
+        rate: rate.filter(|rate| *rate > 0),
+        channels: channels.filter(|channels| *channels > 0),
+        bitrate: bitrate.filter(|bitrate| *bitrate > 0),
+        duration: duration.filter(|duration| *duration > 0.0),
+    })
+}
+
+/// What a codec is called, by the name FFmpeg writes it under: the words a person reads on a
+/// label where the codec has one, and the name itself where it does not.
+fn codec_label(name: &str) -> String {
+    match name {
+        "mp3" => "MP3",
+        "flac" => "FLAC",
+        "alac" => "ALAC",
+        "aac" => "AAC",
+        "opus" => "Opus",
+        "vorbis" => "Vorbis",
+        "speex" => "Speex",
+        "wmav1" | "wmav2" | "wmapro" => "WMA",
+        "wmalossless" => "WMA Lossless",
+        "ac3" => "Dolby Digital",
+        "eac3" => "Dolby Digital Plus",
+        "dts" => "DTS",
+        "ape" => "Monkey's Audio",
+        "wavpack" => "WavPack",
+        "tta" => "True Audio",
+        "musepack" | "mpc7" | "mpc8" => "Musepack",
+        "shorten" => "Shorten",
+        "tak" => "TAK",
+        "amrnb" => "AMR",
+        "amrwb" => "AMR-WB",
+        "cook" | "atrac3" | "atrac3p" | "sipr" => "RealAudio",
+        "dsd_lsbf" | "dsd_msbf" | "dsd_lsbf_planar" | "dsd_msbf_planar" => "DSD",
+        name if name.starts_with("pcm_") => "PCM",
+        name => return name.to_uppercase(),
+    }
+    .to_string()
+}
+
+/// Start the player a sound's card is drawn against, answering whether a player that was
+/// expected arrived.
+///
+/// A card is drawn whether or not anything plays: at `Volume → Audio` 0% the answer is the card
+/// and nothing else, which is what silence looks like and is not a failure. What the caller is
+/// told is whether a player that *was* asked for came up — a sound no engine here will actually
+/// play is a hover answered with nothing rather than a card whose clock can never move.
+fn start_audio_playback(path: &Path, media: &mut MediaData) -> bool {
+    let Some(track) = audio_track::playable(path) else {
+        return false;
+    };
+
+    // A player the hover before this one left behind is ended before this one starts, which is
+    // the check the video path makes before it spawns its own: a sound must not go on playing
+    // over the sound of the file the pointer has moved to. The engine's own session is stopped
+    // by `play_audio` rather than here, and this is what answers for the other engine — a
+    // player that has not been confirmed gone, whose process handle the hover that started it
+    // took with it when it ended.
+    kill_stray_video_process();
+
+    let volume = current_audio_volume();
+    if volume == 0 {
+        return true;
+    }
+
+    match track.player {
+        Player::Native => {
+            // A hover that lands on the file already playing leaves it playing, the same way
+            // the FFmpeg path compares the file it last started.
+            if video_player::playing_path().as_deref() == Some(path) && video_player::is_playing() {
+                return true;
+            }
+
+            video_player::play_audio(path, volume);
+            video_player::is_playing()
+        }
+        Player::Ffmpeg => {
+            media.video_process = start_audio_player(path, volume);
+            media.video_process.is_some()
+        }
+    }
+}
+
+/// Start FFmpeg's player on a sound: no window at all, which is the whole of what this side asks
+/// of it, and the player's own volume scale — `0` to `100`.
+///
+/// A sound is looped while it is hovered, as a video is: what a hover is for is the file, and a
+/// sound that stopped under a pointer that had not moved would be a preview that ended on its
+/// own. The card's clock wraps with it (see `audio_clock`).
+fn start_audio_player(path: &Path, volume: u32) -> Option<Child> {
+    let child = Command::new("ffplay")
+        .args(["-nodisp", "-loop", "0", "-autoexit", "-loglevel", "quiet"])
+        .args(["-volume", &volume.min(100).to_string()])
+        .arg(path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .creation_flags(engine_processes::CREATE_NO_WINDOW)
+        .spawn()
+        .ok()?;
+
+    // The player is this app's own child, taken charge of the way every other one is: the job
+    // ends it when the app does, and the record answers for a run that never got to end it. It
+    // is recorded as the player rather than as an engine, because what ends it is its hover
+    // ending.
+    engine_processes::record_player(VIDEO_PROCESS_IMAGE_NAME, child.id());
+    VIDEO_PID.store(child.id(), Ordering::SeqCst);
+    VIDEO_HWND.store(0, Ordering::SeqCst);
+
+    Some(child)
+}
+
+/// Where the sound is and how long it is: the engine's own clock where Windows plays it, and
+/// this app's clock over the player's start where FFmpeg does. The whole is the file's own
+/// answer either way, and either half is nothing where there is nothing to say it — which is
+/// what a card with no player behind it is drawn with.
+///
+/// A sound loops for as long as it is hovered, so what the clock says is where in the file the
+/// sound is *now*: a player that has been going for longer than the file lasts is wrapped back
+/// into it, which is what keeps the bar going round rather than standing full.
+fn audio_clock(path: &Path, started: Option<Instant>) -> (Option<f64>, Option<f64>) {
+    let Some(track) = audio_track::playable(path) else {
+        return (None, None);
+    };
+
+    match track.player {
+        Player::Native => (video_player::position(), video_player::duration()),
+        Player::Ffmpeg => {
+            let elapsed = started.map(|at| at.elapsed().as_secs_f64());
+            let position = match (elapsed, track.duration) {
+                (Some(elapsed), Some(duration)) if duration > 0.0 => Some(elapsed % duration),
+                (elapsed, _) => elapsed,
+            };
+
+            (position, track.duration)
+        }
+    }
 }
 
 /// Get original dimensions of media for positioning calculations
@@ -6212,6 +6678,10 @@ fn media_dimensions_of_kind(kind: PreviewType, path: &PathBuf) -> Option<(u32, u
 
     match kind {
         PreviewType::Videos => video_box(path),
+        // A sound is measured against the room it is drawn in — the card is a page of text
+        // wrapped to the box it is given — so it is asked where the bounds and the DPI are,
+        // beside the drawn kinds and not here (see `media_dimensions`).
+        PreviewType::Audio => None,
         PreviewType::Ebook => pdf_page_box(path),
         PreviewType::Archives | PreviewType::Text | PreviewType::Peazip => None,
         PreviewType::Document => office_preview::measure(path),
@@ -6388,6 +6858,10 @@ fn media_dimensions(path: &PathBuf, bounds: ScreenBounds, dpi: u32) -> Option<(u
             PreviewType::Text => text_box(path, bounds, dpi),
             PreviewType::Archives => archive_box_off_the_tick(path, bounds, dpi),
             PreviewType::Peazip => peazip_box(path, bounds, dpi),
+            // And the fourth kind that is wrapped to its room: a sound's card is painted at a
+            // fixed font size and cut to the box it is given, and what stands in for it until
+            // the probe beside it has answered is the waiting spinner.
+            PreviewType::Audio => audio_box(path, bounds, dpi),
             _ => media_dimensions_of_kind(kind, path),
         };
     }
@@ -6407,6 +6881,12 @@ fn media_dimensions(path: &PathBuf, bounds: ScreenBounds, dpi: u32) -> Option<(u
     // `peazip_box`).
     if peazip_formats::is_peazip_preview(path) {
         return peazip_box(path, bounds, dpi);
+    }
+
+    // A sound is the fourth kind measured against its room, and the last: what a hover on one
+    // asks is a card whose facts a probe has to bring back first (see `audio_box`).
+    if drawn_as_audio(path) {
+        return audio_box(path, bounds, dpi);
     }
 
     get_media_dimensions(path)
@@ -9190,6 +9670,14 @@ pub fn run_preview_window() {
 
         // Track current video path to avoid restarting
         let mut current_video_path: Option<PathBuf> = None;
+        // The display the hover on screen was measured against: what a sound's card is painted
+        // at, and what it is painted at again while its player runs.
+        let mut audio_card_dpi = 96u32;
+        // When the sound on screen was started, and when its card was last painted. The clock a
+        // sound FFmpeg plays is measured from the first, and the second is the cadence its card
+        // is drawn at (see `audio_clock` and `AUDIO_CARD_REPAINT`).
+        let mut audio_started: Option<Instant> = None;
+        let mut audio_repaint_at = Instant::now();
         // The hover the preview on screen came from, so a theme or Markdown
         // switch can rebuild it without waiting for the next hover.
         let mut current_show: Option<PreviewMessage> = None;
@@ -9401,6 +9889,27 @@ pub fn run_preview_window() {
                     if media.media_type.is_native_video() && media.take_native_video_frame() {
                         needs_repaint = true;
                     }
+                    // A sound's card is the one painted preview that changes while it is on
+                    // screen: the clock and the bar under it are drawn from a player that is
+                    // running, so the page is asked for again at the cadence the clock's own
+                    // seconds are worth watching at. What a card with no player behind it —
+                    // `Volume → Audio` at 0% — costs nothing at all.
+                    if media.media_type.is_audio() && audio_repaint_at.elapsed() >= AUDIO_CARD_REPAINT
+                    {
+                        audio_repaint_at = Instant::now();
+
+                        if let Some(path) = current_show.as_ref().and_then(self::show_path) {
+                            let (elapsed, duration) = audio_clock(path, audio_started);
+                            if media.refresh_audio_card(
+                                path,
+                                elapsed,
+                                duration,
+                                audio_card_dpi,
+                            ) {
+                                needs_repaint = true;
+                            }
+                        }
+                    }
                     // While streaming first-frame loading, repaint for spinner animation.
                     if media.should_draw_streaming_overlay()
                         && last_stream_overlay_repaint.elapsed() >= Duration::from_millis(83)
@@ -9539,7 +10048,7 @@ pub fn run_preview_window() {
                             // before there is anything to show (see `spinner_due`).
                             pending_load = pending;
                         }
-                        Some(media_data) => {
+                        Some(mut media_data) => {
                             // A video the media engine plays is started here, before its
                             // preview is put up: what this window is about to draw is a
                             // frame of it, and an engine that would not start is a file
@@ -9580,6 +10089,33 @@ pub fn run_preview_window() {
 
                                     continue;
                                 }
+                            }
+
+                            // A sound is started here, before its card goes up, for the reason
+                            // a video's engine is: what the card draws is the clock of a player
+                            // that is running. A player that was asked for and did not come up is
+                            // a sound with nothing behind it, which is the answer a video's engine
+                            // that will not start gets — while a card at `Volume → Audio` 0% asks
+                            // for no player at all and is left standing, with its clock still and
+                            // its bar empty.
+                            if media_data.media_type.is_audio() {
+                                if !start_audio_playback(&result.path, &mut media_data) {
+                                    let _ = ShowWindow(hwnd, SW_HIDE);
+                                    clear_pointer_hold();
+                                    pending_load = None;
+
+                                    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+                                        if let Some(ref mut existing) = *current {
+                                            existing.cancel_background_work();
+                                        }
+                                        *current = None;
+                                    }
+
+                                    continue;
+                                }
+
+                                audio_started = Some(Instant::now());
+                                audio_repaint_at = Instant::now();
                             }
 
                             let mw = media_data.current_width() as i32;
@@ -10313,6 +10849,9 @@ pub fn run_preview_window() {
                                 show_is_video = is_video;
                                 show_video_probe = probing;
                                 show_measure_probe = measuring;
+                                // The display the hover is on, which is what a card of a sound
+                                // is painted at and what its clock repaints it at.
+                                audio_card_dpi = dpi;
                                 show_layout = Some(layout);
                                 show_placement = Some(placement);
                                 // The wait for this hover is the spinner's own box at
@@ -10367,6 +10906,7 @@ pub fn run_preview_window() {
                                 show_is_video = is_video;
                                 show_video_probe = video_probe_due(&path);
                                 show_measure_probe = measure_waiting(&path);
+                                audio_card_dpi = dpi;
                                 show_layout = Some(layout);
                                 // A keyboard hover has no pointer for a wait to be
                                 // placed at, so its spinner is the arc's own box
@@ -13123,6 +13663,119 @@ mod tests {
         assert!(first != key(&path), "a rewritten file is another key");
 
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// The report an `ffprobe` pass writes is read for the sound in it and nothing of the
+    /// picture before it: a film with a soundtrack is not a sound, and the fields a card is
+    /// drawn with are the ones that follow the sound's own stream.
+    #[test]
+    fn reads_a_sound_out_of_an_ffprobe_report() {
+        let report = "codec_type=video\ncodec_name=h264\nwidth=1920\n\
+                      codec_type=audio\ncodec_name=flac\nsample_rate=44100\nchannels=2\n\
+                      bit_rate=1006000\nduration=562.31\n";
+
+        let track = audio_track_from_report(report).expect("a sound in the report");
+        assert_eq!(track.player, Player::Ffmpeg);
+        assert_eq!(track.codec.as_deref(), Some("FLAC"));
+        assert_eq!(track.rate, Some(44_100));
+        assert_eq!(track.channels, Some(2));
+        assert_eq!(track.bitrate, Some(1_006_000));
+        assert_eq!(track.duration, Some(562.31));
+
+        assert_eq!(
+            audio_track_from_report("codec_type=video\ncodec_name=h264\nduration=10.0\n"),
+            None,
+            "a file with no sound stream in it is not a sound, however it is named"
+        );
+    }
+
+    /// What this machine has for the sounds named in `RHP_AUDIO_PROBE`, and what their cards
+    /// come out as.
+    ///
+    /// Ignored by default, like every other probe here: it reads real files, it starts no
+    /// player and it plays nothing — what it asks is the question a hover asks before a card is
+    /// drawn, and what it prints is the answer beside the size the card was painted at.
+    ///
+    /// ```text
+    /// $env:RHP_AUDIO_PROBE = "C:\music\track.flac;C:\music\podcast.opus"
+    /// cargo test audio_probe -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore = "reads the files named in RHP_AUDIO_PROBE"]
+    fn audio_probe() {
+        let Ok(list) = std::env::var("RHP_AUDIO_PROBE") else {
+            println!("set RHP_AUDIO_PROBE to one or more paths, separated by ';'");
+            return;
+        };
+
+        for path in list
+            .split(';')
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+            .map(PathBuf::from)
+        {
+            println!("\n--- {} ---", path.display());
+            println!(
+                "the lists call it a sound: {}, and the preview is shown: {}",
+                crate::formats::audio_formats::matches_audio_list(
+                    &path,
+                    &CONFIG.lock().map(|config| config.audio_extensions.clone()).unwrap_or_default(),
+                ),
+                drawn_as_audio(&path)
+            );
+
+            let started = Instant::now();
+            let probed = probe_audio_track(&path);
+            println!("probe: {probed:?} ({} ms)", started.elapsed().as_millis());
+
+            // A container of a video's name is the case the whole verdict exists for: what the
+            // video probe finds in it, and what the router says once that probe has answered.
+            let named_video = CONFIG
+                .lock()
+                .map(|config| {
+                    video_formats::matches_video_list(&path, &config.video_extensions)
+                })
+                .unwrap_or(false);
+            if named_video {
+                println!(
+                    "the video probe answered {}",
+                    match probe_video_geometry(&path) {
+                        ProbedGeometry::Measured(_) => "a shape",
+                        ProbedGeometry::Unmeasurable => "nothing to measure",
+                    }
+                );
+                println!(
+                    "and the router calls it {:?}",
+                    CONFIG
+                        .lock()
+                        .ok()
+                        .and_then(|config| crate::formats::routing::kind_of(&path, &config))
+                );
+                println!("its card is drawn: {}", drawn_as_audio(&path));
+            }
+
+            let Some(track) = probed else {
+                println!("nothing here plays this file");
+                continue;
+            };
+
+            println!("the card says: {:?}", audio_preview::facts_of(&track, &path));
+            for (elapsed, duration) in [(None, None), (Some(67.0), track.duration), (Some(0.5), None)] {
+                let Some(card) = audio_card(&path, elapsed, duration) else {
+                    continue;
+                };
+                let options = current_audio_options();
+                let (width, height) =
+                    audio_preview::measure(&card, 4096, 2160, 96, options).expect("a measured card");
+                let painted =
+                    audio_preview::render(&card, width, height, 96, options).expect("a painted card");
+
+                println!(
+                    "card at {elapsed:?} / {duration:?}: {width}x{height}, {} bytes of frame",
+                    painted.0.len()
+                );
+            }
+        }
     }
 
     /// A video that has not been probed yet is a hover that is waiting, so its box is the

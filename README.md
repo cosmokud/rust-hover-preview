@@ -29,8 +29,9 @@ Almost everything is previewed by **Windows 11 and this app alone** — a codec 
 | Kind | Extensions |
 | --- | --- |
 | Pictures | `jpg` `jpeg` `jfif` `jpe` `png` `apng` `gif` `bmp` `ico` `tif` `tiff` `tga` `hdr` `exr` `ff` `qoi` `pnm` `pam` `pbm` `pgm` `ppm` `dds` `webp` |
-| Pictures through a Windows codec extension | `heic` `heif` `avif` `avci` `jxl` — the extension packages are listed below; without one, no preview |
+| Pictures through a Windows codec extension | `heic` `heif` `avif` `avci` `jxl` |
 | Videos Windows 11 plays itself | `mp4` `m4v` `mov` `qt` `avi` `wmv` `asf` `dvr-ms` `mkv` `webm` `ts` `m2ts` `mts` `m2t` `mpg` `mpeg` `mpe` `m2v` `m1v` `vob` `3gp` `3g2` `3gpp` |
+| Sounds Windows 11 plays itself | `mp3` `wav` `wave` `m4a` `m4b` `aac` `wma` `aif` `aifc` `aiff` `amr` `awb` `flac` `dsf` |
 | Drawings | `svg` `svgz` (WebView2) · `wmf` `emf` (the drawing layer) · `eps` `epsi` `epsf` `epi` `ept` `ept2` `ept3` (the preview the file carries) |
 | Design documents | `psd` `psb` `ai` `kra` `ora` `procreate` `sketch` `fig` `xd` |
 | Fonts | `ttf` `otf` `ttc` `woff` `woff2` (WebView2) |
@@ -47,6 +48,8 @@ Animated GIF, APNG and WebP play. `hdr` and `exr` are tone-mapped for preview. `
 Videos the table does not already cover need FFmpeg, and these are all of them: `264` `265` `266` `apv` `av1` `avc` `avs` `avs2` `avs3` `bik` `bk2` `c93` `cavs` `cdg` `cdxl` `cin` `cpk` `dav` `dif` `divx` `drc` `dv` `evc` `f4v` `flm` `flv` `gxf` `h261` `h263` `h264` `h265` `h266` `h26l` `hevc` `ifv` `imx` `ismv` `ivf` `ivr` `kux` `m2p` `mj2` `mjpeg` `mjpg` `mk3d` `moflex` `mpv` `mve` `mvi` `mxf` `mxg` `nsv` `nut` `obu` `ogm` `ogv` `pmp` `psp` `rcv` `rm` `rmvb` `roq` `rsd` `smk` `str` `swf` `thp` `tod` `tp` `tr` `ty` `ty+` `usm` `vc1` `vc2` `viv` `vro` `vvc` `vw` `wtv` `xl` `xmv` `y4m` `yop`.
 
 The containers and codecs the table above lists are the ones Windows plays on its own, and they play better with FFmpeg installed — more codecs inside the same container, and seeking rather than a still frame. The tray's **Codecs** menu shows what this machine can play.
+
+Sounds Windows does not decode need FFmpeg as well, and these are all of them: `ac3` `ape` `au` `caf` `dff` `dts` `dtshd` `eac3` `mka` `mp2` `mpa` `mpc` `oga` `ogg` `ofr` `ofs` `opus` `ra` `shn` `snd` `spx` `tak` `tta` `voc` `wv`
 
 ### Needs Microsoft Office, or LibreOffice
 
@@ -204,7 +207,7 @@ Here is a concise, plain-language version:
 A setting marked `(Default)` is what an untouched setting would be. The check or radio mark shows what is set now.
 
 * **Enable Preview** — Turn previews on or off.
-* **Preview Types** — Choose which file kinds can preview: Images, Videos, Text, Ebook, Archives, Document, Vector, Fonts, Design. One switch covers both the original file and the engine-drawn preview. Examples: camera raw uses **Images**; LibreOffice document uses **Document**; PeaZip archive uses **Archives**; Calibre book uses **Ebook** — also the app-drawn PDF and comic pages.
+* **Preview Types** — Choose which file kinds can preview: Images, Videos, Audio, Text, Ebook, Archives, Document, Vector, Fonts, Design. One switch covers both the original file and the engine-drawn preview. Examples: camera raw uses **Images**; LibreOffice document uses **Document**; PeaZip archive uses **Archives**; Calibre book uses **Ebook** — also the app-drawn PDF and comic pages.
 * **Text Preview**
   * **Full Mode** — Adds scrolling, selection, and copy. Off by default.
   * **Theme** — Atom One Light, One Dark Pro, or any `.tmTheme` in the theme folder.
@@ -235,7 +238,7 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
   * **Font Background** — Same backdrops for a font specimen. Default **White**.
   * **DDS Background** — Black or White for `.dds` textures. Default **White**. The two see-through backdrops are not offered.
   * **Design Background** — Same as picture backdrops for a design document. Default **Checkerboard**.
-* **Volume** — Max, High, Medium, Low, Very Low, Mute: `100%` down to `0%`.
+* **Volume** — Two halves, **Video** and **Audio**, each offering `0%`, `1%`, `5%`, `10%`, `20%`, `35%`, `50%`, `65%`, `80%` and `100%`. A video's soundtrack starts at `0%` — silent, so a hover never makes a sound the pointer did not ask for — and a sound file at `20%`: a video is looked at and a song is listened to, so the two are settings of their own. A sound at `0%` still shows its card, silently.
 * **Performance**
   * **Cache** — What a preview may cost between hovers: `2 GB` down to `0 MB`. **`Image (RAM)`** = decoded frames kept in memory. **`Document (Disk)`** = engine-drawn pages kept as temp files. **`Image (Disk)`** = the pictures ImageMagick developed, kept as temp files.
   * **Decode Budget** — `16 GB` down to `512 MB`; default `1 GB`. A file past it gets no preview.
@@ -247,7 +250,7 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
   * **LibreOffice TTL** — Same for the engine that draws CorelDRAW and nearby formats. A kept engine converts the next document faster: `1.2 s` cold vs `0.2 s`, but uses a few hundred MB. `0 seconds` means one engine per document. Both TTLs apply to **Persistent** engines; non-persistent ones use **AFK Timer**. Greyed out if LibreOffice is not installed.
   * **WebView2 TTL** — With **Persistent** on: how long the SVG browser stays warm. Off: let go by **AFK Timer**. Greyed out if WebView2 is missing.
   * No `ImageMagick TTL`, `PeaZip TTL`, or `Calibre TTL`: those tools run once and exit, so idle time cannot bound them. A second hover is a cache hit.
-* **Codecs** — What this machine has: Videos, Images, Engines. A missing one carries a cross, and where the README names a page for it, picking the row offers to open that page — nothing is installed or downloaded by the app itself.
+* **Codecs** — What this machine has: Videos, Audio, Images, Engines. A missing one carries a cross, and where the README names a page for it, picking the row offers to open that page — nothing is installed or downloaded by the app itself.
 * **Run at Startup** — Add or remove the Windows startup entry.
 * **Config.ini** — Open the configuration file; named for the running version.
 * **Exit** — Close the app.
@@ -317,6 +320,7 @@ image_background=checkerboard
 vector_background=checkerboard
 
 ; Volume
+audio_volume=20
 video_volume=0
 
 ; Performance
@@ -354,6 +358,7 @@ Here’s what this .INI does:
 * `*_preview_enabled`: turn each preview type on or off. File lists stay normal.
 * `extensions` / `names`: which files get text previews. Extensions have no dots. `names` matches files with no extension.
 * `image_extensions`, `video_extensions`, `archive_extensions`, `office_extensions`, `font_extensions`, `design_extensions`, `vector_extensions`: per-type preview filters. No dots. An entry with a dot, like `tar.gz`, matches the end of the file name.
+* `audio_extensions`: which files are previewed as sounds. One list rather than two, because which engine plays a file is the machine's answer and not a setting: Windows' own decoders are asked first and an installed FFmpeg second.
 * `ebook_extensions`, `libre_extensions`, `magick_extensions`, `peazip_extensions`, `calibre_extensions`: pages this app draws itself — PDFs, comic covers, LibreOffice documents, ImageMagick pictures, PeaZip archives, and Calibre books.
 
 **Memory and cache**
