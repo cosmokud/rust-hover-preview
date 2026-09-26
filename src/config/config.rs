@@ -109,6 +109,14 @@ pub const DEFAULT_AUDIO_VOLUME: u32 = 10;
 /// engine Windows has can only quieten a file — a level is attenuation there, and full volume
 /// is as loud as it goes (see `codecs::normalize_available`).
 pub const DEFAULT_NORMALIZE_VOLUME: bool = true;
+/// Whether a video's soundtrack is brought to full scale before it is played, on the same terms
+/// and by the same measurement as a sound file's own (see above).
+///
+/// It is off where the app starts, and for the reason the video's own level starts at silence: a
+/// video is looked at, and its soundtrack is as likely to be a distraction as anything — where a
+/// sound file *is* the sound. What it costs is the reason it is worth the switch rather than a
+/// default too: a film's audio is a decode of the film, and a hover pays for one.
+pub const DEFAULT_NORMALIZE_VIDEO_VOLUME: bool = false;
 /// The levels either volume is offered at: silence, the one step above it, and the decades
 /// between — smallest first here, and listed the other way round in the tray, loudest first.
 ///
@@ -1379,6 +1387,15 @@ pub struct AppConfig {
     /// and what applies the gain are both FFmpeg's (see `codecs::normalize_available`), which is
     /// also why the tray greys the row where FFmpeg is not installed.
     pub normalize_volume: bool,
+    /// Whether a video's soundtrack is measured and brought to full scale before it is played, on
+    /// the same terms as the sound above it and by the same measurement.
+    ///
+    /// It is a setting of its own rather than one shared with the sound's, because the two are
+    /// hovered for different things: a sound file is the sound, and a film's soundtrack is heard
+    /// beside a picture that was asked for. It is off where the app starts, the way the video's
+    /// own level starts at silence — and like the sound's it does nothing without FFmpeg, which is
+    /// why the tray greys the row where FFmpeg is not installed.
+    pub normalize_video_volume: bool,
     /// How large a picture is drawn, as a share of its own size: `100%` is the size the
     /// file asks for, `50%` half of it, and `fit` the largest size the room the layout
     /// gives it allows.
@@ -1672,6 +1689,7 @@ impl Default for AppConfig {
             audio_volume: DEFAULT_AUDIO_VOLUME,
             audio_seek: DEFAULT_AUDIO_SEEK,
             normalize_volume: DEFAULT_NORMALIZE_VOLUME,
+            normalize_video_volume: DEFAULT_NORMALIZE_VIDEO_VOLUME,
             preview_scale: PreviewScale::Percent(DEFAULT_PREVIEW_SCALE_PERCENT),
             video_scale: PreviewScale::Percent(DEFAULT_VIDEO_SCALE_PERCENT),
             animated_scale: PreviewScale::Percent(DEFAULT_ANIMATED_SCALE_PERCENT),
@@ -1822,6 +1840,7 @@ const SETTING_GROUPS: &[(&str, &[&str])] = &[
         &[
             "audio_seek",
             "audio_volume",
+            "normalize_video_volume",
             "normalize_volume",
             "video_volume",
         ],
@@ -2572,6 +2591,11 @@ impl AppConfig {
         );
         ini.set(
             CONFIG_SECTION,
+            "normalize_video_volume",
+            Some(self.normalize_video_volume.to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
             "preview_scale",
             Some(self.preview_scale.as_str()),
         );
@@ -3000,6 +3024,11 @@ impl AppConfig {
         // that says nothing about it is left where it starts.
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "normalize_volume") {
             self.normalize_volume = value;
+        }
+        // And the video's own, which is off for a file that says nothing about it: a soundtrack is
+        // measured only where it was asked for (see `normalize_video_volume`).
+        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "normalize_video_volume") {
+            self.normalize_video_volume = value;
         }
         if let Some(value) = ini.get(CONFIG_SECTION, "preview_scale") {
             if let Some(scale) = PreviewScale::from_str(&value) {

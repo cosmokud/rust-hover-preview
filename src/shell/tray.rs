@@ -8,8 +8,8 @@ use crate::config::config::{
     DEFAULT_DESIGN_BACKGROUND, DEFAULT_DESIGN_SCALE, DEFAULT_DOCUMENT_CACHE_MB,
     DEFAULT_DOCUMENT_SCALE, DEFAULT_EBOOK_SCALE, DEFAULT_FOLLOW_CURSOR, DEFAULT_FONT_BACKGROUND,
     DEFAULT_FONT_SCALE, DEFAULT_HOVER_DELAY_MS, DEFAULT_IMAGE_BACKGROUND, DEFAULT_IMAGE_CACHE_MB,
-    DEFAULT_IMAGE_DISK_CACHE_MB, DEFAULT_LIBREOFFICE_IDLE_SECS, DEFAULT_NORMALIZE_VOLUME,
-    DEFAULT_OFFICE_ENGINE,
+    DEFAULT_IMAGE_DISK_CACHE_MB, DEFAULT_LIBREOFFICE_IDLE_SECS, DEFAULT_NORMALIZE_VIDEO_VOLUME,
+    DEFAULT_NORMALIZE_VOLUME, DEFAULT_OFFICE_ENGINE,
     DEFAULT_OFFICE_ENGINE_IDLE_SECS, DEFAULT_PREVIEW_SCALE, DEFAULT_SAME_FILE_REHOVER_DELAY_MS,
     DEFAULT_SETTLING_DELAY_MS, DEFAULT_TEXT_FONT_SCALE_PERCENT, DEFAULT_TICK_MS,
     DEFAULT_VECTOR_BACKGROUND, DEFAULT_VECTOR_SCALE, DEFAULT_VIDEO_SCALE, DEFAULT_VIDEO_VOLUME,
@@ -138,6 +138,11 @@ const ID_TRAY_AUDIO_SEEK_BASE: u16 = 1390;
 /// own — out past the tick menu, where the tray's other lone switches sit, rather than in the
 /// stretch the levels are read from.
 const ID_TRAY_NORMALIZE_VOLUME: u16 = 1525;
+/// The video half's own row of the same name, which is the same switch asked about a film's
+/// soundtrack: a setting of its own, and one that starts switched off (see
+/// `normalize_video_volume`). It carries the id beside its sound half's, so neither row is ever
+/// read as a level of a list under it.
+const ID_TRAY_NORMALIZE_VIDEO_VOLUME: u16 = 1526;
 /// The ways a sound can be started, in the order the submenu lists them: where it was left the
 /// last time it was hovered, which is where the setting starts, then its beginning, its middle,
 /// and anywhere in it at all (see `AudioSeek`).
@@ -536,10 +541,11 @@ unsafe extern "system" fn tray_window_proc(
                 {
                     set_vector_background(cmd - ID_TRAY_VECTOR_BACKGROUND_BASE)
                 }
-                // The sound's own peak, above the levels of its half of the `Volume` submenu: a
-                // switch rather than a level, and one read where a player is started rather than
-                // here.
+                // The peak above the levels of each half of the `Volume` submenu, the sound's and
+                // the video's: switches rather than levels, and read where a player is started
+                // rather than here.
                 ID_TRAY_NORMALIZE_VOLUME => toggle_normalize_volume(),
+                ID_TRAY_NORMALIZE_VIDEO_VOLUME => toggle_normalize_video_volume(),
                 // A level of either half of the `Volume` submenu, by the position it was
                 // listed at. The two halves offer the same levels, so one table answers for
                 // both and each range is what says which setting was meant.
@@ -1457,9 +1463,9 @@ unsafe fn show_context_menu(hwnd: HWND) {
     // to be a distraction as anything, while a sound file *is* the sound — so one setting for
     // both would mean turning a film's soundtrack up to hear a song. Each half lists the same
     // ten levels, in the same order, which is what lets one table and one builder serve them;
-    // the level each setting stands at carries the default mark (see `VOLUME_CHOICES`). Above a
-    // sound's levels sits the peak the file itself is measured to, which is a question only a
-    // sound is asked, and below them the other half of the same question, where in a file it
+    // the level each setting stands at carries the default mark (see `VOLUME_CHOICES`). Above
+    // each half's levels sits the switch the file itself answers — the peak it is played at —
+    // and below the sound's own sits the other half of the same question, where in a file it
     // starts playing (see `AUDIO_SEEK_CHOICES`).
     let (video_volume, audio_volume, audio_seek) = CONFIG
         .lock()
@@ -1495,7 +1501,50 @@ unsafe fn show_context_menu(hwnd: HWND) {
         }
     };
 
+    // Each half carries one row the levels do not answer, and it sits above them: the peak a file's
+    // playing is measured to. A level is asked of the hover and this is asked of the file, and the
+    // two are scaled into one another — what the file's own loudest sample is brought to is full
+    // scale, and the level under it is how much of that is heard (see `Normalize`). Both halves are
+    // offered it because both can be heard; they start where they start, the way their levels do.
+    let (normalize_audio, normalize_video) = CONFIG
+        .lock()
+        .map(|config| (config.normalize_volume, config.normalize_video_volume))
+        .unwrap_or((DEFAULT_NORMALIZE_VOLUME, DEFAULT_NORMALIZE_VIDEO_VOLUME));
+    // Asked again here for the reason the `Codecs` rows are asked again: a machine that has just
+    // been given FFmpeg is answered from the machine rather than from the hover that cached it
+    // (see `codecs::refresh`).
+    refresh_codecs();
+    let normalize_available = codecs::normalize_available();
+
+    let append_normalize = |levels: HMENU, wanted: bool, id: u16| {
+        let _ = AppendMenuW(
+            levels,
+            MF_STRING
+                | if wanted && normalize_available {
+                    MF_CHECKED
+                } else {
+                    MF_UNCHECKED
+                }
+                | if normalize_available {
+                    MF_UNCHECKED
+                } else {
+                    // A machine without FFmpeg has nothing that measures a peak or applies one: the
+                    // row is shown as what it is there — a switch that cannot act — rather than as a
+                    // click that would do nothing (see `codecs::normalize_available`).
+                    MF_GRAYED
+                },
+            id as usize,
+            w!("Normalize"),
+        );
+        let _ = AppendMenuW(levels, MF_SEPARATOR, 0, PCWSTR::null());
+    };
+
     let video_levels = CreatePopupMenu().unwrap();
+    append_normalize(
+        video_levels,
+        normalize_video,
+        ID_TRAY_NORMALIZE_VIDEO_VOLUME,
+    );
     append_levels(
         video_levels,
         video_volume,
@@ -1503,41 +1552,8 @@ unsafe fn show_context_menu(hwnd: HWND) {
         DEFAULT_VIDEO_VOLUME,
     );
 
-    // The sound's half carries one row the video's has no use for, above the levels: the peak a
-    // file's playing is measured to. A level is asked of the hover and this is asked of the file,
-    // and the two are scaled into one another — what the file's own loudest sample is brought to is
-    // full scale, and the level below it is how much of that is heard (see `Normalize`).
-    let normalize = CONFIG
-        .lock()
-        .map(|config| config.normalize_volume)
-        .unwrap_or(DEFAULT_NORMALIZE_VOLUME);
-    // Asked again here for the reason the `Codecs` rows are asked again: a machine that has just
-    // been given FFmpeg is answered from the machine rather than from the hover that cached it
-    // (see `codecs::refresh`).
-    refresh_codecs();
-    let normalize_available = codecs::normalize_available();
-
     let audio_levels = CreatePopupMenu().unwrap();
-    let _ = AppendMenuW(
-        audio_levels,
-        MF_STRING
-            | if normalize && normalize_available {
-                MF_CHECKED
-            } else {
-                MF_UNCHECKED
-            }
-            | if normalize_available {
-                MF_UNCHECKED
-            } else {
-                // A machine without FFmpeg has nothing that measures a peak or applies one: the
-                // row is shown as what it is there — a switch that cannot act — rather than as a
-                // click that would do nothing (see `codecs::normalize_available`).
-                MF_GRAYED
-            },
-        ID_TRAY_NORMALIZE_VOLUME as usize,
-        w!("Normalize"),
-    );
-    let _ = AppendMenuW(audio_levels, MF_SEPARATOR, 0, PCWSTR::null());
+    append_normalize(audio_levels, normalize_audio, ID_TRAY_NORMALIZE_VOLUME);
     append_levels(
         audio_levels,
         audio_volume,
@@ -3423,6 +3439,16 @@ fn set_audio_volume(index: u16) {
 fn toggle_normalize_volume() {
     if let Ok(mut config) = CONFIG.lock() {
         config.normalize_volume = !config.normalize_volume;
+        config.save();
+    }
+}
+
+/// And the video's own switch, which is the same question asked about a film's soundtrack: read
+/// where its player is started, like the level beside it, and off where the app starts — a film is
+/// looked at, and a measurement of its audio is a decode of the film.
+fn toggle_normalize_video_volume() {
+    if let Ok(mut config) = CONFIG.lock() {
+        config.normalize_video_volume = !config.normalize_video_volume;
         config.save();
     }
 }
