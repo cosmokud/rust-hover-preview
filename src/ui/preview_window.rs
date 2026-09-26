@@ -1,9 +1,9 @@
 use crate::app::engine_processes;
 use crate::config::config::{
     frame_bytes_within_budget, image_decode_limits, read_within_budget, sanitize_image_cache_mb,
-    sanitize_spinner_delay_ms, sanitize_webp_playback_fps, MarkdownMode, OfficeEngine,
+    sanitize_spinner_delay_ms, sanitize_webp_playback_fps, AudioSeek, MarkdownMode, OfficeEngine,
     PreviewScale, PreviewType, TextTheme, TransparentBackground, DEFAULT_ANIMATED_SCALE_PERCENT,
-    DEFAULT_DDS_BACKGROUND, DEFAULT_DESIGN_BACKGROUND, DEFAULT_DESIGN_SCALE,
+    DEFAULT_AUDIO_SEEK, DEFAULT_DDS_BACKGROUND, DEFAULT_DESIGN_BACKGROUND, DEFAULT_DESIGN_SCALE,
     DEFAULT_DOCUMENT_SCALE, DEFAULT_EBOOK_SCALE, DEFAULT_FONT_BACKGROUND, DEFAULT_FONT_SCALE,
     DEFAULT_IMAGE_BACKGROUND, DEFAULT_IMAGE_CACHE_MB, DEFAULT_PREVIEW_SCALE_PERCENT,
     DEFAULT_SPINNER_DELAY_MS, DEFAULT_TEXT_FONT_SCALE_PERCENT,
@@ -30,6 +30,7 @@ use crate::formats::office_formats;
 use crate::formats::peazip_formats;
 use crate::formats::vector_formats;
 use crate::formats::video_formats;
+use crate::readers::audio_seek;
 use crate::readers::audio_track::{self, Player, Probed};
 use crate::readers::comic_preview;
 use crate::readers::dds_image;
@@ -1939,6 +1940,17 @@ fn current_video_volume() -> u32 {
 /// the moment a player is started, so a change in the tray reaches the next hover.
 fn current_audio_volume() -> u32 {
     CONFIG.lock().map(|cfg| cfg.audio_volume).unwrap_or(0)
+}
+
+/// Where a sound starts, read the way the volume is and at the same moment: from the
+/// configuration as a player is started, so a change in the tray reaches the next hover — and
+/// a sound already playing is left where it is rather than dropped somewhere else, which is
+/// what a seek asked of a running engine would be.
+fn current_audio_seek() -> AudioSeek {
+    CONFIG
+        .lock()
+        .map(|cfg| cfg.audio_seek)
+        .unwrap_or(DEFAULT_AUDIO_SEEK)
 }
 
 /// What a sound's card is built with: the theme and the text size, which are the two settings
@@ -5578,6 +5590,13 @@ fn stop_video_playback(media: &mut MediaData) {
     // the thread that started it (see `video_player`'s `SESSION`) — so a take-down that runs
     // on some other thread kills the player process and leaves the media engine for the
     // thread that owns it (see `kill_player_process` and `hide_preview`).
+    //
+    // What a sound had played of its file is written down here rather than where it is heard:
+    // a hover that is ending is a sound whose position is settled, and the memory the mode that
+    // resumes one reads back is asked to keep what it has before the clock that measured it is
+    // taken down (see `audio_seek::flush`).
+    audio_seek::flush();
+
     if media.media_type.is_native_video() || media.media_type.is_audio() {
         video_player::stop();
     }
@@ -6465,7 +6484,11 @@ fn codec_label(name: &str) -> String {
 /// and nothing else, which is what silence looks like and is not a failure. What the caller is
 /// told is whether a player that *was* asked for came up — a sound no engine here will actually
 /// play is a hover answered with nothing rather than a card whose clock can never move.
-fn start_audio_playback(path: &Path, media: &mut MediaData) -> bool {
+///
+/// `start` is where in the file the sound is dropped, and it is the caller's answer: it is a
+/// question about the file's length and the tray's `Volume → Audio Seek`, both of which are
+/// read where the hover is answered (see `audio_seek::start_position`).
+fn start_audio_playback(path: &Path, media: &mut MediaData, start: f64) -> bool {
     let Some(track) = audio_track::playable(path) else {
         return false;
     };
@@ -6491,11 +6514,11 @@ fn start_audio_playback(path: &Path, media: &mut MediaData) -> bool {
                 return true;
             }
 
-            video_player::play_audio(path, volume);
+            video_player::play_audio(path, volume, start);
             video_player::is_playing()
         }
         Player::Ffmpeg => {
-            media.video_process = start_audio_player(path, volume);
+            media.video_process = start_audio_player(path, volume, start);
             media.video_process.is_some()
         }
     }
@@ -6507,10 +6530,23 @@ fn start_audio_playback(path: &Path, media: &mut MediaData) -> bool {
 /// A sound is looped while it is hovered, as a video is: what a hover is for is the file, and a
 /// sound that stopped under a pointer that had not moved would be a preview that ended on its
 /// own. The card's clock wraps with it (see `audio_clock`).
-fn start_audio_player(path: &Path, volume: u32) -> Option<Child> {
-    let child = Command::new("ffplay")
-        .args(["-nodisp", "-loop", "0", "-autoexit", "-loglevel", "quiet"])
-        .args(["-volume", &volume.min(100).to_string()])
+///
+/// Where the sound starts is `-ss`, and it is an option of the *input* rather than of the
+/// player: what it does is seek the file before anything of it is read, which is a player that
+/// begins at that second rather than one that plays its way there — and it is also where the
+/// loop returns to, so a sound dropped in the middle of a file wraps back to the middle of it
+/// rather than to its beginning. What it costs is nothing: the seek is the player's own, and
+/// nothing is decoded before it.
+fn start_audio_player(path: &Path, volume: u32, start: f64) -> Option<Child> {
+    let mut command = Command::new("ffplay");
+    command.args(["-nodisp", "-loop", "0", "-autoexit", "-loglevel", "quiet"]);
+    command.args(["-volume", &volume.min(100).to_string()]);
+
+    if start.is_finite() && start > 0.0 {
+        command.args(["-ss", &format!("{start:.3}")]);
+    }
+
+    let child = command
         .arg(path)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -6537,16 +6573,23 @@ fn start_audio_player(path: &Path, volume: u32) -> Option<Child> {
 ///
 /// A sound loops for as long as it is hovered, so what the clock says is where in the file the
 /// sound is *now*: a player that has been going for longer than the file lasts is wrapped back
-/// into it, which is what keeps the bar going round rather than standing full.
-fn audio_clock(path: &Path, started: Option<Instant>) -> (Option<f64>, Option<f64>) {
+/// into it, which is what keeps the bar going round rather than standing full. The clock over
+/// the player's start is counted from the second the sound was put in at as well — `from` —
+/// because `ffplay` reports nothing at all: a file dropped half way into itself draws its clock
+/// and its bar at its middle only if this side counts the first half as already played, and
+/// what a hover would otherwise show is a sound playing from its middle with a card saying it
+/// has just begun.
+fn audio_clock(path: &Path, started: Option<Instant>, from: f64) -> (Option<f64>, Option<f64>) {
     let Some(track) = audio_track::playable(path) else {
         return (None, None);
     };
 
     match track.player {
-        Player::Native => (video_player::position(), video_player::duration()),
+        // The engine's own clock has the seek in it — it is the engine that was taken to where
+        // the sound starts — so what it reports is the position with nothing added to it.
+        Player::Native => (video_player::position(), video_player::duration().or(track.duration)),
         Player::Ffmpeg => {
-            let elapsed = started.map(|at| at.elapsed().as_secs_f64());
+            let elapsed = started.map(|at| from + at.elapsed().as_secs_f64());
             let position = match (elapsed, track.duration) {
                 (Some(elapsed), Some(duration)) if duration > 0.0 => Some(elapsed % duration),
                 (elapsed, _) => elapsed,
@@ -9714,6 +9757,15 @@ pub fn run_preview_window() {
         // sound FFmpeg plays is measured from the first, and the second is the cadence its card
         // is drawn at (see `audio_clock` and `AUDIO_CARD_REPAINT`).
         let mut audio_started: Option<Instant> = None;
+        // The second of the file the sound on screen was started at, which is nothing for one
+        // that started at its beginning: what a card's clock is measured from where the player
+        // reports no clock of its own (see `audio_clock`).
+        let mut audio_start_offset = 0.0f64;
+        // A `Volume → Audio Seek` of `Middle` or `Random` asked of a file whose length nothing
+        // had read yet, which is the one start position that cannot be worked out where the
+        // sound is started: a share of a length is asked for again the moment a player reports
+        // one (see the tick below), and this is the ask, held until then.
+        let mut audio_share_seek: Option<AudioSeek> = None;
         let mut audio_repaint_at = Instant::now();
         // The name of the sound on screen, scrolled sideways while the card has no room for it:
         // the scroll is put up with the card it belongs to and advanced by the repaints below,
@@ -9940,6 +9992,14 @@ pub fn run_preview_window() {
                     // player behind it — `Volume → Audio` at 0% — costs is its scroll and
                     // nothing else.
                     if media.media_type.is_audio() {
+                        // A sound that was asked to start somewhere other than the beginning
+                        // and has not been taken there yet is taken there here, on the first
+                        // tick the engine will accept a seek on — which is as soon as it has
+                        // read the file's own header rather than the next card repaint a
+                        // quarter of a second away, and what is heard of the beginning in
+                        // between is that much and no more (see `video_player::apply_seek`).
+                        video_player::apply_seek();
+
                         let cadence = match &audio_name_scroll {
                             Some(scroll) if scroll.moves() => AUDIO_NAME_REPAINT,
                             _ => AUDIO_CARD_REPAINT,
@@ -9957,7 +10017,38 @@ pub fn run_preview_window() {
                             };
 
                             if let Some(path) = current_show.as_ref().and_then(self::show_path) {
-                                let (elapsed, duration) = audio_clock(path, audio_started);
+                                let (elapsed, duration) =
+                                    audio_clock(path, audio_started, audio_start_offset);
+
+                                // A start position that was a share of a length nothing had
+                                // read is asked for here, on the first tick a player says how
+                                // long the file is — the ask is one that can be made at any
+                                // point in a running sound, since what it is is a seek, and
+                                // what it is not is a reason to have left the sound at its
+                                // beginning (see `video_player::seek`). A player that says
+                                // nothing about its length leaves the ask standing rather than
+                                // spending it on a tick it cannot answer.
+                                if let (Some(seek), Some(duration)) = (audio_share_seek, duration)
+                                {
+                                    audio_share_seek = None;
+
+                                    let shared =
+                                        audio_seek::start_position(path, seek, Some(duration));
+                                    video_player::seek(shared);
+                                }
+
+                                // Where the sound had got to is what the mode that resumes one
+                                // reads back, so it is written down as the card is repainted —
+                                // the only moment anything here knows it. The other three ways
+                                // of starting a sound are rules rather than memories and are
+                                // not written down at all: a run that is on one of them keeps
+                                // nothing, which is what makes the memory the setting's own.
+                                if current_audio_seek() == AudioSeek::Remember {
+                                    if let Some(elapsed) = elapsed {
+                                        audio_seek::remember(path, elapsed);
+                                    }
+                                }
+
                                 if media.refresh_audio_card(
                                     path,
                                     elapsed,
@@ -10159,7 +10250,24 @@ pub fn run_preview_window() {
                             // for no player at all and is left standing, with its clock still and
                             // its bar empty.
                             if media_data.media_type.is_audio() {
-                                if !start_audio_playback(&result.path, &mut media_data) {
+                                // Where the sound is dropped in: a question about the file's
+                                // own length and the tray's `Volume → Audio Seek`, and one that
+                                // is answered here rather than by the player, which knows
+                                // neither. A length nothing has read yet — a container that
+                                // does not say, on a machine whose engine may still know it —
+                                // leaves the two shares of one unanswered until a player
+                                // reports one, which the tick below is what asks again.
+                                let seek = current_audio_seek();
+                                let length = audio_track::playable(&result.path)
+                                    .and_then(|track| track.duration);
+                                let start = audio_seek::start_position(&result.path, seek, length);
+
+                                audio_share_seek = (start == 0.0
+                                    && matches!(seek, AudioSeek::Middle | AudioSeek::Random)
+                                    && length.is_none())
+                                .then_some(seek);
+
+                                if !start_audio_playback(&result.path, &mut media_data, start) {
                                     let _ = ShowWindow(hwnd, SW_HIDE);
                                     clear_pointer_hold();
                                     pending_load = None;
@@ -10174,7 +10282,16 @@ pub fn run_preview_window() {
                                     continue;
                                 }
 
-                                audio_started = Some(Instant::now());
+                                // The clock a sound FFmpeg plays is this app's own over the
+                                // moment the player was started, and there is a player to
+                                // measure from exactly where one was started: at
+                                // `Volume → Audio` 0% nothing was, and a card whose clock ran
+                                // anyway would be a sound it says is playing that is not — and
+                                // a position this side would write down as one the file had
+                                // been left at (see `audio_seek::remember`).
+                                audio_started =
+                                    media_data.video_process.is_some().then(Instant::now);
+                                audio_start_offset = start;
                                 audio_repaint_at = Instant::now();
                                 // The marquee the card's name is drawn with, if it needs one:
                                 // what a name is scrolled by is the card's own box, which is
@@ -13858,7 +13975,11 @@ mod tests {
             // player is a process of its own and nothing on this side is drawn from it.
             if track.player == Player::Native {
                 let volume = current_audio_volume().max(1);
-                video_player::play_audio(&path, volume);
+                let seek = current_audio_seek();
+                let start = audio_seek::start_position(&path, seek, track.duration);
+                println!("starting at {start:.3}s, by `Volume → Audio Seek`");
+
+                video_player::play_audio(&path, volume, start);
                 std::thread::sleep(Duration::from_millis(500));
 
                 println!(

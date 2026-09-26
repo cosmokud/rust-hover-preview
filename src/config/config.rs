@@ -100,7 +100,7 @@ pub const DEFAULT_VIDEO_VOLUME: u32 = 0;
 /// file *is* the sound, and a preview of one at zero is a card with nothing behind it. Quiet
 /// rather than loud, so a pointer crossing a folder of music is a few seconds of something
 /// half-heard rather than a jukebox.
-pub const DEFAULT_AUDIO_VOLUME: u32 = 20;
+pub const DEFAULT_AUDIO_VOLUME: u32 = 10;
 /// The levels either volume is offered at, in the order the tray lists them: silence, the one
 /// step above it, and the decades between.
 ///
@@ -1123,6 +1123,61 @@ impl TriggerKeyMode {
     }
 }
 
+/// Where in a file a sound starts playing.
+///
+/// A sound is the one preview that is heard rather than looked at, and a file being listened
+/// to is as often a file being listened to *again* as one met for the first time — so where a
+/// hover drops the needle is a question of its own, apart from the kind's own switch and from
+/// how loud it plays. The four answers are where a pointer crossing a folder of music should
+/// land in it: where this app last left it, at the beginning, in the middle, or anywhere at
+/// all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AudioSeek {
+    /// Where the sound was left the last time it was hovered.
+    ///
+    /// The one answer that is a memory rather than a rule: what it names is a position this
+    /// app wrote down for the file, held in memory for the run and under the temp folder
+    /// across runs (see `audio_seek`). A file nothing is remembered about — one hovered for
+    /// the first time — starts at the beginning, which is what every file did before there
+    /// was a setting.
+    Remember,
+    /// At the beginning, whatever the file is and whatever was heard of it before.
+    Start,
+    /// Half way in, for a file whose worth is somewhere past its opening.
+    Middle,
+    /// Anywhere in the file at all, so that a folder of sounds is a different few seconds of
+    /// each one every time it is crossed.
+    Random,
+}
+
+impl AudioSeek {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Remember => "remember",
+            Self::Start => "start",
+            Self::Middle => "middle",
+            Self::Random => "random",
+        }
+    }
+
+    /// The way a `config.ini` value names, or `None` for one that names no way of starting a
+    /// sound.
+    fn from_str(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "remember" | "resume" | "last" | "last position" => Some(Self::Remember),
+            "start" | "beginning" | "from start" | "from the start" => Some(Self::Start),
+            "middle" | "half" | "halfway" | "from middle" | "from the middle" => Some(Self::Middle),
+            "random" | "shuffle" | "anywhere" => Some(Self::Random),
+            _ => None,
+        }
+    }
+}
+
+/// Where a sound starts unless the configuration says otherwise: where it was left the last
+/// time it was hovered, which is the answer that makes a folder of music behave the way a
+/// player does — the file picked up again rather than begun again.
+pub const DEFAULT_AUDIO_SEEK: AudioSeek = AudioSeek::Remember;
+
 /// How far a preview is placed clear of the item it is about.
 ///
 /// A view draws an item's name, and the views that draw their items as rows draw the
@@ -1290,6 +1345,11 @@ pub struct AppConfig {
     /// is the kind the router gave it, so a video whose streams hold no picture answers to
     /// this one — the same answer the card beside it is drawn from.
     pub audio_volume: u32,
+    /// Where in the file a sound starts playing — the same question the volume above it
+    /// answers, and a setting of its own for the same reason: what a hover on a sound is
+    /// worth depends on how much of it is heard, and a file being listened to again is
+    /// usually wanted from where it was left rather than from the top (see `AudioSeek`).
+    pub audio_seek: AudioSeek,
     /// How large a picture is drawn, as a share of its own size: `100%` is the size the
     /// file asks for, `50%` half of it, and `fit` the largest size the room the layout
     /// gives it allows.
@@ -1580,6 +1640,7 @@ impl Default for AppConfig {
             vector_background: DEFAULT_VECTOR_BACKGROUND,
             video_volume: DEFAULT_VIDEO_VOLUME,
             audio_volume: DEFAULT_AUDIO_VOLUME,
+            audio_seek: DEFAULT_AUDIO_SEEK,
             preview_scale: PreviewScale::Percent(DEFAULT_PREVIEW_SCALE_PERCENT),
             video_scale: PreviewScale::Percent(DEFAULT_VIDEO_SCALE_PERCENT),
             animated_scale: PreviewScale::Percent(DEFAULT_ANIMATED_SCALE_PERCENT),
@@ -1724,7 +1785,7 @@ const SETTING_GROUPS: &[(&str, &[&str])] = &[
             "vector_background",
         ],
     ),
-    ("Volume", &["audio_volume", "video_volume"]),
+    ("Volume", &["audio_seek", "audio_volume", "video_volume"]),
     (
         "Performance",
         &[
@@ -2456,6 +2517,11 @@ impl AppConfig {
         );
         ini.set(
             CONFIG_SECTION,
+            "audio_seek",
+            Some(self.audio_seek.as_str().to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
             "preview_scale",
             Some(self.preview_scale.as_str()),
         );
@@ -2865,6 +2931,15 @@ impl AppConfig {
         if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "audio_volume") {
             if let Ok(value) = u32::try_from(value) {
                 self.audio_volume = sanitize_volume(value);
+            }
+        }
+        // Where a sound starts, which is read the way every other named choice is: a file
+        // written before the setting existed has no key for it and leaves the setting at the
+        // way this build starts — where the sound was left — and a value that names no way of
+        // starting one is left there too.
+        if let Some(value) = ini.get(CONFIG_SECTION, "audio_seek") {
+            if let Some(seek) = AudioSeek::from_str(&value) {
+                self.audio_seek = seek;
             }
         }
         if let Some(value) = ini.get(CONFIG_SECTION, "preview_scale") {
@@ -3665,6 +3740,33 @@ mod tests {
             read_file(&mut loud).audio_volume,
             MAX_VOLUME,
             "a level past the loudest is the loudest, not what the file asked a player for"
+        );
+    }
+
+    /// Where a sound starts is read from its own key, the way a volume is: a file that has
+    /// never named it leaves the setting where this build starts, a file that names one of the
+    /// four is read as it, and a file that names something else is left at the default rather
+    /// than starting sounds somewhere no one asked for.
+    #[test]
+    fn reads_where_a_sound_starts_from_its_own_key() {
+        let mut ini = Ini::new();
+        ini.set(CONFIG_SECTION, "audio_seek", Some("middle".to_string()));
+        assert_eq!(read_file(&mut ini).audio_seek, AudioSeek::Middle);
+
+        let mut older = Ini::new();
+        older.set(CONFIG_SECTION, "audio_volume", Some("35".to_string()));
+        assert_eq!(
+            read_file(&mut older).audio_seek,
+            DEFAULT_AUDIO_SEEK,
+            "a file written before the setting existed starts a sound where a fresh one does"
+        );
+
+        let mut unknown = Ini::new();
+        unknown.set(CONFIG_SECTION, "audio_seek", Some("sideways".to_string()));
+        assert_eq!(
+            read_file(&mut unknown).audio_seek,
+            DEFAULT_AUDIO_SEEK,
+            "a value the app cannot read is answered with the way it starts rather than guessed at"
         );
     }
 

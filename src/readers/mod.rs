@@ -1,4 +1,5 @@
 pub(crate) mod archive_listing;
+pub(crate) mod audio_seek;
 pub(crate) mod audio_track;
 pub(crate) mod bcn;
 pub(crate) mod comic_preview;
