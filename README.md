@@ -237,7 +237,7 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
   * **Design Background** — Same as picture backdrops for a design document. Default **Checkerboard**.
 * **Volume** — Max, High, Medium, Low, Very Low, Mute: `100%` down to `0%`.
 * **Performance**
-  * **Cache** — What a preview may cost between hovers: `2 GB` down to `0 MB`. **`Image (RAM)`** = decoded frames kept in memory. **`Document (Disk)`** = engine-drawn pages kept as temp files.
+  * **Cache** — What a preview may cost between hovers: `2 GB` down to `0 MB`. **`Image (RAM)`** = decoded frames kept in memory. **`Document (Disk)`** = engine-drawn pages kept as temp files. **`Image (Disk)`** = the pictures ImageMagick developed, kept as temp files.
   * **Decode Budget** — `16 GB` down to `512 MB`; default `1 GB`. A file past it gets no preview.
   * **Tick** — How often the app checks Explorer while a folder window is focused: `15 ms` (`default`), `31`, `47`, `63`, or `78 ms`. Lower answers a move sooner; higher is lighter on CPU and Explorer.
 * **Engine**
@@ -321,8 +321,9 @@ video_volume=0
 
 ; Performance
 decode_budget_gb=1
-document_cache_mb=128
-image_cache_mb=32
+document_cache_mb=256
+image_cache_mb=64
+image_disk_cache_mb=512
 tick_ms=15
 
 ; Engine
@@ -356,8 +357,9 @@ Here’s what this .INI does:
 * `ebook_extensions`, `libre_extensions`, `magick_extensions`, `peazip_extensions`, `calibre_extensions`: pages this app draws itself — PDFs, comic covers, LibreOffice documents, ImageMagick pictures, PeaZip archives, and Calibre books.
 
 **Memory and cache**
-* `image_cache_mb`: memory for decoded image frames. Default `32`, max `2048`; `0` holds nothing.
-* `document_cache_mb`: disk cache for rendered document pages. Default `128`, max `2048`; `0` keeps nothing between hovers but still draws the current one. Pages live under `%TEMP%\rust-hover-preview\document`; the least recently read page is removed first.
+* `image_cache_mb`: memory for decoded image frames. Default `64`, max `2048`; `0` holds nothing.
+* `document_cache_mb`: disk cache for rendered document pages. Default `256`, max `2048`; `0` keeps nothing between hovers but still draws the current one. Pages live under `%TEMP%\rust-hover-preview\document`; the least recently read page is removed first.
+* `image_disk_cache_mb`: disk cache for the pictures ImageMagick developed. Default `512`, max `2048`; `0` keeps nothing between hovers but still develops the current one. Pictures live under `%TEMP%\rust-hover-preview\image`; the least recently read one is removed first, and they survive a restart.
 * `decode_budget_gb`: most memory one hover may use. Default `1`, range `0.25`–`64`. A file over the limit shows no preview.
 
 **HDR**

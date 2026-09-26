@@ -73,6 +73,10 @@
 //! open — a few hundred megabytes — which is what the setting is for: `LibreOffice TTL`
 //! names how long past its last conversion the engine is kept, and `0 seconds` is the
 //! setting switched off, which is an engine per document, exactly as it was.
+//!
+//! An engine can also be asked for *ahead* of a document — see [`warm`] — which is the same
+//! launch taken without a conversion: what the first hover of a session pays is the start, and
+//! what a warm does is begin it while the pointer is still settling on the file.
 
 use crate::config::config::{AppConfig, EngineIdle, OfficeEngine, DEFAULT_LIBREOFFICE_IDLE_SECS};
 use crate::engines::document_cache::{self, Page, PageKind};
@@ -411,6 +415,48 @@ fn keep_engine(program: &Path) -> Option<u32> {
     start_kept_engine(program)
 }
 
+/// Ask the engine to be up, without a document, before one is wanted.
+///
+/// What a kept engine saves is the launch, and the first hover of a session on a document of
+/// this engine's is a launch it is about to pay for: the ask is made while the pointer is still
+/// settling on the file, so that the start overlaps what the hover waits for anyway rather than
+/// following it (see `WARM_SETTLE_MS` in `preview_window`, which is what decides whether the
+/// pointer has settled enough to ask).
+///
+/// Nothing is waited on here and nothing is converted: the ask is a flag for the engine thread,
+/// which starts the engine the way a conversion would and leaves it holding its own document
+/// (see `warm_kept_engine`). It is asked once per run — from then on an engine that is up is
+/// what the setting keeps, and one that is let go of is started again by the conversion that
+/// wants it — and a setting that keeps no engine answers it with nothing at all, which is what
+/// `0 seconds` means (see `kept_idle`).
+pub fn warm() {
+    if !available() || WARMED.swap(true, Ordering::AcqRel) {
+        return;
+    }
+
+    WARM_REQUESTED.store(true, Ordering::Release);
+    start_engine();
+
+    let (_, ready) = &*REQUESTED;
+    ready.notify_all();
+}
+
+/// Start the engine the setting keeps, where a warm asked for it and none is up: the work a
+/// conversion begins with, without the conversion (see `keep_engine` and `wait_until_ready`).
+///
+/// It runs on the engine thread, the way every other launch of this engine does, so nothing here
+/// is on a thread a hover is waiting on. An engine that is already kept, a setting that keeps
+/// none, and a machine with no engine installed are one answer: nothing is started.
+fn warm_kept_engine() {
+    let Some(program) = soffice() else {
+        return;
+    };
+
+    if let Some(pid) = keep_engine(&program) {
+        wait_until_ready(pid);
+    }
+}
+
 /// Start the engine the setting keeps, holding this app's own stub document.
 ///
 /// The process is recorded the way every engine this app starts is recorded: it is put in
@@ -618,23 +664,37 @@ fn start_engine() {
 /// not worth standing down over.
 fn next_request() -> Option<PathBuf> {
     let (slot, ready) = &*REQUESTED;
-    let mut requested = match slot.lock() {
-        Ok(requested) => requested,
-        Err(poisoned) => poisoned.into_inner(),
-    };
 
     loop {
+        // The slot is looked at and let go of again rather than held across the loop: what
+        // this thread does between two looks — starting the engine a warm asked for — is a
+        // second of work, and the lock it would hold through it is the one a hover puts its
+        // request down through (see `warm`).
+        let mut requested = match slot.lock() {
+            Ok(requested) => requested,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+
         if let Some(source) = requested.take() {
             return Some(source);
+        }
+
+        // An engine asked to be up before a document wanted it. Nothing is converted, and what
+        // starts is the engine a conversion would have started anyway.
+        if WARM_REQUESTED.swap(false, Ordering::AcqRel) {
+            drop(requested);
+            warm_kept_engine();
+            continue;
         }
 
         // The wait is bounded rather than endless, and what a bound that runs out is for is
         // the engine: one that is kept is let go of by this thread and no other, and the
         // idle setting is what says when (see `let_go_if_expired`).
-        requested = match ready.wait_timeout(requested, IDLE_TICK) {
+        let waited = match ready.wait_timeout(requested, IDLE_TICK) {
             Ok((requested, _)) => requested,
             Err(poisoned) => poisoned.into_inner().0,
         };
+        drop(waited);
 
         let_go_if_expired();
     }
@@ -840,6 +900,15 @@ static REQUESTED: Lazy<(Mutex<Option<PathBuf>>, Condvar)> =
 /// Whether the engine thread has been started. It is one of the app's threads rather than
 /// one per document, so it is started once and waits on its slot for the rest of the run.
 static ENGINE_STARTED: AtomicBool = AtomicBool::new(false);
+
+/// Whether an engine has been asked for ahead of a document, which is once per run: what the ask
+/// is for is the first document of a session, and from then on the engine is kept by the setting
+/// or let go of by it (see `warm`).
+static WARMED: AtomicBool = AtomicBool::new(false);
+
+/// Whether the engine thread has a warm waiting for it: the ask `warm` leaves behind, taken up
+/// between documents.
+static WARM_REQUESTED: AtomicBool = AtomicBool::new(false);
 
 #[cfg(test)]
 mod tests {

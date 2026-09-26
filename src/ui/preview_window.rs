@@ -2014,6 +2014,21 @@ fn current_media_kind() -> Option<PreviewType> {
 /// file is left alone.
 const OFFICE_RENDER_WAIT_SECS: u64 = 25;
 
+/// How long the pointer has to have been on a file before an engine is asked to come up for it.
+///
+/// An engine's launch is a second or more, and an engine that is up is what the first hover of a
+/// session on a document of its kind is otherwise paying for: the ask is made while the hover
+/// waits, so that the start overlaps what it is waiting for rather than following it (see
+/// `warm_engines_for`).
+///
+/// What the wait is for is the pointer rather than the engine. A hand crossing a folder is on a
+/// new file every few dozen milliseconds, and what a hover is about is the file it comes to rest
+/// on: an engine asked for on every file a sweep touches would be a machine full of
+/// applications for a folder nobody looked at. A sixth of a second is long enough for a hand
+/// that was going somewhere else to be somewhere else, and short enough that a hand that stopped
+/// has the engine starting before it has finished looking at the file.
+const WARM_SETTLE_MS: Duration = Duration::from_millis(150);
+
 /// The file a hover message is about.
 fn show_path(show: &PreviewMessage) -> Option<&PathBuf> {
     match show {
@@ -2155,14 +2170,15 @@ fn request_libre_render(path: &Path, generation: u64) -> Option<(PathBuf, u64)> 
 }
 
 /// Whether this hover is owed a picture by the ImageMagick engine: a file the engine develops,
-/// with an engine installed to develop it and nothing converted for this version of it yet.
+/// with an engine installed to develop it and nothing developed for this version of it yet —
+/// in hand for the hover that asked, or written down for the hovers after it.
 ///
 /// It is the same question `libre_render_is_due` is, asked of an engine that is a converter
 /// rather than an application — one that reads a file, writes one and exits, which is why
-/// there is a process to wait for and nothing to keep. Three things ask it: the layout,
-/// which measures a file like this as the wait for a picture; the loader, which answers with
-/// it that a hover is still waiting rather than failed; and the loop, which asks the engine
-/// for the picture only where there is one to ask for.
+/// there is a process to wait for and a page rather than an instance to keep. Three things ask
+/// it: the layout, which measures a file like this as the wait for a picture; the loader, which
+/// answers with it that a hover is still waiting rather than failed; and the loop, which asks
+/// the engine for the picture only where there is one to ask for.
 fn magick_render_is_due(path: &Path) -> bool {
     // The file's own bytes first, the name after them, exactly as the render engine's own
     // question asks it: a picture renamed to a name no list holds is still the engine's to
@@ -2173,6 +2189,7 @@ fn magick_render_is_due(path: &Path) -> bool {
         && imagemagick_render::available()
         && !imagemagick_render::refused(path)
         && !imagemagick_render::developed(path)
+        && !imagemagick_render::has_page(path)
         // A raw sample dump whose own length does not settle a shape is not a file to ask about:
         // the engine would answer that it must be told a size, which is a launch spent on nothing
         // (see `raw_geometry`).
@@ -2313,6 +2330,28 @@ fn request_engine_render(path: &Path, generation: u64, room: (u32, u32)) -> Opti
     }
 
     None
+}
+
+/// Ask the engine that draws this file's page to be up, where the pointer has settled on it.
+///
+/// It is the question `request_libre_render` asks a moment later, asked a moment early: a page
+/// this file is owed, by an engine that is installed, whose kind is switched on and has not
+/// turned the file down. Nothing else is warmed — an engine started for a preview the user has
+/// switched off is a process on the machine for nothing, and one started for a file that has its
+/// page already is a launch nobody was waiting for. The ask itself is the tier's, and it is a
+/// no-op for an engine that is up (see `libreoffice_render::warm`).
+///
+/// Office is not warmed, and that is not an omission: its worker is asked for a *document* to
+/// render — the slot it takes is a `RenderRequest`, and the application is created inside the
+/// render it makes — so "start the application and hold it with nothing open" is not a request
+/// that tier can be handed without taking it apart, which is not what this is for.
+///
+/// The ebook engine is not warmed either, and there is nothing of it to warm: every book is a
+/// conversion of its own and no instance is kept between them (see `calibre_render`).
+fn warm_engines_for(path: &Path) {
+    if libre_render_is_due(path) {
+        libreoffice_render::warm();
+    }
 }
 
 /// What an engine that answers by writing a page into the app's own folder has said about this
@@ -4280,10 +4319,11 @@ fn load_engine_page_for_office(
 /// * the frame this app has already built for this file at this box, which is the image cache
 ///   every other picture is kept in — a hit costs a lookup and no engine at all, which is what
 ///   a pointer swept back and forth over a folder of raws is answered with;
-/// * the picture the engine developed and nobody has drawn yet, which is what the frame is
-///   built from: it is decoded from the bytes the engine wrote them as — never from a file,
-///   since nothing of a conversion is written down — resampled into the box the layout
-///   planned, and held in that same cache under the file, its version and that box;
+/// * the picture the engine developed, which is what the frame is built from: the one held in
+///   the engine's hand for the hover that asked, or the page it wrote down for the hovers after
+///   it — decoded from the bytes the engine wrote the picture as rather than from the source
+///   file, resampled into the box the layout planned, and held in that same cache under the
+///   file, its version and that box;
 /// * and nothing at all, which is the wait the hover is already in — the loop has asked the
 ///   engine for the picture, and the hover is replayed when the answer lands (see
 ///   `magick_render_is_due`).
@@ -4325,10 +4365,14 @@ fn load_magick_picture(
         }
     }
 
-    // The picture the engine developed, which is the one thing a hover that asked for it is
-    // waiting for. A hover that has moved on leaves it where it is: what it is waiting for is
-    // its own replay.
-    let developed = imagemagick_render::take_developed(path)?;
+    // The picture the engine developed: the one in its hand, which is what a hover that asked
+    // for it is waiting for — a hover that has moved on leaves it where it is, since what it is
+    // waiting for is its own replay — or the page it wrote for the hovers after that one, which
+    // is every hover since a restart.
+    let developed = match imagemagick_render::take_developed(path) {
+        Some(developed) => developed,
+        None => imagemagick_render::read_page(path)?,
+    };
     if cancel.load(Ordering::Acquire) {
         return None;
     }
@@ -4340,7 +4384,12 @@ fn load_magick_picture(
         max_height,
         preview_scale,
     );
-    let image = decode_png(&developed.png)?;
+    // A page that is there but does not decode is not a picture: it is given up, so that the
+    // file behind it is developed again rather than read into the same nothing on every hover.
+    let Some(image) = decode_png(&developed.png) else {
+        imagemagick_render::forget_page(path);
+        return None;
+    };
     let (orig_width, orig_height) = image.dimensions();
     let resized = if target_width != orig_width || target_height != orig_height {
         image.resize_exact(
@@ -9101,6 +9150,10 @@ pub fn run_preview_window() {
         // document is one of its own, the render engine where it is one of `[libre]`'s —
         // and whether one has been asked for and is being waited on.
         let mut page_render_pending: Option<(PathBuf, u64)> = None;
+        // The hover an engine has already been asked to come up for, so that the ask is made
+        // once for a file the pointer has settled on rather than on every tick (see
+        // `warm_engines_for`).
+        let mut warmed_generation: Option<u64> = None;
         // A page that arrived for the hover already on screen, and is being loaded
         // to replace what is there rather than to open a new preview.
         let mut page_upgrade: Option<PathBuf> = None;
@@ -10728,6 +10781,22 @@ pub fn run_preview_window() {
                     )
                 })
                 .unwrap_or((false, false));
+
+            // An engine that draws the hover's page is asked to come up once the pointer has
+            // settled on the file: what the ask overlaps is the rest of the wait — a launch is
+            // a second or more — and a file the pointer is merely crossing costs nothing, since
+            // the ask is not made until the hover has outlasted the settle (see `WARM_SETTLE_MS`
+            // and `warm_engines_for`). Once per hover: an engine is asked for the file under the
+            // hand, and nothing is gained by asking again on every tick.
+            if warmed_generation != Some(current_generation) {
+                if let Some(pl) = pending_load
+                    .as_ref()
+                    .filter(|pl| !pl.upgrade && pl.started.elapsed() >= WARM_SETTLE_MS)
+                {
+                    warmed_generation = Some(current_generation);
+                    warm_engines_for(&pl.path);
+                }
+            }
 
             let render_wait = page_render_pending.as_ref().map(|(path, generation)| {
                 *generation == current_generation && shown_path.as_deref() == Some(path.as_path())

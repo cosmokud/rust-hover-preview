@@ -30,7 +30,8 @@
 
 use crate::app::engine_processes;
 use crate::config::config::{
-    read_within_budget, EngineIdle, OfficeEngine, PreviewType, DEFAULT_OFFICE_ENGINE_IDLE_SECS,
+    image_decode_limits, read_within_budget, EngineIdle, OfficeEngine, PreviewType,
+    DEFAULT_OFFICE_ENGINE_IDLE_SECS,
 };
 use crate::engines::document_cache::{self, Page, PageKind};
 use crate::formats::office_formats::{app_for, container_kind, OfficeApp};
@@ -257,16 +258,38 @@ pub(crate) fn held_page(source: &Path) -> Option<Page> {
 /// Whether the page held for this document is narrower than one rendered for a box `width` wide
 /// would be.
 ///
-/// A slide is exported at the width it is asked for, so a deck that was first previewed on a
-/// smaller display holds a page that a larger one would draw softer than it could — worth
-/// replacing, which is what this answers. Every other family's page is the size its document
-/// makes it, whatever box the render was asked for, so nothing about one of those is narrower
-/// than anything. What the held page's own width is, is read from the page itself (see
-/// `document_cache::size`).
+/// It is a question about a raster a family exported *for the box*: a slide is exported at the
+/// width it is asked for, so a deck that was first previewed on a smaller display holds a page
+/// that a larger one would draw softer than it could — worth replacing, which is what this
+/// answers — and one already exported at the cap is not, which is what keeps asking for it from
+/// being a loop. The one other raster Office draws for this app is the picture a workbook is
+/// answered with where no page can be exported, and it is not exported for the box at all: it is
+/// the used range at the range's own size, bounded by the picture's own limits, so a second
+/// render of it would write the same picture again — asking for one would be a render paid on
+/// every hover (see `page_is_workbook_picture`). Every other family's page is a PDF the size its
+/// document makes it, whatever box the render was asked for. What the held page's own width is,
+/// is read from the page itself (see `document_cache::size`).
 pub(crate) fn page_is_narrower_than(source: &Path, page: &Page, width: u32) -> bool {
     page.kind == PageKind::Png
+        && !page_is_workbook_picture(source, page)
         && document_cache::size(source, OfficeEngine::MicrosoftOffice.as_str())
             .is_some_and(|(export_width, _)| export_width < slide_export_width(width))
+}
+
+/// Whether the page held for this document is the picture a workbook is answered with where no
+/// page can be exported, rather than a page drawn for the document.
+///
+/// It is the one thing about a page that the kind it is kept under no longer says: a workbook's
+/// picture is a PNG now, exactly as a slide's export is (see `copy_used_range_picture`), and the
+/// two are told apart by the family the document belongs to — which is the file's own answer,
+/// read here the same way the render tier reads it before it draws anything. What the question is
+/// asked for: a picture is only as good as the pixels it holds, so it is placed as a bitmap
+/// rather than enlarged to the display (`office_preview::SourceKind`), and a display larger than
+/// it is not a reason to render it again. A `.bmp` answers as a picture whatever family it is
+/// kept for, since that is the only thing that ever wrote one.
+pub(crate) fn page_is_workbook_picture(source: &Path, page: &Page) -> bool {
+    matches!(page.kind, PageKind::Png | PageKind::Bmp)
+        && (page.kind == PageKind::Bmp || app_for(source) == Some(OfficeApp::Excel))
 }
 
 /// The hover a page was drawn for is over: it is no longer being waited on, so at a budget of
@@ -1448,10 +1471,14 @@ fn printer_installed(app: &Object) -> bool {
 ///
 /// This is what a machine with no printer gets instead of a page: the range is
 /// copied the way a person copies it — `CopyPicture` — and the bitmap Excel puts
-/// on the clipboard is written out as a BMP, the one image format that is exactly
-/// the bytes the clipboard holds. What it shows is the corner of the sheet a person
-/// would see first rather than the sheet's printed layout, which is the most such a
-/// machine can produce.
+/// on the clipboard is decoded and written out as a PNG. It was a BMP until this
+/// — the one format that is exactly the bytes the clipboard holds — and what that
+/// cost was a page of five to forty megabytes for a picture of flat-coloured
+/// cells: written to the cache, read back out of it, and given up and written
+/// again on every hover that lost it, where the same picture as a PNG is several
+/// times smaller and no different (see `write_png`). What it shows is the corner
+/// of the sheet a person would see first rather than the sheet's printed layout,
+/// which is the most such a machine can produce.
 fn copy_used_range_picture(workbook: &Object, target: &RenderTarget) -> bool {
     let Some(sheet) = workbook
         .member("Worksheets")
@@ -1482,7 +1509,7 @@ fn copy_used_range_picture(workbook: &Object, target: &RenderTarget) -> bool {
             .is_some();
         if copied {
             if let Some(dib) = clipboard_dib() {
-                return write_bmp(&target.file("bmp"), &dib).is_ok();
+                return write_png(&target.file("png"), &dib).is_ok();
             }
         }
 
@@ -1624,14 +1651,19 @@ fn read_clipboard_dib(empty: bool) -> Option<Vec<u8>> {
     }
 }
 
-/// What the clipboard held, written as a BMP file: a DIB is a `BITMAPINFO` and
-/// its pixels, and a BMP file is those bytes with a fourteen-byte header in front
-/// of them.
+/// What the clipboard held, decoded and written as a PNG file.
+///
+/// A DIB is a `BITMAPINFO` and its pixels, and a BMP file is those bytes with a
+/// fourteen-byte header in front of them — which is what the decoder is handed, a
+/// headerless DIB being a file no decoder opens. What comes out is written as a PNG
+/// because of what the picture is: a screenshot of flat-coloured cells, which is the
+/// case that format is best at, so the same picture costs the page cache and the
+/// hover that reads it back a fraction of what the bitmap did.
 ///
 /// It is written beside its name and moved into place, so that a render which is
 /// ended part-way through the write leaves something that is obviously not a
 /// picture rather than half of one under the name a page is read from.
-fn write_bmp(path: &Path, dib: &[u8]) -> std::io::Result<()> {
+fn write_png(path: &Path, dib: &[u8]) -> std::io::Result<()> {
     let offset = dib_pixel_offset(dib).unwrap_or(54);
     let mut file = Vec::with_capacity(dib.len() + 14);
     file.extend_from_slice(b"BM");
@@ -1641,9 +1673,27 @@ fn write_bmp(path: &Path, dib: &[u8]) -> std::io::Result<()> {
     file.extend_from_slice(&offset.to_le_bytes());
     file.extend_from_slice(dib);
 
-    let writing = path.with_extension("bmp.writing");
-    std::fs::write(&writing, file)?;
+    // Read under the budget every other decode of this app is read under: the picture is
+    // Excel's, but the bytes reach this side through the clipboard, which is not this app's.
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(&file)).with_guessed_format()?;
+    reader.limits(image_decode_limits());
+    let picture = reader.decode().map_err(picture_error)?;
+
+    let mut png = Vec::new();
+    picture
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .map_err(picture_error)?;
+
+    let writing = path.with_extension("png.writing");
+    std::fs::write(&writing, &png)?;
     std::fs::rename(&writing, path)
+}
+
+/// A decode or an encode that failed, as the error the write answers with: the caller is a
+/// render, and a picture it could not write is answered the way one it could not copy is —
+/// with no page.
+fn picture_error(error: image::ImageError) -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::InvalidData, error)
 }
 
 /// Where a DIB's pixels start, past its header and its colour table.
@@ -1899,7 +1949,12 @@ fn render_target() -> Option<RenderTarget> {
 fn take_render(target: &RenderTarget) -> Option<(PageKind, Vec<u8>)> {
     let mut taken = None;
 
-    for kind in [PageKind::Pdf, PageKind::Png, PageKind::Bmp] {
+    // The kinds a render writes: a page exported as a PDF, a slide exported as a PNG and a
+    // workbook's picture, which is a PNG since the picture stopped being written as a bitmap
+    // (see `write_png`). A `.bmp` is not written by anything here any more — one left in the
+    // folder by a run before this one is one this app's start clears away with the rest of what
+    // a run leaves in the temp folder (`document_cache::discard_leftovers`).
+    for kind in [PageKind::Pdf, PageKind::Png] {
         let path = target.file(kind.extension());
         if std::fs::metadata(&path).is_err() {
             continue;
@@ -1922,7 +1977,7 @@ fn take_render(target: &RenderTarget) -> Option<(PageKind, Vec<u8>)> {
 
     // A picture is written beside its name and moved into place, so a process that
     // was ended inside that write leaves the half it had written under this name.
-    let _ = std::fs::remove_file(target.file("bmp.writing"));
+    let _ = std::fs::remove_file(target.file("png.writing"));
 
     taken
 }
@@ -2204,8 +2259,9 @@ mod tests {
     /// A slide is exported at the width the render was asked for, so a deck that was
     /// first previewed on a smaller display holds a page a larger one is right to ask
     /// for again — and one exported at the cap is not, which is what keeps asking for
-    /// it from being a loop. A page a document made for itself is its own size
-    /// whatever box the render was asked for.
+    /// it from being a loop. A workbook's picture is the other raster Office draws, and
+    /// it is nobody's export: it is the used range at the range's own size, so a larger
+    /// display is not a reason to ask for one.
     #[test]
     fn asks_for_a_slide_again_when_a_wider_display_wants_one() {
         let source = document("wider.pptx");
@@ -2213,7 +2269,7 @@ mod tests {
             &source,
             OfficeEngine::MicrosoftOffice.as_str(),
             PageKind::Png,
-            &slide_bytes(1280, 720),
+            &picture_bytes(1280, 720),
         )
         .expect("a kept slide");
 
@@ -2234,7 +2290,7 @@ mod tests {
             &source,
             OfficeEngine::MicrosoftOffice.as_str(),
             PageKind::Png,
-            &slide_bytes(MAX_SLIDE_EXPORT_WIDTH, 1080),
+            &picture_bytes(MAX_SLIDE_EXPORT_WIDTH, 1080),
         )
         .expect("a kept slide");
 
@@ -2243,26 +2299,30 @@ mod tests {
             "a page already at the cap is not asked for again"
         );
 
-        // A page a document made for itself has no export width to ask again for: what it is
-        // is the size the document made it, whatever box the render was asked for.
-        let page = document_cache::store(
-            &source,
+        // A workbook's picture is the other PNG a family draws, and it has no export width to
+        // ask again for: what it is is the used range at the size the range came out at,
+        // whatever box the render was asked for — so a second render would write the same
+        // picture, and asking for one would be a render paid on every hover.
+        let workbook = document("wider.xlsx");
+        let picture = document_cache::store(
+            &workbook,
             OfficeEngine::MicrosoftOffice.as_str(),
-            PageKind::Bmp,
-            &bmp_bytes(800, 600, [10, 20, 30, 255]),
+            PageKind::Png,
+            &picture_bytes(800, 600),
         )
         .expect("a kept picture");
 
         assert!(
-            !page_is_narrower_than(&source, &page, 3840),
-            "a page a document made is the size its document makes it"
+            !page_is_narrower_than(&workbook, &picture, 3840),
+            "a workbook's picture is not asked for again for a larger display"
         );
 
+        let _ = std::fs::remove_file(&workbook);
         let _ = std::fs::remove_file(&source);
     }
 
-    /// A PNG of one colour, written the way a slide's export is.
-    fn slide_bytes(width: u32, height: u32) -> Vec<u8> {
+    /// A PNG of one colour, written the way a slide's export and a workbook's picture are.
+    fn picture_bytes(width: u32, height: u32) -> Vec<u8> {
         let mut written = std::io::Cursor::new(Vec::new());
         image::RgbaImage::from_pixel(width, height, image::Rgba([10, 20, 30, 255]))
             .write_to(&mut written, image::ImageFormat::Png)
@@ -2319,15 +2379,16 @@ mod tests {
             config.office_engine = crate::config::config::OfficeEngine::MicrosoftOffice;
         }
 
-        let source = document("held.docx");
+        let source = document("held.xlsx");
 
         // A picture that can be read is a page, and its own size is what the layout
-        // places the preview by.
+        // places the preview by — and it is a picture rather than a page in the layout's
+        // eyes, since what a workbook is answered with is only as good as its pixels.
         document_cache::store(
             &source,
             OfficeEngine::MicrosoftOffice.as_str(),
-            PageKind::Bmp,
-            &bmp_bytes(2, 2, [10, 20, 30, 255]),
+            PageKind::Png,
+            &picture_bytes(2, 2),
         )
         .expect("a kept page");
         assert_eq!(measure(&source), Some((2, 2)), "a page that can be read");
@@ -2337,7 +2398,7 @@ mod tests {
         document_cache::store(
             &source,
             OfficeEngine::MicrosoftOffice.as_str(),
-            PageKind::Bmp,
+            PageKind::Png,
             b"not a picture at all",
         )
         .expect("a kept page");
@@ -2345,34 +2406,6 @@ mod tests {
         assert!(held_page(&source).is_none(), "the broken page is gone");
 
         let _ = std::fs::remove_file(&source);
-    }
-
-    /// A BMP holding one colour, written the way a workbook's picture is.
-    fn bmp_bytes(width: u32, height: u32, color: [u8; 4]) -> Vec<u8> {
-        let pixel_bytes = width * height * 4;
-        let mut dib = Vec::new();
-        dib.extend_from_slice(&40u32.to_le_bytes());
-        dib.extend_from_slice(&(width as i32).to_le_bytes());
-        dib.extend_from_slice(&(height as i32).to_le_bytes());
-        dib.extend_from_slice(&1u16.to_le_bytes());
-        dib.extend_from_slice(&32u16.to_le_bytes());
-        dib.extend_from_slice(&0u32.to_le_bytes());
-        dib.extend_from_slice(&pixel_bytes.to_le_bytes());
-        for _ in 0..4 {
-            dib.extend_from_slice(&0i32.to_le_bytes());
-        }
-        for _ in 0..(width * height) {
-            dib.extend_from_slice(&color);
-        }
-
-        let mut file = Vec::new();
-        file.extend_from_slice(b"BM");
-        file.extend_from_slice(&((dib.len() + 14) as u32).to_le_bytes());
-        file.extend_from_slice(&0u16.to_le_bytes());
-        file.extend_from_slice(&0u16.to_le_bytes());
-        file.extend_from_slice(&54u32.to_le_bytes());
-        file.extend_from_slice(&dib);
-        file
     }
 
     /// A file that was downloaded carries a zone identifier, which is what puts
