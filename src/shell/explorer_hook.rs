@@ -1424,9 +1424,10 @@ fn read_failure_is_the_same_item(
 ///
 /// What the file's content says it is comes ahead of all of that, where it disagrees
 /// with the name: a `.docx` whose bytes are an MP4 is a video, and the engine it is
-/// handed to is the one that plays videos (see `content_type`). It is asked before the
-/// configuration is taken, because `content_type` reads the setting it is gated by
-/// through the same lock and a lock taken twice on one thread is a deadlock.
+/// handed to is the one that plays videos (see `content_type`). Both questions are asked
+/// with the one copy of the configuration this gate takes — the content question is handed
+/// the lists rather than taking them itself, which is what makes a second acquisition on this
+/// thread impossible (see `content_type::of`).
 fn is_media_file(path: &Path) -> bool {
     match crate::formats::head::Facts::read(path) {
         Some(facts) => is_media_file_with_facts(path, &facts),
@@ -1438,11 +1439,11 @@ fn is_media_file(path: &Path) -> bool {
 /// content says it is, decided the way it is decided everywhere else (see
 /// `crate::formats::head::Facts`).
 fn is_media_file_with_facts(path: &Path, facts: &crate::formats::head::Facts) -> bool {
-    let content = crate::formats::content_type::of_with_facts(path, facts);
-
     let Ok(config) = CONFIG.lock() else {
         return false;
     };
+
+    let content = crate::formats::content_type::of_with_facts(path, facts, &config);
 
     match content {
         crate::formats::content_type::Content::Kind(kind) => return kind.enabled_in(&config),

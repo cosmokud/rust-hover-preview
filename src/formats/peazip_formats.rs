@@ -343,7 +343,22 @@ pub fn is_peazip_preview(path: &Path) -> bool {
 pub fn is_engine_archive(path: &Path) -> bool {
     use crate::formats::content_type::{self, Content};
 
-    match content_type::of(path) {
+    // The file's own entry first and the configuration after it: the question is asked with the
+    // lists in hand, and the head it reads is read outside the lock (see `content_type::of`).
+    let facts = crate::formats::head::Facts::read(path);
+
+    let content = {
+        let Ok(config) = crate::CONFIG.lock() else {
+            return false;
+        };
+
+        match &facts {
+            Some(facts) => content_type::of_with_facts(path, facts, &config),
+            None => content_type::of(path, &config),
+        }
+    };
+
+    match content {
         Content::Kind(PreviewType::Peazip) => true,
         Content::Kind(_) | Content::Foreign => false,
         Content::Unknown => is_peazip_file(path),
