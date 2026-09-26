@@ -22,7 +22,7 @@ use crate::formats::codecs::{self, refresh as refresh_codecs, Row};
 use crate::shell::explorer_hook;
 use crate::text::text_theme;
 use crate::ui::preview_window::{refresh_preview, refresh_preview_types, trim_image_cache};
-use crate::{app::startup, CONFIG, RUNNING};
+use crate::{app::startup, StartupTrace, CONFIG, RUNNING};
 use once_cell::sync::Lazy;
 use std::os::windows::ffi::OsStrExt;
 use std::sync::atomic::Ordering;
@@ -3177,7 +3177,15 @@ unsafe fn remove_tray_icon(hwnd: HWND) {
     let _ = Shell_NotifyIconW(NIM_DELETE, &nid);
 }
 
-pub fn run_tray() {
+/// Run the tray window and its message loop, which is where this app's main thread spends the
+/// run.
+///
+/// The `trace` is the start's own (see `StartupTrace`), and what it is handed for is the two
+/// steps between the launch and the icon a user is waiting for: the window the icon hangs on
+/// and the icon itself. Everything else on this thread comes after that, and nothing of the
+/// start is left between them — the housekeeping that used to be is on a thread of its own by
+/// the time this is called (see `main`).
+pub fn run_tray(trace: &mut StartupTrace) {
     unsafe {
         let hinstance = GetModuleHandleW(None).unwrap();
 
@@ -3221,6 +3229,7 @@ pub fn run_tray() {
         };
 
         TRAY_HWND = hwnd;
+        trace.step("tray window");
 
         // Add tray icon (retry briefly in case Explorer isn't ready yet)
         let mut added = add_tray_icon(hwnd);
@@ -3239,6 +3248,10 @@ pub fn run_tray() {
             remove_tray_icon(hwnd);
             return;
         }
+
+        // The icon is in the tray, which is the last thing the start is between the launch and
+        // anything the user can see: what the retries above cost shows in this step's own time.
+        trace.step("tray icon");
 
         // Message loop.
         //

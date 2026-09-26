@@ -218,6 +218,18 @@ fn record_as(kind: Kind, image: &str, pid: u32) {
 
     let created = creation_time(pid).unwrap_or(0);
     if let Ok(mut owned) = OWNED.lock() {
+        // The record that is already there is the record this would write, and the file is
+        // the expensive part of this: what a start path asks twice about one process is a
+        // whole file rewritten with no line of it changed. Everything the file carries is
+        // what is compared — the image, the id, the moment it started and what it is — so
+        // a record that says something else about the same process is still written.
+        let held = owned.iter().any(|held| {
+            held.pid == pid && held.created == created && held.kind == kind && held.image == image
+        });
+        if held {
+            return;
+        }
+
         owned.retain(|owned| owned.pid != pid);
         owned.push(Owned {
             image: image.to_string(),
@@ -231,12 +243,20 @@ fn record_as(kind: Kind, image: &str, pid: u32) {
 }
 
 /// Stop holding a process, which is what a caller does once it has seen it go.
+///
+/// Nothing is written here, and that is the point. What the file is for is the process that
+/// may still be running when this run does not get to end it, and a line naming a process
+/// that has ended is one the next run passes over: the reaper acts through
+/// `terminate_verified`, which matches the image and the start time before it touches
+/// anything, so a stale line is inert by construction. The next record rewrites the file
+/// whole anyway, so all this leaves behind is a file that names an engine that is gone until
+/// then. What it saves is the write that made every engine stopped, and every video hover
+/// ended, two writes rather than one: what stays is the start, which is the half whose
+/// durability is the point.
 pub fn forget(pid: u32) {
     if let Ok(mut owned) = OWNED.lock() {
         owned.retain(|owned| owned.pid != pid);
     }
-
-    persist();
 }
 
 /// End a process this app started, if it is still there and still the one recorded.
@@ -809,9 +829,14 @@ mod tests {
     ///
     /// One test rather than two, because the folder it reaps from is named in the
     /// environment, and two tests setting that at once are two tests reading each
-    /// other's files.
+    /// other's files. It holds the stand-ins' lock for the same reason, and because the
+    /// processes it reaps are the stand-ins every other engine's test is using.
     #[test]
     fn reaps_a_run_that_is_gone_and_leaves_a_live_one_alone() {
+        let _stand_in = STAND_IN
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
         let folder = std::env::temp_dir()
             .join("rust-hover-preview-engine-tests")
             .join(std::process::id().to_string());
@@ -866,6 +891,82 @@ mod tests {
         let _ = held.kill();
         let _ = held.wait();
         let _ = abandoned.wait();
+        let _ = std::fs::remove_dir_all(&folder);
+        std::env::remove_var("RHP_ENGINE_STATE");
+    }
+
+    /// What a run writes down is what it has started, and what it writes is written when
+    /// the file would change: a record the file already carries is not written again, and a
+    /// process let go of is not struck out of the file at all — a line naming a process that
+    /// has ended is one the reaper passes over, so the write that would remove it buys
+    /// nothing and costs a disk write for every engine stopped and every video hover ended.
+    ///
+    /// The file's absence is what proves a write did not happen. Equal bytes say nothing
+    /// either way, and a write puts the file back.
+    #[test]
+    fn a_record_is_written_once_and_a_forget_is_not_a_write() {
+        let _stand_in = STAND_IN
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+        let folder = std::env::temp_dir()
+            .join("rust-hover-preview-engine-record-tests")
+            .join(std::process::id().to_string());
+        let _ = std::fs::remove_dir_all(&folder);
+        std::env::set_var("RHP_ENGINE_STATE", &folder);
+
+        let mut engine = stand_in();
+        let pid = engine.id();
+        let file = folder.join(format!("{}.state", std::process::id()));
+
+        record("ping.exe", pid);
+
+        let written = std::fs::read_to_string(&file).expect("the record this run wrote");
+        assert!(
+            written.contains(&format!("engine ping.exe {pid} ")),
+            "the process that was started is what is written down: {written}"
+        );
+
+        // The same process, the same image, the same start: there is nothing in the file
+        // this would change.
+        std::fs::remove_file(&file).expect("the file this run wrote");
+        record("ping.exe", pid);
+        assert!(!file.exists(), "a record already held is not written again");
+
+        // And the end of a process is not an event the file records: what is held is dropped,
+        // which is all any caller of `forget` is asking for.
+        forget(pid);
+        assert!(record_of(pid).is_none(), "the process is no longer held");
+
+        // What is written is written for a process that is not in the file yet — and it is
+        // written whole, so what a run has let go of by then is not in it any more.
+        let mut second = stand_in();
+        let second_pid = second.id();
+        record("ping.exe", second_pid);
+
+        let written = std::fs::read_to_string(&file).expect("the record the second start wrote");
+        assert!(
+            written.contains(&format!("engine ping.exe {second_pid} ")),
+            "the second process is written down: {written}"
+        );
+        assert!(
+            !written
+                .lines()
+                .any(|line| line.starts_with("engine") && line.contains(&pid.to_string())),
+            "and the one that was let go of is not: {written}"
+        );
+
+        std::fs::remove_file(&file).expect("the record the second start wrote");
+        forget(second_pid);
+        assert!(
+            !file.exists(),
+            "nothing is written to say a process has ended"
+        );
+
+        let _ = engine.kill();
+        let _ = engine.wait();
+        let _ = second.kill();
+        let _ = second.wait();
         let _ = std::fs::remove_dir_all(&folder);
         std::env::remove_var("RHP_ENGINE_STATE");
     }
