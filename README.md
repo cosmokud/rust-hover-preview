@@ -247,7 +247,7 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
   * **LibreOffice TTL** — Same for the engine that draws CorelDRAW and nearby formats. A kept engine converts the next document faster: `1.2 s` cold vs `0.2 s`, but uses a few hundred MB. `0 seconds` means one engine per document. Both TTLs apply to **Persistent** engines; non-persistent ones use **AFK Timer**. Greyed out if LibreOffice is not installed.
   * **WebView2 TTL** — With **Persistent** on: how long the SVG browser stays warm. Off: let go by **AFK Timer**. Greyed out if WebView2 is missing.
   * No `ImageMagick TTL`, `PeaZip TTL`, or `Calibre TTL`: those tools run once and exit, so idle time cannot bound them. A second hover is a cache hit.
-* **Codecs** — What this machine has: Videos, Images, Engines. Missing ones are greyed out.
+* **Codecs** — What this machine has: Videos, Images, Engines. A missing one carries a cross, and where the README names a page for it, picking the row offers to open that page — nothing is installed or downloaded by the app itself.
 * **Run at Startup** — Add or remove the Windows startup entry.
 * **Config.ini** — Open the configuration file; named for the running version.
 * **Exit** — Close the app.

@@ -21,8 +21,8 @@ use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, GetDlgItem, MessageBoxW, SetWindowTextW, SetWindowsHookExW,
-    UnhookWindowsHookEx, HCBT_ACTIVATE, IDNO, IDYES, MB_DEFBUTTON2, MB_ICONWARNING,
-    MB_SETFOREGROUND, MB_YESNO, WH_CBT,
+    UnhookWindowsHookEx, HCBT_ACTIVATE, IDNO, IDYES, MB_DEFBUTTON2, MB_ICONINFORMATION,
+    MB_ICONWARNING, MB_SETFOREGROUND, MB_YESNO, MESSAGEBOX_STYLE, WH_CBT,
 };
 
 /// The caption every dialog of this app carries.
@@ -100,7 +100,11 @@ pub(crate) unsafe extern "system" fn hook(code: i32, wparam: WPARAM, lparam: LPA
 /// The second button is the default one, which is the whole of what makes a question
 /// safe to put in front of a hand: what Enter or a stray space answers is the answer
 /// that does nothing.
-fn confirm(text: &str, affirmative: &str) -> bool {
+///
+/// The icon is the caller's, because the two ends of what this app asks are not the
+/// same kind of question: a reset changes a file and says so with a warning, while
+/// the question about a page changes nothing and is told as what it is.
+fn confirm(text: &str, affirmative: &str, icon: MESSAGEBOX_STYLE) -> bool {
     let caption = wide(CAPTION);
     let text = wide(text);
 
@@ -114,7 +118,7 @@ fn confirm(text: &str, affirmative: &str) -> bool {
             HWND::default(),
             PCWSTR(text.as_ptr()),
             PCWSTR(caption.as_ptr()),
-            MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2 | MB_SETFOREGROUND,
+            MB_YESNO | icon | MB_DEFBUTTON2 | MB_SETFOREGROUND,
         )
     };
 
@@ -147,7 +151,7 @@ pub(crate) fn confirm_reset_settings(changes: &[(String, String, String)]) -> bo
 
     text.push_str("\nYour extension lists are not touched.");
 
-    confirm(&text, "Reset")
+    confirm(&text, "Reset", MB_ICONWARNING)
 }
 
 /// The question the `Reset Extension Lists` row asks, naming the lists that would go.
@@ -159,7 +163,23 @@ pub(crate) fn confirm_reset_lists(sections: &[String]) -> bool {
         sections.join(", ")
     );
 
-    confirm(&text, "Reset")
+    confirm(&text, "Reset", MB_ICONWARNING)
+}
+
+/// The question a missing row of the tray's `Codecs` submenu asks: whether to open the page
+/// the engine or codec is got from.
+///
+/// Nothing is installed from here and nothing is fetched: a yes hands the page to the
+/// browser the user already has, which is the page the README names for the thing, and a no
+/// leaves the machine exactly as it was — so nothing about this question is a warning, and
+/// the address is in it so that what a yes opens is read before it is opened.
+pub(crate) fn confirm_open_page(name: &str, url: &str) -> bool {
+    let text = format!(
+        "Open the download page for {name}?\n\n{url}\n\n\
+         The page opens in your browser. Nothing is installed by this app."
+    );
+
+    confirm(&text, "Open", MB_ICONINFORMATION)
 }
 
 /// A string as a message box wants it: UTF-16, terminated.

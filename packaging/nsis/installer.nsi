@@ -2,7 +2,7 @@
 ; `[package.metadata.packager.nsis] template` in Cargo.toml. The placeholders
 ; in double braces are filled in by cargo-packager.
 ;
-; This is cargo-packager 0.11.8's own template with three differences:
+; This is cargo-packager 0.11.8's own template with four differences:
 ;   - there is no "Already Installed" page: a previous installation is removed
 ;     automatically, before anything is written, instead of being offered as a
 ;     choice;
@@ -12,6 +12,12 @@
 ;     (see "Recommended settings page" below). It writes no configuration of its
 ;     own: it leaves two files for the app to find, and the app is what puts the
 ;     settings back.
+;   - a page of its own is shown after that one, listing the optional engines this
+;     app can drive but does not ship, marked with whether this machine already
+;     has each of them and carrying a link to the page it is installed from where
+;     it does not (see "Optional engines page" below). It installs nothing and
+;     writes nothing: it is the README's install steps, offered where a user is
+;     already looking.
 ; Upgrading cargo-packager means diffing this file against the upstream
 ; template at crates/packager/src/package/nsis/installer.nsi.
 
@@ -170,10 +176,35 @@ Var RecommendedSettingsState
 Var RecommendedListsState
 Page custom RecommendedShow RecommendedLeave
 
-; 7. Installation page
+; 7. Optional engines page
+;
+; The engines this app can drive but does not ship, and whether this machine already has each
+; of them: one row per engine, saying what the engine is called and a few of the formats it
+; would give previews to, marked as detected or left greyed with a link to the page it is
+; installed from.
+;
+; Nothing is installed from here and nothing is downloaded. What a link does is open a page in
+; the browser the user already has — the same pages the README names, and the same ones the
+; tray's `Codecs` rows open. A row an engine is present for offers nothing, since there is
+; nothing to offer.
+;
+; What is asked about each engine is what the app itself asks before it drives one, so a page
+; that says a name is missing and the app's own `Codecs` row agree: the folders each installer
+; writes to, the `PATH` for FFmpeg's player, the console archiver inside a PeaZip installation,
+; and the ProgID of each Office application for the one thing decided here about LibreOffice —
+; the Office formats are worth naming only on a machine with no Office to draw them, and what
+; LibreOffice adds to a machine that has one is the formats beside them.
+;
+; Like the page above it, this page is not shown to an unattended installer at all: an update
+; put on by the app's own `Auto` answer runs this installer silently, and a page nobody is
+; there to read is not shown to anyone.
+Var EnginesLibreText
+Page custom EnginesShow EnginesLeave
+
+; 8. Installation page
 !insertmacro MUI_PAGE_INSTFILES
 
-; 8. Finish page
+; 9. Finish page
 ;
 ; Don't auto jump to finish page after installation page,
 ; because the installation page has useful info that can be used debug any issues with the installer.
@@ -234,6 +265,27 @@ LangString recommendedIntro ${LANG_ENGLISH} "Put the app's settings back to the 
 LangString recommendedSettings ${LANG_ENGLISH} "Reset to Recommended Settings"
 LangString recommendedLists ${LANG_ENGLISH} "Reset Extension Lists"
 LangString recommendedNote ${LANG_ENGLISH} "The first puts the settings back and leaves your extension lists alone. The second puts the lists back and leaves every other setting alone."
+
+; The words the optional-engines page carries: what each row is called, with a few of the
+; formats that engine would give previews to, and the two words a row can carry to its right.
+; `enginesLibreOffice` is the name a machine with no Office sees and `enginesLibreNiche` the one
+; a machine with it does: the Office formats are covered there already, and what LibreOffice
+; adds is the formats beside them.
+;
+; The checkmark is a square root sign, which is a fact about the font rather than a choice: the
+; dialog font these pages are drawn with carries `√` and has no glyph at all for `✔` or `✓`,
+; which would be drawn as a box.
+LangString enginesTitle ${LANG_ENGLISH} "Optional engines"
+LangString enginesSubtitle ${LANG_ENGLISH} "Previews that need something this app does not ship"
+LangString enginesIntro ${LANG_ENGLISH} "These engines are optional: without one, the files it draws simply show no preview. Nothing is installed here — a link opens the page it is installed from, and an engine installed later is used without a restart."
+LangString enginesDetected ${LANG_ENGLISH} "Detected"
+LangString enginesDownload ${LANG_ENGLISH} "Download"
+LangString enginesFFmpeg ${LANG_ENGLISH} "FFmpeg (flv, rmvb, mxf, ogv, swf, ...)"
+LangString enginesLibreOffice ${LANG_ENGLISH} "LibreOffice (doc, docx, xls, xlsx, ppt, pptx, ...)"
+LangString enginesLibreNiche ${LANG_ENGLISH} "LibreOffice (cdr, odt, ods, odp, odg, ...)"
+LangString enginesImageMagick ${LANG_ENGLISH} "ImageMagick (nef, cr2, cr3, arw, dng, raf, ...)"
+LangString enginesPeaZip ${LANG_ENGLISH} "PeaZip (cab, iso, rpm, deb, arj, lzh, ...)"
+LangString enginesCalibre ${LANG_ENGLISH} "Calibre (mobi, azw3, epub, djvu, fb2, ...)"
 
 !macro SetContext
   !if "${INSTALLMODE}" == "currentUser"
@@ -657,6 +709,262 @@ FunctionEnd
 Function RecommendedLeave
   SendMessage $RecommendedSettingsCheckbox ${BM_GETCHECK} 0 0 $RecommendedSettingsState
   SendMessage $RecommendedListsCheckbox ${BM_GETCHECK} 0 0 $RecommendedListsState
+FunctionEnd
+
+; The optional-engines page: one row per engine this app can drive, marked with whether this
+; machine already has it and carrying a link to the page it is installed from where it does not.
+;
+; A row that is present is the same label with `√` in front of it, and a row that is missing is
+; that label greyed — which is what disabling a static does, since the dialog manager draws a
+; disabled control's text in the grey the platform keeps for it.
+;
+; The five engines are asked about one at a time, and each detector answers in `$0`: 1 where the
+; engine is installed and 0 where it is not.
+Function FFmpegInstalled
+  StrCpy $0 0
+  SearchPath $1 "ffplay.exe"
+  IfErrors +2 0
+    StrCpy $0 1
+FunctionEnd
+
+Function LibreOfficeInstalled
+  StrCpy $0 0
+  ${If} ${FileExists} "$PROGRAMFILES64\LibreOffice\program\soffice.exe"
+    StrCpy $0 1
+    Return
+  ${EndIf}
+  ${If} ${FileExists} "$PROGRAMFILES\LibreOffice\program\soffice.exe"
+    StrCpy $0 1
+  ${EndIf}
+FunctionEnd
+
+; ImageMagick installs into a folder named for its version — `ImageMagick-7.1.2-Q16-HDRI` and
+; the like — so the folders under a program directory are read rather than a name guessed at.
+; A folder counts where one of the two tools inside it is there, which is the same two names, in
+; the same order, that the app itself looks for.
+Function ImageMagickScan
+  ${If} $1 == ""
+    Return
+  ${EndIf}
+  FindFirst $2 $3 "$1\ImageMagick*"
+  imagemagick_loop:
+    StrCmp $3 "" imagemagick_done
+    ${If} ${FileExists} "$1\$3\magick.exe"
+      StrCpy $0 1
+      Goto imagemagick_done
+    ${EndIf}
+    ${If} ${FileExists} "$1\$3\convert.exe"
+      StrCpy $0 1
+      Goto imagemagick_done
+    ${EndIf}
+    FindNext $2 $3
+    Goto imagemagick_loop
+  imagemagick_done:
+  FindClose $2
+FunctionEnd
+
+Function ImageMagickInstalled
+  StrCpy $0 0
+  StrCpy $1 "$PROGRAMFILES64"
+  Call ImageMagickScan
+  ${If} $0 == 1
+    Return
+  ${EndIf}
+  StrCpy $1 "$PROGRAMFILES"
+  Call ImageMagickScan
+FunctionEnd
+
+; PeaZip is asked for the console archiver the app runs rather than for the application's own
+; windowed frontend: a window opening is what a PeaZip preview is not, and what the app looks
+; for is `res\bin\7z\7z.exe` inside the installation.
+Function PeaZipInstalled
+  StrCpy $0 0
+  ${If} ${FileExists} "$PROGRAMFILES64\PeaZip\res\bin\7z\7z.exe"
+    StrCpy $0 1
+    Return
+  ${EndIf}
+  ${If} ${FileExists} "$PROGRAMFILES\PeaZip\res\bin\7z\7z.exe"
+    StrCpy $0 1
+  ${EndIf}
+FunctionEnd
+
+Function CalibreInstalled
+  StrCpy $0 0
+  ${If} ${FileExists} "$PROGRAMFILES64\Calibre2\ebook-convert.exe"
+    StrCpy $0 1
+    Return
+  ${EndIf}
+  ${If} ${FileExists} "$PROGRAMFILES\Calibre2\ebook-convert.exe"
+    StrCpy $0 1
+  ${EndIf}
+FunctionEnd
+
+; Whether every Office application this app draws a page with is installed. It is asked for the
+; LibreOffice row and nothing else, and what that row is called follows it: with all three here
+; the Office formats are covered and what LibreOffice adds is the formats beside them, while a
+; machine with none — or with only some — is shown the Office formats LibreOffice draws.
+;
+; What is read is the ProgID each application registers, which is the same `CLSIDFromProgID`
+; question the app asks before it drives one.
+Function OfficeInstalled
+  StrCpy $0 1
+  ReadRegStr $1 HKCR "Word.Application\CLSID" ""
+  ${If} $1 == ""
+    StrCpy $0 0
+  ${EndIf}
+  ReadRegStr $1 HKCR "Excel.Application\CLSID" ""
+  ${If} $1 == ""
+    StrCpy $0 0
+  ${EndIf}
+  ReadRegStr $1 HKCR "PowerPoint.Application\CLSID" ""
+  ${If} $1 == ""
+    StrCpy $0 0
+  ${EndIf}
+FunctionEnd
+
+Function EnginesShow
+  ${If} ${Silent}
+    Abort
+  ${EndIf}
+  ${IfThen} $PassiveMode == 1 ${|} Abort ${|}
+
+  !insertmacro MUI_HEADER_TEXT "$(enginesTitle)" "$(enginesSubtitle)"
+
+  nsDialogs::Create 1018
+  Pop $0
+  ${If} $0 == error
+    Abort
+  ${EndIf}
+
+  ${NSD_CreateLabel} 0 0 100% 26u "$(enginesIntro)"
+  Pop $0
+
+  Call FFmpegInstalled
+  ${If} $0 == 1
+    StrCpy $1 "√ $(enginesFFmpeg)"
+    ${NSD_CreateLabel} 0 32u 74% 12u "$1"
+    Pop $0
+    ${NSD_CreateLabel} 75% 32u 25% 12u "$(enginesDetected)"
+    Pop $0
+  ${Else}
+    ${NSD_CreateLabel} 0 32u 74% 12u "$(enginesFFmpeg)"
+    Pop $0
+    EnableWindow $0 0
+    ${NSD_CreateLink} 75% 32u 25% 12u "$(enginesDownload)"
+    Pop $0
+    ${NSD_OnClick} $0 EnginesLinkFFmpeg
+  ${EndIf}
+
+  ; What LibreOffice is called here is decided before it is asked about: the Office formats are
+  ; worth naming where there is no Office to draw them, and the formats beside them are what the
+  ; engine is worth where there is one.
+  StrCpy $EnginesLibreText "$(enginesLibreOffice)"
+  Call OfficeInstalled
+  ${If} $0 == 1
+    StrCpy $EnginesLibreText "$(enginesLibreNiche)"
+  ${EndIf}
+
+  Call LibreOfficeInstalled
+  ${If} $0 == 1
+    StrCpy $1 "√ $EnginesLibreText"
+    ${NSD_CreateLabel} 0 46u 74% 12u "$1"
+    Pop $0
+    ${NSD_CreateLabel} 75% 46u 25% 12u "$(enginesDetected)"
+    Pop $0
+  ${Else}
+    ${NSD_CreateLabel} 0 46u 74% 12u "$EnginesLibreText"
+    Pop $0
+    EnableWindow $0 0
+    ${NSD_CreateLink} 75% 46u 25% 12u "$(enginesDownload)"
+    Pop $0
+    ${NSD_OnClick} $0 EnginesLinkLibreOffice
+  ${EndIf}
+
+  Call ImageMagickInstalled
+  ${If} $0 == 1
+    StrCpy $1 "√ $(enginesImageMagick)"
+    ${NSD_CreateLabel} 0 60u 74% 12u "$1"
+    Pop $0
+    ${NSD_CreateLabel} 75% 60u 25% 12u "$(enginesDetected)"
+    Pop $0
+  ${Else}
+    ${NSD_CreateLabel} 0 60u 74% 12u "$(enginesImageMagick)"
+    Pop $0
+    EnableWindow $0 0
+    ${NSD_CreateLink} 75% 60u 25% 12u "$(enginesDownload)"
+    Pop $0
+    ${NSD_OnClick} $0 EnginesLinkImageMagick
+  ${EndIf}
+
+  Call PeaZipInstalled
+  ${If} $0 == 1
+    StrCpy $1 "√ $(enginesPeaZip)"
+    ${NSD_CreateLabel} 0 74u 74% 12u "$1"
+    Pop $0
+    ${NSD_CreateLabel} 75% 74u 25% 12u "$(enginesDetected)"
+    Pop $0
+  ${Else}
+    ${NSD_CreateLabel} 0 74u 74% 12u "$(enginesPeaZip)"
+    Pop $0
+    EnableWindow $0 0
+    ${NSD_CreateLink} 75% 74u 25% 12u "$(enginesDownload)"
+    Pop $0
+    ${NSD_OnClick} $0 EnginesLinkPeaZip
+  ${EndIf}
+
+  Call CalibreInstalled
+  ${If} $0 == 1
+    StrCpy $1 "√ $(enginesCalibre)"
+    ${NSD_CreateLabel} 0 88u 74% 12u "$1"
+    Pop $0
+    ${NSD_CreateLabel} 75% 88u 25% 12u "$(enginesDetected)"
+    Pop $0
+  ${Else}
+    ${NSD_CreateLabel} 0 88u 74% 12u "$(enginesCalibre)"
+    Pop $0
+    EnableWindow $0 0
+    ${NSD_CreateLink} 75% 88u 25% 12u "$(enginesDownload)"
+    Pop $0
+    ${NSD_OnClick} $0 EnginesLinkCalibre
+  ${EndIf}
+
+  nsDialogs::Show
+FunctionEnd
+
+; Nothing is read from this page as it is left: it says what the machine has and the links are
+; all it does, so there is no state to collect. The page above has two boxes and this one has
+; none — which is why this function is empty rather than absent, since a page is declared with
+; both of its functions.
+Function EnginesLeave
+FunctionEnd
+
+; The page's five links, a function each, so that the address a row opens is written by the row
+; rather than looked up from a table. The control handle the click carries is the first thing on
+; the stack and is dropped: what a click does is one address, and which control it was is not
+; part of the question.
+Function EnginesLinkFFmpeg
+  Pop $0
+  ExecShell "open" "https://ffmpeg.org/download.html"
+FunctionEnd
+
+Function EnginesLinkLibreOffice
+  Pop $0
+  ExecShell "open" "https://www.libreoffice.org/download/"
+FunctionEnd
+
+Function EnginesLinkImageMagick
+  Pop $0
+  ExecShell "open" "https://imagemagick.org/download/"
+FunctionEnd
+
+Function EnginesLinkPeaZip
+  Pop $0
+  ExecShell "open" "https://peazip.github.io/peazip-64bit.html"
+FunctionEnd
+
+Function EnginesLinkCalibre
+  Pop $0
+  ExecShell "open" "https://calibre-ebook.com/download_windows"
 FunctionEnd
 
 Function CreateDesktopShortcut
