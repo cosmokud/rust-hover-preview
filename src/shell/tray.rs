@@ -161,10 +161,16 @@ const ID_TRAY_OPEN_CONFIG: u16 = 1040;
 /// first puts every setting back at what this build recommends and leaves the extension
 /// lists alone, the second puts the lists back and leaves every other setting alone.
 ///
-/// They sit above every range the submenus share — the highest command in use is `1514` —
-/// so neither can be read as a click on one of those.
+/// They sit between every range the submenus share and the `Codecs` commands above them, so
+/// neither can be read as a click on one of those.
 const ID_TRAY_RESET_SETTINGS: u16 = 1520;
 const ID_TRAY_RESET_LISTS: u16 = 1521;
+/// The rows of the `Codecs` submenu, numbered as one list across its three groups: only the
+/// rows this machine is missing and has a page for are given an id at all, and this is where
+/// those ids begin. The range is wider than the list is long, so that a row added to any of
+/// the three groups is still inside it.
+const ID_TRAY_CODEC_BASE: u16 = 1600;
+const CODEC_COMMANDS: u16 = 64;
 /// The row above `Run at Startup`, which is in the menu only while a newer release is
 /// waiting: it puts the installer `updates` fetched on, and the app ends itself as the
 /// installer takes over rather than being the copy that has to be terminated.
@@ -529,6 +535,14 @@ unsafe extern "system" fn tray_window_proc(
                 ID_TRAY_OPEN_CONFIG => open_config_file(),
                 ID_TRAY_RESET_SETTINGS => reset_settings_from_tray(),
                 ID_TRAY_RESET_LISTS => reset_lists_from_tray(),
+                // A row of the `Codecs` submenu, by the position it was listed at. Only the
+                // rows this machine is missing and has a page for carry an id, and the row an
+                // id stands for is read again from the machine rather than kept from the menu
+                // build, so nothing has to be remembered between the click and the row (see
+                // `open_codec_page`).
+                cmd if (ID_TRAY_CODEC_BASE..ID_TRAY_CODEC_BASE + CODEC_COMMANDS).contains(&cmd) => {
+                    open_codec_page(cmd - ID_TRAY_CODEC_BASE)
+                }
                 // How large a picture is drawn, by the position its item was listed at.
                 cmd if (ID_TRAY_SCALE_BASE
                     ..ID_TRAY_SCALE_BASE + BITMAP_SCALE_CHOICES.len() as u16)
@@ -1685,7 +1699,8 @@ unsafe fn show_context_menu(hwnd: HWND) {
     // Add the "Codecs" submenu: every engine and every codec extension a preview can lean
     // on, each marked with whether this machine has it. The list is what is installed
     // rather than what this app can do, so a row that is greyed is a preview that will not
-    // be shown and a package that can be installed to show it.
+    // be shown and a package that can be installed to show it — and where the README names
+    // a page for that package, picking the row offers to open it.
     //
     // The answers are asked again here, because this is the one moment a user is looking
     // at them: a codec extension installed a minute ago shows up the next time the menu is
@@ -2701,19 +2716,33 @@ fn append_engine_idle_menu(
 /// The `Codecs` submenu: what this machine has of everything a preview leans on, grouped
 /// by what each thing is for.
 ///
-/// Nothing in it is a setting and nothing in it does anything — the rows are there to be
-/// read. A row that is there is marked and reads as any other item does, while one that is
-/// not is greyed and cannot be picked at all. A Windows item cannot be both normal-looking
-/// and unpickable, so the rows that are present are made inert by having no id at all
-/// rather than by being disabled, and the mark they carry is a glyph rather than the
-/// checkmark column a menu item can draw — those are the same trade the other way round
-/// (see `codec_row_label`).
+/// A row that is there is marked and reads as any other item does, and picking it does
+/// nothing — there is nothing to do about a thing the machine already has. A row that is
+/// not there is greyed and cannot be picked at all where there is nowhere to send anyone,
+/// and is pickable where the README names a page for it: picking one asks whether to open
+/// that page, which is the whole of what this submenu does. The app installs nothing and
+/// fetches nothing for it — what a yes hands over is a link, and the browser the user
+/// already has is what opens it (see `open_codec_page`).
+///
+/// A Windows item cannot be both normal-looking and unpickable, so the rows that are
+/// present are made inert by having no id at all rather than by being disabled, and the
+/// mark they carry is a glyph rather than the checkmark column a menu item can draw —
+/// those are the same trade the other way round (see `codec_row_label`).
 fn append_codecs_menu(menu: HMENU) {
     let codecs_menu = unsafe { CreatePopupMenu().unwrap() };
 
-    append_codec_group(codecs_menu, w!("Videos"), codecs::video());
-    append_codec_group(codecs_menu, w!("Images"), codecs::images());
-    append_codec_group(codecs_menu, w!("Engines"), codecs::engines());
+    let video = codecs::video();
+    let images = codecs::images();
+
+    // The three groups are numbered as one list, in the order they are read, so that an id
+    // says which row was picked without the menu having to be remembered: the same three
+    // groups are built again, in the same order, when the click arrives (see `codec_row`).
+    let images_base = ID_TRAY_CODEC_BASE + video.len() as u16;
+    let engines_base = images_base + images.len() as u16;
+
+    append_codec_group(codecs_menu, w!("Videos"), video, ID_TRAY_CODEC_BASE);
+    append_codec_group(codecs_menu, w!("Images"), images, images_base);
+    append_codec_group(codecs_menu, w!("Engines"), codecs::engines(), engines_base);
 
     let _ = unsafe {
         AppendMenuW(
@@ -2726,7 +2755,9 @@ fn append_codecs_menu(menu: HMENU) {
 }
 
 /// One group of the `Codecs` submenu, with a row per engine or codec in it.
-fn append_codec_group(parent: HMENU, label: PCWSTR, rows: Vec<Row>) {
+///
+/// `base` is where this group's commands begin in the numbering above.
+fn append_codec_group(parent: HMENU, label: PCWSTR, rows: Vec<Row>, base: u16) {
     let group = unsafe { CreatePopupMenu().unwrap() };
 
     // The labels are kept for as long as the group is being filled out, for the reason the
@@ -2743,15 +2774,26 @@ fn append_codec_group(parent: HMENU, label: PCWSTR, rows: Vec<Row>) {
         .collect();
 
     for (index, row) in rows.iter().enumerate() {
-        // The id is nothing on purpose: no command is matched against a codec row, so
-        // picking one closes the menu and does nothing else.
-        let flags = if row.available {
+        // A row the machine has is inert, and so is a row it is missing that has nowhere to
+        // be got from: neither is given an id, so picking one closes the menu and does
+        // nothing else. The two are told apart by being grey where the second is — a row
+        // cannot be both normal-looking and unpickable, and the cross every missing row
+        // carries is what says which of them a row is.
+        let pickable = !row.available && row.link.is_some();
+
+        let flags = if pickable || row.available {
             MF_STRING
         } else {
             MF_STRING | MF_GRAYED
         };
 
-        let _ = unsafe { AppendMenuW(group, flags, 0, PCWSTR(labels[index].as_ptr())) };
+        let id = if pickable {
+            (base + index as u16) as usize
+        } else {
+            0
+        };
+
+        let _ = unsafe { AppendMenuW(group, flags, id, PCWSTR(labels[index].as_ptr())) };
     }
 
     let _ = unsafe { AppendMenuW(parent, MF_STRING | MF_POPUP, group.0 as usize, label) };
@@ -2764,12 +2806,56 @@ fn append_codec_group(parent: HMENU, label: PCWSTR, rows: Vec<Row>) {
 /// because the two cannot be told apart for the rows that matter: a menu greys a checked
 /// item along with everything else about it, so a present row and a missing one would look
 /// the same. A glyph is nothing but text, and it stays legible on the row it is on.
+///
+/// A row that can be picked carries an ellipsis, which is the Windows way of saying a dialog
+/// follows — and one does: the question of whether to open the page the thing is got from.
 fn codec_row_label(row: &Row) -> String {
     if row.available {
         format!("\u{2714} {}", row.name)
+    } else if row.link.is_some() {
+        format!("\u{2716} {}\u{2026}", row.name)
     } else {
         format!("\u{2716} {}", row.name)
     }
+}
+
+/// The click on a row of the `Codecs` submenu: ask whether to open the page the thing is
+/// installed from, and open it where the answer is yes.
+///
+/// The row is read again from the machine rather than kept from the menu build, which is
+/// what makes an id mean the same thing on both sides: the groups are listed in a fixed
+/// order, so the position an id stands for is the position the row is at now. The link is
+/// asked of that row for the same reason — a `.heic` arrives in two packages, and which of
+/// the two is missing is a fact of this moment rather than of the menu that was built.
+fn open_codec_page(index: u16) {
+    let Some(row) = codec_row(index as usize) else {
+        return;
+    };
+
+    // A row the machine has offers nothing, and one that was missing when the menu was built
+    // and is not anymore is answered the same way: what the row says now is what it is
+    // answered with, rather than what it said when the menu was drawn.
+    if row.available {
+        return;
+    }
+
+    let Some(url) = row.link else {
+        return;
+    };
+
+    if dialogs::confirm_open_page(row.name, url) {
+        open_link(url);
+    }
+}
+
+/// The row the `Codecs` submenu lists at `index`: the three groups read as one list, in the
+/// order they are listed, which is the order their commands were handed out in.
+fn codec_row(index: usize) -> Option<Row> {
+    let mut rows = codecs::video();
+    rows.extend(codecs::images());
+    rows.extend(codecs::engines());
+
+    rows.into_iter().nth(index)
 }
 
 /// What an idle time is called in an `… Engine TTL` submenu: the time, with the one an
@@ -3274,6 +3360,24 @@ fn set_settling_delay(index: u16) {
     if let Ok(mut config) = CONFIG.lock() {
         config.settling_delay_ms = delay_ms;
         config.save();
+    }
+}
+
+/// A page, opened in the browser the user already has: the same call the release page is
+/// opened with, and nothing is fetched or run here — what becomes of the page is the
+/// browser's own business (see `updates::open_release_page`).
+fn open_link(url: &str) {
+    let wide_url: Vec<u16> = url.encode_utf16().chain(std::iter::once(0)).collect();
+
+    unsafe {
+        let _ = ShellExecuteW(
+            HWND(std::ptr::null_mut()),
+            w!("open"),
+            PCWSTR(wide_url.as_ptr()),
+            PCWSTR(std::ptr::null()),
+            PCWSTR(std::ptr::null()),
+            SW_SHOWNORMAL,
+        );
     }
 }
 
