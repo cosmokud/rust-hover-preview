@@ -430,7 +430,7 @@ What decides it is the Explorer hook and nothing else. `ExplorerState` is alread
 for the loop's own sleeps — reachable is a window that is showing and out from behind
 whatever is in front of it, which is where the multimonitor rule lives — and each read of it
 publishes the answer into `app::afk`, whose clock is the whole of the state either rule
-needs. The engines ask that clock on the look they already take for their idle times: the
+needs. What counts as an Explorer window is the browser frame's class and nothing else (`cabinetwclass`, `explorerwclass`, the same test the window walk is made with): the rest of the shell is explorer.exe too — the desktop (`Progman`, `WorkerW`), the taskbar, the Start menu, the search box — and reading one of those as Explorer is what left the state on `ActiveFocus` with the desktop in front, which is what Show Desktop leaves there, so a preview that was already up was never taken down. The engines ask that clock on the look they already take for their idle times: the
 Office worker twice a second, the LibreOffice thread once a second, the browser every quarter
 of one while it is up. So nothing here polls, wakes a thread that is asleep, or costs a hover
 anything, and an engine is never let go of while something it drew is in front of the user —
