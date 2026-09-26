@@ -15,8 +15,7 @@ use crate::ui::preview_window::{
 use crate::{CONFIG, RUNNING};
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
-use std::ffi::OsString;
-use std::os::windows::ffi::{OsStrExt, OsStringExt};
+use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
@@ -57,9 +56,9 @@ use windows::Win32::UI::Shell::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetAncestor, GetClassNameW, GetCursorPos, GetForegroundWindow, GetWindowPlacement,
-    GetWindowRect, GetWindowThreadProcessId, IsIconic, IsWindowVisible, SystemParametersInfoW,
-    WindowFromPoint, GA_ROOT, SPI_GETICONTITLELOGFONT, SW_SHOWMAXIMIZED,
-    SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, WINDOWPLACEMENT,
+    GetWindowRect, IsIconic, IsWindowVisible, SystemParametersInfoW, WindowFromPoint, GA_ROOT,
+    SPI_GETICONTITLELOGFONT, SW_SHOWMAXIMIZED, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
+    WINDOWPLACEMENT,
 };
 
 /// What the walk over Explorer's own windows found: how many there are, how many are
@@ -3714,6 +3713,24 @@ fn is_cursor_over_explorer_full(window: HWND) -> bool {
     false
 }
 
+/// Whether a window is one of Explorer's folder windows.
+///
+/// The class is the whole of the test, and only the class: a folder view is drawn in the
+/// browser frame, and this is the same answer the walk over Explorer's windows is made
+/// with (`explorer_browser_class_matches`), so the loop cannot count a window as Explorer's
+/// in one place and not in the other. What it keeps out is the rest of the shell, which is
+/// explorer.exe as well — the desktop (`Progman`, `WorkerW`), the taskbar, the Start menu,
+/// the search box. Reading one of those as an Explorer window is what made the foreground
+/// test answer yes with the desktop in front, which is what Show Desktop leaves there: the
+/// state never left `ActiveFocus`, the counts that would have said every Explorer window
+/// was minimized were never asked for, and a preview that was already up was never taken
+/// down.
+///
+/// The ask is one class lookup, kept for the window (see `EXPLORER_WINDOW_CACHE`). The
+/// process behind the window used to be read as well, for any window that was not one of
+/// the two classes — an `OpenProcess` and an image name for every window the pointer
+/// walked over — and it answered yes for every piece of the shell that is explorer.exe,
+/// which is the answer this test must never give.
 fn is_explorer_window(hwnd: HWND) -> bool {
     let hwnd_key = hwnd.0 as isize;
     if hwnd_key == 0 {
@@ -3728,49 +3745,7 @@ fn is_explorer_window(hwnd: HWND) -> bool {
         }
     }
 
-    let mut is_explorer = false;
-    unsafe {
-        let mut class_name = [0u16; 256];
-        let len = GetClassNameW(hwnd, &mut class_name);
-        let class_str = if len > 0 {
-            OsString::from_wide(&class_name[..len as usize])
-                .to_string_lossy()
-                .to_lowercase()
-        } else {
-            String::new()
-        };
-
-        // Check for common Explorer window classes
-        if class_str.contains("cabinetwclass") || class_str.contains("explorerwclass") {
-            is_explorer = true;
-        } else {
-            // Fallback: check process name
-            let mut process_id: u32 = 0;
-            GetWindowThreadProcessId(hwnd, Some(&mut process_id));
-
-            if let Ok(handle) = windows::Win32::System::Threading::OpenProcess(
-                windows::Win32::System::Threading::PROCESS_QUERY_LIMITED_INFORMATION,
-                false,
-                process_id,
-            ) {
-                let mut buffer = [0u16; 260];
-                let mut size = buffer.len() as u32;
-                if windows::Win32::System::Threading::QueryFullProcessImageNameW(
-                    handle,
-                    windows::Win32::System::Threading::PROCESS_NAME_WIN32,
-                    windows::core::PWSTR(buffer.as_mut_ptr()),
-                    &mut size,
-                )
-                .is_ok()
-                {
-                    let path = OsString::from_wide(&buffer[..size as usize]);
-                    let path_str = path.to_string_lossy().to_lowercase();
-                    is_explorer = path_str.contains("explorer.exe");
-                }
-                let _ = windows::Win32::Foundation::CloseHandle(handle);
-            }
-        }
-    }
+    let is_explorer = explorer_browser_class_matches(hwnd);
 
     if let Ok(mut cache) = EXPLORER_WINDOW_CACHE.lock() {
         if cache.len() >= 512 {
