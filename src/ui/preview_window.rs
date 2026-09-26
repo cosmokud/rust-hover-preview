@@ -6460,14 +6460,19 @@ fn peazip_box(path: &Path, bounds: ScreenBounds, dpi: u32) -> Option<(u32, u32)>
 /// rest of the line was cut off below it. Measuring the document again at the width
 /// the box actually has is what gives it the height the text really takes there, and
 /// placing the result again is the same rule that put it there the first time.
+///
+/// The size that measure answered with is handed back with the layout, because the
+/// wait that follows the pointer re-places from the size it was given as well: left
+/// at the display's own measurement it would step around the name for a height the
+/// wrapped frame does not have (see `HoverPlacement`).
 fn text_preview_layout(
     path: &Path,
     layout: PreviewLayout,
     dpi: u32,
     place: impl FnOnce((u32, u32)) -> Option<PreviewLayout>,
-) -> PreviewLayout {
+) -> (PreviewLayout, Option<(u32, u32)>) {
     if !is_text_preview(path) {
-        return layout;
+        return (layout, None);
     }
 
     let Some(size) = text_preview::measure(
@@ -6477,10 +6482,13 @@ fn text_preview_layout(
         dpi,
         current_text_options(),
     ) else {
-        return layout;
+        return (layout, None);
     };
 
-    place(size).unwrap_or(layout)
+    match place(size) {
+        Some(placed) => (placed, Some(size)),
+        None => (layout, None),
+    }
 }
 
 /// The effective DPI of the display nearest `(x, y)`, which is what a text preview's
@@ -6923,6 +6931,11 @@ fn load_spinner_delay() -> Duration {
 /// tick would re-read a header, a listing or a document sixty times a second to
 /// learn what the hover already knew. What is recomputed is the place — that is
 /// what the cursor decides.
+///
+/// A text preview is the one size measured again before the wait starts — its height
+/// is the rows its lines wrap into at the width the box came out with — and what is
+/// kept here is the size that measure answered with, so a re-placement steps around
+/// the name for the rows the frame really has (see `text_preview_layout`).
 #[derive(Clone, Copy)]
 struct HoverPlacement {
     orig_dims: (u32, u32),
@@ -10254,7 +10267,7 @@ pub fn run_preview_window() {
                             // that asked (see `measure_waiting`).
                             let measuring = measure_waiting(&path);
                             let is_video = drawn_as_video(&path);
-                            let placement = HoverPlacement {
+                            let mut placement = HoverPlacement {
                                 orig_dims,
                                 avoid,
                                 follow_cursor,
@@ -10263,18 +10276,28 @@ pub fn run_preview_window() {
                             };
                             let placed = compute_mouse_layout(x, y, placement, bounds, dpi);
                             if let Some(layout) = placed {
-                                let layout = text_preview_layout(&path, layout, dpi, |size| {
-                                    compute_mouse_layout(
-                                        x,
-                                        y,
-                                        HoverPlacement {
-                                            orig_dims: size,
-                                            ..placement
-                                        },
-                                        bounds,
-                                        dpi,
-                                    )
-                                });
+                                let (layout, text_size) =
+                                    text_preview_layout(&path, layout, dpi, |size| {
+                                        compute_mouse_layout(
+                                            x,
+                                            y,
+                                            HoverPlacement {
+                                                orig_dims: size,
+                                                ..placement
+                                            },
+                                            bounds,
+                                            dpi,
+                                        )
+                                    });
+                                // A text preview is placed again at the width its box came
+                                // out with, and the frame that lands is taller by the rows a
+                                // long line wraps into there. The wait re-places from the size
+                                // kept here, so it keeps the re-measured one: the display's own
+                                // measurement would step the wait around the name for a height
+                                // the frame does not have (see `text_preview_layout`).
+                                if let Some(size) = text_size {
+                                    placement.orig_dims = size;
+                                }
                                 show_is_video = is_video;
                                 show_video_probe = probing;
                                 show_measure_probe = measuring;
@@ -10319,7 +10342,7 @@ pub fn run_preview_window() {
                                 preview_scale,
                             };
                             if let Some(layout) = compute_keyboard_layout(placement, bounds, dpi) {
-                                let layout = text_preview_layout(&path, layout, dpi, |size| {
+                                let (layout, _) = text_preview_layout(&path, layout, dpi, |size| {
                                     compute_keyboard_layout(
                                         KeyboardPlacement {
                                             orig_dims: size,
