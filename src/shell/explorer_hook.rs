@@ -142,21 +142,178 @@ struct ItemResolver {
     /// The Shell window collection, created once and kept: building it is the one
     /// call every lookup would otherwise repeat.
     shell_windows: Option<IShellWindows>,
-    /// The view that answered for a window, kept while the window holds only that
-    /// one view: a window with tabs has several and none of them is the cache's to
-    /// choose between.
-    view: Option<AnsweredView>,
+    /// The views of the window the last look was in, kept while they still describe
+    /// it: reading them is one crossing into the shell per Shell window the desktop
+    /// holds, and a window that holds tabs is one registration per tab (see
+    /// `frame_views`).
+    window_views: Option<WindowViews>,
+    /// The answer the last look at the item under the pointer produced, kept while the
+    /// pointer stays inside that item — see `AnsweredItem`.
+    item: Option<AnsweredItem>,
     probe: Option<ProbeMemo>,
 }
 
-/// The view that answered for a window.
+/// One view of a window, as the Shell hands it over.
 struct AnsweredView {
-    browser_hwnd: isize,
-    shell_browser: IShellBrowser,
-    /// The shell view's own identity, so a window that navigated is a different
-    /// view even though the window is the same one.
+    /// The view's own identity, which is what tells one view of a window from another —
+    /// a window that holds tabs has one per tab — and is the same object across a
+    /// navigation: what changes then is the folder the view holds, not the view.
     view_identity: *mut core::ffi::c_void,
+    /// The window the view is drawn in, which is what says which of a frame's views the
+    /// item under the pointer belongs to (see `ItemWindow`). Nothing where the view will
+    /// not name one, which leaves it to answer with the rest.
+    view_hwnd: isize,
     folder_view: IFolderView2,
+}
+
+/// Every view one window holds, as a walk of the Shell window collection found them.
+///
+/// What is kept is the whole set and not the one view that answered, because which of
+/// them is showing what is under the pointer is a question about the pointer rather than
+/// about the set: a tab switched is the same set with a different window inside it (see
+/// `ItemWindow`), and a set read again for that would be the walk this exists to save.
+/// So the set is read again only where it cannot describe the window any more, and that
+/// is a short list: the window is gone, hidden or minimized, or the desktop holds a
+/// different number of Shell windows than it did when the set was read — one cheap
+/// number that moves when a tab or a window is opened or closed, and the only thing that
+/// ever adds a view to a window or takes one away.
+struct WindowViews {
+    frame: isize,
+    /// How many Shell windows the desktop held when this set was read.
+    registrations: i32,
+    views: Vec<AnsweredView>,
+}
+
+impl WindowViews {
+    /// Whether the window this set was read for is still one an item can be drawn in.
+    /// A window that is gone, hidden or minimized holds nothing to answer about — the
+    /// same question `folder_views_for_window` asks of a window before walking it.
+    fn is_live(&self) -> bool {
+        let frame = HWND(self.frame as *mut core::ffi::c_void);
+        !frame.is_invalid()
+            && unsafe { IsWindowVisible(frame).as_bool() && !IsIconic(frame).as_bool() }
+    }
+}
+
+/// The window an item is resolved in: the frame whose views can be holding it, and the
+/// window the item is drawn in.
+///
+/// The second is what tells a frame's views apart, and it is the fact this path did
+/// without for as long as they could not be told apart at all. A window that holds tabs
+/// registers one Shell window per tab, every one of them answering with the frame's own
+/// window, so the frame names a *set* of views rather than one — and the tabs that are
+/// not showing cannot be told from the showing one by their own windows, which are
+/// visible either way. What the item is drawn in is inside a window of exactly one of
+/// them: the tab that is showing. A view whose window the item's own window descends
+/// from is therefore the view the item was drawn by, and it is asked alone. It is the
+/// same test the pointer's hints already make to find the view a point is in (see
+/// `get_active_shell_view_context`), which is why a pointer that is in none of them —
+/// over the navigation pane, the toolbar, the details pane, none of which belongs to a
+/// tab — names no view, and the frame's views are told apart by what they answer, as
+/// they were before this window was read.
+struct ItemWindow {
+    /// The frame the item path resolves against: the root window under the pointer, or
+    /// the frame the focused item is drawn in.
+    frame: isize,
+    /// The window the item is drawn in — the window under the pointer for the pointer's
+    /// item, the window the item's own provider reports for the keyboard's — or nothing
+    /// where neither is known.
+    drawn_in: isize,
+}
+
+impl ItemWindow {
+    /// The one view of a frame that drew the item, where the frame's views can be told
+    /// apart by the window the item is in.
+    ///
+    /// Two views claiming that window is a frame this cannot tell apart, and it is
+    /// answered the way it was before the window was read: every view is asked and what
+    /// they answer has to agree. A window is on exactly one chain from the desktop down
+    /// to what is under the pointer, so two views holding it is a reading that cannot be
+    /// trusted rather than one of several, and nothing is answered on it.
+    fn view_holding(&self, views: &[AnsweredView]) -> Option<usize> {
+        let mut found = None;
+        for (position, view) in views.iter().enumerate() {
+            if !self.draws_inside(view.view_hwnd) {
+                continue;
+            }
+            if found.is_some() {
+                return None;
+            }
+            found = Some(position);
+        }
+
+        found
+    }
+
+    /// Whether a view's own window is one the item is drawn inside.
+    fn draws_inside(&self, view_hwnd: isize) -> bool {
+        self.drawn_in != 0
+            && view_hwnd != 0
+            && hwnd_is_same_or_ancestor(
+                HWND(self.drawn_in as *mut core::ffi::c_void),
+                HWND(view_hwnd as *mut core::ffi::c_void),
+            )
+    }
+}
+
+/// What a view says about the item at a position: whether it holds it, and whether there
+/// is a file to preview if it does.
+///
+/// The two questions are asked in order and are not the same question (see
+/// `item_file_path`), and they are asked of one item object rather than two: the item at
+/// that position is fetched once and asked for the name it is shown under and for the
+/// path it stands for. Fetching it is the crossing the two questions used to pay twice —
+/// and a frame whose every view is asked paid it twice for each of them.
+enum ViewItem {
+    /// The view could not be asked for the item at all. A view is not something this app
+    /// can see the end of: a window that has closed takes its views with it and the
+    /// proxies left behind answer nothing, so this is what a set that may be describing a
+    /// window that has moved on looks like, and the frame's views are read again.
+    Unaskable,
+    /// The view does not hold the item at that position.
+    NotHeld,
+    /// The view holds it, and it is not a file this app previews.
+    NoFile,
+    /// The view holds it, and this is the file it stands for.
+    File(PathBuf),
+}
+
+/// The answer one look at the item under the pointer produced, kept while the pointer
+/// stays inside the item it was read from.
+///
+/// An answer is kept against the item rather than the point, because a point is what a
+/// hand sweeping a list has a new one of every tick and the item is not: a `Details` row
+/// is as wide as the view, so a pointer moving along one crosses many points and never
+/// leaves the item the first of them was answered for. What ends it is the pointer
+/// leaving that box — or the window the box was read in, which a box on its own cannot
+/// stand in for: a tab switched under a parked pointer is another view drawing another
+/// folder at the same place, and the box that held the item of one is the box of the
+/// item of the other. Everything else that makes the item under a parked pointer a new
+/// question drops the answer where it happens (see `ItemResolver::forget_item`).
+struct AnsweredItem {
+    /// The window the item under the pointer was drawn in — see `ItemWindow`. The
+    /// pointer has to be in the same window for the answer to still be about it.
+    drawn_in: isize,
+    /// The box the view draws the item in, which the pointer has to stay inside.
+    bounds: (i32, i32, i32, i32),
+    /// The file the item stands for, or nothing where the view holds an item with no
+    /// file to preview — a folder, an application. That is an answer as well: the item
+    /// under the pointer is one this app has nothing to show for, which is not a reason
+    /// to ask the shell about it again on every tick.
+    path: Option<PathBuf>,
+}
+
+/// What one look at the pointer found.
+struct PointerLook {
+    /// The file the pointer is on, where what is under it is a file this app previews.
+    path: Option<PathBuf>,
+    /// The box the view draws the item the look read in, or nothing where the look found
+    /// no item at all. It is published for the preview thread and the pointer-left check
+    /// as it always was, and it is what the answer is kept against — see `AnsweredItem`.
+    item_bounds: Option<(i32, i32, i32, i32)>,
+    /// The window the look read the item in, or nothing where the pointer was in no
+    /// window this app could name.
+    drawn_in: isize,
 }
 
 /// The answer one point produced, kept for the rest of the loop tick.
@@ -420,7 +577,8 @@ impl ItemResolver {
             walker: None,
             item_index_property,
             shell_windows: None,
-            view: None,
+            window_views: None,
+            item: None,
             probe: None,
         };
         resolver.rebuild_automation_parts();
@@ -501,21 +659,33 @@ impl ItemResolver {
         self.rebuild_automation_parts();
     }
 
-    /// Build the Shell window collection again, and drop the view that answered
-    /// through it. These two are what the resolver holds that another process
-    /// serves: the collection and every view are Explorer's own, so once Explorer
-    /// is not the process it was, both are proxies into one that is gone — and a
-    /// proxy into a gone process fails for good rather than reconnecting.
+    /// Build the Shell window collection again, and drop what was read through it: the
+    /// views of the window last resolved in, and the item under the pointer. These are
+    /// what the resolver holds that another process serves: the collection and every view
+    /// are Explorer's own, so once Explorer is not the process it was, both are proxies
+    /// into one that is gone — and a proxy into a gone process fails for good rather than
+    /// reconnecting.
     fn rebuild_shell(&mut self) {
         self.shell_windows =
             unsafe { CoCreateInstance::<_, IShellWindows>(&ShellWindows, None, CLSCTX_ALL).ok() };
-        self.view = None;
+        self.window_views = None;
+        self.item = None;
     }
 
-    /// Drop what describes the view, because what describes the last one describes
-    /// the wrong place once the window has navigated.
-    fn forget_view(&mut self) {
-        self.view = None;
+    /// Drop a window's views, for a caller that has just seen the place they describe
+    /// change. A set is otherwise kept across a navigation — a view is the same object
+    /// afterwards and reads the folder it holds now — so this is for the change nothing
+    /// about the set can be read against, and what it costs is one walk.
+    fn forget_window_views(&mut self) {
+        self.window_views = None;
+    }
+
+    /// Drop the item under the pointer, for everything that makes it a new question: a
+    /// wheel moving the list under a parked pointer, a navigation, a click that may have
+    /// sorted the view. What is kept is an answer for the item it was read from, and none
+    /// of those leave that item where it was.
+    fn forget_item(&mut self) {
+        self.item = None;
     }
 
     /// One answer per loop tick: what a tick learned is not carried into the next
@@ -534,27 +704,28 @@ impl ItemResolver {
     fn remember_probe(&mut self, point: POINT, answer: Option<PathBuf>) {
         self.probe = Some(ProbeMemo { point, answer });
     }
-}
 
-impl AnsweredView {
-    /// Whether the cached view is still the one the window is showing. A window
-    /// that navigated is showing a different view, and what the old one knew about
-    /// its items describes the place the window has left.
-    fn is_current(&self) -> bool {
-        unsafe {
-            let browser_window = HWND(self.browser_hwnd as *mut core::ffi::c_void);
-            if !IsWindowVisible(browser_window).as_bool() || IsIconic(browser_window).as_bool() {
-                return false;
-            }
+    /// The answer the item under the pointer was read for, where the pointer is still
+    /// inside that item: the same window, and the same box within it — see `AnsweredItem`.
+    fn item_under(&self, point: POINT, drawn_in: isize) -> Option<Option<PathBuf>> {
+        self.item
+            .as_ref()
+            .filter(|answered| {
+                answered.drawn_in == drawn_in && point_in_box(point, answered.bounds)
+            })
+            .map(|answered| answered.path.clone())
+    }
 
-            match self.shell_browser.QueryActiveShellView() {
-                Ok(view) => view
-                    .cast::<IUnknown>()
-                    .map(|identity| Interface::as_raw(&identity) == self.view_identity)
-                    .unwrap_or(false),
-                Err(_) => false,
-            }
-        }
+    /// Keep what one look found, against the item it read rather than the point it read
+    /// it at. A look that found no item at all keeps nothing: what a look like that
+    /// answered for is the asking having failed, and that is a question to ask again next
+    /// tick (see `read_failure_is_the_same_item`).
+    fn remember_item(&mut self, look: &PointerLook) {
+        self.item = look.item_bounds.map(|bounds| AnsweredItem {
+            drawn_in: look.drawn_in,
+            bounds,
+            path: look.path.clone(),
+        });
     }
 }
 
@@ -866,15 +1037,19 @@ static HOOK_TRACE: Lazy<bool> = Lazy::new(|| std::env::var_os("RHP_HOOK_TRACE").
 
 /// The crossings into the shell a probe has made since the last line was written:
 /// the window collections walked, the windows those walks passed between them, the
-/// times the view that answered last was even asked, the times it answered, the item
-/// walks through the view's provider, and the points resolved.
+/// walks that ended at the window the pointer is in, the probes answered from a set of
+/// views already read, the probes whose item was answered by the one view it is drawn
+/// in, the item walks through the view's provider, the points resolved, and the looks
+/// answered from the item under the pointer without asking the shell again.
 ///
-/// The two counts in the middle are the pair that settles something this app has
-/// been argued about rather than measured. That view is only consulted while the
-/// whole desktop holds one registered Shell window, so a count of answers cannot
-/// stand on its own: nothing answered because it was never asked and nothing answered
-/// because it was asked and could not say are opposite readings of a zero, and they
-/// point at different work.
+/// The pair to read together is the walks against the sets kept: reading a window's
+/// views is one crossing into the shell per Shell window the desktop holds, and a
+/// window that holds tabs is one registration per tab — so a set read again on every
+/// probe is the cost that grows with how many tabs are open, and a set kept is what
+/// says that cost is paid once for a window rather than once for a tick. Beside them,
+/// the anchored count against the points resolved says how often the window an item is
+/// drawn in was enough to tell a frame's views apart — a window holding tabs answered
+/// by one view rather than by all of them.
 static PROBE_VIEW_WALKS: AtomicU64 = AtomicU64::new(0);
 static PROBE_VIEW_WINDOWS: AtomicU64 = AtomicU64::new(0);
 /// The walks that ended at the window the pointer is in rather than walking the
@@ -882,10 +1057,17 @@ static PROBE_VIEW_WINDOWS: AtomicU64 = AtomicU64::new(0);
 /// not something a count of windows walked can say: a walk that stopped at the third
 /// of five and a collection that holds three are the same number.
 static PROBE_VIEW_POINTER_MATCHES: AtomicU64 = AtomicU64::new(0);
-static PROBE_VIEW_CACHE_OPENED: AtomicU64 = AtomicU64::new(0);
-static PROBE_VIEW_CACHE_HITS: AtomicU64 = AtomicU64::new(0);
+/// The probes a frame's views answered without being read again, and the probes the view
+/// the item is drawn in was asked for rather than every view of the frame — see
+/// `frame_views` and `ItemWindow`.
+static PROBE_VIEW_SETS_KEPT: AtomicU64 = AtomicU64::new(0);
+static PROBE_VIEW_ANCHORED: AtomicU64 = AtomicU64::new(0);
 static PROBE_ITEM_WALKS: AtomicU64 = AtomicU64::new(0);
 static PROBE_POINTER_RESOLUTIONS: AtomicU64 = AtomicU64::new(0);
+/// The looks the item under the pointer was answered from, without the shell being
+/// asked at all: a hand moving along one row of a list is many points and one item, and
+/// this is what says how much of a sweep that answers for — see `AnsweredItem`.
+static PROBE_ITEM_MEMO_HITS: AtomicU64 = AtomicU64::new(0);
 
 /// The slowest of the view walks since the last line, in milliseconds — what a probe
 /// costs in time rather than in calls, which is the number that says whether the
@@ -935,10 +1117,11 @@ fn flush_probe_counts(now: Instant, last: &mut Instant, path: &Path) {
     let walks = PROBE_VIEW_WALKS.swap(0, Ordering::Relaxed);
     let windows = PROBE_VIEW_WINDOWS.swap(0, Ordering::Relaxed);
     let matches = PROBE_VIEW_POINTER_MATCHES.swap(0, Ordering::Relaxed);
-    let opened = PROBE_VIEW_CACHE_OPENED.swap(0, Ordering::Relaxed);
-    let hits = PROBE_VIEW_CACHE_HITS.swap(0, Ordering::Relaxed);
+    let kept = PROBE_VIEW_SETS_KEPT.swap(0, Ordering::Relaxed);
+    let anchored = PROBE_VIEW_ANCHORED.swap(0, Ordering::Relaxed);
     let items = PROBE_ITEM_WALKS.swap(0, Ordering::Relaxed);
     let points = PROBE_POINTER_RESOLUTIONS.swap(0, Ordering::Relaxed);
+    let memo = PROBE_ITEM_MEMO_HITS.swap(0, Ordering::Relaxed);
     let view_slowest = PROBE_VIEW_SLOWEST_MS.swap(0, Ordering::Relaxed);
     let item_slowest = PROBE_ITEM_SLOWEST_MS.swap(0, Ordering::Relaxed);
 
@@ -954,7 +1137,7 @@ fn flush_probe_counts(now: Instant, last: &mut Instant, path: &Path) {
         use std::io::Write;
         let _ = writeln!(
             file,
-            "points {points}  item walks {items} (slowest {item_slowest}ms)  view walks {walks} (windows {windows}, pointer matched {matches}, cache asked {opened}, answered {hits}, slowest {view_slowest}ms)"
+            "points {points}  item walks {items} (slowest {item_slowest}ms)  view walks {walks} (windows {windows}, pointer matched {matches}, slowest {view_slowest}ms)  sets kept {kept}  anchored {anchored}  item memo {memo}"
         );
     }
 }
@@ -1742,6 +1925,15 @@ fn point_in_rect(point: &POINT, rect: &RECT) -> bool {
     point.x >= rect.left && point.x < rect.right && point.y >= rect.top && point.y < rect.bottom
 }
 
+/// Whether a point is inside a box, read the way a window reads one: the right and
+/// bottom edges are outside it. It is the reading the published item box is compared
+/// with the pointer through (see `pointer_item_holds`), asked here of a box the hook is
+/// holding itself — the item one answer was read from.
+fn point_in_box(point: POINT, bounds: (i32, i32, i32, i32)) -> bool {
+    let (left, top, right, bottom) = bounds;
+    point.x >= left && point.x < right && point.y >= top && point.y < bottom
+}
+
 fn normalize_existing_path(path: PathBuf) -> Option<PathBuf> {
     if !path.exists() {
         return None;
@@ -2258,17 +2450,29 @@ fn element_item_index(
     }
 }
 
-/// The root window the pointer is over, which is the window a Shell view has to
-/// belong to for the items it draws to be the ones under the pointer.
-fn root_window_at(point: POINT) -> Option<HWND> {
+/// The window the pointer is in, which is the window an item under it is drawn in.
+///
+/// Both handles come out of the one walk: the window under the pointer, and the root it
+/// belongs to. The root is the frame whose views can be holding the item — a Shell view
+/// has to belong to the window the pointer is over for the items it draws to be the ones
+/// under it — and the window under the pointer is what says which of those views is
+/// drawing it (see `ItemWindow`).
+fn item_window_at(point: POINT) -> Option<ItemWindow> {
     unsafe {
         let window = WindowFromPoint(point);
         if window.is_invalid() {
             return None;
         }
 
-        let root = GetAncestor(window, GA_ROOT);
-        (!root.is_invalid()).then_some(root)
+        let frame = GetAncestor(window, GA_ROOT);
+        if frame.is_invalid() {
+            return None;
+        }
+
+        Some(ItemWindow {
+            frame: frame.0 as isize,
+            drawn_in: window.0 as isize,
+        })
     }
 }
 
@@ -2277,18 +2481,26 @@ fn root_window_at(point: POINT) -> Option<HWND> {
 ///
 /// A window that holds several tabs registers one Shell window per tab, and every
 /// one of them answers with the frame's own window — so the frame names a set of
-/// views rather than one, and something else has to say which of them the pointer
-/// is in. The tabs that are not showing are not skipped here: they are what the
-/// item settles, and a view skipped here could be the one holding it.
+/// views rather than one, and something else has to say which of them is showing
+/// what the item is: the window the item is drawn in (see `ItemWindow`). Nothing
+/// here skips a tab that is not showing. This walk does not ask a view anything, it
+/// collects them, and which of them answers is settled afterwards.
+///
+/// What it costs is the reason it is kept rather than made per probe: every
+/// registration is crossed into for the view it holds and for the window that view
+/// is drawn in, so a window holding tabs costs a few calls per tab — and a window
+/// that holds eight of them is not one to walk three dozen times a second. The
+/// caller that keeps the set is `frame_views`.
 fn folder_views_for_window(
     resolver: &ItemResolver,
-    root_key: isize,
+    frame: isize,
     registrations: Option<i32>,
 ) -> Vec<AnsweredView> {
     let mut candidates: Vec<AnsweredView> = Vec::new();
     let Some(shell_windows) = resolver.shell_windows.as_ref() else {
         return candidates;
     };
+    note_probe(&PROBE_VIEW_WALKS);
 
     unsafe {
         // The count the caller is already holding is the one used: asking the
@@ -2304,6 +2516,7 @@ fn folder_views_for_window(
         };
 
         for index in 0..count.min(SHELL_WINDOW_LIMIT) {
+            note_probe(&PROBE_VIEW_WINDOWS);
             let Ok(dispatch) = shell_windows.Item(&VARIANT::from(index)) else {
                 continue;
             };
@@ -2314,7 +2527,7 @@ fn folder_views_for_window(
                 continue;
             };
             let browser_window = HWND(handle.0 as *mut core::ffi::c_void);
-            if browser_window.0 as isize != root_key {
+            if browser_window.0 as isize != frame {
                 continue;
             }
             if !IsWindowVisible(browser_window).as_bool() || IsIconic(browser_window).as_bool() {
@@ -2343,14 +2556,23 @@ fn folder_views_for_window(
             {
                 continue;
             }
+
+            // The window the view is drawn in, which is what says which of a frame's
+            // views an item is drawn by. A view that will not name one is kept with no
+            // window rather than dropped: it can still answer the item question, which
+            // is all this walk asked it for before the window was read.
+            let view_hwnd = shell_view
+                .GetWindow()
+                .map(|hwnd| hwnd.0 as isize)
+                .unwrap_or_default();
+
             let Ok(folder_view) = shell_view.cast::<IFolderView2>() else {
                 continue;
             };
 
             candidates.push(AnsweredView {
-                browser_hwnd: root_key,
-                shell_browser,
                 view_identity,
+                view_hwnd,
                 folder_view,
             });
         }
@@ -2369,29 +2591,90 @@ fn shell_window_count(resolver: &ItemResolver) -> Option<i32> {
     unsafe { resolver.shell_windows.as_ref()?.Count().ok() }
 }
 
-/// The file an item stands for, asked of the view that is showing it.
+/// The views a window holds, from the set kept for it where that set still describes
+/// the window, and read from the Shell window collection where it does not.
 ///
-/// The view belongs to a window — the frame the pointer is over, or the one the
-/// focused item is drawn in — and a window that holds tabs registers one Shell
-/// window per tab, all of them answering with the frame's own window, so the frame
-/// names a set of views and not one. Which of them it is, is settled in two steps
-/// that must not be confused with each other.
+/// Keeping the set is what turns this path's cost from one paid per probe into one paid
+/// per window: reading it is a crossing into the shell for every Shell window the
+/// desktop holds — a few of them each, and one more for every tab a window is holding —
+/// while asking one of the views it holds for an item is a call or two. What is read
+/// again is read again for one of two reasons, and they are the only two that can leave
+/// the set describing a window that is no longer there: the window the set was read for
+/// is gone, hidden or minimized, or the desktop holds a different number of Shell
+/// windows than it did — which is the one cheap number that moves when a tab or a window
+/// is opened or closed, and the only thing that ever adds a view to a window or takes
+/// one away. Everything else a view does leaves the set alone: navigating is the same
+/// view holding another folder, and which of a frame's views is showing what the item
+/// is, is a question about the window the item is drawn in rather than about the set
+/// (see `ItemWindow`).
+fn frame_views(
+    resolver: &mut ItemResolver,
+    frame: isize,
+    registrations: Option<i32>,
+) -> &[AnsweredView] {
+    let kept = resolver.window_views.as_ref().is_some_and(|set| {
+        set.frame == frame
+            && registrations.is_none_or(|count| count == set.registrations)
+            && set.is_live()
+    });
+
+    if kept {
+        note_probe(&PROBE_VIEW_SETS_KEPT);
+    } else {
+        // Timed at the walk rather than around the probe: what the shell is being held
+        // for is this, and an answer already in hand costs nothing worth timing.
+        let started = Instant::now();
+        let views = folder_views_for_window(resolver, frame, registrations);
+        note_probe_ms(&PROBE_VIEW_SLOWEST_MS, started.elapsed());
+
+        resolver.window_views = Some(WindowViews {
+            frame,
+            // A collection that will not say how many windows it holds leaves the number
+            // of views it produced, which the next probe's count will disagree with — the
+            // set is read again then, which is what a count that could not be read is
+            // worth.
+            registrations: registrations.unwrap_or(views.len() as i32),
+            views,
+        });
+    }
+
+    match resolver.window_views.as_ref() {
+        Some(set) => set.views.as_slice(),
+        None => &[],
+    }
+}
+
+/// The file an item stands for, asked of the view that is drawing it.
 ///
-/// First the item: a candidate view is asked whether the item at that position is
-/// the item we are on, by name and nothing else. That is an identity question, and
-/// a folder answers it exactly as a file does — what the item *is* says nothing
-/// about which view holds it. Then, and only for the views that claimed the item,
-/// the file: the path the Shell hands over, gated to a file this app previews. A
-/// view that holds the item but has no file to show it (a folder, an archive, a
-/// document) is a *match* with nothing to preview, not a view that failed to match
-/// — treating it as the latter is how another tab's file gets shown while a folder
-/// is hovered. What several matches do has to agree: two tabs showing the same
-/// folder are one answer, while tabs that disagree — about the file, or about
-/// whether there is one at all — are a question the item cannot settle, and no
-/// answer is better than the wrong tab's file.
+/// The view belongs to a window — the frame the pointer is over, or the one the focused
+/// item is drawn in — and a window that holds tabs registers one Shell window per tab,
+/// all of them answering with the frame's own window, so the frame names a set of views
+/// and not one. Which of them it is, is settled in two steps that must not be confused
+/// with each other.
+///
+/// First the view: the window the item is drawn in is a window of exactly one of the
+/// frame's views — the tab that is showing — and that view, and nothing else, is asked
+/// (see `ItemWindow`). A view answers about its own folder's items whether it is showing
+/// or not, so a tab the item is not in is one whose answer is about something else: it
+/// is not asked, and its agreement is not waited for. What that leaves is a pointer in
+/// none of them — over the navigation pane, the toolbar, the details pane, none of which
+/// belongs to a tab — and there the views are told apart the way all of them were before
+/// the item's own window was read: each is asked, and what they answer has to agree.
+///
+/// Then the item: a candidate view is asked whether the item at that position is the
+/// item we are on, by name and nothing else. That is an identity question, and a folder
+/// answers it exactly as a file does — what the item *is* says nothing about which view
+/// holds it. Then, and only for the views that claimed the item, the file: the path the
+/// Shell hands over, gated to a file this app previews. A view that holds the item but
+/// has no file to show it (a folder, an archive, a document) is a *match* with nothing
+/// to preview, not a view that failed to match — treating it as the latter is how
+/// another tab's file gets shown while a folder is hovered. What several matches do has
+/// to agree: two tabs showing the same folder are one answer, while tabs that disagree —
+/// about the file, or about whether there is one at all — are a question the item cannot
+/// settle, and no answer is better than the wrong tab's file.
 fn item_file_path(
     resolver: &mut ItemResolver,
-    root_key: isize,
+    window: &ItemWindow,
     item: &HoveredItem,
 ) -> Option<PathBuf> {
     let index = item.index? - 1;
@@ -2403,45 +2686,60 @@ fn item_file_path(
         return None;
     }
 
-    // The view that answered last is asked first, but only while it is the *only*
-    // registration for the window: with one view there is no second one for it to
-    // disagree with, and a window holding tabs is never answered from the cache —
-    // a cached tab is one of several, and the cache cannot say which of them is
-    // showing.
-    if registrations == Some(1) {
-        note_probe(&PROBE_VIEW_CACHE_OPENED);
-        if let Some(answered) = resolver.view.as_ref() {
-            if answered.browser_hwnd == root_key && answered.is_current() {
-                if let Some(path) = view_item_media_path(&answered.folder_view, index) {
-                    note_probe(&PROBE_VIEW_CACHE_HITS);
-                    return Some(path);
+    // The view the item is drawn in answers alone. A view that cannot be asked is read
+    // again, once: a view whose calls fail is what a set that may be describing a window
+    // that has moved on looks like, and what the re-read costs is one walk of a
+    // collection this is holding for exactly that reason.
+    for attempt in 0..2 {
+        let asked = {
+            let views = frame_views(resolver, window.frame, registrations);
+            match window.view_holding(views) {
+                Some(position) => {
+                    note_probe(&PROBE_VIEW_ANCHORED);
+                    view_item(&views[position].folder_view, index, &item.name)
                 }
+                None => break,
             }
+        };
+
+        match asked {
+            ViewItem::File(path) => return Some(path),
+            // Whatever that view answered is the answer: the item the pointer is on is
+            // not at the position the accessibility tree reported, or it is an item with
+            // no file to preview. Neither is a reason to ask a tab the pointer is not in.
+            ViewItem::NotHeld | ViewItem::NoFile => return None,
+            ViewItem::Unaskable if attempt == 1 => return None,
+            ViewItem::Unaskable => resolver.forget_window_views(),
         }
     }
 
     let mut matches = 0usize;
     let mut matched_without_file = 0usize;
-    let mut answer: Option<(AnsweredView, PathBuf)> = None;
+    let mut answer: Option<PathBuf> = None;
     let mut disagreed = false;
 
-    for candidate in folder_views_for_window(resolver, root_key, registrations) {
-        if !view_item_holds(&candidate.folder_view, index, &item.name) {
-            continue;
-        }
-        matches += 1;
-
-        let Some(path) = view_item_media_path(&candidate.folder_view, index) else {
-            // This view holds the item, and the item is not a file to preview.
-            matched_without_file += 1;
-            continue;
-        };
-
-        match &answer {
-            None => answer = Some((candidate, path)),
-            Some((_, existing)) if !same_path(existing, &path) => disagreed = true,
-            // Another tab showing the same folder is the same answer.
-            Some(_) => {}
+    {
+        let views = frame_views(resolver, window.frame, registrations);
+        for candidate in views {
+            match view_item(&candidate.folder_view, index, &item.name) {
+                // A view that could not be asked answered nothing, which is how it was
+                // counted before the views could be told apart: another view may still
+                // answer, and if none does the item is not one of theirs.
+                ViewItem::Unaskable | ViewItem::NotHeld => continue,
+                ViewItem::NoFile => {
+                    matches += 1;
+                    matched_without_file += 1;
+                }
+                ViewItem::File(path) => {
+                    matches += 1;
+                    match &answer {
+                        None => answer = Some(path),
+                        Some(existing) if !same_path(existing, &path) => disagreed = true,
+                        // Another tab showing the same folder is the same answer.
+                        Some(_) => {}
+                    }
+                }
+            }
         }
     }
 
@@ -2459,9 +2757,7 @@ fn item_file_path(
         return None;
     }
 
-    let (view, path) = answer?;
-    resolver.view = Some(view);
-    Some(path)
+    answer
 }
 
 /// The file system path the Shell holds for an item — the path the item *is*,
@@ -2497,52 +2793,56 @@ fn item_display_name_matches(item: &IShellItem, expected_name: &str) -> bool {
     }
 }
 
-/// Whether the item at a position in a view is the item that was asked about.
+/// What a view answers about the item at a position: whether it holds it, and what the
+/// item is if it does.
 ///
-/// This is the identity question and nothing else: the name the view shows the item
-/// under against the name the accessibility tree reports for it. What the item *is*
-/// is not part of it — a folder goes by its name exactly as a file does, and a view
-/// that holds a folder has to be seen as holding the item, or the tab that owns it
-/// abstains and another tab's file answers in its place. An item with no name to ask
-/// about is taken as held, which the caller has already established can only be
-/// asked of a window showing one view.
-fn view_item_holds(folder_view: &IFolderView2, index: i32, expected_name: &str) -> bool {
-    if index < 0 || expected_name.is_empty() {
-        return true;
+/// The identity question comes first and is nothing else: the name the view shows the
+/// item under against the name the accessibility tree reports for it. What the item *is*
+/// is not part of it — a folder goes by its name exactly as a file does, and a view that
+/// holds a folder has to be seen as holding the item, or the tab that owns it abstains
+/// and another tab's file answers in its place. An item with no name to ask about is
+/// taken as held, which the caller has already established can only be asked of a window
+/// showing one view.
+///
+/// Then the file, and only for the views that claimed the item: the path the Shell holds
+/// for the item at that position (`SIGDN_FILESYSPATH`, which for a search result is the
+/// real file wherever it lives), gated to a file this app previews. A folder reaches
+/// this point and stops here — held, with nothing to preview — which is what keeps the
+/// preview of a folder from being another tab's file.
+///
+/// Both answers are read off one item object, which is the whole of why the two
+/// questions are one function: the item at a position is what each of them is about, and
+/// fetching it twice was a crossing into the shell paid twice for every view asked.
+fn view_item(folder_view: &IFolderView2, index: i32, expected_name: &str) -> ViewItem {
+    // A position that is not one is the answer the caller has already established it can
+    // be given: an item with no name is only asked about of a window showing one view,
+    // and what such a view is asked for is the file at that position.
+    if index < 0 {
+        return ViewItem::NoFile;
     }
 
     unsafe {
-        let Ok(item) = folder_view.GetItem::<IShellItem>(index) else {
-            return false;
+        let item = match folder_view.GetItem::<IShellItem>(index) {
+            Ok(item) => item,
+            Err(_) => return ViewItem::Unaskable,
         };
 
-        item_display_name_matches(&item, expected_name)
+        if !expected_name.is_empty() && !item_display_name_matches(&item, expected_name) {
+            return ViewItem::NotHeld;
+        }
+
+        match shell_item_filesystem_path(&item)
+            .and_then(normalize_media_path)
+            .filter(|path| path.is_file())
+        {
+            Some(path) => ViewItem::File(path),
+            None => ViewItem::NoFile,
+        }
     }
 }
 
-/// The path a view's item at a position stands for, when it is a file this app
-/// previews.
-///
-/// The path is the Shell's own answer for the item at that position
-/// (`SIGDN_FILESYSPATH`) — for a search result, the real file wherever it lives,
-/// and for a folder or an item that stands for no file at all, no answer. It is the
-/// *second* question, asked only of the views that first claimed the item: a folder
-/// reaches this point and stops here, which is what keeps the preview of a folder
-/// from being another tab's file.
-fn view_item_media_path(folder_view: &IFolderView2, index: i32) -> Option<PathBuf> {
-    if index < 0 {
-        return None;
-    }
-
-    unsafe {
-        let item = folder_view.GetItem::<IShellItem>(index).ok()?;
-        let path = shell_item_filesystem_path(&item)?;
-
-        normalize_media_path(path).filter(|path| path.is_file())
-    }
-}
-
-/// The file the pointer is over, resolved once per point.
+/// The file the pointer is over, resolved once per point and kept while the pointer
+/// stays inside the item it was read from.
 ///
 /// The pointer asks one question — what is under me — and the view under it
 /// answers by identity: the item the accessibility provider says the point is
@@ -2552,6 +2852,14 @@ fn view_item_media_path(folder_view: &IFolderView2, index: i32) -> Option<PathBu
 /// is the one thing the view does not need. What follows the identity route is the
 /// same answer asked of the item itself: the accessible value it carries, when
 /// that value is a whole path.
+///
+/// What the answer is kept against is the item rather than the point, and that is what a
+/// hand sweeping a list is answered from: a `Details` row is as wide as the view, so a
+/// pointer moving along one is a new point on every tick and the same item on every one
+/// of them, and a file it has already been answered for is not asked about again while
+/// the pointer stays in the item — and in the window — that answer was read in. Everything
+/// that makes the item under a parked pointer a new question drops the answer with it
+/// (`forget_item`).
 fn get_file_under_cursor(resolver: &mut ItemResolver) -> Option<PathBuf> {
     let mut point = POINT::default();
     if unsafe { GetCursorPos(&mut point) }.is_err() {
@@ -2566,9 +2874,26 @@ fn get_file_under_cursor(resolver: &mut ItemResolver) -> Option<PathBuf> {
         return answer;
     }
 
-    let answer = resolve_file_under_cursor(resolver, point);
-    resolver.remember_probe(point, answer.clone());
-    answer
+    // The window the pointer is in is read before the answer is, because it is half of
+    // what that answer is kept against: a tab switched under a parked pointer is another
+    // view drawing another folder at the same place, and the box alone cannot say the
+    // item under the pointer is the one this answer was read from.
+    let window = item_window_at(point);
+    let drawn_in = window
+        .as_ref()
+        .map(|window| window.drawn_in)
+        .unwrap_or_default();
+
+    if let Some(answer) = resolver.item_under(point, drawn_in) {
+        note_probe(&PROBE_ITEM_MEMO_HITS);
+        return answer;
+    }
+
+    let look = resolve_file_under_cursor(resolver, point, window.as_ref());
+    resolver.remember_probe(point, look.path.clone());
+    resolver.remember_item(&look);
+
+    look.path
 }
 
 /// The file the pointer is over.
@@ -2578,9 +2903,27 @@ fn get_file_under_cursor(resolver: &mut ItemResolver) -> Option<PathBuf> {
 /// value is a whole path. Nothing is looked up by name, nothing is walked, and a
 /// name that nothing can vouch for is left unanswered rather than guessed at — a
 /// search across folders is full of names that belong to more than one file.
-fn resolve_file_under_cursor(resolver: &mut ItemResolver, point: POINT) -> Option<PathBuf> {
+///
+/// What it answers with is the file *and* the item it was read from, because the two
+/// leave together: the window and the box are what the pointer stays inside for the file
+/// to still be the one under it (see `AnsweredItem`), and a look that found no item at all
+/// answers for neither. The window is handed in rather than read here, because the caller
+/// reads it before the answer it is holding is asked about.
+fn resolve_file_under_cursor(
+    resolver: &mut ItemResolver,
+    point: POINT,
+    window: Option<&ItemWindow>,
+) -> PointerLook {
+    let drawn_in = window.map(|window| window.drawn_in).unwrap_or_default();
+
     note_probe(&PROBE_POINTER_RESOLUTIONS);
-    let item = uia_item_from_point(resolver, point, false)?;
+    let Some(item) = uia_item_from_point(resolver, point, false) else {
+        return PointerLook {
+            path: None,
+            item_bounds: None,
+            drawn_in,
+        };
+    };
 
     // The item the pointer is on, as the box the view draws it in, published for the
     // preview thread to hold a reveal to and for this loop to read a move off: a
@@ -2595,41 +2938,38 @@ fn resolve_file_under_cursor(resolver: &mut ItemResolver, point: POINT) -> Optio
     // (see `view_bounds`), so a pointer over the toolbar above a clipped item, or off the
     // window below one, is outside it and has left the item — where the box the provider
     // drew carries on saying it has not.
-    publish_pointer_item_box((
+    let bounds = (
         item.bounds.left,
         item.bounds.top,
         item.bounds.right,
         item.bounds.bottom,
-    ));
+    );
+    publish_pointer_item_box(bounds);
 
-    if let Some(root_key) = root_window_at(point).map(|window| window.0 as isize) {
-        if let Some(path) = item_file_path(resolver, root_key, &item) {
-            // The view is asked twice: a wheel turns the list under a parked
-            // pointer, and an item that is no longer at the point the first answer
-            // described is not what that answer is about.
-            if uia_item_from_point(resolver, point, false)
+    // The view is asked twice: a wheel turns the list under a parked pointer, and an
+    // item that is no longer at the point the first answer described is not what that
+    // answer is about. The second look is made only where there is an answer to confirm:
+    // what a view could not answer for is not a file this loop has to take back.
+    let path = window
+        .and_then(|window| item_file_path(resolver, window, &item))
+        .filter(|_| {
+            uia_item_from_point(resolver, point, false)
                 .map(|again| again.same_item(&item))
                 .unwrap_or(false)
-            {
-                return Some(path);
-            }
-        }
-    }
+        });
 
     // What the item says about itself: a search result carries the file's own path
     // in its accessible value, and a name that is a whole path was come by the same
     // way.
-    if let Some(value) = item.value.as_deref() {
-        if let Some(path) = resolve_media_path_from_text(value) {
-            return Some(path);
-        }
-    }
+    let path = path
+        .or_else(|| item.value.as_deref().and_then(resolve_media_path_from_text))
+        .or_else(|| resolve_media_path_from_text(&item.name));
 
-    if let Some(path) = resolve_media_path_from_text(&item.name) {
-        return Some(path);
+    PointerLook {
+        path,
+        item_bounds: Some(bounds),
+        drawn_in,
     }
-
-    None
 }
 
 /// The region a preview of the file under the pointer is kept off, as the `Avoid`
@@ -3328,6 +3668,23 @@ struct FocusedItemInfo {
     root_window: Option<isize>,
 }
 
+impl FocusedItemInfo {
+    /// The window the item is resolved in, as the item path asks for one: the frame whose
+    /// views can hold it, and the window the item's own provider says it is drawn in —
+    /// which is what says which of that frame's views drew it (see `ItemWindow`).
+    ///
+    /// The keyboard has no pointer to take a window from, so where the provider reports
+    /// none — the shell's item provider often does not — the frame's views are told apart
+    /// by what they answer, which is how the keyboard path resolved its item before the
+    /// window the item is drawn in was read at all.
+    fn item_window(&self) -> Option<ItemWindow> {
+        Some(ItemWindow {
+            frame: self.root_window?,
+            drawn_in: self.item.native_window,
+        })
+    }
+}
+
 /// What tells one keyboard focus observation from the next.
 ///
 /// The name alone does not. A search whose results come from several folders can
@@ -3458,8 +3815,8 @@ fn resolve_focused_item_to_path(
     resolver: &mut ItemResolver,
     focused: &FocusedItemInfo,
 ) -> Option<PathBuf> {
-    if let Some(root_key) = focused.root_window {
-        if let Some(path) = item_file_path(resolver, root_key, &focused.item) {
+    if let Some(window) = focused.item_window() {
+        if let Some(path) = item_file_path(resolver, &window, &focused.item) {
             return Some(path);
         }
     }
@@ -3745,7 +4102,11 @@ pub fn run_explorer_hook() {
                 if display_signature_changed(last_display_signature.as_ref(), &display_signature) {
                     last_display_signature = Some(display_signature);
                     clear_shell_view_probe_caches();
-                    resolver.forget_view();
+                    resolver.forget_window_views();
+                    // The boxes an item was read from are the ones the display that has
+                    // gone drew it in, so the item under the pointer is a question of its
+                    // own now rather than an answer to be kept.
+                    resolver.forget_item();
                     hide_preview();
                     last_file = None;
                     keyboard_file = None;
@@ -4023,8 +4384,10 @@ pub fn run_explorer_hook() {
                 // The list moves under a parked cursor, so the file under the pointer
                 // is a new question: the probe latch is reopened and the hover clock
                 // restarted, or a pointer that never moves would never be asked about
-                // the file that scrolled under it.
+                // the file that scrolled under it. The item an answer was read from goes
+                // with it: the pointer has not moved, and what it is on has.
                 stationary_hover_probe_done = false;
+                resolver.forget_item();
                 hover_start = Some(loop_now);
 
                 if keyboard_owns_pointer {
@@ -4071,6 +4434,10 @@ pub fn run_explorer_hook() {
             }
             if mouse_button_press || activation_key_press || keyboard_navigation_press {
                 last_navigation_trigger_at = Some(loop_now);
+                // A press is the list being acted on, and what a press can do to a view is
+                // move what is under a parked pointer: a click on a column header sorts
+                // it. The item an answer was read from is dropped with it.
+                resolver.forget_item();
             }
 
             if explorer_navigation_shortcut_input || mouse_navigation_input {
@@ -4083,6 +4450,7 @@ pub fn run_explorer_hook() {
                 suppressed.clear();
                 pointer_pause.clear();
                 stationary_search_miss_started_at = None;
+                resolver.forget_item();
                 hover_start = None;
                 last_focused_key = None;
                 video_hover_guard_until = None;
@@ -4237,7 +4605,8 @@ pub fn run_explorer_hook() {
                     // already holds was read against the view that has been left, so
                     // it goes with them rather than deciding anything below.
                     clear_shell_view_probe_caches();
-                    resolver.forget_view();
+                    resolver.forget_window_views();
+                    resolver.forget_item();
                     resolver.forget_probe();
                     hover_start = None;
                     last_focused_key = None;
@@ -5384,8 +5753,9 @@ mod tests {
         PROBE_VIEW_WALKS.fetch_add(2, Ordering::Relaxed);
         PROBE_VIEW_WINDOWS.fetch_add(7, Ordering::Relaxed);
         PROBE_VIEW_POINTER_MATCHES.fetch_add(5, Ordering::Relaxed);
-        PROBE_VIEW_CACHE_OPENED.fetch_add(4, Ordering::Relaxed);
-        PROBE_VIEW_CACHE_HITS.fetch_add(3, Ordering::Relaxed);
+        PROBE_VIEW_SETS_KEPT.fetch_add(4, Ordering::Relaxed);
+        PROBE_VIEW_ANCHORED.fetch_add(3, Ordering::Relaxed);
+        PROBE_ITEM_MEMO_HITS.fetch_add(6, Ordering::Relaxed);
         PROBE_POINTER_RESOLUTIONS.fetch_add(1, Ordering::Relaxed);
         note_probe_ms(&PROBE_VIEW_SLOWEST_MS, Duration::from_millis(9));
         note_probe_ms(&PROBE_ITEM_SLOWEST_MS, Duration::from_millis(11));
@@ -5415,8 +5785,9 @@ mod tests {
             written(&first, "pointer matched ") >= 5,
             "pointer matches: {first}"
         );
-        assert!(written(&first, "cache asked ") >= 4, "asked: {first}");
-        assert!(written(&first, "answered ") >= 3, "answered: {first}");
+        assert!(written(&first, "sets kept ") >= 4, "sets kept: {first}");
+        assert!(written(&first, "anchored ") >= 3, "anchored: {first}");
+        assert!(written(&first, "item memo ") >= 6, "item memo: {first}");
         // Two slowest figures, and the first of them belongs to the item walks: read
         // by name so that one field being added cannot shift another's number into
         // its place.
