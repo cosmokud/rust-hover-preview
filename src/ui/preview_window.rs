@@ -5,10 +5,11 @@ use crate::config::config::{
     PreviewScale, PreviewType, TextTheme, TransparentBackground, DEFAULT_ANIMATED_SCALE_PERCENT,
     DEFAULT_AUDIO_SEEK, DEFAULT_DDS_BACKGROUND, DEFAULT_DESIGN_BACKGROUND, DEFAULT_DESIGN_SCALE,
     DEFAULT_DOCUMENT_SCALE, DEFAULT_EBOOK_SCALE, DEFAULT_FONT_BACKGROUND, DEFAULT_FONT_SCALE,
-    DEFAULT_IMAGE_BACKGROUND, DEFAULT_IMAGE_CACHE_MB, DEFAULT_NORMALIZE_VOLUME,
-    DEFAULT_PREVIEW_SCALE_PERCENT, DEFAULT_SPINNER_DELAY_MS, DEFAULT_TEXT_FONT_SCALE_PERCENT,
-    DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS, DEFAULT_VECTOR_BACKGROUND, DEFAULT_VECTOR_SCALE,
-    DEFAULT_VIDEO_SCALE_PERCENT, DEFAULT_WEBP_PLAYBACK_FPS,
+    DEFAULT_IMAGE_BACKGROUND, DEFAULT_IMAGE_CACHE_MB, DEFAULT_NORMALIZE_VIDEO_VOLUME,
+    DEFAULT_NORMALIZE_VOLUME, DEFAULT_PREVIEW_SCALE_PERCENT, DEFAULT_SPINNER_DELAY_MS,
+    DEFAULT_TEXT_FONT_SCALE_PERCENT, DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS,
+    DEFAULT_VECTOR_BACKGROUND, DEFAULT_VECTOR_SCALE, DEFAULT_VIDEO_SCALE_PERCENT,
+    DEFAULT_WEBP_PLAYBACK_FPS,
 };
 use crate::engines::calibre_render;
 use crate::engines::imagemagick_render;
@@ -5161,6 +5162,13 @@ fn probe_video_geometry(path: &PathBuf) -> ProbedGeometry {
 
         return ProbedGeometry::Unmeasurable;
     };
+
+    // The film's soundtrack is measured beside its geometry where `Normalize` is on for videos,
+    // which is the same arrangement the sound probe's own peak is measured under: one read of the
+    // file, on the thread the hover is waiting on, held for every hover after this one (see
+    // `measure_video_gain`).
+    measure_video_gain(path);
+
     let crop = best_valid_crop(candidates, src_w, src_h);
 
     let geometry = if let Some(crop) = crop {
@@ -5433,7 +5441,8 @@ fn set_noactivate_for_process(pid: u32) {
     wake_noactivate_monitor();
 }
 
-/// Start ffplay for video preview with configurable volume
+/// Start ffplay for video preview, at the level `Volume → Video` names and with the film's own peak
+/// folded into it where `Normalize` is on for videos (see `normalizing_video`).
 fn start_video_playback(path: &PathBuf, x: i32, y: i32, width: i32, height: i32) -> Option<Child> {
     // Get volume setting from config (0-100)
     let volume = CONFIG.lock().map(|c| c.video_volume).unwrap_or(0);
@@ -5445,8 +5454,29 @@ fn start_video_playback(path: &PathBuf, x: i32, y: i32, width: i32, height: i32)
     if volume == 0 {
         cmd.arg("-an");
     } else {
+        // The level, with the soundtrack's own peak folded into it where `Normalize` is on for
+        // videos and one has been measured: the two multiply, exactly as they do for a sound file
+        // (see `start_audio_player`). A film nothing has measured is played as the file holds it,
+        // and what measures it is a read on a thread of its own — the hover after this one is the
+        // one that hears it (see `spawn_gain_scan`).
+        let gain = if normalizing_video() {
+            match audio_track::gain(path) {
+                Some(gain) if gain != 1.0 => Some(gain),
+                Some(_) => None,
+                None => {
+                    spawn_gain_scan(path);
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         // Convert percentage to ffplay volume filter (0-100 maps to 0.0-1.0)
-        let volume_filter = format!("volume={:.2}", volume as f64 / 100.0);
+        let volume_filter = match gain {
+            Some(gain) => format!("volume={:.4}", volume as f64 / 100.0 * gain),
+            None => format!("volume={:.2}", volume as f64 / 100.0),
+        };
         cmd.args(["-af", &volume_filter]);
     }
 
@@ -6510,6 +6540,22 @@ fn normalizing_audio() -> bool {
         .map(|config| config.normalize_volume)
         .unwrap_or(DEFAULT_NORMALIZE_VOLUME);
 
+    normalize_available_for(wanted)
+}
+
+/// The same question for a video's soundtrack, which is a setting of its own and off where the app
+/// starts (see `normalize_video_volume`).
+fn normalizing_video() -> bool {
+    let wanted = CONFIG
+        .lock()
+        .map(|config| config.normalize_video_volume)
+        .unwrap_or(DEFAULT_NORMALIZE_VIDEO_VOLUME);
+
+    normalize_available_for(wanted)
+}
+
+/// Whether a peak may be measured and applied at all, for whichever kind asked for it.
+fn normalize_available_for(wanted: bool) -> bool {
     wanted && codecs::normalize_available()
 }
 
@@ -6545,7 +6591,20 @@ fn end_gain_scan(path: &Path) {
 /// thread that asked — which is a thread a hover is waiting on and never the tick (see
 /// `probe_audio_track`).
 fn measure_audio_gain(path: &Path) {
-    if !normalizing_audio() || audio_track::gain(path).is_some() {
+    measure_gain(path, normalizing_audio());
+}
+
+/// The same measurement for a video's soundtrack, where `Normalize` is on for videos: the audio of
+/// a film is asked for here as well, beside the geometry probe, because it is the same read of the
+/// same file on the same thread a hover is already waiting on (see `probe_video_geometry`).
+fn measure_video_gain(path: &Path) {
+    measure_gain(path, normalizing_video());
+}
+
+/// The measurement itself, for whichever kind asked for it: one read per file, held whether or not
+/// it answered (see `finish_gain_scan`).
+fn measure_gain(path: &Path, wanted: bool) {
+    if !wanted || audio_track::gain(path).is_some() {
         return;
     }
 
