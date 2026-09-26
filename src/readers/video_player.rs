@@ -1,6 +1,11 @@
-//! The media engine Windows has, for a video preview on a machine without FFmpeg.
+//! The media engine Windows has, for the previews it plays.
 //!
-//! A video is played by `ffplay` when FFmpeg is installed, and by this when it is not.
+//! A video is played by `ffplay` when FFmpeg is installed, and by this when it is not; a sound
+//! is played by this where its own decoders reach the format, and by that player where they do
+//! not — the other way round, and deliberately: what the engine gives a sound is a player
+//! inside this app's own process, with no window, no process to supervise and a position the
+//! card can be drawn from (see `audio_track` and `audio_preview`).
+//!
 //! The two are the same preview to the rest of the app — the same window, the same
 //! placement, the same box — because what comes out of here is frames, drawn where every
 //! other frame is drawn, rather than a player's window standing in for the preview. That
@@ -19,14 +24,22 @@
 //! The engine is what decides which files it can play: whatever Windows 11 decodes out of
 //! the box, plus whatever a codec extension from the Microsoft Store has added — which is
 //! the question the tray's `Codecs` submenu answers for the machine it is running on.
+//!
+//! The three questions asked of the engine from outside are all answered here. [`dimensions`]
+//! is a video's shape, asked of a source reader before there is anything to play. [`audio_track`]
+//! is whether this machine has a decoder for a sound and what the file says about it, asked the
+//! same way — the reader is asked for *decoded* PCM, which it can only give where the decoder is
+//! registered, and the media type the file declares is read for the rest. And [`position`] and
+//! [`duration`] are what the running session says about itself, for the card's clock.
 
 use crate::formats::codecs;
+use crate::readers::audio_track;
 use std::cell::RefCell;
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use windows::core::{implement, IUnknown, Interface, BSTR, PCWSTR};
+use windows::core::{implement, GUID, IUnknown, Interface, BSTR, PCWSTR};
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Imaging::{
     GUID_WICPixelFormat32bppBGRA, IWICBitmap, WICBitmapCacheOnLoad, WICBitmapLockWrite,
@@ -34,10 +47,16 @@ use windows::Win32::Graphics::Imaging::{
 use windows::Win32::Media::MediaFoundation::{
     CLSID_MFMediaEngineClassFactory, IMFAttributes, IMFByteStream, IMFMediaEngine,
     IMFMediaEngineClassFactory, IMFMediaEngineEx, IMFMediaEngineNotify, IMFMediaEngineNotify_Impl,
-    MFCreateAttributes, MFCreateMFByteStreamOnStream, MFCreateSourceReaderFromByteStream,
-    MFVideoFormat_ARGB32, MFARGB, MF_BYTESTREAM_ORIGIN_NAME, MF_MEDIA_ENGINE_CALLBACK,
-    MF_MEDIA_ENGINE_EVENT_ERROR, MF_MEDIA_ENGINE_READY_HAVE_CURRENT_DATA,
-    MF_MEDIA_ENGINE_VIDEO_OUTPUT_FORMAT, MF_MT_FRAME_SIZE, MF_MT_PIXEL_ASPECT_RATIO,
+    MFAudioFormat_AAC, MFAudioFormat_ADTS, MFAudioFormat_ALAC, MFAudioFormat_AMR_NB,
+    MFAudioFormat_AMR_WB, MFAudioFormat_DTS, MFAudioFormat_Dolby_AC3, MFAudioFormat_Dolby_DDPlus,
+    MFAudioFormat_FLAC, MFAudioFormat_Float, MFAudioFormat_MP3, MFAudioFormat_Opus,
+    MFAudioFormat_PCM, MFAudioFormat_Vorbis, MFAudioFormat_WMAudioV8, MFAudioFormat_WMAudioV9,
+    MFAudioFormat_WMAudio_Lossless, MFCreateAttributes, MFCreateMFByteStreamOnStream,
+    MFCreateMediaType, MFCreateSourceReaderFromByteStream, MFMediaType_Audio, MFVideoFormat_ARGB32,
+    MFARGB, MF_BYTESTREAM_ORIGIN_NAME, MF_MEDIA_ENGINE_CALLBACK, MF_MEDIA_ENGINE_EVENT_ERROR,
+    MF_MEDIA_ENGINE_READY_HAVE_CURRENT_DATA, MF_MEDIA_ENGINE_VIDEO_OUTPUT_FORMAT,
+    MF_MT_AUDIO_NUM_CHANNELS, MF_MT_AUDIO_SAMPLES_PER_SECOND, MF_MT_AVG_BITRATE, MF_MT_FRAME_SIZE,
+    MF_MT_MAJOR_TYPE, MF_MT_PIXEL_ASPECT_RATIO, MF_MT_SUBTYPE, MF_SOURCE_READER_FIRST_AUDIO_STREAM,
     MF_SOURCE_READER_FIRST_VIDEO_STREAM,
 };
 use windows::Win32::System::Com::{
@@ -97,7 +116,10 @@ struct Session {
     /// was handed, kept until the video is over so that nothing it is still reading from
     /// can go out of scope under it.
     byte_stream: IMFByteStream,
-    bitmap: IWICBitmap,
+    /// Where a video's frames are delivered — and nothing at all for a sound, which has no
+    /// frames to deliver and no box to draw one in. A session without a surface is the whole
+    /// of what playing a sound costs this side.
+    bitmap: Option<IWICBitmap>,
     width: u32,
     height: u32,
     path: PathBuf,
@@ -167,7 +189,25 @@ pub fn play(path: &Path, width: u32, height: u32, volume: u32) {
         return;
     }
 
-    if let Some(session) = Session::begin(path, width, height, volume) {
+    if let Some(session) = Session::begin(path, Some((width, height)), volume) {
+        SESSION.with(|slot| *slot.borrow_mut() = Some(session));
+    }
+}
+
+/// Start playing `path` as a sound at `volume` per cent: the same engine, the same file and the
+/// same loop, with no surface and nothing to draw.
+///
+/// Anything already playing is stopped first, so a sound is never two sounds. A call that could
+/// not start one leaves nothing behind rather than a session that will never make a noise:
+/// [`is_playing`] answers for that, and the card the hover shows stands alone.
+pub fn play_audio(path: &Path, volume: u32) {
+    stop();
+
+    if !codecs::mf_started() {
+        return;
+    }
+
+    if let Some(session) = Session::begin(path, None, volume) {
         SESSION.with(|slot| *slot.borrow_mut() = Some(session));
     }
 }
@@ -185,6 +225,12 @@ pub fn resize(width: u32, height: u32) {
             return;
         };
 
+        // A sound has no surface to resize, and asking one for a new one would be a video's
+        // question put to a file that has no picture.
+        if session.bitmap.is_none() {
+            return;
+        }
+
         if session.width == width && session.height == height || width == 0 || height == 0 {
             return;
         }
@@ -193,7 +239,7 @@ pub fn resize(width: u32, height: u32) {
             return;
         };
 
-        session.bitmap = bitmap;
+        session.bitmap = Some(bitmap);
         session.width = width;
         session.height = height;
     });
@@ -212,6 +258,125 @@ pub fn is_playing() -> bool {
             .as_ref()
             .is_some_and(|session| !session.failed.load(Ordering::Acquire))
     })
+}
+
+/// How far into the file the running session has played, in seconds.
+///
+/// It is the engine's own clock rather than this app's, which is what makes it the right
+/// answer for a sound: an engine that decodes, paces itself and loops is the one thing that
+/// knows where the sound is, and a card drawn from a wall clock beside it would drift from
+/// what is being heard. `None` is no session, and a position the engine will not report yet.
+pub fn position() -> Option<f64> {
+    SESSION.with(|slot| {
+        let slot = slot.borrow();
+        let session = slot.as_ref()?;
+
+        let seconds = unsafe { session.engine.GetCurrentTime() };
+
+        (seconds.is_finite() && seconds >= 0.0).then_some(seconds)
+    })
+}
+
+/// How long the file plays, in seconds, where the running session has said.
+///
+/// A duration is not known the moment a session exists — the engine reads the container's own
+/// header first — so a card drawn before it lands is a card with no whole to measure against,
+/// and the one drawn a moment later has it (see `audio_preview::Card`).
+pub fn duration() -> Option<f64> {
+    SESSION.with(|slot| {
+        let slot = slot.borrow();
+        let session = slot.as_ref()?;
+
+        let seconds = unsafe { session.engine.GetDuration() };
+
+        (seconds.is_finite() && seconds > 0.0).then_some(seconds)
+    })
+}
+
+/// Whether this machine can play `path` as a sound, and what the file says it holds.
+///
+/// It is the one question the sound list cannot answer, asked the way every other question in
+/// this app is asked — of the machine rather than of a table. The file is opened as a source
+/// reader (the header parse a hover pays for and nothing more), its own media type is read for
+/// the facts the card is drawn with, and then the reader is asked for *decoded* PCM on that
+/// stream: a source reader can only give what a registered decoder can produce, so a yes there
+/// is the whole of "this will play".
+///
+/// What comes back is a track with no duration in it: how long a file plays is the engine's
+/// answer once one is running, and the engine is not started by a probe.
+pub fn audio_probe(path: &Path) -> Option<audio_track::Track> {
+    if !codecs::mf_started() {
+        return None;
+    }
+
+    let byte_stream = open_stream(path)?;
+    let reader =
+        unsafe { MFCreateSourceReaderFromByteStream(&byte_stream, None::<&IMFAttributes>) }.ok()?;
+
+    // A file with no audio stream at all — a film, or a container of something else — is not a
+    // sound, and there is nothing to be asked about it beyond that.
+    let media_type =
+        unsafe { reader.GetNativeMediaType(MF_SOURCE_READER_FIRST_AUDIO_STREAM.0 as u32, 0) }
+            .ok()?;
+
+    let subtype = unsafe { media_type.GetGUID(&MF_MT_SUBTYPE) }.ok()?;
+    let rate = unsafe { media_type.GetUINT32(&MF_MT_AUDIO_SAMPLES_PER_SECOND) }.ok();
+    let channels = unsafe { media_type.GetUINT32(&MF_MT_AUDIO_NUM_CHANNELS) }
+        .ok()
+        .and_then(|channels| u16::try_from(channels).ok());
+    let bitrate = unsafe { media_type.GetUINT32(&MF_MT_AVG_BITRATE) }.ok();
+
+    // The decoder, asked for the only way that answers it: a stream the reader will hand back
+    // as PCM is a stream this machine has a decoder for.
+    let pcm = unsafe { MFCreateMediaType() }.ok()?;
+    unsafe { pcm.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Audio) }.ok()?;
+    unsafe { pcm.SetGUID(&MF_MT_SUBTYPE, &MFAudioFormat_PCM) }.ok()?;
+    unsafe {
+        reader.SetCurrentMediaType(MF_SOURCE_READER_FIRST_AUDIO_STREAM.0 as u32, None, &pcm)
+    }
+    .ok()?;
+
+    Some(audio_track::Track {
+        player: audio_track::Player::Native,
+        codec: codec_name(&subtype),
+        rate: rate.filter(|rate| *rate > 0),
+        channels: channels.filter(|channels| *channels > 0),
+        bitrate: bitrate.filter(|bitrate| *bitrate > 0),
+        duration: None,
+    })
+}
+
+/// What a stream's own codec is called, where this app has a name for it.
+///
+/// The engine names its formats by the GUID of the stream rather than by a word, and the words
+/// beside them are the ones a person reads on a label: what is left unnamed is a codec this
+/// app has no name for, which the card answers for with the extension the file carries (see
+/// `audio_preview::facts_of`).
+fn codec_name(subtype: &GUID) -> Option<String> {
+    const CODECS: &[(GUID, &str)] = &[
+        (MFAudioFormat_MP3, "MP3"),
+        (MFAudioFormat_AAC, "AAC"),
+        (MFAudioFormat_ADTS, "AAC"),
+        (MFAudioFormat_FLAC, "FLAC"),
+        (MFAudioFormat_ALAC, "ALAC"),
+        (MFAudioFormat_WMAudioV8, "WMA"),
+        (MFAudioFormat_WMAudioV9, "WMA"),
+        (MFAudioFormat_WMAudio_Lossless, "WMA Lossless"),
+        (MFAudioFormat_Dolby_AC3, "Dolby Digital"),
+        (MFAudioFormat_Dolby_DDPlus, "Dolby Digital Plus"),
+        (MFAudioFormat_DTS, "DTS"),
+        (MFAudioFormat_AMR_NB, "AMR"),
+        (MFAudioFormat_AMR_WB, "AMR-WB"),
+        (MFAudioFormat_Opus, "Opus"),
+        (MFAudioFormat_Vorbis, "Vorbis"),
+        (MFAudioFormat_PCM, "PCM"),
+        (MFAudioFormat_Float, "PCM"),
+    ];
+
+    CODECS
+        .iter()
+        .find(|(codec, _)| codec == subtype)
+        .map(|(_, name)| (*name).to_string())
 }
 
 /// Take the frame the engine has ready into `pixels`, answering with the size it was
@@ -246,9 +411,15 @@ pub fn stop() {
 }
 
 impl Session {
-    fn begin(path: &Path, width: u32, height: u32, volume: u32) -> Option<Self> {
+    fn begin(path: &Path, surface_size: Option<(u32, u32)>, volume: u32) -> Option<Self> {
         let byte_stream = open_stream(path)?;
-        let bitmap = surface(width, height)?;
+
+        // A video is played into a surface of its own; a sound is played into nothing, and the
+        // engine is left with no output for a picture at all.
+        let (bitmap, width, height) = match surface_size {
+            Some((width, height)) => (Some(surface(width, height)?), width, height),
+            None => (None, 0, 0),
+        };
         let failed = Arc::new(AtomicBool::new(false));
 
         let mut attributes: Option<IMFAttributes> = None;
@@ -263,9 +434,14 @@ impl Session {
 
         // Frame-server mode delivers frames in one format or another, and this is the one
         // this app composes in: `MFVideoFormat_ARGB32` is a D3D `A8R8G8B8`, which is the
-        // same bytes in the same order as the WIC bitmap below.
-        unsafe { attributes.SetGUID(&MF_MEDIA_ENGINE_VIDEO_OUTPUT_FORMAT, &MFVideoFormat_ARGB32) }
+        // same bytes in the same order as the WIC bitmap below. It is asked for where there
+        // is a surface to deliver into, and not for a sound.
+        if bitmap.is_some() {
+            unsafe {
+                attributes.SetGUID(&MF_MEDIA_ENGINE_VIDEO_OUTPUT_FORMAT, &MFVideoFormat_ARGB32)
+            }
             .ok()?;
+        }
 
         let factory: IMFMediaEngineClassFactory = unsafe {
             CoCreateInstance(&CLSID_MFMediaEngineClassFactory, None, CLSCTX_INPROC_SERVER)
@@ -313,6 +489,10 @@ impl Session {
     }
 
     fn copy_into(&mut self, pixels: &mut Vec<u8>) -> Option<(u32, u32)> {
+        // A sound has no frames to take, and the session that plays one is never asked for
+        // any: what the card beside it is drawn from is the engine's clock and not its output.
+        let bitmap = self.bitmap.as_ref()?;
+
         if self.failed.load(Ordering::Acquire) {
             return None;
         }
@@ -334,7 +514,7 @@ impl Session {
             right: self.width as i32,
             bottom: self.height as i32,
         };
-        let destination: IUnknown = self.bitmap.cast().ok()?;
+        let destination: IUnknown = bitmap.cast().ok()?;
 
         // The whole frame, drawn into the whole surface: what the engine is asked for is
         // the box the layout planned, and it scales the picture into that box and fills
@@ -345,8 +525,7 @@ impl Session {
         }
         .ok()?;
 
-        copy_locked(&self.bitmap, pixels, self.width, self.height)
-            .then_some((self.width, self.height))
+        copy_locked(bitmap, pixels, self.width, self.height).then_some((self.width, self.height))
     }
 }
 

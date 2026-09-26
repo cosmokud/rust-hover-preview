@@ -12,7 +12,7 @@ use crate::config::config::{
     DEFAULT_OFFICE_ENGINE_IDLE_SECS, DEFAULT_PREVIEW_SCALE, DEFAULT_SAME_FILE_REHOVER_DELAY_MS,
     DEFAULT_SETTLING_DELAY_MS, DEFAULT_TEXT_FONT_SCALE_PERCENT, DEFAULT_TICK_MS,
     DEFAULT_VECTOR_BACKGROUND, DEFAULT_VECTOR_SCALE, DEFAULT_VIDEO_SCALE, DEFAULT_VIDEO_VOLUME,
-    DEFAULT_WEBVIEW_IDLE_SECS,
+    DEFAULT_WEBVIEW_IDLE_SECS, DEFAULT_AUDIO_VOLUME, VOLUME_CHOICES,
 };
 use crate::config::theme_files;
 use crate::engines::document_cache;
@@ -106,12 +106,18 @@ const BACKGROUND_CHOICES: [TransparentBackground; 4] = [
 /// rather than kept as a value the menu has no item for (see `sanitize_dds_background`).
 const DDS_BACKGROUND_CHOICES: [TransparentBackground; 2] =
     [TransparentBackground::Black, TransparentBackground::White];
-const ID_TRAY_VOLUME_MAX: u16 = 1010; // 100%
-const ID_TRAY_VOLUME_HIGH: u16 = 1011; // 80%
-const ID_TRAY_VOLUME_MEDIUM: u16 = 1012; // 50%
-const ID_TRAY_VOLUME_LOW: u16 = 1013; // 25%
-const ID_TRAY_VOLUME_VERY_LOW: u16 = 1014; // 10%
-const ID_TRAY_VOLUME_MUTE: u16 = 1015; // 0%
+/// The two halves of the `Volume` submenu: one command per level it offers, in the order it
+/// lists them, the video's range first and the sound's beside it. Each half is a base plus the
+/// position a level was listed at, so one table and one builder serve both — the arrangement
+/// the `Background`, `Scale` and `Timing` submenus already have — and the two ranges are ten
+/// wide and apart from each other and from everything else, which is what keeps a level of one
+/// from being read as a level of the other.
+///
+/// They sit in the stretch between the disk-cache range and the decode budget's, which is the
+/// one gap this block had left. The six single ids they replace (1010 to 1015) are gone with
+/// them: a volume is a level of one of two lists now rather than a name of its own.
+const ID_TRAY_VIDEO_VOLUME_BASE: u16 = 1360;
+const ID_TRAY_AUDIO_VOLUME_BASE: u16 = 1370;
 const ID_TRAY_POSITION_FOLLOW: u16 = 1020; // Follow cursor
 const ID_TRAY_POSITION_BEST: u16 = 1021; // Best position
 /// The `Placement → Avoid` submenu: one command per way a preview is kept off the
@@ -258,6 +264,13 @@ const ID_TRAY_TYPE_DESIGN: u16 = 1071;
 /// kind SVG documents have always had — the id is the one this gate carried under that name
 /// — and the metafiles and encapsulated PostScript files the same kind grew to hold.
 const ID_TRAY_TYPE_VECTOR: u16 = 1069;
+/// The `Audio` gate: the sounds this app plays, which are the one kind of preview that is
+/// heard rather than looked at — and the reason `Volume` has two halves (see
+/// `ID_TRAY_AUDIO_VOLUME_BASE`).
+///
+/// Its id sits in the slack the font sizes leave rather than beside the other gates: 1072 is
+/// where the text preview's own `100%` begins, and the block of gates there is two sizes wide.
+const ID_TRAY_TYPE_AUDIO: u16 = 1098;
 /// The `Cache` submenu: one command per size it offers, in the order it lists
 /// them, for each of the three caches it sizes. They start past the range the `theme`
 /// folder's own items occupy (see `ID_TRAY_THEME_CUSTOM_BASE`).
@@ -488,12 +501,21 @@ unsafe extern "system" fn tray_window_proc(
                 {
                     set_vector_background(cmd - ID_TRAY_VECTOR_BACKGROUND_BASE)
                 }
-                ID_TRAY_VOLUME_MAX => set_volume(100),
-                ID_TRAY_VOLUME_HIGH => set_volume(80),
-                ID_TRAY_VOLUME_MEDIUM => set_volume(50),
-                ID_TRAY_VOLUME_LOW => set_volume(25),
-                ID_TRAY_VOLUME_VERY_LOW => set_volume(10),
-                ID_TRAY_VOLUME_MUTE => set_volume(0),
+                // A level of either half of the `Volume` submenu, by the position it was
+                // listed at. The two halves offer the same levels, so one table answers for
+                // both and each range is what says which setting was meant.
+                cmd if (ID_TRAY_VIDEO_VOLUME_BASE
+                    ..ID_TRAY_VIDEO_VOLUME_BASE + VOLUME_CHOICES.len() as u16)
+                    .contains(&cmd) =>
+                {
+                    set_video_volume(cmd - ID_TRAY_VIDEO_VOLUME_BASE)
+                }
+                cmd if (ID_TRAY_AUDIO_VOLUME_BASE
+                    ..ID_TRAY_AUDIO_VOLUME_BASE + VOLUME_CHOICES.len() as u16)
+                    .contains(&cmd) =>
+                {
+                    set_audio_volume(cmd - ID_TRAY_AUDIO_VOLUME_BASE)
+                }
                 ID_TRAY_POSITION_FOLLOW => set_follow_cursor(true),
                 ID_TRAY_POSITION_BEST => set_follow_cursor(false),
                 // A way of keeping a preview off the hovered item, by the position it
@@ -562,6 +584,7 @@ unsafe extern "system" fn tray_window_proc(
                 ID_TRAY_TEXT_FULL_MODE => toggle_text_preview_full_mode(),
                 ID_TRAY_TYPE_IMAGES => toggle_preview_type(PreviewType::Images),
                 ID_TRAY_TYPE_VIDEOS => toggle_preview_type(PreviewType::Videos),
+                ID_TRAY_TYPE_AUDIO => toggle_preview_type(PreviewType::Audio),
                 ID_TRAY_TYPE_TEXT => toggle_preview_type(PreviewType::Text),
                 ID_TRAY_TYPE_EBOOK => toggle_preview_type(PreviewType::Ebook),
                 ID_TRAY_TYPE_ARCHIVES => toggle_preview_type(PreviewType::Archives),
@@ -762,6 +785,7 @@ unsafe fn show_context_menu(hwnd: HWND) {
     let kinds = [
         (PreviewType::Images, ID_TRAY_TYPE_IMAGES, w!("Images")),
         (PreviewType::Videos, ID_TRAY_TYPE_VIDEOS, w!("Videos")),
+        (PreviewType::Audio, ID_TRAY_TYPE_AUDIO, w!("Audio")),
         (PreviewType::Text, ID_TRAY_TYPE_TEXT, w!("Text")),
         (PreviewType::Ebook, ID_TRAY_TYPE_EBOOK, w!("Ebook")),
         (PreviewType::Archives, ID_TRAY_TYPE_ARCHIVES, w!("Archives")),
@@ -1360,37 +1384,55 @@ unsafe fn show_context_menu(hwnd: HWND) {
         w!("Background"),
     );
 
-    // Add the Volume submenu
-    let current_volume = CONFIG
+    // Add the Volume submenu: two halves, because the two kinds of preview that make a sound
+    // are hovered for different things — a video is looked at, and its soundtrack is as likely
+    // to be a distraction as anything, while a sound file *is* the sound — so one setting for
+    // both would mean turning a film's soundtrack up to hear a song. Each half lists the same
+    // ten levels, in the same order, which is what lets one table and one builder serve them;
+    // the level each setting stands at carries the default mark (see `VOLUME_CHOICES`).
+    let (video_volume, audio_volume) = CONFIG
         .lock()
-        .map(|c| c.video_volume)
-        .unwrap_or(DEFAULT_VIDEO_VOLUME);
-    let volume_menu = CreatePopupMenu().unwrap();
+        .map(|c| (c.video_volume, c.audio_volume))
+        .unwrap_or((DEFAULT_VIDEO_VOLUME, DEFAULT_AUDIO_VOLUME));
 
-    let vol_flag = |vol: u32| {
-        MF_STRING
-            | if current_volume == vol {
-                MF_CHECKED
-            } else {
-                MF_UNCHECKED
-            }
+    let volume_menu = CreatePopupMenu().unwrap();
+    let levels_menu = |current: u32, base: u16, default: u32| -> HMENU {
+        let levels = CreatePopupMenu().unwrap();
+
+        for (index, level) in VOLUME_CHOICES.iter().enumerate() {
+            let flags = MF_STRING
+                | if current == *level {
+                    MF_CHECKED
+                } else {
+                    MF_UNCHECKED
+                };
+
+            append_labeled_item(
+                levels,
+                flags,
+                base + index as u16,
+                &default_label(&format!("{level}%"), *level == default),
+            );
+        }
+
+        levels
     };
-    // The same as the two delay menus: the volume a video starts at carries the default
-    // mark, which is the silent one.
-    let volume_item = |vol: u32, id: u16, label: &str| {
-        append_labeled_item(
-            volume_menu,
-            vol_flag(vol),
-            id,
-            &default_label(label, vol == DEFAULT_VIDEO_VOLUME),
-        );
-    };
-    volume_item(100, ID_TRAY_VOLUME_MAX, "Max (100%)");
-    volume_item(80, ID_TRAY_VOLUME_HIGH, "High (80%)");
-    volume_item(50, ID_TRAY_VOLUME_MEDIUM, "Medium (50%)");
-    volume_item(25, ID_TRAY_VOLUME_LOW, "Low (25%)");
-    volume_item(10, ID_TRAY_VOLUME_VERY_LOW, "Very Low (10%)");
-    volume_item(0, ID_TRAY_VOLUME_MUTE, "Mute (0%)");
+
+    let video_levels = levels_menu(video_volume, ID_TRAY_VIDEO_VOLUME_BASE, DEFAULT_VIDEO_VOLUME);
+    let audio_levels = levels_menu(audio_volume, ID_TRAY_AUDIO_VOLUME_BASE, DEFAULT_AUDIO_VOLUME);
+
+    let _ = AppendMenuW(
+        volume_menu,
+        MF_STRING | MF_POPUP,
+        video_levels.0 as usize,
+        w!("Video"),
+    );
+    let _ = AppendMenuW(
+        volume_menu,
+        MF_STRING | MF_POPUP,
+        audio_levels.0 as usize,
+        w!("Audio"),
+    );
 
     let _ = AppendMenuW(
         menu,
@@ -2733,14 +2775,17 @@ fn append_codecs_menu(menu: HMENU) {
 
     let video = codecs::video();
     let images = codecs::images();
+    let audio = codecs::audio();
 
-    // The three groups are numbered as one list, in the order they are read, so that an id
-    // says which row was picked without the menu having to be remembered: the same three
-    // groups are built again, in the same order, when the click arrives (see `codec_row`).
-    let images_base = ID_TRAY_CODEC_BASE + video.len() as u16;
+    // The groups are numbered as one list, in the order they are read, so that an id says which
+    // row was picked without the menu having to be remembered: the same groups are built again,
+    // in the same order, when the click arrives (see `codec_row`).
+    let audio_base = ID_TRAY_CODEC_BASE + video.len() as u16;
+    let images_base = audio_base + audio.len() as u16;
     let engines_base = images_base + images.len() as u16;
 
     append_codec_group(codecs_menu, w!("Videos"), video, ID_TRAY_CODEC_BASE);
+    append_codec_group(codecs_menu, w!("Audio"), audio, audio_base);
     append_codec_group(codecs_menu, w!("Images"), images, images_base);
     append_codec_group(codecs_menu, w!("Engines"), codecs::engines(), engines_base);
 
@@ -2848,10 +2893,11 @@ fn open_codec_page(index: u16) {
     }
 }
 
-/// The row the `Codecs` submenu lists at `index`: the three groups read as one list, in the
-/// order they are listed, which is the order their commands were handed out in.
+/// The row the `Codecs` submenu lists at `index`: the groups read as one list, in the order
+/// they are listed, which is the order their commands were handed out in.
 fn codec_row(index: usize) -> Option<Row> {
     let mut rows = codecs::video();
+    rows.extend(codecs::audio());
     rows.extend(codecs::images());
     rows.extend(codecs::engines());
 
@@ -3127,9 +3173,27 @@ fn set_markdown_mode(mode: MarkdownMode) {
     refresh_preview();
 }
 
-fn set_volume(volume: u32) {
+fn set_video_volume(index: u16) {
+    let Some(volume) = VOLUME_CHOICES.get(index as usize).copied() else {
+        return;
+    };
+
     if let Ok(mut config) = CONFIG.lock() {
         config.video_volume = volume;
+        config.save();
+    }
+}
+
+/// A level of the `Volume → Audio` submenu, by the position it was listed at: the volume a
+/// sound file is played at, which is the setting a card is drawn against as well as the one its
+/// player is started with.
+fn set_audio_volume(index: u16) {
+    let Some(volume) = VOLUME_CHOICES.get(index as usize).copied() else {
+        return;
+    };
+
+    if let Ok(mut config) = CONFIG.lock() {
+        config.audio_volume = volume;
         config.save();
     }
 }
@@ -3728,6 +3792,57 @@ mod tests {
                     "the range {ours:?} contains {elsewhere}, which is another item's id"
                 );
             }
+        }
+    }
+
+    /// The two halves of the `Volume` submenu carry a range apiece, and the levels they offer
+    /// are the table's own: silence at the top, the whole of it at the bottom, and every level
+    /// above the one before it.
+    ///
+    /// It is a test about ids for the reason the timing one below is — the two halves share a
+    /// table, so a range that ran into the other would hand a click to the wrong setting — and
+    /// about the table for the reason the font sizes' own test is: a level no item offers is a
+    /// setting a user can reach only by editing the file.
+    #[test]
+    fn the_two_volume_submenus_carry_a_range_apiece() {
+        let bases = [ID_TRAY_VIDEO_VOLUME_BASE, ID_TRAY_AUDIO_VOLUME_BASE];
+        let width = VOLUME_CHOICES.len() as u16;
+
+        assert_eq!(VOLUME_CHOICES[0], 0, "the topmost item is silence");
+        assert_eq!(
+            *VOLUME_CHOICES.last().expect("a last level"),
+            100,
+            "the bottom one is the whole of it"
+        );
+        assert!(
+            VOLUME_CHOICES.windows(2).all(|pair| pair[0] < pair[1]),
+            "every level is louder than the one above it: {VOLUME_CHOICES:?}"
+        );
+        for default in [DEFAULT_VIDEO_VOLUME, DEFAULT_AUDIO_VOLUME] {
+            assert!(
+                VOLUME_CHOICES.contains(&default),
+                "{default}% is marked as a default and is no item of the menu"
+            );
+        }
+
+        for (index, base) in bases.iter().enumerate() {
+            for above in &bases[..index] {
+                assert!(
+                    above + width <= *base,
+                    "the range at {base} overlaps the one at {above}"
+                );
+            }
+        }
+
+        // The gate for sounds is a command of its own, in the slack the font sizes leave
+        // rather than in either range: a level is not a switch, and neither is a switch a
+        // level — a collision here is a click that turns previews off where it meant to
+        // change a volume.
+        for base in bases {
+            assert!(
+                !(base..base + width).contains(&ID_TRAY_TYPE_AUDIO),
+                "the sound gate's id is inside the range at {base}"
+            );
         }
     }
 

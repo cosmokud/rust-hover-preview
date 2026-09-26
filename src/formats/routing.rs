@@ -24,9 +24,9 @@ use crate::engines::{
     calibre_render, imagemagick_render, libreoffice_render, peazip_render, webview_preview,
 };
 use crate::formats::{
-    archive_formats, calibre_formats, codecs, design_formats, ebook_formats, font_formats,
-    image_formats, libre_formats, magick_formats, office_formats, peazip_formats, text_formats,
-    vector_formats, video_formats,
+    archive_formats, audio_formats, calibre_formats, codecs, design_formats, ebook_formats,
+    font_formats, image_formats, libre_formats, magick_formats, office_formats, peazip_formats,
+    text_formats, vector_formats, video_formats,
 };
 use crate::readers::pdf_preview;
 use crate::readers::svg_preview;
@@ -68,6 +68,7 @@ type Claim = fn(&Path, &AppConfig, Asked) -> Option<PreviewType>;
 ///   still names is a drawing — and the kinds that can answer for one are asked before it.
 const CLAIMS: &[Claim] = &[
     claim_video,
+    claim_audio,
     claim_ebook,
     claim_archives,
     claim_peazip,
@@ -108,13 +109,36 @@ fn claims(path: &Path, config: &AppConfig, asked: Asked) -> Option<PreviewType> 
 
 /// A video: the configured list's names, and the two of them it shares with the text lists
 /// settled by the file rather than by the name where the file is the thing being asked about.
+///
+/// The one thing that takes a video away from this claim is the probe: a container of a name
+/// this list carries — an `.mp4`, an `.mka`, an `.ogg` — whose own streams turned out to hold
+/// a sound and no picture is not a video at all, and the sound claim below is where it is
+/// answered instead (see `audio_formats::probed_audio_only`).
 fn claim_video(path: &Path, config: &AppConfig, asked: Asked) -> Option<PreviewType> {
+    if audio_formats::probed_audio_only(path) {
+        return None;
+    }
+
     let claimed = match asked {
         Asked::File => video_formats::matches_video_list(path, &config.video_extensions),
         Asked::Name => video_formats::claims_video_name(path, &config.video_extensions),
     };
 
     claimed.then_some(PreviewType::Videos)
+}
+
+/// A sound: a name the `[audio]` list carries, or a container of a name another list carries
+/// that a probe found a sound in and no picture — see `audio_formats` for the list and for the
+/// verdict, and `audio_track` for the probe that reaches it.
+///
+/// It is asked beside the video claim rather than after the kinds below it, because the two
+/// are the pair that share containers: what a `.mka` is, is whichever of the two its streams
+/// say it is, and nothing else in the table has an opinion about one.
+fn claim_audio(path: &Path, config: &AppConfig, _asked: Asked) -> Option<PreviewType> {
+    let named = audio_formats::matches_audio_list(path, &config.audio_extensions);
+    let probed = audio_formats::probed_audio_only(path);
+
+    (named || probed).then_some(PreviewType::Audio)
 }
 
 /// A page this app draws itself: a PDF, and a comic, which is the other half of the same kind.
@@ -235,6 +259,13 @@ pub fn chain(kind: PreviewType) -> &'static [Reader] {
         // A video is played by FFmpeg where it is installed and by the engine Windows has
         // where it is not, which is one answer per file rather than per hover (see `codecs`).
         PreviewType::Videos => &[Reader::Ffmpeg, Reader::Native],
+
+        // A sound is the other way round, and deliberately: the engine Windows has plays it
+        // inside this app's own process — nothing to start, nothing to supervise, and the
+        // position it reports is the position the card draws — while FFmpeg's player is the
+        // answer for the formats that engine has no decoder for. Which of the two a file is
+        // is the probe's own answer rather than this chain's (see `audio_track`).
+        PreviewType::Audio => &[Reader::Native, Reader::Ffmpeg],
 
         PreviewType::Ebook => &[Reader::Native],
         PreviewType::Archives => &[Reader::Native],
@@ -359,6 +390,7 @@ mod tests {
 
         let mut lists = vec![
             (PreviewType::Videos, extensions(&config.video_extensions)),
+            (PreviewType::Audio, extensions(&config.audio_extensions)),
             (PreviewType::Ebook, extensions(&config.ebook_extensions)),
             (
                 PreviewType::Archives,
@@ -413,6 +445,14 @@ mod tests {
         // often than it is a disk image is the reading the order gets wrong, and moving it is
         // a line in this table rather than a reordering of the lists.
         ("preview.vhd", PreviewType::Peazip),
+        // A `.mpc` is a Musepack sound and the persistent cache ImageMagick keeps for itself,
+        // and the two are told apart from the front of the file: an image cache opens with the
+        // `id=ImageMagick` the converter's own reader answers for (see the signature that names
+        // `miff`), and a Musepack file with its own `MPCK` or `MP+`. A name-level answer is
+        // what this table settles, and it is the sound's, because the sound list is asked
+        // first — a file of neither shape is the one the order gets wrong, and that is a file
+        // neither reader could draw.
+        ("preview.mpc", PreviewType::Audio),
     ];
 
     /// Every name this app ships reaches the kind its list is written for, and a name two
@@ -559,5 +599,50 @@ mod tests {
                 "`{name}` has the one reader it has always had: what it gives up is deliberate"
             );
         }
+    }
+
+    /// A sound is reached by its name, and a container whose streams a probe found a sound in
+    /// and no picture is reached by that verdict — the one thing a list cannot say, and the
+    /// one thing that takes a file away from the video claim above it.
+    #[test]
+    fn a_sound_is_the_name_it_carries_or_the_streams_a_probe_found() {
+        let config = AppConfig::default();
+
+        for name in ["track.flac", "song.mp3", "book.m4b", "radio.mka", "album.opus"] {
+            assert_eq!(
+                kind_of(Path::new(name), &config),
+                Some(PreviewType::Audio),
+                "`{name}` is a sound"
+            );
+        }
+
+        assert_eq!(
+            chain(PreviewType::Audio),
+            &[Reader::Native, Reader::Ffmpeg],
+            "a sound is played inside this app's own process before FFmpeg's player is asked"
+        );
+
+        // A container the video list claims, whose own streams the probe found no picture in:
+        // the verdict is what answers it, and it is remembered under the file it was read from
+        // rather than under its name — so the path here is one no other test writes.
+        let probed = Path::new("routing-test-audio-only-container.mkv");
+        assert_eq!(
+            kind_of(probed, &config),
+            Some(PreviewType::Videos),
+            "a container of a video's name is a video until a probe says otherwise"
+        );
+
+        crate::formats::audio_formats::remember_audio_only(probed);
+        assert_eq!(
+            kind_of(probed, &config),
+            Some(PreviewType::Audio),
+            "and a sound once its own streams have answered for it"
+        );
+        assert_eq!(
+            kind_of_name(probed, &config),
+            Some(PreviewType::Audio),
+            "the same answer through the name half of the question, which is the form the \
+             content tier asks in"
+        );
     }
 }
