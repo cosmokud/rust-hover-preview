@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.3.6]
+## [0.3.6] - 2026-09-27
 
 ### Added
 
@@ -17,7 +17,7 @@
 - The positions **Remember** is made of are kept in a small file under `%TEMP%\rust-hover-preview\audio` (`seek.txt`), so a file hovered again after a restart is picked up where it was left. It is written as the card's clock is repainted and at the end of a hover, so a file is dropped within a fifth of a second of where it actually stopped, and it is indexed by the path and given up least recently left off first; it is bounded at a gigabyte by a ceiling in the code — some thirty million sounds hovered — with nothing in `config.ini` or the tray behind it. Nothing is remembered while the tray is on any of the other three answers: the memory belongs to the mode that reads it.
 - A sound's own length is now read by the probe on the machine's side as well — the container's presentation, rather than only `ffprobe`'s report — so a card on a machine without FFmpeg has a clock from its first frame, and the two start positions that are a share of one have a length to be a share *of*.
 - **`Timing → Prioritize Keyboard`**: with it on, a pointer parked on a file no longer previews of its own while the keyboard is driving Explorer — a key pressed onto a file with no preview of its own behaves like one pressed onto a file that has a preview — until the pointer is moved, the wheel is turned, or a folder change hands the screen over. On by default; switched off, the pointer's own hover wins as before.
-- **`Volume → Audio → Normalize`**: each sound's loudest sample is measured and brought to full scale before it plays, so a folder is heard at one level rather than at each file's own. On by default, and greyed out where FFmpeg is not installed — FFmpeg is what measures the peak and what applies it.
+- **`Volume → Audio → Normalize`** and **`Volume → Video → Normalize`**: a file's loudest sample is measured and brought to full scale before it plays, so a folder of sounds — or a set of films — is heard at one level rather than at each file's own. The sound's row is on by default and the video's is off, and both are greyed out where FFmpeg is not installed — FFmpeg is what measures the peak and what applies it.
 
 ### Fixed
 
@@ -44,7 +44,6 @@
 - **`Cache → Image (Disk)`**: a budget for the pictures the image converter develops. Each is kept as a file under `%TEMP%\rust-hover-preview\image` (`image_disk_cache_mb`, `512` by default), so hovering a camera raw a second time — or again after a restart — is a read rather than another conversion. `0` keeps nothing between hovers.
 - **`Reset to Recommended Settings`** and **`Reset Extension Lists`**: two rows inside the tray's `Config.ini` item, each asking first and each offered only while there is something to put back. The first returns every setting to what this build recommends and leaves the extension lists alone; the second returns the lists and leaves every other setting alone.
 - The installer asks the same two questions on a page of its own, with both boxes clear and neither one shown to a silent install — so an update taken with `Auto` changes nothing. What a box asks for is applied the next time the app starts.
-
 
 ### Fixed
 
@@ -125,7 +124,7 @@
 - The update check now runs at every startup as well as when the tray menu is opened, and the hour between checks is counted in memory rather than written to `%LOCALAPPDATA%`.
 - The update prompt now asks with three answers: **`Auto`** installs the update as before, **`Manual`** opens the release page in your browser, and **`Cancel`** does nothing.
 - **The `Cache` submenu has two entries** where it had five: **`Image (RAM)`**, the decoded frames held between hovers, and **`Document (Disk)`**, the pages an engine drew. **Text** and **Ebook** previews are no longer cached at all — a painted text frame and a rasterized PDF page are the cheapest things here to make again and the dearest to hold, so a text hover keeps the parsed document and its styled lines, and a PDF hover keeps only the page's size. What either costs is a layout, a raster and an encode rather than the memory a screenful of pixels takes.
-- **The pages both document engines draw are one cache, on disk.** `document_cache_mb` — `128` by default, `0`–`2048` — replaces `office_cache_mb` and `libre_cache_mb`, and a `config.ini` holding either older key is read once for the larger of the two and written without them. The pages live under `%TEMP%\rust-hover-preview\document`, named for the document, the version of it and the engine that drew it, so a page outlives the run that drew it and the engine it was drawn by — and so a page one engine drew is never handed back as the other's work. What is given up first is the page that has not been _read_ for longest, not the one converted longest ago, and the page a hover is waiting for is never given up: at `0` a page is kept from the moment it is drawn until the hover that asked for it ends.
+- **The pages both document engines draw are one cache, on disk.** `document_cache_mb` — `128` by default, `0`–`2048` — replaces `office_cache_mb` and `libre_cache_mb`, and a `config.ini` holding either older key is read once for the larger of the two and written without them. The pages live under `%TEMP%\rust-hover-preview\document`, named for the document, the version of it and the engine that drew it, so a page outlives the run that drew it and the engine it was drawn by — and so a page one engine drew is never handed back as the other's work. What is given up first is the page that has not been *read* for longest, not the one converted longest ago, and the page a hover is waiting for is never given up: at `0` a page is kept from the moment it is drawn until the hover that asked for it ends.
 - The LibreOffice engine's own profile and the stub document it holds open moved out of `%APPDATA%\rust-hover-preview\rendered` — a folder that is deleted at startup now, along with everything else an earlier version cached — to `%LOCALAPPDATA%\rust-hover-preview\libreoffice`, beside the app's other engine state.
 
 ### Fixed
@@ -260,7 +259,7 @@
 
 ### Fixed
 
-- A name in the text list _and_ in a drawing or document list is previewed as that kind again, not as text — the two halves of the app now agree about a file whose name is written down twice.
+- A name in the text list *and* in a drawing or document list is previewed as that kind again, not as text — the two halves of the app now agree about a file whose name is written down twice.
 - SVG previews are back: a document is drawn by the engine again rather than being handed to the readers that replay the other half of the Vector kind, which turned it down.
 - A Photoshop document smaller than the screen shows a preview again: it was refused whenever the preview was enlarged past the document's own size.
 - EPS files whose preview is a palette picture — the shape Photoshop writes into an EPS — now preview. That shape is read by the app itself, since the picture decoder turns it down.
@@ -330,7 +329,7 @@
 
 ### Added
 
-- Font previews for `ttf`, `otf`, `ttc`, `woff` and `woff2`, drawn by the WebView2 engine the SVG previews already use: the name the font calls itself, the pangram _The quick brown fox jumps over the lazy dog._, and a line each for Japanese, Chinese, Korean, Cyrillic and Greek that the font's own character map covers. A line is drawn only where every character of it is in the font — a browser falls back per glyph and says nothing about it — so nothing is ever shown in a system font and passed off as the font; a font of a script there is no line for is shown by the characters its own map holds instead.
+- Font previews for `ttf`, `otf`, `ttc`, `woff` and `woff2`, drawn by the WebView2 engine the SVG previews already use: the name the font calls itself, the pangram *The quick brown fox jumps over the lazy dog.*, and a line each for Japanese, Chinese, Korean, Cyrillic and Greek that the font's own character map covers. A line is drawn only where every character of it is in the font — a browser falls back per glyph and says nothing about it — so nothing is ever shown in a system font and passed off as the font; a font of a script there is no line for is shown by the characters its own map holds instead.
 - `Font Scaling` under the tray's **Placement** menu, with `font_scale` in `config.ini`: how much of the screen a specimen is drawn over — `Fit to Screen`, or 75%, 50% (the default), 25%, 10%.
 - `Fonts` under **Preview Types**, and a `[font]` extension list in `config.ini`; both are written on first run.
 - `Font Background` under the tray's **Background** menu, with `font_background` in `config.ini`: a specimen is a page of text, so its ink follows the backdrop — light on black, dark on the light ones, and light with a shadow where there is none to be read against.
@@ -421,7 +420,7 @@
 
 - An animated SVG stopped moving once the engine had been let go for idle — ten minutes after the last one, on the default `webview_idle`: the thread that played it ended with its browser while the app still held its handle, so every document after that was left on its still frame for the rest of the run. The thread now outlives the engine and begins another one for the next document.
 - The WebView2 browser no longer outlives the app when the app is killed, and one left behind by an earlier run is ended by the next launch instead of being left holding its profile folder.
-- Every process the app starts — an Office engine, the WebView2 browser, an `ffplay` — is put in a Windows job object, so a crash, a kill from Task Manager or a logoff ends them with the app, and is recorded under `%LOCALAPPDATA%\rust-hover-preview\engines` so that the next launch ends whatever the job could not take. Nothing is ever acted on by id alone: a record is used only when the process still carries the image _and_ the start time it was recorded with.
+- Every process the app starts — an Office engine, the WebView2 browser, an `ffplay` — is put in a Windows job object, so a crash, a kill from Task Manager or a logoff ends them with the app, and is recorded under `%LOCALAPPDATA%\rust-hover-preview\engines` so that the next launch ends whatever the job could not take. Nothing is ever acted on by id alone: a record is used only when the process still carries the image *and* the start time it was recorded with.
 - One engine per Office family is enforced rather than assumed: a family's engine is started only when nothing this app began for it is still running, and a replacement waits for the process it replaces to be gone. Exiting while a document is mid-render no longer leaves the engine behind either.
 - Pictures over 40 megapixels preview again: the pixel cap is gone, and every reader — pictures, animated GIF/APNG/WebP, SVG documents, Office exports, themes — now asks the decode budget above before it allocates.
 
@@ -966,3 +965,4 @@
 - Video preview: MP4, WebM, MKV, AVI, MOV, WMV, FLV, M4V.
 - System tray controls.
 - INI config file in `%APPDATA%\rust-hover-preview\config.ini`.
+
