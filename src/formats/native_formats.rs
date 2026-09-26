@@ -147,7 +147,10 @@ pub fn job_for(path: &Path, kind: PreviewType, config: &AppConfig) -> Option<Nat
 /// throw away before the still path drew the same picture is not decoded. A file whose head
 /// could not be read — one that is not there, one whose content is still in the cloud — is the
 /// still job too, which is the path that would have failed to read it in any case.
-fn picture_job(path: &Path) -> NativeJob {
+///
+/// It is asked of the file and of nothing else — which reader draws a picture is not a list's
+/// answer — so a caller takes no configuration for it and holds no lock while it reads the head.
+pub fn picture_job(path: &Path) -> NativeJob {
     use crate::formats::head::{PictureFamily, PictureForm};
 
     if let Some(nature) = crate::formats::head::picture_nature(path) {

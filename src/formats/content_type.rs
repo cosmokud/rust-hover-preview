@@ -92,7 +92,6 @@
 //! rather than held to an answer about what it used to be.
 
 use crate::config::config::{AppConfig, PreviewType};
-use crate::CONFIG;
 use infer::{MatcherType, Type};
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
@@ -131,16 +130,27 @@ pub enum Content {
 /// and answered from the cache where the same file has been asked about already in this
 /// hover. `Content::Unknown`, where that is the answer, leaves the kind to the list the
 /// name is written in.
-pub fn of(path: &Path) -> Content {
-    answered(crate::formats::head::key(path), path, None)
+///
+/// The configuration is passed in rather than taken here: the lists are what the names a
+/// file's bytes answered with are turned into a kind by, and the caller either has them in
+/// hand already or takes them once for this question. Nothing below takes that lock, which is
+/// what makes a second acquisition on one thread impossible rather than merely unlikely: a
+/// lock taken twice hangs the thread that asked, and this question is asked from the hook, the
+/// loader, the layout and the engines' own request sides.
+pub fn of(path: &Path, config: &AppConfig) -> Content {
+    answered(crate::formats::head::key(path), path, None, config)
 }
 
 /// The same for a caller that has already read the file's own entry: the answer is held under
 /// the version that entry names, and the head is read from that entry as well, so a hover that
 /// has asked a file's own claim is not asking the volume for the same metadata twice (see
 /// `crate::formats::head::Facts`).
-pub fn of_with_facts(path: &Path, facts: &crate::formats::head::Facts) -> Content {
-    answered(facts.key().clone(), path, Some(facts))
+pub fn of_with_facts(
+    path: &Path,
+    facts: &crate::formats::head::Facts,
+    config: &AppConfig,
+) -> Content {
+    answered(facts.key().clone(), path, Some(facts), config)
 }
 
 /// The kind a file's content belongs to, held under the key it was read at.
@@ -148,6 +158,7 @@ fn answered(
     key: crate::formats::head::Key,
     path: &Path,
     facts: Option<&crate::formats::head::Facts>,
+    config: &AppConfig,
 ) -> Content {
     if let Ok(answers) = ANSWERS.lock() {
         if let Some(answer) = answers.get(&key) {
@@ -155,7 +166,7 @@ fn answered(
         }
     }
 
-    let answer = read(path, facts);
+    let answer = read(path, facts, config);
 
     if let Ok(mut answers) = ANSWERS.lock() {
         if answers.len() >= ANSWERS_MAX_ENTRIES {
@@ -167,13 +178,15 @@ fn answered(
     answer
 }
 
-/// What the file holds, read once and not held.
+/// What the file holds, read once and not held. The lists the names it answered with are
+/// turned into a kind by are the caller's, which is why nothing here takes the configuration
+/// lock (see [`of`]).
 ///
 /// The tables are asked in the order they can answer in: the bytes first, through the
 /// formats every tool agrees on and then through the ones an engine here reads that no
 /// such table carries, and the name the file is under last, for the formats whose own head
 /// is nothing either table knows — see [`KIND_BY_NAME`] for what is in that one.
-fn read(path: &Path, facts: Option<&crate::formats::head::Facts>) -> Content {
+fn read(path: &Path, facts: Option<&crate::formats::head::Facts>, config: &AppConfig) -> Content {
     // The front of the file first, and the kind its own form settles by itself: the bytes
     // at the front of a picture are a picture's, whatever the file is called, and nothing
     // further is read of one. A front that settles nothing — a container a camera raw is
@@ -185,11 +198,7 @@ fn read(path: &Path, facts: Option<&crate::formats::head::Facts>) -> Content {
                 .nature()
                 .is_some_and(|nature| nature.container_of_a_raw)
             {
-                let Ok(config) = CONFIG.lock() else {
-                    return Content::Unknown;
-                };
-
-                if let Some(kind) = kind_claiming(names, &config) {
+                if let Some(kind) = kind_claiming(names, config) {
                     return Content::Kind(kind);
                 }
             }
@@ -202,11 +211,7 @@ fn read(path: &Path, facts: Option<&crate::formats::head::Facts>) -> Content {
     let probe = head.bytes();
 
     if let Some(names) = detected_names(probe) {
-        let Ok(config) = CONFIG.lock() else {
-            return Content::Unknown;
-        };
-
-        return classify(path, names, &config);
+        return classify(path, names, config);
     }
 
     // Neither table named the front of the file, so the name it carries is what is left to
@@ -3714,11 +3719,15 @@ mod tests {
             .collect();
         paths.sort();
 
+        let Ok(config) = crate::CONFIG.lock() else {
+            return;
+        };
+
         for path in paths {
             println!(
                 "{:<16} {:?}",
                 path.file_name().unwrap_or_default().to_string_lossy(),
-                of(&path)
+                of(&path, &config)
             );
         }
     }
