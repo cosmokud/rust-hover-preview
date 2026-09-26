@@ -53,6 +53,8 @@ The containers and codecs the table above lists are the ones Windows plays on it
 
 Sounds Windows does not decode need FFmpeg as well, and these are all of them: `ac3` `ape` `au` `caf` `dff` `dts` `dtshd` `eac3` `mka` `mp2` `mpa` `mpc` `oga` `ogg` `ofr` `ofs` `opus` `ra` `shn` `snd` `spx` `tak` `tta` `voc` `wv`
 
+**Normalize** needs it too: what measures a sound's peak and what applies it are FFmpeg's, so on a machine without it the row is greyed and every sound plays as the file holds it.
+
 ### Needs Microsoft Office, or LibreOffice
 
 Office documents — `doc` `docm` `docx` `dot` `dotm` `dotx` `xls` `xlsb` `xlsm` `xlsx` `xlt` `xltm` `xltx` `ppt` `pptm` `pptx` `pps` `ppsm` `ppsx` `pot` `potm` `potx` — are drawn in the background by an installed Office so previews appear quickly after the first hover. Excel needs a print queue to export a page — **Microsoft Print to PDF** is enough, and the Print Spooler service must be enabled; without one, Excel falls back to the sheet’s top-left corner. Where no Office is installed, an installed LibreOffice draws them instead. To have LibreOffice draw them all — with Microsoft Office installed as well — use **Engine → Select Engine → Office** and pick **LibreOffice**.
@@ -245,7 +247,8 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
   - **Font Background** — Same backdrops for a font specimen. Default **White**.
   - **DDS Background** — Black or White for `.dds` textures. Default **White**. The two see-through backdrops are not offered.
   - **Design Background** — Same as picture backdrops for a design document. Default **Checkerboard**.
-- **Volume** — **Video** and **Audio**, each offering `0%`, `1%`, `5%`, `10%`, `20%`, `35%`, `50%`, `65%`, `80%` and `100%`. A video's soundtrack starts at `0%` — silent, so a hover never makes a sound the pointer did not ask for — and a sound file at `10%`: a video is looked at and a song is listened to, so the two are settings of their own. A sound at `0%` still shows its card, silently.
+- **Volume** — **Video** and **Audio**, each offering `100%`, `80%`, `65%`, `50%`, `35%`, `20%`, `10%`, `5%`, `1%` and `0%`, loudest first. A video's soundtrack starts at `0%` — silent, so a hover never makes a sound the pointer did not ask for — and a sound file at `10%`: a video is looked at and a song is listened to, so the two are settings of their own. A sound at `0%` still shows its card, silently.
+  - **Normalize** — The first row of the **Audio** submenu, above the levels: each sound's loudest sample is measured and brought to full scale before it plays, so a folder is heard at one level rather than at each file's own. On by default, and greyed out unless FFmpeg is installed — FFmpeg is what measures the peak and what applies it. The peak is measured once per file and kept, so only a file's first hover waits for it.
   - **Audio Seek** — Where in a file a hovered sound starts playing: **Remember** (`default`) picks it up where the last hover left it, **From the Start** always begins at the beginning, **From the Middle** drops it half way in, and **Random** anywhere at all. The remembered positions are kept in a small file under `%TEMP%\rust-hover-preview\audio`, so they survive a restart; nothing is remembered while another mode is chosen. Whatever a sound is started at, it goes back to the beginning of the file when it reaches the end of it and loops from there for as long as the hover lasts. A video is always played from its beginning.
 - **Performance**
   - **Cache** — What a preview may cost between hovers: `2 GB` down to `0 MB`. **`Image (RAM)`** = decoded frames kept in memory. **`Document (Disk)`** = engine-drawn pages kept as temp files. **`Image (Disk)`** = the pictures ImageMagick developed, kept as temp files.
@@ -331,6 +334,7 @@ vector_background=checkerboard
 ; Volume
 audio_seek=remember
 audio_volume=10
+normalize_volume=true
 video_volume=0
 
 ; Performance

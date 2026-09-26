@@ -101,8 +101,16 @@ pub const DEFAULT_VIDEO_VOLUME: u32 = 0;
 /// rather than loud, so a pointer crossing a folder of music is a few seconds of something
 /// half-heard rather than a jukebox.
 pub const DEFAULT_AUDIO_VOLUME: u32 = 10;
-/// The levels either volume is offered at, in the order the tray lists them: silence, the one
-/// step above it, and the decades between.
+/// Whether a sound's loudest sample is brought to the full scale of the format before it is
+/// played, so that a folder of files is heard at one level rather than at each file's own.
+///
+/// It is on where the app starts, and FFmpeg is what makes it possible at all: the peak is
+/// measured by FFmpeg's own meter and the gain is applied by FFmpeg's own player, where the
+/// engine Windows has can only quieten a file — a level is attenuation there, and full volume
+/// is as loud as it goes (see `codecs::normalize_available`).
+pub const DEFAULT_NORMALIZE_VOLUME: bool = true;
+/// The levels either volume is offered at: silence, the one step above it, and the decades
+/// between — smallest first here, and listed the other way round in the tray, loudest first.
 ///
 /// One table for both menus rather than one apiece, because the question a user asks of either
 /// is the same — how loud is this — and the two are the same setting applied to two kinds of
@@ -1360,6 +1368,17 @@ pub struct AppConfig {
     /// worth depends on how much of it is heard, and a file being listened to again is
     /// usually wanted from where it was left rather than from the top (see `AudioSeek`).
     pub audio_seek: AudioSeek,
+    /// Whether a sound's loudest sample is measured and brought to the full scale of the format
+    /// before it is played — the one thing that asks a file to be as loud as the next rather
+    /// than as loud as it was recorded.
+    ///
+    /// A setting of its own rather than a level among the ones above it, because it is a
+    /// question about the file rather than about the hover: a level says how loud this app
+    /// should be, and this says where a file's own peak is counted from. It is on where the app
+    /// starts, and on a machine without FFmpeg it does nothing at all — what measures the peak
+    /// and what applies the gain are both FFmpeg's (see `codecs::normalize_available`), which is
+    /// also why the tray greys the row where FFmpeg is not installed.
+    pub normalize_volume: bool,
     /// How large a picture is drawn, as a share of its own size: `100%` is the size the
     /// file asks for, `50%` half of it, and `fit` the largest size the room the layout
     /// gives it allows.
@@ -1652,6 +1671,7 @@ impl Default for AppConfig {
             video_volume: DEFAULT_VIDEO_VOLUME,
             audio_volume: DEFAULT_AUDIO_VOLUME,
             audio_seek: DEFAULT_AUDIO_SEEK,
+            normalize_volume: DEFAULT_NORMALIZE_VOLUME,
             preview_scale: PreviewScale::Percent(DEFAULT_PREVIEW_SCALE_PERCENT),
             video_scale: PreviewScale::Percent(DEFAULT_VIDEO_SCALE_PERCENT),
             animated_scale: PreviewScale::Percent(DEFAULT_ANIMATED_SCALE_PERCENT),
@@ -1797,7 +1817,15 @@ const SETTING_GROUPS: &[(&str, &[&str])] = &[
             "vector_background",
         ],
     ),
-    ("Volume", &["audio_seek", "audio_volume", "video_volume"]),
+    (
+        "Volume",
+        &[
+            "audio_seek",
+            "audio_volume",
+            "normalize_volume",
+            "video_volume",
+        ],
+    ),
     (
         "Performance",
         &[
@@ -2539,6 +2567,11 @@ impl AppConfig {
         );
         ini.set(
             CONFIG_SECTION,
+            "normalize_volume",
+            Some(self.normalize_volume.to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
             "preview_scale",
             Some(self.preview_scale.as_str()),
         );
@@ -2961,6 +2994,12 @@ impl AppConfig {
             if let Some(seek) = AudioSeek::from_str(&value) {
                 self.audio_seek = seek;
             }
+        }
+        // Whether a sound's peak is measured and brought to full scale, which a file written
+        // before the setting existed has no key for: a fresh installation normalizes, and a file
+        // that says nothing about it is left where it starts.
+        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "normalize_volume") {
+            self.normalize_volume = value;
         }
         if let Some(value) = ini.get(CONFIG_SECTION, "preview_scale") {
             if let Some(scale) = PreviewScale::from_str(&value) {

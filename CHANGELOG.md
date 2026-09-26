@@ -17,6 +17,7 @@
 - The positions **Remember** is made of are kept in a small file under `%TEMP%\rust-hover-preview\audio` (`seek.txt`), so a file hovered again after a restart is picked up where it was left. It is written as the card's clock is repainted and at the end of a hover, so a file is dropped within a fifth of a second of where it actually stopped, and it is indexed by the path and given up least recently left off first; it is bounded at a gigabyte by a ceiling in the code — some thirty million sounds hovered — with nothing in `config.ini` or the tray behind it. Nothing is remembered while the tray is on any of the other three answers: the memory belongs to the mode that reads it.
 - A sound's own length is now read by the probe on the machine's side as well — the container's presentation, rather than only `ffprobe`'s report — so a card on a machine without FFmpeg has a clock from its first frame, and the two start positions that are a share of one have a length to be a share *of*.
 - **`Timing → Prioritize Keyboard`**: with it on, a pointer parked on a file no longer previews of its own while the keyboard is driving Explorer — a key pressed onto a file with no preview of its own behaves like one pressed onto a file that has a preview — until the pointer is moved, the wheel is turned, or a folder change hands the screen over. On by default; switched off, the pointer's own hover wins as before.
+- **`Volume → Audio → Normalize`**: each sound's loudest sample is measured and brought to full scale before it plays, so a folder is heard at one level rather than at each file's own. On by default, and greyed out where FFmpeg is not installed — FFmpeg is what measures the peak and what applies it.
 
 ### Fixed
 
@@ -34,6 +35,7 @@
 
 - `README.md` and `ARCHITECTURE.md` describe the sound kind, its two engines, the two volumes, where a sound starts and the scrolling name, and what a sound does at the end of its file.
 - `PRIVACY.md` names the keys the keyboard poll reads — the navigation keys and the letters and digits a name is typed with — and `README.md` and `ARCHITECTURE.md` describe what typing a name previews.
+- The **`Volume → Video`** and **`Volume → Audio`** lists now run loudest first: `100%` at the top, `0%` at the bottom.
 
 ## [0.3.5] - 2026-09-26
 
