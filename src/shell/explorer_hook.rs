@@ -162,7 +162,41 @@ struct AnsweredView {
     /// item under the pointer belongs to (see `ItemWindow`). Nothing where the view will
     /// not name one, which leaves it to answer with the rest.
     view_hwnd: isize,
+    /// The browser object the view was found through, which is what knows the URL the view
+    /// was opened with: the place a probe remembers, and the one fact of a place the Shell
+    /// always answers (see `ActiveShellViewContext`).
+    browser: IWebBrowser2,
+    /// The view itself, which is what the folder it has open is walked out of. It is kept
+    /// rather than asked for again because asking for it is a crossing into the shell, and
+    /// the walk that found this view has already made it (see `folder_views_for_window`).
+    shell_view: IShellView,
     folder_view: IFolderView2,
+}
+
+impl AnsweredView {
+    /// What this view is showing: the URL it was opened with, and — where the caller wants
+    /// it — the folder it has open, which is what a probe remembers about the place.
+    ///
+    /// It is the question a folder probe asks of the view it is about — the URL the view
+    /// was opened with and the folder it has open — asked of a view that was found once for
+    /// a window rather than once for every probe: the same two facts of the same objects,
+    /// paid for once per window instead of once per tick (see `WindowViews`).
+    fn describe(&self, want_folder: bool) -> ActiveShellViewContext {
+        unsafe {
+            let location_url = self.browser.LocationURL().ok().map(|url| url.to_string());
+            let folder_path = if want_folder {
+                get_shell_view_folder_path(&self.shell_view)
+            } else {
+                None
+            };
+
+            ActiveShellViewContext {
+                shell_view_hwnd: self.view_hwnd,
+                location_url,
+                folder_path,
+            }
+        }
+    }
 }
 
 /// Every view one window holds, as a walk of the Shell window collection found them.
@@ -180,6 +214,19 @@ struct WindowViews {
     frame: isize,
     /// How many Shell windows the desktop held when this set was read.
     registrations: i32,
+    /// Which of the views a probe last found the pointer inside, where one did.
+    ///
+    /// It is what a probe that is in *none* of them is answered by: a pointer over the
+    /// navigation pane, the toolbar or the details pane is in no tab, so no view of the
+    /// frame can be told from another by the pointer, and what the frame is showing is a
+    /// question this set cannot answer. Answering with the view the hand was last inside
+    /// is answering with the tab the user was last working in, and — which matters more —
+    /// it is an answer that does not move while the pointer does not: a place read twice
+    /// is one place rather than two (see `anchored_view_context`).
+    ///
+    /// It is an index into `views` and it goes with the set: a set read again is a set
+    /// whose views were found again, and the anchor is dropped with the old one.
+    anchor: Option<usize>,
     views: Vec<AnsweredView>,
 }
 
@@ -205,8 +252,8 @@ impl WindowViews {
 /// visible either way. What the item is drawn in is inside a window of exactly one of
 /// them: the tab that is showing. A view whose window the item's own window descends
 /// from is therefore the view the item was drawn by, and it is asked alone. It is the
-/// same test the pointer's hints already make to find the view a point is in (see
-/// `get_active_shell_view_context`), which is why a pointer that is in none of them —
+/// same test the folder probe makes to find the view a point is in (see
+/// `anchored_view_context`), which is why a pointer that is in none of them —
 /// over the navigation pane, the toolbar, the details pane, none of which belongs to a
 /// tab — names no view, and the frame's views are told apart by what they answer, as
 /// they were before this window was read.
@@ -679,6 +726,28 @@ impl ItemResolver {
         self.window_views = None;
     }
 
+    /// The view of `frame` the pointer was last inside, out of the set kept for that frame.
+    ///
+    /// What reads it is a probe that is in none of the frame's views and has to answer with
+    /// something anyway — a pointer over the navigation pane or the toolbar — and the
+    /// answer is the tab the hand was last working in rather than one picked at random (see
+    /// `WindowViews`).
+    fn remembered_view(&self, frame: isize) -> Option<usize> {
+        self.window_views
+            .as_ref()
+            .filter(|set| set.frame == frame)
+            .and_then(|set| set.anchor)
+    }
+
+    /// Remember that a probe found the pointer inside this view of this frame.
+    fn remember_view(&mut self, frame: isize, index: usize) {
+        if let Some(set) = self.window_views.as_mut() {
+            if set.frame == frame {
+                set.anchor = Some(index);
+            }
+        }
+    }
+
     /// Drop the item under the pointer, for everything that makes it a new question: a
     /// wheel moving the list under a parked pointer, a navigation, a click that may have
     /// sorted the view. What is kept is an answer for the item it was read from, and none
@@ -1035,30 +1104,25 @@ fn explorer_restart_count() -> u64 {
 static HOOK_TRACE: Lazy<bool> = Lazy::new(|| std::env::var_os("RHP_HOOK_TRACE").is_some());
 
 /// The crossings into the shell a probe has made since the last line was written:
-/// the window collections walked, the windows those walks passed between them, the
-/// walks that ended at the window the pointer is in, the probes answered from a set of
-/// views already read, the probes whose item was answered by the one view it is drawn
-/// in, the item walks through the view's provider, the points resolved, and the looks
-/// answered from the item under the pointer without asking the shell again.
+/// the window collections walked, the windows those walks passed between them,
+/// the probes answered from a set of views already read, the probes whose place or item
+/// was answered by the one view the pointer is in, the item walks through the view's
+/// provider, the points resolved, and the looks answered from the item under the pointer
+/// without asking the shell again.
 ///
 /// The pair to read together is the walks against the sets kept: reading a window's
 /// views is one crossing into the shell per Shell window the desktop holds, and a
 /// window that holds tabs is one registration per tab — so a set read again on every
 /// probe is the cost that grows with how many tabs are open, and a set kept is what
 /// says that cost is paid once for a window rather than once for a tick. Beside them,
-/// the anchored count against the points resolved says how often the window an item is
-/// drawn in was enough to tell a frame's views apart — a window holding tabs answered
-/// by one view rather than by all of them.
+/// the anchored count against the points resolved says how often the window an item and
+/// a place are read in was enough to tell a frame's views apart — a window holding tabs
+/// answered by one view rather than by all of them.
 static PROBE_VIEW_WALKS: AtomicU64 = AtomicU64::new(0);
 static PROBE_VIEW_WINDOWS: AtomicU64 = AtomicU64::new(0);
-/// The walks that ended at the window the pointer is in rather than walking the
-/// collection out. The loop stops there by design, and whether that ever happens is
-/// not something a count of windows walked can say: a walk that stopped at the third
-/// of five and a collection that holds three are the same number.
-static PROBE_VIEW_POINTER_MATCHES: AtomicU64 = AtomicU64::new(0);
 /// The probes a frame's views answered without being read again, and the probes the view
-/// the item is drawn in was asked for rather than every view of the frame — see
-/// `frame_views` and `ItemWindow`.
+/// the pointer is in was asked for rather than every view of the frame — see `frame_views`
+/// and `ItemWindow`.
 static PROBE_VIEW_SETS_KEPT: AtomicU64 = AtomicU64::new(0);
 static PROBE_VIEW_ANCHORED: AtomicU64 = AtomicU64::new(0);
 static PROBE_ITEM_WALKS: AtomicU64 = AtomicU64::new(0);
@@ -1115,7 +1179,6 @@ fn flush_probe_counts(now: Instant, last: &mut Instant, path: &Path) {
 
     let walks = PROBE_VIEW_WALKS.swap(0, Ordering::Relaxed);
     let windows = PROBE_VIEW_WINDOWS.swap(0, Ordering::Relaxed);
-    let matches = PROBE_VIEW_POINTER_MATCHES.swap(0, Ordering::Relaxed);
     let kept = PROBE_VIEW_SETS_KEPT.swap(0, Ordering::Relaxed);
     let anchored = PROBE_VIEW_ANCHORED.swap(0, Ordering::Relaxed);
     let items = PROBE_ITEM_WALKS.swap(0, Ordering::Relaxed);
@@ -1136,7 +1199,7 @@ fn flush_probe_counts(now: Instant, last: &mut Instant, path: &Path) {
         use std::io::Write;
         let _ = writeln!(
             file,
-            "points {points}  item walks {items} (slowest {item_slowest}ms)  view walks {walks} (windows {windows}, pointer matched {matches}, slowest {view_slowest}ms)  sets kept {kept}  anchored {anchored}  item memo {memo}"
+            "points {points}  item walks {items} (slowest {item_slowest}ms)  view walks {walks} (windows {windows}, slowest {view_slowest}ms)  sets kept {kept}  anchored {anchored}  item memo {memo}"
         );
     }
 }
@@ -1667,205 +1730,63 @@ fn is_probable_search_view_context(context: &ActiveShellViewContext) -> bool {
         .unwrap_or(false)
 }
 
-/// One Shell window the pointer could be in, with what it takes to ask that window
-/// what it is showing.
+/// The place a point is over, out of the views the window under it holds.
 ///
-/// What a window is asked is not free — the URL it was opened with and the folder it
-/// has open are crossings into the shell apiece, and the folder is a walk through the
-/// view's own objects — so the window is chosen first and asked second. One view is
-/// described per probe rather than every view that could have been.
-struct ShellViewCandidate {
-    shell_view_hwnd: isize,
-    browser: IWebBrowser2,
-    shell_view: IShellView,
-}
-
-impl ShellViewCandidate {
-    /// What the view is showing: the URL it was opened with, and — where the caller
-    /// wants it — the folder it has open, which is what a probe remembers about the
-    /// place.
-    ///
-    /// The folder is asked for only where it is wanted, because it is not free: it
-    /// is a walk through the view's own objects, out to the Shell's answer for the
-    /// place, with a check that what came back is a directory. One of the two
-    /// callers reads the URL and discards everything else.
-    fn describe(self, want_folder: bool) -> ActiveShellViewContext {
-        unsafe {
-            let location_url = self.browser.LocationURL().ok().map(|url| url.to_string());
-            let folder_path = if want_folder {
-                get_shell_view_folder_path(&self.shell_view)
-            } else {
-                None
-            };
-
-            ActiveShellViewContext {
-                shell_view_hwnd: self.shell_view_hwnd,
-                location_url,
-                folder_path,
-            }
-        }
-    }
-}
-
-/// What a probe learned about one Shell window before anything of the window was
-/// read: the three facts the choice between windows is made from.
-#[derive(Clone, Copy, Default)]
-struct ShellViewFacts {
-    /// The pointer is inside this window, which is the strongest of the three.
-    holds_cursor: bool,
-    /// The window's rectangle holds the point.
-    holds_point: bool,
-    /// The window is the foreground one.
-    is_foreground: bool,
-}
-
-/// Which of the windows a probe found is the one it is about.
+/// It stands where a walk of every Shell window the desktop has registered once stood, and
+/// what it asks instead is the question the item path already settles a point with: the
+/// window under the pointer is a window, or a child of one, of exactly one of the views a
+/// window holds, and with tabs that is the tab that is showing — so that view, and nothing
+/// else, is asked what it is showing (see `ItemWindow` and `frame_views`). The cost is one
+/// frame's worth of work rather than the desktop's: the set is in hand for all but the
+/// first probe of a window, and what is left is the shell being asked to describe the one
+/// view the pointer is in.
 ///
-/// The order the answers are trusted in is the order the evidence is worth: the
-/// window the pointer is inside, then the *first* window the point falls in, then
-/// the *last* window that is the foreground one. The first two are `position` and
-/// the last is `rposition`, which is what makes a window registered twice — the
-/// tabs of one frame answer with the frame's own handle — settle on the last of
-/// them rather than the first.
+/// A pointer in none of the frame's views is a pointer over the navigation pane, the
+/// toolbar or the details pane, none of which belongs to a tab: which tab the frame is
+/// showing is then not something the pointer can say, and what is answered for is the view
+/// the pointer was last inside of that frame — the tab the hand was last working in — or
+/// the frame's first view where it has never been inside one (see `WindowViews::anchor`).
+/// Any of a frame's views is a guess at that point; what this one has over a view picked at
+/// random is that it does not change while the pointer does not, so one place is read as
+/// one place.
 ///
-/// A window whose rectangle holds the point is not asked whether it is the
-/// foreground one, and cannot be: a point match is taken before any foreground
-/// match, so the two answers never compete and the window that would have carried
-/// both is never the reason for the answer.
-fn winning_shell_view(facts: &[ShellViewFacts]) -> Option<usize> {
-    if let Some(index) = facts.iter().position(|facts| facts.holds_cursor) {
-        return Some(index);
-    }
-
-    if let Some(index) = facts.iter().position(|facts| facts.holds_point) {
-        return Some(index);
-    }
-
-    facts.iter().rposition(|facts| facts.is_foreground)
-}
-
-/// The Shell window a point is in, out of the collection the resolver already holds.
-///
-/// The collection is handed in rather than built here. Building it is the one call
-/// every lookup would otherwise repeat, and the resolver keeps one for exactly that
-/// reason (`ItemResolver::shell_windows`) — a probe that built its own would pay for
-/// a Shell object per call and hold a second, unrelated one beside the resolver's,
-/// both of them proxies into the same process. A collection the resolver does not
-/// have yet answers no probe, which is what the resolver's own lookups do with it
-/// too.
-fn get_active_shell_view_context(
-    shell_windows: Option<&IShellWindows>,
-    screen_point: &POINT,
+/// What a probe that cannot be answered at all is left with is nothing, which is what it
+/// was left with before: a look that answered no fact is a question to ask again rather
+/// than a place that changed (see `HoverLocation`).
+fn anchored_view_context(
+    resolver: &mut ItemResolver,
+    pointer: &PointerTick,
     want_folder: bool,
 ) -> Option<ActiveShellViewContext> {
-    unsafe {
-        let shell_windows = shell_windows?;
-        let count = shell_windows.Count().ok()?;
-        note_probe(&PROBE_VIEW_WALKS);
-        let cursor_hwnd = WindowFromPoint(*screen_point);
-        let foreground = GetForegroundWindow();
-        let mut candidates: Vec<ShellViewCandidate> = Vec::new();
-        let mut facts: Vec<ShellViewFacts> = Vec::new();
+    let window = item_window_of(pointer.window)?;
+    // Read before the frame's views are, because reading them borrows the resolver: what
+    // the pointer was last inside of this frame is what a probe that is inside none of them
+    // is answered by, and it belongs to the set the borrow is about to be taken of.
+    let remembered = resolver.remembered_view(window.frame);
+    let registrations = shell_window_count(resolver);
 
-        // Bounded by `SHELL_WINDOW_LIMIT` as well as by the collection: a desktop
-        // holding more Shell windows than that is not one to walk on every probe, so
-        // past the cap the probe answers from the windows it already has.
-        for i in 0..count.min(SHELL_WINDOW_LIMIT) {
-            note_probe(&PROBE_VIEW_WINDOWS);
-
-            let variant = VARIANT::from(i);
-            let disp = match shell_windows.Item(&variant) {
-                Ok(disp) => disp,
-                Err(_) => continue,
-            };
-            let browser = match disp.cast::<IWebBrowser2>() {
-                Ok(browser) => browser,
-                Err(_) => continue,
-            };
-            let browser_hwnd = match browser.HWND() {
-                Ok(browser_hwnd) => browser_hwnd,
-                Err(_) => continue,
-            };
-            let service_provider = match browser.cast::<IServiceProvider>() {
-                Ok(service_provider) => service_provider,
-                Err(_) => continue,
-            };
-            let shell_browser: IShellBrowser =
-                match service_provider.QueryService(&SID_STopLevelBrowser) {
-                    Ok(shell_browser) => shell_browser,
-                    Err(_) => continue,
-                };
-            let shell_view = match shell_browser.QueryActiveShellView() {
-                Ok(shell_view) => shell_view,
-                Err(_) => continue,
-            };
-            let shell_view_hwnd = match shell_view.GetWindow() {
-                Ok(hwnd) if !hwnd.is_invalid() => hwnd,
-                _ => continue,
-            };
-            if !IsWindowVisible(shell_view_hwnd).as_bool() || is_window_minimized(shell_view_hwnd) {
-                continue;
-            }
-
-            // The window the pointer is in is the answer whatever the others are, so
-            // it ends the walk rather than joining it — and it is the one window that
-            // is not asked for its rectangle, which it does not need: a cursor match
-            // is taken before a point match, so the box could not change the answer.
-            let holds_cursor =
-                !cursor_hwnd.is_invalid() && hwnd_is_same_or_ancestor(cursor_hwnd, shell_view_hwnd);
-
-            let mut holds_point = false;
-            if !holds_cursor {
-                let mut rect = RECT::default();
-                holds_point = GetWindowRect(shell_view_hwnd, &mut rect).is_ok()
-                    && point_in_rect(screen_point, &rect);
-            }
-
-            candidates.push(ShellViewCandidate {
-                shell_view_hwnd: shell_view_hwnd.0 as isize,
-                browser,
-                shell_view,
-            });
-            facts.push(ShellViewFacts {
-                holds_cursor,
-                holds_point,
-                is_foreground: foreground == HWND(browser_hwnd.0 as *mut _),
-            });
-
-            if holds_cursor {
-                note_probe(&PROBE_VIEW_POINTER_MATCHES);
-                break;
-            }
-        }
-
-        let winner = winning_shell_view(&facts)?;
-        candidates
-            .into_iter()
-            .nth(winner)
-            .map(|candidate| candidate.describe(want_folder))
-    }
-}
-
-fn get_active_shell_view_context_at_cursor(
-    resolver: &ItemResolver,
-    want_folder: bool,
-) -> Option<ActiveShellViewContext> {
-    let mut cursor_pos = POINT::default();
-    if unsafe { GetCursorPos(&mut cursor_pos) }.is_err() {
-        return None;
-    }
-
-    // Timed around the whole of it — the walk, the choice between the windows it
-    // found, and what the window that won was asked — because what a probe costs in
-    // time is not what it costs in calls, and the shell is the other side of it.
+    // Timed at the whole of it the way the walk it stands in for was: what the shell is
+    // being held for is describing the view, and a set already in hand costs nothing.
     let started = Instant::now();
-    let context =
-        get_active_shell_view_context(resolver.shell_windows.as_ref(), &cursor_pos, want_folder);
+    let views = frame_views(resolver, window.frame, registrations);
+    let anchor = window.view_holding(views);
+    let context = anchor
+        .or_else(|| remembered.filter(|index| *index < views.len()))
+        .and_then(|index| views.get(index))
+        .map(|view| view.describe(want_folder));
     note_probe_ms(&PROBE_VIEW_SLOWEST_MS, started.elapsed());
+
+    if let Some(anchor) = anchor {
+        note_probe(&PROBE_VIEW_ANCHORED);
+        // Remembered for the probes that are in none of the frame's views: it is the tab
+        // the hand was last working in, and what such a probe is answered by.
+        resolver.remember_view(window.frame, anchor);
+    }
 
     context
 }
 
+/// Whether the pointer is inside a window that is the view itself or one of its children.
 fn hwnd_is_same_or_ancestor(child: HWND, ancestor: HWND) -> bool {
     if child.is_invalid() || ancestor.is_invalid() {
         return false;
@@ -1891,34 +1812,35 @@ fn hwnd_is_same_or_ancestor(child: HWND, ancestor: HWND) -> bool {
 /// Whether the view under the pointer is a search's results. The hints carry the
 /// same answer, but they are read at the folder probe's cadence: a search opened a
 /// moment ago is seen here before it is seen there.
-fn is_current_search_view_legacy(resolver: &ItemResolver) -> bool {
-    // Only the URL is read here, so the folder is not asked for: it is a walk
-    // through the view's own objects, and this check discards everything but the
-    // location.
-    match get_active_shell_view_context_at_cursor(resolver, false) {
-        Some(context) => context
-            .location_url
-            .as_deref()
-            .map(is_search_ms_url)
-            .unwrap_or(false),
-        None => false,
-    }
+///
+/// It is the same view the hints are read from — the one the pointer is in — so the two
+/// cannot be about different views: what differs between them is when they were read (see
+/// `anchored_view_context`).
+fn is_current_search_view_legacy(resolver: &mut ItemResolver, pointer: &PointerTick) -> bool {
+    // Only the URL is read, so the folder is not asked for: it is a walk through the
+    // view's own objects, and this check discards everything but the location.
+    anchored_view_context(resolver, pointer, false)
+        .and_then(|context| context.location_url)
+        .is_some_and(|url| is_search_ms_url(&url))
 }
 
 /// What the view under the pointer is showing, for the probes that need to know a
 /// location has changed.
 ///
-/// It is answered by the view itself — the folder it has open and the URL it was
-/// opened with — and by nothing else: the resolution of a file does not depend on
-/// it, so a view the shell does not describe leaves the hints empty rather than
-/// sending the hook looking for another witness.
-fn get_current_hover_resolver_hints(resolver: &ItemResolver) -> HoverResolverHints {
+/// It is answered by the view the pointer is in — the folder it has open and the URL it was
+/// opened with — and by nothing else: the resolution of a file does not depend on it, so a
+/// view the shell does not describe leaves the hints empty rather than sending the hook
+/// looking for another witness.
+fn get_current_hover_resolver_hints(
+    resolver: &mut ItemResolver,
+    pointer: &PointerTick,
+) -> HoverResolverHints {
     let mut hints = HoverResolverHints::default();
 
-    if let Some(context) = get_active_shell_view_context_at_cursor(resolver, true) {
+    if let Some(context) = anchored_view_context(resolver, pointer, true) {
         hints.current_folder = context.folder_path.clone();
         hints.location_url = context.location_url.clone();
-        hints.shell_view_hwnd = Some(context.shell_view_hwnd);
+        hints.shell_view_hwnd = (context.shell_view_hwnd != 0).then_some(context.shell_view_hwnd);
 
         hints.is_search_view = is_probable_search_view_context(&context);
         if hints.is_search_view {
@@ -1930,10 +1852,6 @@ fn get_current_hover_resolver_hints(resolver: &ItemResolver) -> HoverResolverHin
     }
 
     hints
-}
-
-fn point_in_rect(point: &POINT, rect: &RECT) -> bool {
-    point.x >= rect.left && point.x < rect.right && point.y >= rect.top && point.y < rect.bottom
 }
 
 /// Whether a point is inside a box, read the way a window reads one: the right and
@@ -2467,16 +2385,20 @@ fn element_item_index(
     }
 }
 
-/// The window the pointer is in, which is the window an item under it is drawn in.
+/// The window an item is resolved in, from the window under the pointer.
 ///
 /// Both handles come out of the one walk: the window under the pointer, and the root it
 /// belongs to. The root is the frame whose views can be holding the item — a Shell view
 /// has to belong to the window the pointer is over for the items it draws to be the ones
 /// under it — and the window under the pointer is what says which of those views is
 /// drawing it (see `ItemWindow`).
-fn item_window_at(point: POINT) -> Option<ItemWindow> {
+///
+/// The window is handed in rather than read here, because it is the tick's own reading of
+/// what the pointer is over: the item a tick resolves and the place it describes are about
+/// that one window, and a second reading of it would be a second answer to one question
+/// (see `PointerTick`).
+fn item_window_of(window: HWND) -> Option<ItemWindow> {
     unsafe {
-        let window = WindowFromPoint(point);
         if window.is_invalid() {
             return None;
         }
@@ -2590,6 +2512,8 @@ fn folder_views_for_window(
             candidates.push(AnsweredView {
                 view_identity,
                 view_hwnd,
+                browser,
+                shell_view,
                 folder_view,
             });
         }
@@ -2651,6 +2575,9 @@ fn frame_views(
             // set is read again then, which is what a count that could not be read is
             // worth.
             registrations: registrations.unwrap_or(views.len() as i32),
+            // The views were found again, so the one the pointer was last inside of the
+            // old set says nothing about this one.
+            anchor: None,
             views,
         });
     }
@@ -2708,16 +2635,27 @@ fn item_file_path(
     // that has moved on looks like, and what the re-read costs is one walk of a
     // collection this is holding for exactly that reason.
     for attempt in 0..2 {
-        let asked = {
+        let (asked, anchored) = {
             let views = frame_views(resolver, window.frame, registrations);
             match window.view_holding(views) {
                 Some(position) => {
                     note_probe(&PROBE_VIEW_ANCHORED);
-                    view_item(&views[position].folder_view, index, &item.name)
+                    (
+                        view_item(&views[position].folder_view, index, &item.name),
+                        Some(position),
+                    )
                 }
                 None => break,
             }
         };
+
+        // The view the item was drawn in is the view the pointer is in, which is what a
+        // probe that is in none of them is answered by: it is remembered here as well as by
+        // the hints, because a hand sweeping a list is this path many times a second and a
+        // folder probe once every few hundred milliseconds (see `WindowViews::anchor`).
+        if let Some(anchored) = anchored {
+            resolver.remember_view(window.frame, anchored);
+        }
 
         match asked {
             ViewItem::File(path) => return Some(path),
@@ -2874,11 +2812,8 @@ fn view_item(folder_view: &IFolderView2, index: i32, expected_name: &str) -> Vie
 /// the pointer stays in the item — and in the window — that answer was read in. Everything
 /// that makes the item under a parked pointer a new question drops the answer with it
 /// (`forget_item`).
-fn get_file_under_cursor(resolver: &mut ItemResolver) -> Option<PathBuf> {
-    let mut point = POINT::default();
-    if unsafe { GetCursorPos(&mut point) }.is_err() {
-        return None;
-    }
+fn get_file_under_cursor(resolver: &mut ItemResolver, pointer: &PointerTick) -> Option<PathBuf> {
+    let point = pointer.point;
 
     // A tick asks about the same point more than once — the move path asks for
     // the file it latched and then for the one on screen — and the answer is the
@@ -2891,8 +2826,10 @@ fn get_file_under_cursor(resolver: &mut ItemResolver) -> Option<PathBuf> {
     // The window the pointer is in is read before the answer is, because it is half of
     // what that answer is kept against: a tab switched under a parked pointer is another
     // view drawing another folder at the same place, and the box alone cannot say the
-    // item under the pointer is the one this answer was read from.
-    let window = item_window_at(point);
+    // item under the pointer is the one this answer was read from. It is the window the
+    // tick already has, and not a second reading of a pointer that may have moved since
+    // (see `PointerTick`).
+    let window = item_window_of(pointer.window);
     let drawn_in = window
         .as_ref()
         .map(|window| window.drawn_in)
@@ -3274,17 +3211,6 @@ fn read_explorer_state() -> ExplorerState {
     state
 }
 
-/// Keyboard navigation state: `active` is true while a navigation key is held
-/// or was pressed since the previous poll, and `pressed` is the fresh press
-/// transition alone. A held key keeps reporting `active` forever, so a folder
-/// change uses `pressed` to tell a new key press apart from state left over
-/// from the navigation that opened the folder.
-fn keyboard_navigation_input_state() -> (bool, bool) {
-    key_input_state(&[
-        VK_UP, VK_DOWN, VK_LEFT, VK_RIGHT, VK_HOME, VK_END, VK_PRIOR, VK_NEXT,
-    ])
-}
-
 /// Left, right and middle buttons are deliberate input even when the cursor
 /// never moves: the folder a double-click opens is user navigation, not a
 /// background change the preview has to wait out.
@@ -3344,21 +3270,76 @@ fn is_explorer_navigation_shortcut_key(key_vk: i32, alt_down: bool, ctrl_down: b
         || (ctrl_down && key_vk == VK_T_CODE)
 }
 
-fn is_explorer_navigation_shortcut_detected() -> bool {
+/// Everything one poll of the keyboard says about navigation.
+///
+/// `active` is true while a navigation key is held or was pressed since the previous poll,
+/// and `pressed` is the fresh press transition alone: a held key keeps reporting `active`
+/// forever, so a folder change uses `pressed` to tell a new key press apart from state left
+/// over from the navigation that opened the folder (see `keyboard_navigation_press_seq`).
+///
+/// `shortcut` is Explorer's own navigation being *asked* for — a Backspace, an arrow under
+/// Alt, a Ctrl+T — which is input the app acts on rather than state it waits out.
+#[derive(Clone, Copy, Default)]
+struct NavigationInput {
+    active: bool,
+    pressed: bool,
+    shortcut: bool,
+}
+
+/// The navigation keys and the shortcuts made of them, read in one pass.
+///
+/// One pass because the keys overlap: the arrows are navigation keys *and* half of a
+/// shortcut, and the press bit `GetAsyncKeyState` reports is consumed by whoever reads a key
+/// first — so a second read of the same key in one tick is not the same answer twice, it is
+/// a read that finds the bit already taken (see the caller, which reads the navigation keys
+/// ahead of everything else for exactly that reason). The arrows are read here, once, and
+/// the shortcut asks its question of the same reading: whether the key is *down*, which is
+/// what the second read would have found.
+///
+/// The two keys that are not navigation keys are read whatever the modifiers are, and that
+/// is not an oversight. A Backspace navigates with no modifier at all, so gating it on a
+/// modifier would lose the shortcut outright; and a `T` typed anywhere on the machine sets
+/// its own press bit, so gating *that* read on Ctrl being held would leave the bit standing
+/// until Ctrl was next pressed — and a Ctrl pressed for something else would then read as a
+/// Ctrl+T that opens a tab. What leaving a press bit standing costs is the read that
+/// consumes it, which is why both are read every tick.
+fn navigation_input() -> NavigationInput {
     let alt_down = is_key_down(VK_MENU_CODE);
     let ctrl_down = is_key_down(VK_CONTROL_CODE);
-    let shortcut_keys = [
-        VK_BACK_CODE,
-        VK_LEFT.0 as i32,
-        VK_RIGHT.0 as i32,
-        VK_UP.0 as i32,
-        VK_T_CODE,
+    let mut input = NavigationInput::default();
+
+    let navigation_keys = [
+        VK_UP, VK_DOWN, VK_LEFT, VK_RIGHT, VK_HOME, VK_END, VK_PRIOR, VK_NEXT,
     ];
 
-    shortcut_keys.iter().any(|&key_vk| unsafe {
-        is_pressed_or_down_state(GetAsyncKeyState(key_vk) as u16)
+    for &key in &navigation_keys {
+        let key_vk = key.0 as i32;
+        let state = unsafe { GetAsyncKeyState(key_vk) as u16 };
+
+        if is_pressed_or_down_state(state) {
+            input.active = true;
+        }
+        if (state & 0x0001) != 0 {
+            input.pressed = true;
+        }
+        if is_key_down_state(state)
             && is_explorer_navigation_shortcut_key(key_vk, alt_down, ctrl_down)
-    })
+        {
+            input.shortcut = true;
+        }
+    }
+
+    for key_vk in [VK_BACK_CODE, VK_T_CODE] {
+        let state = unsafe { GetAsyncKeyState(key_vk) as u16 };
+
+        if is_pressed_or_down_state(state)
+            && is_explorer_navigation_shortcut_key(key_vk, alt_down, ctrl_down)
+        {
+            input.shortcut = true;
+        }
+    }
+
+    input
 }
 
 fn mouse_navigation_buttons() -> [windows::Win32::UI::Input::KeyboardAndMouse::VIRTUAL_KEY; 2] {
@@ -3550,39 +3531,69 @@ fn key_is_down(vk: i32) -> bool {
     }
 }
 
-/// Whether the pointer is inside a region a preview published as holding it,
-/// reading the cursor position here: the caller runs before the polling loop has
-/// read it for this iteration. Answers `false` without a syscall when nothing on
-/// screen holds the pointer.
-fn preview_pointer_hold_now() -> bool {
-    let mut cursor_pos = POINT::default();
-    unsafe {
-        if GetCursorPos(&mut cursor_pos).is_err() {
-            return false;
-        }
-    }
-
-    preview_pointer_hold(cursor_pos.x, cursor_pos.y)
+/// What one tick knows about the pointer: where it is, the scale of the display it is on,
+/// and the window it is over.
+///
+/// One reading of each per tick rather than one per caller, because every question a tick
+/// asks about the pointer is a question about one instant: what the hand has done is one
+/// reading of "the mouse has moved", what is under it is one window, and the display it is
+/// on is one monitor. A caller that reads the cursor for itself in the middle of a tick is
+/// asking about a later instant than the tick it belongs to — and paying a syscall for the
+/// privilege. The one read that is deliberately fresh is the one the preview loop makes
+/// before it lays a hover out (see `replay_where_the_pointer_is`): that one is about where
+/// the preview goes, and it happens on the thread that draws it.
+#[derive(Clone, Copy)]
+struct PointerTick {
+    point: POINT,
+    /// The scale of the display the pointer is on, which is what a move is measured against
+    /// at the tolerance it is given (see `KeyboardPointerPause::move_threshold_px`).
+    dpi: u32,
+    /// The window under the pointer, leaf first: what a frame's views are told apart by
+    /// (see `ItemWindow`).
+    window: HWND,
 }
 
-/// Check if cursor is currently over an Explorer window (regardless of foreground).
+impl PointerTick {
+    /// The pointer as one reading, from a cursor position already in hand.
+    ///
+    /// It is the one place a snapshot is built: the scale of the display is asked of the
+    /// display the point is on, and the window is asked of the point itself, so a caller
+    /// that has read the cursor is a caller that has everything else here (see
+    /// `read_pointer` for the callers that have not).
+    fn of(point: POINT) -> Self {
+        Self {
+            point,
+            dpi: monitor_dpi_from_point(point.x, point.y),
+            window: unsafe { WindowFromPoint(point) },
+        }
+    }
+}
+
+/// Where the pointer is and what is under it, as one reading.
+fn read_pointer() -> Option<PointerTick> {
+    let mut point = POINT::default();
+    if unsafe { GetCursorPos(&mut point) }.is_err() {
+        return None;
+    }
+
+    Some(PointerTick::of(point))
+}
+
+/// Whether the window under the pointer is an Explorer window or one inside one.
+///
+/// The window is handed in rather than read here: what a tick has under the pointer is one
+/// window, and the walk up from it to a class the shell is known by is the same walk
+/// whoever starts it.
 /// Keep this HWND/class based; calling ShellWindows here caused Explorer-side
 /// COM providers to allocate while we were merely checking cursor position.
-fn is_cursor_over_explorer_full() -> bool {
+fn is_cursor_over_explorer_full(window: HWND) -> bool {
     unsafe {
-        let mut cursor_pos = POINT::default();
-        if GetCursorPos(&mut cursor_pos).is_err() {
-            return false;
-        }
-
-        // Get window under cursor
-        let hwnd = WindowFromPoint(cursor_pos);
-        if hwnd.is_invalid() {
+        if window.is_invalid() {
             return false;
         }
 
         // Walk up parent windows to find Explorer window
-        let mut current_hwnd = hwnd;
+        let mut current_hwnd = window;
 
         for _ in 0..20 {
             if is_explorer_window(current_hwnd) {
@@ -3957,7 +3968,7 @@ pub fn run_explorer_hook() {
     const STATE_RECHECK_MEDIUM_MS: u64 = 300; // When visible but not focused
     const STATE_RECHECK_ACTIVE_MS: u64 = 100; // When active
 
-    let (mut config_snapshot, mut trigger_key_vk) = CONFIG
+    let (mut config_snapshot, mut trigger_key_vk, mut trigger_key_seen) = CONFIG
         .lock()
         .map(|c| {
             let snapshot = (
@@ -3969,9 +3980,11 @@ pub fn run_explorer_hook() {
                 c.trigger_key_enabled,
                 c.tick_ms,
             );
-            // Resolved once per config change instead of once per tick.
+            // Resolved once per config change instead of once per tick: what the tick
+            // compares is the spelling, and a spelling that has not changed is a key that
+            // has not changed (see the snapshot below).
             let vk = off_trigger_key_to_vk(&c.trigger_key);
-            (snapshot, vk)
+            (snapshot, vk, c.trigger_key.clone())
         })
         .unwrap_or((
             (
@@ -3984,6 +3997,7 @@ pub fn run_explorer_hook() {
                 DEFAULT_TICK_MS,
             ),
             Some(0x12),
+            "alt".to_string(),
         ));
     let mut explorer_probe_backoff_until: Option<Instant> = None;
     let mut last_display_signature = current_display_signature();
@@ -4198,7 +4212,15 @@ pub fn run_explorer_hook() {
                 config.trigger_key_enabled,
                 config.tick_ms,
             );
-            trigger_key_vk = off_trigger_key_to_vk(&config.trigger_key);
+            // The trigger key is resolved when it is *spelled* differently, not every
+            // tick: what the tick does with it is read a key's state, and lower-casing a
+            // name and looking it up again is work a setting that has not changed does not
+            // need. The comparison is a string compare and costs no allocation; the clone
+            // behind it happens once per change.
+            if config.trigger_key != trigger_key_seen {
+                trigger_key_seen = config.trigger_key.clone();
+                trigger_key_vk = off_trigger_key_to_vk(&config.trigger_key);
+            }
         }
 
         let preview_enabled = config_snapshot.0;
@@ -4293,7 +4315,18 @@ pub fn run_explorer_hook() {
                 // A pointer that a preview is holding is not evidence that the
                 // user has left: the preview is on top of Explorer, so the check
                 // below cannot see Explorer under it.
-                if !is_cursor_over_explorer_full() && !preview_pointer_hold_now() {
+                //
+                // Both questions are about the pointer as it is, and both are asked of
+                // one reading of it: what is under the pointer is one window, and a
+                // preview holding the pointer is one point in one region (see
+                // `PointerTick`).
+                let pointer = read_pointer();
+                let over_explorer =
+                    pointer.is_some_and(|pointer| is_cursor_over_explorer_full(pointer.window));
+                let holds_pointer = pointer
+                    .is_some_and(|pointer| preview_pointer_hold(pointer.point.x, pointer.point.y));
+
+                if !over_explorer && !holds_pointer {
                     if last_file.is_some() || keyboard_file.is_some() {
                         hide_preview();
                         last_file = None;
@@ -4321,11 +4354,15 @@ pub fn run_explorer_hook() {
         std::thread::sleep(Duration::from_millis(tick_ms));
 
         unsafe {
-            // Get cursor position
+            // Get cursor position, as the tick's one reading of the pointer: everything
+            // this tick asks about it — where it is, the scale of the display it is on, and
+            // the window under it — is a question about one instant, and it is read here
+            // rather than again by each caller (see `PointerTick`).
             let mut cursor_pos = POINT::default();
             if GetCursorPos(&mut cursor_pos).is_err() {
                 continue;
             }
+            let pointer = PointerTick::of(cursor_pos);
 
             // Whether the pointer is on a preview that holds it: a text preview the
             // user can read or select from — on the preview, or inside the margin
@@ -4348,10 +4385,8 @@ pub fn run_explorer_hook() {
             // treated the way it was before the pointer ever touched it.
             let pointer_hold = preview_pointer_hold(cursor_pos.x, cursor_pos.y);
 
-            let move_threshold = pointer_pause.move_threshold_px(
-                is_keyboard_hover || keyboard_screen_owner,
-                monitor_dpi_from_point(cursor_pos.x, cursor_pos.y),
-            );
+            let move_threshold = pointer_pause
+                .move_threshold_px(is_keyboard_hover || keyboard_screen_owner, pointer.dpi);
             // How far the hand has come is one reading of "the mouse has moved", and
             // the file the preview on screen is about is another: a pointer that has
             // left that item has moved whatever the threshold says, and the two are
@@ -4369,10 +4404,12 @@ pub fn run_explorer_hook() {
             // Read the navigation keys first: GetAsyncKeyState's "pressed since
             // the previous call" bit goes away with the first read of a key in
             // an iteration, and that fresh press is what a folder change has to
-            // tell apart from a held key.
-            let (keyboard_navigation_active, keyboard_navigation_press) =
-                keyboard_navigation_input_state();
-            let explorer_navigation_shortcut_input = is_explorer_navigation_shortcut_detected();
+            // tell apart from a held key. The keys a shortcut is made of are read
+            // with them, once, for the same reason (see `navigation_input`).
+            let navigation = navigation_input();
+            let keyboard_navigation_active = navigation.active;
+            let keyboard_navigation_press = navigation.pressed;
+            let explorer_navigation_shortcut_input = navigation.shortcut;
             let keyboard_navigation_input =
                 explorer_navigation_shortcut_input || keyboard_navigation_active;
             let mouse_navigation_input = is_mouse_navigation_button_detected();
@@ -4391,7 +4428,7 @@ pub fn run_explorer_hook() {
             }
             let keyboard_owns_pointer = is_keyboard_hover || pointer_pause.freezes_pointer();
             let wheel_scroll = wheel_tick
-                && (is_cursor_over_explorer_full()
+                && (is_cursor_over_explorer_full(pointer.window)
                     || (keyboard_owns_pointer && cursor_preview_hover().any()));
             if wheel_scroll {
                 scroll_since_move = true;
@@ -4585,7 +4622,7 @@ pub fn run_explorer_hook() {
                 )
             {
                 last_folder_probe = Instant::now();
-                hover_resolver_hints = get_current_hover_resolver_hints(&resolver);
+                hover_resolver_hints = get_current_hover_resolver_hints(&mut resolver, &pointer);
                 let location = HoverLocation::of(&hover_resolver_hints);
                 // A look that answered nothing about the place is left alone: it is a
                 // question to ask again, not a change to act on. And a fact is only
@@ -4638,7 +4675,7 @@ pub fn run_explorer_hook() {
                     // changed under an unmoved pointer is owed is the question asked
                     // again rather than the preview taken away.
                     let still_on_the_file = last_file.as_ref().is_some_and(|file| {
-                        get_file_under_cursor(&mut resolver)
+                        get_file_under_cursor(&mut resolver, &pointer)
                             .is_some_and(|current| same_path(file, &current))
                     }) || read_failure_is_the_same_item(
                         hover_item_box,
@@ -4659,7 +4696,7 @@ pub fn run_explorer_hook() {
                         // then remember the press count: only a later navigation key
                         // press may lift this suspension, so key state left over
                         // from the navigation that opened the folder cannot.
-                        let _ = keyboard_navigation_input_state();
+                        let _ = navigation_input();
                         keyboard_press_seq_at_suspend = keyboard_navigation_press_seq;
 
                         if last_file.is_some() || keyboard_file.is_some() || is_keyboard_hover {
@@ -4791,7 +4828,7 @@ pub fn run_explorer_hook() {
                 allow_keyboard_preview_on_first_observation = true;
 
                 if let Some(suppressed_file) = suppressed.file.clone() {
-                    if let Some(current_file) = get_file_under_cursor(&mut resolver) {
+                    if let Some(current_file) = get_file_under_cursor(&mut resolver, &pointer) {
                         if same_path(&suppressed_file, &current_file) {
                             hover_start = Some(Instant::now());
                             continue;
@@ -4805,7 +4842,7 @@ pub fn run_explorer_hook() {
                 // resolution and wait until hover is stable before probing media.
                 if last_file.is_some() {
                     let mut keep_while_pointer_held = false;
-                    if let Some(current_file) = get_file_under_cursor(&mut resolver) {
+                    if let Some(current_file) = get_file_under_cursor(&mut resolver, &pointer) {
                         if last_file
                             .as_ref()
                             .map(|last| same_path(last, &current_file))
@@ -5064,7 +5101,7 @@ pub fn run_explorer_hook() {
                     let scroll_driven = scroll_since_move;
 
                     // Try to get file under cursor
-                    let resolved = get_file_under_cursor(&mut resolver);
+                    let resolved = get_file_under_cursor(&mut resolver, &pointer);
                     // One probe per parked cursor: this one closes the latch, and the
                     // events that make the file under the cursor a new question — a
                     // move, a wheel tick, a folder change — are what reopen it.
@@ -5128,7 +5165,7 @@ pub fn run_explorer_hook() {
                         }
 
                         let search_view_active = hover_resolver_hints.is_search_view
-                            || is_current_search_view_legacy(&resolver);
+                            || is_current_search_view_legacy(&mut resolver, &pointer);
                         if search_view_active {
                             let miss_started =
                                 stationary_search_miss_started_at.get_or_insert_with(Instant::now);
@@ -5542,84 +5579,6 @@ mod tests {
         assert!(text_boxes(&[]).is_none());
     }
 
-    /// One window's facts, from the three answers the choice between windows is made
-    /// from — see `ShellViewFacts`.
-    fn window(holds_cursor: bool, holds_point: bool, is_foreground: bool) -> ShellViewFacts {
-        ShellViewFacts {
-            holds_cursor,
-            holds_point,
-            is_foreground,
-        }
-    }
-
-    /// The window the pointer is inside is the answer whatever the others are: chosen
-    /// over the window the point merely falls in, and over the foreground one, even
-    /// when both come first — see `winning_shell_view`.
-    #[test]
-    fn the_window_the_pointer_is_in_is_the_answer() {
-        let chosen = winning_shell_view(&[
-            window(false, true, true),
-            window(true, false, false),
-            window(false, false, true),
-        ]);
-
-        assert_eq!(chosen, Some(1), "the window the pointer is in");
-    }
-
-    /// The *first* window the point falls in is the answer, not the last. A frame and
-    /// the pane inside it both register and both hold a point that is over the list,
-    /// and the walk reached the frame before the pane.
-    #[test]
-    fn the_first_window_the_point_falls_in_is_the_answer() {
-        let chosen = winning_shell_view(&[
-            window(false, false, true),
-            window(false, true, false),
-            window(false, true, true),
-        ]);
-
-        assert_eq!(chosen, Some(1), "the first window the point is in");
-    }
-
-    /// A window the point falls in is the answer over one that is only the foreground
-    /// window, because a point match is taken before any foreground match: the two
-    /// never compete, which is why a point match is not also asked about the
-    /// foreground.
-    #[test]
-    fn the_point_beats_the_foreground_window() {
-        let chosen = winning_shell_view(&[window(false, false, true), window(false, true, true)]);
-
-        assert_eq!(chosen, Some(1), "the window the point is in");
-    }
-
-    /// With nothing else to go on the *last* window that is the foreground one is the
-    /// answer. One frame registers a window per tab and every one of them answers with
-    /// the frame's own handle, so the last read is the one the answer comes from.
-    #[test]
-    fn the_last_foreground_window_is_the_answer() {
-        let chosen = winning_shell_view(&[
-            window(false, false, true),
-            window(false, false, false),
-            window(false, false, true),
-        ]);
-
-        assert_eq!(
-            chosen,
-            Some(2),
-            "the last window that is the foreground one"
-        );
-    }
-
-    /// A probe that matched no window has no answer, which is what leaves the hints
-    /// empty rather than describing a window that is not there.
-    #[test]
-    fn a_probe_that_matched_no_window_has_no_answer() {
-        assert_eq!(winning_shell_view(&[]), None);
-        assert_eq!(
-            winning_shell_view(&[window(false, false, false), window(false, false, false)]),
-            None
-        );
-    }
-
     /// One state's counts, from the numbers `explorer_state_from_counts` decides by.
     fn counts(
         total: usize,
@@ -5766,7 +5725,6 @@ mod tests {
 
         PROBE_VIEW_WALKS.fetch_add(2, Ordering::Relaxed);
         PROBE_VIEW_WINDOWS.fetch_add(7, Ordering::Relaxed);
-        PROBE_VIEW_POINTER_MATCHES.fetch_add(5, Ordering::Relaxed);
         PROBE_VIEW_SETS_KEPT.fetch_add(4, Ordering::Relaxed);
         PROBE_VIEW_ANCHORED.fetch_add(3, Ordering::Relaxed);
         PROBE_ITEM_MEMO_HITS.fetch_add(6, Ordering::Relaxed);
@@ -5795,10 +5753,6 @@ mod tests {
         assert!(written(&first, "points ") >= 1, "points: {first}");
         assert!(written(&first, "view walks ") >= 2, "view walks: {first}");
         assert!(written(&first, "windows ") >= 7, "windows: {first}");
-        assert!(
-            written(&first, "pointer matched ") >= 5,
-            "pointer matches: {first}"
-        );
         assert!(written(&first, "sets kept ") >= 4, "sets kept: {first}");
         assert!(written(&first, "anchored ") >= 3, "anchored: {first}");
         assert!(written(&first, "item memo ") >= 6, "item memo: {first}");
@@ -5826,21 +5780,20 @@ mod tests {
     }
 
     /// The probe against the shell the machine is actually running — the part of this
-    /// no unit test reaches: a real window collection, the choice between the windows
-    /// in it, and what the window that wins is then asked.
+    /// no unit test reaches: a real window collection, the views a real window holds, and
+    /// what the view the pointer is in is then asked.
     ///
     /// Ignored because it needs a desktop, which is the same reason the other probes
-    /// here are. Run by hand: `cargo test -- --ignored the_probe_walks_the_shell`.
+    /// here are. Run by hand: `cargo test -- --ignored the_probe_reads_the_place`.
     ///
-    /// What it asserts is about the walk rather than about the answer, because the
-    /// answer is whatever this machine happens to have under its pointer: how many
-    /// windows were passed, that the walk cost no more than the collection had to
-    /// offer, and that an answer can only have come from a window that was walked.
-    /// It is the only coverage the restructured probe has — see
-    /// `winning_shell_view` for the part that is unit tested on its own.
+    /// What it asserts is about the shape of the probe rather than about the answer,
+    /// because the answer is whatever this machine happens to have under its pointer:
+    /// that a place is read out of the views the pointed-at window holds, and that a
+    /// second probe of the same place reads no view set again — the property the whole
+    /// arrangement is for, and the one an argument cannot settle.
     #[test]
     #[ignore = "reads the shell of the desktop it runs on"]
-    fn the_probe_walks_the_shell_of_the_desktop_it_runs_on() {
+    fn the_probe_reads_the_place_out_of_the_window_the_pointer_is_in() {
         // Every call on this path is a Shell object's, so the thread needs an
         // apartment before any of it is asked for — the same one the hook thread
         // takes, which never pumps either.
@@ -5849,60 +5802,49 @@ mod tests {
             return;
         }
 
-        let shell_windows =
-            unsafe { CoCreateInstance::<_, IShellWindows>(&ShellWindows, None, CLSCTX_ALL) }.ok();
-        let Some(shell_windows) = shell_windows else {
-            println!("no Shell window collection: nothing to walk");
-            return;
-        };
-        let Some(count) = (unsafe { shell_windows.Count() }).ok() else {
-            println!("the collection will not say how many windows it holds");
-            return;
-        };
+        let mut resolver = ItemResolver::new(None);
+        resolver.rebuild_shell();
 
-        let walks = PROBE_VIEW_WALKS.load(Ordering::Relaxed);
-        let windows = PROBE_VIEW_WINDOWS.load(Ordering::Relaxed);
-
-        let mut point = POINT::default();
-        if unsafe { GetCursorPos(&mut point) }.is_err() {
+        let Some(pointer) = read_pointer() else {
             println!("no pointer to ask about");
             return;
-        }
+        };
 
-        let context = get_active_shell_view_context(Some(&shell_windows), &point, true);
+        let kept = PROBE_VIEW_SETS_KEPT.load(Ordering::Relaxed);
+        let context = anchored_view_context(&mut resolver, &pointer, true);
+        let walks = PROBE_VIEW_WALKS.load(Ordering::Relaxed);
 
-        assert_eq!(
-            PROBE_VIEW_WALKS.load(Ordering::Relaxed),
-            walks + 1,
-            "one walk is one walk"
-        );
-
-        let walked = PROBE_VIEW_WINDOWS.load(Ordering::Relaxed) - windows;
-        let room = count.clamp(0, SHELL_WINDOW_LIMIT) as u64;
-        assert!(
-            walked <= room,
-            "no more windows than the walk had room for: {walked} of {count}"
-        );
-        if count > 0 {
-            assert!(walked > 0, "a walk over windows passes between them");
-        }
-
-        // An answer names a window the walk reached, so an answer with no window
-        // behind it would be one that came from somewhere the walk never went.
+        // An answer names a view, and a view is a window: an answer with no window
+        // behind it would be one that came from somewhere no view was ever found.
         if let Some(context) = &context {
-            assert!(walked > 0, "an answer comes from a window that was walked");
             assert_ne!(context.shell_view_hwnd, 0, "an answer names a window");
         }
 
-        // Said out loud rather than only asserted: a run that answered from a walk
-        // of no windows at all is a run this test passed without testing anything,
-        // and the numbers are how that is told apart from a run that walked.
+        // The second probe of an unmoved pointer is answered out of the set the first
+        // one read: a window's views are its own until a tab or a window is opened or
+        // closed, and reading them again for every probe is the cost that grows with
+        // how many tabs are open.
+        let _ = anchored_view_context(&mut resolver, &pointer, true);
+
+        assert_eq!(
+            PROBE_VIEW_WALKS.load(Ordering::Relaxed),
+            walks,
+            "a probe of the same place reads no view set again"
+        );
+        assert!(
+            PROBE_VIEW_SETS_KEPT.load(Ordering::Relaxed) > kept,
+            "and the set the first probe read is what answered it"
+        );
+
+        // Said out loud rather than only asserted: a run whose pointer is in none of the
+        // Shell windows passes the assertions above without describing anything, and the
+        // numbers are how that is told apart from a run that answered.
         match &context {
             Some(context) => println!(
-                "walked {walked} of {count} windows; the pointer is in window {} with folder {:?}",
+                "the pointer is in view {} with folder {:?} (view walks {walks} before it)",
                 context.shell_view_hwnd, context.folder_path
             ),
-            None => println!("walked {walked} of {count} windows; the pointer is in none of them"),
+            None => println!("the pointer is in no view a Shell window holds"),
         }
 
         unsafe { CoUninitialize() };
