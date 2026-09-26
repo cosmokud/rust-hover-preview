@@ -2716,6 +2716,7 @@ unsafe fn paint(
 
                     painter.draw(
                         &piece(0, from),
+                        rect.left,
                         rect,
                         &run.style,
                         run.style.foreground,
@@ -2729,6 +2730,7 @@ unsafe fn paint(
                     };
                     painter.draw(
                         &piece(from, to),
+                        highlight_rect.left,
                         highlight_rect,
                         &run.style,
                         highlight_foreground.unwrap_or(run.style.foreground),
@@ -2738,6 +2740,7 @@ unsafe fn paint(
                     let tail_x = run.x + (to as f32 * advance).round() as i32;
                     painter.draw(
                         &piece(to, characters.len()),
+                        tail_x,
                         RECT {
                             left: tail_x,
                             ..rect
@@ -2749,6 +2752,7 @@ unsafe fn paint(
                 }
                 None => painter.draw(
                     &run.text,
+                    rect.left,
                     rect,
                     &run.style,
                     run.style.foreground,

@@ -11,11 +11,16 @@
 - **`Audio`** joins **Preview Types**, and **`Codecs`** gains an **Audio** group: FFmpeg, the media stack, and the decoders for MP3, AAC/M4A, WMA, FLAC, ALAC, Vorbis and Opus (the **Web Media Extensions** package), Dolby Digital and DTS. A row that is missing and has a page asks before opening it, exactly as the video and image rows do.
 - **`[audio] extensions`** in `config.ini` is the list of what is previewed as a sound, written from the built-in list on first run and read back after. `audio_volume` joins `video_volume` under the same `; Volume` heading.
 - Sounds are recognized by their own bytes as well as by their names: the magic of FLAC, WavPack, Monkey's Audio, True Audio, TAK, OptimFROG, Shorten, CAF, AU, VOC, Musepack, RealAudio, the DSD containers, AC-3 and DTS, the `ftypM4B` audiobook brand, and the Ogg page that carries Vorbis, Opus, Speex or FLAC rather than Theora. A renamed sound is still previewed as the sound it is, and a renamed *video* that holds only a song is answered as one too.
+- **A sound's name is scrolled across its card when the card has no room for it**, rather than being cut short with an ellipsis. The card is the width its facts line and its bar ask for and never wider; a name too long for it is drawn whole, clipped to the card, and moved left until its end is in sight and back again — resting a second at either end — for as long as the card is up. A card whose name does fit is drawn once and held, at the cadence the clock already had.
 - `TODO.md` gains **`Unsupported Audio Formats`**: MIDI (the GS Wavetable synthesizer is a MIDI *out* device and not a decoder, and FFmpeg's player is silent on one), the tracker modules (libopenmpt is an FFmpeg build option), the protected files (`m4p`, `aa`, `aax`), the playlists (`m3u`, `pls`, …) and `.cda` — each with what it would take.
+
+### Fixed
+
+- **Sounds played by the media engine now play at all.** The name the engine was handed to resolve a file by was the Shell's verbatim path — `\\?\C:\…` — and a verbatim path is not a URL: the engine refused it, and the refusal arrives on its notify callback *after* `Play` has already answered, so what a hover got was the card it was owed with a clock that never moved and nothing audible, with nothing on this side able to say why. Every sound the native engine plays was that way; the ones FFmpeg plays were not, because a command line takes a verbatim path happily — which is what made it look like a bug about formats rather than about the form of a path. The stream is still opened on the verbatim path, and only the name handed to the engine beside it is the plain form now. A video the engine plays on a machine without FFmpeg was refused the same way.
 
 ### Changed
 
-- `README.md` and `ARCHITECTURE.md` describe the sound kind, its two engines and the two volumes.
+- `README.md` and `ARCHITECTURE.md` describe the sound kind, its two engines, the two volumes and the scrolling name.
 
 ## [0.3.5] - 2026-09-26
 
