@@ -42,8 +42,6 @@ Almost everything is previewed by **Windows 11 and this app alone** — a codec 
 
 Animated GIF, APNG and WebP play. `hdr` and `exr` are tone-mapped for preview. `dds` previews BC1–BC7, both BC6H variants and uncompressed textures — including packed HDR and depth — at the first face and the nearest-size mip.
 
-Comics are read by the app itself, so they need nothing installed: a `.cbz` is a zip of pages, a `.cbr` a rar of them, and a `.cbc` Calibre’s own container — a zip of several comics’ pages. What a hover shows is the **first page**, at the book kind’s scale and under the same **`Ebook`** switch a PDF answers to. Nothing is unpacked to disk: the archive’s headers are walked for the plate’s name and only that one plate is read, so a hundred-megabyte comic costs a page rather than an unpacking. The plate is chosen the way comic readers choose it — the first by name with the digits counted, so `2.jpg` comes before `10.jpg` — and a two-page spread is shown whole rather than cut in half.
-
 ### Needs FFmpeg, or the media engine Windows has
 
 Videos the table does not already cover need FFmpeg, and these are all of them: `264` `265` `266` `apv` `av1` `avc` `avs` `avs2` `avs3` `bik` `bk2` `c93` `cavs` `cdg` `cdxl` `cin` `cpk` `dav` `dif` `divx` `drc` `dv` `evc` `f4v` `flm` `flv` `gxf` `h261` `h263` `h264` `h265` `h266` `h26l` `hevc` `ifv` `imx` `ismv` `ivf` `ivr` `kux` `m2p` `mj2` `mjpeg` `mjpg` `mk3d` `moflex` `mpv` `mve` `mvi` `mxf` `mxg` `nsv` `nut` `obu` `ogm` `ogv` `pmp` `psp` `rcv` `rm` `rmvb` `roq` `rsd` `smk` `str` `swf` `thp` `tod` `tp` `tr` `ty` `ty+` `usm` `vc1` `vc2` `viv` `vro` `vvc` `vw` `wtv` `xl` `xmv` `y4m` `yop`.
@@ -199,58 +197,60 @@ Or download the official installer from https://calibre-ebook.com/download_windo
 3. Or navigate with the keyboard — arrow keys or Tab — to preview the focused item.
 4. Right-click the tray icon to configure behavior.
 
+Here is a concise, plain-language version:
+
 ## System Tray Menu
 
-The item a setting starts at carries `(Default)` after its name, so a menu says both what is set now — the check or radio mark — and what a setting nobody has touched would be.
+A setting marked `(Default)` is what an untouched setting would be. The check or radio mark shows what is set now.
 
-- **Enable Preview** — turn previews on or off.
-- **Preview Types** — Images, Videos, Text, Ebook, Archives, Document, Vector, Fonts, Design: gate a kind without touching its file list. One gate covers each pair of a kind the app reads and the kind an engine draws for it, so a camera raw is gated by **Images**, a document LibreOffice draws by **Document**, an archive PeaZip lists by **Archives**, and a book Calibre converts by **Ebook** — which is also the switch over the pages the app draws itself: the PDF and the comic.
-- **Text Preview**
-  - **Full Mode** — adds scrolling, selection, and copy; off by default.
-  - **Theme** — Atom One Light, One Dark Pro, or any `.tmTheme` in the theme folder.
-  - **Font Size** — 400% at the top down to 70% at the bottom.
-  - **Markdown** — Rendered or Source.
-- **Timing**
-  - **Trigger Key (Alt)** — the key is named in the item itself.
-    - **Enable Trigger Key** — whether the key is watched at all.
-    - **Hold to Disable Preview** / **Hold to Enable Preview** — what holding it does.
-  - **Delay** — how long the pointer rests on a file before its preview opens: 0 ms at the top down to 1000 ms at the bottom. 0 ms by default.
-  - **Rehover Delay** — the same steps, before the same file can preview again; 200 ms by default.
-  - **Settling Delay** — the same steps, how long the pointer must have been still before it will preview what it is on: 0 ms, the default, is a new file previewed while the hand is still moving to it. The keyboard's own previews are not gated by it.
-- **Placement**
-  - **Position** — Follow Cursor or Best Position; Best Position by default.
-  - **Avoid** — Avoid Nothing, Avoid Filename (default), Avoid Filename Column, or Avoid Details. This keeps a preview off the item it is about. Keyboard previews have no cursor to be anchored to, so **Avoid Nothing** places them the way **Avoid Filename** does.
-- **Scaling**
-  - **Image Scaling** — Fit to Screen or 25%–400%, of the image's own size.
-  - **Video Scaling** — the same shares for a video, 100% (default).
-  - **Animated Scaling** — the same shares for an animated GIF, WebP, or PNG; a still GIF or PNG keeps Image Scaling. 100% (default).
-  - **Vector Scaling** — Fit to Screen (default), or 75%, 50%, 25%, 10% of the display.
-  - **Ebook Scaling** — Fit to Screen (default), or the same shares of the display for a PDF page, a comic’s first page, and a book an installed Calibre converted into one.
-  - **Document Scaling** — the same shares of the display for a document drawn as a page, whichever drew it: an Office document’s own application, or LibreOffice for the formats beside it (CorelDRAW and the older word processors, spreadsheets and presentations). A workbook’s fallback bitmap is never enlarged.
-  - **Font Scaling** — the same shares for a font specimen, 50% by default.
-  - **Design Scaling** — the same shares of the display for a design document (Photoshop, Illustrator, Krita, OpenRaster, Procreate); Fit to Screen by default.
-- **Background**
-  - **Image Background** — Transparent, Black, White, or Checkerboard; Checkerboard by default.
-  - **Vector Background** — the same backdrops for a drawing: an SVG document, or a metafile; Checkerboard by default.
-  - **Font Background** — the same backdrops for a font specimen; White by default.
-  - **DDS Background** — Black or White for `.dds` textures, whose alpha channel is as often a mask or an unused channel as it is transparency; White by default. The two backdrops that show what stands behind a texture are not offered for one.
-  - **Design Background** — the same backdrops as a picture's, for a design document; Checkerboard by default.
-- **Volume** — Max, High, Medium, Low, Very Low, Mute: 100% down to 0%.
-- **Performance**
-  - **Cache** — what a preview may cost between hovers, 2 GB down to 0 MB: **`Image (RAM)`**, the decoded frames held in memory, and **`Document (Disk)`**, the pages an engine drew, kept as files under the temp folder so a document drawn once is not drawn again.
-  - **Decode Budget** — 16 GB down to 512 MB, 1 GB default: a file past it gets no preview.
-  - **Tick** — how often the app looks at Explorer while a folder window is in focus: 15 ms (default), 31, 47, 63 or 78 ms, one to five Windows timer ticks. Lower answers a move sooner; higher is lighter on the CPU and on Explorer.
-- **Engine**
-  - **AFK Timer** — how long Explorer may be out of reach before an engine that is not marked **Persistent** is let go: 1 hour, 30 minutes, 10 minutes, 5 minutes, 1 minute (default), 30 seconds, 15 seconds. It counts time with no Explorer window reachable — every one of them minimized, or every one of them behind a maximized or fullscreen app — on any monitor, so a second Explorer window on another screen keeps every engine warm. Each **`… TTL`** submenu has a **Persistent** toggle at the top for an engine you want kept regardless.
-  - **Select Engine → Office** — which engine an Office document’s page is asked of: **Microsoft Office** (default) draws it with the application that owns the format and keeps LibreOffice as the fallback for a family this machine has no application for, while **LibreOffice** draws every Office document whether Microsoft Office is installed or not. The LibreOffice row is greyed out where it is not installed.
-  - **Microsoft Office TTL** — **Persistent** on, how long a family’s Office app is kept warm whatever you are doing: Indefinitely, 1 hour, 30 minutes, 10 minutes (default), 5 minutes, 1 minute, 0 seconds. Off, it is kept while Explorer is reachable and let go by **AFK Timer** instead.
-  - **LibreOffice TTL** — the same for the engine that draws CorelDRAW and the documents beside it: how long it is kept after the last document it converted. A kept engine converts the next document without starting up again — measured on one document, 1.2 s cold against 0.2 s — and while it is kept it is a LibreOffice with a small document of this app's own open, which is a few hundred megabytes. `0 seconds` keeps none, which is an engine per document. Both are the answer for an engine marked **Persistent**; one that is not is let go by **AFK Timer** instead. Greyed out where LibreOffice is not installed.
-  - **WebView2 TTL** — **Persistent** on, how long the browser that draws SVG documents is kept warm; off, it is let go by **AFK Timer**. Greyed out where WebView2 is missing.
-  - There is no `ImageMagick TTL`, no `PeaZip TTL` and no `Calibre TTL`, because none of those three is a process the app can keep: each is handed a file, writes what it read and exits. What a second hover of the same file costs is a hit in the cache its answer was kept in, so there is nothing an idle time could bound.
-- **Codecs** — what this machine has: Videos, Images, and Engines. Missing ones are greyed out.
-- **Run at Startup** — add or remove the Windows startup entry.
-- **Config.ini** — open the configuration file; the item is named for the running version.
-- **Exit** — close the app.
+* **Enable Preview** — Turn previews on or off.
+* **Preview Types** — Choose which file kinds can preview: Images, Videos, Text, Ebook, Archives, Document, Vector, Fonts, Design. One switch covers both the original file and the engine-drawn preview. Examples: camera raw uses **Images**; LibreOffice document uses **Document**; PeaZip archive uses **Archives**; Calibre book uses **Ebook** — also the app-drawn PDF and comic pages.
+* **Text Preview**
+  * **Full Mode** — Adds scrolling, selection, and copy. Off by default.
+  * **Theme** — Atom One Light, One Dark Pro, or any `.tmTheme` in the theme folder.
+  * **Font Size** — `400%` at the top down to `70%` at the bottom.
+  * **Markdown** — Rendered or Source.
+* **Timing**
+  * **Trigger Key (Alt)** — The key is named in the item.
+    * **Enable Trigger Key** — Whether the key is watched.
+    * **Hold to Disable Preview** / **Hold to Enable Preview** — What holding the key does.
+  * **Delay** — How long the pointer rests before a preview opens: `0 ms` at the top down to `1000 ms` at the bottom. Default `0 ms`.
+  * **Rehover Delay** — Wait before the same file can preview again. Default `200 ms`.
+  * **Settling Delay** — How still the pointer must be before previewing what it is on. Default `0 ms` means a new file can preview while the hand is still moving. Keyboard previews ignore this.
+* **Placement**
+  * **Position** — Follow Cursor or Best Position. Default **Best Position**.
+  * **Avoid** — Avoid Nothing, Avoid Filename (`default`), Avoid Filename Column, or Avoid Details. Keeps a preview off the item it is about. Keyboard previews have no cursor, so **Avoid Nothing** acts like **Avoid Filename**.
+* **Scaling**
+  * **Image Scaling** — Fit to Screen or `25%`–`400%` of the image’s own size.
+  * **Video Scaling** — Same shares for a video. Default `100%`.
+  * **Animated Scaling** — Same shares for an animated GIF, WebP, or PNG. A still GIF or PNG uses **Image Scaling**. Default `100%`.
+  * **Vector Scaling** — Fit to Screen (`default`), or `75%`, `50%`, `25%`, `10%` of the display.
+  * **Ebook Scaling** — Fit to Screen (`default`), or the same display shares for a PDF page, a comic’s first page, and a Calibre-converted book.
+  * **Document Scaling** — Same display shares for a document drawn as a page, whether by its own Office app or by LibreOffice. A workbook’s fallback bitmap is never enlarged.
+  * **Font Scaling** — Same shares for a font specimen. Default `50%`.
+  * **Design Scaling** — Same display shares for design documents: Photoshop, Illustrator, Krita, OpenRaster, Procreate. Default **Fit to Screen**.
+* **Background**
+  * **Image Background** — Transparent, Black, White, or Checkerboard. Default **Checkerboard**.
+  * **Vector Background** — Same backdrops for an SVG document or metafile. Default **Checkerboard**.
+  * **Font Background** — Same backdrops for a font specimen. Default **White**.
+  * **DDS Background** — Black or White for `.dds` textures. Default **White**. The two see-through backdrops are not offered.
+  * **Design Background** — Same as picture backdrops for a design document. Default **Checkerboard**.
+* **Volume** — Max, High, Medium, Low, Very Low, Mute: `100%` down to `0%`.
+* **Performance**
+  * **Cache** — What a preview may cost between hovers: `2 GB` down to `0 MB`. **`Image (RAM)`** = decoded frames kept in memory. **`Document (Disk)`** = engine-drawn pages kept as temp files.
+  * **Decode Budget** — `16 GB` down to `512 MB`; default `1 GB`. A file past it gets no preview.
+  * **Tick** — How often the app checks Explorer while a folder window is focused: `15 ms` (`default`), `31`, `47`, `63`, or `78 ms`. Lower answers a move sooner; higher is lighter on CPU and Explorer.
+* **Engine**
+  * **AFK Timer** — How long Explorer may be unreachable before a non-**Persistent** engine is let go: `1 hour`, `30 minutes`, `10 minutes`, `5 minutes`, `1 minute` (`default`), `30 seconds`, `15 seconds`. Counts time when no Explorer window is reachable on any monitor. A second Explorer window keeps engines warm. Each **`… TTL`** submenu has a **Persistent** toggle at the top.
+  * **Select Engine → Office** — Which engine draws Office documents: **Microsoft Office** (`default`) uses the format’s own app and falls back to LibreOffice; **LibreOffice** draws every Office document. LibreOffice is greyed out if not installed.
+  * **Microsoft Office TTL** — With **Persistent** on: how long a family’s Office app stays warm: Indefinitely, `1 hour`, `30 minutes`, `10 minutes` (`default`), `5 minutes`, `1 minute`, `0 seconds`. Off: kept while Explorer is reachable, then let go by **AFK Timer**.
+  * **LibreOffice TTL** — Same for the engine that draws CorelDRAW and nearby formats. A kept engine converts the next document faster: `1.2 s` cold vs `0.2 s`, but uses a few hundred MB. `0 seconds` means one engine per document. Both TTLs apply to **Persistent** engines; non-persistent ones use **AFK Timer**. Greyed out if LibreOffice is not installed.
+  * **WebView2 TTL** — With **Persistent** on: how long the SVG browser stays warm. Off: let go by **AFK Timer**. Greyed out if WebView2 is missing.
+  * No `ImageMagick TTL`, `PeaZip TTL`, or `Calibre TTL`: those tools run once and exit, so idle time cannot bound them. A second hover is a cache hit.
+* **Codecs** — What this machine has: Videos, Images, Engines. Missing ones are greyed out.
+* **Run at Startup** — Add or remove the Windows startup entry.
+* **Config.ini** — Open the configuration file; named for the running version.
+* **Exit** — Close the app.
 
 ## Configuration
 
@@ -341,48 +341,71 @@ hdr_tone_map=reinhard
 spinner_delay_ms=250
 ```
 
-Key settings, in plain terms:
+Here’s what this .INI does:
 
-- `theme` — `light`, `dark`, or `custom:<name>`.
-- `markdown_mode` — `rendered` or `source`.
-- `*_preview_enabled` — whether that kind of preview may show at all; the file lists stay as they are.
-- `text_preview_full_mode` — `true` adds scrolling, selection, and copy.
-- `text_font_scale` — a percentage from 1 to 1000, default `125`; archive listings follow it too.
-- `extensions` / `names` — the text-preview gates. Extensions are written without dots. Names match extensionless files.
-- `image_extensions`, `video_extensions`, `archive_extensions`, `office_extensions`, `font_extensions`, `design_extensions`, `vector_extensions` — per-type preview gates, written without dots. An entry with a dot in it, like `tar.gz`, is matched against the end of the file name. `ebook_extensions`, `libre_extensions`, `magick_extensions`, `peazip_extensions` and `calibre_extensions`, in their own sections, are the pages this app draws itself (a PDF, and a comic’s first plate), the documents LibreOffice draws, the pictures ImageMagick develops, the archives PeaZip lists, and the books Calibre converts.
-- `image_cache_mb` — memory for decoded image frames: default `32`, max `2048`; `0` holds nothing.
-- `document_cache_mb` — disk for the pages an engine drew — an Office export, a slide’s image, a workbook’s picture, a converted PDF: default `128`, max `2048`; `0` keeps nothing between hovers but still draws for the current one. The pages live under `%TEMP%\rust-hover-preview\document`, named for the document, the version of it and the engine that drew it, and the page that has not been read for longest is the one given up first.
-- `decode_budget_gb` — the most memory one hover may decode or read for: default `1`, smallest `0.25`, largest `64`. A file past it shows no preview.
-- `hdr_tone_map` — how HDR/EXR light values become screen values: `reinhard` (default), `aces` (filmic), `srgb` (clips), or `off` (bare clamp). Pictures already in screen values, like PNG or JPEG, are never affected.
-- `hdr_exposure` — how many stops those pictures are shifted before that curve: default `0`, clamped to `-10`–`10`.
-- `spinner_delay_ms` — how long a hover’s load may run before the waiting spinner is put up, in milliseconds: default `250`, and `0` puts it up with the load. One delay answers every kind of preview — a decode, a page Office is rendering, a browser that has to start — and there is no tray entry for it.
-- `office_engine` — which engine draws an Office document’s page: `microsoft_office` (default) asks the application that owns the format and falls back to LibreOffice for a family this machine has no application for, while `libreoffice` asks the render engine for every Office document whether Microsoft Office is installed or not. With no LibreOffice installed the second falls back to the first, and the tray row is greyed out.
-- `libreoffice_idle` — seconds the LibreOffice engine is kept after the last page it drew, or `indefinitely`; default `600`. `0` keeps no engine at all, which is a launch per document; while one is kept it is a LibreOffice with a small document of this app's own open, and it is ended by the app when the time is up.
-- `office_engine_idle` — seconds an Office engine is kept after its last page, or `indefinitely`; default `600`. `0` lets it go as soon as it has drawn a page. It bounds an engine the same way `libreoffice_idle` does, and like it, only while that engine is marked persistent.
-- `afk_timer_seconds` — seconds with no Explorer window reachable before an engine that is not marked persistent is let go; default `60`, clamped to a day. `0` lets an engine go the moment Explorer goes out of reach.
-- `office_engine_persistent`, `libreoffice_persistent`, `webview_persistent` — `true` keeps that engine whatever you are doing, with its `…_idle` time as the only bound; `false` (default) keeps it while Explorer is reachable and lets `afk_timer_seconds` bound it.
-- `trigger_key` / `trigger_key_mode` / `trigger_key_enabled` — the key (`alt`, `ctrl`, `shift`, `win`), what it does (`disable` or `enable`), and whether it is watched at all; `true` by default.
-- `follow_cursor` — `true` for Follow Cursor, `false` for Best Position.
-- `avoid_mode` — `filename` (default), `filename_column`, `details`, or `off`: what a preview is kept off.
-- `preview_scale` — percentage or `fit`, read against the picture's own size.
-- `video_scale` — the same for a video, `100` by default.
-- `animated_scale` — the same for an animated GIF, WebP, or PNG, `100` by default; a still GIF or PNG follows `preview_scale`.
-- `vector_scale` — percentage or `fit`, read against the screen. `fit` is default, is all of the room, and `100` or more reads as it. It covers every drawing the Vector kind holds. The name it used to be written under (`svg_scale`) is not read: a line like that is removed the next time the file is written, and the setting goes back to its default.
-- `magick_preview_enabled` and `peazip_preview_enabled` are not read: a picture the ImageMagick engine develops is gated by `image_preview_enabled` and an archive the PeaZip engine lists by `archive_preview_enabled`, since what either is previewed as is a picture or an archive. `libre_preview_enabled` and `libre_scale` are gone the same way — what draws those documents is `document_preview_enabled` and `document_scale`. Lines left under the old names are removed the next time the file is written. `office_cache_mb` and `libre_cache_mb` are gone the same way: one `document_cache_mb` replaces both, and a file that still holds either is read once for the larger of the two and written without them.
-- There is no TTL for ImageMagick, and no `magick_idle` key: it is the one engine here that is a converter rather than a process this app can hold open, so what a file costs is a conversion or a hit in the picture cache (`image_cache_mb`) and never a file of the app's own.
-- There is no TTL for PeaZip either, and no `peazip_idle` key, for the same reason: what this app runs of it are the tools PeaZip carries, each of which prints an archive’s table of contents and exits — and for the three single-stream names whose tools have no listing to print, `br`, `bcm` and `lpaq8`, nothing is run at all. What a file costs is a listing or a hit in the listing cache, and a second hover of the same archive starts nothing at all.
-- And there is no TTL for Calibre, and no `calibre_idle` key, for the engine’s own answer a third time: `ebook-convert` reads a book, writes a PDF of it and exits, booting a whole Python application to do it. There is no instance to hold open between books and nothing an idle time could bound, however much a launch costs; what a second hover of the same book costs is a read of the page it converted, kept in the page cache (`document_cache_mb`) beside every other engine’s page.
-- `ebook_scale` — percentage or `fit`, read against the screen, for a PDF page; `fit` by default. `100` or more reads as `fit`.
-- `document_scale` — the same for a document drawn as a page, `fit` by default, whichever drew it: an Office document’s own application, or LibreOffice for the formats beside it. A workbook’s fallback bitmap follows its own size and is never enlarged.
-- `font_scale` — percentage or `fit`, read against the screen. `50` is default, `fit` is all of it, and `100` or more reads as `fit`. A font has no size of its own, so the share is of the display.
-- `design_scale` — the same for a design document, `fit` by default. A design preview is the picture the file keeps of the whole document, so the share is of the screen the way a page’s is rather than of the document’s own size.
-- `ttc_face` — which face of a `.ttc` collection is drawn: `1` is the first face, and the highest setting is `10`. The heading says which face came out.
-- `image_background` — `checkerboard` (default), `black`, `white`, or `transparent`: what a picture is drawn over, and with it a PDF page, a painted text frame and a page a document was drawn as. The one name every kind used to share (`transparent_background`) is not read: lines like that are removed the next time the file is written.
-- `font_background` — `white` (default), `black`, `checkerboard`, or `transparent`.
-- `dds_background` — `white` (default) or `black`, and only those two: a texture's alpha channel is as often a mask, a height or a roughness as it is transparency, so the backdrops that show what stands behind a preview are not offered for one, and a file that names one of them is read as `white`.
-- `vector_background` — `checkerboard` (default), `white`, `black`, or `transparent`: what an SVG document's page, or a metafile drawing, is drawn over. The name it used to be written under (`svg_background`) is not read: a line like that is removed the next time the file is written.
-- `design_background` — `checkerboard` (default), `white`, `black`, or `transparent`.
-- A deleted `extensions=` line or whole section comes back with built-in entries. An `extensions=` line left empty stays empty.
+**Look and text**
+* `theme`: `light`, `dark`, or `custom:<name>`.
+* `markdown_mode`: show Markdown as `rendered` or `source`.
+* `text_preview_full_mode`: `true` adds scrolling, selection, and copy.
+* `text_font_scale`: 1–1000%, default `125`; archive lists follow it too.
+
+**What can preview**
+* `*_preview_enabled`: turn each preview type on or off. File lists stay normal.
+* `extensions` / `names`: which files get text previews. Extensions have no dots. `names` matches files with no extension.
+* `image_extensions`, `video_extensions`, `archive_extensions`, `office_extensions`, `font_extensions`, `design_extensions`, `vector_extensions`: per-type preview filters. No dots. An entry with a dot, like `tar.gz`, matches the end of the file name.
+* `ebook_extensions`, `libre_extensions`, `magick_extensions`, `peazip_extensions`, `calibre_extensions`: pages this app draws itself — PDFs, comic covers, LibreOffice documents, ImageMagick pictures, PeaZip archives, and Calibre books.
+
+**Memory and cache**
+* `image_cache_mb`: memory for decoded image frames. Default `32`, max `2048`; `0` holds nothing.
+* `document_cache_mb`: disk cache for rendered document pages. Default `128`, max `2048`; `0` keeps nothing between hovers but still draws the current one. Pages live under `%TEMP%\rust-hover-preview\document`; the least recently read page is removed first.
+* `decode_budget_gb`: most memory one hover may use. Default `1`, range `0.25`–`64`. A file over the limit shows no preview.
+
+**HDR**
+* `hdr_tone_map`: how HDR/EXR light becomes screen values: `reinhard` default, `aces`, `srgb`, or `off`. PNG/JPEG are not affected.
+* `hdr_exposure`: stops shifted before that curve. Default `0`, range `-10` to `10`.
+
+**Waiting and engines**
+* `spinner_delay_ms`: wait before showing the loading spinner. Default `250`; `0` shows it immediately. One delay covers all preview types.
+* `office_engine`: `microsoft_office` default, falls back to LibreOffice when needed; or `libreoffice`, which always uses LibreOffice. If LibreOffice is missing, it falls back and the tray row is greyed out.
+* `libreoffice_idle`: seconds LibreOffice is kept after its last page, or `indefinitely`. Default `600`; `0` launches it per document.
+* `office_engine_idle`: same idea for the Office engine. Default `600`; `0` lets it go after drawing a page.
+* `afk_timer_seconds`: seconds with no Explorer window before a non-persistent engine is released. Default `60`, max one day. `0` releases immediately.
+* `office_engine_persistent`, `libreoffice_persistent`, `webview_persistent`: `true` keeps that engine always, bounded only by its `…_idle` time. `false` default keeps it while Explorer is reachable, bounded by `afk_timer_seconds`.
+
+**Trigger and position**
+* `trigger_key` / `trigger_key_mode` / `trigger_key_enabled`: the key (`alt`, `ctrl`, `shift`, `win`), what it does (`disable` or `enable`), and whether it is watched. Default `true`.
+* `follow_cursor`: `true` = Follow Cursor; `false` = Best Position.
+* `avoid_mode`: `filename` default, `filename_column`, `details`, or `off` — what the preview avoids.
+
+**Scaling**
+* `preview_scale`: percentage or `fit`, based on the picture’s own size.
+* `video_scale`: same for video. Default `100`.
+* `animated_scale`: same for animated GIF, WebP, or PNG. Default `100`. Still GIF/PNG follow `preview_scale`.
+* `vector_scale`: percentage or `fit`, based on the screen. Default `fit`; `100` or more reads as `fit`. Covers all Vector drawings. Old `svg_scale` is ignored and removed.
+* `ebook_scale`: PDF page scale against the screen. Default `fit`; `100` or more reads as `fit`.
+* `document_scale`: document page scale against the screen. Default `fit`. A workbook’s fallback bitmap keeps its own size and is never enlarged.
+* `font_scale`: font preview scale against the screen. Default `50`; `fit` means all of it; `100` or more reads as `fit`.
+* `design_scale`: design document scale against the screen. Default `fit`.
+
+**Fonts**
+* `ttc_face`: which face of a `.ttc` is drawn. `1` is first, max `10`. The heading shows which face came out.
+
+**Backgrounds**
+* `image_background`: `checkerboard` default, `black`, `white`, or `transparent`. Also used for PDF pages, painted text frames, and document pages. Old `transparent_background` is ignored and removed.
+* `font_background`: `white` default, `black`, `checkerboard`, or `transparent`.
+* `dds_background`: `white` default or `black`, and only those two. Any other value reads as `white`.
+* `vector_background`: `checkerboard` default, `white`, `black`, or `transparent`. Used for SVG pages and metafiles. Old `svg_background` is ignored and removed.
+* `design_background`: `checkerboard` default, `white`, `black`, or `transparent`.
+
+**Old or removed names**
+* `magick_preview_enabled` and `peazip_preview_enabled`: not read. ImageMagick pictures use `image_preview_enabled`; PeaZip archives use `archive_preview_enabled`.
+* `libre_preview_enabled` and `libre_scale`: gone. Use `document_preview_enabled` and `document_scale`.
+* `office_cache_mb` and `libre_cache_mb`: gone. Use `document_cache_mb`. If both old ones exist, the larger is read once, then both are removed.
+* No `magick_idle`, `peazip_idle`, or `calibre_idle`. ImageMagick, PeaZip, and Calibre are converters, not engines kept open. A second hover usually costs only a cache hit.
+
+**Extension list behavior**
+* A deleted `extensions=` line or whole section comes back with built-in entries.
+* An `extensions=` line left empty stays empty.
 
 ## Build from Source
 
