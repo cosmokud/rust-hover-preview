@@ -15,6 +15,7 @@
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufReader, Read, Seek, SeekFrom};
+use std::os::windows::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
@@ -116,31 +117,99 @@ pub(crate) struct Key {
     len: u64,
 }
 
+impl Key {
+    /// The key for a file whose own entry has already been read.
+    pub(crate) fn of_metadata(path: &Path, metadata: &std::fs::Metadata) -> Self {
+        Self {
+            path: path.to_path_buf(),
+            modified: metadata.modified().ok(),
+            len: metadata.len(),
+        }
+    }
+}
+
+/// What one reading of a file's directory entry settles: that it is there, what version it is
+/// at, whether it is a file, and whether its content is on this machine.
+///
+/// A hover asks a file all of those — is it there, may its content be read, is it one of this
+/// app's kinds, is it a file — and every one of them used to be its own question for the
+/// volume: five or six reads of the same directory entry, on the thread that draws the hover,
+/// for a file whose answers are all in the one entry. What is read here is read once and
+/// handed to the questions that follow (see `explorer_hook::normalize_media_path`).
+pub(crate) struct Facts {
+    key: Key,
+    attributes: u32,
+    is_file: bool,
+}
+
+impl Facts {
+    /// Read the file's own entry, or `None` where there is nothing there to read.
+    pub(crate) fn read(path: &Path) -> Option<Self> {
+        let metadata = std::fs::metadata(path).ok()?;
+
+        Some(Self {
+            key: Key::of_metadata(path, &metadata),
+            attributes: metadata.file_attributes(),
+            is_file: metadata.is_file(),
+        })
+    }
+
+    /// The version of the file this entry was read at, which is what a head and an answer
+    /// about a file's content are held under.
+    pub(crate) fn key(&self) -> &Key {
+        &self.key
+    }
+
+    /// Whether reading the file would have to fetch its content first (see `cloud_files`).
+    pub(crate) fn needs_download(&self) -> bool {
+        crate::shell::cloud_files::is_remote(self.attributes)
+    }
+
+    /// Whether the entry is a file rather than a directory or a device.
+    pub(crate) fn is_file(&self) -> bool {
+        self.is_file
+    }
+}
+
 /// The head of the file at `path`, read to the front of it and no further where the front
 /// settles the question.
 pub(crate) fn of(path: &Path) -> Option<Arc<Head>> {
-    let key = key(path);
+    held_or_read(path, false, None)
+}
 
-    if let Some(head) = held(&key) {
-        return Some(head);
-    }
-
-    let head = Arc::new(read(path, false)?);
-
-    Some(keep(key, head))
+/// The same for a caller that has already read the file's own entry, so that the version and
+/// the question of whether its content is here are not asked of the volume again (see
+/// `Facts`).
+pub(crate) fn of_with_facts(path: &Path, facts: &Facts) -> Option<Arc<Head>> {
+    held_or_read(path, false, Some(facts))
 }
 
 /// The head of the file at `path`, read to the whole window the tables are asked about.
 pub(crate) fn full(path: &Path) -> Option<Arc<Head>> {
-    let key = key(path);
+    held_or_read(path, true, None)
+}
+
+/// The same for a caller that has already read the file's own entry (see `Facts`).
+pub(crate) fn full_with_facts(path: &Path, facts: &Facts) -> Option<Arc<Head>> {
+    held_or_read(path, true, Some(facts))
+}
+
+/// The head of a file, from the heads already read where one is held and from the file itself
+/// where none is.
+fn held_or_read(path: &Path, whole: bool, facts: Option<&Facts>) -> Option<Arc<Head>> {
+    let key = facts.map_or_else(|| key(path), |facts| facts.key().clone());
 
     if let Some(head) = held(&key) {
-        if head.complete() {
+        if !whole || head.complete() {
             return Some(head);
         }
     }
 
-    let head = Arc::new(read(path, true)?);
+    let remote = facts.map_or_else(
+        || crate::shell::cloud_files::needs_download(path),
+        Facts::needs_download,
+    );
+    let head = Arc::new(read(path, whole, remote)?);
 
     Some(keep(key, head))
 }
@@ -151,20 +220,15 @@ pub(crate) fn picture_nature(path: &Path) -> Option<PictureNature> {
     of(path).and_then(|head| head.nature)
 }
 
-/// The key a file's head is held under.
+/// The key a file's head is held under, read from the file's own entry.
 pub(crate) fn key(path: &Path) -> Key {
-    let metadata = std::fs::metadata(path).ok();
-
-    Key {
-        path: path.to_path_buf(),
-        modified: metadata
-            .as_ref()
-            .and_then(|metadata| metadata.modified().ok()),
-        len: metadata
-            .as_ref()
-            .map(|metadata| metadata.len())
-            .unwrap_or(0),
-    }
+    std::fs::metadata(path)
+        .map(|metadata| Key::of_metadata(path, &metadata))
+        .unwrap_or_else(|_| Key {
+            path: path.to_path_buf(),
+            modified: None,
+            len: 0,
+        })
 }
 
 static HEADS: Lazy<Mutex<HashMap<Key, Arc<Head>>>> = Lazy::new(|| Mutex::new(HashMap::new()));
@@ -184,10 +248,10 @@ fn keep(key: Key, head: Arc<Head>) -> Arc<Head> {
     head
 }
 
-fn read(path: &Path, whole: bool) -> Option<Head> {
+fn read(path: &Path, whole: bool, remote: bool) -> Option<Head> {
     // A file whose content is not on this machine is not opened: reading its front is what
     // would bring it down. What it is called is the whole of what is known about it.
-    if crate::shell::cloud_files::needs_download(path) {
+    if remote {
         return None;
     }
 

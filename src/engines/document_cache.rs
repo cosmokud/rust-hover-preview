@@ -22,8 +22,11 @@
 //! page the ebook engine writes for a book, which is a third name again.
 //!
 //! What is kept is bounded by `document_cache_mb`, least recently used first — and "used" is
-//! the page file's own timestamp, set every time a page is read, so what is given up first is
-//! what has not been looked at for longest rather than what was converted first.
+//! what this process remembers reading, kept in a table beside the pages rather than written
+//! onto them. A page's file used to carry its own last-read stamp, which cost a write to the
+//! volume for every read of every page and a walk of the folder to find the oldest one; the
+//! table is read off the folder once, when a run first asks it anything, and after that neither
+//! a read nor a trim is a question for the disk (see `with_index` and `prune`).
 
 use crate::config::config::{sanitize_document_cache_mb, AppConfig, DEFAULT_DOCUMENT_CACHE_MB};
 use crate::readers::pdf_preview;
@@ -95,6 +98,123 @@ const SIZE_MEMO_MAX_ENTRIES: usize = 256;
 pub(crate) struct Page {
     pub(crate) path: PathBuf,
     pub(crate) kind: PageKind,
+}
+
+/// One page a folder holds, or the mark an engine left for a document it would not draw.
+enum IndexEntry {
+    Page {
+        kind: PageKind,
+        bytes: u64,
+        /// When the page was last read, on this table's clock.
+        last_used: SystemTime,
+    },
+    /// A mark left for a document an engine would not draw, and when it was left.
+    Refused { left: SystemTime },
+}
+
+impl IndexEntry {
+    /// What this entry costs the budget: the page's own size, and nothing for a mark — an empty
+    /// file is nothing to give up.
+    fn bytes(&self) -> u64 {
+        match self {
+            Self::Page { bytes, .. } => *bytes,
+            Self::Refused { .. } => 0,
+        }
+    }
+
+    /// When this entry was last read, which is the order a trim gives pages up in: a page by
+    /// when it was read, and a mark by when it was left.
+    fn last_used(&self) -> SystemTime {
+        match self {
+            Self::Page { last_used, .. } => *last_used,
+            Self::Refused { left } => *left,
+        }
+    }
+}
+
+/// The pages one folder holds, as this run knows them.
+///
+/// A page's file is the page; this is the reading of the folder — which key it holds, which of
+/// the files it is kept as, how large it is, and when it was last read — kept so that what a
+/// hover asks about a page is a lookup rather than a question for the disk. The folder is read
+/// once, when the table is first asked for: what a run before this one left there is the same
+/// cache, and the timestamps its files carry are all that is known about when they were last
+/// used (see `of`).
+#[derive(Default)]
+struct FolderIndex {
+    entries: HashMap<String, IndexEntry>,
+}
+
+impl FolderIndex {
+    /// The pages a folder already holds, read off the names its files carry.
+    ///
+    /// A file is one of the pages because of what it is called: `<key>.pdf`, `<key>.png` and
+    /// `<key>.bmp` are pages, and `<key>.none` is a mark for a document an engine would not
+    /// draw. Anything else in the folder — half a page under a `.writing` name, a file of some
+    /// other kind — is not a page and is left alone (see `write_whole`).
+    fn of(folder: &Path) -> Self {
+        let mut entries = HashMap::new();
+
+        let Ok(read) = std::fs::read_dir(folder) else {
+            return Self { entries };
+        };
+
+        for entry in read.flatten() {
+            if !entry.file_type().is_ok_and(|kind| kind.is_file()) {
+                continue;
+            }
+
+            let path = entry.path();
+            let Some(key) = path.file_stem().and_then(OsStr::to_str) else {
+                continue;
+            };
+            let Some(extension) = path.extension().and_then(OsStr::to_str) else {
+                continue;
+            };
+            let Ok(metadata) = entry.metadata() else {
+                continue;
+            };
+
+            let key = key.to_string();
+            let left = metadata.modified().unwrap_or_else(|_| SystemTime::now());
+
+            match PageKind::from_extension(OsStr::new(extension)) {
+                Some(kind) => {
+                    entries.insert(
+                        key,
+                        IndexEntry::Page {
+                            kind,
+                            bytes: metadata.len(),
+                            last_used: left,
+                        },
+                    );
+                }
+                None if extension == REFUSED_SUFFIX => {
+                    entries.insert(key, IndexEntry::Refused { left });
+                }
+                None => {}
+            }
+        }
+
+        Self { entries }
+    }
+}
+
+/// The index of every folder this run has been asked about.
+///
+/// Per folder rather than one table, because a name in it means a file in *that* folder: the
+/// pages are kept in one folder and a test names one of its own, and what is read from one is
+/// not a page of the other (see `prune_folder`).
+static INDEX: Lazy<Mutex<HashMap<PathBuf, FolderIndex>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+
+/// Ask the index of `folder`, reading the folder itself the first time it is asked anything.
+fn with_index<T>(folder: &Path, ask: impl FnOnce(&mut FolderIndex) -> T) -> Option<T> {
+    let mut indexes = INDEX.lock().ok()?;
+    let index = indexes
+        .entry(folder.to_path_buf())
+        .or_insert_with(|| FolderIndex::of(folder));
+
+    Some(ask(index))
 }
 
 /// A page's own size, remembered by the document it was drawn from.
@@ -186,37 +306,41 @@ fn refused_path(folder: &Path, key: &str) -> PathBuf {
 
 /// The page kept for this version of this document, if there is one.
 ///
-/// Reading a page is what using it is: its timestamp is set to now, which is how the budget
-/// tells what has not been looked at from what has (see `prune`).
+/// Reading a page is what using it is: it is stamped as read in the table the budget is trimmed
+/// by, which is a write to a number in memory rather than to the file (see `FolderIndex`).
 ///
 /// What the file *is* is not asked here. Whether a page can actually be read out of one is a
 /// question for the side that draws it — a side whose threads are multithreaded apartments and
 /// may talk to the PDF engine — and this is asked from threads that are not (see
-/// `office_preview`).
+/// `office_preview`). What is asked of the disk is whether the file is still there: the table
+/// answers with the page a previous read found, and one something else has taken away is
+/// dropped here so that the document is drawn again rather than hovered into nothing.
 pub(crate) fn page(source: &Path, engine: &str) -> Option<Page> {
     let folder = folder()?;
     let key = key(source, engine);
 
-    for kind in [PageKind::Pdf, PageKind::Png, PageKind::Bmp] {
+    with_index(&folder, |index| {
+        let IndexEntry::Page {
+            kind, last_used, ..
+        } = index.entries.get_mut(&key)?
+        else {
+            // A document an engine would not draw has no page here, which is the same answer as
+            // no page at all: what separates the two is asked for by name (see `refused`).
+            return None;
+        };
+
+        let kind = *kind;
+        *last_used = SystemTime::now();
+
         let path = path_of(&folder, &key, kind);
-        if std::fs::metadata(&path).is_ok() {
-            touch(&path);
-            return Some(Page { path, kind });
+        if std::fs::metadata(&path).is_err() {
+            index.entries.remove(&key);
+            return None;
         }
-    }
 
-    None
-}
-
-/// Say that the page has just been read, which is what the order pages are given up in is made
-/// of. A timestamp that cannot be written is not worth answering for: the page is still there,
-/// and all that is lost is where it sits in that order.
-fn touch(page: &Path) {
-    let Ok(file) = std::fs::File::options().write(true).open(page) else {
-        return;
-    };
-
-    let _ = file.set_modified(SystemTime::now());
+        Some(Page { path, kind })
+    })
+    .flatten()
 }
 
 /// Keep a page an engine has just drawn, replacing whatever was kept for the same version of
@@ -236,6 +360,17 @@ pub(crate) fn store(source: &Path, engine: &str, kind: PageKind, bytes: &[u8]) -
 
     let path = path_of(&folder, &key, kind);
     write_whole(&path, bytes)?;
+
+    with_index(&folder, |index| {
+        index.entries.insert(
+            key.clone(),
+            IndexEntry::Page {
+                kind,
+                bytes: bytes.len() as u64,
+                last_used: SystemTime::now(),
+            },
+        );
+    });
 
     // A size remembered for the page this one replaces is not this page's size: what the
     // document's own file has not changed about is the page, and a slide re-exported at another
@@ -281,6 +416,10 @@ pub(crate) fn forget(source: &Path, engine: &str) {
         let _ = std::fs::remove_file(path_of(&folder, &key, kind));
     }
 
+    with_index(&folder, |index| {
+        index.entries.remove(&key);
+    });
+
     if let Ok(mut sizes) = SIZES.lock() {
         sizes.remove(&key);
     }
@@ -300,6 +439,15 @@ pub(crate) fn refuse(source: &Path, engine: &str) {
     let key = key(source, engine);
     let _ = std::fs::write(refused_path(&folder, &key), b"");
 
+    with_index(&folder, |index| {
+        index.entries.insert(
+            key.clone(),
+            IndexEntry::Refused {
+                left: SystemTime::now(),
+            },
+        );
+    });
+
     release_held(|held, _| held == key);
 
     prune();
@@ -316,22 +464,30 @@ pub(crate) fn refused(source: &Path, engine: &str) -> bool {
         return false;
     };
 
-    let marker = refused_path(&folder, &key(source, engine));
-    let Ok(metadata) = std::fs::metadata(&marker) else {
-        return false;
-    };
+    let key = key(source, engine);
 
-    let age = metadata
-        .modified()
-        .ok()
-        .and_then(|refused| SystemTime::now().duration_since(refused).ok());
-    if age.is_some_and(|age| age < REFUSAL_TTL) {
-        return true;
-    }
+    with_index(&folder, |index| match index.entries.get(&key) {
+        Some(IndexEntry::Refused { left }) => {
+            if SystemTime::now()
+                .duration_since(*left)
+                .is_ok_and(|age| age < REFUSAL_TTL)
+            {
+                return true;
+            }
 
-    let _ = std::fs::remove_file(&marker);
+            // A mark past its age is not an answer any more: what it says is that an engine
+            // would not draw the document once, and a document that was locked, or half-copied,
+            // or read while a filter was still being installed is one worth asking about again.
+            // The mark is dropped here rather than left for a trim to find, because the ask
+            // itself is what says it is stale.
+            index.entries.remove(&key);
+            let _ = std::fs::remove_file(refused_path(&folder, &key));
 
-    false
+            false
+        }
+        _ => false,
+    })
+    .unwrap_or(false)
 }
 
 /// The hover a page was drawn for is over: it is no longer being waited on, so at a budget of
@@ -395,6 +551,63 @@ fn read_size(page: &Page) -> Option<(u32, u32)> {
     }
 }
 
+impl FolderIndex {
+    /// Drop pages, least recently used first, until the folder fits inside `limit`.
+    ///
+    /// What a page costs is the size of its file, and a page that cannot be drawn is worth the
+    /// same as one that can until it is read: a mark left for a document an engine would not
+    /// draw is given up with the rest, since it is the same folder's room either way.
+    ///
+    /// The page a hover is waiting for is never one of them — it was stored a moment ago and has
+    /// not been drawn yet. At a budget of nothing it is the only page left, which is what that
+    /// size means: nothing kept *between* hovers rather than no page shown at all.
+    ///
+    /// Nothing here asks the disk what the folder holds. What is given up is what this table
+    /// knows: the folder as it was found, and every page kept since (see `of` and `store`). A
+    /// trim that a hover ends runs on the thread that draws the hover, and a walk of the folder
+    /// with a timestamp read per file — which is what this was — is a walk of every page of
+    /// every document the session has looked at, on that thread, every time a document's hover
+    /// ends.
+    fn trim(&mut self, folder: &Path, limit: u64, held: Option<&str>) {
+        let mut total: u64 = self.entries.values().map(IndexEntry::bytes).sum();
+        if total <= limit {
+            return;
+        }
+
+        let mut pages: Vec<(SystemTime, String)> = self
+            .entries
+            .iter()
+            .filter(|(key, _)| held != Some(key.as_str()))
+            .map(|(key, entry)| (entry.last_used(), key.clone()))
+            .collect();
+
+        pages.sort_by_key(|(last_used, _)| *last_used);
+
+        for (_, key) in pages {
+            if total <= limit {
+                break;
+            }
+
+            let Some(entry) = self.entries.remove(&key) else {
+                continue;
+            };
+
+            let path = match entry {
+                IndexEntry::Page { kind, .. } => path_of(folder, &key, kind),
+                IndexEntry::Refused { .. } => refused_path(folder, &key),
+            };
+
+            // A page that could not be given up is one this table goes on holding: it is still
+            // taking up the folder's room, and the next trim is where it is tried again.
+            if std::fs::remove_file(&path).is_ok() {
+                total = total.saturating_sub(entry.bytes());
+            } else {
+                self.entries.insert(key, entry);
+            }
+        }
+    }
+}
+
 /// Drop pages, least recently used first, until the folder fits inside the configured budget.
 ///
 /// What a page costs is the size of its file, and a page that cannot be drawn is worth the same
@@ -420,59 +633,10 @@ fn prune() {
 }
 
 /// The same, for a folder the caller names rather than the one pages are kept in — a test's own,
-/// since what a trim gives up is given up for good.
+/// since what a trim gives up is given up for good. What such a folder holds is read off the
+/// disk the first time it is named, and trimmed from the table after that (see `with_index`).
 fn prune_folder(folder: &Path, limit: u64, held: Option<&str>) {
-    let Ok(entries) = std::fs::read_dir(folder) else {
-        return;
-    };
-
-    let mut pages: Vec<(SystemTime, u64, PathBuf)> = entries
-        .flatten()
-        .filter(|entry| {
-            entry
-                .file_type()
-                .map(|kind| kind.is_file())
-                .unwrap_or(false)
-        })
-        .filter(|entry| {
-            entry
-                .path()
-                .extension()
-                .and_then(PageKind::from_extension)
-                .is_some()
-                || entry
-                    .path()
-                    .extension()
-                    .is_some_and(|extension| extension == REFUSED_SUFFIX)
-        })
-        .filter(|entry| {
-            let stem = entry
-                .path()
-                .file_stem()
-                .and_then(OsStr::to_str)
-                .map(str::to_string);
-            stem.as_deref() != held
-        })
-        .filter_map(|entry| {
-            let metadata = entry.metadata().ok()?;
-            Some((metadata.modified().ok()?, metadata.len(), entry.path()))
-        })
-        .collect();
-
-    let mut total: u64 = pages.iter().map(|(_, size, _)| *size).sum();
-    if total <= limit {
-        return;
-    }
-
-    pages.sort_by_key(|(modified, _, _)| *modified);
-    for (_, size, path) in pages {
-        if total <= limit {
-            break;
-        }
-        if std::fs::remove_file(&path).is_ok() {
-            total = total.saturating_sub(size);
-        }
-    }
+    with_index(folder, |index| index.trim(folder, limit, held));
 }
 
 /// Delete what earlier versions cached on disk, and whatever a render that was ended mid-flight
@@ -621,16 +785,21 @@ mod tests {
         );
 
         // A mark older than the age it is kept for is not an answer any more, and reading it
-        // is what drops it: the document is asked about again.
+        // is what drops it: the document is asked about again. The age is the table's own —
+        // what is on the disk is the mark, and when it was left is what this side remembers
+        // having written (see `FolderIndex`).
+        let refused_key = key(&source, libre());
         let marker = folder()
             .expect("a folder")
-            .join(format!("{}.{REFUSED_SUFFIX}", key(&source, libre())));
-        std::fs::File::options()
-            .write(true)
-            .open(&marker)
-            .expect("the mark")
-            .set_modified(SystemTime::now() - REFUSAL_TTL - Duration::from_secs(1))
-            .expect("an older mark");
+            .join(format!("{refused_key}.{REFUSED_SUFFIX}"));
+
+        with_index(&folder().expect("a folder"), |index| {
+            let Some(IndexEntry::Refused { left }) = index.entries.get_mut(&refused_key) else {
+                panic!("the mark just left");
+            };
+
+            *left = SystemTime::now() - REFUSAL_TTL - Duration::from_secs(1);
+        });
 
         assert!(!refused(&source, libre()));
         assert!(!marker.is_file(), "and the mark is gone with the answer");
