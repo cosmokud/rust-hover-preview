@@ -1032,11 +1032,31 @@ unsafe fn show_context_menu(hwnd: HWND) {
 
     let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
 
-    // Add the "Timing" submenu: how long a hover waits before its preview opens, how
-    // long the same file is held off after its preview was dismissed, how long the
-    // pointer must be still before anything previews at all, and what the trigger key
-    // does.
+    // Add the "Timing" submenu: whether the keyboard's turn holds the pointer back, how long
+    // a hover waits before its preview opens, how long the same file is held off after its
+    // preview was dismissed, how long the pointer must be still before anything previews at
+    // all, and what the trigger key does.
     let timing_menu = CreatePopupMenu().unwrap();
+
+    // Whether the keyboard driving Explorer holds a parked pointer back instead of the file
+    // under it previewing: the first row here, the one switch among the submenu's delays and
+    // keys, and it starts off, where the pointer's own hover wins.
+    let prioritize_keyboard = CONFIG
+        .lock()
+        .map(|c| c.prioritize_keyboard)
+        .unwrap_or(false);
+
+    let _ = AppendMenuW(
+        timing_menu,
+        MF_STRING
+            | if prioritize_keyboard {
+                MF_CHECKED
+            } else {
+                MF_UNCHECKED
+            },
+        ID_TRAY_PRIORITIZE_KEYBOARD as usize,
+        w!("Prioritize Keyboard"),
+    );
 
     // Add the "Trigger Key (Alt)" submenu: whether the key is watched at all, the
     // key it watches, and what holding it does. Which of the two modes is active is
@@ -1161,26 +1181,6 @@ unsafe fn show_context_menu(hwnd: HWND) {
         MF_STRING | MF_POPUP,
         settling_delay_menu.0 as usize,
         w!("Settling Delay"),
-    );
-
-    // Whether the keyboard driving Explorer holds a parked pointer back instead of the file
-    // under it previewing: the one row here that is a switch rather than a delay or a key,
-    // and it starts off, where the pointer's own hover wins.
-    let prioritize_keyboard = CONFIG
-        .lock()
-        .map(|c| c.prioritize_keyboard)
-        .unwrap_or(false);
-
-    let _ = AppendMenuW(
-        timing_menu,
-        MF_STRING
-            | if prioritize_keyboard {
-                MF_CHECKED
-            } else {
-                MF_UNCHECKED
-            },
-        ID_TRAY_PRIORITIZE_KEYBOARD as usize,
-        w!("Prioritize Keyboard"),
     );
 
     let _ = AppendMenuW(
