@@ -5127,18 +5127,19 @@ pub fn run_explorer_hook() {
                             last_focused_key = Some(focused_key);
                             allow_keyboard_preview_on_first_observation = false;
 
-                            // Dismiss any active mouse hover
-                            if last_file.is_some() && !is_keyboard_hover {
-                                hide_preview();
-                                last_file = None;
-                                suppressed.clear();
-                                hover_start = None;
-                            }
-
                             // Resolve to a media file and show keyboard preview
                             if let Some(path) =
                                 resolve_focused_item_to_path(&mut resolver, &focused_info)
                             {
+                                // Dismiss any active mouse hover: the keyboard's own preview
+                                // is what is about to replace it.
+                                if last_file.is_some() && !is_keyboard_hover {
+                                    hide_preview();
+                                    last_file = None;
+                                    suppressed.clear();
+                                    hover_start = None;
+                                }
+
                                 if keyboard_file.as_ref() != Some(&path) {
                                     // Hide previous preview before showing new one
                                     if is_keyboard_hover {
@@ -5174,6 +5175,18 @@ pub fn run_explorer_hook() {
                                 if is_keyboard_hover {
                                     hide_preview();
                                 }
+                                // The pointer's own hover is left where it is: a key pressed
+                                // onto an item with nothing to show must not take the preview
+                                // of the file under the pointer down and put it straight back
+                                // up. It goes only where `Prioritize Keyboard` is what holds
+                                // the pointer back — there the keyboard owns the screen and
+                                // the pointer waits for its turn (see the guard below).
+                                if prioritize_keyboard && last_file.is_some() {
+                                    hide_preview();
+                                    last_file = None;
+                                    suppressed.clear();
+                                    hover_start = None;
+                                }
                                 keyboard_file = None;
                                 is_keyboard_hover = false;
                                 video_hover_guard_until = None;
@@ -5189,18 +5202,19 @@ pub fn run_explorer_hook() {
                         last_focused_key = Some(focused_key);
                         allow_keyboard_preview_on_first_observation = false;
 
-                        // Dismiss any active mouse hover
-                        if last_file.is_some() && !is_keyboard_hover {
-                            hide_preview();
-                            last_file = None;
-                            suppressed.clear();
-                            hover_start = None;
-                        }
-
                         // Resolve to a media file and show keyboard preview
                         if let Some(path) =
                             resolve_focused_item_to_path(&mut resolver, &focused_info)
                         {
+                            // Dismiss any active mouse hover: the keyboard's own preview
+                            // is what is about to replace it.
+                            if last_file.is_some() && !is_keyboard_hover {
+                                hide_preview();
+                                last_file = None;
+                                suppressed.clear();
+                                hover_start = None;
+                            }
+
                             if keyboard_file.as_ref() != Some(&path) {
                                 // Hide previous preview before showing new one
                                 if is_keyboard_hover {
@@ -5234,6 +5248,17 @@ pub fn run_explorer_hook() {
                             if is_keyboard_hover {
                                 hide_preview();
                             }
+                            // The pointer's own hover is left where it is, for the reason
+                            // the first observation leaves it: a key pressed onto an item
+                            // with nothing to show must not take the preview of the file
+                            // under the pointer down and put it straight back up. It goes
+                            // only where `Prioritize Keyboard` holds the pointer back.
+                            if prioritize_keyboard && last_file.is_some() {
+                                hide_preview();
+                                last_file = None;
+                                suppressed.clear();
+                                hover_start = None;
+                            }
                             keyboard_file = None;
                             is_keyboard_hover = false;
                             video_hover_guard_until = None;
@@ -5259,7 +5284,8 @@ pub fn run_explorer_hook() {
             // moved past the tolerance, or given a wheel tick — or when a folder change
             // hands the screen back to it. With the setting off the pointer's own hover
             // wins, as it always has: a parked pointer previews the file it is on while
-            // the keyboard drives.
+            // the keyboard drives, and a key pressed onto an item with no preview to give
+            // leaves that hover standing rather than taking it down and putting it back.
             if is_keyboard_hover
                 || (prioritize_keyboard && keyboard_screen_owner)
                 || pointer_pause.freezes_pointer()

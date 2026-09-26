@@ -220,13 +220,13 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
   - **Font Size** — `400%` at the top down to `70%` at the bottom.
   - **Markdown** — Rendered or Source.
 - **Timing**
+  - **Prioritize Keyboard** — Off by default. When on, the file under a pointer that has not been moved does not preview of its own while the keyboard is driving Explorer, so pressing a key onto a file with no preview of its own behaves like pressing one onto a file that has a preview. The pointer takes the screen back when it is moved, when the wheel is turned, or when a folder change hands it over.
   - **Trigger Key (Alt)** — The key is named in the item.
     - **Enable Trigger Key** — Whether the key is watched.
     - **Hold to Disable Preview** / **Hold to Enable Preview** — What holding the key does.
   - **Delay** — How long the pointer rests before a preview opens: `0 ms` at the top down to `1000 ms` at the bottom. Default `0 ms`.
   - **Rehover Delay** — Wait before the same file can preview again. Default `200 ms`.
   - **Settling Delay** — How still the pointer must be before previewing what it is on. Default `0 ms` means a new file can preview while the hand is still moving. Keyboard previews ignore this.
-  - **Prioritize Keyboard** — Off by default. When on, the file under a pointer that has not been moved does not preview of its own while the keyboard is driving Explorer, so pressing a key onto a file with no preview of its own behaves like pressing one onto a file that has a preview. The pointer takes the screen back when it is moved, when the wheel is turned, or when a folder change hands it over.
 - **Placement**
   - **Position** — Follow Cursor or Best Position. Default **Best Position**.
   - **Avoid** — Avoid Nothing, Avoid Filename (`default`), Avoid Filename Column, or Avoid Details. Keeps a preview off the item it is about. Keyboard previews have no cursor, so **Avoid Nothing** acts like **Avoid Filename**.
