@@ -373,7 +373,7 @@ struct ProbeMemo {
 /// One walk reads the pieces of it for every way of avoiding that asks for one, so it
 /// answers with both boxes rather than being asked twice: the whole of what the item
 /// draws, and the piece its name is drawn in.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct ItemText {
     /// Every piece of the item's text taken as one box — a row's name with the columns
     /// beside it, the label under an icon — which is the region `Avoid Details` keeps a
@@ -383,9 +383,16 @@ struct ItemText {
     /// draw their items as rows is the `Name` column of `Details` — the name above the
     /// path of `Content` — and the label itself under an icon. It is the room the name
     /// is *given*: the region `Avoid Filename Column` keeps a preview off, and the box
-    /// `Avoid Filename` narrows to the width the name itself is drawn at — see
-    /// [`HoveredItem::name_box`].
+    /// the pointer's `Avoid Filename` narrows to the width the name is drawn at — see
+    /// [`HoveredItem::pointer_name_box`].
     name: RECT,
+    /// The label the piece the name is drawn in reports for itself: the name the view
+    /// draws there, which for a name too long for the room it is given is the name cut
+    /// to that room, the ellipsis and all, rather than the name the item goes by. It is
+    /// what the pointer's `Avoid Filename` is measured from, so that a name the view
+    /// cut is cleared to the end of what it draws — see
+    /// [`HoveredItem::pointer_name_box`]. Nothing where the piece reported none.
+    name_text: Option<String>,
     /// Whether anything is drawn beside the piece the name is drawn in. A view that
     /// draws its items as rows writes the columns beside the name there — a `Details`
     /// row's type, date and size, the path and details of a `Content` row — where a
@@ -437,7 +444,9 @@ impl HoveredItem {
     }
 
     /// The region a preview of this item is kept off, as the `Avoid` setting has it:
-    /// the name where it is drawn at `Filename`, the box the view gives the name at
+    /// the name where the view draws it at `Filename` — the label the name is drawn
+    /// with, so a name cut to the room it was given is kept off to the end of what is
+    /// drawn (see [`Self::pointer_name_box`]) — the box the view gives the name at
     /// `FilenameColumn`, that box with the columns a row writes beside it at `Details`,
     /// and nothing at all at `Off` — or the item's own box at any of the first three
     /// for a view that reports no text, the name being drawn inside that box whatever
@@ -449,9 +458,9 @@ impl HoveredItem {
     fn avoid_box(&self) -> Option<(i32, i32, i32, i32)> {
         let region = match avoid_mode() {
             AvoidMode::Off => return None,
-            AvoidMode::Filename => self.name_box(),
-            AvoidMode::FilenameColumn => self.text.map(|text| text.name),
-            AvoidMode::Details => self.text.map(|text| text.all),
+            AvoidMode::Filename => self.pointer_name_box(),
+            AvoidMode::FilenameColumn => self.text.as_ref().map(|text| text.name),
+            AvoidMode::Details => self.text.as_ref().map(|text| text.all),
         }
         .unwrap_or(self.bounds);
 
@@ -473,8 +482,8 @@ impl HoveredItem {
     fn keyboard_avoid_box(&self) -> Option<(i32, i32, i32, i32)> {
         let region = match avoid_mode() {
             AvoidMode::Off | AvoidMode::Filename => self.name_box(),
-            AvoidMode::FilenameColumn => self.text.map(|text| text.name),
-            AvoidMode::Details => self.text.map(|text| text.all),
+            AvoidMode::FilenameColumn => self.text.as_ref().map(|text| text.name),
+            AvoidMode::Details => self.text.as_ref().map(|text| text.all),
         }
         .unwrap_or(self.bounds);
 
@@ -494,30 +503,88 @@ impl HoveredItem {
     /// row read as a box. An item whose text cannot be measured answers `false`, which
     /// leaves it placed by its box the way it always was.
     fn draws_columns(&self) -> bool {
-        self.text.is_some_and(|text| text.columns)
+        self.text.as_ref().is_some_and(|text| text.columns)
     }
 
     /// The box the item's name is drawn in, cut to the width the name itself takes:
-    /// the region `Avoid Filename` keeps a preview off, where the box as the view
-    /// reported it is the one `Avoid Filename Column` keeps it off.
+    /// the region a *keyboard* `Avoid Filename` keeps a preview off, where the box as
+    /// the view reported it is the one `Avoid Filename Column` keeps it off.
     ///
     /// A view reports the room an item's name is *given* — the `Name` column of a
     /// `Details` row is one width for every file in it, a long name and a short one
-    /// alike — so the width the name is drawn at, at the larger of the two sizes a view
+    /// alike — so the width the name goes by takes, at the larger of the two sizes a view
     /// may draw it at, is measured and the box is narrowed to it. It is only ever
-    /// narrowed: a name that fills the room it was given, or is drawn truncated to it,
-    /// is left as the view reported it.
+    /// narrowed: a name that fills the room it was given is left as the view reported it.
+    /// A name the view *cut* to its room is not, and that is the pointer's answer to
+    /// measure instead — see [`Self::pointer_name_box`].
     fn name_box(&self) -> Option<RECT> {
-        let text = self.text?;
+        let text = self.text.as_ref()?;
 
         let Some(width) = drawn_name_width(&self.name, region_display_dpi(&text.name)) else {
             return Some(text.name);
         };
 
-        Some(RECT {
-            right: (text.name.left + width).min(text.name.right),
-            ..text.name
-        })
+        Some(narrowed(text.name, width))
+    }
+
+    /// The box the item's name is drawn in, cut to the width of the label it is drawn
+    /// *at*: the region the pointer's `Avoid Filename` keeps a preview off, where the
+    /// box as the view reported it is the one `Avoid Filename Column` keeps it off.
+    ///
+    /// What is measured is the label the piece the name is drawn in reports for itself —
+    /// the name the view drew there, which for a name too long for the room it was given
+    /// is the name cut to that room — and the name the item goes by, the wider of the two
+    /// being what the box is cut to. The label is what a pointer has to be kept off
+    /// because it is what is on screen: measured from the name the item goes by alone, a
+    /// name the view cut is measured past the room while the drawn text stops at the
+    /// room's own edge, so the box comes out narrower than the label *and* narrower than
+    /// the room, and a preview placed past it lands in the middle of the name it was
+    /// moved beside. The two measurements agree for every name that fits its room, where
+    /// the label *is* the name; the names that do not fit are the ones they part on, and
+    /// there the wider of the two is the room itself — which is what leaves a name cut to
+    /// its room kept off whole, the region `Avoid Filename Column` keeps, and there is no
+    /// tail of the room left for a preview to be placed in anyway.
+    ///
+    /// Taking the wider of the two is also what keeps a view that reports less than it
+    /// draws — a piece of a name rather than the name drawn — from cutting the region
+    /// below the width the item's own name measures, which is what it was cut to before
+    /// a label was read at all.
+    ///
+    /// A keyboard preview is placed from [`Self::name_box`] instead: what such a preview
+    /// takes its place from is the item alone, with no pointer on it to say which part of
+    /// it the hand is at.
+    fn pointer_name_box(&self) -> Option<RECT> {
+        let text = self.text.as_ref()?;
+        let dpi = region_display_dpi(&text.name);
+
+        let width = match text
+            .name_text
+            .as_deref()
+            .filter(|label| *label != self.name.as_str())
+        {
+            Some(label) => {
+                let drawn = drawn_name_width(label, dpi);
+                let named = drawn_name_width(&self.name, dpi);
+                drawn.max(named)
+            }
+            None => drawn_name_width(&self.name, dpi),
+        };
+
+        Some(width.map_or(text.name, |width| narrowed(text.name, width)))
+    }
+}
+
+/// The room an item's name is given, cut to the width the name drawn in it takes: what a
+/// name box is, whichever of the two names it was measured from — see
+/// [`HoveredItem::name_box`] and [`HoveredItem::pointer_name_box`].
+///
+/// It only ever cuts: a name that takes the whole room it was given — one drawn cut to
+/// it, or one measured at the width of the room itself — is left as the view reported
+/// it, so a name that fills its room is kept off to the room's own edge.
+fn narrowed(room: RECT, width: i32) -> RECT {
+    RECT {
+        right: (room.left + width).min(room.right),
+        ..room
     }
 }
 
@@ -1240,6 +1307,55 @@ fn note_stalled_preview(path: Option<&Path>, quiet_ms: u64) {
         let _ = writeln!(
             file,
             "preview loop quiet {quiet_ms}ms: its engines were ended from the hook"
+        );
+    }
+}
+
+/// Note the region one hover's preview is kept off, where a trace is being written: the
+/// name the item goes by, the label the room the name is given reports for itself, that
+/// room, and the box the preview is placed past — see `avoid_box_under_cursor`.
+///
+/// Once for a hover rather than once for a probe, which is how often the region is asked
+/// for: a probe is every tick the pointer is over anything at all, and a region is one
+/// read beside the preview it places. It is the line that says which of the two names a
+/// name box is measured from came out wider on the machine it was written on, and so
+/// whether a name the view cut to its room is being kept off to the end of what it draws
+/// or to less than that — the question an `Avoid Filename` preview covering the middle of
+/// the name it belongs to is answered by.
+fn note_avoid_region(
+    path: Option<&Path>,
+    item: &HoveredItem,
+    region: Option<(i32, i32, i32, i32)>,
+) {
+    let Some(path) = path else {
+        return;
+    };
+
+    let (label, room) = match item.text.as_ref() {
+        Some(text) => (
+            text.name_text.as_deref().unwrap_or_default(),
+            format!(
+                "{},{},{},{}",
+                text.name.left, text.name.top, text.name.right, text.name.bottom
+            ),
+        ),
+        None => ("", "none".to_string()),
+    };
+    let region = match region {
+        Some((left, top, right, bottom)) => format!("{left},{top},{right},{bottom}"),
+        None => "none".to_string(),
+    };
+
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        use std::io::Write;
+        let _ = writeln!(
+            file,
+            "avoid region {region} over room {room}: {} listed as {label:?}",
+            item.name
         );
     }
 }
@@ -2200,7 +2316,7 @@ fn item_text_box(
     let automation = resolver.automation.as_ref()?;
     let cache = resolver.cache.as_ref()?;
 
-    let mut pieces: Vec<RECT> = Vec::new();
+    let mut pieces: Vec<TextPiece> = Vec::new();
 
     unsafe {
         let condition = automation.CreateTrueCondition().ok()?;
@@ -2225,7 +2341,15 @@ fn item_text_box(
             // Text reported outside the item's box is reported wrong, and the box is
             // what answers for an item whose text the view does not place.
             if rect.right > bounds.left && rect.left < bounds.right {
-                pieces.push(rect);
+                pieces.push(TextPiece {
+                    rect,
+                    // The label the piece reports for itself, which the same batched read
+                    // already carries — a `Details` row's `Name` cell draws a name too
+                    // long for it cut to the room it has, and the label is then the cut
+                    // one where the item's own name is not — see
+                    // [`HoveredItem::pointer_name_box`].
+                    text: element_name(&child).unwrap_or_default(),
+                });
             }
         }
     }
@@ -2233,30 +2357,42 @@ fn item_text_box(
     text_boxes(&pieces)
 }
 
+/// One piece of an item's own text: the box the view draws it in, and the label the
+/// piece reports for itself, which is the text drawn there — the name the item goes by
+/// where the piece has room for it and the name cut to the room where it does not.
+struct TextPiece {
+    rect: RECT,
+    text: String,
+}
+
 /// What the pieces of an item's own text add up to, or `None` when the item drew none.
 ///
-/// Three things are read from them at once, because one walk answers all three: the
-/// whole of what the item draws as one box, the piece its name is drawn in, and
-/// whether anything was drawn *beside* that piece. The last is what tells a row of the
-/// view from a box item: a `Details` or `Content` row writes its columns to the right
-/// of the name — the type, the date, the size — where a label under an icon, a tile's
-/// stacked lines and a name on its own draw nothing there. See [`ItemText::columns`].
-fn text_boxes(pieces: &[RECT]) -> Option<ItemText> {
+/// Four things are read from them at once, because one walk answers all four: the whole
+/// of what the item draws as one box, the piece its name is drawn in, the label that
+/// piece draws its name with, and whether anything was drawn *beside* that piece. The
+/// last is what tells a row of the view from a box item: a `Details` or `Content` row
+/// writes its columns to the right of the name — the type, the date, the size — where a
+/// label under an icon, a tile's stacked lines and a name on its own draw nothing there.
+/// See [`ItemText::columns`].
+fn text_boxes(pieces: &[TextPiece]) -> Option<ItemText> {
     let mut all: Option<RECT> = None;
-    let mut name: Option<RECT> = None;
+    let mut name: Option<usize> = None;
 
-    for rect in pieces {
+    for (index, piece) in pieces.iter().enumerate() {
+        let rect = piece.rect;
+
         // The name is the leftmost piece, which is the one the views that draw their
         // items as rows put first; two pieces drawn from the same edge — the name above
         // the path of `Content` — are told apart by taking the higher.
         let is_name = match name {
             None => true,
-            Some(current) => {
-                rect.left < current.left || (rect.left == current.left && rect.top < current.top)
+            Some(held) => {
+                let held = pieces[held].rect;
+                rect.left < held.left || (rect.left == held.left && rect.top < held.top)
             }
         };
         if is_name {
-            name = Some(*rect);
+            name = Some(index);
         }
 
         all = Some(match all {
@@ -2266,16 +2402,21 @@ fn text_boxes(pieces: &[RECT]) -> Option<ItemText> {
                 right: union.right.max(rect.right),
                 bottom: union.bottom.max(rect.bottom),
             },
-            None => *rect,
+            None => rect,
         });
     }
 
     let all = all?;
-    let name = name.unwrap_or(all);
+    let label = name.and_then(|index| {
+        let piece = &pieces[index];
+        (!piece.text.trim().is_empty()).then(|| piece.text.clone())
+    });
+    let name = name.map_or(all, |index| pieces[index].rect);
 
     Some(ItemText {
         all,
         name,
+        name_text: label,
         columns: all.right > name.right,
     })
 }
@@ -2942,7 +3083,14 @@ fn avoid_box_under_cursor(resolver: &ItemResolver, point: POINT) -> Option<(i32,
     }
 
     let item = uia_item_from_point(resolver, point, true)?;
-    item.avoid_box()
+    let region = item.avoid_box();
+
+    // Whether the region is written down is decided once for the run — see
+    // `hook_trace_path` — and the write is one line per hover, beside the preview it
+    // places rather than beside every probe that never asked for one.
+    note_avoid_region(hook_trace_path().as_deref(), &item, region);
+
+    region
 }
 
 /// Quick check if foreground window is Explorer (cheap, no COM)
@@ -5443,43 +5591,42 @@ mod tests {
         );
     }
 
+    /// One piece of an item's text, from the box the view draws it in and the label it
+    /// reports for itself.
+    fn piece(left: i32, top: i32, right: i32, bottom: i32, text: &str) -> TextPiece {
+        TextPiece {
+            rect: RECT {
+                left,
+                top,
+                right,
+                bottom,
+            },
+            text: text.to_string(),
+        }
+    }
+
     /// A `Details` row's text is read as a row: the name is the `Name` column, the box
-    /// the item draws is the whole of its columns, and the columns drawn beside the
-    /// name are what says the item is a row of its view rather than a box — see
-    /// `text_boxes`. The boxes are the ones a row of a `Details` folder is reported
-    /// with, a name and the columns beside it.
+    /// the item draws is the whole of its columns, the label the name is drawn with is
+    /// read beside it, and the columns drawn beside the name are what says the item is a
+    /// row of its view rather than a box — see `text_boxes`. The boxes are the ones a row
+    /// of a `Details` folder is reported with, a name and the columns beside it.
     #[test]
     fn a_details_rows_text_is_read_as_a_row() {
         let text = text_boxes(&[
-            RECT {
-                left: 1160,
-                top: 372,
-                right: 1396,
-                bottom: 391,
-            },
-            RECT {
-                left: 1396,
-                top: 372,
-                right: 1540,
-                bottom: 391,
-            },
-            RECT {
-                left: 1540,
-                top: 372,
-                right: 1660,
-                bottom: 391,
-            },
-            RECT {
-                left: 1660,
-                top: 372,
-                right: 1740,
-                bottom: 391,
-            },
+            piece(1160, 372, 1396, 391, "a-very-long-file-name-here.txt"),
+            piece(1396, 372, 1540, 391, "File folder"),
+            piece(1540, 372, 1660, 391, "26/09/2026 09:41"),
+            piece(1660, 372, 1740, 391, "4 KB"),
         ])
         .expect("a row that draws text");
 
         assert_eq!(text.name.left, 1160, "the name is the leftmost piece");
         assert_eq!(text.name.right, 1396, "which is the `Name` column");
+        assert_eq!(
+            text.name_text.as_deref(),
+            Some("a-very-long-file-name-here.txt"),
+            "and the name is read with the label it is drawn with"
+        );
         assert_eq!(
             text.all.right, 1740,
             "the row's text stops at its last column"
@@ -5494,30 +5641,10 @@ mod tests {
     #[test]
     fn a_content_rows_text_is_read_as_a_row() {
         let text = text_boxes(&[
-            RECT {
-                left: 1204,
-                top: 349,
-                right: 1504,
-                bottom: 371,
-            },
-            RECT {
-                left: 1542,
-                top: 354,
-                right: 1600,
-                bottom: 370,
-            },
-            RECT {
-                left: 1578,
-                top: 371,
-                right: 1617,
-                bottom: 387,
-            },
-            RECT {
-                left: 1836,
-                top: 371,
-                right: 1889,
-                bottom: 387,
-            },
+            piece(1204, 349, 1504, 371, "a-very-long-file-name-here.txt"),
+            piece(1542, 354, 1600, 370, "Text Document"),
+            piece(1578, 371, 1617, 387, "D:\\Notes"),
+            piece(1836, 371, 1889, 387, "2 KB"),
         ])
         .expect("a row that draws text");
 
@@ -5532,44 +5659,34 @@ mod tests {
     /// Text drawn *under* the name is not drawn beside it: the label under an icon is
     /// one piece, and the lines a tile stacks share the room they are drawn in, so
     /// neither is read as a row — the preview of such an item is placed by its box —
-    /// see `text_boxes`.
+    /// see `text_boxes`. The label of a tile is the first line's, as the box is.
     #[test]
     fn text_under_the_name_is_not_a_column_beside_it() {
-        let label = text_boxes(&[RECT {
-            left: 1235,
-            top: 602,
-            right: 1312,
-            bottom: 618,
-        }])
-        .expect("a label that draws text");
+        let label = text_boxes(&[piece(1235, 602, 1312, 618, "report.txt")])
+            .expect("a label that draws text");
         assert_eq!(label.all, label.name, "the label is all of the text");
+        assert_eq!(
+            label.name_text.as_deref(),
+            Some("report.txt"),
+            "and the label is the text drawn in it"
+        );
         assert!(
             !label.columns,
             "a label under an icon has nothing beside it"
         );
 
         let stacked = text_boxes(&[
-            RECT {
-                left: 1193,
-                top: 346,
-                right: 1384,
-                bottom: 362,
-            },
-            RECT {
-                left: 1193,
-                top: 362,
-                right: 1384,
-                bottom: 378,
-            },
-            RECT {
-                left: 1193,
-                top: 378,
-                right: 1384,
-                bottom: 394,
-            },
+            piece(1193, 346, 1384, 362, "report.txt"),
+            piece(1193, 362, 1384, 378, "D:\\Notes"),
+            piece(1193, 378, 1384, 394, "4 KB"),
         ])
         .expect("a tile that draws text");
         assert_eq!(stacked.name.bottom, 362, "the name is the first line");
+        assert_eq!(
+            stacked.name_text.as_deref(),
+            Some("report.txt"),
+            "and the first line is the label read with it"
+        );
         assert!(!stacked.columns, "the lines under it are not beside it");
     }
 
@@ -5578,6 +5695,115 @@ mod tests {
     #[test]
     fn an_item_that_draws_no_text_has_no_boxes() {
         assert!(text_boxes(&[]).is_none());
+    }
+
+    /// The item a file is resolved from, from the facts a name box is measured against:
+    /// the name the item goes by, and the text the view drew inside it.
+    fn listed(name: &str, text: ItemText) -> HoveredItem {
+        HoveredItem {
+            index: Some(1),
+            name: name.to_string(),
+            value: None,
+            bounds: RECT {
+                left: 1150,
+                top: 372,
+                right: 1740,
+                bottom: 391,
+            },
+            text: Some(text),
+            native_window: 0,
+        }
+    }
+
+    /// The text an item draws when it draws one piece: the room the view gives its name,
+    /// and the label the name is drawn in there with.
+    fn name_room(left: i32, right: i32, label: &str) -> ItemText {
+        let rect = RECT {
+            left,
+            top: 372,
+            right,
+            bottom: 391,
+        };
+
+        ItemText {
+            all: rect,
+            name: rect,
+            name_text: (!label.is_empty()).then(|| label.to_string()),
+            columns: false,
+        }
+    }
+
+    /// A name too long for the room it was given is drawn cut to it, and the room is what
+    /// is kept off: the pointer's region is the label's width cut to the room, which for
+    /// a label that fills the room is the room itself — the region `Avoid Filename
+    /// Column` keeps, and the one a preview that covered the middle of the name was
+    /// placed from. See `HoveredItem::pointer_name_box`.
+    #[test]
+    fn a_name_that_cannot_fit_its_room_is_kept_off_whole() {
+        let room = name_room(1160, 1240, "a-very-long-file-name-h…");
+        let item = listed("a-very-long-file-name-here.txt", room);
+
+        let measured = drawn_name_width("a-very-long-file-name-h…", 96).expect("a label measures");
+        assert!(
+            measured >= 80,
+            "the label takes the whole of the room it was cut to, and more: {measured}"
+        );
+
+        assert_eq!(
+            item.pointer_name_box(),
+            Some(RECT {
+                left: 1160,
+                top: 372,
+                right: 1240,
+                bottom: 391,
+            }),
+            "the room is kept off whole, as `Avoid Filename Column` keeps it"
+        );
+    }
+
+    /// A name with room to spare is kept off to the width it takes and no further, which
+    /// is the tail of its column left for a preview to be placed in — see
+    /// `HoveredItem::pointer_name_box`.
+    #[test]
+    fn a_name_that_fits_its_room_is_kept_off_to_the_width_it_takes() {
+        let item = listed("aa.txt", name_room(1160, 1500, "aa.txt"));
+
+        let measured = drawn_name_width("aa.txt", 96).expect("a short name measures");
+        assert!(measured < 340, "a name with room to spare: {measured}");
+
+        let region = item.pointer_name_box().expect("a name this item draws");
+        assert_eq!(region.left, 1160, "the region starts where the name does");
+        assert_eq!(
+            region.right,
+            1160 + measured,
+            "and stops at the width the name takes"
+        );
+    }
+
+    /// The wider of the two names is the one measured: a view that reports less than it
+    /// draws — a piece of a name — is not what cuts the region below the width the item's
+    /// own name takes — see `HoveredItem::pointer_name_box`.
+    #[test]
+    fn a_label_shorter_than_the_name_is_not_what_is_measured() {
+        let item = listed(
+            "a-very-long-file-name-here.txt",
+            name_room(1160, 1500, "a-very-long"),
+        );
+
+        let named =
+            drawn_name_width("a-very-long-file-name-here.txt", 96).expect("a long name measures");
+        assert!(
+            named > drawn_name_width("a-very-long", 96).expect("a piece of it measures"),
+            "the name takes more room than the piece of it reported: {named}"
+        );
+        assert!(named < 340, "and the room has room for it: {named}");
+
+        let region = item.pointer_name_box().expect("a name this item draws");
+        assert_eq!(
+            region.right,
+            1160 + named,
+            "the name's own width is what the room is cut to"
+        );
     }
 
     /// One state's counts, from the numbers `explorer_state_from_counts` decides by.
