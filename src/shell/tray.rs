@@ -8,7 +8,8 @@ use crate::config::config::{
     DEFAULT_DESIGN_BACKGROUND, DEFAULT_DESIGN_SCALE, DEFAULT_DOCUMENT_CACHE_MB,
     DEFAULT_DOCUMENT_SCALE, DEFAULT_EBOOK_SCALE, DEFAULT_FOLLOW_CURSOR, DEFAULT_FONT_BACKGROUND,
     DEFAULT_FONT_SCALE, DEFAULT_HOVER_DELAY_MS, DEFAULT_IMAGE_BACKGROUND, DEFAULT_IMAGE_CACHE_MB,
-    DEFAULT_IMAGE_DISK_CACHE_MB, DEFAULT_LIBREOFFICE_IDLE_SECS, DEFAULT_OFFICE_ENGINE,
+    DEFAULT_IMAGE_DISK_CACHE_MB, DEFAULT_LIBREOFFICE_IDLE_SECS, DEFAULT_NORMALIZE_VOLUME,
+    DEFAULT_OFFICE_ENGINE,
     DEFAULT_OFFICE_ENGINE_IDLE_SECS, DEFAULT_PREVIEW_SCALE, DEFAULT_SAME_FILE_REHOVER_DELAY_MS,
     DEFAULT_SETTLING_DELAY_MS, DEFAULT_TEXT_FONT_SCALE_PERCENT, DEFAULT_TICK_MS,
     DEFAULT_VECTOR_BACKGROUND, DEFAULT_VECTOR_SCALE, DEFAULT_VIDEO_SCALE, DEFAULT_VIDEO_VOLUME,
@@ -130,6 +131,13 @@ const ID_TRAY_AUDIO_VOLUME_BASE: u16 = 1370;
 /// `the_two_volume_submenus_carry_a_range_apiece`, which holds all three away from the sounds
 /// gate and from each other.
 const ID_TRAY_AUDIO_SEEK_BASE: u16 = 1390;
+/// The `Volume → Audio` submenu's first row: whether a sound's loudest sample is measured and
+/// brought to full scale before it is played (see `Normalize`).
+///
+/// It is a switch of its own rather than a level of the list under it, so it takes an id of its
+/// own — out past the tick menu, where the tray's other lone switches sit, rather than in the
+/// stretch the levels are read from.
+const ID_TRAY_NORMALIZE_VOLUME: u16 = 1525;
 /// The ways a sound can be started, in the order the submenu lists them: where it was left the
 /// last time it was hovered, which is where the setting starts, then its beginning, its middle,
 /// and anywhere in it at all (see `AudioSeek`).
@@ -528,6 +536,10 @@ unsafe extern "system" fn tray_window_proc(
                 {
                     set_vector_background(cmd - ID_TRAY_VECTOR_BACKGROUND_BASE)
                 }
+                // The sound's own peak, above the levels of its half of the `Volume` submenu: a
+                // switch rather than a level, and one read where a player is started rather than
+                // here.
+                ID_TRAY_NORMALIZE_VOLUME => toggle_normalize_volume(),
                 // A level of either half of the `Volume` submenu, by the position it was
                 // listed at. The two halves offer the same levels, so one table answers for
                 // both and each range is what says which setting was meant.
@@ -1445,9 +1457,10 @@ unsafe fn show_context_menu(hwnd: HWND) {
     // to be a distraction as anything, while a sound file *is* the sound — so one setting for
     // both would mean turning a film's soundtrack up to hear a song. Each half lists the same
     // ten levels, in the same order, which is what lets one table and one builder serve them;
-    // the level each setting stands at carries the default mark (see `VOLUME_CHOICES`). Below
-    // them is the same submenu's other half of the question, which is a sound's alone: where in
-    // a file it starts playing (see `AUDIO_SEEK_CHOICES`).
+    // the level each setting stands at carries the default mark (see `VOLUME_CHOICES`). Above a
+    // sound's levels sits the peak the file itself is measured to, which is a question only a
+    // sound is asked, and below them the other half of the same question, where in a file it
+    // starts playing (see `AUDIO_SEEK_CHOICES`).
     let (video_volume, audio_volume, audio_seek) = CONFIG
         .lock()
         .map(|c| (c.video_volume, c.audio_volume, c.audio_seek))
@@ -1458,10 +1471,14 @@ unsafe fn show_context_menu(hwnd: HWND) {
         ));
 
     let volume_menu = CreatePopupMenu().unwrap();
-    let levels_menu = |current: u32, base: u16, default: u32| -> HMENU {
-        let levels = CreatePopupMenu().unwrap();
-
-        for (index, level) in VOLUME_CHOICES.iter().enumerate() {
+    let append_levels = |levels: HMENU, current: u32, base: u16, default: u32| {
+        // Largest first, which is the order a level is looked for in: a pointer crossing a folder
+        // of sounds is most often turning one down, and the whole of the scale standing at the top
+        // is what the rest of the list is read against. The id a level is listed at stays the
+        // table's own position — only the order the items are appended in is turned round — so a
+        // click still names its level by the position it holds in `VOLUME_CHOICES` (see
+        // `set_audio_volume`).
+        for (index, level) in VOLUME_CHOICES.iter().enumerate().rev() {
             let flags = MF_STRING
                 | if current == *level {
                     MF_CHECKED
@@ -1476,12 +1493,57 @@ unsafe fn show_context_menu(hwnd: HWND) {
                 &default_label(&format!("{level}%"), *level == default),
             );
         }
-
-        levels
     };
 
-    let video_levels = levels_menu(video_volume, ID_TRAY_VIDEO_VOLUME_BASE, DEFAULT_VIDEO_VOLUME);
-    let audio_levels = levels_menu(audio_volume, ID_TRAY_AUDIO_VOLUME_BASE, DEFAULT_AUDIO_VOLUME);
+    let video_levels = CreatePopupMenu().unwrap();
+    append_levels(
+        video_levels,
+        video_volume,
+        ID_TRAY_VIDEO_VOLUME_BASE,
+        DEFAULT_VIDEO_VOLUME,
+    );
+
+    // The sound's half carries one row the video's has no use for, above the levels: the peak a
+    // file's playing is measured to. A level is asked of the hover and this is asked of the file,
+    // and the two are scaled into one another — what the file's own loudest sample is brought to is
+    // full scale, and the level below it is how much of that is heard (see `Normalize`).
+    let normalize = CONFIG
+        .lock()
+        .map(|config| config.normalize_volume)
+        .unwrap_or(DEFAULT_NORMALIZE_VOLUME);
+    // Asked again here for the reason the `Codecs` rows are asked again: a machine that has just
+    // been given FFmpeg is answered from the machine rather than from the hover that cached it
+    // (see `codecs::refresh`).
+    refresh_codecs();
+    let normalize_available = codecs::normalize_available();
+
+    let audio_levels = CreatePopupMenu().unwrap();
+    let _ = AppendMenuW(
+        audio_levels,
+        MF_STRING
+            | if normalize && normalize_available {
+                MF_CHECKED
+            } else {
+                MF_UNCHECKED
+            }
+            | if normalize_available {
+                MF_UNCHECKED
+            } else {
+                // A machine without FFmpeg has nothing that measures a peak or applies one: the
+                // row is shown as what it is there — a switch that cannot act — rather than as a
+                // click that would do nothing (see `codecs::normalize_available`).
+                MF_GRAYED
+            },
+        ID_TRAY_NORMALIZE_VOLUME as usize,
+        w!("Normalize"),
+    );
+    let _ = AppendMenuW(audio_levels, MF_SEPARATOR, 0, PCWSTR::null());
+    append_levels(
+        audio_levels,
+        audio_volume,
+        ID_TRAY_AUDIO_VOLUME_BASE,
+        DEFAULT_AUDIO_VOLUME,
+    );
 
     let _ = AppendMenuW(
         volume_menu,
@@ -3351,6 +3413,20 @@ fn set_audio_volume(index: u16) {
     }
 }
 
+/// The switch above a sound's levels: whether a file's loudest sample is measured and brought to
+/// full scale before it is played, which is read where a player is started the way the level
+/// beside it is — nothing on screen is rebuilt, and a sound already playing is left where it is.
+///
+/// It is the file that is measured rather than the playing that is re-scaled, so a file switched
+/// on for while it was already known is measured off the tick, and what that measurement is for is
+/// the hover after the one that asked for it (see `spawn_gain_scan`).
+fn toggle_normalize_volume() {
+    if let Ok(mut config) = CONFIG.lock() {
+        config.normalize_volume = !config.normalize_volume;
+        config.save();
+    }
+}
+
 /// A way of starting a sound, by the position it was listed at: where in a file a hover drops
 /// the needle, which is read as a player is started the way the volume beside it is. An id past
 /// the last way the menu offered is one that is not there.
@@ -3972,8 +4048,8 @@ mod tests {
     }
 
     /// The two halves of the `Volume` submenu carry a range apiece, and the levels they offer
-    /// are the table's own: silence at the top, the whole of it at the bottom, and every level
-    /// above the one before it.
+    /// are the table's own: silence and the decades above it, each louder than the one before,
+    /// which the menu lists the other way round — the whole of the scale at the top.
     ///
     /// It is a test about ids for the reason the timing one below is — the two halves share a
     /// table, so a range that ran into the other would hand a click to the wrong setting — and

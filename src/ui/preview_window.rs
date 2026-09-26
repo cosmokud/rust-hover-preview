@@ -5,8 +5,8 @@ use crate::config::config::{
     PreviewScale, PreviewType, TextTheme, TransparentBackground, DEFAULT_ANIMATED_SCALE_PERCENT,
     DEFAULT_AUDIO_SEEK, DEFAULT_DDS_BACKGROUND, DEFAULT_DESIGN_BACKGROUND, DEFAULT_DESIGN_SCALE,
     DEFAULT_DOCUMENT_SCALE, DEFAULT_EBOOK_SCALE, DEFAULT_FONT_BACKGROUND, DEFAULT_FONT_SCALE,
-    DEFAULT_IMAGE_BACKGROUND, DEFAULT_IMAGE_CACHE_MB, DEFAULT_PREVIEW_SCALE_PERCENT,
-    DEFAULT_SPINNER_DELAY_MS, DEFAULT_TEXT_FONT_SCALE_PERCENT,
+    DEFAULT_IMAGE_BACKGROUND, DEFAULT_IMAGE_CACHE_MB, DEFAULT_NORMALIZE_VOLUME,
+    DEFAULT_PREVIEW_SCALE_PERCENT, DEFAULT_SPINNER_DELAY_MS, DEFAULT_TEXT_FONT_SCALE_PERCENT,
     DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS, DEFAULT_VECTOR_BACKGROUND, DEFAULT_VECTOR_SCALE,
     DEFAULT_VIDEO_SCALE_PERCENT, DEFAULT_WEBP_PLAYBACK_FPS,
 };
@@ -6351,12 +6351,21 @@ fn load_audio_card(path: &Path, width: u32, height: u32, dpi: u32) -> Option<Med
 /// player the file is played by: the engine answers for a file it can decode — which is the
 /// whole of what its probe is for — and everything else is FFmpeg's, where FFmpeg is installed
 /// at all. A file neither answers for is a file with no preview.
+///
+/// The peak of a file that plays is measured here as well, where the tray's `Normalize` asks for
+/// it: one read of one file, on the thread the hover is waiting on anyway, and the gain every
+/// hover after this one is played at (see `measure_audio_gain`).
 fn probe_audio_track(path: &Path) -> Option<audio_track::Track> {
-    if let Some(track) = video_player::audio_probe(path) {
-        return Some(track);
+    let track = match video_player::audio_probe(path) {
+        Some(track) => Some(track),
+        None => ffprobe_audio_track(path),
+    };
+
+    if track.is_some() {
+        measure_audio_gain(path);
     }
 
-    ffprobe_audio_track(path)
+    track
 }
 
 /// What FFmpeg's own probe reports about a file, and the player that would play it.
@@ -6477,6 +6486,159 @@ fn codec_label(name: &str) -> String {
     .to_string()
 }
 
+/// How long a sound's peak is given — a decode of every sample in the file, which is what a peak
+/// that is the file's own costs — before the wait for it is over.
+///
+/// It is longer than the probe's own cap for what it reads: a probe reads a header, and this reads
+/// the file. The cap is for the file no meter is coming back from, and one this side gives up on
+/// is played as it holds rather than waited for (see `finish_gain_scan`).
+const AUDIO_GAIN_TIMEOUT_SECS: u64 = 15;
+
+/// The sounds whose peak is being measured right now, which is what keeps a file hovered twice in
+/// the time one measurement takes from being read twice (see `begin_gain_scan`).
+static MEASURING_GAIN: Lazy<Mutex<Vec<PathBuf>>> = Lazy::new(|| Mutex::new(Vec::new()));
+
+/// Reads in flight this list holds before it is emptied, the same bound and the same reasoning as
+/// the measure list's own (see `MEASURING_MAX_ENTRIES`).
+const MEASURING_GAIN_MAX_ENTRIES: usize = 64;
+
+/// Whether a sound's peak is measured and applied at all: the setting is on and this machine has
+/// the two programs that make it possible (see `codecs::normalize_available`).
+fn normalizing_audio() -> bool {
+    let wanted = CONFIG
+        .lock()
+        .map(|config| config.normalize_volume)
+        .unwrap_or(DEFAULT_NORMALIZE_VOLUME);
+
+    wanted && codecs::normalize_available()
+}
+
+/// Say that this file's peak is being measured, answering whether one already is.
+fn begin_gain_scan(path: &Path) -> bool {
+    let Ok(mut measuring) = MEASURING_GAIN.lock() else {
+        return false;
+    };
+
+    if measuring.iter().any(|running| running == path) {
+        return false;
+    }
+
+    if measuring.len() >= MEASURING_GAIN_MAX_ENTRIES {
+        measuring.clear();
+    }
+
+    measuring.push(path.to_path_buf());
+
+    true
+}
+
+/// Say that the measurement of this file's peak is done with.
+fn end_gain_scan(path: &Path) {
+    let Ok(mut measuring) = MEASURING_GAIN.lock() else {
+        return;
+    };
+
+    measuring.retain(|running| running != path);
+}
+
+/// Measure a sound's peak where `Normalize` asks for it and nothing has measured it yet, on the
+/// thread that asked — which is a thread a hover is waiting on and never the tick (see
+/// `probe_audio_track`).
+fn measure_audio_gain(path: &Path) {
+    if !normalizing_audio() || audio_track::gain(path).is_some() {
+        return;
+    }
+
+    if begin_gain_scan(path) {
+        finish_gain_scan(path);
+    }
+}
+
+/// The same measurement on a thread of its own, for a sound that was probed before `Normalize`
+/// was on — or probed on a machine that had no FFmpeg to measure it with.
+///
+/// Nothing waits for it and nothing is held up by it: the sound being hovered is played as the
+/// file holds it, and what it measures is measured for the hover after this one (see
+/// `start_audio_playback`).
+fn spawn_gain_scan(path: &Path) {
+    if audio_track::gain(path).is_some() || !begin_gain_scan(path) {
+        return;
+    }
+
+    let path = path.to_path_buf();
+
+    std::thread::spawn(move || finish_gain_scan(&path));
+}
+
+/// Measure a sound's peak and hold the gain it asked for, which is where every measurement of one
+/// ends.
+///
+/// A measurement that answered nothing — a meter that failed, a file with no sound stream in it,
+/// a read that ran past its cap — is held as a gain of one rather than left unmeasured: what such
+/// a file is played at is what it holds, which is the same answer a peak already at full scale is
+/// played at, and a file that cannot be measured is not measured again on every hover of it.
+fn finish_gain_scan(path: &Path) {
+    let gain = measure_audio_peak(path).unwrap_or(1.0);
+
+    audio_track::remember_gain(path, gain);
+    end_gain_scan(path);
+}
+
+/// The gain that brings a sound's loudest sample to the full scale of the format, as FFmpeg's own
+/// `volumedetect` measures it — or nothing where it could not be asked.
+///
+/// The meter decodes every sample and reads the largest of them, which is what a peak is: `-3 dB`
+/// is a file whose loudest sample stands at half of full scale, and half of full scale is what `+3
+/// dB` of gain brings to the ceiling. Only the file's own sound stream is handed to the meter, and
+/// what it writes is nothing — the pass is the measurement (see `Normalize`).
+fn measure_audio_peak(path: &Path) -> Option<f64> {
+    if !codecs::normalize_available() {
+        return None;
+    }
+
+    // Spawned and waited for under a cap, the arrangement every probe here has: a meter left
+    // behind by a crash is one the job ends, and one that has not answered by the deadline is
+    // killed rather than waited for (see `wait_bounded`).
+    let child = Command::new("ffmpeg")
+        .args(["-v", "info", "-nostdin", "-hide_banner"])
+        .arg("-i")
+        .arg(path)
+        .args(["-map", "0:a:0", "-af", "volumedetect", "-f", "null", "-"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .creation_flags(engine_processes::CREATE_NO_WINDOW)
+        .spawn()
+        .ok()?;
+
+    engine_processes::adopt(child.id());
+
+    let output = wait_bounded(child, Duration::from_secs(AUDIO_GAIN_TIMEOUT_SECS))?;
+    let report = String::from_utf8_lossy(&output.stderr);
+
+    audio_gain_from_report(&report)
+}
+
+/// The gain a `volumedetect` report asks for: what brings a file's loudest sample to full scale.
+///
+/// Nothing finite to read is nothing to apply. A file of silence reports a peak of `-inf` dB, and
+/// what it would ask for is every sample of it times an infinity — a file with nothing to hear is
+/// left as it is rather than lifted to whatever the format's noise floor happens to be.
+fn audio_gain_from_report(report: &str) -> Option<f64> {
+    let peak = report
+        .lines()
+        .find_map(|line| line.split_once("max_volume:"))
+        .and_then(|(_, value)| value.split_whitespace().next())
+        .and_then(|value| value.parse::<f64>().ok())?;
+
+    if !peak.is_finite() {
+        return None;
+    }
+
+    let gain = 10f64.powf(-peak / 20.0);
+
+    (gain.is_finite() && gain > 0.0).then_some(gain)
+}
+
 /// Start the player a sound's card is drawn against, answering whether a player that was
 /// expected arrived.
 ///
@@ -6488,6 +6650,12 @@ fn codec_label(name: &str) -> String {
 /// `start` is where in the file the sound is dropped, and it is the caller's answer: it is a
 /// question about the file's length and the tray's `Volume → Audio Seek`, both of which are
 /// read where the hover is answered (see `audio_seek::start_position`).
+///
+/// Which player a sound is started in is settled here too, and the peak of the file is the whole of
+/// that question: where the tray's `Normalize` is on and a gain has been measured for the file,
+/// FFmpeg's player is the one it is started in — a gain is a filter there, and the engine Windows
+/// has cannot be handed one — while every other file is played by whichever engine its own probe
+/// answered for.
 fn start_audio_playback(path: &Path, media: &mut MediaData, start: f64) -> bool {
     let Some(track) = audio_track::playable(path) else {
         return false;
@@ -6506,6 +6674,29 @@ fn start_audio_playback(path: &Path, media: &mut MediaData, start: f64) -> bool 
         return true;
     }
 
+    if normalizing_audio() {
+        match audio_track::gain(path) {
+            Some(gain) if gain != 1.0 => {
+                // The engine's own session is let go first, which is what a file that has just been
+                // handed to the other player needs: a sound already playing natively — the hover
+                // that started before this file's peak was measured — must not go on playing over
+                // the gain it asked for (see `video_player::stop`).
+                video_player::stop();
+
+                media.video_process = start_audio_player(path, volume, start, Some(gain));
+
+                return media.video_process.is_some();
+            }
+            // Nothing to apply: the file's loudest sample already stands at full scale, or the file
+            // is silence rather than sound, and both are played the way they always were.
+            Some(_) => {}
+            // Nothing has measured the file, so this hover is played as the file holds it: a decode
+            // of every sample is not work for the tick, and what the scan is started for is the
+            // hover after this one (see `spawn_gain_scan`).
+            None => spawn_gain_scan(path),
+        }
+    }
+
     match track.player {
         Player::Native => {
             // A hover that lands on the file already playing leaves it playing, the same way
@@ -6518,14 +6709,16 @@ fn start_audio_playback(path: &Path, media: &mut MediaData, start: f64) -> bool 
             video_player::is_playing()
         }
         Player::Ffmpeg => {
-            media.video_process = start_audio_player(path, volume, start);
+            media.video_process = start_audio_player(path, volume, start, None);
             media.video_process.is_some()
         }
     }
 }
 
 /// Start FFmpeg's player on a sound: no window at all, which is the whole of what this side asks
-/// of it, and the player's own volume scale — `0` to `100`.
+/// of it, and the level the sound is played at — the player's own scale, `0` to `100`, where the
+/// file is played as it holds it, and the filter that can carry more than full scale where a peak
+/// has been measured for it (see `Normalize`).
 ///
 /// A sound is looped while it is hovered, as a video is: what a hover is for is the file, and a
 /// sound that stopped under a pointer that had not moved would be a preview that ended on its
@@ -6549,10 +6742,24 @@ fn start_audio_playback(path: &Path, media: &mut MediaData, start: f64) -> bool 
 ///
 /// A sound that starts at the beginning of its file is that second player already, so it is
 /// given that player's own loop rather than a pass for this side to restart after.
-fn start_audio_player(path: &Path, volume: u32, start: f64) -> Option<Child> {
+fn start_audio_player(path: &Path, volume: u32, start: f64, gain: Option<f64>) -> Option<Child> {
     let mut command = Command::new("ffplay");
     command.args(["-nodisp", "-autoexit", "-loglevel", "quiet"]);
-    command.args(["-volume", &volume.min(100).to_string()]);
+
+    // The level the sound is played at, with the file's own peak folded into it where one was
+    // measured: FFmpeg's player has a scale of its own for a level and a filter for a gain, and the
+    // two multiply — what is handed to the filter is the whole of what the file is scaled by, so a
+    // normalized file at `Volume → Audio` 10% is heard at a tenth of full scale rather than at ten
+    // times it.
+    match gain {
+        Some(gain) => {
+            let level = format!("volume={:.4}", f64::from(volume) / 100.0 * gain);
+            command.args(["-af", &level]);
+        }
+        None => {
+            command.args(["-volume", &volume.min(100).to_string()]);
+        }
+    }
 
     if start.is_finite() && start > 0.0 {
         command.args(["-ss", &format!("{start:.3}")]);
@@ -6696,20 +6903,27 @@ fn audio_clock(path: &Path, started: Option<Instant>, from: f64) -> (Option<f64>
         return (None, None);
     };
 
-    match track.player {
+    // The engine's own clock is what a sound the engine plays is measured by, and a sound this side
+    // started a player for is measured by the clock over that player's start — whichever engine the
+    // machine's own decoders would have made of the file: a peak puts a file the engine could have
+    // played into FFmpeg's hands, and a player of this side's reports nothing at all (see
+    // `start_audio_playback` and `audio_started`).
+    if started.is_none() && matches!(track.player, Player::Native) {
         // The engine's own clock has the seek in it — it is the engine that was taken to where
         // the sound starts — so what it reports is the position with nothing added to it.
-        Player::Native => (video_player::position(), video_player::duration().or(track.duration)),
-        Player::Ffmpeg => {
-            let elapsed = started.map(|at| from + at.elapsed().as_secs_f64());
-            let position = match (elapsed, track.duration) {
-                (Some(elapsed), Some(duration)) if duration > 0.0 => Some(elapsed % duration),
-                (elapsed, _) => elapsed,
-            };
-
-            (position, track.duration)
-        }
+        return (
+            video_player::position(),
+            video_player::duration().or(track.duration),
+        );
     }
+
+    let elapsed = started.map(|at| from + at.elapsed().as_secs_f64());
+    let position = match (elapsed, track.duration) {
+        (Some(elapsed), Some(duration)) if duration > 0.0 => Some(elapsed % duration),
+        (elapsed, _) => elapsed,
+    };
+
+    (position, track.duration)
 }
 
 /// Get original dimensions of media for positioning calculations

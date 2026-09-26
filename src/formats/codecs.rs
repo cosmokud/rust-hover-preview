@@ -48,6 +48,11 @@ use windows::Win32::System::Registry::{
 /// video preview has to answer for.
 const FFPLAY_NAME: &str = "ffplay.exe";
 
+/// And the program a sound's peak is measured by: the other name normalization asks for, since
+/// the install the player comes from is the install the meter comes from (see
+/// `normalize_available`).
+const FFMPEG_NAME: &str = "ffmpeg.exe";
+
 /// The WinRT class the Windows PDF engine is activated through. What is asked of it is
 /// whether it is registered at all, which is what the system itself answers activation
 /// from: the class is opened with a stream rather than with nothing, so there is no
@@ -356,12 +361,17 @@ pub fn engines() -> Vec<Row> {
 /// Ask again, which is what the tray's menu build does before it lists the answers.
 ///
 /// Every other probe is asked on demand and answers from the machine at that moment. The
-/// one answer that is kept is whether FFmpeg is installed, because it is asked on every
-/// video hover and a hover must not go looking through the `PATH` for it — so opening the
-/// menu is what lets a machine that has just been given FFmpeg start using it, rather than
-/// a restart.
+/// answers that are kept are FFmpeg's own — the player a video is played by, and the meter and
+/// the player a sound's peak is measured and applied with — because they are asked on every
+/// video hover and every sound hover, and a hover must not go looking through the `PATH` for
+/// them: opening the menu is what lets a machine that has just been given FFmpeg start using
+/// it, rather than a restart.
 pub fn refresh() {
     if let Ok(mut cached) = FFPLAY.lock() {
+        *cached = None;
+    }
+
+    if let Ok(mut cached) = NORMALIZE.lock() {
         *cached = None;
     }
 }
@@ -382,6 +392,29 @@ pub fn ffplay_available() -> bool {
     let answer = find_ffplay().is_some();
 
     if let Ok(mut cached) = FFPLAY.lock() {
+        *cached = Some(answer);
+    }
+
+    answer
+}
+
+/// Whether a sound's peak can be measured and applied on this machine: the meter that measures
+/// it and the player that applies the gain to it are one install, and both of them have to be
+/// here for the tray's `Normalize` row to be anything but a switch that cannot act.
+///
+/// It is asked the way the player's own answer is asked and kept the same way — an install that
+/// arrives while the app is running is picked up by the next opening of the menu rather than at
+/// the next restart (see [`refresh`]).
+pub fn normalize_available() -> bool {
+    if let Ok(cached) = NORMALIZE.lock() {
+        if let Some(answer) = *cached {
+            return answer;
+        }
+    }
+
+    let answer = find_ffplay().is_some() && find_program(FFMPEG_NAME).is_some();
+
+    if let Ok(mut cached) = NORMALIZE.lock() {
         *cached = Some(answer);
     }
 
@@ -441,6 +474,15 @@ fn initialize_apartment() {
 /// Spawning the player to ask whether it exists would be a program started to answer a
 /// question about a program, and the `PATH` already holds the answer.
 fn find_ffplay() -> Option<PathBuf> {
+    find_program(FFPLAY_NAME)
+}
+
+/// Where a program of FFmpeg's is, by the name it is installed under: the same two places
+/// `Command::new` looks for it, and nothing started to ask.
+///
+/// Spawning the program to ask whether it exists would be a program started to answer a
+/// question about a program, and the `PATH` already holds the answer.
+fn find_program(name: &str) -> Option<PathBuf> {
     let mut folders: Vec<PathBuf> = Vec::new();
 
     if let Some(own_folder) = std::env::current_exe()
@@ -456,8 +498,8 @@ fn find_ffplay() -> Option<PathBuf> {
 
     folders
         .into_iter()
-        .map(|folder| folder.join(FFPLAY_NAME))
-        .find(|player| player.is_file())
+        .map(|folder| folder.join(name))
+        .find(|program| program.is_file())
 }
 
 /// Whether a decoder for one compressed video format is registered.
@@ -664,3 +706,8 @@ static MEDIA_FOUNDATION: OnceLock<bool> = OnceLock::new();
 
 /// Whether FFmpeg is installed, kept between hovers and cleared by [`refresh`].
 static FFPLAY: Lazy<Mutex<Option<bool>>> = Lazy::new(|| Mutex::new(None));
+
+/// Whether both of FFmpeg's programs a sound's peak needs are here — the meter that measures it
+/// and the player that applies it — kept the way the player's own answer is and cleared by the
+/// same [`refresh`].
+static NORMALIZE: Lazy<Mutex<Option<bool>>> = Lazy::new(|| Mutex::new(None));
