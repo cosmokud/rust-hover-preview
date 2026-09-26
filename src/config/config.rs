@@ -1270,6 +1270,15 @@ pub struct AppConfig {
     /// in milliseconds: what keeps a pointer crossing a list from answering every file it
     /// passes on its way (see `DEFAULT_SETTLING_DELAY_MS`).
     pub settling_delay_ms: u64,
+    /// Whether the keyboard driving Explorer holds a parked pointer back rather than
+    /// sharing the screen with it: with this on, the file under a pointer that has not
+    /// been moved since a key press does not preview of its own — a key pressed onto an
+    /// item with no preview to give reads exactly as one pressed onto an item that has a
+    /// preview — until the pointer takes its turn back with a move or a wheel, or a
+    /// folder change hands it over. Off, where the app starts: the pointer's own hover
+    /// raises a preview whenever a file is under it, whatever the keyboard is doing (see
+    /// `explorer_hook`).
+    pub prioritize_keyboard: bool,
     /// How often the app looks at the pointer's world while Explorer has focus, in
     /// milliseconds (see `DEFAULT_TICK_MS`).
     ///
@@ -1629,6 +1638,7 @@ impl Default for AppConfig {
             avoid_mode: DEFAULT_AVOID_MODE,
             same_file_rehover_delay_ms: DEFAULT_SAME_FILE_REHOVER_DELAY_MS,
             settling_delay_ms: DEFAULT_SETTLING_DELAY_MS,
+            prioritize_keyboard: false,
             tick_ms: DEFAULT_TICK_MS,
             spinner_delay_ms: DEFAULT_SPINNER_DELAY_MS,
             webp_playback_fps: DEFAULT_WEBP_PLAYBACK_FPS,
@@ -1754,6 +1764,7 @@ const SETTING_GROUPS: &[(&str, &[&str])] = &[
         "Timing",
         &[
             "hover_delay_ms",
+            "prioritize_keyboard",
             "same_file_rehover_delay_ms",
             "settling_delay_ms",
             "trigger_key",
@@ -2464,6 +2475,11 @@ impl AppConfig {
             "settling_delay_ms",
             Some(self.settling_delay_ms.to_string()),
         );
+        ini.set(
+            CONFIG_SECTION,
+            "prioritize_keyboard",
+            Some(self.prioritize_keyboard.to_string()),
+        );
         ini.set(CONFIG_SECTION, "tick_ms", Some(self.tick_ms.to_string()));
         ini.set(
             CONFIG_SECTION,
@@ -2862,6 +2878,9 @@ impl AppConfig {
         }
         if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "settling_delay_ms") {
             self.settling_delay_ms = value;
+        }
+        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "prioritize_keyboard") {
+            self.prioritize_keyboard = value;
         }
         if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "tick_ms") {
             self.tick_ms = sanitize_tick_ms(value);

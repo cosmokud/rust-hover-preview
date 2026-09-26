@@ -162,6 +162,11 @@ const AVOID_CHOICES: [AvoidMode; 4] = [
 const ID_TRAY_DELAY_BASE: u16 = 1455;
 const ID_TRAY_REHOVER_DELAY_BASE: u16 = 1470;
 const ID_TRAY_SETTLING_DELAY_BASE: u16 = 1485;
+/// The one row of `Timing` that is a switch rather than a delay or a key: whether the
+/// keyboard driving Explorer holds a parked pointer back instead of sharing the screen
+/// with it. It sits past every range the app hands out up to the tick menu, so it is never
+/// read as one of their items.
+const ID_TRAY_PRIORITIZE_KEYBOARD: u16 = 1515;
 /// The delays those three submenus offer, in the order they list them: no wait at all
 /// at the top, where the app starts, and a whole second at the bottom. A delay a
 /// hand-edited `config.ini` holds that is not one of these is shown with nothing checked
@@ -488,6 +493,7 @@ unsafe extern "system" fn tray_window_proc(
                 ID_TRAY_TRIGGER_DISABLE => set_trigger_key_mode(TriggerKeyMode::Disable),
                 ID_TRAY_TRIGGER_ENABLE => set_trigger_key_mode(TriggerKeyMode::Enable),
                 ID_TRAY_TRIGGER_ENABLED => toggle_trigger_key_enabled(),
+                ID_TRAY_PRIORITIZE_KEYBOARD => toggle_prioritize_keyboard(),
                 ID_TRAY_ENGINE_OFFICE_MS => set_office_engine(OfficeEngine::MicrosoftOffice),
                 ID_TRAY_ENGINE_OFFICE_LIBRE => set_office_engine(OfficeEngine::LibreOffice),
                 // A backdrop, by the position it was listed at: an image's or a
@@ -1155,6 +1161,26 @@ unsafe fn show_context_menu(hwnd: HWND) {
         MF_STRING | MF_POPUP,
         settling_delay_menu.0 as usize,
         w!("Settling Delay"),
+    );
+
+    // Whether the keyboard driving Explorer holds a parked pointer back instead of the file
+    // under it previewing: the one row here that is a switch rather than a delay or a key,
+    // and it starts off, where the pointer's own hover wins.
+    let prioritize_keyboard = CONFIG
+        .lock()
+        .map(|c| c.prioritize_keyboard)
+        .unwrap_or(false);
+
+    let _ = AppendMenuW(
+        timing_menu,
+        MF_STRING
+            | if prioritize_keyboard {
+                MF_CHECKED
+            } else {
+                MF_UNCHECKED
+            },
+        ID_TRAY_PRIORITIZE_KEYBOARD as usize,
+        w!("Prioritize Keyboard"),
     );
 
     let _ = AppendMenuW(
@@ -1961,6 +1987,17 @@ fn toggle_trigger_key_enabled() {
         config.save();
     }
     refresh_preview();
+}
+
+/// Whether the keyboard driving Explorer holds a parked pointer back is a setting rather
+/// than a view of one: nothing on screen is rebuilt and nothing is taken down — the switch
+/// is read by the hook on its next tick — so a preview that is up when it is thrown is left
+/// where it is.
+fn toggle_prioritize_keyboard() {
+    if let Ok(mut config) = CONFIG.lock() {
+        config.prioritize_keyboard = !config.prioritize_keyboard;
+        config.save();
+    }
 }
 
 /// What a picture is drawn over — and every preview that is not a document: a page,
