@@ -38,6 +38,24 @@ const GLYPH_STROKE_PIXELS: f32 = 1.4;
 /// How wide the glyph inside a caption button is.
 const GLYPH_PIXELS: f32 = 10.0;
 
+/// The room a volume popup takes at a display's scale: the panel that floats over the media
+/// above the bar, and the groove the level is drawn in inside it.
+const VOLUME_PANEL_WIDTH: i32 = 44;
+const VOLUME_PANEL_HEIGHT: i32 = 116;
+/// How far the groove is held off each end of the panel, which is the room the thumb takes at
+/// either end of it: a thumb that was clipped by the panel at 100% would be a level drawn short.
+const VOLUME_PANEL_INSET: i32 = 22;
+/// How far the panel floats above the bar it belongs to.
+const VOLUME_PANEL_GAP: i32 = 8;
+const VOLUME_PANEL_RADIUS: f32 = 14.0;
+const VOLUME_TRACK_WIDTH: i32 = 6;
+/// The radius of the button's own wash: the button is a chip rather than the square the strip's
+/// room for it would otherwise draw, since it is a control a hand comes back to.
+const VOLUME_BUTTON_RADIUS: i32 = 7;
+/// The radius of the knob on the groove, which is the bar's own thumb made rounder: it is held
+/// rather than aimed at, so it is drawn as something a finger fits.
+const VOLUME_THUMB_RADIUS: f32 = 8.0;
+
 /// The colors a caption and a bubble are painted in.
 ///
 /// They come from the theme the text previews are painted with — One Dark Pro, Atom One
@@ -100,15 +118,19 @@ pub(crate) enum TransportPart {
     Play,
     /// The bar itself, which is dragged to seek.
     Seek,
+    /// The button that opens the volume popup, which is the pin's own control rather than the
+    /// player's.
+    Volume,
 }
 
 /// Where the parts of a transport bar are, in the bar's own coordinates: the button, the bar
-/// itself, and the two labels beside them.
+/// itself, the two labels beside them, and the volume button at the far end.
 pub(crate) struct TransportLayout {
     pub(crate) play: RECT,
     pub(crate) bar: RECT,
     pub(crate) elapsed: RECT,
     pub(crate) total: RECT,
+    pub(crate) volume: RECT,
 }
 
 /// The room each part of a transport bar is given at a display's scale.
@@ -134,6 +156,16 @@ pub(crate) fn transport_layout(
         right: padding + play_side,
         bottom: (height + play_side) / 2,
     };
+    // The volume button is the last thing on the bar, against the right edge the way it is on
+    // every player that has one — and it keeps its box whether or not the bar it sits on has
+    // controls, since it is this app's own control rather than the player's (see
+    // `TransportPart::Volume`).
+    let volume = RECT {
+        left: (width - padding - play_side).max(padding),
+        top: (height - play_side) / 2,
+        right: (width - padding).max(padding),
+        bottom: (height + play_side) / 2,
+    };
     let content_left = if interactive {
         play.right + gap
     } else {
@@ -146,9 +178,9 @@ pub(crate) fn transport_layout(
         bottom: height,
     };
     let total = RECT {
-        left: (width - padding - label).max(elapsed.right),
+        left: (volume.left - gap - label).max(elapsed.right),
         top: 0,
-        right: (width - padding).max(elapsed.right),
+        right: (volume.left - gap).max(elapsed.right),
         bottom: height,
     };
     let bar_height = text_paint::scaled(4, scale).clamp(2, height.max(2));
@@ -164,13 +196,17 @@ pub(crate) fn transport_layout(
         bar,
         elapsed,
         total,
+        volume,
     }
 }
 
 /// Which part of a transport bar a point is on, in the bar's own coordinates.
 ///
-/// A bar that is not `interactive` answers nothing: its button does not exist and its track is
-/// not something that can be dragged, so there is no part of it for a press to have found.
+/// The volume button is answered on a bar that is not `interactive` as well, and it is answered
+/// first: it is not the player's control but this app's, and what it does — take the level it is
+/// given, and start the player again at it where the player cannot be told anything — is a thing
+/// both engines can be asked. A bar that is not `interactive` has no button and no track for a
+/// press to have found, which is what the early answer after it says.
 pub(crate) fn transport_part_at(
     x: i32,
     y: i32,
@@ -179,12 +215,16 @@ pub(crate) fn transport_part_at(
     dpi: u32,
     interactive: bool,
 ) -> Option<TransportPart> {
+    let layout = transport_layout(width, height, dpi, interactive);
+    let inside = |rect: RECT| x >= rect.left && x < rect.right && y >= rect.top && y < rect.bottom;
+
+    if inside(layout.volume) {
+        return Some(TransportPart::Volume);
+    }
+
     if !interactive {
         return None;
     }
-
-    let layout = transport_layout(width, height, dpi, interactive);
-    let inside = |rect: RECT| x >= rect.left && x < rect.right && y >= rect.top && y < rect.bottom;
 
     if inside(layout.play) {
         return Some(TransportPart::Play);
@@ -201,6 +241,77 @@ pub(crate) fn transport_part_at(
     }
 
     None
+}
+
+/// Where a volume popup is, in the window's own coordinates: the panel it floats in, and the
+/// groove inside it the level is drawn against.
+pub(crate) struct VolumePopup {
+    pub(crate) panel: RECT,
+    pub(crate) track: RECT,
+}
+
+/// The popup a volume button opens, as it is placed against the strip the button sits in: a panel
+/// floating over the media above the bar, hung from the button's own right edge and kept inside
+/// the window it belongs to — a popup drawn off the side of the window is a level that cannot be
+/// dragged to.
+///
+/// `strip_top` is the row the transport bar begins at in the window and `strip_height` how tall
+/// that strip is, which is what the button's own box is computed from, so the popup and the
+/// button cannot drift apart: what opens it is drawn where it was pressed.
+pub(crate) fn volume_popup_layout(
+    width: i32,
+    strip_top: i32,
+    strip_height: i32,
+    dpi: u32,
+) -> VolumePopup {
+    let scale = dpi as f32 / 96.0;
+    let button = transport_layout(width, strip_height, dpi, true).volume;
+
+    let panel_width = text_paint::scaled(VOLUME_PANEL_WIDTH, scale).max(8);
+    let panel_height = text_paint::scaled(VOLUME_PANEL_HEIGHT, scale).max(8);
+    let gap = text_paint::scaled(VOLUME_PANEL_GAP, scale).max(1);
+
+    let right = button.right.clamp(0, width.max(0));
+    let left = (right - panel_width).max(0);
+    let right = left + panel_width;
+    let bottom = (strip_top + button.top - gap).max(panel_height);
+    let panel = RECT {
+        left,
+        top: bottom - panel_height,
+        right,
+        bottom,
+    };
+
+    // The groove, which is what the level is measured on: it is held off both ends of the panel
+    // by the room the thumb takes, so a level of nothing and a level of everything are both drawn
+    // whole, and it can never be shorter than a level that can be aimed at.
+    let track_width = text_paint::scaled(VOLUME_TRACK_WIDTH, scale).max(2);
+    let inset = text_paint::scaled(VOLUME_PANEL_INSET, scale)
+        .min(((panel.bottom - panel.top) - 8) / 2)
+        .max(1);
+    let center = (panel.left + panel.right) / 2;
+    let track = RECT {
+        left: center - track_width / 2,
+        top: panel.top + inset,
+        right: center - track_width / 2 + track_width,
+        bottom: panel.bottom - inset,
+    };
+
+    VolumePopup { panel, track }
+}
+
+/// Where along a volume popup's groove a point is, as a share of the level: the bottom of the
+/// groove is nothing and the top of it is everything, which is the way a level is read.
+pub(crate) fn volume_share_at(y: i32, track: RECT) -> f64 {
+    let span = (track.bottom - track.top).max(1) as f64;
+    ((track.bottom - y) as f64 / span).clamp(0.0, 1.0)
+}
+
+/// The row a level is drawn at on a popup's groove.
+pub(crate) fn volume_thumb_row(track: RECT, volume: u32) -> i32 {
+    let share = volume.min(100) as f64 / 100.0;
+    let span = (track.bottom - track.top).max(1) as f64;
+    track.bottom - (span * share).round() as i32
 }
 
 /// Where along a transport bar a point is, as a share of the file: what a press on the bar asks
@@ -230,6 +341,11 @@ pub(crate) struct TransportState {
     pub(crate) duration: Option<f64>,
     pub(crate) hovered: Option<TransportPart>,
     pub(crate) pressed: Option<TransportPart>,
+    /// The level this pin's own volume control is at, and whether its popup is open. The button
+    /// carries both: a level of nothing is a speaker with no sound coming out of it, and an open
+    /// popup is a button held down rather than one a hand is merely over (`paint_volume_button`).
+    pub(crate) volume: u32,
+    pub(crate) volume_open: bool,
 }
 
 /// Paint a transport bar into a surface the size of the strip: the play button, the bar with the
@@ -274,6 +390,11 @@ pub(crate) fn paint_transport(
     if state.interactive {
         paint_play_button(surface, palette, state, layout.play, scale);
     }
+
+    // The volume button, which is on the bar whether or not the player behind it answers
+    // anything: the level is this app's to keep, and both engines are given it (see
+    // `TransportPart::Volume`).
+    paint_volume_button(surface, palette, state, layout.volume, scale);
 
     // The bar: a track, what has been played filled in, and a thumb at the playhead.
     let filled = match (state.position, state.duration) {
@@ -423,6 +544,511 @@ fn paint_play_button(
             put(buffer, width, x, center_y + y, ink, 1.0);
         }
     }
+}
+
+/// Paint the volume button: a speaker with the sound leaving it, or the same speaker crossed out
+/// where the level is nothing.
+///
+/// What the button says is the level this pin is playing at rather than what the tray's setting
+/// is, and that is the whole reason it is drawn here: the level belongs to the window it is on
+/// (see `PinnedPreview::volume`), so the bar is the only place it can be read off.
+fn paint_volume_button(
+    surface: &DibSurface,
+    palette: &ChromePalette,
+    state: &TransportState,
+    rect: RECT,
+    scale: f32,
+) {
+    let pressed = state.pressed == Some(TransportPart::Volume);
+    let buffer = unsafe {
+        std::slice::from_raw_parts_mut(
+            surface.bits(),
+            surface.width as usize * surface.height as usize * 4,
+        )
+    };
+    let width = surface.width as i32;
+
+    // A button a hand is over lights up, and a button whose popup is open stays lit while it is:
+    // the pointer is on the level by then, and what the popup came out of should still say where
+    // it belongs. The wash is the button's own shape rather than the strip it sits in — a square
+    // of a colour around a speaker is a box, and this is one of the two controls on the bar a hand
+    // is meant to find.
+    if state.hovered == Some(TransportPart::Volume) || pressed || state.volume_open {
+        let radius = text_paint::scaled(VOLUME_BUTTON_RADIUS, scale) as f32;
+        let wash = if pressed || state.volume_open {
+            palette.hover(0.18)
+        } else {
+            palette.hover(0.10)
+        };
+        fill_round_rect(buffer, width, rect, radius, wash, wash, 1.0);
+    }
+
+    let center_x = (rect.left + rect.right) as f32 / 2.0;
+    let center_y = (rect.top + rect.bottom) as f32 / 2.0;
+    let side = (rect.bottom - rect.top).max(8);
+    let size = (text_paint::scaled(17, scale) as f32).clamp(9.0, side as f32);
+    let stroke = (GLYPH_STROKE_PIXELS * scale * 1.1).max(1.0);
+
+    paint_speaker(
+        buffer,
+        width,
+        (center_x, center_y),
+        size,
+        palette.foreground,
+        stroke,
+        state.volume,
+    );
+}
+
+/// The speaker a volume button is drawn as: a body with a cone on it, and the sound leaving the
+/// cone as one or two arcs — whose number is how loud it is — or a cross where it is not.
+///
+/// How many arcs a level gets is the icon every player uses: at 1% and at 34% the same mark is
+/// drawn and neither is wrong, and what a button is read for at a glance is whether there is any
+/// sound at all.
+fn paint_speaker(
+    buffer: &mut [u8],
+    width: i32,
+    center: (f32, f32),
+    size: f32,
+    ink: [u8; 3],
+    stroke: f32,
+    volume: u32,
+) {
+    let (center_x, center_y) = center;
+    let half = size / 2.0;
+    let point = |x: f32, y: f32| (center_x + x * half, center_y + y * half);
+
+    // The body: the back of the speaker and the cone that leaves it, as one shape.
+    fill_polygon(
+        buffer,
+        width,
+        &[
+            point(-0.78, -0.26),
+            point(-0.30, -0.26),
+            point(0.10, -0.62),
+            point(0.10, 0.62),
+            point(-0.30, 0.26),
+            point(-0.78, 0.26),
+        ],
+        ink,
+        1.0,
+    );
+
+    if volume == 0 {
+        // Crossed out, and crossed out where the sound would be: a speaker drawn without its
+        // arcs reads as a small icon rather than as one that is making no noise.
+        stroke_segment(
+            buffer,
+            width,
+            point(0.30, -0.34),
+            point(0.80, 0.34),
+            stroke,
+            ink,
+            1.0,
+        );
+        stroke_segment(
+            buffer,
+            width,
+            point(0.30, 0.34),
+            point(0.80, -0.34),
+            stroke,
+            ink,
+            1.0,
+        );
+        return;
+    }
+
+    let center = point(0.14, 0.0);
+    stroke_arc(buffer, width, center, half * 0.44, stroke, ink, 1.0);
+    if volume >= 34 {
+        stroke_arc(buffer, width, center, half * 0.86, stroke, ink, 1.0);
+    }
+}
+
+/// Paint the popup a volume button opens: a panel floating over the media above the bar, the
+/// groove in it, the level the groove has been taken to, and the knob that is dragged.
+///
+/// It is written straight into the window's own surface rather than into a strip of its own,
+/// because that is what it is: a thing drawn over the picture, with the picture behind it. What
+/// is behind it is the media wherever the media is this app's pixels and the player's own window
+/// everywhere else, which is what brings the pin's window above the player's while it is open
+/// (see `pin_volume_open`).
+pub(crate) fn paint_volume_popup(
+    buffer: &mut [u8],
+    width: i32,
+    palette: &ChromePalette,
+    popup: &VolumePopup,
+    volume: u32,
+    held: bool,
+) {
+    let panel_height = (popup.panel.bottom - popup.panel.top).max(1) as f32;
+    let scale = panel_height / VOLUME_PANEL_HEIGHT as f32;
+    let radius = (VOLUME_PANEL_RADIUS * scale).max(1.0);
+    let thumb = (VOLUME_THUMB_RADIUS * scale).max(2.0);
+
+    // The shadow: the panel's own shape held a couple of pixels lower, so that a panel over a
+    // picture reads as floating over it rather than as a hole cut in it.
+    let shadow = (2.0 * scale).round().max(1.0) as i32;
+    fill_round_rect(
+        buffer,
+        width,
+        RECT {
+            left: popup.panel.left,
+            top: popup.panel.top + shadow,
+            right: popup.panel.right,
+            bottom: popup.panel.bottom + shadow,
+        },
+        radius,
+        [0, 0, 0],
+        [0, 0, 0],
+        0.32,
+    );
+
+    // The panel: the theme's page colour, a shade lighter at the top than at the bottom so that
+    // it reads as a surface a knob sits on. A hairline around it keeps it off a video of a colour
+    // close to its own.
+    fill_round_rect(
+        buffer,
+        width,
+        popup.panel,
+        radius,
+        palette.hover(0.08),
+        palette.hover(0.0),
+        0.97,
+    );
+    stroke_round_rect(
+        buffer,
+        width,
+        popup.panel,
+        radius,
+        (1.0 * scale).round().max(1.0),
+        palette.hover(0.32),
+        1.0,
+    );
+
+    // The groove the level is read against, and the part of it that has been reached: the fill
+    // runs from the knob down, which is the way a level is filled in.
+    let track_radius = (popup.track.right - popup.track.left) as f32 / 2.0;
+    let groove = palette.hover(0.22);
+    fill_round_rect(
+        buffer,
+        width,
+        popup.track,
+        track_radius,
+        groove,
+        groove,
+        0.9,
+    );
+
+    let row = volume_thumb_row(popup.track, volume);
+    if volume > 0 {
+        fill_round_rect(
+            buffer,
+            width,
+            RECT {
+                left: popup.track.left,
+                top: row,
+                right: popup.track.right,
+                bottom: popup.track.bottom,
+            },
+            track_radius,
+            palette.accent,
+            palette.accent,
+            1.0,
+        );
+    }
+
+    // The knob, with the panel's own colour for a collar: it is drawn over the filled part of the
+    // groove as often as over the empty one, and the collar is what keeps it a knob either way.
+    let center_x = (popup.track.left + popup.track.right) as f32 / 2.0;
+    let center_y = row as f32;
+    fill_disc(
+        buffer,
+        width,
+        center_x,
+        center_y,
+        thumb + (1.5 * scale).max(1.0),
+        palette.hover(0.0),
+        1.0,
+    );
+    let ink = if held {
+        palette.accent
+    } else {
+        palette.foreground
+    };
+    fill_disc(buffer, width, center_x, center_y, thumb, ink, 1.0);
+}
+
+/// Fill a rounded rectangle, shaded from one colour at its top edge to another at its bottom: a
+/// popup panel is the one thing here that is not a flat surface.
+fn fill_round_rect(
+    buffer: &mut [u8],
+    width: i32,
+    rect: RECT,
+    radius: f32,
+    top: [u8; 3],
+    bottom: [u8; 3],
+    coverage: f32,
+) {
+    if rect.right <= rect.left || rect.bottom <= rect.top {
+        return;
+    }
+
+    let height = (rect.bottom - rect.top) as f32;
+    for y in rect.top..rect.bottom {
+        let color = text_paint::blend(top, bottom, (y - rect.top) as f32 / height);
+        for x in rect.left..rect.right {
+            let coverage = coverage * round_rect_coverage(x, y, rect, radius);
+            if coverage > 0.0 {
+                put(buffer, width, x, y, color, coverage);
+            }
+        }
+    }
+}
+
+/// The outline of a rounded rectangle, drawn inside its own edge so that the shape under it is
+/// the size it was asked for.
+fn stroke_round_rect(
+    buffer: &mut [u8],
+    width: i32,
+    rect: RECT,
+    radius: f32,
+    thickness: f32,
+    color: [u8; 3],
+    coverage: f32,
+) {
+    let thickness = thickness.round().max(1.0) as i32;
+    let inner = RECT {
+        left: rect.left + thickness,
+        top: rect.top + thickness,
+        right: rect.right - thickness,
+        bottom: rect.bottom - thickness,
+    };
+    if inner.right <= inner.left || inner.bottom <= inner.top {
+        return;
+    }
+
+    let inner_radius = (radius - thickness as f32).max(0.0);
+    for y in rect.top..rect.bottom {
+        for x in rect.left..rect.right {
+            let outline = (round_rect_coverage(x, y, rect, radius)
+                - round_rect_coverage(x, y, inner, inner_radius))
+            .max(0.0);
+            if outline > 0.0 {
+                put(buffer, width, x, y, color, coverage * outline);
+            }
+        }
+    }
+}
+
+/// How much of a pixel a rounded rectangle covers, worked out from the distance to its edge: one
+/// shape, so that a panel, its outline and the groove in it cannot disagree about where they end.
+fn round_rect_coverage(x: i32, y: i32, rect: RECT, radius: f32) -> f32 {
+    let half_width = (rect.right - rect.left) as f32 / 2.0;
+    let half_height = (rect.bottom - rect.top) as f32 / 2.0;
+    if half_width <= 0.0 || half_height <= 0.0 {
+        return 0.0;
+    }
+
+    let radius = radius.clamp(0.0, half_width.min(half_height));
+    let center_x = rect.left as f32 + half_width;
+    let center_y = rect.top as f32 + half_height;
+    let dx = ((x as f32 + 0.5 - center_x).abs() - (half_width - radius)).max(0.0);
+    let dy = ((y as f32 + 0.5 - center_y).abs() - (half_height - radius)).max(0.0);
+    let distance = (dx * dx + dy * dy).sqrt() - radius;
+
+    (0.5 - distance).clamp(0.0, 1.0)
+}
+
+/// Fill a circle: the knob a level is dragged by, and the collar around it.
+fn fill_disc(
+    buffer: &mut [u8],
+    width: i32,
+    center_x: f32,
+    center_y: f32,
+    radius: f32,
+    color: [u8; 3],
+    coverage: f32,
+) {
+    let radius = radius.max(0.5);
+    let left = (center_x - radius - 1.0).floor() as i32;
+    let right = (center_x + radius + 1.0).ceil() as i32;
+    let top = (center_y - radius - 1.0).floor() as i32;
+    let bottom = (center_y + radius + 1.0).ceil() as i32;
+
+    for y in top..=bottom {
+        for x in left..=right {
+            let dx = x as f32 + 0.5 - center_x;
+            let dy = y as f32 + 0.5 - center_y;
+            let edge = (radius - (dx * dx + dy * dy).sqrt() + 0.5).clamp(0.0, 1.0);
+            if edge > 0.0 {
+                put(buffer, width, x, y, color, coverage * edge);
+            }
+        }
+    }
+}
+
+/// Fill a polygon, sampled rather than scanned: the shapes drawn here are a dozen pixels across,
+/// so a handful of samples a pixel costs less than a scanline that has to be right about every
+/// edge of a shape as small as a glyph.
+fn fill_polygon(
+    buffer: &mut [u8],
+    width: i32,
+    points: &[(f32, f32)],
+    color: [u8; 3],
+    coverage: f32,
+) {
+    const SAMPLES: i32 = 4;
+
+    if points.len() < 3 {
+        return;
+    }
+
+    let left = points
+        .iter()
+        .map(|p| p.0)
+        .fold(f32::INFINITY, f32::min)
+        .floor() as i32;
+    let right = points
+        .iter()
+        .map(|p| p.0)
+        .fold(f32::NEG_INFINITY, f32::max)
+        .ceil() as i32;
+    let top = points
+        .iter()
+        .map(|p| p.1)
+        .fold(f32::INFINITY, f32::min)
+        .floor() as i32;
+    let bottom = points
+        .iter()
+        .map(|p| p.1)
+        .fold(f32::NEG_INFINITY, f32::max)
+        .ceil() as i32;
+
+    for y in top..=bottom {
+        for x in left..=right {
+            let mut inside = 0;
+            for sample_y in 0..SAMPLES {
+                for sample_x in 0..SAMPLES {
+                    let point = (
+                        x as f32 + (sample_x as f32 + 0.5) / SAMPLES as f32,
+                        y as f32 + (sample_y as f32 + 0.5) / SAMPLES as f32,
+                    );
+                    if point_in_polygon(point, points) {
+                        inside += 1;
+                    }
+                }
+            }
+
+            if inside > 0 {
+                let edge = inside as f32 / (SAMPLES * SAMPLES) as f32;
+                put(buffer, width, x, y, color, coverage * edge);
+            }
+        }
+    }
+}
+
+fn point_in_polygon(point: (f32, f32), points: &[(f32, f32)]) -> bool {
+    let mut inside = false;
+    let mut previous = points.len() - 1;
+
+    for current in 0..points.len() {
+        let (x, y) = points[current];
+        let (previous_x, previous_y) = points[previous];
+
+        if (y > point.1) != (previous_y > point.1)
+            && point.0 < (previous_x - x) * (point.1 - y) / (previous_y - y) + x
+        {
+            inside = !inside;
+        }
+
+        previous = current;
+    }
+
+    inside
+}
+
+/// One band of a circle, drawn as the pixels a given distance from a center and within the spread
+/// of angles a speaker's sound is drawn in: the two arcs a volume button carries.
+fn stroke_arc(
+    buffer: &mut [u8],
+    width: i32,
+    center: (f32, f32),
+    radius: f32,
+    thickness: f32,
+    color: [u8; 3],
+    coverage: f32,
+) {
+    let half = (thickness / 2.0).max(0.5);
+    let reach = radius + half + 1.0;
+    let left = (center.0 - reach).floor() as i32;
+    let right = (center.0 + reach).ceil() as i32;
+    let top = (center.1 - reach).floor() as i32;
+    let bottom = (center.1 + reach).ceil() as i32;
+
+    // The ends of an arc are square to the axis it opens from, with a sliver of fade so that an
+    // end is a soft edge rather than a stair step.
+    const SPREAD: f32 = 0.85;
+    let feather = 0.14;
+
+    for y in top..=bottom {
+        for x in left..=right {
+            let dx = x as f32 + 0.5 - center.0;
+            let dy = y as f32 + 0.5 - center.1;
+            let distance = (dx * dx + dy * dy).sqrt();
+            let radial = (half + 0.5 - (distance - radius).abs()).clamp(0.0, 1.0);
+            if radial <= 0.0 {
+                continue;
+            }
+
+            let angle = dy.abs().atan2(dx);
+            let spread = ((SPREAD - angle) / feather).clamp(0.0, 1.0);
+            if spread > 0.0 {
+                put(buffer, width, x, y, color, coverage * radial * spread);
+            }
+        }
+    }
+}
+
+/// A line between two points, drawn as the pixels within half its thickness of it.
+fn stroke_segment(
+    buffer: &mut [u8],
+    width: i32,
+    from: (f32, f32),
+    to: (f32, f32),
+    thickness: f32,
+    color: [u8; 3],
+    coverage: f32,
+) {
+    let half = (thickness / 2.0).max(0.5);
+    let left = (from.0.min(to.0) - half - 1.0).floor() as i32;
+    let right = (from.0.max(to.0) + half + 1.0).ceil() as i32;
+    let top = (from.1.min(to.1) - half - 1.0).floor() as i32;
+    let bottom = (from.1.max(to.1) + half + 1.0).ceil() as i32;
+
+    for y in top..=bottom {
+        for x in left..=right {
+            let distance = distance_to_segment((x as f32 + 0.5, y as f32 + 0.5), from, to);
+            let edge = (half + 0.5 - distance).clamp(0.0, 1.0);
+            if edge > 0.0 {
+                put(buffer, width, x, y, color, coverage * edge);
+            }
+        }
+    }
+}
+
+fn distance_to_segment(point: (f32, f32), from: (f32, f32), to: (f32, f32)) -> f32 {
+    let (dx, dy) = (to.0 - from.0, to.1 - from.1);
+    let length_squared = dx * dx + dy * dy;
+    let along = if length_squared <= f32::EPSILON {
+        0.0
+    } else {
+        (((point.0 - from.0) * dx + (point.1 - from.1) * dy) / length_squared).clamp(0.0, 1.0)
+    };
+
+    let nearest = (from.0 + along * dx, from.1 + along * dy);
+    ((point.0 - nearest.0).powi(2) + (point.1 - nearest.1).powi(2)).sqrt()
 }
 
 /// One of the two clocks: where the file is, or how long it is. A file with no length is drawn as
@@ -1362,6 +1988,300 @@ mod tests {
         // for a second of a file that is not there.
         assert_eq!(transport_share_at(0, 800, 96, true), 0.0);
         assert_eq!(transport_share_at(800, 800, 96, true), 1.0);
+    }
+
+    /// The volume button is the last thing on the bar and it answers a press whatever the player
+    /// behind the bar can be told: a level is this app's own, and FFmpeg's player takes one as well
+    /// as the media engine does — by being started again at it.
+    #[test]
+    fn the_volume_button_answers_on_a_bar_with_no_other_controls() {
+        let live = transport_layout(800, 30, 96, true);
+        let readout = transport_layout(800, 30, 96, false);
+
+        // It keeps its own box at the right edge of the strip, and it is the same box whether or
+        // not the bar carries a play button: a control that moved because the engine changed would
+        // be one a hand has to look for.
+        assert_eq!(live.volume, readout.volume);
+        assert_eq!(
+            live.volume.right,
+            800 - 10,
+            "against the strip's own padding"
+        );
+        assert!(
+            live.volume.left > live.total.right,
+            "the clocks end before it"
+        );
+
+        let x = (live.volume.left + live.volume.right) / 2;
+        let y = (live.volume.top + live.volume.bottom) / 2;
+        assert_eq!(
+            transport_part_at(x, y, 800, 30, 96, true),
+            Some(TransportPart::Volume)
+        );
+        assert_eq!(
+            transport_part_at(x, y, 800, 30, 96, false),
+            Some(TransportPart::Volume),
+            "and on a bar whose player cannot be told anything"
+        );
+
+        // What the button did not take is not the track's: the room it occupies comes off the end
+        // the clocks were drawn at.
+        assert!(readout.total.right <= readout.volume.left);
+        assert!(readout.bar.right <= readout.total.left);
+    }
+
+    /// The popup hangs over the button that opened it, inside the window it belongs to, and its
+    /// groove is what the level is measured against: the bottom of it is nothing and the top of it
+    /// is everything.
+    #[test]
+    fn a_volume_popup_is_placed_over_its_button_and_read_bottom_up() {
+        let (width, strip_top, strip_height) = (800, 400, 30);
+        let popup = volume_popup_layout(width, strip_top, strip_height, 96);
+        let button = transport_layout(width, strip_height, 96, true).volume;
+
+        // Above the bar, hung from the button's own right edge, and clear of the button itself.
+        assert_eq!(popup.panel.right, button.right);
+        assert_eq!(
+            popup.panel.bottom,
+            strip_top + button.top - VOLUME_PANEL_GAP
+        );
+        assert!(popup.panel.top >= 0);
+        assert_eq!(
+            popup.panel.right - popup.panel.left,
+            VOLUME_PANEL_WIDTH,
+            "the panel is the width a level is drawn in"
+        );
+
+        // The groove is inside the panel and centered in it, with the room the knob takes at either
+        // end: a level of everything is a knob that is still whole.
+        assert!(popup.track.left > popup.panel.left && popup.track.right < popup.panel.right);
+        assert_eq!(
+            (popup.track.left + popup.track.right) / 2,
+            (popup.panel.left + popup.panel.right) / 2
+        );
+        assert!(popup.track.top - popup.panel.top >= 20);
+        assert!(popup.panel.bottom - popup.track.bottom >= 20);
+
+        // A point on the groove is the share of the level it is at, and a point past either end is
+        // the end it is past.
+        assert_eq!(volume_share_at(popup.track.bottom, popup.track), 0.0);
+        assert_eq!(volume_share_at(popup.track.top, popup.track), 1.0);
+        let middle = (popup.track.top + popup.track.bottom) / 2;
+        assert!((volume_share_at(middle, popup.track) - 0.5).abs() < 0.02);
+        assert_eq!(volume_share_at(0, popup.track), 1.0);
+        assert_eq!(volume_share_at(strip_top + strip_height, popup.track), 0.0);
+
+        // And what is drawn at a level is drawn where it was read from: the knob of 100% is at the
+        // top of the groove, the knob of nothing is at the bottom, and the two are inside it.
+        assert_eq!(volume_thumb_row(popup.track, 100), popup.track.top);
+        assert_eq!(volume_thumb_row(popup.track, 0), popup.track.bottom);
+        assert!(volume_thumb_row(popup.track, 50) < volume_thumb_row(popup.track, 25));
+    }
+
+    /// A window too narrow for the panel is not a popup drawn off the side of it: it is a panel
+    /// that starts at the window's own edge, where the hand that opened it can still reach it.
+    #[test]
+    fn a_volume_popup_is_kept_inside_a_narrow_window() {
+        let popup = volume_popup_layout(30, 100, 30, 96);
+
+        assert!(popup.panel.left >= 0);
+        assert!(popup.panel.right > popup.panel.left);
+        assert!(popup.track.left >= popup.panel.left);
+        assert!(popup.track.bottom > popup.track.top);
+    }
+
+    fn scratch(label: &str) -> std::path::PathBuf {
+        let root = std::env::var_os("COMMANDCODE_SCRATCHPAD")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir)
+            .join("pin-chrome")
+            .join(label);
+        std::fs::create_dir_all(&root).expect("a fixture directory");
+        root
+    }
+
+    fn write_png(path: std::path::PathBuf, bgra: &[u8], width: u32, height: u32) {
+        let mut rgba = bgra.to_vec();
+        for pixel in rgba.as_chunks_mut::<4>().0 {
+            pixel.swap(0, 2);
+        }
+        image::save_buffer(path, &rgba, width, height, image::ExtendedColorType::Rgba8)
+            .expect("a written picture");
+    }
+
+    /// The pictures this test writes are the design under review: the bar's volume button in each
+    /// state it can be in, and the popup over a picture — which is what the panel is drawn over,
+    /// and what it has to read against at every level.
+    #[test]
+    fn draws_the_volume_control() {
+        let dir = scratch("volume");
+        let light = ChromePalette {
+            background: [250, 250, 250],
+            foreground: [56, 58, 66],
+            accent: [166, 38, 164],
+            dark: false,
+        };
+        let dark = ChromePalette {
+            background: [40, 44, 52],
+            foreground: [171, 178, 191],
+            accent: [198, 120, 221],
+            dark: true,
+        };
+
+        for (name, palette) in [("light", &light), ("dark", &dark)] {
+            for (dpi, size) in [(96u32, "1x"), (192, "2x")] {
+                let bar = 30 * (dpi / 96);
+
+                // The bar at each state the button can be in: idle, a hand over it, and its popup
+                // open — which is a button held down — and the last of those at a level of nothing,
+                // which is the button crossed out.
+                let states = [
+                    (65u32, None, false),
+                    (65, Some(TransportPart::Volume), false),
+                    (0, Some(TransportPart::Volume), true),
+                ];
+                let (width, height) = (560 * (dpi / 96), bar * states.len() as u32);
+                let mut bars = image_buffer(width, height);
+
+                for (index, (volume, hovered, open)) in states.iter().enumerate() {
+                    let surface = DibSurface::create(width, bar).expect("a surface");
+                    paint_transport(
+                        &surface,
+                        palette,
+                        &TransportState {
+                            interactive: true,
+                            playing: index % 2 == 0,
+                            position: Some(42.0),
+                            duration: Some(180.0),
+                            hovered: *hovered,
+                            pressed: None,
+                            volume: *volume,
+                            volume_open: *open,
+                        },
+                        dpi,
+                    );
+                    blit(
+                        &mut bars,
+                        width,
+                        bar,
+                        &surface.pixels(),
+                        0,
+                        index as u32 * bar,
+                    );
+                }
+
+                write_png(
+                    dir.join(format!("bar-{name}-{size}.png")),
+                    &bars,
+                    width,
+                    height,
+                );
+
+                // The popup as it stands over the picture in a pinned window, at three levels —
+                // nothing, a hand's worth, and everything — with the middle one held, which is the
+                // knob the accent colour is drawn in.
+                let (window, row) = (360 * (dpi / 96), 240 * (dpi / 96));
+                let (out_width, out_height) = (window * 3, row);
+                let mut out = image_buffer(out_width, out_height);
+
+                for (index, volume) in [0u32, 45, 100].into_iter().enumerate() {
+                    let x = index as u32 * window;
+                    let strip_top = row as i32 - bar as i32;
+                    let picture = backdrop(window, row, palette);
+                    for y in 0..row {
+                        for column in 0..window {
+                            let from = ((y * window + column) * 4) as usize;
+                            let to = ((y * out_width + x + column) * 4) as usize;
+                            out[to..to + 4].copy_from_slice(&picture[from..from + 4]);
+                        }
+                    }
+
+                    let surface = DibSurface::create(window, bar).expect("a surface");
+                    paint_transport(
+                        &surface,
+                        palette,
+                        &TransportState {
+                            interactive: true,
+                            playing: true,
+                            position: Some(42.0),
+                            duration: Some(180.0),
+                            hovered: None,
+                            pressed: None,
+                            volume,
+                            volume_open: true,
+                        },
+                        dpi,
+                    );
+                    blit(&mut out, out_width, row, &surface.pixels(), x, row - bar);
+
+                    let mut popup = volume_popup_layout(window as i32, strip_top, bar as i32, dpi);
+                    for rect in [&mut popup.panel, &mut popup.track] {
+                        rect.left += x as i32;
+                        rect.right += x as i32;
+                    }
+
+                    paint_volume_popup(
+                        &mut out,
+                        out_width as i32,
+                        palette,
+                        &popup,
+                        volume,
+                        volume == 45,
+                    );
+                }
+
+                write_png(
+                    dir.join(format!("popup-{name}-{size}.png")),
+                    &out,
+                    out_width,
+                    out_height,
+                );
+            }
+        }
+    }
+
+    fn image_buffer(width: u32, height: u32) -> Vec<u8> {
+        vec![0u8; width as usize * height as usize * 4]
+    }
+
+    fn blit(out: &mut [u8], width: u32, height: u32, source: &[u8], x: u32, y: u32) {
+        for row in 0..height {
+            for column in 0..width {
+                let from = ((row * width + column) * 4) as usize;
+                let to = (((y + row) * width + x + column) * 4) as usize;
+                if to + 3 < out.len() && from + 3 < source.len() {
+                    out[to..to + 4].copy_from_slice(&source[from..from + 4]);
+                }
+            }
+        }
+    }
+
+    /// A picture for the popup to float over: light and dark bands and a colour wash, so that a
+    /// panel which reads on one of them and not the other says so in the picture.
+    fn backdrop(width: u32, height: u32, palette: &ChromePalette) -> Vec<u8> {
+        let mut out = image_buffer(width, height);
+        for y in 0..height {
+            for x in 0..width {
+                let index = ((y * width + x) * 4) as usize;
+                let band: f32 = if (x / 40 + y / 40) % 2 == 0 {
+                    0.75
+                } else {
+                    0.12
+                };
+                let color = text_paint::blend(
+                    [20, 20, 20],
+                    palette.accent,
+                    (x as f32 / width as f32) * 0.7,
+                );
+                let level = (band * 255.0).round() as u8;
+                out[index] = (color[2] as f32 * (0.4 + band * 0.6)) as u8;
+                out[index + 1] = (color[1] as f32 * (0.4 + band * 0.6)) as u8;
+                out[index + 2] = (color[0] as f32 * (0.4 + band * 0.6)) as u8;
+                out[index + 3] = level;
+            }
+        }
+
+        out
     }
 
     #[test]

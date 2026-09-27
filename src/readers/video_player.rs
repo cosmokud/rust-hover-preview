@@ -356,6 +356,34 @@ pub fn set_paused(paused: bool) {
     });
 }
 
+/// Take the sound of what is playing to `volume` per cent, which is what a pinned preview's own
+/// volume control asks for the moment its knob is moved — the one thing about a running session
+/// that can be changed while it runs, since a seek is deferred and a pause is a state.
+///
+/// A level of nothing is asked for as mute rather than as a volume of zero, which is the form a
+/// session is started in as well: the engine is then free to leave the audio path out
+/// altogether. Nothing is done where nothing is playing, which is a pin whose file has already
+/// been let go of; the level a player is started at is the caller's answer, as it has always
+/// been (see [`play`]).
+pub fn set_volume(volume: u32) {
+    SESSION.with(|slot| {
+        let slot = slot.borrow();
+        let Some(session) = slot.as_ref() else {
+            return;
+        };
+
+        let engine = &session.engine;
+        unsafe {
+            if volume == 0 {
+                let _ = engine.SetMuted(true);
+            } else {
+                let _ = engine.SetMuted(false);
+                let _ = engine.SetVolume(f64::from(volume.min(100)) / 100.0);
+            }
+        }
+    });
+}
+
 /// Take the sound that is playing to `seconds` into its file, which is what a start position
 /// the probe could not work out asks for once the engine has said how long the file is.
 ///
