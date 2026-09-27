@@ -11442,7 +11442,18 @@ fn seek_pinned_playback(path: &PathBuf, content: ScreenRegion, seconds: f64) {
     match current_media_type() {
         Some(MediaType::NativeVideo) => {
             video_player::seek(seconds);
-            update_pin_transport(|transport| transport.seeking = None);
+
+            // A file this side has paused is drawn at the second it was stopped at rather than at
+            // the engine's own position (see `pin_playhead`), so a seek made while it is paused has
+            // to move that second with it. The engine goes where it was taken either way; what
+            // this is for is the bar, which would otherwise spring back to the second the pause
+            // began at the moment the hand let go — the file seeked, and the bar saying otherwise.
+            update_pin_transport(|transport| {
+                if transport.paused_at.is_some() {
+                    transport.paused_at = Some(seconds);
+                }
+                transport.seeking = None;
+            });
         }
         Some(MediaType::Video) => restart_pinned_player(path, content, seconds),
         _ => {}
@@ -18154,6 +18165,30 @@ mod tests {
                         waited.elapsed().as_secs_f32(),
                         video_player::position()
                     );
+
+                    // And the same seek with the file held where it is, which is the other half of
+                    // what a bar dragged on a paused pin has to do: the second it is drawn at moves
+                    // with the hand (the app writes that one down itself), and the picture has to
+                    // follow it too — which is a frame the engine hands over while it is paused.
+                    let held_target = target * 0.3;
+                    video_player::set_paused(true);
+                    video_player::seek(held_target);
+
+                    let held = Instant::now();
+                    let mut held_frames = 0;
+                    while held.elapsed() < Duration::from_millis(400) {
+                        if video_player::copy_frame_into(&mut pixels).is_some() {
+                            held_frames += 1;
+                        }
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+
+                    println!(
+                        "and a seek to {held_target:.2}s with the file paused drew {held_frames} frames and reads back as {:?}",
+                        video_player::position()
+                    );
+
+                    video_player::set_paused(false);
                 }
 
                 if frames == 0 {
@@ -19787,6 +19822,76 @@ mod tests {
 
         if let Ok(mut media) = CURRENT_MEDIA.lock() {
             *media = previous;
+        }
+    }
+
+    /// What this guards: a seek made while a pinned video is paused. A paused file is drawn at the
+    /// second it was stopped at rather than at the engine's own position (see `pin_playhead`), so a
+    /// seek that moves the engine and leaves that second where it was is a bar that springs back to
+    /// where the pause began the moment the hand lets go of it — the file seeked, and the bar
+    /// saying otherwise.
+    #[test]
+    fn a_seek_made_while_a_pinned_video_is_paused_moves_the_second_it_is_drawn_at() {
+        let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+        let previous_pin = PINNED.lock().ok().and_then(|mut pinned| pinned.take());
+
+        let mut video = create_loading_media(320, 240);
+        video.media_type = MediaType::NativeVideo;
+        if let Ok(mut media) = CURRENT_MEDIA.lock() {
+            *media = Some(video);
+        }
+
+        let path = std::env::temp_dir()
+            .join("rust-hover-preview-video-tests")
+            .join("paused-seek.mp4");
+
+        // Twice: a bar dragged while the file is held, and the same drag while it is playing —
+        // only the first of those is drawn from a second this side wrote down.
+        let cases: [(Option<f64>, Option<f64>); 2] = [(Some(30.0), Some(90.0)), (None, None)];
+
+        for (paused_at, wanted) in cases {
+            if let Ok(mut pinned) = PINNED.lock() {
+                *pinned = Some(PinnedPreview {
+                    path: path.clone(),
+                    content: (0, 0, 320, 240),
+                    restore: None,
+                    dpi: 96,
+                    transport_bar: true,
+                    transport_live: true,
+                    frame: PinFrame::Shaped,
+                    collapsed: false,
+                    hovered: None,
+                    pressed: None,
+                    dragging: None,
+                    transport: PinTransport {
+                        duration: Some(120.0),
+                        paused_at,
+                        ..Default::default()
+                    },
+                });
+            }
+
+            seek_pinned_playback(&path, (0, 0, 320, 240), 90.0);
+
+            let transport = PINNED.lock().ok().and_then(|pinned| {
+                pinned
+                    .as_ref()
+                    .map(|pin| (pin.transport.paused_at, pin.transport.seeking))
+            });
+
+            assert_eq!(
+                transport,
+                Some((wanted, None)),
+                "a paused file is drawn at the second it was taken to, and a drag that is over is \
+                 a drag that is over"
+            );
+        }
+
+        if let Ok(mut pinned) = PINNED.lock() {
+            *pinned = previous_pin;
+        }
+        if let Ok(mut media) = CURRENT_MEDIA.lock() {
+            *media = previous_media;
         }
     }
 }
