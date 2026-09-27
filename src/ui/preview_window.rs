@@ -95,19 +95,20 @@ use windows::Win32::System::Threading::{
 };
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetAsyncKeyState, ReleaseCapture, SetCapture, VK_A, VK_C, VK_CONTROL,
+    GetAsyncKeyState, GetCapture, ReleaseCapture, SetCapture, VK_A, VK_C, VK_CONTROL,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DispatchMessageW,
     EnumWindows, GetCursorPos, GetSystemMetrics, GetWindow, GetWindowLongPtrW, GetWindowRect,
-    GetWindowThreadProcessId, IsWindow, IsWindowVisible, LoadCursorW, MoveWindow, PeekMessageW,
-    RegisterClassExW, SetCursor, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow,
-    ShowWindowAsync, SystemParametersInfoW, TrackPopupMenu, TranslateMessage, UpdateLayeredWindow,
-    CS_HREDRAW, CS_VREDRAW, GWL_EXSTYLE, GW_OWNER, HWND_TOPMOST, IDC_ARROW, IDC_SIZEALL,
-    IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE, MF_STRING, MSG, PBT_APMRESUMEAUTOMATIC,
-    PBT_APMRESUMESUSPEND, PBT_APMSTANDBY, PBT_APMSUSPEND, PM_REMOVE, SM_CXVIRTUALSCREEN,
-    SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SPI_GETWORKAREA, SWP_FRAMECHANGED,
-    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SW_HIDE, SW_SHOWNOACTIVATE,
+    GetWindowThreadProcessId, IsWindow, IsWindowVisible, LoadCursorW, MoveWindow,
+    MsgWaitForMultipleObjectsEx, PeekMessageW, RegisterClassExW, SetCursor, SetForegroundWindow,
+    SetWindowLongPtrW, SetWindowPos, ShowWindow, ShowWindowAsync, SystemParametersInfoW,
+    TrackPopupMenu, TranslateMessage, UpdateLayeredWindow, CS_HREDRAW, CS_VREDRAW, GWL_EXSTYLE,
+    GW_OWNER, HWND_TOPMOST, IDC_ARROW, IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE,
+    IDC_SIZEWE, MF_STRING, MSG, MWMO_INPUTAVAILABLE, PBT_APMRESUMEAUTOMATIC, PBT_APMRESUMESUSPEND,
+    PBT_APMSTANDBY, PBT_APMSUSPEND, PM_REMOVE, QS_ALLINPUT, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN,
+    SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SPI_GETWORKAREA, SWP_FRAMECHANGED, SWP_NOACTIVATE,
+    SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SW_HIDE, SW_SHOWNOACTIVATE,
     SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, TPM_LEFTALIGN, TPM_NONOTIFY, TPM_RETURNCMD, TPM_TOPALIGN,
     ULW_ALPHA, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
     WM_POWERBROADCAST, WM_RBUTTONUP, WM_SETCURSOR, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
@@ -12198,6 +12199,14 @@ type BubbleDrag = ((i32, i32), (i32, i32));
 
 static PIN_BUBBLE_DRAG: Lazy<Mutex<Option<BubbleDrag>>> = Lazy::new(|| Mutex::new(None));
 
+/// How long the bubble's own wait runs before the drag is looked at again, while the button that
+/// took hold of it is down.
+///
+/// The wait itself ends on the pointer's next message — a mouse either moves or it does not, and
+/// the one message that is not a move is the release — so this is only the ceiling on a drag that
+/// has lost its capture without one being sent, which is what keeps the wait from being a hang.
+const PIN_BUBBLE_DRAG_WAIT_MS: u32 = 100;
+
 /// Whether the drag in progress has moved at all: what tells a click on the bubble — which puts
 /// the window back up — from a hand that was carrying it somewhere.
 static PIN_BUBBLE_MOVED: AtomicBool = AtomicBool::new(false);
@@ -12531,6 +12540,10 @@ unsafe extern "system" fn pin_bubble_proc(
             }
             PIN_BUBBLE_MOVED.store(false, Ordering::Release);
             let _ = SetCapture(hwnd);
+            // And the drag is carried here rather than left to the preview loop's next tick: what
+            // has hold of the bubble is the pointer, and the pointer does not wait for a tick of
+            // anything (see `carry_bubble_drag`).
+            carry_bubble_drag(hwnd);
             LRESULT(0)
         }
         WM_MOUSEMOVE => {
@@ -12551,6 +12564,13 @@ unsafe extern "system" fn pin_bubble_proc(
                     ask_pin(PinCommand::Restore);
                 }
             }
+            LRESULT(0)
+        }
+        windows::Win32::UI::WindowsAndMessaging::WM_CAPTURECHANGED => {
+            // A capture taken away is a drag that is over wherever the bubble stood: a window
+            // that is not holding the pointer is not being carried by it, and the state is what
+            // the drag's own wait is ended by (see `carry_bubble_drag`).
+            drop_bubble_drag();
             LRESULT(0)
         }
         WM_RBUTTONUP => {
@@ -12620,6 +12640,71 @@ unsafe fn drag_pin_bubble(hwnd: HWND, point: (i32, i32)) {
     // The drag state follows the window, so the next move is measured from where it is now
     // rather than from where the press began: the two are the same only while nothing clamps it.
     *drag = Some((point, (target.0, target.1)));
+}
+
+/// Whether a drag of the bubble is in progress: what the wait below is waiting to be over, and
+/// what a release is read as a click or as the end of a carry against.
+fn bubble_is_being_dragged() -> bool {
+    PIN_BUBBLE_DRAG
+        .lock()
+        .map(|drag| drag.is_some())
+        .unwrap_or(false)
+}
+
+/// Forget a drag of the bubble, if one is in progress.
+fn drop_bubble_drag() {
+    if let Ok(mut drag) = PIN_BUBBLE_DRAG.lock() {
+        *drag = None;
+    }
+}
+
+/// Carry the bubble for as long as the button that took hold of it is held.
+///
+/// This is the one drag that cannot be left to the preview loop, because it is the one drag of a
+/// window with nothing in it: the loop's own wait is a sixteenth of a second with something on
+/// screen and longer with nothing, and every one of those waits is time the pointer has moved
+/// through and the bubble has not — a small window with the pointer on it is read against the
+/// pointer itself, so what a tick of lag costs is the bubble trailing the hand rather than
+/// arriving with it. So while the button is down the thread waits on its own message queue rather
+/// than on the loop's clock, and a move is carried where it lands (`drag_pin_bubble`) instead of
+/// being drained in a batch a tick later.
+///
+/// What is owed the loop while this runs is the note that the loop is still alive: a bubble being
+/// dragged down a desktop for a few seconds is a preview thread at work, not one that has stopped
+/// answering, and the hook that ends the engines of a stopped loop reads that note (see
+/// `preview_stall_ms`).
+///
+/// It is over when the drag is: a release is answered by the handler that has always answered it,
+/// which is dispatched from here like any message, and a capture taken away says so with the
+/// message that takes it away. The wait is bounded for the one case neither leaves a message for:
+/// a drag whose state has been emptied for another reason still leaves it within the bound.
+unsafe fn carry_bubble_drag(hwnd: HWND) {
+    let mut msg = MSG::default();
+
+    loop {
+        note_preview_alive();
+
+        // Everything the queue holds, answered where it is: a move carries the bubble, and the
+        // release ends the drag in the handler it always has.
+        while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
+            let _ = TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
+
+        if !RUNNING.load(Ordering::SeqCst) || !bubble_is_being_dragged() || GetCapture() != hwnd {
+            return;
+        }
+
+        // Nothing left to answer: what is waited for is the pointer's next message rather than
+        // the loop's next tick — and the wait ends on it, so the bubble moves with the hand
+        // rather than after it.
+        let _ = MsgWaitForMultipleObjectsEx(
+            None,
+            PIN_BUBBLE_DRAG_WAIT_MS,
+            QS_ALLINPUT,
+            MWMO_INPUTAVAILABLE,
+        );
+    }
 }
 
 /// The box of a window, as a screen rectangle and its size.
@@ -13182,29 +13267,53 @@ unsafe fn apply_pin_drag(hwnd: HWND) {
     }
 
     let (width, height) = (window.2 - window.0, window.3 - window.1);
-    let _ = SetWindowPos(
-        hwnd,
-        HWND_TOPMOST,
-        window.0,
-        window.1,
-        width,
-        height,
-        SWP_NOACTIVATE,
-    );
 
-    // Whatever stands in the media band travels with it.
-    place_pinned_siblings();
-
-    // And a window that was carried has nothing to paint: what a layered window is drawn from is
-    // the surface it already has, and moving one moves that surface with it — so a drag is a
+    // A window that was carried has nothing to paint: what a layered window is drawn from is the
+    // surface it already has, and moving one moves that surface with it — so a drag is a
     // `SetWindowPos` per pointer move and nothing else, which is the whole of why a pinned window
     // follows a hand at the pace of the pointer rather than at the pace of a repaint of a
-    // display's worth of pixels. A resize is the drag that has a picture to draw, because the box
-    // it is being dragged to is a band the frame it holds is not the size of (see
-    // `compose_media_into_band`).
+    // display's worth of pixels.
+    //
+    // A resize is the drag that has a picture to draw, because the box it is being dragged to is
+    // a band the frame it holds is not the size of (see `compose_media_into_band`) — and that
+    // picture is the reason the new box is handed to `UpdateLayeredWindow` rather than to
+    // `SetWindowPos`: one call applies the frame, its place, and the window's size together, so
+    // there is no moment in which the surface of the box the drag came from stands at the place
+    // of the box it is being dragged to. Sizing the window first and painting after it is that
+    // moment once per pointer move, and it is seen as the whole of the window's contents shaking:
+    // the surface carries the old origin and the window the new one, so the difference between
+    // the two is drawn as the picture jumping — which is every edge and corner but the
+    // bottom-right one, where the origin does not move at all and there is nothing to jump (see
+    // `render_layered_preview_at`).
     if matches!(drag.action, PinDragAction::Resize(_)) {
-        render_layered_preview(hwnd);
+        render_pinned_preview_at(hwnd, window.0, window.1);
+
+        // The box is already the one the paint applied; what is re-asserted here is only the
+        // place in the z-order a carried window gets from its own `SetWindowPos`.
+        let _ = SetWindowPos(
+            hwnd,
+            HWND_TOPMOST,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        );
+    } else {
+        let _ = SetWindowPos(
+            hwnd,
+            HWND_TOPMOST,
+            window.0,
+            window.1,
+            width,
+            height,
+            SWP_NOACTIVATE,
+        );
     }
+
+    // Whatever stands in the media band travels with it — after the box it stands in is the
+    // window's, so that a player's window is never put where the surface has not caught up.
+    place_pinned_siblings();
 }
 
 /// The window a resize drag has produced: the box the drag began on, dragged by one of its edges,
