@@ -23,6 +23,16 @@
 //!     with its own `crop` filter, and the shape the box is placed at, so that the picture
 //!     fills it rather than being letterboxed inside it.
 //!
+//! Who *scales* the picture is the one thing here that depends on the size it is drawn at. A box
+//! larger than the picture — a video shown above 100%, or a pinned window dragged or maximized
+//! past the size the file has — is asked of the engine at the picture's own size and scaled by
+//! this side ([`scale_rows`]), because the engine's scaling is a fixed thing: which filter it
+//! reads a picture at is not a question this app can ask it, let alone choose, and what it left
+//! above 100% was the stair-stepping no linear read of the same source has. A box that is not
+//! larger is handed to the engine to scale into, as it always was — a scale *down* is the one
+//! direction this side has nothing to add to, and what the choice is made of is written where it
+//! is made (see [`play`]).
+//!
 //! What that buys over the ffplay path is the whole of the window machinery a player's
 //! own window needs — the style monitor, the topmost re-assertion, the PID record, the
 //! job object — none of which exists here, because there is no second window and no
@@ -161,8 +171,21 @@ struct Session {
     /// frames to deliver and no box to draw one in. A session without a surface is the whole
     /// of what playing a sound costs this side.
     bitmap: Option<IWICBitmap>,
+    /// The box the preview draws at: the size of the frame this side hands over, and the size the
+    /// engine is asked to deliver at only while it is the one scaling (see `scaled`).
     width: u32,
     height: u32,
+    /// The size the picture has in the file, which is what the engine is asked for where this side
+    /// scales it, and what the box sits above or below for the question of who scales. Nothing at
+    /// all for a sound, which has no picture to scale.
+    picture: (u32, u32),
+    /// Whether this side scales the picture into the box rather than the engine: the two sizes
+    /// above are what settles it, and what each of the two costs is written on [`play`].
+    scaled: bool,
+    /// The two rows of the picture this side has already read across to the box's width, kept
+    /// between the rows of the box that are mixed from them, and empty while the engine is the one
+    /// scaling (see `scale_rows`).
+    rows: [Vec<u8>; 2],
     /// Where in the frame the picture is taken from, where the probe settled on a crop: the
     /// rectangle the engine's frame transfer is asked for. The whole frame is `None`, which is
     /// what a file the probe found no crop in is played with — and what every sound is.
@@ -267,6 +290,24 @@ pub struct Crop {
     pub frame_height: u32,
 }
 
+/// The picture a preview of a video is drawn from: the size the file is shown at, and — where the
+/// probe settled on one — the part of the frame that picture is cut from.
+///
+/// The two halves are what the choice of who scales the picture is made of, so they are handed
+/// over together rather than one being worked out from the other: a box larger than the picture
+/// is a picture this side scales into it, and a box that is not is one the engine scales into it
+/// (see [`play`]).
+#[derive(Clone, Copy, Default)]
+pub struct Picture {
+    /// The size the picture is shown at — the box at 100%, and what every other share of the
+    /// setting is a share of. A sound has no picture and is played with none of this.
+    pub width: u32,
+    pub height: u32,
+    /// Where in the frame the picture is taken from, where the file carries its own bars: the
+    /// rectangle both players are told about, each in its own terms (see [`Crop`]).
+    pub crop: Option<Crop>,
+}
+
 /// A crop as the rectangle the engine's frame transfer is asked for — the same region, in the
 /// normalized coordinates that call takes — or nothing at all for a rectangle with no area in
 /// it or a frame with no size.
@@ -286,22 +327,28 @@ fn source_rect(crop: Crop) -> Option<MFVideoNormalizedRect> {
     })
 }
 
-/// Start playing `path` into a surface of `width` by `height`, at `volume` per cent, from
-/// `crop` — the part of the frame to draw, where the probe found the file's own picture to be
-/// smaller than the frame holding it.
+/// Start playing `path` into a surface of `width` by `height`, at `volume` per cent, from the
+/// picture `picture` names.
+///
+/// The two sizes are what settles who scales the picture into that box: a box larger than the
+/// picture is a file being shown above its own size, and one the engine is asked for at the
+/// picture's own size and this side scales (see [`scale_rows`]), while a box that is not larger
+/// is the engine's to fill as it always was (see `scales_here`). What the first costs is a
+/// resample of every frame and what the second costs is nothing beyond the copy every frame paid
+/// before it — a preview drawn at or below the picture's own size is the copy it always was.
 ///
 /// Anything already playing is stopped first, so a video is never two videos. A call that
 /// could not start one leaves nothing behind rather than a session that will never produce
 /// a frame: [`is_playing`] answers for that, and the hover it was for is answered with no
 /// preview.
-pub fn play(path: &Path, width: u32, height: u32, volume: u32, crop: Option<Crop>) {
+pub fn play(path: &Path, width: u32, height: u32, volume: u32, picture: Picture) {
     stop();
 
     if width == 0 || height == 0 || !codecs::mf_started() {
         return;
     }
 
-    if let Some(session) = Session::begin(path, Some((width, height)), volume, 0.0, crop) {
+    if let Some(session) = Session::begin(path, Some((width, height)), picture, volume, 0.0) {
         SESSION.with(|slot| *slot.borrow_mut() = Some(session));
     }
 }
@@ -326,7 +373,7 @@ pub fn play_audio(path: &Path, volume: u32, start: f64) {
 
     // A sound has no picture, so there is no frame for a crop to be a part of and none is
     // handed over: the argument is a video's question and is answered as one by the caller.
-    if let Some(session) = Session::begin(path, None, volume, start, None) {
+    if let Some(session) = Session::begin(path, None, Picture::default(), volume, start) {
         SESSION.with(|slot| *slot.borrow_mut() = Some(session));
     }
 }
@@ -404,6 +451,14 @@ pub fn seek(seconds: f64) {
 /// The engine is told nothing: what it delivers is scaled into whatever rectangle the
 /// frame transfer names, so the only thing a new size costs is a new bitmap to deliver
 /// into.
+///
+/// Which rectangle that is depends on the box the new size makes, and the two sides of the
+/// picture's own size cost different things. A box larger than the picture is this side's to
+/// scale, and the surface it reads is the picture's own — the same surface whatever the box is,
+/// so a window dragged about up there is dragged about without a bitmap being made. A box at or
+/// below the picture's size is the engine's to scale into, and the surface has to *be* that box:
+/// the engine writes where it is told to, so a box that changed is a bitmap that is made again
+/// (see `scales_here`).
 pub fn resize(width: u32, height: u32) {
     SESSION.with(|slot| {
         let mut slot = slot.borrow_mut();
@@ -421,14 +476,41 @@ pub fn resize(width: u32, height: u32) {
             return;
         }
 
-        let Some(bitmap) = surface(width, height) else {
-            return;
-        };
+        let scaled = scales_here(session.picture, width, height);
 
-        session.bitmap = Some(bitmap);
+        // The surface has to be made again wherever the engine is the one that scales — every box
+        // it is handed is the box it writes — and wherever the scaling has just come back to this
+        // side, whose surface is the picture's rather than the box's.
+        if !scaled || scaled != session.scaled {
+            let size = if scaled {
+                session.picture
+            } else {
+                (width, height)
+            };
+
+            let Some(bitmap) = surface(size.0, size.1) else {
+                return;
+            };
+
+            session.bitmap = Some(bitmap);
+        }
+
+        session.scaled = scaled;
         session.width = width;
         session.height = height;
     });
+}
+
+/// Whether this side scales the picture into the box rather than asking the engine to: a box
+/// larger than the picture on either axis is a file shown above its own size, which is the one
+/// case the engine's own scaling is not asked for.
+///
+/// Either axis rather than both, because the two are not always scaled alike — a file whose
+/// pixels are not square is stretched along one of them at every size — and a picture already
+/// being asked for at its own size may as well be scaled by the one sampler for both directions.
+/// A picture with no size at all is a sound, which has nothing to scale and nothing to ask for.
+fn scales_here(picture: (u32, u32), width: u32, height: u32) -> bool {
+    picture.0 > 0 && picture.1 > 0 && (width > picture.0 || height > picture.1)
 }
 
 /// The file being played, which is what a hover that lands on the same file again compares
@@ -815,22 +897,40 @@ impl Session {
     fn begin(
         path: &Path,
         surface_size: Option<(u32, u32)>,
+        picture: Picture,
         volume: u32,
         start: f64,
-        crop: Option<Crop>,
     ) -> Option<Self> {
         let byte_stream = open_stream(path)?;
 
         // A video is played into a surface of its own; a sound is played into nothing, and the
         // engine is left with no output for a picture at all.
-        let (bitmap, width, height) = match surface_size {
-            Some((width, height)) => (Some(surface(width, height)?), width, height),
-            None => (None, 0, 0),
+        let (bitmap, width, height, scaled) = match surface_size {
+            Some((width, height)) => {
+                // Whose scaling the picture is handed to is settled here, once, because it is what
+                // the surface is made of as well as what every frame of the session costs: the
+                // picture's own size where this side scales it, and the box itself where the engine
+                // does (see `scales_here`).
+                let scaled = scales_here((picture.width, picture.height), width, height);
+                let (surface_width, surface_height) = if scaled {
+                    (picture.width, picture.height)
+                } else {
+                    (width, height)
+                };
+
+                (
+                    Some(surface(surface_width, surface_height)?),
+                    width,
+                    height,
+                    scaled,
+                )
+            }
+            None => (None, 0, 0, false),
         };
 
         // What the picture is taken from, which is settled here rather than at every frame:
         // the crop where the probe settled on one, and the whole frame where it did not.
-        let source = crop.and_then(source_rect);
+        let source = picture.crop.and_then(source_rect);
 
         let failed = Arc::new(AtomicBool::new(false));
 
@@ -909,6 +1009,9 @@ impl Session {
             bitmap,
             width,
             height,
+            picture: (picture.width, picture.height),
+            scaled,
+            rows: [Vec::new(), Vec::new()],
             source,
             path: path.to_path_buf(),
             failed,
@@ -1007,11 +1110,20 @@ impl Session {
 
         unsafe { self.engine.OnVideoStreamTick() }.ok()?;
 
+        // The rectangle the engine is asked to write: the box, where it is the one scaling, and the
+        // picture's own size where this side is — where what comes back is the picture as the file
+        // holds it, for the sampler below to read into the box (see `scales_here`).
+        let (delivered_width, delivered_height) = if self.scaled {
+            self.picture
+        } else {
+            (self.width, self.height)
+        };
+
         let rect = RECT {
             left: 0,
             top: 0,
-            right: self.width as i32,
-            bottom: self.height as i32,
+            right: delivered_width as i32,
+            bottom: delivered_height as i32,
         };
         let destination: IUnknown = bitmap.cast().ok()?;
 
@@ -1036,7 +1148,19 @@ impl Session {
         // a session that never had one (see `failing_path`).
         self.drew = true;
 
-        copy_locked(bitmap, pixels, self.width, self.height).then_some((self.width, self.height))
+        let copied = if self.scaled {
+            resample_locked(
+                bitmap,
+                pixels,
+                self.picture,
+                (self.width, self.height),
+                &mut self.rows,
+            )
+        } else {
+            copy_locked(bitmap, pixels, self.width, self.height)
+        };
+
+        copied.then_some((self.width, self.height))
     }
 }
 
@@ -1111,8 +1235,220 @@ fn open_stream(path: &Path) -> Option<IMFByteStream> {
     Some(stream)
 }
 
+/// Take the picture out of a locked bitmap and into the box, scaled by this side: the road every
+/// frame of a preview shown above the picture's own size takes (see `scales_here`).
+///
+/// It is [`copy_locked`]'s other half and is written in the same terms — BGRA both ways, the alpha
+/// forced opaque, the caller's buffer rewritten rather than replaced — with the one difference
+/// that the picture is read out of the engine's own surface a row at a time, as the rows are
+/// needed, rather than copied out whole first: a row of the picture that two rows of the box are
+/// mixed from is read twice from the lock and touched once in memory.
+fn resample_locked(
+    bitmap: &IWICBitmap,
+    pixels: &mut Vec<u8>,
+    picture: (u32, u32),
+    box_size: (u32, u32),
+    rows: &mut [Vec<u8>; 2],
+) -> bool {
+    let Ok(lock) = (unsafe { bitmap.Lock(std::ptr::null(), WICBitmapLockWrite.0 as u32) }) else {
+        return false;
+    };
+    let Ok(stride) = (unsafe { lock.GetStride() }) else {
+        return false;
+    };
+
+    let mut size: u32 = 0;
+    let mut data: *mut u8 = std::ptr::null_mut();
+    if unsafe { lock.GetDataPointer(&mut size, &mut data) }.is_err() || data.is_null() {
+        return false;
+    }
+
+    let source = unsafe { std::slice::from_raw_parts(data, size as usize) };
+
+    // The buffer is the frame's own and is kept between frames, and every byte of it is written by
+    // the rows below: what it needs is the room rather than a zeroing, which at the size of a
+    // display was a pass of its own over thirty megabytes sixty times a second. The room it needs
+    // is the box's, which a buffer still holding a frame of an older box — a pinned window dragged
+    // to another size — does not have yet.
+    let row_bytes = box_size.0 as usize * 4;
+    let Some(needed) = row_bytes.checked_mul(box_size.1 as usize) else {
+        return false;
+    };
+    if pixels.len() != needed {
+        pixels.resize(needed, 0);
+    }
+
+    scale_rows(source, stride as usize, picture, box_size, rows, pixels)
+}
+
+/// The scaling itself: the picture at its own size read into a buffer of the box's.
+///
+/// Bilinear and separable — a row of the box is two rows of the picture read across to the box's
+/// width and then mixed, and a pixel of that row is two of those columns mixed — which is the
+/// reading `preview_window::resample_into_band` gives a picture being dragged to another size, in
+/// the same 16.16 arithmetic and the same 256ths. It is the cheapest filter a picture can be
+/// shown above its own size at without the edges of the file arriving a whole destination pixel
+/// wide, which is what was being looked at.
+///
+/// The row of the picture a row of the box takes its lower half from is the row the next one takes
+/// its upper half from wherever the box is the larger of the two, and reading it across twice is
+/// half the scaling's work done twice over, so the two rows a row of the box is mixed from are
+/// kept in `rows` between the rows that need them. Below the picture's own size the rows no longer
+/// come in pairs and every row is read for itself, which is `resample_into_band`'s arrangement for
+/// the same reason: a scale down is not what this is here for.
+fn scale_rows(
+    source: &[u8],
+    stride: usize,
+    picture: (u32, u32),
+    box_size: (u32, u32),
+    rows: &mut [Vec<u8>; 2],
+    out: &mut [u8],
+) -> bool {
+    let (picture_width, picture_height) = picture;
+    let (box_width, box_height) = box_size;
+
+    if picture_width == 0 || picture_height == 0 || box_width == 0 || box_height == 0 {
+        return false;
+    }
+
+    let row_bytes = box_width as usize * 4;
+    let Some(needed) = row_bytes.checked_mul(box_height as usize) else {
+        return false;
+    };
+
+    // Every row of the picture this reads has to be there, and the last of them is the one that
+    // says so: a lock is as long as the surface's own rows, and a picture sized by the file and
+    // delivered by the engine is one this can be short of only where the engine wrote less than it
+    // said it would — half a frame being no frame.
+    let Some(picture_bytes) = stride
+        .checked_mul(picture_height as usize - 1)
+        .and_then(|rows| rows.checked_add(picture_width as usize * 4))
+    else {
+        return false;
+    };
+    if source.len() < picture_bytes || out.len() < needed {
+        return false;
+    }
+
+    // Where a destination row and column map back to in the picture, in 16.16, a pixel's own half
+    // taken off so that a destination pixel stands on the centre of the source pixel it lands in:
+    // the mapping `resample_into_band` makes, and the whole of what the loop repeats.
+    let step_x = ((picture_width as u64) << 16) / box_width as u64;
+    let step_y = ((picture_height as u64) << 16) / box_height as u64;
+
+    for row in rows.iter_mut() {
+        row.resize(row_bytes, 0);
+    }
+
+    // Which row of the picture each of the two holds, which is what says whether it has to be read
+    // across for the row of the box in hand at all.
+    let mut held: [Option<u32>; 2] = [None, None];
+
+    for y in 0..box_height as usize {
+        let sy = (y as u64 * step_y + step_y / 2).saturating_sub(0x8000);
+        let upper_row = (((sy >> 16) as usize).min(picture_height as usize - 1)) as u32;
+        let lower_row = (upper_row + 1).min(picture_height - 1);
+        let weight = ((sy & 0xFFFF) >> 8) as u32;
+
+        // The row of the box above the one in hand ends where this one starts wherever the picture
+        // is being enlarged, so the buffer the last row was mixed from is the one to use here
+        // wherever it still holds the row this one needs: only a row neither buffer holds is read
+        // across again.
+        let upper = match held.iter().position(|row| *row == Some(upper_row)) {
+            Some(index) => index,
+            None => {
+                interpolate_row(
+                    source,
+                    stride,
+                    picture_width,
+                    upper_row as usize,
+                    step_x,
+                    &mut rows[0],
+                );
+                held[0] = Some(upper_row);
+
+                0
+            }
+        };
+        let lower = 1 - upper;
+
+        interpolate_row(
+            source,
+            stride,
+            picture_width,
+            lower_row as usize,
+            step_x,
+            &mut rows[lower],
+        );
+        held[lower] = Some(lower_row);
+
+        let destination = &mut out[y * row_bytes..(y + 1) * row_bytes];
+        blend_rows(&rows[upper], &rows[lower], weight, destination);
+    }
+
+    true
+}
+
+/// One row of the picture read across to the box's width: the whole of the horizontal half of the
+/// scaling, and the reason a row of the picture is read where a row of the box asks for one.
+///
+/// The alpha is not read at all — a picture is opaque here, so the fourth byte of every pixel
+/// written is 255 whatever the codec put beside it (see [`copy_locked`]).
+fn interpolate_row(
+    source: &[u8],
+    stride: usize,
+    picture_width: u32,
+    picture_row: usize,
+    step: u64,
+    out: &mut [u8],
+) {
+    let start = picture_row * stride;
+    let picture_row = &source[start..start + picture_width as usize * 4];
+    let last = picture_width as usize - 1;
+
+    for (x, pixel) in out.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+        let sx = (x as u64 * step + step / 2).saturating_sub(0x8000);
+        let left = ((sx >> 16) as usize).min(last);
+        let right = (left + 1).min(last);
+        let weight = ((sx & 0xFFFF) >> 8) as u32;
+
+        let (near, far) = (left * 4, right * 4);
+        for channel in 0..3 {
+            let mixed = picture_row[near + channel] as u32 * (256 - weight)
+                + picture_row[far + channel] as u32 * weight;
+
+            pixel[channel] = ((mixed + 128) >> 8) as u8;
+        }
+
+        pixel[3] = 255;
+    }
+}
+
+/// Mix the two rows of the picture a row of the box sits between, by how far into the pair that
+/// row falls: the vertical half of the scaling, weighed in the same 256ths [`interpolate_row`]
+/// weighs a column by.
+fn blend_rows(upper: &[u8], lower: &[u8], weight: u32, out: &mut [u8]) {
+    let near_weight = 256 - weight;
+
+    for ((pixel, upper), lower) in out
+        .as_chunks_mut::<4>()
+        .0
+        .iter_mut()
+        .zip(upper.as_chunks::<4>().0)
+        .zip(lower.as_chunks::<4>().0)
+    {
+        for channel in 0..3 {
+            let mixed = upper[channel] as u32 * near_weight + lower[channel] as u32 * weight;
+
+            pixel[channel] = ((mixed + 128) >> 8) as u8;
+        }
+
+        pixel[3] = 255;
+    }
+}
+
 /// Copy a locked bitmap out as the preview's frame, which is the one place a video's pixels
-/// are touched.
+/// are touched where the engine is the one that scaled them.
 ///
 /// The alpha is forced opaque rather than taken from the codec. What the engine delivers is
 /// a picture, and a picture has no transparency of its own here: the window a video used to
@@ -1216,6 +1552,103 @@ mod tests {
         assert!(
             !plays(&path),
             "the mark is what the router is answered with, not the probe"
+        );
+    }
+
+    /// The pixel at a row and column of a frame of the box's own width.
+    fn pixel_at(bgra: &[u8], width: usize, row: usize, column: usize) -> [u8; 4] {
+        let at = (row * width + column) * 4;
+
+        bgra[at..at + 4].try_into().expect("four bytes to a pixel")
+    }
+
+    /// A picture read above its own size is read *between* its pixels, which is the whole of
+    /// what this side scales a preview above 100% for: the edge of a picture that was two pixels
+    /// wide arrives as the four steps between them rather than as the two it was made of.
+    #[test]
+    fn an_enlarged_edge_is_read_between_its_pixels() {
+        // A 2x2 picture of one edge: black down the left of it and blue down the right.
+        let source = [
+            0u8, 0, 0, 255, 255, 0, 0, 255, //
+            0, 0, 0, 255, 255, 0, 0, 255,
+        ];
+        let mut out = vec![0u8; 4 * 4 * 4];
+        let mut rows = [Vec::new(), Vec::new()];
+
+        assert!(scale_rows(&source, 8, (2, 2), (4, 4), &mut rows, &mut out));
+
+        // The outermost pixels stand on the two the picture has, and each of the two between them
+        // is a quarter of the way from one to the other — where a picture read a source pixel at a
+        // time would have arrived as `0, 0, 255, 255`.
+        let expected = [0u8, 64, 191, 255];
+
+        for row in 0..4 {
+            for (column, level) in expected.iter().enumerate() {
+                assert_eq!(
+                    pixel_at(&out, 4, row, column),
+                    [*level, 0, 0, 255],
+                    "row {row}, column {column} of the edge, and every pixel of it opaque"
+                );
+            }
+        }
+    }
+
+    /// The other direction is read the same way — a picture read below its own size lands between
+    /// four of its pixels and is answered with their average — which is what a file whose pixels
+    /// are not square asks of the one axis it is stretched along at every size.
+    #[test]
+    fn a_shrunken_picture_is_read_between_its_pixels_too() {
+        // Black above blue, read into the one pixel between them.
+        let source = [
+            0u8, 0, 0, 255, 0, 0, 0, 255, //
+            255, 0, 0, 255, 255, 0, 0, 255,
+        ];
+        let mut out = vec![0u8; 4];
+        let mut rows = [Vec::new(), Vec::new()];
+
+        assert!(scale_rows(&source, 8, (2, 2), (1, 1), &mut rows, &mut out));
+
+        assert_eq!(out, [128, 0, 0, 255], "the pixel standing between them");
+    }
+
+    /// Who scales the picture is one question and these are its two sizes: a box larger than the
+    /// picture on either axis is a file shown above its own size and is this side's to scale, and
+    /// everything at or below the picture's own size is the engine's, as it always was.
+    #[test]
+    fn a_box_larger_than_the_picture_is_the_one_this_side_scales() {
+        assert!(scales_here((640, 480), 1280, 960), "shown at twice its size");
+        assert!(scales_here((640, 480), 641, 480), "over by a pixel");
+
+        assert!(
+            !scales_here((640, 480), 640, 480),
+            "a preview at 100% is the picture itself, and nothing is scaled by anybody"
+        );
+        assert!(!scales_here((640, 480), 320, 240), "a preview below 100%");
+
+        assert!(
+            scales_here((720, 480), 872, 480),
+            "a pixel wider than it is tall is a stretch along one axis, which is still this side's"
+        );
+        assert!(
+            !scales_here((0, 0), 320, 240),
+            "a sound has no picture to scale, and a box of nothing is not one either"
+        );
+    }
+
+    /// A picture the engine wrote less of than it said it would is answered with no frame rather
+    /// than with one drawn from the rows it managed: half a picture is not a picture, and the
+    /// frame the preview is holding is a better answer than a half-filled one.
+    #[test]
+    fn a_picture_short_of_its_own_size_is_no_frame_at_all() {
+        // One row of a two-row picture, read into a box with room for it.
+        let source = [0u8; 8];
+        let mut out = vec![9u8; 4 * 4 * 4];
+        let mut rows = [Vec::new(), Vec::new()];
+
+        assert!(!scale_rows(&source, 8, (2, 2), (4, 4), &mut rows, &mut out));
+        assert!(
+            out.iter().all(|byte| *byte == 9),
+            "and what was there is left as it was"
         );
     }
 }

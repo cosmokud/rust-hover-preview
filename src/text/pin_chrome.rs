@@ -40,14 +40,18 @@ const GLYPH_PIXELS: f32 = 10.0;
 
 /// The room a volume popup takes at a display's scale: the panel that floats over the media
 /// above the bar, and the groove the level is drawn in inside it.
-const VOLUME_PANEL_WIDTH: i32 = 44;
-const VOLUME_PANEL_HEIGHT: i32 = 116;
+///
+/// The panel is a strip of glass over somebody else's picture, so it is kept no wider than it has
+/// to be: the thumb and its collar, and a couple of pixels of panel either side of them.
+const VOLUME_PANEL_WIDTH: i32 = 24;
+const VOLUME_PANEL_HEIGHT: i32 = 98;
 /// How far the groove is held off each end of the panel, which is the room the thumb takes at
-/// either end of it: a thumb that was clipped by the panel at 100% would be a level drawn short.
-const VOLUME_PANEL_INSET: i32 = 22;
+/// either end of it: a thumb that was clipped by the panel at 100% would be a level drawn short,
+/// and anything beyond that room is panel being drawn over a picture it is covering.
+const VOLUME_PANEL_INSET: i32 = 14;
 /// How far the panel floats above the bar it belongs to.
 const VOLUME_PANEL_GAP: i32 = 8;
-const VOLUME_PANEL_RADIUS: f32 = 14.0;
+const VOLUME_PANEL_RADIUS: f32 = 9.0;
 const VOLUME_TRACK_WIDTH: i32 = 6;
 /// The radius of the button's own wash: the button is a chip rather than the square the strip's
 /// room for it would otherwise draw, since it is a control a hand comes back to.
@@ -55,6 +59,9 @@ const VOLUME_BUTTON_RADIUS: i32 = 7;
 /// The radius of the knob on the groove, which is the bar's own thumb made rounder: it is held
 /// rather than aimed at, so it is drawn as something a finger fits.
 const VOLUME_THUMB_RADIUS: f32 = 8.0;
+/// How much wider the collar around the knob is than the knob itself: the ring of panel colour
+/// that keeps a knob drawn over the filled part of the groove reading as a knob.
+const VOLUME_COLLAR_PIXELS: f32 = 1.5;
 
 /// The colors a caption and a bubble are painted in.
 ///
@@ -768,7 +775,7 @@ pub(crate) fn paint_volume_popup(
         width,
         center_x,
         center_y,
-        thumb + (1.5 * scale).max(1.0),
+        thumb + (VOLUME_COLLAR_PIXELS * scale).max(1.0),
         palette.hover(0.0),
         1.0,
     );
@@ -2053,14 +2060,29 @@ mod tests {
         );
 
         // The groove is inside the panel and centered in it, with the room the knob takes at either
-        // end: a level of everything is a knob that is still whole.
+        // end: a level of everything is a knob that is still whole. The room is the knob's own
+        // radius, and it is asked for with the collar the knob is drawn with rather than tightly.
         assert!(popup.track.left > popup.panel.left && popup.track.right < popup.panel.right);
         assert_eq!(
             (popup.track.left + popup.track.right) / 2,
             (popup.panel.left + popup.panel.right) / 2
         );
-        assert!(popup.track.top - popup.panel.top >= 20);
-        assert!(popup.panel.bottom - popup.track.bottom >= 20);
+
+        let collar = (VOLUME_THUMB_RADIUS + VOLUME_COLLAR_PIXELS).ceil() as i32;
+        let ends = popup.track.top - popup.panel.top;
+        assert!(
+            ends >= collar && popup.panel.bottom - popup.track.bottom >= collar,
+            "the groove is held off each end of the panel by the knob and its collar"
+        );
+
+        // And the panel is kept close around the knob: it is a strip of glass over somebody else's
+        // picture, so what it is wider than the knob and its collar by is a couple of pixels and no
+        // more, at either side and at both ends.
+        let beside = (popup.panel.right - popup.panel.left - collar * 2) / 2;
+        assert!(
+            (1..=4).contains(&beside) && ends <= collar + 8,
+            "the panel hugs the knob: {beside} beside it, {ends} past its ends"
+        );
 
         // A point on the groove is the share of the level it is at, and a point past either end is
         // the end it is past.
