@@ -78,9 +78,10 @@ use windows::Win32::Foundation::{
 };
 use windows::Win32::Graphics::Gdi::{
     BeginPaint, ClientToScreen, CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject,
-    EndPaint, GetMonitorInfoW, MonitorFromPoint, SelectObject, AC_SRC_ALPHA, AC_SRC_OVER,
-    BITMAPINFO, BITMAPINFOHEADER, BI_RGB, BLENDFUNCTION, DIB_RGB_COLORS, HBITMAP, HDC, HGDIOBJ,
-    MONITORINFO, MONITOR_DEFAULTTONEAREST, PAINTSTRUCT,
+    EndPaint, GdiFlush, GetMonitorInfoW, MonitorFromPoint, SelectObject, SetBrushOrgEx,
+    SetStretchBltMode, StretchBlt, AC_SRC_ALPHA, AC_SRC_OVER, BITMAPINFO, BITMAPINFOHEADER, BI_RGB,
+    BLENDFUNCTION, DIB_RGB_COLORS, HALFTONE, HBITMAP, HDC, HGDIOBJ, MONITORINFO,
+    MONITOR_DEFAULTTONEAREST, PAINTSTRUCT, SRCCOPY,
 };
 use windows::Win32::System::DataExchange::{
     CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
@@ -1614,8 +1615,21 @@ pub fn notify_peazip_ready(path: &Path, generation: u64, ok: bool) {
 /// `video_probe_due` and `awaiting_engine`).
 fn spawn_video_probe(path: PathBuf, generation: u64) {
     std::thread::spawn(move || {
-        let _ =
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| probe_video_geometry(&path)));
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            probe_video_geometry(&path);
+
+            // Which of the two engines plays the file is a question for the engine itself, and
+            // the hover this probe is for is replayed on the thread that draws it — where the
+            // answer has to be in hand rather than asked for. What the ask is, is a source reader
+            // over the file with a decoder chain built for it, which is the shape of work this
+            // thread exists to keep off that one; and the answer is held per file and version, so
+            // what the replay, the load and the pin after it pay is a lookup (see
+            // `media_engine_plays`). It is asked of every video the probe runs for, whether or not
+            // the name is one the engine is asked to play: the layout reads the same answer out of
+            // an unmeasurable video's fall-back box.
+            let _ = media_engine_plays(&path);
+        }));
+
         notify_video_probed(&path, generation);
     });
 }
@@ -5003,16 +5017,11 @@ fn load_video_thumbnail(
     max_height: u32,
     preview_scale: PreviewScale,
 ) -> Option<MediaData> {
-    // Which engine plays this file is settled here, once, and everything below follows
-    // from it: the media engine Windows has where it can decode the file, and FFmpeg's
-    // player where it cannot. The engine is asked first because of what only it can be
-    // told — a pause, a seek and a position that are real rather than a player ended and
-    // begun again at a second — and because the frames it hands back are drawn by this
-    // app, so a pinned window of one can be resized and dragged by its picture. A machine
-    // with no FFmpeg plays everything through the engine anyway, which is the question the
-    // first half of this asks; the second half is the file's own answer, held per version
-    // so that a hover asks it once (see `video_player::plays`).
-    let native = codecs::plays_video_natively() || video_player::plays(path);
+    // Which engine plays this file is settled here, once, and everything below follows from it:
+    // the media engine Windows has where it can decode the file, and FFmpeg's player where it
+    // cannot (see `media_engine_plays`, which the preview loop asks the same question of before
+    // it decides whether a player takes the window over).
+    let native = media_engine_plays(path);
 
     let geometry = match probe_video_geometry(path) {
         ProbedGeometry::Measured(geometry) => geometry,
@@ -6387,9 +6396,7 @@ fn load_picture(
 fn video_box(path: &Path) -> Option<(u32, u32)> {
     match cached_video_geometry(path) {
         Some(ProbedGeometry::Measured(geometry)) => Some((geometry.width, geometry.height)),
-        Some(ProbedGeometry::Unmeasurable) => {
-            (!codecs::plays_video_natively()).then_some((1920, 1080))
-        }
+        Some(ProbedGeometry::Unmeasurable) => (!media_engine_plays(path)).then_some((1920, 1080)),
         // Not probed yet: the wait for the probe, which is the box the hover is placed
         // in until the answer lands and the hover is replayed.
         None => Some((office_preview::WAITING_BOX, office_preview::WAITING_BOX)),
@@ -6439,6 +6446,43 @@ fn drawn_as_video(path: &Path) -> bool {
     }
 
     video_formats::is_video_preview(path)
+}
+
+/// Which of the two engines plays a video: the media engine the media stack of Windows has, or
+/// FFmpeg's `ffplay` in a window of its own.
+///
+/// It is one answer and not a chain, and everything about a video follows from it — whether the
+/// frames are drawn by this app or by a player, whether a pin of one is resized and maximized or
+/// only moved, and whether its transport bar is a control or a read-out (see `pin_frame` and
+/// `pin_transport_kind`). The engine is taken wherever it can decode the file because of what
+/// only it can be told: a pause, a seek and a position that are real rather than a player ended
+/// and begun again at a second — and because the frames it hands back are this app's to draw,
+/// which is what lets a pinned window of one be resized by its edges.
+///
+/// Two things are asked, in this order. A machine with no FFmpeg has only one engine, so the
+/// first question settles it without asking anything about the file at all. Otherwise the name
+/// decides which engine is asked *first*: `[video]` is the formats Windows' own codecs read, and
+/// `[ffmpeg]` is what only FFmpeg's player reaches, so the engine is not asked about one of those
+/// at all. A file whose name is in `[video]` is then asked of the engine itself, once per file
+/// and version (`video_player::plays`), and a file it turns down — an HEVC film on a machine
+/// without the HEVC codec, a container whose handler Windows does not ship after all — is played
+/// by FFmpeg's player where one is installed, which is the one case that costs the resize and the
+/// transport controls.
+///
+/// The write-back is what makes the question affordable where it is asked: the probe opens the
+/// file and builds a decoder chain for it, so the answer is held, and a hover that asks twice —
+/// the layout, the load, a pin — is a lookup after the first (see `video_player::plays`).
+fn media_engine_plays(path: &Path) -> bool {
+    if codecs::plays_video_natively() {
+        return true;
+    }
+
+    let named = CONFIG
+        .lock()
+        .map(|config| video_formats::matches_video_list(path, &config.video_extensions))
+        .unwrap_or(false);
+
+    named && video_player::plays(path)
 }
 
 /// The box a PDF page asks for, measured off the preview thread.
@@ -8423,6 +8467,12 @@ thread_local! {
     /// caption's is: a pinned video repaints while it plays, and the two strips are painted one
     /// after the other — so they cannot share one surface without one of them being rebuilt.
     static TRANSPORT_SURFACE: RefCell<Option<DibSurface>> = const { RefCell::new(None) };
+    /// The frame a pinned window is being dragged to is scaled out of: the media's own pixels, in
+    /// a surface GDI can read, which is what lets a band of a size the frame is not be filled by
+    /// `StretchBlt` rather than by a pixel at a time. It is kept between repaints for the reason
+    /// the two strips above are — an edge under a hand is a repaint per pointer move — and its
+    /// size follows the frame, not the box being dragged to.
+    static BAND_SOURCE: RefCell<Option<DibSurface>> = const { RefCell::new(None) };
 }
 
 /// How many windows keep a surface of their own: the preview — pinned or not — and the bubble.
@@ -8690,23 +8740,26 @@ unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
     // size it had (see `compose_media_into_band`).
     let band_height = (height - caption_height - paint.transport_height).max(1) as u32;
 
-    if let Ok(media) = CURRENT_MEDIA.lock() {
-        if let Some(media) = media.as_ref() {
-            if !media.media_type.is_engine() && !matches!(media.media_type, MediaType::Video) {
-                compose_media_into_band(
-                    media.current_pixels(),
-                    media.current_width(),
-                    media.current_height(),
-                    (width.max(1) as u32, band_height),
-                    preview_background(media.media_type),
-                    media.current_frame_is_opaque(),
-                    BandTarget {
-                        out,
-                        width: width as u32,
-                        origin_y: caption_height as u32,
-                        height: band_height,
-                    },
-                );
+    if let Some(mem_dc) = layered_surface_dc(hwnd.0 as isize) {
+        if let Ok(media) = CURRENT_MEDIA.lock() {
+            if let Some(media) = media.as_ref() {
+                if !media.media_type.is_engine() && !matches!(media.media_type, MediaType::Video) {
+                    compose_media_into_band(
+                        media.current_pixels(),
+                        media.current_width(),
+                        media.current_height(),
+                        (width.max(1) as u32, band_height),
+                        preview_background(media.media_type),
+                        media.current_frame_is_opaque(),
+                        BandTarget {
+                            out,
+                            dc: mem_dc,
+                            width: width as u32,
+                            origin_y: caption_height as u32,
+                            height: band_height,
+                        },
+                    );
+                }
             }
         }
     }
@@ -8878,10 +8931,18 @@ fn pinned_paint() -> Option<PinnedPaint> {
     })
 }
 
-/// Where a frame that is not the whole of a window is composed: the surface, its own row width,
-/// the row the band the frame goes in begins at, and how tall that band is.
+/// Where a frame that is not the whole of a window is composed: the surface it goes on and the
+/// memory DC that surface is selected into, its own row width, the row the band the frame goes in
+/// begins at, and how tall that band is.
+///
+/// The DC travels with the pixels because there are two ways to fill a band that is not the
+/// frame's size and one of them is not this app's: a frame that is opaque is scaled by GDI,
+/// straight into the surface `UpdateLayeredWindow` will read, which is the difference between a
+/// window that follows a hand while an edge is dragged and one that stutters behind it (see
+/// `stretch_into_band`).
 struct BandTarget<'a> {
     out: &'a mut [u8],
+    dc: HDC,
     width: u32,
     origin_y: u32,
     height: u32,
@@ -8890,11 +8951,16 @@ struct BandTarget<'a> {
 /// Put the media of a pinned window into the band its window has left for it.
 ///
 /// A frame that is already the band's size is composed into it row for row, which is the whole of
-/// the cost of an ordinary paint. One that is not is *sampled* into it, which is the one thing a
+/// the cost of an ordinary paint. One that is not is *scaled* into it, which is the one thing a
 /// window being resized needs and the reason this is a question rather than a call: a box that
 /// changed a moment ago holds a frame of the size it had, and what a drag has to show is that
-/// frame filling the box it is being dragged to rather than standing at its old size inside it
-/// (see `resample_into_band`).
+/// frame filling the box it is being dragged to rather than standing at its old size inside it.
+///
+/// The scaling itself is GDI's wherever it can be, because the box is under a hand while it
+/// happens: a frame whose own pixels are opaque everywhere is stretched by the window's own
+/// surface DC, and the pixel-at-a-time sampler below is kept for the frames that need it — one
+/// with an alpha channel to composite and a backdrop to composite it over, which is a per-pixel
+/// question GDI cannot be asked (see `stretch_into_band` and `resample_into_band`).
 fn compose_media_into_band(
     bgra: &[u8],
     width: u32,
@@ -8902,7 +8968,7 @@ fn compose_media_into_band(
     band: (u32, u32),
     background: TransparentBackground,
     opaque: bool,
-    target: BandTarget<'_>,
+    mut target: BandTarget<'_>,
 ) {
     if width == 0 || height == 0 || band.0 == 0 || band.1 == 0 {
         return;
@@ -8910,9 +8976,112 @@ fn compose_media_into_band(
 
     if (width, height) == band {
         compose_preview_pixels_into_band(bgra, width, height, background, opaque, target);
-    } else {
+    } else if !opaque || !stretch_into_band(bgra, (width, height), band, &mut target) {
         resample_into_band(bgra, (width, height), band, background, opaque, target);
     }
+}
+
+/// Fill a band of another size with the frame, scaled by GDI, answering whether it was drawn.
+///
+/// It is `resample_into_band`'s fast road and the reason it exists: the frame is copied into a
+/// surface of its own — the media's pixels, not the window's — and `StretchBlt` scales it into
+/// the band, which for a box under a hand is the difference between a picture that keeps up with
+/// the pointer and one the hand outruns. What GDI is asked for is the quality a still picture is
+/// scaled at rather than the fastest one it has (`HALFTONE`), since what is being watched is a
+/// file, and what the drag owes the eye at the end of it is still a layout at the box the window
+/// ended up with rather than the stretch it was being shown (see `relayout_pinned_media`).
+///
+/// Only a frame whose every pixel is opaque comes here. That is what makes the stretch the whole
+/// of the picture: there is no alpha to composite and no backdrop behind it to composite it over,
+/// so the band can be filled by a copy of the pixels at another size — while a frame with an
+/// alpha channel is a per-pixel question (what is behind it, and where the checkerboard's squares
+/// fall) that GDI cannot be asked, and is sampled the long way instead.
+///
+/// The alpha byte is forced opaque over the band afterwards rather than trusted to the stretch: a
+/// 32-bit `BI_RGB` DIB has no alpha channel as far as GDI is concerned, and what it does with that
+/// byte — copy it, interpolate it as a fourth channel, or write zero over it — is not something a
+/// layered window can afford to be wrong about (see `UpdateLayeredWindow`'s `ULW_ALPHA`).
+fn stretch_into_band(
+    bgra: &[u8],
+    source: (u32, u32),
+    band: (u32, u32),
+    target: &mut BandTarget<'_>,
+) -> bool {
+    let (source_width, source_height) = source;
+    let row_bytes = source_width as usize * 4;
+    let wanted = row_bytes * source_height as usize;
+
+    if row_bytes == 0 || source_height == 0 || bgra.len() < wanted {
+        return false;
+    }
+
+    let (out_width, band_height, origin_y, dc) =
+        (target.width, target.height, target.origin_y, target.dc);
+    let out_row_bytes = out_width as usize * 4;
+    let rows = (band.1 as usize).min(band_height as usize);
+    if rows == 0 || out_row_bytes == 0 {
+        return false;
+    }
+
+    BAND_SOURCE.with(|cell| {
+        let mut held = cell.borrow_mut();
+        let size = (source_width.max(1), source_height.max(1));
+        if held.as_ref().map(|surface| (surface.width, surface.height)) != Some(size) {
+            *held = DibSurface::create(size.0, size.1);
+        }
+
+        let Some(source_surface) = held.as_ref() else {
+            return false;
+        };
+
+        // The frame's own pixels, into the surface GDI scales out of. It is the frame that is
+        // copied rather than the window, and the surface is kept between repaints: what a still
+        // picture costs a drag is this copy and the stretch, per pointer move.
+        let source_bits = unsafe {
+            std::slice::from_raw_parts_mut(source_surface.bits(), row_bytes * size.1 as usize)
+        };
+        source_bits[..wanted].copy_from_slice(&bgra[..wanted]);
+
+        unsafe {
+            // A stretch's brush origin is the DC's, and a DC that keeps the one it had is a
+            // halftone pattern placed by whatever drew on it last.
+            let _ = SetStretchBltMode(dc, HALFTONE);
+            let _ = SetBrushOrgEx(dc, 0, 0, None);
+            let _ = StretchBlt(
+                dc,
+                0,
+                origin_y as i32,
+                out_width as i32,
+                rows as i32,
+                source_surface.dc,
+                0,
+                0,
+                source_width as i32,
+                source_height as i32,
+                SRCCOPY,
+            );
+            // GDI batches its calls, and what reads this surface is not a GDI call: the bits are
+            // handed to `UpdateLayeredWindow` by the caller, so anything still in the batch is
+            // work nobody waits for.
+            let _ = GdiFlush();
+        }
+
+        // A `BI_RGB` surface carries no alpha as far as GDI is concerned, and what a layered
+        // window is drawn from is premultiplied coverage: an opaque frame's is 255 everywhere.
+        let out = &mut *target.out;
+        for row in 0..rows {
+            let start = (origin_y as usize + row) * out_row_bytes;
+            let Some(destination) = out.get_mut(start..start + out_row_bytes) else {
+                break;
+            };
+
+            for pixel in destination.as_chunks_mut::<4>().0 {
+                pixel[3] = 255;
+            }
+        }
+
+        true
+    })
 }
 
 /// `compose_preview_pixels_into` for a frame that is not the whole surface: the frame is
@@ -8934,6 +9103,7 @@ fn compose_preview_pixels_into_band(
         width: out_width,
         origin_y,
         height: band_height,
+        ..
     } = target;
 
     if width == 0 || height == 0 || out_width == 0 || band_height == 0 {
@@ -8991,6 +9161,7 @@ fn resample_into_band(
         width: out_width,
         origin_y,
         height: band_height,
+        ..
     } = target;
 
     if out_width == 0 || band_height == 0 {
@@ -12970,10 +13141,19 @@ unsafe fn apply_pin_drag(hwnd: HWND) {
         SWP_NOACTIVATE,
     );
 
-    // Whatever stands in the media band travels with it, and the caption is painted again because
-    // the window under it has moved.
+    // Whatever stands in the media band travels with it.
     place_pinned_siblings();
-    render_layered_preview(hwnd);
+
+    // And a window that was carried has nothing to paint: what a layered window is drawn from is
+    // the surface it already has, and moving one moves that surface with it — so a drag is a
+    // `SetWindowPos` per pointer move and nothing else, which is the whole of why a pinned window
+    // follows a hand at the pace of the pointer rather than at the pace of a repaint of a
+    // display's worth of pixels. A resize is the drag that has a picture to draw, because the box
+    // it is being dragged to is a band the frame it holds is not the size of (see
+    // `compose_media_into_band`).
+    if matches!(drag.action, PinDragAction::Resize(_)) {
+        render_layered_preview(hwnd);
+    }
 }
 
 /// The window a resize drag has produced: the box the drag began on, dragged by one of its edges,
@@ -15050,12 +15230,15 @@ pub fn run_preview_window() {
                         current_show = show_snapshot.clone();
                     }
 
-                    // A video is played by `ffplay` when FFmpeg is installed, and by the
-                    // media engine Windows has when it is not. The two take different
-                    // roads from here: FFmpeg's player is its own window, which is what
-                    // the branch below puts up, while the engine's frames come back
-                    // through the ordinary load and are drawn by this app's own window.
-                    let ffplay_plays_video = show_is_video && codecs::ffplay_available();
+                    // A video is played by the media engine Windows has wherever it can decode
+                    // the file, and by FFmpeg's player only where it cannot (see
+                    // `media_engine_plays`). The two take different roads from here: the engine's
+                    // frames come back through the ordinary load and are drawn by this app's own
+                    // window — which is what a pin of one is resized, maximized and dragged by —
+                    // while FFmpeg's player is a window of its own, which is what the branch
+                    // below puts up.
+                    let ffplay_plays_video =
+                        show_is_video && !media_engine_plays(&path) && codecs::ffplay_available();
 
                     if show_video_probe || show_measure_probe {
                         // The hover is waiting on a probe: nothing of the file can be
@@ -17579,14 +17762,14 @@ mod tests {
             "document: {}",
             crate::engines::webview_preview::draws(&path)
         );
-        // Which engine would play a video here, asked the way the router asks it: whether there
-        // is anything of FFmpeg's to fall back to, and whether this file needs it. Reported for
-        // every file rather than only for a video, because a probe is run to find out what the
-        // machine is doing.
+        // Which engine would play a video here, asked the way the app asks it: whether there is
+        // anything of FFmpeg's to fall back to, and — where there is — whether this file is one
+        // the engine is asked about and can decode. Reported for every file rather than only for
+        // a video, because a probe is run to find out what the machine is doing.
         println!(
             "video: played natively = {} (machine), {} (this file)",
             crate::formats::codecs::plays_video_natively(),
-            crate::readers::video_player::plays(&path)
+            media_engine_plays(&path)
         );
 
         std::thread::spawn(run_preview_window);
@@ -17742,9 +17925,7 @@ mod tests {
             // video probe finds in it, and what the router says once that probe has answered.
             let named_video = CONFIG
                 .lock()
-                .map(|config| {
-                    video_formats::matches_video_list(&path, &config.video_extensions)
-                })
+                .map(|config| video_formats::matches_any_video_list(&path, &config))
                 .unwrap_or(false);
             if named_video {
                 println!(
@@ -17872,8 +18053,18 @@ mod tests {
                 }
             );
             println!(
-                "so the router would play it with {}",
-                if crate::formats::codecs::plays_video_natively() || can_play {
+                "and the name is one the `[video]` list asks the engine for: {}",
+                CONFIG
+                    .lock()
+                    .map(|config| video_formats::matches_video_list(
+                        &path,
+                        &config.video_extensions
+                    ))
+                    .unwrap_or(false)
+            );
+            println!(
+                "so a preview of it is played by {}",
+                if media_engine_plays(&path) {
                     "the media engine Windows has"
                 } else {
                     "FFmpeg's player"
@@ -17930,7 +18121,7 @@ mod tests {
         video_geometry_cache().insert(key, ProbedGeometry::Unmeasurable);
         assert_eq!(
             video_box(&path),
-            (!codecs::plays_video_natively()).then_some((1920, 1080))
+            (!media_engine_plays(&path)).then_some((1920, 1080))
         );
 
         let _ = std::fs::remove_file(&path);
@@ -19153,6 +19344,10 @@ mod tests {
                 opaque,
                 BandTarget {
                     out: &mut out,
+                    // The sampler is the road that has no surface of its own — what the frame is
+                    // scaled *out of* is the fast road's business, and this is the test of the
+                    // road that scales the frame itself (see `stretch_into_band`).
+                    dc: HDC(std::ptr::null_mut()),
                     width: size.0,
                     origin_y: 0,
                     height: size.1,
@@ -19224,6 +19419,66 @@ mod tests {
             &squares[..4],
             "and the first square is where it was"
         );
+    }
+
+    /// And the other road a scaled band is filled by, which is the one an opaque frame takes: GDI
+    /// stretches the frame into the window's own surface, which is what keeps a window a hand is
+    /// dragging by its edge at the pace of the hand rather than at the pace of a sample per pixel
+    /// of a display's worth of them (see `stretch_into_band`).
+    ///
+    /// What is asked of the result is what a layered window needs of it: the frame at the band's
+    /// size, in the band's rows and nowhere else, with every pixel of it opaque. The last is the
+    /// part worth a test of its own — a 32-bit `BI_RGB` surface has no alpha channel as far as GDI
+    /// is concerned, so the byte it leaves there is one this side has to write rather than trust.
+    #[test]
+    fn a_stretched_band_is_the_frame_at_the_size_it_is_drawn_at() {
+        let (width, height, band_height, origin_y) = (8u32, 6u32, 4u32, 2u32);
+        let surface = DibSurface::create(width, height).expect("a surface to stretch into");
+        let out = unsafe {
+            std::slice::from_raw_parts_mut(
+                surface.bits(),
+                (width * height * 4) as usize,
+            )
+        };
+
+        let media = [32u8, 64, 128, 255].repeat(4);
+        assert!(
+            stretch_into_band(
+                &media,
+                (2, 2),
+                (width, band_height),
+                &mut BandTarget {
+                    out,
+                    dc: surface.dc,
+                    width,
+                    origin_y,
+                    height: band_height,
+                },
+            ),
+            "a frame of the surface's own format is one GDI stretches"
+        );
+
+        for (row, line) in out.chunks(width as usize * 4).enumerate() {
+            for (column, pixel) in line.as_chunks::<4>().0.iter().enumerate() {
+                if row < origin_y as usize {
+                    assert_eq!(
+                        pixel,
+                        &[0, 0, 0, 0],
+                        "row {row} is above the band and is nothing at all"
+                    );
+                    continue;
+                }
+
+                assert_eq!(pixel[3], 255, "pixel {row}:{column} is opaque");
+                for (channel, wanted) in [32i32, 64, 128].iter().enumerate() {
+                    let got = pixel[channel] as i32;
+                    assert!(
+                        (got - wanted).abs() <= 4,
+                        "pixel {row}:{column} is the media: {pixel:?}"
+                    );
+                }
+            }
+        }
     }
 
     /// A page that is laid out to its box — a document, a listing — is resized one dimension at

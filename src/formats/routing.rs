@@ -120,8 +120,8 @@ fn claim_video(path: &Path, config: &AppConfig, asked: Asked) -> Option<PreviewT
     }
 
     let claimed = match asked {
-        Asked::File => video_formats::matches_video_list(path, &config.video_extensions),
-        Asked::Name => video_formats::claims_video_name(path, &config.video_extensions),
+        Asked::File => video_formats::matches_any_video_list(path, config),
+        Asked::Name => video_formats::claims_any_video_name(path, config),
     };
 
     claimed.then_some(PreviewType::Videos)
@@ -388,8 +388,13 @@ mod tests {
                 .collect()
         };
 
+        // A video is the two lists together: the kind is what a file is, and which of the two
+        // lists its name is in is only which engine plays it.
+        let mut video_names = extensions(&config.video_extensions);
+        video_names.extend(extensions(&config.ffmpeg_extensions));
+
         let mut lists = vec![
-            (PreviewType::Videos, extensions(&config.video_extensions)),
+            (PreviewType::Videos, video_names),
             (PreviewType::Audio, extensions(&config.audio_extensions)),
             (PreviewType::Ebook, extensions(&config.ebook_extensions)),
             (

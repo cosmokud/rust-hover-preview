@@ -267,10 +267,7 @@ mod tests {
                         path,
                         &config.office_extensions,
                     )
-                    || crate::formats::video_formats::matches_video_list(
-                        path,
-                        &config.video_extensions,
-                    )
+                    || crate::formats::video_formats::matches_any_video_list(path, &config)
                     || crate::formats::text_formats::matches_text_lists(
                         path,
                         &config.text_extensions,
