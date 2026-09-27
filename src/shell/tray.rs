@@ -23,7 +23,9 @@ use crate::engines::webview_preview;
 use crate::formats::codecs::{self, refresh as refresh_codecs, Row};
 use crate::shell::explorer_hook;
 use crate::text::text_theme;
-use crate::ui::preview_window::{refresh_preview, refresh_preview_types, trim_image_cache};
+use crate::ui::preview_window::{
+    refresh_pin, refresh_preview, refresh_preview_types, trim_image_cache,
+};
 use crate::{app::startup, StartupTrace, CONFIG, RUNNING};
 use once_cell::sync::Lazy;
 use std::os::windows::ffi::OsStrExt;
@@ -52,6 +54,7 @@ const WM_TRAYICON: u32 = WM_USER + 1;
 const ID_TRAY_EXIT: u16 = 1001;
 const ID_TRAY_STARTUP: u16 = 1002;
 const ID_TRAY_ENABLE: u16 = 1003;
+const ID_TRAY_PIN: u16 = 1004; // Whether a preview can be pinned with a key
 const ID_TRAY_TRIGGER_DISABLE: u16 = 1005; // Hold the trigger key to stop previews
 const ID_TRAY_TRIGGER_ENABLE: u16 = 1006; // Hold the trigger key to allow previews
 const ID_TRAY_TRIGGER_ENABLED: u16 = 1068; // Whether the trigger key is watched at all
@@ -503,6 +506,9 @@ unsafe extern "system" fn tray_window_proc(
                 ID_TRAY_ENABLE => {
                     toggle_preview_enabled();
                 }
+                ID_TRAY_PIN => {
+                    toggle_pin_enabled();
+                }
                 ID_TRAY_TRIGGER_DISABLE => set_trigger_key_mode(TriggerKeyMode::Disable),
                 ID_TRAY_TRIGGER_ENABLE => set_trigger_key_mode(TriggerKeyMode::Enable),
                 ID_TRAY_TRIGGER_ENABLED => toggle_trigger_key_enabled(),
@@ -825,6 +831,33 @@ unsafe fn show_context_menu(hwnd: HWND) {
         enable_flags,
         ID_TRAY_ENABLE as usize,
         w!("Enable Preview"),
+    );
+
+    // And "Enable Pin" below it, naming the key that pins the way the trigger key's
+    // own submenu names its own: the key is a setting, so the row says which one is
+    // watched rather than only whether one is.
+    let (pin_enabled, pin_key) = CONFIG
+        .lock()
+        .map(|c| (c.pin_enabled, c.pin_key.clone()))
+        .unwrap_or((true, "space".to_string()));
+    let mut pin_key_chars = pin_key.chars();
+    let pin_key_display = match pin_key_chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + pin_key_chars.as_str(),
+        None => pin_key,
+    };
+    let pin_label = format!("Enable Pin ({pin_key_display})");
+    let pin_label_wide: Vec<u16> = pin_label.encode_utf16().chain(std::iter::once(0)).collect();
+    let pin_flags = MF_STRING
+        | if pin_enabled {
+            MF_CHECKED
+        } else {
+            MF_UNCHECKED
+        };
+    let _ = AppendMenuW(
+        menu,
+        pin_flags,
+        ID_TRAY_PIN as usize,
+        PCWSTR(pin_label_wide.as_ptr()),
     );
 
     // Add the "Preview Types" submenu: one gate per kind of preview, on by
@@ -2043,6 +2076,19 @@ fn toggle_preview_enabled() {
         config.preview_enabled = !config.preview_enabled;
         config.save();
     }
+}
+
+/// Whether the pin key is watched is a setting rather than a view of one, and two
+/// things have to be told about a change to it: the hook procedure that watches the
+/// key reads a number rather than the configuration, and a preview that is pinned
+/// when the feature is switched off is a window nothing would ever take down again.
+fn toggle_pin_enabled() {
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_enabled = !config.pin_enabled;
+        config.save();
+    }
+    crate::shell::key_input::refresh();
+    refresh_pin();
 }
 
 /// What the trigger key does is a setting rather than a view of one, so the preview
