@@ -8835,10 +8835,11 @@ unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
         }
     }
 
-    // The chrome, for kinds that draw it over their media: whole, or not painted at all, which is
-    // what makes a picture whose chrome has gone a picture and nothing else (see `PinChrome`).
-    // The caption, across the window's first rows.
-    if paint.chrome {
+    // The chrome, for kinds that draw it over their media: each strip whole, or not painted at
+    // all, which is what makes a picture whose chrome has gone a picture and nothing else — and the
+    // two are asked about one at a time, so a hand at one end of a window does not bring out what
+    // is at the other end of it (see `PinChrome`). The caption, across the window's first rows.
+    if paint.caption {
         if let Some(palette) = pin_chrome::ChromePalette::current() {
             let caption = pin_chrome::Caption {
                 title: &paint.title,
@@ -8867,7 +8868,7 @@ unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
     }
 
     // The transport bar, for the kinds that play, across the window's last rows.
-    if paint.transport_height > 0 && paint.chrome {
+    if paint.transport_height > 0 && paint.bar {
         if let Some(palette) = pin_chrome::ChromePalette::current() {
             let state = pin_chrome::TransportState {
                 interactive: paint.transport_live,
@@ -8945,9 +8946,10 @@ struct PinnedPaint {
     /// Whether the chrome is drawn over the media rather than in bands around it, which is what
     /// says where the media's band of the window is and even whether there is one.
     overlay: bool,
-    /// Whether the chrome is drawn at all this frame: it is whole or it is not there, with nothing
-    /// in between to draw (see `PinChrome`).
-    chrome: bool,
+    /// Whether each strip of it is drawn this frame: each is whole or not there at all, with
+    /// nothing in between to draw, and the two are asked about apart (see `PinChrome`).
+    caption: bool,
+    bar: bool,
     dpi: u32,
     title: String,
     maximized: bool,
@@ -8975,7 +8977,8 @@ fn pinned_paint() -> Option<PinnedPaint> {
         caption_height: pinned_caption_height(pin.dpi),
         transport_height: pinned_transport_height(pin.dpi, pin.transport_bar),
         overlay: pin.overlay,
-        chrome: pin.chrome.wanted,
+        caption: pin.chrome.caption,
+        bar: pin.chrome.bar,
         dpi: pin.dpi,
         title: pin
             .path
@@ -11434,33 +11437,39 @@ fn pin_transport_kind(kind: Option<MediaType>) -> bool {
     matches!(kind, Some(MediaType::Video) | Some(MediaType::NativeVideo))
 }
 
-/// Whether a pinned window's chrome is showing, and what is asking for it.
+/// Which strips of a pinned window's chrome are showing, and what is asking for them.
 ///
 /// Only the kinds whose chrome is drawn over their media have anything to show or hide: for those
 /// the caption is a strip over the top of the picture and the transport bar a strip over the
-/// bottom, and both are in the way of the thing the window is for. What asks for them is the
-/// pointer — near the strip it is drawn in, and nothing else: a press or a drag on the media is a
-/// hand on the picture, which is not a hand asking for a title bar — and coming up is one of the
-/// moments a hand is looking for a close button, so a pin shows its chrome for a moment whether or
+/// bottom, and each is in the way of the thing the window is for. The two are asked about *apart*,
+/// because they are two different things a hand reaches for: a pointer at the bottom of a video has
+/// not asked for its title bar, and a bar drawn across the picture for a hand that was nowhere near
+/// it is the thing this whole arrangement exists to avoid. What asks for a strip is the pointer
+/// being near that strip and nothing else — a press or a drag on the media is a hand on the
+/// picture, which is not a hand asking for a title bar — and coming up is one of the moments a hand
+/// is looking for a close button, so a pin shows the whole of its chrome for a moment whether or
 /// not the pointer is near it (see `PIN_CHROME_ARRIVAL_SECONDS`).
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 struct PinChrome {
-    /// Whether the pointer (or the arrival window) is asking for it. Everything is answered by
-    /// this, and there is no half-shown state: the strips are drawn into the window's own rows —
-    /// the media is composed there and the chrome replaces it — so a chrome painted at a share of
-    /// itself would be a strip with the picture gone behind it rather than a strip that is on its
-    /// way out. It is drawn whole or not at all (see the note over `PIN_CHROME_NEAR_PIXELS`).
-    wanted: bool,
-    /// When the arrival window closes, while one is open.
+    /// Whether the pointer is asking for the caption, and for the transport bar. Everything is
+    /// answered by these two, and there is no half-shown state: a strip is drawn into the window's
+    /// own rows — the media is composed there and the chrome replaces it — so one painted at a
+    /// share of itself would be a strip with the picture gone behind it rather than a strip on its
+    /// way out. Each is drawn whole or not at all (see the note over `PIN_CHROME_NEAR_PIXELS`).
+    caption: bool,
+    bar: bool,
+    /// When the arrival window closes, while one is open. While it is open both strips are shown:
+    /// what a pin owes the hand that just made it is the whole of its chrome.
     until: Option<Instant>,
 }
 
 impl PinChrome {
-    /// The chrome a pinned window comes up with: showing, and staying that way for a moment
-    /// whether or not the pointer is near it.
+    /// The chrome a pinned window comes up with: both strips, and staying that way for a moment
+    /// whether or not the pointer is near them.
     fn on_arrival(now: Instant) -> Self {
         Self {
-            wanted: true,
+            caption: true,
+            bar: true,
             until: Some(now + Duration::from_secs_f32(PIN_CHROME_ARRIVAL_SECONDS)),
         }
     }
@@ -11469,14 +11478,15 @@ impl PinChrome {
     /// and not something the pointer can ask for or away.
     fn always() -> Self {
         Self {
-            wanted: true,
+            caption: true,
+            bar: true,
             until: None,
         }
     }
 }
 
-/// Ask whether the pointer is calling for a pinned window's chrome, answering whether that
-/// question's answer changed — which is whether the window owes a repaint, since there is nothing
+/// Ask which strips of a pinned window's chrome the pointer is calling for, answering whether
+/// either answer changed — which is whether the window owes a repaint, since there is nothing
 /// between shown and hidden for a frame to be drawn at.
 ///
 /// What is asked is the pointer's place on the screen rather than anything the window was sent: a
@@ -11490,39 +11500,52 @@ fn refresh_pin_chrome(pin: &mut PinnedPreview, now: Instant, cursor: Option<(i32
         return false;
     }
 
-    // The arrival window is spent the moment it closes, and there is no bringing it back: what
-    // asks for the chrome after it is the pointer and nothing else.
+    // The arrival window is spent the moment it closes, and there is no bringing it back: what asks
+    // for a strip after it is the pointer and nothing else.
     if pin.chrome.until.is_some_and(|until| now >= until) {
         pin.chrome.until = None;
     }
 
-    let wanted = pin.chrome.until.is_some() || pin_chrome_near(pin, cursor);
-    let changed = pin.chrome.wanted != wanted;
-    pin.chrome.wanted = wanted;
+    let (caption, bar) = match pin.chrome.until.is_some() {
+        true => (true, true),
+        false => pin_chrome_near(pin, cursor),
+    };
+
+    let changed = (pin.chrome.caption, pin.chrome.bar) != (caption, bar);
+    pin.chrome.caption = caption;
+    pin.chrome.bar = bar;
 
     changed
 }
 
-/// Whether the pointer is near the strips a pinned window's chrome is drawn in — near enough that
-/// the chrome comes out. The strips are the caption across the top of the window and, for a kind
-/// that plays, the transport bar across the bottom, and the room beside them is the same either
-/// way: a hand that has come for the title bar is coming for it from the picture below it.
-fn pin_chrome_near(pin: &PinnedPreview, cursor: Option<(i32, i32)>) -> bool {
+/// Which of the strips a pinned window's chrome is drawn in the pointer is near — near enough that
+/// the strip comes out.
+///
+/// They are answered one at a time rather than as one question, and that is the whole of what this
+/// function is for: the caption is over the picture's first rows and the bar over its last, and a
+/// hand at one end of a window is not a hand that has asked for what is at the other end of it. What
+/// they have in common is the room beside them — a strip is asked for from either side of the
+/// window's own edge, since a pointer that has not quite arrived is on its way there — so a pointer
+/// out beyond the window's sides is near neither.
+fn pin_chrome_near(pin: &PinnedPreview, cursor: Option<(i32, i32)>) -> (bool, bool) {
     let Some((x, y)) = cursor else {
-        return false;
+        return (false, false);
     };
 
     let window = pin.window_box();
     let margin = logical_px(pin.dpi, PIN_CHROME_NEAR_PIXELS).max(1);
+    if x < window.0 - margin || x > window.2 + margin {
+        return (false, false);
+    }
+
     let caption = pinned_caption_height(pin.dpi);
     let transport = pinned_transport_height(pin.dpi, pin.transport_bar);
 
-    let across = x >= window.0 - margin && x <= window.2 + margin;
     let at_the_top = y >= window.1 - margin && y <= window.1 + caption + margin;
     let at_the_bottom =
         transport > 0 && y >= window.3 - transport - margin && y <= window.3 + margin;
 
-    across && (at_the_top || at_the_bottom)
+    (at_the_top, at_the_bottom)
 }
 
 /// Whether a pinned window's chrome — the caption and the transport bar — is drawn *over* the
@@ -13199,14 +13222,18 @@ unsafe fn pinned_mouse_move(hwnd: HWND, x: i32, y: i32) {
             return;
         };
 
-        // A hand in one of the strips is a hand asking for the chrome, and it is asked here as
-        // well as on the loop's tick because a press can arrive in the same handful of messages as
-        // the move that brought the pointer there: the loop would answer the question a tick too
-        // late for a click that is already on its way (see `pin_chrome_near`).
+        // A hand in one of the strips is a hand asking for that strip, and it is asked here as well
+        // as on the loop's tick because a press can arrive in the same handful of messages as the
+        // move that brought the pointer there: the loop would answer the question a tick too late
+        // for a click that is already on its way (see `pin_chrome_near`). One strip at a time, the
+        // way the tick asks it: it is the strip the pointer is in, not the window it is over.
         let (_, height) = pin.window_size();
         let bar_top = height - pinned_transport_height(pin.dpi, pin.transport_bar);
-        if y < caption.height || (pin.transport_bar && y >= bar_top) {
-            pin.chrome.wanted = true;
+        if y < caption.height {
+            pin.chrome.caption = true;
+        }
+        if pin.transport_bar && y >= bar_top {
+            pin.chrome.bar = true;
         }
 
         let changed = pin.hovered != hovered;
@@ -13252,10 +13279,9 @@ struct PinnedCaption {
     dpi: u32,
     width: i32,
     frame: PinFrame,
-    /// Whether the chrome is asking to be used: the buttons are answers to a hand that has come
-    /// for the caption, and a caption that has faded away is not something a press may act on —
-    /// what is under it then is the picture, which is a handle for moving the window (see
-    /// `PinChrome`).
+    /// Whether this strip is showing: the buttons are answers to a hand that has come for the
+    /// caption, and a caption that is not drawn is not something a press may act on — what is under
+    /// it then is the picture, which is a handle for moving the window (see `PinChrome`).
     wanted: bool,
 }
 
@@ -13269,7 +13295,7 @@ fn pinned_caption_geometry() -> Option<PinnedCaption> {
             dpi: pin.dpi,
             width,
             frame: pin.frame,
-            wanted: pin.chrome.wanted,
+            wanted: pin.chrome.caption,
         }
     })
 }
@@ -13285,8 +13311,8 @@ struct PinnedTransportBar {
     /// Whether the player behind the bar can be told anything, which is whether its parts are the
     /// pointer's to press at all (see `PinnedPreview::transport_live`).
     live: bool,
-    /// Whether the bar is there to be pressed: the same question the caption's buttons are
-    /// answered by (see `PinnedCaption::wanted`).
+    /// Whether the bar is showing, which is the same question the caption's buttons are answered
+    /// by: a bar that is not drawn is not a bar a press may act on (see `PinnedCaption::wanted`).
     wanted: bool,
 }
 
@@ -13306,7 +13332,7 @@ fn pinned_transport_geometry() -> Option<PinnedTransportBar> {
         height: band,
         dpi: pin.dpi,
         live: pin.transport_live,
-        wanted: pin.chrome.wanted,
+        wanted: pin.chrome.bar,
     })
 }
 
@@ -20035,32 +20061,34 @@ mod tests {
     }
 
     #[test]
-    fn a_pins_chrome_is_asked_for_from_the_strips_it_is_drawn_in() {
+    fn a_pins_chrome_is_asked_for_one_strip_at_a_time() {
         let caption = pinned_caption_height(96);
         let pin = overlay_pin((100, 100, 500, 400), PinChrome::always());
 
         // The caption's strip and the room beside it: a pointer over the picture's first rows, or
         // just above the window, is a pointer that has come for the title bar.
-        assert!(pin_chrome_near(&pin, Some((300, 100))));
-        assert!(pin_chrome_near(&pin, Some((300, 90))));
-        assert!(pin_chrome_near(&pin, Some((300, 100 + caption))));
-        assert!(pin_chrome_near(&pin, Some((300, 100 + caption + 24))));
-        assert!(!pin_chrome_near(&pin, Some((300, 100 + caption + 25))));
+        assert_eq!(pin_chrome_near(&pin, Some((300, 100))), (true, false));
+        assert_eq!(pin_chrome_near(&pin, Some((300, 90))), (true, false));
+        assert_eq!(pin_chrome_near(&pin, Some((300, 100 + caption))), (true, false));
+        assert_eq!(pin_chrome_near(&pin, Some((300, 100 + caption + 24))), (true, false));
+        assert_eq!(pin_chrome_near(&pin, Some((300, 100 + caption + 25))), (false, false));
 
         // And out in the picture, which is where the chrome is out of the way: a hand there is
-        // reading the file rather than looking for its buttons.
-        assert!(!pin_chrome_near(&pin, Some((300, 300))));
-        assert!(!pin_chrome_near(&pin, Some((500 + 25, 100))));
-        assert!(!pin_chrome_near(&pin, None));
+        // reading the file rather than looking for its buttons. A hand out beside the window is not
+        // near anything of it either, whichever end it is level with.
+        assert_eq!(pin_chrome_near(&pin, Some((300, 300))), (false, false));
+        assert_eq!(pin_chrome_near(&pin, Some((500 + 25, 100))), (false, false));
+        assert_eq!(pin_chrome_near(&pin, None), (false, false));
 
-        // A kind that plays carries the bar across the bottom as well, which is the other strip a
-        // hand can come for.
+        // A kind that plays carries the bar across the bottom, and *that* is what a hand down there
+        // has asked for: the title bar is the other end of the window, and it stays where it is.
         let mut playing = pin;
         playing.transport_bar = true;
-        assert!(pin_chrome_near(&playing, Some((300, 400 - 12))));
-        assert!(pin_chrome_near(&playing, Some((300, 400 + 24))));
-        assert!(!pin_chrome_near(&playing, Some((300, 400 - 30 - 25))));
-        assert!(!pin_chrome_near(&playing, Some((300, 300))));
+        assert_eq!(pin_chrome_near(&playing, Some((300, 400 - 12))), (false, true));
+        assert_eq!(pin_chrome_near(&playing, Some((300, 400 + 24))), (false, true));
+        assert_eq!(pin_chrome_near(&playing, Some((300, 400 - 30 - 25))), (false, false));
+        assert_eq!(pin_chrome_near(&playing, Some((300, 300))), (false, false));
+        assert_eq!(pin_chrome_near(&playing, Some((300, 100))), (true, false));
     }
 
     #[test]
@@ -20070,58 +20098,72 @@ mod tests {
         let far = Some((-1000, -1000));
         let near = Some((300, 100 + pinned_caption_height(96) / 2));
 
-        // A pin comes up with its chrome showing, and it stays that way for a moment whether or
-        // not the pointer is anywhere near it — the moment a hand looks for the buttons in — and
-        // nothing about that costs a repaint: it is already drawn.
+        // A pin comes up with the whole of its chrome showing, and it stays that way for a moment
+        // whether or not the pointer is anywhere near it — the moment a hand looks for the buttons
+        // in — and nothing about that costs a repaint: it is already drawn.
         let mut pin = overlay_pin(content, PinChrome::on_arrival(now));
-        assert!(pin.chrome.wanted);
+        pin.transport_bar = true;
+        assert!(pin.chrome.caption && pin.chrome.bar);
         assert!(!refresh_pin_chrome(
             &mut pin,
             now + Duration::from_millis(1400),
             far
         ));
-        assert!(pin.chrome.wanted);
+        assert!(pin.chrome.caption && pin.chrome.bar);
 
-        // Then it is gone, in the tick that notices rather than over a fade of them, and the answer
-        // having changed is the repaint that shows the picture in its place.
+        // Then the strips left alone are gone, in the tick that notices rather than over a fade of
+        // them, and the answer having changed is the repaint that shows the picture in their place.
         let leaving = now + Duration::from_millis(1500);
         assert!(refresh_pin_chrome(&mut pin, leaving, far));
-        assert!(!pin.chrome.wanted);
+        assert!(!pin.chrome.caption && !pin.chrome.bar);
 
-        // And asking again is not a change: a chrome that has gone costs nothing to keep gone.
+        // And asking again is not a change: a strip that has gone costs nothing to keep gone.
         assert!(!refresh_pin_chrome(
             &mut pin,
             leaving + Duration::from_secs(1),
             far
         ));
-        assert!(!pin.chrome.wanted);
+        assert!(!pin.chrome.caption && !pin.chrome.bar);
 
-        // A hand coming back for it gets it at once, and one that leaves again takes it away.
+        // A hand coming for the title bar gets the title bar — and not the bar at the other end of
+        // the window, which is what it did not ask for. A hand at the bottom is answered the same
+        // way round.
         assert!(refresh_pin_chrome(
             &mut pin,
             leaving + Duration::from_secs(2),
             near
         ));
-        assert!(pin.chrome.wanted);
-        assert!(!refresh_pin_chrome(
+        assert!(pin.chrome.caption && !pin.chrome.bar);
+
+        let at_the_bar = Some((300, 400 - 12));
+        assert!(refresh_pin_chrome(
             &mut pin,
             leaving + Duration::from_secs(3),
-            near
+            at_the_bar
+        ));
+        assert!(!pin.chrome.caption && pin.chrome.bar);
+
+        // A strip that is already showing is not a change, and neither is one that leaves.
+        assert!(!refresh_pin_chrome(
+            &mut pin,
+            leaving + Duration::from_secs(4),
+            at_the_bar
         ));
         assert!(refresh_pin_chrome(
             &mut pin,
-            leaving + Duration::from_secs(4),
+            leaving + Duration::from_secs(5),
             far
         ));
-        assert!(!pin.chrome.wanted);
+        assert!(!pin.chrome.caption && !pin.chrome.bar);
 
         // A press or a drag is a hand on the picture rather than a hand asking for a title bar, so
         // the chrome is not brought out by one — what is asked is where the pointer is and nothing
         // else. What holds a button is a pointer that is on the strip the button is in, which is
         // where the pointer has to be for the press to have landed on it at all.
-        let mut pressed = overlay_pin(content, PinChrome::on_arrival(now));
+        let mut pressed = overlay_pin(content, PinChrome::always());
         pressed.chrome = PinChrome {
-            wanted: false,
+            caption: false,
+            bar: false,
             until: None,
         };
         pressed.pressed = Some(pin_chrome::CaptionButton::Minimize);
@@ -20131,14 +20173,14 @@ mod tests {
             action: PinDragAction::Move,
         });
         assert!(!refresh_pin_chrome(&mut pressed, now, far));
-        assert!(!pressed.chrome.wanted);
+        assert!(!pressed.chrome.caption && !pressed.chrome.bar);
 
         // A pin whose chrome is not drawn over its media has nothing to show or hide and nothing it
         // is asked: a text preview's caption and bar are where they have always been, always there.
         let mut text = overlay_pin(content, PinChrome::always());
         text.overlay = false;
         assert!(!refresh_pin_chrome(&mut text, now, far));
-        assert!(text.chrome.wanted);
+        assert!(text.chrome.caption && text.chrome.bar);
     }
 
     fn edge(left: bool, top: bool, right: bool, bottom: bool) -> PinResize {
