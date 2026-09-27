@@ -112,7 +112,16 @@ pub(crate) struct TransportLayout {
 }
 
 /// The room each part of a transport bar is given at a display's scale.
-pub(crate) fn transport_layout(width: i32, height: i32, dpi: u32) -> TransportLayout {
+///
+/// A bar whose player cannot be told anything is laid out without the button: the two clocks and
+/// the track begin at the strip's own padding rather than after a control that is not there (see
+/// `TransportState::interactive`).
+pub(crate) fn transport_layout(
+    width: i32,
+    height: i32,
+    dpi: u32,
+    interactive: bool,
+) -> TransportLayout {
     let scale = dpi as f32 / 96.0;
     let padding = text_paint::scaled(10, scale);
     let play_side = (height - text_paint::scaled(8, scale)).clamp(8, height.max(8));
@@ -125,10 +134,15 @@ pub(crate) fn transport_layout(width: i32, height: i32, dpi: u32) -> TransportLa
         right: padding + play_side,
         bottom: (height + play_side) / 2,
     };
+    let content_left = if interactive {
+        play.right + gap
+    } else {
+        padding
+    };
     let elapsed = RECT {
-        left: play.right + gap,
+        left: content_left,
         top: 0,
-        right: play.right + gap + label,
+        right: content_left + label,
         bottom: height,
     };
     let total = RECT {
@@ -154,14 +168,22 @@ pub(crate) fn transport_layout(width: i32, height: i32, dpi: u32) -> TransportLa
 }
 
 /// Which part of a transport bar a point is on, in the bar's own coordinates.
+///
+/// A bar that is not `interactive` answers nothing: its button does not exist and its track is
+/// not something that can be dragged, so there is no part of it for a press to have found.
 pub(crate) fn transport_part_at(
     x: i32,
     y: i32,
     width: i32,
     height: i32,
     dpi: u32,
+    interactive: bool,
 ) -> Option<TransportPart> {
-    let layout = transport_layout(width, height, dpi);
+    if !interactive {
+        return None;
+    }
+
+    let layout = transport_layout(width, height, dpi, interactive);
     let inside = |rect: RECT| x >= rect.left && x < rect.right && y >= rect.top && y < rect.bottom;
 
     if inside(layout.play) {
@@ -183,8 +205,8 @@ pub(crate) fn transport_part_at(
 
 /// Where along a transport bar a point is, as a share of the file: what a press on the bar asks
 /// the player to be taken to.
-pub(crate) fn transport_share_at(x: i32, width: i32, dpi: u32) -> f64 {
-    let layout = transport_layout(width, 0, dpi);
+pub(crate) fn transport_share_at(x: i32, width: i32, dpi: u32, interactive: bool) -> f64 {
+    let layout = transport_layout(width, 0, dpi, interactive);
     let span = (layout.bar.right - layout.bar.left).max(1) as f64;
 
     ((x - layout.bar.left) as f64 / span).clamp(0.0, 1.0)
@@ -192,6 +214,14 @@ pub(crate) fn transport_share_at(x: i32, width: i32, dpi: u32) -> f64 {
 
 /// What a transport bar is drawn from.
 pub(crate) struct TransportState {
+    /// Whether the player behind the bar can be told anything at all.
+    ///
+    /// FFmpeg's player cannot: it reports no position, takes no pause, and can only be taken to
+    /// another second by being ended and begun again — so a pinned video it plays carries a bar
+    /// with no button and nothing to drag, and what is left is a read-out drawn from this app's
+    /// own clock over the player's start (see `pin_playhead`). The media engine's bar is the one
+    /// with controls, because every one of them is a question it answers.
+    pub(crate) interactive: bool,
     /// Whether a player is running, which is what the button's glyph says.
     pub(crate) playing: bool,
     /// Where the playhead is, and how long the file is: nothing for either is a bar with no
@@ -213,7 +243,7 @@ pub(crate) fn paint_transport(
     let width = surface.width as i32;
     let height = surface.height as i32;
     let scale = dpi as f32 / 96.0;
-    let layout = transport_layout(width, height, dpi);
+    let layout = transport_layout(width, height, dpi, state.interactive);
 
     text_paint::fill_rect(
         surface,
@@ -239,7 +269,11 @@ pub(crate) fn paint_transport(
         palette.hover(0.18),
     );
 
-    paint_play_button(surface, palette, state, layout.play, scale);
+    // The button is drawn only where there is a player to press it: a bar with no controls is a
+    // read-out, and a button that does nothing is a promise the app cannot keep.
+    if state.interactive {
+        paint_play_button(surface, palette, state, layout.play, scale);
+    }
 
     // The bar: a track, what has been played filled in, and a thumb at the playhead.
     let filled = match (state.position, state.duration) {
@@ -1344,9 +1378,9 @@ mod tests {
 
     #[test]
     fn a_transport_bar_is_taken_hold_of_where_it_was_pressed() {
-        let layout = transport_layout(800, 30, 96);
+        let layout = transport_layout(800, 30, 96, true);
         let middle = (layout.bar.left + layout.bar.right) / 2;
-        let share = transport_share_at(middle, 800, 96);
+        let share = transport_share_at(middle, 800, 96, true);
         assert!(
             (share - 0.5).abs() < 0.05,
             "the middle of the bar is half of it"
@@ -1354,27 +1388,61 @@ mod tests {
 
         // A press past either end is the end it is past, which is what keeps a drag from asking
         // for a second of a file that is not there.
-        assert_eq!(transport_share_at(0, 800, 96), 0.0);
-        assert_eq!(transport_share_at(800, 800, 96), 1.0);
+        assert_eq!(transport_share_at(0, 800, 96, true), 0.0);
+        assert_eq!(transport_share_at(800, 800, 96, true), 1.0);
     }
 
     #[test]
     fn the_parts_of_a_transport_bar_are_hit_where_they_are_drawn() {
-        let layout = transport_layout(800, 30, 96);
+        let layout = transport_layout(800, 30, 96, true);
 
         let play = (layout.play.left + layout.play.right) / 2;
         assert_eq!(
-            transport_part_at(play, 15, 800, 30, 96),
+            transport_part_at(play, 15, 800, 30, 96, true),
             Some(TransportPart::Play)
         );
 
         let bar = (layout.bar.left + layout.bar.right) / 2;
         assert_eq!(
-            transport_part_at(bar, 15, 800, 30, 96),
+            transport_part_at(bar, 15, 800, 30, 96, true),
             Some(TransportPart::Seek)
         );
 
         // Nothing is hit where nothing is drawn.
-        assert_eq!(transport_part_at(2, 2, 800, 30, 96), None);
+        assert_eq!(transport_part_at(2, 2, 800, 30, 96, true), None);
+    }
+
+    /// A bar whose player cannot be told anything is a read-out: FFmpeg's player reports no
+    /// position, takes no pause, and can only be "seeked" by being ended and begun again at a
+    /// second — so its bar carries no button and nothing to drag, and the two clocks begin where
+    /// the strip does rather than after a control that is not there.
+    #[test]
+    fn a_bar_with_no_controls_has_none_to_press() {
+        let dead = transport_layout(800, 30, 96, false);
+        let live = transport_layout(800, 30, 96, true);
+
+        assert_eq!(dead.elapsed.left, 10, "the clock begins at the padding");
+        assert_eq!(
+            live.elapsed.left, dead.elapsed.left + (live.play.right - live.play.left) + 5,
+            "a bar with a button begins after it"
+        );
+
+        // The track is longer by the room the button does not take, so a playhead drawn against
+        // it is drawn against the same file rather than against a bar with a hole in it.
+        assert!(dead.bar.left < live.bar.left);
+        assert!(
+            dead.bar.right - dead.bar.left > live.bar.right - live.bar.left,
+            "the space a button does not take is the track's"
+        );
+
+        // And neither the button's place nor the track answers a press.
+        let play = (live.play.left + live.play.right) / 2;
+        let bar = (dead.bar.left + dead.bar.right) / 2;
+        assert_eq!(transport_part_at(play, 15, 800, 30, 96, false), None);
+        assert_eq!(transport_part_at(bar, 15, 800, 30, 96, false), None);
+        assert_eq!(
+            transport_part_at(play, 15, 800, 30, 96, true),
+            Some(TransportPart::Play)
+        );
     }
 }
