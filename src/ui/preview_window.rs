@@ -6487,30 +6487,44 @@ fn video_box(path: &Path) -> Option<(u32, u32)> {
     }
 }
 
-/// The part of a video's frame its preview is drawn from: the crop the probe settled on, in the
-/// frame's own pixels.
+/// The picture a video's preview is drawn from: the size the file is shown at, and the part of
+/// the frame that picture is cut from where the probe settled on a crop, in the frame's own
+/// pixels.
 ///
 /// It is the one answer both players are given, each in its own terms — FFmpeg's player as a
 /// filter on its command line, and the media engine as the source rectangle of its frame
-/// transfer, which is what it is normalized over here (see `video_player::Crop`). The box is
-/// placed at the crop's shape, so a whole frame drawn into it is scaled down to fit and padded
-/// with the engine's border colour on the sides the file's own bars leave over — which is the
-/// black bar a preview of a file with a crop was growing down two of its edges.
+/// transfer, which is what it is normalized over here (see `video_player::Picture`) — and it is
+/// also what settles who scales a preview shown above 100%: the picture is what the engine is
+/// asked for at its own size, and the box is what this side scales it into (see
+/// `video_player::play`). The box is placed at the picture's shape, so a whole frame drawn into
+/// one is scaled down to fit and padded with the engine's border colour on the sides the file's
+/// own bars leave over — which is the black bar a preview of a file with a crop was growing
+/// down two of its edges.
 ///
 /// It is read from the cache and never probed for, for the reason `video_box` reads a shape
 /// from there: this is asked on the preview thread, where the probe's two processes are the one
-/// wait that must not happen.
-fn probed_crop(path: &Path) -> Option<video_player::Crop> {
+/// wait that must not happen. A file the cache has no answer for is handed the box itself as its
+/// picture, which is a picture the size of the preview: nothing for either side to scale, and the
+/// arrangement every video had before this side could scale one.
+fn probed_picture(path: &Path, width: u32, height: u32) -> video_player::Picture {
     match cached_video_geometry(path) {
-        Some(ProbedGeometry::Measured(geometry)) => geometry.crop.map(|crop| video_player::Crop {
-            x: crop.x,
-            y: crop.y,
-            width: crop.width,
-            height: crop.height,
-            frame_width: geometry.frame_width,
-            frame_height: geometry.frame_height,
-        }),
-        _ => None,
+        Some(ProbedGeometry::Measured(geometry)) => video_player::Picture {
+            width: geometry.width,
+            height: geometry.height,
+            crop: geometry.crop.map(|crop| video_player::Crop {
+                x: crop.x,
+                y: crop.y,
+                width: crop.width,
+                height: crop.height,
+                frame_width: geometry.frame_width,
+                frame_height: geometry.frame_height,
+            }),
+        },
+        _ => video_player::Picture {
+            width,
+            height,
+            crop: None,
+        },
     }
 }
 
@@ -15218,7 +15232,7 @@ pub fn run_preview_window() {
                                         width,
                                         height,
                                         current_video_volume(),
-                                        probed_crop(&result.path),
+                                        probed_picture(&result.path, width, height),
                                     );
                                 }
 
@@ -19328,7 +19342,7 @@ mod tests {
             // asked for the way the preview loop asks for them, and what comes back is counted.
             // The volume is nothing, so nothing is heard of this.
             if media_engine_plays(&path) {
-                video_player::play(&path, 320, 240, 0, probed_crop(&path));
+                video_player::play(&path, 320, 240, 0, probed_picture(&path, 320, 240));
                 println!("a session over it started: {}", video_player::is_playing());
 
                 let mut pixels = Vec::new();
