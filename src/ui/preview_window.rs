@@ -4999,9 +4999,15 @@ fn load_video_thumbnail(
     preview_scale: PreviewScale,
 ) -> Option<MediaData> {
     // Which engine plays this file is settled here, once, and everything below follows
-    // from it: FFmpeg's player when it is installed, and the media engine Windows has when
-    // it is not.
-    let native = codecs::plays_video_natively();
+    // from it: the media engine Windows has where it can decode the file, and FFmpeg's
+    // player where it cannot. The engine is asked first because of what only it can be
+    // told — a pause, a seek and a position that are real rather than a player ended and
+    // begun again at a second — and because the frames it hands back are drawn by this
+    // app, so a pinned window of one can be resized and dragged by its picture. A machine
+    // with no FFmpeg plays everything through the engine anyway, which is the question the
+    // first half of this asks; the second half is the file's own answer, held per version
+    // so that a hover asks it once (see `video_player::plays`).
+    let native = codecs::plays_video_natively() || video_player::plays(path);
 
     let geometry = match probe_video_geometry(path) {
         ProbedGeometry::Measured(geometry) => geometry,
@@ -8741,6 +8747,7 @@ unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
     if paint.transport_height > 0 {
         if let Some(palette) = pin_chrome::ChromePalette::current() {
             let state = pin_chrome::TransportState {
+                interactive: paint.transport_live,
                 playing: paint.playing,
                 position: paint.position,
                 duration: paint.duration,
@@ -8820,6 +8827,9 @@ struct PinnedPaint {
     hovered: Option<pin_chrome::CaptionButton>,
     pressed: Option<pin_chrome::CaptionButton>,
     transport: PinTransport,
+    /// Whether the bar's controls do anything for the engine playing this file (see
+    /// `PinnedPreview::transport_live`).
+    transport_live: bool,
     playing: bool,
     position: Option<f64>,
     duration: Option<f64>,
@@ -8854,6 +8864,7 @@ fn pinned_paint() -> Option<PinnedPaint> {
         duration: pin_duration(&pin.transport),
         playing: pin_is_playing(&pin.transport),
         transport: pin.transport,
+        transport_live: pin.transport_live,
     })
 }
 
@@ -10901,6 +10912,13 @@ struct PinnedPreview {
     /// Whether this kind carries a transport bar, decided when the pin was taken up: it is the
     /// same answer for as long as the pin lasts, and the window's own height is measured from it.
     transport_bar: bool,
+    /// Whether that bar's controls do anything, which is a question about the engine playing the
+    /// file rather than about the kind: FFmpeg's player reports no position, takes no pause, and
+    /// is taken to another second only by being ended and begun again — so a pinned video it
+    /// plays carries a bar that is a read-out, with no button and nothing to drag (see
+    /// `pin_chrome::TransportState`). Every control on the bar is a question the media engine
+    /// answers, and the two are told apart by the kind of media a pin was taken up on.
+    transport_live: bool,
     /// What the edges and the caption do for this kind, decided when the pin was taken up for the
     /// same reason the line above is (see `PinFrame`).
     frame: PinFrame,
@@ -10966,7 +10984,12 @@ enum PinFrame {
 
 fn pin_frame(kind: Option<MediaType>) -> PinFrame {
     match kind {
-        Some(MediaType::Audio) => PinFrame::None,
+        // A sound's card is its own size, and a video FFmpeg's player has is a window of
+        // somebody else's: the card has no box to grow into, and the player's window is not
+        // this app's to resize — what it would be given is a picture scaled into a box it was
+        // not made for, with the bars a wrong shape leaves. Both are moved by their caption and
+        // their band, and neither is framed.
+        Some(MediaType::Audio) | Some(MediaType::Video) => PinFrame::None,
         Some(MediaType::Text) | Some(MediaType::Archive) => PinFrame::Free,
         _ => PinFrame::Shaped,
     }
@@ -12250,7 +12273,16 @@ unsafe fn pinned_mouse_move(hwnd: HWND, x: i32, y: i32) {
     // The same question of the transport bar, which is the other strip a pointer lights up.
     let transport_hovered = pinned_transport_geometry().and_then(|bar| {
         (y >= bar.top)
-            .then(|| pin_chrome::transport_part_at(x, y - bar.top, bar.width, bar.height, bar.dpi))
+            .then(|| {
+                pin_chrome::transport_part_at(
+                    x,
+                    y - bar.top,
+                    bar.width,
+                    bar.height,
+                    bar.dpi,
+                    bar.live,
+                )
+            })
             .flatten()
     });
     let transport_changed = PINNED
@@ -12300,6 +12332,9 @@ struct PinnedTransportBar {
     top: i32,
     height: i32,
     dpi: u32,
+    /// Whether the player behind the bar can be told anything, which is whether its parts are the
+    /// pointer's to press at all (see `PinnedPreview::transport_live`).
+    live: bool,
 }
 
 fn pinned_transport_geometry() -> Option<PinnedTransportBar> {
@@ -12317,6 +12352,7 @@ fn pinned_transport_geometry() -> Option<PinnedTransportBar> {
         top: height - band,
         height: band,
         dpi: pin.dpi,
+        live: pin.transport_live,
     })
 }
 
@@ -12334,8 +12370,14 @@ unsafe fn pinned_transport_press(hwnd: HWND, x: i32, y: i32) -> bool {
         return false;
     }
 
-    let Some(part) = pin_chrome::transport_part_at(x, y - bar.top, bar.width, bar.height, bar.dpi)
-    else {
+    let Some(part) = pin_chrome::transport_part_at(
+        x,
+        y - bar.top,
+        bar.width,
+        bar.height,
+        bar.dpi,
+        bar.live,
+    ) else {
         return false;
     };
 
@@ -12344,7 +12386,7 @@ unsafe fn pinned_transport_press(hwnd: HWND, x: i32, y: i32) -> bool {
             update_pin_transport(|transport| transport.pressed = Some(part));
         }
         pin_chrome::TransportPart::Seek => {
-            let share = pin_chrome::transport_share_at(x, bar.width, bar.dpi);
+            let share = pin_chrome::transport_share_at(x, bar.width, bar.dpi, bar.live);
             update_pin_transport(|transport| {
                 transport.seeking = pin_seconds_at(transport, share);
             });
@@ -12380,7 +12422,7 @@ unsafe fn pinned_transport_drag(hwnd: HWND, x: i32) -> bool {
         return false;
     }
 
-    let share = pin_chrome::transport_share_at(x, bar.width, bar.dpi);
+    let share = pin_chrome::transport_share_at(x, bar.width, bar.dpi, bar.live);
     update_pin_transport(|transport| transport.seeking = pin_seconds_at(transport, share));
     render_layered_preview(hwnd);
     true
@@ -12414,8 +12456,14 @@ unsafe fn pinned_transport_release(hwnd: HWND, x: i32, y: i32) -> bool {
         let still_on_it = pinned_transport_geometry()
             .map(|bar| {
                 y >= bar.top
-                    && pin_chrome::transport_part_at(x, y - bar.top, bar.width, bar.height, bar.dpi)
-                        == Some(part)
+                    && pin_chrome::transport_part_at(
+                        x,
+                        y - bar.top,
+                        bar.width,
+                        bar.height,
+                        bar.dpi,
+                        bar.live,
+                    ) == Some(part)
             })
             .unwrap_or(false);
 
@@ -14506,6 +14554,7 @@ pub fn run_preview_window() {
                                 restore: None,
                                 dpi,
                                 transport_bar,
+                                transport_live: kind == Some(MediaType::NativeVideo),
                                 frame: pin_frame(kind),
                                 collapsed: false,
                                 hovered: None,
@@ -17171,13 +17220,14 @@ mod tests {
             "document: {}",
             crate::engines::webview_preview::draws(&path)
         );
-        // Which engine would play a video here, which is the whole of the fallback's
-        // routing: `ffplay` when it is installed, and the media engine Windows has when it
-        // is not. Reported for every file rather than only for a video, because a probe is
-        // run to find out what the machine is doing.
+        // Which engine would play a video here, asked the way the router asks it: whether there
+        // is anything of FFmpeg's to fall back to, and whether this file needs it. Reported for
+        // every file rather than only for a video, because a probe is run to find out what the
+        // machine is doing.
         println!(
-            "video: played natively = {}",
-            crate::formats::codecs::plays_video_natively()
+            "video: played natively = {} (machine), {} (this file)",
+            crate::formats::codecs::plays_video_natively(),
+            crate::readers::video_player::plays(&path)
         );
 
         std::thread::spawn(run_preview_window);
@@ -17408,6 +17458,68 @@ mod tests {
                 );
                 video_player::stop();
             }
+        }
+    }
+
+    /// The router's question about a video, against the machine it runs on: whether the media
+    /// engine can decode this file, which of the two engines would play it, and what the geometry
+    /// probe has to say about it.
+    ///
+    /// It is the probe beside this one's counterpart for pictures, and it is ignored for the same
+    /// reason — it reads real files and starts a real media stack.
+    ///
+    /// Run it by hand:
+    ///
+    /// ```text
+    /// cargo test video_engine_probe -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore = "reads the files named in RHP_VIDEO_PROBE and starts the media stack"]
+    fn video_engine_probe() {
+        let Ok(list) = std::env::var("RHP_VIDEO_PROBE") else {
+            println!("set RHP_VIDEO_PROBE to one or more paths, separated by ';'");
+            return;
+        };
+
+        println!(
+            "this machine plays video natively = {} (nothing of FFmpeg's installed)",
+            crate::formats::codecs::plays_video_natively()
+        );
+
+        for path in list
+            .split(';')
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+            .map(PathBuf::from)
+        {
+            println!("\n--- {} ---", path.display());
+            println!("the preview is shown: {}", drawn_as_video(&path));
+
+            let started = Instant::now();
+            let can_play = video_player::can_play(&path);
+            println!(
+                "the engine can decode it: {can_play} ({} ms, uncached)",
+                started.elapsed().as_millis()
+            );
+            println!("and the router reads that back: {}", video_player::plays(&path));
+
+            let geometry = probe_video_geometry(&path);
+            println!(
+                "the geometry probe: {}",
+                match &geometry {
+                    ProbedGeometry::Measured(geometry) =>
+                        format!("{}x{}, duration {:?}", geometry.width, geometry.height, geometry.duration),
+                    ProbedGeometry::Unmeasurable => "nothing to measure".to_string(),
+                }
+            );
+            println!(
+                "so the router would play it with {}",
+                if crate::formats::codecs::plays_video_natively() || can_play {
+                    "the media engine Windows has"
+                } else {
+                    "FFmpeg's player"
+                }
+            );
         }
     }
 
@@ -18533,10 +18645,10 @@ mod tests {
 
     #[test]
     fn what_a_kind_is_framed_by_follows_what_is_inside_it() {
-        // What is drawn is the file's own shape, so the box can only be a box of that shape.
+        // What is drawn is the file's own shape, so the box can only be a box of that shape:
+        // a picture, a page an engine rendered, and a video the media engine decodes.
         assert_eq!(pin_frame(Some(MediaType::StaticImage)), PinFrame::Shaped);
         assert_eq!(pin_frame(Some(MediaType::AnimatedGif)), PinFrame::Shaped);
-        assert_eq!(pin_frame(Some(MediaType::Video)), PinFrame::Shaped);
         assert_eq!(pin_frame(Some(MediaType::NativeVideo)), PinFrame::Shaped);
         assert_eq!(pin_frame(Some(MediaType::Pdf)), PinFrame::Shaped);
 
@@ -18544,8 +18656,11 @@ mod tests {
         assert_eq!(pin_frame(Some(MediaType::Text)), PinFrame::Free);
         assert_eq!(pin_frame(Some(MediaType::Archive)), PinFrame::Free);
 
-        // And a sound's card is its own size: nothing to resize and nothing to maximize.
+        // And two kinds are framed by nothing: a sound's card is its own size, and a video
+        // FFmpeg's player has is a window of somebody else's — the one box this app does not
+        // own, so there is no shape of its own to keep and no resize it could be given.
         assert_eq!(pin_frame(Some(MediaType::Audio)), PinFrame::None);
+        assert_eq!(pin_frame(Some(MediaType::Video)), PinFrame::None);
     }
 
     #[test]

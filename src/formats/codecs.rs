@@ -421,9 +421,17 @@ pub fn normalize_available() -> bool {
     answer
 }
 
-/// Whether a video is played by the engine Windows has, which is what the layout and the
-/// renderer both have to agree about: the one asks whether a video has a size to be placed
-/// at, and the other asks which of the two engines draws it.
+/// Whether the engine Windows has is the *only* player this machine has for a video: nothing of
+/// FFmpeg's is installed, so a file the engine cannot open is a file nothing plays.
+///
+/// It is one half of the question the router asks before it plays a video, and the other half is
+/// the file's own answer, asked of the engine itself: this says whether there is anything to fall
+/// back *to*, and `video_player::plays` says whether the fallback is needed for this file. On a
+/// machine with no FFmpeg the first answer settles it, which is why the two are asked in that
+/// order and why this asks about the machine rather than about a file.
+///
+/// The layout and the renderer both have to agree about it: the one asks whether a video has a
+/// size to be placed at, and the other asks which of the two engines draws it.
 pub fn plays_video_natively() -> bool {
     !ffplay_available()
 }

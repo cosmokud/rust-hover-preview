@@ -1,10 +1,14 @@
 //! The media engine Windows has, for the previews it plays.
 //!
-//! A video is played by `ffplay` when FFmpeg is installed, and by this when it is not; a sound
-//! is played by this where its own decoders reach the format, and by that player where they do
-//! not — the other way round, and deliberately: what the engine gives a sound is a player
-//! inside this app's own process, with no window, no process to supervise and a position the
-//! card can be drawn from (see `audio_track` and `audio_preview`).
+//! A video is played by this where its decoders reach the file and by `ffplay` where they do
+//! not; a sound is played by this where its own decoders reach the format, and by that player
+//! where they do not — the same order for both, and the same question asked of both, which is
+//! whether this machine has a decoder for the file (see [`plays`] and [`audio_probe`]).
+//!
+//! The order is the engine's first because of what only it can be asked: a pause, a seek and a
+//! position that are real rather than a player restarted at a second, and frames this app draws
+//! itself — which is what lets a pinned window of one be resized, and dragged by its picture.
+//! FFmpeg's player is what is left for the files the engine has no decoder for.
 //!
 //! The two are the same preview to the rest of the app — the same window, the same
 //! placement, the same box — because what comes out of here is frames, drawn where every
@@ -25,20 +29,25 @@
 //! the box, plus whatever a codec extension from the Microsoft Store has added — which is
 //! the question the tray's `Codecs` submenu answers for the machine it is running on.
 //!
-//! The three questions asked of the engine from outside are all answered here. [`dimensions`]
-//! is a video's shape, asked of a source reader before there is anything to play. [`audio_track`]
-//! is whether this machine has a decoder for a sound and what the file says about it, asked the
-//! same way — the reader is asked for *decoded* PCM, which it can only give where the decoder is
-//! registered, and the media type the file declares is read for the rest. And [`position`] and
-//! [`duration`] are what the running session says about itself, for the card's clock.
+//! The questions asked of the engine from outside are all answered here. [`dimensions`]
+//! is a video's shape, asked of a source reader before there is anything to play. [`plays`]
+//! is whether a decoder here can hand a video's own frames back at all — what the router
+//! asks before it hands a file to this engine or to FFmpeg's player. [`audio_track`] is the
+//! same question about a sound, asked the same way — the reader is asked for *decoded* PCM,
+//! which it can only give where the decoder is registered, and the media type the file
+//! declares is read for the rest. And [`position`] and [`duration`] are what the running
+//! session says about itself, for the card's clock and a pinned window's transport bar.
 
 use crate::formats::codecs;
+use crate::formats::head;
 use crate::readers::audio_track;
+use once_cell::sync::Lazy;
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use windows::core::{implement, GUID, IUnknown, Interface, BSTR, PCWSTR};
 use windows::Win32::Foundation::RECT;
@@ -54,7 +63,8 @@ use windows::Win32::Media::MediaFoundation::{
     MFAudioFormat_FLAC, MFAudioFormat_Float, MFAudioFormat_MP3, MFAudioFormat_Opus,
     MFAudioFormat_PCM, MFAudioFormat_Vorbis, MFAudioFormat_WMAudioV8, MFAudioFormat_WMAudioV9,
     MFAudioFormat_WMAudio_Lossless, MFCreateAttributes, MFCreateMFByteStreamOnStream,
-    MFCreateMediaType, MFCreateSourceReaderFromByteStream, MFMediaType_Audio, MFVideoFormat_ARGB32,
+    MFCreateMediaType, MFCreateSourceReaderFromByteStream, MFMediaType_Audio, MFMediaType_Video,
+    MFVideoFormat_ARGB32, MFVideoFormat_RGB32,
     MFARGB, MF_BYTESTREAM_ORIGIN_NAME, MF_MEDIA_ENGINE_CALLBACK, MF_MEDIA_ENGINE_EVENT_ERROR,
     MF_MEDIA_ENGINE_READY_HAVE_CURRENT_DATA, MF_MEDIA_ENGINE_READY_HAVE_METADATA,
     MF_MEDIA_ENGINE_VIDEO_OUTPUT_FORMAT, MF_MT_AUDIO_NUM_CHANNELS,
@@ -380,6 +390,93 @@ pub fn duration() -> Option<f64> {
         (seconds.is_finite() && seconds > 0.0).then_some(seconds)
     })
 }
+
+/// Whether this machine can play `path` as a video: the question the router asks before it hands
+/// a file to this engine rather than to FFmpeg's player.
+///
+/// It is the question `audio_probe` asks about a sound, asked about a picture and the same way:
+/// the file is opened as a source reader, it has to hold a video stream at all, and then the
+/// reader is asked to produce *decoded* frames on that stream. What it is asked for is RGB32,
+/// which is the frame the rest of this app works in rather than the subtype any one codec
+/// delivers, so a yes is a decoder *and* a converter — which is what the engine needs before a
+/// frame can be handed over. A no here is a file FFmpeg's player takes, and the two engines
+/// between them are why a video is previewed at all on a machine that has only one of them.
+///
+/// What is deliberately not asked is whether the file would play *well*: a file this engine opens
+/// and then fails on is answered where every other failure about a preview is, and a probe that
+/// decoded a frame to find out would make every video hover pay for a decoder's worth of work.
+pub fn can_play(path: &Path) -> bool {
+    if !codecs::mf_started() {
+        return false;
+    }
+
+    let Some(byte_stream) = open_stream(path) else {
+        return false;
+    };
+    let Ok(reader) =
+        (unsafe { MFCreateSourceReaderFromByteStream(&byte_stream, None::<&IMFAttributes>) })
+    else {
+        return false;
+    };
+
+    // A file with no video stream at all — a sound, a container of something else — is not a
+    // video, and there is nothing to be asked about it beyond that.
+    if unsafe { reader.GetNativeMediaType(MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32, 0) }.is_err()
+    {
+        return false;
+    }
+
+    let Ok(frames) = (unsafe { MFCreateMediaType() }) else {
+        return false;
+    };
+    if unsafe { frames.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video) }.is_err() {
+        return false;
+    }
+    if unsafe { frames.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_RGB32) }.is_err() {
+        return false;
+    }
+
+    // The decoder, asked for the only way that answers it: a stream the reader will hand back as
+    // frames is a stream this machine has a decoder for.
+    unsafe { reader.SetCurrentMediaType(MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32, None, &frames) }
+        .is_ok()
+}
+
+/// What the engine said about a file, held by the path and the version of the file it was said
+/// about: what the router asks before every video it previews, answered once per version.
+///
+/// It is `audio_track`'s arrangement for the same reason: a probe opens a file and builds a
+/// decoder chain for it, and a hover that asks twice — a measure and a render, a hover that comes
+/// back to a file — must not pay for that twice. A file that is written again is a file whose
+/// answer is asked again, because the version is part of the key.
+pub fn plays(path: &Path) -> bool {
+    let key = head::key(path);
+
+    if let Some(answer) = PLAYABLE
+        .lock()
+        .ok()
+        .and_then(|held| held.get(&key).copied())
+    {
+        return answer;
+    }
+
+    let answer = can_play(path);
+
+    if let Ok(mut held) = PLAYABLE.lock() {
+        if held.len() >= PLAYABLE_MAX_ENTRIES {
+            held.clear();
+        }
+        held.insert(key, answer);
+    }
+
+    answer
+}
+
+/// What the engine has been asked about, one answer per file and version. It is bounded the way
+/// the sound tracks are: a run that hovers a library of films does not grow a map forever, and
+/// what a clear costs is one probe per file rather than an unbounded map.
+static PLAYABLE: Lazy<Mutex<HashMap<head::Key, bool>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+const PLAYABLE_MAX_ENTRIES: usize = 512;
 
 /// Whether this machine can play `path` as a sound, and what the file says it holds.
 ///
