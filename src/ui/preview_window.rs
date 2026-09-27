@@ -5752,8 +5752,14 @@ fn set_noactivate_for_process(pid: u32) {
     wake_noactivate_monitor();
 }
 
-/// Start ffplay for video preview, at the level `Volume → Video` names and with the film's own peak
+/// Start ffplay for video preview, at the level `volume` names and with the film's own peak
 /// folded into it where `Normalize` is on for videos (see `normalizing_video`).
+///
+/// The level is the caller's answer rather than a read of the configuration, because the two
+/// callers keep different ones: a preview that is beginning is played at `Volume → Video`, and a
+/// pinned one is played at the level its own window is holding — the one the tray named when that
+/// pin was taken up, moved by whatever the hand on its volume control has done since, and never
+/// written back to the setting (see `PinVolume`).
 fn start_video_playback(
     path: &PathBuf,
     x: i32,
@@ -5761,9 +5767,9 @@ fn start_video_playback(
     width: i32,
     height: i32,
     start: f64,
+    volume: u32,
 ) -> Option<Child> {
-    // Get volume setting from config (0-100)
-    let volume = CONFIG.lock().map(|c| c.video_volume).unwrap_or(0);
+    let volume = volume.min(100);
 
     // Use ffplay for video playback - borderless, positioned at preview location
     let mut cmd = Command::new("ffplay");
@@ -8919,6 +8925,8 @@ unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
                 duration: paint.duration,
                 hovered: paint.transport.hovered,
                 pressed: paint.transport.pressed,
+                volume: paint.volume.level,
+                volume_open: paint.volume.open,
             };
 
             TRANSPORT_SURFACE.with(|cell| {
@@ -8941,6 +8949,29 @@ unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
                     );
                 }
             });
+        }
+    }
+
+    // The volume popup, over the media above the bar it came out of: it is drawn last of
+    // everything because it is over everything, and the band it floats over is the media's own —
+    // this app's pixels for a picture the media engine draws, and the hole the player's window
+    // stands in for a video FFmpeg plays (see `pin_volume_open`).
+    if paint.volume.open && paint.transport_height > 0 {
+        if let Some(palette) = pin_chrome::ChromePalette::current() {
+            let popup = pin_chrome::volume_popup_layout(
+                width,
+                (height - paint.transport_height).max(0),
+                paint.transport_height,
+                paint.dpi,
+            );
+            pin_chrome::paint_volume_popup(
+                out,
+                width,
+                &palette,
+                &popup,
+                paint.volume.level,
+                paint.volume.dragging,
+            );
         }
     }
 
@@ -9000,6 +9031,8 @@ struct PinnedPaint {
     hovered: Option<pin_chrome::CaptionButton>,
     pressed: Option<pin_chrome::CaptionButton>,
     transport: PinTransport,
+    /// The level this pin plays at, and whether its popup is open (see `PinVolume`).
+    volume: PinVolume,
     /// Whether the bar's controls do anything for the engine playing this file (see
     /// `PinnedPreview::transport_live`).
     transport_live: bool,
@@ -9040,6 +9073,7 @@ fn pinned_paint() -> Option<PinnedPaint> {
         duration: pin_duration(&pin.transport),
         playing: pin_is_playing(&pin.transport),
         transport: pin.transport,
+        volume: pin.volume,
         transport_live: pin.transport_live,
     })
 }
@@ -10202,11 +10236,11 @@ unsafe extern "system" fn window_proc(
             LRESULT(1)
         }
         WM_LBUTTONDOWN => {
-            // A press on a pinned window is the pin's before it is anything else's: the caption's
-            // buttons, the caption itself, an edge, and the media under the hand are all things a
-            // window does with a pointer (see `pinned_press`).
+            // A press on a pinned window is the pin's before it is anything else's: the volume
+            // popup over the picture, the caption's buttons, the caption itself, an edge, and the
+            // media under the hand are all things a window does with a pointer (see `pinned_press`).
             let (x, y) = message_point(lparam);
-            if pinned() && pinned_press(hwnd, x, y) {
+            if pinned() && (pinned_volume_press(hwnd, x, y) || pinned_press(hwnd, x, y)) {
                 return LRESULT(0);
             }
 
@@ -10262,6 +10296,11 @@ unsafe extern "system" fn window_proc(
                         pin.transport.pressed = None;
                         pin.transport.seeking = None;
                         pin.transport.hovered = None;
+                        // A knob that was being held is let go of with the capture: a pointer that
+                        // has gone elsewhere is not a hand still on the level, and the popup is put
+                        // away by the tick that finds the pointer away from it (see
+                        // `refresh_pin_volume`).
+                        pin.volume.dragging = false;
                     }
                 }
             }
@@ -11450,6 +11489,9 @@ struct PinnedPreview {
     /// Where the playback of a video is, which is what the transport bar is drawn from and what
     /// a seek or a pause is measured against (see `PinTransport`).
     transport: PinTransport,
+    /// The level this pin plays at, which belongs to this window rather than to the setting it was
+    /// read from (see `PinVolume`).
+    volume: PinVolume,
 }
 
 /// Where a pinned video's playback is.
@@ -11477,6 +11519,74 @@ struct PinTransport {
 /// Whether a kind is one the transport bar is drawn for.
 fn pin_transport_kind(kind: Option<MediaType>) -> bool {
     matches!(kind, Some(MediaType::Video) | Some(MediaType::NativeVideo))
+}
+
+/// The volume a pinned preview is playing at.
+///
+/// A pin is given the level the tray names at the moment it is taken up — which is the level the
+/// preview it came from is already playing at — and everything done to it after that belongs to
+/// that window alone. A hand on the pin's volume control moves this and writes nothing: the setting
+/// under `Volume → Video` stays exactly where the user put it, and the next preview begins at that
+/// (see `current_video_volume`). That is why the level is kept here rather than read from the
+/// configuration where it is needed.
+#[derive(Clone, Copy, Default)]
+struct PinVolume {
+    /// The level this pin is playing at, 0-100.
+    level: u32,
+    /// The level the player that is running now was started at. FFmpeg's player is told nothing
+    /// while it runs — a level is another player begun at that level — so what says whether one is
+    /// owed is this against `level`, and what the bar is drawn from is always `level`.
+    playing_at: u32,
+    /// Whether the popup is open.
+    open: bool,
+    /// Whether the knob is being held: a drag is a hand on the level, and what a drag must not be
+    /// mistaken for is the pointer having gone away from the popup (see `refresh_pin_volume`).
+    dragging: bool,
+}
+
+/// Write an answer about the volume back into the pin, if there is still one.
+fn update_pin_volume(change: impl FnOnce(&mut PinVolume)) {
+    if let Ok(mut pinned) = PINNED.lock() {
+        if let Some(pin) = pinned.as_mut() {
+            change(&mut pin.volume);
+        }
+    }
+}
+
+/// The level the pin that is up is playing at, and the setting where there is no pin: what a
+/// player this app starts for a pinned file is given (see `restart_pinned_player`).
+fn pinned_volume_level() -> u32 {
+    PINNED
+        .lock()
+        .ok()
+        .and_then(|pinned| pinned.as_ref().map(|pin| pin.volume.level))
+        .unwrap_or_else(current_video_volume)
+}
+
+/// Whether the pin that is up has its volume popup open, which is what the tick's re-assertion of
+/// the player's window is held off by: the popup is drawn over the media, and the media of a video
+/// FFmpeg plays is that window.
+fn pin_volume_open() -> bool {
+    PINNED
+        .lock()
+        .ok()
+        .and_then(|pinned| pinned.as_ref().map(|pin| pin.volume.open && !pin.collapsed))
+        .unwrap_or(false)
+}
+
+/// Put the pin's volume popup away, answering whether it was open — which is whether the window
+/// owes a repaint for it.
+fn close_pin_volume() -> bool {
+    let mut closed = false;
+    if let Ok(mut pinned) = PINNED.lock() {
+        if let Some(pin) = pinned.as_mut() {
+            closed = pin.volume.open;
+            pin.volume.open = false;
+            pin.volume.dragging = false;
+        }
+    }
+
+    closed
 }
 
 /// Which strips of a pinned window's chrome are showing, and what is asking for them.
@@ -11535,11 +11645,16 @@ impl PinChrome {
 /// strip that has gone is not a region the mouse can be over, so a window that waited to be told
 /// the pointer had arrived would never be told (see `pin_chrome_near`).
 fn refresh_pin_chrome(pin: &mut PinnedPreview, now: Instant, cursor: Option<(i32, i32)>) -> bool {
+    // The volume popup is asked about on this clock before the strips are, and asked about for
+    // every kind: it is the transport bar's own, and a kind whose chrome is never hidden still has
+    // a popup that belongs on screen only while it is being used (see `refresh_pin_volume`).
+    let closed = refresh_pin_volume(pin, cursor);
+
     // Nothing of a pin's chrome is on screen while the pin is a bubble, and nothing of it moves a
     // repaint that a bubble has no use for: what asks for the chrome there is a mouse over a window
     // that is not up.
     if !pin.overlay || pin.collapsed {
-        return false;
+        return closed;
     }
 
     // The arrival window is spent the moment it closes, and there is no bringing it back: what asks
@@ -11553,11 +11668,52 @@ fn refresh_pin_chrome(pin: &mut PinnedPreview, now: Instant, cursor: Option<(i32
         false => pin_chrome_near(pin, cursor),
     };
 
+    // The strip the popup came out of stays showing while it is open, whatever the pointer is
+    // doing: the popup is drawn in this window's own rows above that strip, and a bar that went
+    // away underneath it would take the button that opened it with it.
+    let bar = bar || pin.volume.open;
+
     let changed = (pin.chrome.caption, pin.chrome.bar) != (caption, bar);
     pin.chrome.caption = caption;
     pin.chrome.bar = bar;
 
-    changed
+    changed || closed
+}
+
+/// Whether the volume popup is still wanted, answering whether it has been put away — which is
+/// whether the window owes a repaint for it.
+///
+/// It belongs to the button that opened it and to nothing else, so it is kept while the pointer is
+/// anywhere in that control — the panel itself, or the strip the button sits in — and put away once
+/// the pointer is away from the whole of it. A knob being held keeps it whatever the pointer is
+/// doing: a drag is the pointer's, and a drag that has left the panel is a level being taken to an
+/// end rather than a popup being dismissed.
+fn refresh_pin_volume(pin: &mut PinnedPreview, cursor: Option<(i32, i32)>) -> bool {
+    if !pin.volume.open || pin.volume.dragging {
+        return false;
+    }
+
+    let (width, height) = pin.window_size();
+    let strip = pinned_transport_height(pin.dpi, pin.transport_bar);
+    let popup = pin_chrome::volume_popup_layout(width, (height - strip).max(0), strip, pin.dpi);
+
+    let margin = logical_px(pin.dpi, PIN_CHROME_NEAR_PIXELS).max(1);
+    let window = pin.window_box();
+    let on_the_popup = cursor.is_some_and(|(x, y)| {
+        let (x, y) = (x - window.0, y - window.1);
+        x >= popup.panel.left - margin
+            && x < popup.panel.right + margin
+            && y >= popup.panel.top - margin
+            && y < popup.panel.bottom + margin
+    });
+
+    let (near_caption, near_bar) = pin_chrome_near(pin, cursor);
+    if on_the_popup || near_caption || near_bar {
+        return false;
+    }
+
+    pin.volume.open = false;
+    true
 }
 
 /// Which of the strips a pinned window's chrome is drawn in the pointer is near — near enough that
@@ -11702,22 +11858,25 @@ fn pin_is_playing(transport: &PinTransport) -> bool {
     }
 }
 
-/// What the transport's own actions need of the pin: the file being played, and the box the
-/// player's window fills.
-fn pinned_playback_target() -> Option<(PathBuf, ScreenRegion)> {
+/// What the transport's own actions need of the pin: the file being played, the box the player's
+/// window fills, where its playback is, and the level it is playing at.
+fn pinned_playback_state() -> Option<(PathBuf, ScreenRegion, PinTransport, PinVolume)> {
     let pinned = PINNED.lock().ok()?;
     let pin = pinned.as_ref()?;
-    Some((pin.path.clone(), pin.content))
+    Some((pin.path.clone(), pin.content, pin.transport, pin.volume))
 }
 
 /// End the player a pinned video is playing in and begin another one at a second of the file.
 ///
 /// It is what a seek and a resume from a pause both are with FFmpeg, whose player can be told
 /// nothing once it is running: the same bargain the sound path makes, where a file dropped in
-/// half way is a player started at that second (see `start_audio_player`).
+/// half way is a player started at that second (see `start_audio_player`). It is also what the one
+/// thing about a running player that *can* be changed is asked by — the level — so the player that
+/// begins is given the pin's own level rather than the tray's setting (see `PinVolume`).
 fn restart_pinned_player(path: &PathBuf, content: ScreenRegion, seconds: f64) {
     let width = (content.2 - content.0).max(1);
     let height = (content.3 - content.1).max(1);
+    let volume = pinned_volume_level();
 
     if let Ok(mut current) = CURRENT_MEDIA.lock() {
         if let Some(media) = current.as_mut() {
@@ -11727,7 +11886,7 @@ fn restart_pinned_player(path: &PathBuf, content: ScreenRegion, seconds: f64) {
     }
     kill_stray_video_process();
 
-    let process = start_video_playback(path, content.0, content.1, width, height, seconds);
+    let process = start_video_playback(path, content.0, content.1, width, height, seconds, volume);
     let pid = process.as_ref().map(|child| child.id()).unwrap_or(0);
 
     if let Ok(mut current) = CURRENT_MEDIA.lock() {
@@ -11746,6 +11905,7 @@ fn restart_pinned_player(path: &PathBuf, content: ScreenRegion, seconds: f64) {
         transport.paused_at = None;
         transport.seeking = None;
     });
+    update_pin_volume(|pin| pin.playing_at = volume);
 }
 
 /// Take a pinned video to a second of its file.
@@ -11819,6 +11979,56 @@ fn update_pin_transport(change: impl FnOnce(&mut PinTransport)) {
         if let Some(pin) = pinned.as_mut() {
             change(&mut pin.transport);
         }
+    }
+}
+
+/// Move the pin's level to `level`, giving it to a player that can be told one while it runs.
+///
+/// The media engine takes a level while it plays, which is what makes a knob dragged on the pin
+/// heard as it moves. FFmpeg's player takes one only by being started at it, so nothing is given
+/// here — what that player is owed is settled where the hand lets go of the knob (see
+/// `settle_pin_volume`), because a player restarted for every pixel of a drag is a picture that
+/// never settles. Nothing is written to the configuration either way: the level belongs to this
+/// window (see `PinVolume`).
+fn set_pin_volume(level: u32) {
+    let level = level.min(100);
+    update_pin_volume(|volume| volume.level = level);
+
+    if current_media_type() == Some(MediaType::NativeVideo) {
+        video_player::set_volume(level);
+        update_pin_volume(|volume| volume.playing_at = level);
+    }
+}
+
+/// Give the pin's level to the player it is owed to, where giving it costs a player replaced.
+///
+/// FFmpeg's player is told nothing once it is running, so the level it is to play at is another
+/// player begun at it — the same bargain a seek makes, and it is taken to the second the hand let
+/// go of the knob at rather than back to the beginning (see `pin_playhead`). A pin that is paused
+/// owes nothing now: the player that is begun when it resumes is begun at the level
+/// `restart_pinned_player` reads, so the two are written down as settled here.
+fn settle_pin_volume() {
+    let Some((path, content, transport, volume)) = pinned_playback_state() else {
+        return;
+    };
+    if volume.playing_at == volume.level {
+        return;
+    }
+
+    match current_media_type() {
+        Some(MediaType::NativeVideo) => {
+            video_player::set_volume(volume.level);
+            update_pin_volume(|volume| volume.playing_at = volume.level);
+        }
+        Some(MediaType::Video) => {
+            if pin_is_playing(&transport) {
+                let playhead = pin_playhead(&transport).unwrap_or(0.0);
+                restart_pinned_player(&path, content, playhead);
+            } else {
+                update_pin_volume(|volume| volume.playing_at = volume.level);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -12525,6 +12735,11 @@ fn collapse_pin() {
 
         pin.collapsed = true;
         PIN_COLLAPSED.store(true, Ordering::Release);
+
+        // A bubble has no bar and no level to be read off: the popup goes with the window it was
+        // drawn over, and a pin put back up is put back up without it.
+        pin.volume.open = false;
+        pin.volume.dragging = false;
 
         // The bubble takes the place of the button the hand went for, which is looked up in the
         // caption's own layout rather than taken to be the window's corner (see
@@ -13238,6 +13453,12 @@ unsafe fn pinned_mouse_move(hwnd: HWND, x: i32, y: i32) {
         return;
     }
 
+    // A drag of the volume knob, which is a level being aimed rather than a window being moved
+    // (see `pinned_volume_drag`).
+    if pinned_volume_drag(hwnd, y) {
+        return;
+    }
+
     // A drag along the transport bar, which is a seek being aimed rather than a window being
     // moved (see `pinned_transport_drag`).
     if pinned_transport_drag(hwnd, x) {
@@ -13413,6 +13634,12 @@ unsafe fn pinned_transport_press(hwnd: HWND, x: i32, y: i32) -> bool {
                 transport.seeking = pin_seconds_at(transport, share);
             });
         }
+        // The volume button is held rather than acted on where it is pressed, like every button a
+        // window has: what a click does is open the popup or put it away, and that is a release
+        // (see `pinned_transport_release`).
+        pin_chrome::TransportPart::Volume => {
+            update_pin_transport(|transport| transport.pressed = Some(part));
+        }
     }
 
     let _ = SetCapture(hwnd);
@@ -13493,9 +13720,15 @@ unsafe fn pinned_transport_release(hwnd: HWND, x: i32, y: i32) -> bool {
             })
             .unwrap_or(false);
 
-        if still_on_it && part == pin_chrome::TransportPart::Play {
-            if let Some((path, content)) = pinned_playback_target() {
-                toggle_pinned_playback(&path, content, transport);
+        if still_on_it {
+            match part {
+                pin_chrome::TransportPart::Play => {
+                    if let Some((path, content, _, _)) = pinned_playback_state() {
+                        toggle_pinned_playback(&path, content, transport);
+                    }
+                }
+                pin_chrome::TransportPart::Volume => toggle_pin_volume(hwnd),
+                pin_chrome::TransportPart::Seek => {}
             }
         }
 
@@ -13507,13 +13740,175 @@ unsafe fn pinned_transport_release(hwnd: HWND, x: i32, y: i32) -> bool {
     // A drag of the bar: the file is taken to the second the hand stopped at, which is the one
     // moment an FFmpeg player is ended and begun again (see `seek_pinned_playback`).
     if let Some(seconds) = seeking {
-        if let Some((path, content)) = pinned_playback_target() {
+        if let Some((path, content, _, _)) = pinned_playback_state() {
             seek_pinned_playback(&path, content, seconds);
         }
     }
 
     render_layered_preview(hwnd);
     true
+}
+
+/// The popup a pin's volume button opens, as the pointer's questions about it need it: where it
+/// is, or nothing when it is not up.
+fn pinned_volume_geometry() -> Option<pin_chrome::VolumePopup> {
+    let pinned = PINNED.lock().ok()?;
+    let pin = pinned.as_ref()?;
+    if pin.collapsed || !pin.transport_bar || !pin.volume.open {
+        return None;
+    }
+
+    let (width, height) = pin.window_size();
+    let strip = pinned_transport_height(pin.dpi, true);
+
+    Some(pin_chrome::volume_popup_layout(
+        width,
+        (height - strip).max(0),
+        strip,
+        pin.dpi,
+    ))
+}
+
+/// Whether the popup's knob is being held.
+fn pin_volume_dragging() -> bool {
+    PINNED
+        .lock()
+        .ok()
+        .and_then(|pinned| pinned.as_ref().map(|pin| pin.volume.dragging))
+        .unwrap_or(false)
+}
+
+/// Whether a point on a pinned window is the volume button: what a press on the popup's own button
+/// has to be told apart from a press anywhere else, since the one keeps the popup and the other
+/// puts it away (see `pinned_press`).
+fn pin_point_is_volume_button(x: i32, y: i32) -> bool {
+    pinned_transport_geometry().is_some_and(|bar| {
+        y >= bar.top
+            && pin_chrome::transport_part_at(
+                x,
+                y - bar.top,
+                bar.width,
+                bar.height,
+                bar.dpi,
+                bar.live,
+            ) == Some(pin_chrome::TransportPart::Volume)
+    })
+}
+
+/// A press on a pinned window's volume popup, answering whether it was the popup's: the knob is
+/// taken hold of where the hand landed, which is the level it is drawn at from there.
+///
+/// The panel is the target rather than the groove inside it: a level is aimed at with the whole of
+/// what is drawn, and a hand a few pixels off a six-pixel groove is a hand that meant to move it.
+/// It is asked before anything else the band could be — what is under the popup is the picture it
+/// floats over, and a press there is not a hand on that picture.
+unsafe fn pinned_volume_press(hwnd: HWND, x: i32, y: i32) -> bool {
+    let Some(popup) = pinned_volume_geometry() else {
+        return false;
+    };
+
+    if x < popup.panel.left
+        || x >= popup.panel.right
+        || y < popup.panel.top
+        || y >= popup.panel.bottom
+    {
+        return false;
+    }
+
+    let _ = SetCapture(hwnd);
+    update_pin_volume(|volume| volume.dragging = true);
+    set_pin_volume((pin_chrome::volume_share_at(y, popup.track) * 100.0).round() as u32);
+    render_layered_preview(hwnd);
+    true
+}
+
+/// Carry a drag of the volume knob: the knob follows the hand, and the level of a player that can
+/// be told one follows it too (see `set_pin_volume`).
+unsafe fn pinned_volume_drag(hwnd: HWND, y: i32) -> bool {
+    if !pin_volume_dragging() {
+        return false;
+    }
+    let Some(popup) = pinned_volume_geometry() else {
+        return false;
+    };
+
+    set_pin_volume((pin_chrome::volume_share_at(y, popup.track) * 100.0).round() as u32);
+    render_layered_preview(hwnd);
+    true
+}
+
+/// A release on the volume popup: the knob is let go, and the player that takes a level only by
+/// being started at one is settled with it (see `settle_pin_volume`).
+unsafe fn pinned_volume_release(hwnd: HWND) -> bool {
+    let dragging = {
+        let Ok(mut pinned) = PINNED.lock() else {
+            return false;
+        };
+        let Some(pin) = pinned.as_mut() else {
+            return false;
+        };
+
+        let dragging = pin.volume.dragging;
+        pin.volume.dragging = false;
+        dragging
+    };
+
+    if !dragging {
+        return false;
+    }
+
+    let _ = ReleaseCapture();
+    settle_pin_volume();
+    render_layered_preview(hwnd);
+    true
+}
+
+/// Open the volume popup, or put it away: what a click on the volume button does.
+///
+/// Opening it puts the pin's window above the player's, because what the panel floats over is the
+/// media — and the media of a video FFmpeg plays is a window of somebody else's standing in that
+/// band, asserted over this one. The tick that keeps that window in front of Explorer is held off
+/// while the popup is open (`pin_volume_open`), which is the whole of what the two windows owe each
+/// other; nothing has to be done when it closes, since the pin's window is transparent wherever it
+/// is not painting and the player is in front of it again on the tick.
+unsafe fn toggle_pin_volume(hwnd: HWND) {
+    let opened = {
+        let Ok(mut pinned) = PINNED.lock() else {
+            return;
+        };
+        let Some(pin) = pinned.as_mut() else {
+            return;
+        };
+
+        pin.volume.open = !pin.volume.open;
+        if !pin.volume.open {
+            pin.volume.dragging = false;
+        }
+
+        pin.volume.open
+    };
+
+    if opened {
+        raise_pinned_window(hwnd);
+    }
+    render_layered_preview(hwnd);
+}
+
+/// Put the pin's window above the window standing in its media band, without taking the focus and
+/// without moving anything: the order the tick keeps for the player, asked the other way round for
+/// as long as a volume popup is open.
+unsafe fn raise_pinned_window(hwnd: HWND) {
+    if let Some((window, width, height)) = pinned_window_box() {
+        let _ = SetWindowPos(
+            hwnd,
+            HWND_TOPMOST,
+            window.0,
+            window.1,
+            width,
+            height,
+            SWP_NOACTIVATE,
+        );
+    }
 }
 
 /// A press on a pinned window, answering whether it was the pin's to act on.
@@ -13536,6 +13931,14 @@ unsafe fn pinned_press(hwnd: HWND, x: i32, y: i32) -> bool {
         return false;
     };
     let framed = caption.frame != PinFrame::None;
+
+    // Anything but the volume button itself puts its popup away: the panel floats over the media,
+    // and a hand that has come for the picture, the title bar or an edge is not a hand on the
+    // level. The button is left out because a click on it is what puts the popup away — closing it
+    // here would have the release open it straight back up (see `pinned_transport_release`).
+    if !pin_point_is_volume_button(x, y) && close_pin_volume() {
+        render_layered_preview(hwnd);
+    }
 
     if framed {
         let edge = {
@@ -14019,7 +14422,14 @@ fn resize_pinned_content(
 /// landed on is clicked if the pointer is still on it, and a drag — which is over wherever the
 /// pointer left it — asks for the media to be laid out again at the box the window ended up with.
 unsafe fn pinned_release(hwnd: HWND, x: i32, y: i32) -> bool {
-    // The transport bar first: a bar a press has taken hold of is the bar's pointer until it lets
+    // A drag of the volume knob first, which is a hand on the level rather than on anything else:
+    // it is the one press on a pinned window that is let go of somewhere other than where it began
+    // (see `pinned_volume_press`).
+    if pinned_volume_release(hwnd) {
+        return true;
+    }
+
+    // The transport bar next: a bar a press has taken hold of is the bar's pointer until it lets
     // go, whatever else is under it.
     if pinned_transport_release(hwnd, x, y) {
         return true;
@@ -14443,8 +14853,14 @@ pub fn run_preview_window() {
 
             // Periodically re-assert topmost on the video window to prevent it
             // from falling behind Explorer or other windows (Bug 2 fix)
+            //
+            // For as long as a volume popup is open it is left where it is, and the pin's window is
+            // the one on top: what the popup floats over is the media, and the media of a video
+            // FFmpeg plays is this very window. Nothing is asked of the order on the way out — the
+            // next tick of this asks for the player again (see `toggle_pin_volume`).
             if current_video_path.is_some()
                 && !pin_is_collapsed()
+                && !pin_volume_open()
                 && last_topmost_check.elapsed() >= Duration::from_millis(200)
             {
                 last_topmost_check = Instant::now();
@@ -15893,6 +16309,13 @@ pub fn run_preview_window() {
                         );
                         let content = content_box_of(window, dpi, transport_bar, overlay);
 
+                        // The level the pin plays at is the one the tray names now — which is the
+                        // level the preview it came from is already playing at, both engines being
+                        // started at `Volume → Video` — and from the moment the pin is up the level
+                        // is this window's own: a knob moved on its bar moves nothing else (see
+                        // `PinVolume`).
+                        let volume = current_video_volume();
+
                         if let Ok(mut pinned) = PINNED.lock() {
                             let now = Instant::now();
                             *pinned = Some(PinnedPreview {
@@ -15924,6 +16347,11 @@ pub fn run_preview_window() {
                                         .then_some((Instant::now(), 0.0)),
                                     ..Default::default()
                                 },
+                                volume: PinVolume {
+                                    level: volume,
+                                    playing_at: volume,
+                                    ..Default::default()
+                                },
                             });
                         }
 
@@ -15949,6 +16377,12 @@ pub fn run_preview_window() {
                     // or put back on a display that changed: the media is laid out again at the
                     // size it is now drawn at, and the window is put up around the result.
                     PreviewMessage::PinBox(content) => {
+                        // A window given another box has had its media laid out again under it, and
+                        // a volume popup floating over that media belongs to the box it was opened
+                        // in: it is put away rather than left over a picture that has moved out from
+                        // under it.
+                        close_pin_volume();
+
                         let card = AudioCardClock {
                             started: audio_started,
                             from: audio_start_offset,
@@ -16191,6 +16625,7 @@ pub fn run_preview_window() {
                                     media_width,
                                     media_height,
                                     0.0,
+                                    current_video_volume(),
                                 );
                                 let pid =
                                     video_process.as_ref().map(|child| child.id()).unwrap_or(0);
@@ -20079,6 +20514,7 @@ mod tests {
             pressed: None,
             dragging: None,
             transport: PinTransport::default(),
+            volume: PinVolume::default(),
         }
     }
 
@@ -20237,6 +20673,103 @@ mod tests {
         text.overlay = false;
         assert!(!refresh_pin_chrome(&mut text, now, far));
         assert!(text.chrome.caption && text.chrome.bar);
+    }
+
+    /// The volume popup belongs to the button that opened it and to nothing else: it is kept while
+    /// the pointer is anywhere in that control — the panel itself, or the strip the button sits in
+    /// — held while the knob is being dragged, and put away once the pointer has left the whole of
+    /// it, which is a repaint the window owes.
+    #[test]
+    fn a_volume_popup_is_kept_on_its_control_and_put_away_once_the_pointer_has_left_it() {
+        let now = Instant::now();
+        let content = (100, 100, 500, 400);
+        let far = Some((-1000, -1000));
+
+        let mut pin = overlay_pin(content, PinChrome::always());
+        pin.transport_bar = true;
+        pin.volume = PinVolume {
+            level: 40,
+            playing_at: 40,
+            open: true,
+            dragging: false,
+        };
+
+        let window = pin.window_box();
+        let (width, height) = pin.window_size();
+        let strip = pinned_transport_height(pin.dpi, true);
+        let popup = pin_chrome::volume_popup_layout(width, (height - strip).max(0), strip, pin.dpi);
+        let on_the_popup = Some((
+            window.0 + (popup.panel.left + popup.panel.right) / 2,
+            window.1 + (popup.panel.top + popup.panel.bottom) / 2,
+        ));
+
+        // A hand on the panel keeps it, and the strip it came out of stays showing with it — the
+        // popup is drawn in this window's own rows above that strip, and a bar that went away
+        // underneath it would take the button that opened it with it.
+        pin.chrome = PinChrome {
+            caption: false,
+            bar: false,
+            until: None,
+        };
+        assert!(refresh_pin_chrome(&mut pin, now, on_the_popup));
+        assert!(pin.volume.open);
+        assert!(pin.chrome.bar);
+
+        // The button's own strip keeps it too: the pointer is on the control, one row below the
+        // panel.
+        let at_the_button = Some((window.0 + width - 20, window.1 + height - 15));
+        assert!(!refresh_pin_chrome(&mut pin, now, at_the_button));
+        assert!(pin.volume.open);
+
+        // A knob being held keeps it wherever the pointer has got to: a drag that has left the
+        // panel is a level being taken to an end, not a popup being dismissed.
+        pin.volume.dragging = true;
+        assert!(!refresh_pin_chrome(&mut pin, now, far));
+        assert!(pin.volume.open);
+
+        // And a pointer away from the whole of it puts it away, which is the repaint.
+        pin.volume.dragging = false;
+        assert!(refresh_pin_chrome(&mut pin, now, far));
+        assert!(!pin.volume.open);
+
+        // A window whose box has changed has no popup left to put away, and asking again is not a
+        // change: a popup that has gone costs nothing to keep gone.
+        assert!(!refresh_pin_chrome(&mut pin, now, far));
+        assert!(!pin.volume.open);
+    }
+
+    /// The level a pin is given is the tray's at the moment it is taken up, and what a hand does to
+    /// it afterwards is that window's own: nothing of it is written back to `Volume → Video`.
+    #[test]
+    fn a_level_moved_on_a_pin_is_the_pins_and_not_the_setting() {
+        let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+        let previous_pin = PINNED.lock().ok().and_then(|mut pinned| pinned.take());
+
+        let mut video = create_loading_media(320, 240);
+        video.media_type = MediaType::NativeVideo;
+        if let Ok(mut media) = CURRENT_MEDIA.lock() {
+            *media = Some(video);
+        }
+        if let Ok(mut pinned) = PINNED.lock() {
+            *pinned = Some(overlay_pin((100, 100, 420, 340), PinChrome::always()));
+        }
+
+        let setting = current_video_volume();
+        set_pin_volume(12);
+
+        assert_eq!(pinned_volume_level(), 12, "the pin is playing at 12");
+        assert_eq!(
+            current_video_volume(),
+            setting,
+            "`Volume → Video` is left exactly where the user put it"
+        );
+
+        if let Ok(mut pinned) = PINNED.lock() {
+            *pinned = previous_pin;
+        }
+        if let Ok(mut media) = CURRENT_MEDIA.lock() {
+            *media = previous_media;
+        }
     }
 
     fn edge(left: bool, top: bool, right: bool, bottom: bool) -> PinResize {
@@ -20474,6 +21007,7 @@ mod tests {
             pressed: None,
             dragging: None,
             transport: PinTransport::default(),
+            volume: PinVolume::default(),
         };
         let (width, height) = pin.window_size();
 
@@ -20958,6 +21492,7 @@ mod tests {
                         paused_at,
                         ..Default::default()
                     },
+                    volume: PinVolume::default(),
                 });
             }
 
