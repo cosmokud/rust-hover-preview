@@ -252,6 +252,29 @@ fn hover_still_wanted(hidden: &Option<MutexGuard<'static, u64>>, pl: &PendingLoa
         .unwrap_or(true)
 }
 
+/// Whether the media on screen is holding a frame of a video the media engine plays rather
+/// than the placeholder a preview of one is loaded with.
+///
+/// A video preview is loaded with a frame of the size the layout planned and nothing in it:
+/// what the engine decodes is written into that frame, one frame at a time, from the first
+/// one the engine hands over (see `take_native_video_frame`). The placeholder answers this
+/// with no — it is not a picture of anything, and what the whole of it is drawn as is the
+/// backdrop the tray keeps for pictures, seen through what its pixels are mostly transparent
+/// of — so this is what a preview held back for its first frame is revealed by (see
+/// `FirstFrameWait`), and what a preview already on screen is asked before it is painted
+/// again for one.
+fn media_holds_a_frame() -> bool {
+    CURRENT_MEDIA
+        .lock()
+        .ok()
+        .and_then(|media| {
+            media.as_ref().map(|media| {
+                media.media_type.is_native_video() && media.current_frame_is_opaque()
+            })
+        })
+        .unwrap_or(false)
+}
+
 /// The item the hover on screen is about, as the box the view draws it in: the
 /// hook's own answer about the pointer, published with every look at the item under
 /// it and withdrawn with the window.
@@ -5840,6 +5863,35 @@ struct VideoStart {
     path: PathBuf,
     pid: u32,
     started: Instant,
+}
+
+/// A video the media engine plays whose preview is up but has no frame of the file in it
+/// yet, and what is needed to put that preview up once there is one.
+///
+/// A preview of a video is loaded with a placeholder frame — the frame the engine's own
+/// frames land in rather than a picture of anything (see `take_native_video_frame`) — and
+/// the engine is asked to play rather than made to: `Load` and `Play` answer before the
+/// engine has read the file's header, so a load lands with a placeholder that nothing has
+/// been drawn into yet, and the first frame arrives on a tick of its own.
+///
+/// Opening the window on that placeholder is what is seen as a flash of the backdrop at
+/// the start of a hover: the placeholder is not a picture of the file, and every pixel of
+/// it is mostly transparent — which, composed over the backdrop the tray keeps for
+/// pictures, is the backdrop itself for as long as the engine takes to start. So the
+/// install holds the window back, and this is what it held it with: the frame whose
+/// arrival is the reveal is the first one the engine hands over.
+#[derive(Clone, Copy)]
+struct FirstFrameWait {
+    /// The hover that held the preview back. A newer hover installs its own media and puts
+    /// its own window up, and this is not what reveals that one.
+    generation: u64,
+    /// The hide count the install was under (see `HIDDEN_EPOCH`): a hide since is the
+    /// pointer having left the file, and no window is put up for a hover that has gone.
+    epoch: u64,
+    /// Where this hover laid the preview out, which is where the frame is painted: while
+    /// the wait is outstanding the window is the wait's own — the spinner's box at the
+    /// pointer, or whatever the hover before this one left on screen.
+    pos: (i32, i32),
 }
 
 /// How long a player is given to put its window up before the wait for it is given up
@@ -13560,6 +13612,10 @@ pub fn run_preview_window() {
         // for a video, which the spinner stands in for until the player's window is
         // there (see `VideoStart`).
         let mut video_start: Option<VideoStart> = None;
+        // A video the media engine plays whose window has been held back for its first
+        // frame: the preview is put up by the frame's arrival rather than opened on the
+        // placeholder its load lands with (see `FirstFrameWait`).
+        let mut first_frame_wait: Option<FirstFrameWait> = None;
 
         // Message loop
         let mut msg = MSG::default();
@@ -13598,6 +13654,10 @@ pub fn run_preview_window() {
                 }
                 current_video_path = None;
                 video_pos = (0, 0, 0, 0);
+                // A preview held back for a video's first frame goes with the media the
+                // reset above has already dropped: the session it was waiting on is the
+                // one the resume let go of, and the frame it was for is not coming.
+                first_frame_wait = None;
 
                 // A browser engine is a process that does not survive a suspend in any
                 // state worth keeping, so it is let go with everything else and begun
@@ -13938,6 +13998,37 @@ pub fn run_preview_window() {
                 render_layered_preview(hwnd);
             }
 
+            // A video the engine plays whose preview was held back for its first frame: the
+            // engine has handed one over — the repaint above is of it — and what is left of
+            // the wait is the window, which is put up here if it is not up already. A window
+            // that is on screen needs nothing of this: what it was holding was a wait's
+            // frame or another preview's, and the frame that landed is drawn at the place
+            // this hover was laid out at rather than at that window's own (see `FirstFrameWait`).
+            if let Some(wait) = first_frame_wait {
+                if wait.generation != current_generation || wait.epoch != hidden_epoch() {
+                    first_frame_wait = None;
+                } else if media_holds_a_frame() {
+                    first_frame_wait = None;
+
+                    if !pinned() {
+                        render_layered_preview_at(hwnd, wait.pos.0, wait.pos.1);
+                    }
+
+                    if !IsWindowVisible(hwnd).as_bool() {
+                        let _ = SetWindowPos(
+                            hwnd,
+                            HWND_TOPMOST,
+                            0,
+                            0,
+                            0,
+                            0,
+                            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW,
+                        );
+                        let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+                    }
+                }
+            }
+
             // A page an engine has finished with, held apart from the hovers: it is
             // not a hover to act on but an answer about the one on screen. Office's
             // tier and the engines beside it send it as a message, a page the render
@@ -14069,7 +14160,9 @@ pub fn run_preview_window() {
                             // frame of it, and an engine that would not start is a file
                             // with no preview rather than a box of the placeholder pixels
                             // a video preview is opened with.
-                            if media_data.media_type.is_native_video() {
+                            let native_video = media_data.media_type.is_native_video();
+
+                            if native_video {
                                 let (width, height) =
                                     (media_data.current_width(), media_data.current_height());
 
@@ -14104,7 +14197,22 @@ pub fn run_preview_window() {
 
                                     continue;
                                 }
+
+                                // A session that is already playing — the hover is back on
+                                // the file, or is a preview of it taken down and asked for
+                                // again — has a frame in hand, and it is taken here rather
+                                // than waited a tick for: what the window is put up with is
+                                // a frame of the file, and an engine that has one has it
+                                // now. A session that has just been asked to play has none,
+                                // and the reveal below is held for it (see `FirstFrameWait`).
+                                media_data.take_native_video_frame();
                             }
+
+                            // Whether this preview has a frame of the video in it: what the
+                            // engine had in hand was taken above, and a preview holding none
+                            // is one nothing is put up for yet.
+                            let video_frame_in_hand =
+                                native_video && media_data.current_frame_is_opaque();
 
                             // A sound is started here, before its card goes up, for the reason
                             // a video's engine is: what the card draws is the clock of a player
@@ -14247,6 +14355,18 @@ pub fn run_preview_window() {
                             // Showing first would flash the previous preview at
                             // the new position and size.
                             //
+                            // A video the engine plays is not painted at all until
+                            // it has a frame of the file: what its load landed with
+                            // is the placeholder frame every video preview is
+                            // loaded with, and the window is held back rather than
+                            // put up on it — a placeholder is not a picture of
+                            // anything, and drawn over the backdrop the tray keeps
+                            // for pictures it *is* that backdrop, which is what is
+                            // seen as a flash of it at the start of a hover. The
+                            // tick that takes the first frame is what puts this
+                            // preview up, at the place its layout came out at (see
+                            // `FirstFrameWait`).
+                            //
                             // The frame and the window it goes into are written
                             // under the hide count's own lock, so a hide cannot
                             // land between the two — and a load the pointer has
@@ -14259,7 +14379,13 @@ pub fn run_preview_window() {
                                     .map(|pl| hover_still_wanted(&hidden, pl))
                                     .unwrap_or(true);
 
-                                if wanted {
+                                if wanted && native_video && !video_frame_in_hand {
+                                    first_frame_wait = pending.as_ref().map(|pl| FirstFrameWait {
+                                        generation: result.generation,
+                                        epoch: pl.hide_epoch,
+                                        pos: (pl.pos_x, pl.pos_y),
+                                    });
+                                } else if wanted {
                                     match pending.as_ref().filter(|_| visible) {
                                         Some(pl) => {
                                             render_layered_preview_at(hwnd, pl.pos_x, pl.pos_y)
