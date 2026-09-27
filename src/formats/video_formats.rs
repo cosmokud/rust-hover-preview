@@ -249,9 +249,7 @@ mod tests {
     #[test]
     fn the_two_lists_put_each_engine_where_it_belongs() {
         let config = AppConfig::default();
-        let native = |name: &str| {
-            matches_video_list(Path::new(name), &config.video_extensions)
-        };
+        let native = |name: &str| matches_video_list(Path::new(name), &config.video_extensions);
 
         // `ts` and `mts` are left out of this: they are claimed by the text lists too, so a file
         // of either name is settled by its own bytes rather than by the list it is in (see

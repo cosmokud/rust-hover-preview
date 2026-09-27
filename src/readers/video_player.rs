@@ -69,7 +69,8 @@ use windows::Win32::Media::MediaFoundation::{
     MF_MEDIA_ENGINE_READY_HAVE_CURRENT_DATA, MF_MEDIA_ENGINE_READY_HAVE_METADATA,
     MF_MEDIA_ENGINE_VIDEO_OUTPUT_FORMAT, MF_MT_AUDIO_NUM_CHANNELS,
     MF_MT_AUDIO_SAMPLES_PER_SECOND, MF_MT_AVG_BITRATE, MF_MT_FRAME_SIZE, MF_MT_MAJOR_TYPE,
-    MF_MT_PIXEL_ASPECT_RATIO, MF_MT_SUBTYPE, MF_PD_DURATION, MF_SOURCE_READER_FIRST_AUDIO_STREAM,
+    MF_MT_PIXEL_ASPECT_RATIO, MF_MT_SUBTYPE, MF_PD_DURATION,
+    MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING, MF_SOURCE_READER_FIRST_AUDIO_STREAM,
     MF_SOURCE_READER_FIRST_VIDEO_STREAM, MF_SOURCE_READER_MEDIASOURCE,
 };
 use windows::Win32::System::Com::{
@@ -95,6 +96,15 @@ const BORDER: MFARGB = MFARGB {
 /// what a sound is answered with then is its beginning, rather than a seek asked for again on
 /// every read of its clock for as long as it is hovered.
 const SEEK_GIVE_UP: Duration = Duration::from_secs(3);
+
+/// How long a session is given to hand over its first frame before the engine is taken to be
+/// failing at the file rather than slow to start it.
+///
+/// Reading a file's first frame is a fraction of a second's work for a file on this machine, so
+/// this is a give-up rather than a wait anything is expected to reach. It is generous on purpose:
+/// what the answer does is hand the file to FFmpeg's player, and a file that was merely slow to
+/// start would be a preview taken away from the engine that could have drawn it.
+const FIRST_FRAME_GIVE_UP: Duration = Duration::from_secs(3);
 
 /// The engine's event sink, which is what the engine needs before it will run at all —
 /// `MF_MEDIA_ENGINE_CALLBACK` is required in every mode.
@@ -146,6 +156,15 @@ struct Session {
     height: u32,
     path: PathBuf,
     failed: Arc<AtomicBool>,
+    /// Whether a frame of the file has been handed over at all.
+    ///
+    /// A session is not a promise that a picture will come of it: what the engine accepts and
+    /// then cannot draw is a file whose decoder and converter are there and whose *pipeline* is
+    /// not — an H.264 film in a chroma the hardware decoder has no mode for, which is a file
+    /// this engine is handed by a probe that asked a question it could answer and then fails at
+    /// playback. What tells that apart from a video that is merely slow to start is this: no
+    /// frame at all, some while after the session began (see [`failing_path`]).
+    drew: bool,
     /// Where the sound was asked to start, while the engine has not taken it there yet.
     ///
     /// A seek is made of a source the engine has read the header of, and the header is not
@@ -340,6 +359,66 @@ pub fn is_playing() -> bool {
     })
 }
 
+/// The file the engine is failing at, if it is failing at one: a session with a surface that has
+/// been up a while and has not handed over a single frame of it.
+///
+/// It is how the app finds out that a question a probe answered yes to was still the wrong
+/// question. A probe asks the engine's *parts* — a decoder for the stream and a converter to the
+/// format this app composes in — and the engine plays through a pipeline of its own, which can
+/// have no mode for a file the parts both accept: an H.264 film in a chroma the hardware decoder
+/// does not do is decoded and converted happily by a source reader, and never drawn by the
+/// engine. What is left of such a file without this is a preview of the placeholder pixels — the
+/// pixels a video preview is opened with and that nothing replaces — so the app asks this on the
+/// tick and answers it with [`mark_unplayable`], which is what hands the file to FFmpeg's player.
+///
+/// Only a session with a surface is asked about: a sound has no frames to hand over and is never
+/// waiting for one.
+pub fn failing_path() -> Option<PathBuf> {
+    SESSION.with(|slot| {
+        let slot = slot.borrow();
+        let session = slot.as_ref()?;
+
+        // A session that was asked to pause hands nothing over because nothing was asked of it,
+        // which is not a session failing at its file: a pin whose pause was pressed before the
+        // first frame arrived is a file this side stopped.
+        if unsafe { session.engine.IsPaused() }.as_bool() {
+            return None;
+        }
+
+        (session.bitmap.is_some()
+            && !session.drew
+            && session.began.elapsed() >= FIRST_FRAME_GIVE_UP)
+            .then(|| session.path.clone())
+    })
+}
+
+/// Write a file down as one the media engine cannot draw, and let go of the session that was
+/// failing at it, so that what plays the file from here on is FFmpeg's player.
+///
+/// The answer is held where the probe's own answer is held and the same way — per file and the
+/// version of it, in the same map — because it is the same question. What a probe answers yes to
+/// and the engine then fails at is that answer being wrong about this file, and a correction
+/// belongs where the answer was read from: the routing asks [`plays`] and gets this, the next
+/// hover of the file takes the other road, and the load that follows agrees with it. A file
+/// written again is a file asked about again, since the version is part of the key.
+///
+/// The session is stopped rather than left running: an engine that has not drawn a frame of the
+/// file in all this time is not going to, and what it is holding is the file.
+pub fn mark_unplayable(path: &Path) {
+    let key = head::key(path);
+
+    if let Ok(mut held) = PLAYABLE.lock() {
+        if held.len() >= PLAYABLE_MAX_ENTRIES {
+            held.clear();
+        }
+        held.insert(key, false);
+    }
+
+    if playing_path().as_deref() == Some(path) {
+        stop();
+    }
+}
+
 /// How far into the file the running session has played, in seconds.
 ///
 /// It is the engine's own clock rather than this app's, which is what makes it the right
@@ -413,8 +492,31 @@ pub fn can_play(path: &Path) -> bool {
     let Some(byte_stream) = open_stream(path) else {
         return false;
     };
+
+    // The reader is asked for decoded frames in the format this app composes in, and that is a
+    // question with two halves: a decoder for the stream, and something to turn what the decoder
+    // hands back into RGB32 — which in the ordinary case is NV12, and what turns NV12 into RGB32
+    // is the video processor MFT, inserted by the reader only where it has been told to insert it.
+    // Asking without this attribute asks whether the *decoder itself* delivers RGB32, which no
+    // H.264 decoder does and no film with one can answer yes to: every video of every kind is
+    // answered with no, and the file goes to FFmpeg's player for a reason that has nothing to do
+    // with the file. What the engine needs to play a video into a surface of its own is the same
+    // two things — decoder and converter — since frame-server mode is asked for ARGB32, so this
+    // stays the question `can_play` is documented to ask rather than being widened to "is there a
+    // decoder at all", which would answer yes for files the engine then cannot draw.
+    let mut attributes: Option<IMFAttributes> = None;
+    if unsafe { MFCreateAttributes(&mut attributes, 1) }.is_err() {
+        return false;
+    }
+    let Some(attributes) = attributes else {
+        return false;
+    };
+    if unsafe { attributes.SetUINT32(&MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING, 1) }.is_err() {
+        return false;
+    }
+
     let Ok(reader) =
-        (unsafe { MFCreateSourceReaderFromByteStream(&byte_stream, None::<&IMFAttributes>) })
+        (unsafe { MFCreateSourceReaderFromByteStream(&byte_stream, Some(&attributes)) })
     else {
         return false;
     };
@@ -716,6 +818,7 @@ impl Session {
             height,
             path: path.to_path_buf(),
             failed,
+            drew: false,
             pending_seek: None,
             began: Instant::now(),
         };
@@ -816,6 +919,10 @@ impl Session {
                 .TransferVideoFrame(&destination, None, &rect, Some(&BORDER))
         }
         .ok()?;
+
+        // A frame of the file has been drawn: whatever becomes of this session later, it is not
+        // a session that never had one (see `failing_path`).
+        self.drew = true;
 
         copy_locked(bitmap, pixels, self.width, self.height).then_some((self.width, self.height))
     }
@@ -972,6 +1079,31 @@ mod tests {
             plain_name(Path::new(r"\\server\share\track.mp3")),
             r"\\server\share\track.mp3",
             "and so is a share written the ordinary way"
+        );
+    }
+
+    /// A file the engine has been watched failing at is a file FFmpeg's player plays from then
+    /// on: the mark is written where the probe's own answer is kept and read by the same
+    /// question, so what the routing asks about the file is the answer this side learned by
+    /// watching it rather than the one it guessed at.
+    #[test]
+    fn a_file_the_engine_failed_at_is_ffmpegs_from_here_on() {
+        // A file of this module's own holding nothing a decoder could read, so that the answer
+        // the mark corrects is one about a file no engine can play rather than about whatever
+        // this machine happens to have decoders for.
+        let folder = std::env::temp_dir()
+            .join("rust-hover-preview-video-tests")
+            .join("unplayable");
+        std::fs::create_dir_all(&folder).expect("a test folder");
+
+        let path = folder.join("not-a-film.mp4");
+        std::fs::write(&path, b"not a film at all").expect("the file");
+
+        mark_unplayable(&path);
+
+        assert!(
+            !plays(&path),
+            "the mark is what the router is answered with, not the probe"
         );
     }
 }
