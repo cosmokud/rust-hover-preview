@@ -527,11 +527,15 @@ pub(crate) enum CaptionButton {
     Close,
 }
 
-/// What a caption is drawn from: the name of what is pinned, whether it is maximized, and
-/// which button the pointer is on, if any.
+/// What a caption is drawn from: the name of what is pinned, whether it is maximized, whether it
+/// offers a maximize at all, and which button the pointer is on, if any.
 pub(crate) struct Caption<'a> {
     pub(crate) title: &'a str,
     pub(crate) maximized: bool,
+    /// Whether this pin has a maximum to go to. A sound's card does not: the card is its own
+    /// size, so there is no larger box to give it and the button would be one that does nothing
+    /// (see `pin_frame`).
+    pub(crate) maximizable: bool,
     pub(crate) hovered: Option<CaptionButton>,
     pub(crate) pressed: Option<CaptionButton>,
 }
@@ -539,29 +543,48 @@ pub(crate) struct Caption<'a> {
 /// Where a caption's buttons are, in the caption's own coordinates: each one's box, left to
 /// right. They are the caption's own height and sit against its right edge, which is where a
 /// hand goes for a window it wants to close — and the same place Windows puts them.
-pub(crate) fn button_boxes(width: i32, height: i32, dpi: u32) -> [CaptionButtonBox; 3] {
-    let button = text_paint::scaled(BUTTON_PIXELS as i32, dpi as f32 / 96.0)
-        .max(1)
-        .min((width / 3).max(1));
-
-    let boxes = |index: i32, kind: CaptionButton| {
-        let right = width - index * button;
-        CaptionButtonBox {
-            kind,
-            rect: RECT {
-                left: right - button,
-                top: 0,
-                right,
-                bottom: height,
-            },
-        }
+///
+/// A caption without a maximize carries two buttons rather than three, and the two it carries
+/// keep their own places at that edge: closing a window is a gesture made by position, and a
+/// close button that moved because the window it is on has nothing to maximize would be a
+/// window whose close button is where a maximize is on every other one.
+pub(crate) fn button_boxes(
+    width: i32,
+    height: i32,
+    dpi: u32,
+    maximizable: bool,
+) -> Vec<CaptionButtonBox> {
+    let kinds: &[CaptionButton] = if maximizable {
+        &[
+            CaptionButton::Minimize,
+            CaptionButton::Maximize,
+            CaptionButton::Close,
+        ]
+    } else {
+        &[CaptionButton::Minimize, CaptionButton::Close]
     };
 
-    [
-        boxes(2, CaptionButton::Minimize),
-        boxes(1, CaptionButton::Maximize),
-        boxes(0, CaptionButton::Close),
-    ]
+    let button = text_paint::scaled(BUTTON_PIXELS as i32, dpi as f32 / 96.0)
+        .max(1)
+        .min((width / kinds.len().max(1) as i32).max(1));
+
+    kinds
+        .iter()
+        .enumerate()
+        .map(|(index, kind)| {
+            let from_the_right = kinds.len() as i32 - 1 - index as i32;
+            let right = width - from_the_right * button;
+            CaptionButtonBox {
+                kind: *kind,
+                rect: RECT {
+                    left: right - button,
+                    top: 0,
+                    right,
+                    bottom: height,
+                },
+            }
+        })
+        .collect()
 }
 
 /// One caption button and the box it occupies.
@@ -578,8 +601,9 @@ pub(crate) fn button_at(
     width: i32,
     height: i32,
     dpi: u32,
+    maximizable: bool,
 ) -> Option<CaptionButton> {
-    button_boxes(width, height, dpi)
+    button_boxes(width, height, dpi, maximizable)
         .into_iter()
         .find(|button| {
             x >= button.rect.left
@@ -627,9 +651,9 @@ pub(crate) fn paint_caption(
         hairline,
     );
 
-    let buttons = button_boxes(width, height, dpi);
-    for button in buttons {
-        paint_button(surface, palette, caption, button, scale);
+    let buttons = button_boxes(width, height, dpi, caption.maximizable);
+    for button in &buttons {
+        paint_button(surface, palette, caption, *button, scale);
     }
 
     let title_right = buttons
@@ -1253,7 +1277,7 @@ mod tests {
 
     #[test]
     fn the_buttons_sit_against_the_right_edge_in_the_order_windows_has_them() {
-        let buttons = button_boxes(600, 30, 96);
+        let buttons = button_boxes(600, 30, 96, true);
 
         assert_eq!(buttons[0].kind, CaptionButton::Minimize);
         assert_eq!(buttons[1].kind, CaptionButton::Maximize);
@@ -1265,11 +1289,57 @@ mod tests {
         // And a point is on the button it looks like it is on, or on none of them.
         let close = buttons[2].rect;
         assert_eq!(
-            button_at(close.left + 1, 5, 600, 30, 96),
+            button_at(close.left + 1, 5, 600, 30, 96, true),
             Some(CaptionButton::Close)
         );
-        assert_eq!(button_at(1, 5, 600, 30, 96), None);
-        assert_eq!(button_at(close.left + 1, 40, 600, 30, 96), None);
+        assert_eq!(button_at(1, 5, 600, 30, 96, true), None);
+        assert_eq!(button_at(close.left + 1, 40, 600, 30, 96, true), None);
+    }
+
+    /// A pin with nothing to maximize — a sound's card — carries the two buttons that mean
+    /// something on it, packed against the right edge the way Windows packs a window's: the one
+    /// that closes it keeps the place it has on every other caption, and the one beside it is
+    /// the minimize that was there before.
+    #[test]
+    fn a_caption_without_a_maximize_keeps_the_close_button_where_it_was() {
+        let three = button_boxes(600, 30, 96, true);
+        let two = button_boxes(600, 30, 96, false);
+
+        assert_eq!(two.len(), 2);
+        assert_eq!(two[0].kind, CaptionButton::Minimize);
+        assert_eq!(two[1].kind, CaptionButton::Close);
+
+        let close = three
+            .iter()
+            .find(|button| button.kind == CaptionButton::Close)
+            .expect("a close button")
+            .rect;
+        let minimize = three
+            .iter()
+            .find(|button| button.kind == CaptionButton::Minimize)
+            .expect("a minimize button")
+            .rect;
+
+        assert_eq!(two[1].rect.left, close.left);
+        assert_eq!(two[1].rect.right, close.right);
+        assert_eq!(two[0].rect.right, two[1].rect.left);
+        assert_eq!(two[0].rect.right - two[0].rect.left, minimize.right - minimize.left);
+
+        // And the space the button used to take is a button's, not a hole: it is the minimize
+        // that has moved along into it.
+        let maximize = three
+            .iter()
+            .find(|button| button.kind == CaptionButton::Maximize)
+            .expect("a maximize button")
+            .rect;
+        assert_eq!(
+            button_at(maximize.left + 1, 5, 600, 30, 96, false),
+            Some(CaptionButton::Minimize)
+        );
+        assert_eq!(
+            button_at(maximize.left + 1, 5, 600, 30, 96, true),
+            Some(CaptionButton::Maximize)
+        );
     }
 
     #[test]

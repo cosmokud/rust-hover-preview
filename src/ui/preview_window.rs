@@ -100,16 +100,17 @@ use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DispatchMessageW,
     EnumWindows, GetCursorPos, GetSystemMetrics, GetWindow, GetWindowLongPtrW, GetWindowRect,
     GetWindowThreadProcessId, IsWindow, IsWindowVisible, LoadCursorW, MoveWindow, PeekMessageW,
-    RegisterClassExW, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow,
+    RegisterClassExW, SetCursor, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow,
     ShowWindowAsync, SystemParametersInfoW, TrackPopupMenu, TranslateMessage, UpdateLayeredWindow,
-    CS_HREDRAW, CS_VREDRAW, GWL_EXSTYLE, GW_OWNER, HWND_TOPMOST, IDC_ARROW, MF_STRING, MSG,
+    CS_HREDRAW, CS_VREDRAW, GWL_EXSTYLE, GW_OWNER, HWND_TOPMOST, IDC_ARROW, IDC_SIZENESW,
+    IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE, MF_STRING, MSG,
     PBT_APMRESUMEAUTOMATIC, PBT_APMRESUMESUSPEND, PBT_APMSTANDBY, PBT_APMSUSPEND, PM_REMOVE,
     SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SPI_GETWORKAREA,
     SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SW_HIDE,
     SW_SHOWNOACTIVATE, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, TPM_LEFTALIGN, TPM_NONOTIFY,
     TPM_RETURNCMD, TPM_TOPALIGN, ULW_ALPHA, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_LBUTTONDOWN,
-    WM_LBUTTONUP, WM_MOUSEMOVE, WM_POWERBROADCAST, WM_RBUTTONUP, WNDCLASSEXW, WS_EX_LAYERED,
-    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    WM_LBUTTONUP, WM_MOUSEMOVE, WM_POWERBROADCAST, WM_RBUTTONUP, WM_SETCURSOR, WNDCLASSEXW,
+    WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
 const PREVIEW_CLASS: PCWSTR = w!("RustHoverPreviewWindow");
@@ -161,6 +162,10 @@ const PIN_DRAG_SLOP_PIXELS: f32 = 4.0;
 const PIN_KEEP_ON_SCREEN_PIXELS: f32 = 64.0;
 /// How wide a band along a pinned window's edge begins a resize.
 const PIN_RESIZE_BORDER_PIXELS: f32 = 6.0;
+/// How small a resize can take the media a pin is showing: the window around it is never given a
+/// smaller body than this, whichever edge is being dragged, so a window cannot be shrunk to
+/// something with no room left to grab.
+const PIN_MIN_MEDIA_PIXELS: f32 = 48.0;
 /// How often a pinned window with a transport bar is painted again while its file plays: the
 /// playhead is a thing that moves on its own, and a quarter of a second is what a sound's card is
 /// repainted at for the same reason (see `AUDIO_CARD_REPAINT`).
@@ -8695,6 +8700,7 @@ unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
         let caption = pin_chrome::Caption {
             title: &paint.title,
             maximized: paint.maximized,
+            maximizable: paint.maximizable,
             hovered: paint.hovered,
             pressed: paint.pressed,
         };
@@ -8809,6 +8815,8 @@ struct PinnedPaint {
     dpi: u32,
     title: String,
     maximized: bool,
+    /// Whether this pin's caption offers a maximize at all (see `PinFrame`).
+    maximizable: bool,
     hovered: Option<pin_chrome::CaptionButton>,
     pressed: Option<pin_chrome::CaptionButton>,
     transport: PinTransport,
@@ -8834,6 +8842,7 @@ fn pinned_paint() -> Option<PinnedPaint> {
             .map(|name| name.to_string_lossy().to_string())
             .unwrap_or_default(),
         maximized: pin.restore.is_some(),
+        maximizable: pin.frame != PinFrame::None,
         hovered: pin.hovered,
         pressed: pin.pressed,
         // Where the bar is drawn: where the pointer has dragged it while a drag is going, and
@@ -9700,6 +9709,17 @@ unsafe extern "system" fn window_proc(
         WM_DISPLAYCHANGE | WM_DPICHANGED => {
             reset_preview_after_display_change(hwnd);
             DISPLAY_RESET.store(true, Ordering::Release);
+            LRESULT(0)
+        }
+        WM_SETCURSOR => {
+            // What the pointer is over on a pinned window, said with the pointer itself: an edge
+            // of one is a resize, and a resize is the one thing a window has no other way of
+            // announcing (see `pinned_set_cursor`). The point in this message is in screen
+            // coordinates, unlike every other message this window handles.
+            let (screen_x, screen_y) = message_point(lparam);
+            if pinned() && pinned_set_cursor(hwnd, screen_x, screen_y) {
+                return LRESULT(1);
+            }
             LRESULT(0)
         }
         WM_LBUTTONDOWN => {
@@ -10806,22 +10826,29 @@ fn pinned_room(bounds: ScreenBounds, dpi: u32, transport: bool) -> ScreenBounds 
     }
 }
 
-/// The box the media of a pinned preview takes when its window is given a room: the largest
-/// box of the media's own shape that fits it — the rule every other preview is placed by (see
+/// The box the media of a pinned preview takes when its window is given a room: the largest box
+/// of the media's own shape that fits it — the rule every other preview is placed by (see
 /// `scale_dimensions`).
 ///
-/// What a pin is never given is the letterbox a box of a fixed shape would leave: the window
-/// is fitted to the media, so a maximized photograph is the largest the display can show of
-/// it rather than the size of the display, and every band of the window is filled by the
-/// thing it is a band of.
-fn pinned_media_box(orig_dims: (u32, u32), room: ScreenBounds) -> (i32, i32) {
+/// What a pin is never given is the letterbox a box of a fixed shape would leave: the window is
+/// fitted to the media, so every band of it is filled by the thing it is a band of. At
+/// fit-to-screen the media is scaled up to the room as well as down to it, which is what makes a
+/// maximize a maximize — a small picture is drawn as large as the display can show it rather than
+/// sitting in the middle of the screen at its own size — and at a percentage it is the size the
+/// app would have hovered it at, which is what a display change keeps (see `toggle_pin_maximized`
+/// and `replace_pinned_window`).
+fn pinned_media_box(
+    orig_dims: (u32, u32),
+    room: ScreenBounds,
+    scale: PreviewScale,
+) -> (i32, i32) {
     let (room_width, room_height) = room.room();
     let (width, height) = scale_dimensions(
         orig_dims.0.max(1),
         orig_dims.1.max(1),
         room_width,
         room_height,
-        PreviewScale::Percent(100),
+        scale,
     );
 
     (width as i32, height as i32)
@@ -10874,6 +10901,9 @@ struct PinnedPreview {
     /// Whether this kind carries a transport bar, decided when the pin was taken up: it is the
     /// same answer for as long as the pin lasts, and the window's own height is measured from it.
     transport_bar: bool,
+    /// What the edges and the caption do for this kind, decided when the pin was taken up for the
+    /// same reason the line above is (see `PinFrame`).
+    frame: PinFrame,
     /// Whether the window is collapsed into the round bubble the minimize button leaves.
     collapsed: bool,
     /// The caption button the pointer is over and the one it has pressed: what the caption is
@@ -10912,6 +10942,34 @@ struct PinTransport {
 /// Whether a kind is one the transport bar is drawn for.
 fn pin_transport_kind(kind: Option<MediaType>) -> bool {
     matches!(kind, Some(MediaType::Video) | Some(MediaType::NativeVideo))
+}
+
+/// What a pinned window's edges and caption do, which is a question about the kind of thing
+/// inside it.
+///
+/// The rule under all three is the one thing a preview is never given: a bar. A picture, a
+/// video, a rendered page — anything whose pixels are the file's own shape — is resized by
+/// scaling the whole box, so its box can only ever be a box of its own shape and the media fills
+/// it exactly. A page that is *laid out* to the box it is given, like a document, needs no such
+/// rule: any box it is handed is a box it draws text into, so its edges move one at a time. And a
+/// sound's card is neither: it is its own size, and a window around it would only be a window
+/// with room in it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum PinFrame {
+    /// Shaped: every edge and corner scales both sides, keeping the media's shape.
+    Shaped,
+    /// Laid out to any box: an edge resizes that edge alone.
+    Free,
+    /// Nothing to frame: no resize and no maximize.
+    None,
+}
+
+fn pin_frame(kind: Option<MediaType>) -> PinFrame {
+    match kind {
+        Some(MediaType::Audio) => PinFrame::None,
+        Some(MediaType::Text) | Some(MediaType::Archive) => PinFrame::Free,
+        _ => PinFrame::Shaped,
+    }
 }
 
 /// The kind of media on screen, which is what the transport's own questions are answered by.
@@ -11398,8 +11456,9 @@ fn relayout_pinned_media(
         Some(_) => {
             let cancel = Arc::new(AtomicBool::new(false));
             if let Some(media) =
-                load_media(path, width, height, PreviewScale::Percent(100), dpi, cancel)
+                load_media(path, width, height, PreviewScale::FitToScreen, dpi, cancel)
             {
+                let media = keep_text_place(media);
                 if let Ok(mut current) = CURRENT_MEDIA.lock() {
                     if let Some(ref mut existing) = *current {
                         existing.cancel_background_work();
@@ -11410,6 +11469,38 @@ fn relayout_pinned_media(
         }
         None => {}
     }
+}
+
+/// Carry where a page of text was up to — the line its frame starts at and what was selected —
+/// from the media being replaced onto the one that replaces it.
+///
+/// A pinned text preview is laid out again whenever its window is given another box, and a box is
+/// what the document is wrapped for: without this, resizing the window of a document someone is
+/// reading would put them back at the top of it. The two positions survive being carried because
+/// they are places in the document rather than points on the screen (see `Selection`), and the
+/// rest of the state — the lines, the scrollbar, what can be reached — belongs to the box the new
+/// media was laid out in.
+///
+/// It takes the lock itself and is called *before* the one above is taken, for the reason the
+/// deadlock in `pin_media_is_alive` is written down as: a lock this thread already holds is not a
+/// lock it can wait for.
+fn keep_text_place(media: MediaData) -> MediaData {
+    let Ok(current) = CURRENT_MEDIA.lock() else {
+        return media;
+    };
+    let Some(old) = current
+        .as_ref()
+        .and_then(|existing| existing.text_state.as_ref())
+    else {
+        return media;
+    };
+
+    let mut media = media;
+    if let Some(state) = media.text_state.as_mut() {
+        state.first_line = old.first_line;
+        state.selection = old.selection;
+    }
+    media
 }
 
 /// The clock a sound's card is drawn from, which belongs to the preview loop and not to the
@@ -11538,7 +11629,7 @@ fn replace_pinned_window() -> Option<PreviewMessage> {
         (pin.content.2 - pin.content.0).max(1) as u32,
         (pin.content.3 - pin.content.1).max(1) as u32,
     );
-    let (width, height) = pinned_media_box(shape, room);
+    let (width, height) = pinned_media_box(shape, room, PreviewScale::Percent(100));
     let content = clamp_pinned_box(
         (
             pin.content.0,
@@ -11556,11 +11647,16 @@ fn replace_pinned_window() -> Option<PreviewMessage> {
 
 /// Maximize a pinned window, or restore one that is maximized.
 ///
-/// Maximizing gives the media the largest box of its own shape the display has room for, at
-/// the scale the tray asks a preview to be shown at — a picture's own scale setting, the
-/// document's, whichever kind it turned out to be — so what the button does is what
-/// `Fit to Screen` would have done to the same file, and not a box of the display's shape
-/// stretched to fill it. Restoring puts back the box the window had, exactly as it was.
+/// Maximizing is Fit to Screen: the media is given the largest box of its own shape the display's
+/// work area has room for — scaled *up* to it as well as down, so a small picture fills the
+/// screen rather than sitting at its own size in the middle of it — and the box is put in the
+/// middle of that area, with the caption above it and the transport bar below it where the kind
+/// has one. Nothing about it is clipped and nothing is stretched: what is left over when the
+/// display's shape and the media's disagree is a margin at the sides or above and below, which is
+/// what a maximized window of any shape has always done. For a kind that is laid out to its box
+/// rather than scaled, the largest box is the room itself and the page is drawn into it.
+///
+/// Restoring puts back the box the window had, exactly as it was.
 fn toggle_pin_maximized(request: &mut Option<PreviewMessage>) {
     let Ok(mut pinned) = PINNED.lock() else {
         return;
@@ -11578,7 +11674,13 @@ fn toggle_pin_maximized(request: &mut Option<PreviewMessage>) {
                 (pin.content.2 - pin.content.0).max(1) as u32,
                 (pin.content.3 - pin.content.1).max(1) as u32,
             );
-            let (width, height) = pinned_media_box(shape, room);
+            let (width, height) = match pin.frame {
+                PinFrame::Free => (
+                    (room.right - room.left).max(1),
+                    (room.bottom - room.top).max(1),
+                ),
+                _ => pinned_media_box(shape, room, PreviewScale::FitToScreen),
+            };
 
             pin.restore = Some(pin.content);
             (
@@ -12098,7 +12200,7 @@ fn content_box_of(window: ScreenRegion, dpi: u32, transport: bool) -> ScreenRegi
 /// button it is over — a caption lights up as a pointer crosses it, the way a Windows one does —
 /// and, while a press is being held, the drag or the resize it began.
 unsafe fn pinned_mouse_move(hwnd: HWND, x: i32, y: i32) {
-    let Some((caption_height, dpi, width)) = pinned_caption_geometry() else {
+    let Some(caption) = pinned_caption_geometry() else {
         return;
     };
 
@@ -12120,8 +12222,17 @@ unsafe fn pinned_mouse_move(hwnd: HWND, x: i32, y: i32) {
         return;
     }
 
-    let hovered = (y < caption_height)
-        .then(|| pin_chrome::button_at(x, y, width, caption_height, dpi))
+    let hovered = (y < caption.height)
+        .then(|| {
+            pin_chrome::button_at(
+                x,
+                y,
+                caption.width,
+                caption.height,
+                caption.dpi,
+                caption.frame != PinFrame::None,
+            )
+        })
         .flatten();
     let changed = {
         let Ok(mut pinned) = PINNED.lock() else {
@@ -12158,13 +12269,26 @@ unsafe fn pinned_mouse_move(hwnd: HWND, x: i32, y: i32) {
     }
 }
 
-/// The pinned window's caption, as the pointer's questions need it.
-fn pinned_caption_geometry() -> Option<(i32, u32, i32)> {
+/// What the pointer's questions about a pinned window's caption need: how tall the strip is, the
+/// scale it is drawn at, the window's own width, and what this pin's edges and buttons do.
+struct PinnedCaption {
+    height: i32,
+    dpi: u32,
+    width: i32,
+    frame: PinFrame,
+}
+
+fn pinned_caption_geometry() -> Option<PinnedCaption> {
     let pinned = PINNED.lock().ok()?;
     let pin = pinned.as_ref()?;
     (!pin.collapsed).then(|| {
         let (width, _) = pin.window_size();
-        (pinned_caption_height(pin.dpi), pin.dpi, width)
+        PinnedCaption {
+            height: pinned_caption_height(pin.dpi),
+            dpi: pin.dpi,
+            width,
+            frame: pin.frame,
+        }
     })
 }
 
@@ -12326,12 +12450,21 @@ unsafe fn pinned_transport_release(hwnd: HWND, x: i32, y: i32) -> bool {
 /// under a hand that drags it. What is inside the media is left to the media: a text preview's
 /// scrollbar and its selection are the pointer's own, and a press on either is not a move.
 unsafe fn pinned_press(hwnd: HWND, x: i32, y: i32) -> bool {
-    let Some((caption_height, dpi, width)) = pinned_caption_geometry() else {
+    let Some(caption) = pinned_caption_geometry() else {
         return false;
     };
+    let framed = caption.frame != PinFrame::None;
 
-    if y < caption_height {
-        if let Some(button) = pin_chrome::button_at(x, y, width, caption_height, dpi) {
+    if y < caption.height {
+        let button = pin_chrome::button_at(
+            x,
+            y,
+            caption.width,
+            caption.height,
+            caption.dpi,
+            framed,
+        );
+        if let Some(button) = button {
             if let Ok(mut pinned) = PINNED.lock() {
                 if let Some(pin) = pinned.as_mut() {
                     pin.pressed = Some(button);
@@ -12351,25 +12484,20 @@ unsafe fn pinned_press(hwnd: HWND, x: i32, y: i32) -> bool {
         return true;
     }
 
-    let edge = {
-        let Ok(pinned) = PINNED.lock() else {
-            return false;
+    if framed {
+        let edge = {
+            let Ok(pinned) = PINNED.lock() else {
+                return false;
+            };
+            pinned.as_ref().and_then(|pin| pin.resize_edge(x, y))
         };
-        pinned.as_ref().and_then(|pin| pin.resize_edge(x, y))
-    };
-    if let Some(edge) = edge {
-        begin_pin_drag(hwnd, PinDragAction::Resize(edge));
-        return true;
+        if let Some(edge) = edge {
+            begin_pin_drag(hwnd, PinDragAction::Resize(edge));
+            return true;
+        }
     }
 
-    // The media: a picture, an animation, a video's band, a page. All of them are dragged by,
-    // except a text preview, whose own press begins a selection or a scrollbar drag.
-    let interactive = CURRENT_MEDIA
-        .lock()
-        .ok()
-        .and_then(|media| media.as_ref().map(|media| media.text_state.is_some()))
-        .unwrap_or(false);
-    if !interactive {
+    if pinned_content_is_the_pins(x, y) {
         begin_pin_drag(hwnd, PinDragAction::Move);
         return true;
     }
@@ -12377,9 +12505,87 @@ unsafe fn pinned_press(hwnd: HWND, x: i32, y: i32) -> bool {
     false
 }
 
-/// Begin a drag of a pinned window: where the pointer is, what the press was on, and the box the
-/// window had at that moment — which is what the whole drag is measured against, so a window
-/// follows a hand rather than accumulating a drift of little moves.
+/// Whether a press on the media belongs to the pin rather than to the media.
+///
+/// It is the pin's for every kind and every part of the frame — a hand on the picture carries the
+/// window the way a hand on a title bar does, which is what a window's body is for — with one
+/// exception: a text preview has business of its own under the pointer, and the two places that
+/// business is in are the scrollbar (a drag of the thumb) and the text itself (a selection). What
+/// is left of a page is its margins — above the first line, below the last, and the gutters
+/// either side of the column — and the margins are a handle, as the caption is.
+fn pinned_content_is_the_pins(x: i32, y: i32) -> bool {
+    let (media_x, media_y) = media_point(x, y);
+    if text_scroll_drag_target(media_x, media_y).is_some() {
+        return false;
+    }
+
+    let Ok(media) = CURRENT_MEDIA.lock() else {
+        return true;
+    };
+    let Some(media) = media.as_ref() else {
+        return true;
+    };
+    let Some(state) = media.text_state.as_ref() else {
+        return true;
+    };
+
+    !text_preview::point_is_on_text(&state.lines, media_x, media_y)
+}
+
+/// Set the cursor for a point on a pinned window, answering whether this app set it.
+///
+/// A resize is the one gesture a window gives away with the shape of the pointer rather than with
+/// anything drawn, and a pinned window has no other way of saying its edges are its own: an edge
+/// that does not say so is an edge found by trying. A kind that is scaled whole is resized by
+/// both sides at once whichever edge is taken, which is what the diagonal cursor says; a page
+/// that is laid out to its box takes one edge at a time, and the cursor names the edge.
+unsafe fn pinned_set_cursor(hwnd: HWND, screen_x: i32, screen_y: i32) -> bool {
+    let Some(origin) = window_origin(hwnd) else {
+        return false;
+    };
+    let (x, y) = (screen_x - origin.0, screen_y - origin.1);
+
+    let (frame, edge) = {
+        let Ok(pinned) = PINNED.lock() else {
+            return false;
+        };
+        let Some(pin) = pinned.as_ref() else {
+            return false;
+        };
+        if pin.frame == PinFrame::None || pin.dragging.is_some() {
+            return false;
+        }
+
+        (pin.frame, pin.resize_edge(x, y))
+    };
+    let Some(edge) = edge else {
+        return false;
+    };
+
+    let vertical = edge.top || edge.bottom;
+    let horizontal = edge.left || edge.right;
+    let away = (x * 2 < origin.2) == (y * 2 < origin.3);
+    let one_edge = frame == PinFrame::Free && horizontal != vertical;
+
+    let named = if one_edge {
+        // A page that is laid out to its box takes one edge at a time, so the cursor names the
+        // edge the hand is on.
+        if horizontal {
+            IDC_SIZEWE
+        } else {
+            IDC_SIZENS
+        }
+    } else if away {
+        IDC_SIZENWSE
+    } else {
+        IDC_SIZENESW
+    };
+
+    if let Ok(cursor) = LoadCursorW(None, named) {
+        SetCursor(cursor);
+    }
+    true
+}
 unsafe fn begin_pin_drag(hwnd: HWND, action: PinDragAction) {
     let Some(from) = cursor_screen_point() else {
         return;
@@ -12404,7 +12610,7 @@ unsafe fn begin_pin_drag(hwnd: HWND, action: PinDragAction) {
 /// Carry a pinned window's drag on: the pointer has moved, and what the press began is applied to
 /// the box the window had when it began.
 unsafe fn apply_pin_drag(hwnd: HWND) {
-    let (drag, dpi, transport) = {
+    let (drag, dpi, transport, frame) = {
         let Ok(pinned) = PINNED.lock() else {
             return;
         };
@@ -12415,7 +12621,7 @@ unsafe fn apply_pin_drag(hwnd: HWND) {
             return;
         };
 
-        (drag, pin.dpi, pin.transport_bar)
+        (drag, pin.dpi, pin.transport_bar, pin.frame)
     };
 
     let Some(point) = cursor_screen_point() else {
@@ -12431,7 +12637,7 @@ unsafe fn apply_pin_drag(hwnd: HWND) {
             drag.window.3 + dy,
         ),
         PinDragAction::Resize(edge) => {
-            resize_pinned_window(drag.window, edge, dx, dy, dpi, transport)
+            resize_pinned_window(drag.window, edge, dx, dy, dpi, transport, frame)
         }
     };
     let window = clamp_pinned_box(window, dpi);
@@ -12466,10 +12672,15 @@ unsafe fn apply_pin_drag(hwnd: HWND) {
 
 /// The window a resize drag has produced.
 ///
-/// The media keeps its own shape whatever edge is dragged: a preview is never stretched, so a
-/// edge drag scales both sides by what the dragged edge asked for. The corner opposite the one
-/// being dragged stays where it is, which is what makes a window grow away from the hand that is
-/// pulling it.
+/// What the media does with a box of another shape is the whole of the rule (see `PinFrame`). A
+/// kind whose pixels are its own shape keeps that shape whatever edge is dragged: the drag scales
+/// both sides by what the dragged edge asked for, so what the window is given is always a box the
+/// media fills exactly — never a picture with a band of nothing beside it, and never one pulled
+/// out of shape. A kind that is laid out to its box takes the drag one dimension at a time, which
+/// is what a page of text wants: a wider window is a longer line, not a bigger letter.
+///
+/// Whichever it is, the corner opposite the one being dragged stays where it is, which is what
+/// makes a window grow away from the hand that is pulling it.
 fn resize_pinned_window(
     window: ScreenRegion,
     edge: PinResize,
@@ -12477,28 +12688,54 @@ fn resize_pinned_window(
     dy: i32,
     dpi: u32,
     transport: bool,
+    frame: PinFrame,
 ) -> ScreenRegion {
     let content = content_box_of(window, dpi, transport);
     let width = (content.2 - content.0).max(1) as f32;
     let height = (content.3 - content.1).max(1) as f32;
+    let floor = logical_px(dpi, PIN_MIN_MEDIA_PIXELS).max(8) as f32;
 
-    let mut scale = 1.0f32;
-    if edge.right {
-        scale = scale.max((width + dx as f32) / width);
-    }
-    if edge.left {
-        scale = scale.max((width - dx as f32) / width);
-    }
-    if edge.bottom {
-        scale = scale.max((height + dy as f32) / height);
-    }
-    if edge.top {
-        scale = scale.max((height - dy as f32) / height);
-    }
+    let (width, height) = if frame == PinFrame::Free {
+        let mut width = width;
+        let mut height = height;
+        if edge.right {
+            width += dx as f32;
+        }
+        if edge.left {
+            width -= dx as f32;
+        }
+        if edge.bottom {
+            height += dy as f32;
+        }
+        if edge.top {
+            height -= dy as f32;
+        }
 
-    let scale = scale.clamp(0.05, 20.0);
-    let width = (width * scale).round().max(1.0) as i32;
-    let height = (height * scale).round().max(1.0) as i32;
+        (width.max(floor), height.max(floor))
+    } else {
+        let mut scale = 1.0f32;
+        if edge.right {
+            scale = scale.max((width + dx as f32) / width);
+        }
+        if edge.left {
+            scale = scale.max((width - dx as f32) / width);
+        }
+        if edge.bottom {
+            scale = scale.max((height + dy as f32) / height);
+        }
+        if edge.top {
+            scale = scale.max((height - dy as f32) / height);
+        }
+
+        let scale = scale.clamp(0.05, 20.0);
+        (
+            (width * scale).round().max(floor),
+            (height * scale).round().max(floor),
+        )
+    };
+
+    let width = width.round() as i32;
+    let height = height.round() as i32;
     let left = if edge.left {
         content.2 - width
     } else {
@@ -12528,7 +12765,7 @@ unsafe fn pinned_release(hwnd: HWND, x: i32, y: i32) -> bool {
         return true;
     }
 
-    let (pressed, dragging, caption_height, dpi, width) = {
+    let (pressed, dragging, caption_height, dpi, width, framed) = {
         let Ok(mut pinned) = PINNED.lock() else {
             return false;
         };
@@ -12545,6 +12782,7 @@ unsafe fn pinned_release(hwnd: HWND, x: i32, y: i32) -> bool {
             pinned_caption_height(pin.dpi),
             pin.dpi,
             width,
+            pin.frame != PinFrame::None,
         )
     };
 
@@ -12554,7 +12792,7 @@ unsafe fn pinned_release(hwnd: HWND, x: i32, y: i32) -> bool {
 
     if let Some(button) = pressed {
         let still_on_it = y < caption_height
-            && pin_chrome::button_at(x, y, width, caption_height, dpi) == Some(button);
+            && pin_chrome::button_at(x, y, width, caption_height, dpi, framed) == Some(button);
 
         if still_on_it {
             match button {
@@ -14268,6 +14506,7 @@ pub fn run_preview_window() {
                                 restore: None,
                                 dpi,
                                 transport_bar,
+                                frame: pin_frame(kind),
                                 collapsed: false,
                                 hovered: None,
                                 pressed: None,
@@ -18205,6 +18444,7 @@ mod tests {
             0,
             96,
             false,
+            PinFrame::Shaped,
         );
 
         let content = content_box_of(resized, 96, false);
@@ -18223,13 +18463,93 @@ mod tests {
             0,
             96,
             false,
+            PinFrame::Shaped,
         );
         let content = content_box_of(resized, 96, false);
         assert_eq!(content, (-200, 30, 400, 480));
+
+        // A corner asks for both sides at once, and it is the larger of the two that the box
+        // takes, so the media is never smaller than the hand asked for.
+        let resized = resize_pinned_window(
+            window,
+            PinResize {
+                left: false,
+                top: false,
+                right: true,
+                bottom: true,
+            },
+            200,
+            30,
+            96,
+            false,
+            PinFrame::Shaped,
+        );
+        let content = content_box_of(resized, 96, false);
+        assert_eq!(content, (0, 30, 600, 480));
+    }
+
+    /// A page that is laid out to its box — a document, a listing — is resized one dimension at
+    /// a time: a wider window is a longer line, and there is no shape of the file's to keep
+    /// because the box the text is poured into *is* the layout.
+    #[test]
+    fn a_page_that_is_laid_out_to_its_box_is_resized_one_edge_at_a_time() {
+        let window = (0, 0, 400, 300 + pinned_caption_height(96));
+        let resized = resize_pinned_window(
+            window,
+            PinResize {
+                left: false,
+                top: false,
+                right: true,
+                bottom: false,
+            },
+            200,
+            0,
+            96,
+            false,
+            PinFrame::Free,
+        );
+
+        let content = content_box_of(resized, 96, false);
+        assert_eq!(content, (0, 30, 600, 330));
+
+        // And its own floor holds: a page cannot be dragged to nothing.
+        let resized = resize_pinned_window(
+            window,
+            PinResize {
+                left: false,
+                top: false,
+                right: false,
+                bottom: true,
+            },
+            0,
+            -10_000,
+            96,
+            false,
+            PinFrame::Free,
+        );
+        let content = content_box_of(resized, 96, false);
+        assert_eq!(content, (0, 30, 400, 30 + PIN_MIN_MEDIA_PIXELS as i32));
     }
 
     #[test]
-    fn a_pinned_box_keeps_the_shape_of_what_it_is_shown_for() {
+    fn what_a_kind_is_framed_by_follows_what_is_inside_it() {
+        // What is drawn is the file's own shape, so the box can only be a box of that shape.
+        assert_eq!(pin_frame(Some(MediaType::StaticImage)), PinFrame::Shaped);
+        assert_eq!(pin_frame(Some(MediaType::AnimatedGif)), PinFrame::Shaped);
+        assert_eq!(pin_frame(Some(MediaType::Video)), PinFrame::Shaped);
+        assert_eq!(pin_frame(Some(MediaType::NativeVideo)), PinFrame::Shaped);
+        assert_eq!(pin_frame(Some(MediaType::Pdf)), PinFrame::Shaped);
+
+        // A page of text is poured into whatever box it is given, at any shape.
+        assert_eq!(pin_frame(Some(MediaType::Text)), PinFrame::Free);
+        assert_eq!(pin_frame(Some(MediaType::Archive)), PinFrame::Free);
+
+        // And a sound's card is its own size: nothing to resize and nothing to maximize.
+        assert_eq!(pin_frame(Some(MediaType::Audio)), PinFrame::None);
+    }
+
+    #[test]
+    fn a_maximized_box_is_the_display_by_the_medias_own_shape() {
         let room = ScreenBounds {
             left: 0,
             top: 0,
@@ -18237,16 +18557,38 @@ mod tests {
             bottom: 1000,
         };
 
-        // A file larger than the display is fitted to it by its own shape rather than by the
-        // display's, which is the letterbox a box of the display's shape would leave and the one
-        // thing a pinned window is never given.
-        assert_eq!(pinned_media_box((4000, 3000), room), (1000, 750));
-        assert_eq!(pinned_media_box((3000, 4000), room), (750, 1000));
+        // Maximizing is Fit to Screen: the media is given the largest box of its own shape the
+        // room has, which is the room with a margin at two of its sides rather than the room
+        // itself — the letterbox a box of the display's shape would leave is the one thing a
+        // pinned window is never given.
+        assert_eq!(
+            pinned_media_box((4000, 3000), room, PreviewScale::FitToScreen),
+            (1000, 750)
+        );
+        assert_eq!(
+            pinned_media_box((3000, 4000), room, PreviewScale::FitToScreen),
+            (750, 1000)
+        );
 
-        // And one smaller than the display keeps its own size: what a preview is enlarged past
-        // 100% is a picture blurred for nothing, which is the rule every other placement follows
-        // (see `scale_in_room`).
-        assert_eq!(pinned_media_box((400, 300), room), (400, 300));
+        // And one smaller than the display is scaled up to it rather than left at its own size
+        // in the middle of the screen: the button says "as large as this display can show it",
+        // and a box that refused to grow would be a button that did nothing on a small picture.
+        assert_eq!(
+            pinned_media_box((400, 300), room, PreviewScale::FitToScreen),
+            (1000, 750)
+        );
+
+        // What a display change asks for is not the same question: a pin that still fits keeps
+        // the size the user chose for it, and only one that no longer fits is brought down to
+        // the room.
+        assert_eq!(
+            pinned_media_box((400, 300), room, PreviewScale::Percent(100)),
+            (400, 300)
+        );
+        assert_eq!(
+            pinned_media_box((4000, 3000), room, PreviewScale::Percent(100)),
+            (1000, 750)
+        );
     }
 
     #[test]
