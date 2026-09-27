@@ -1071,8 +1071,14 @@ struct VideoCrop {
 
 #[derive(Clone, Copy)]
 struct VideoGeometry {
+    /// The shape the preview is placed at: the crop where the probe settled on one, and the
+    /// frame itself where it did not.
     width: u32,
     height: u32,
+    /// The frame that shape was read from, which is the whole the crop is a part of: what the
+    /// engine's own source rectangle is normalized over (see `video_player::Crop`).
+    frame_width: u32,
+    frame_height: u32,
     crop: Option<VideoCrop>,
     /// How long the file plays, where the probe read it: what a pinned preview's transport bar
     /// is drawn against. Neither engine hands a length over — FFmpeg's player reports nothing at
@@ -5068,6 +5074,8 @@ fn load_video_thumbnail(
         ProbedGeometry::Unmeasurable => VideoGeometry {
             width: 1920,
             height: 1080,
+            frame_width: 1920,
+            frame_height: 1080,
             crop: None,
             duration: None,
         },
@@ -5465,10 +5473,15 @@ fn probe_video_geometry(path: &PathBuf) -> ProbedGeometry {
 
     let crop = best_valid_crop(candidates, src_w, src_h);
 
+    // The frame is kept beside the crop rather than only in the shape, because the two players
+    // are told about a crop in different terms: FFmpeg's player in pixels, and the media engine
+    // as a share of the frame the rectangle was cut from (see `video_player::Crop`).
     let geometry = if let Some(crop) = crop {
         VideoGeometry {
             width: crop.width,
             height: crop.height,
+            frame_width: src_w,
+            frame_height: src_h,
             crop: Some(crop),
             duration: src_duration,
         }
@@ -5476,6 +5489,8 @@ fn probe_video_geometry(path: &PathBuf) -> ProbedGeometry {
         VideoGeometry {
             width: src_w,
             height: src_h,
+            frame_width: src_w,
+            frame_height: src_h,
             crop: None,
             duration: src_duration,
         }
@@ -6463,6 +6478,33 @@ fn video_box(path: &Path) -> Option<(u32, u32)> {
         // Not probed yet: the wait for the probe, which is the box the hover is placed
         // in until the answer lands and the hover is replayed.
         None => Some((office_preview::WAITING_BOX, office_preview::WAITING_BOX)),
+    }
+}
+
+/// The part of a video's frame its preview is drawn from: the crop the probe settled on, in the
+/// frame's own pixels.
+///
+/// It is the one answer both players are given, each in its own terms — FFmpeg's player as a
+/// filter on its command line, and the media engine as the source rectangle of its frame
+/// transfer, which is what it is normalized over here (see `video_player::Crop`). The box is
+/// placed at the crop's shape, so a whole frame drawn into it is scaled down to fit and padded
+/// with the engine's border colour on the sides the file's own bars leave over — which is the
+/// black bar a preview of a file with a crop was growing down two of its edges.
+///
+/// It is read from the cache and never probed for, for the reason `video_box` reads a shape
+/// from there: this is asked on the preview thread, where the probe's two processes are the one
+/// wait that must not happen.
+fn probed_crop(path: &Path) -> Option<video_player::Crop> {
+    match cached_video_geometry(path) {
+        Some(ProbedGeometry::Measured(geometry)) => geometry.crop.map(|crop| video_player::Crop {
+            x: crop.x,
+            y: crop.y,
+            width: crop.width,
+            height: crop.height,
+            frame_width: geometry.frame_width,
+            frame_height: geometry.frame_height,
+        }),
+        _ => None,
     }
 }
 
@@ -14760,6 +14802,7 @@ pub fn run_preview_window() {
                                         width,
                                         height,
                                         current_video_volume(),
+                                        probed_crop(&result.path),
                                     );
                                 }
 
@@ -17377,6 +17420,8 @@ mod tests {
             ProbedGeometry::Measured(VideoGeometry {
                 width: 1920,
                 height: 1080,
+                frame_width: 1920,
+                frame_height: 1080,
                 crop: None,
                 duration: None,
             }),
@@ -18848,7 +18893,7 @@ mod tests {
             // asked for the way the preview loop asks for them, and what comes back is counted.
             // The volume is nothing, so nothing is heard of this.
             if media_engine_plays(&path) {
-                video_player::play(&path, 320, 240, 0);
+                video_player::play(&path, 320, 240, 0, probed_crop(&path));
                 println!("a session over it started: {}", video_player::is_playing());
 
                 let mut pixels = Vec::new();
@@ -18986,6 +19031,8 @@ mod tests {
             ProbedGeometry::Measured(VideoGeometry {
                 width: 640,
                 height: 360,
+                frame_width: 640,
+                frame_height: 360,
                 crop: None,
                 duration: None,
             }),

@@ -18,7 +18,10 @@
 //!
 //!   * it decodes, paces itself, plays the audio and loops — none of which this app does;
 //!   * this side asks, once a tick, whether a frame is due (`OnVideoStreamTick`) and takes
-//!     it (`TransferVideoFrame`) into a bitmap of its own.
+//!     it (`TransferVideoFrame`) into a bitmap of its own, from the crop the probe settled on
+//!     where it settled on one (see [`Crop`]) — the region FFmpeg's player is told to draw
+//!     with its own `crop` filter, and the shape the box is placed at, so that the picture
+//!     fills it rather than being letterboxed inside it.
 //!
 //! What that buys over the ffplay path is the whole of the window machinery a player's
 //! own window needs — the style monitor, the topmost re-assertion, the PID record, the
@@ -64,7 +67,7 @@ use windows::Win32::Media::MediaFoundation::{
     MFAudioFormat_PCM, MFAudioFormat_Vorbis, MFAudioFormat_WMAudioV8, MFAudioFormat_WMAudioV9,
     MFAudioFormat_WMAudio_Lossless, MFCreateAttributes, MFCreateMFByteStreamOnStream,
     MFCreateMediaType, MFCreateSourceReaderFromByteStream, MFMediaType_Audio, MFMediaType_Video,
-    MFVideoFormat_ARGB32, MFVideoFormat_RGB32,
+    MFVideoFormat_ARGB32, MFVideoFormat_RGB32, MFVideoNormalizedRect,
     MFARGB, MF_BYTESTREAM_ORIGIN_NAME, MF_MEDIA_ENGINE_CALLBACK, MF_MEDIA_ENGINE_EVENT_ERROR,
     MF_MEDIA_ENGINE_READY_HAVE_CURRENT_DATA, MF_MEDIA_ENGINE_READY_HAVE_METADATA,
     MF_MEDIA_ENGINE_VIDEO_OUTPUT_FORMAT, MF_MT_AUDIO_NUM_CHANNELS,
@@ -78,9 +81,15 @@ use windows::Win32::System::Com::{
 };
 use windows::Win32::UI::Shell::SHCreateStreamOnFileEx;
 
-/// What the letterboxing is filled with. A video is an opaque rectangle — the window it
-/// used to be played in was opaque too — so the bars inside a frame are black rather than
-/// the backdrop the rest of a frame is composited over.
+/// What the letterboxing is filled with, where a box has any letterboxing in it at all.
+///
+/// The box a preview is placed at is the shape of the picture that goes into it — the probe's
+/// crop where it settled on one, the frame itself where it did not — so an ordinary preview is
+/// filled to its own edges and this is never reached. What is left for it is the box that has
+/// been given another shape since: a pinned window dragged by its edges, into which the engine
+/// scales the picture and pads what is left. A video is an opaque rectangle — the window it
+/// used to be played in was opaque too — so the padding is black rather than the backdrop the
+/// rest of a frame is composited over.
 const BORDER: MFARGB = MFARGB {
     rgbBlue: 0,
     rgbGreen: 0,
@@ -154,6 +163,10 @@ struct Session {
     bitmap: Option<IWICBitmap>,
     width: u32,
     height: u32,
+    /// Where in the frame the picture is taken from, where the probe settled on a crop: the
+    /// rectangle the engine's frame transfer is asked for. The whole frame is `None`, which is
+    /// what a file the probe found no crop in is played with — and what every sound is.
+    source: Option<MFVideoNormalizedRect>,
     path: PathBuf,
     failed: Arc<AtomicBool>,
     /// Whether a frame of the file has been handed over at all.
@@ -231,20 +244,64 @@ pub fn dimensions(path: &Path) -> Option<(u32, u32)> {
     Some((width, height))
 }
 
-/// Start playing `path` into a surface of `width` by `height`, at `volume` per cent.
+/// The part of a video's own frame a preview is drawn from: the rectangle the geometry probe's
+/// cropdetect pass settled on, in the frame's own pixels, together with the frame it is a part
+/// of.
+///
+/// It is the one thing about a crop that both players have to be told, and each is told it in
+/// its own terms — FFmpeg's player as a filter on its command line, and the engine as the source
+/// rectangle of its frame transfer, which is normalized over the frame rather than in pixels
+/// (see [`source_rect`]). What it is for is the difference between a box with black bars in it
+/// and a picture that fills the box: the box is placed at the crop's shape, so a *whole* frame
+/// drawn into one is scaled down to fit and padded with the border colour on the two sides the
+/// file's own bars leave over.
+#[derive(Clone, Copy)]
+pub struct Crop {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+    /// The frame the rectangle is a part of: the probe reads both together, and what the engine
+    /// is told is the rectangle as a share of this.
+    pub frame_width: u32,
+    pub frame_height: u32,
+}
+
+/// A crop as the rectangle the engine's frame transfer is asked for — the same region, in the
+/// normalized coordinates that call takes — or nothing at all for a rectangle with no area in
+/// it or a frame with no size.
+fn source_rect(crop: Crop) -> Option<MFVideoNormalizedRect> {
+    if crop.width == 0 || crop.height == 0 || crop.frame_width == 0 || crop.frame_height == 0 {
+        return None;
+    }
+
+    let frame_width = crop.frame_width as f32;
+    let frame_height = crop.frame_height as f32;
+
+    Some(MFVideoNormalizedRect {
+        left: crop.x as f32 / frame_width,
+        top: crop.y as f32 / frame_height,
+        right: (crop.x + crop.width) as f32 / frame_width,
+        bottom: (crop.y + crop.height) as f32 / frame_height,
+    })
+}
+
+/// Start playing `path` into a surface of `width` by `height`, at `volume` per cent, from
+/// `crop` — the part of the frame to draw, where the probe found the file's own picture to be
+/// smaller than the frame holding it.
 ///
 /// Anything already playing is stopped first, so a video is never two videos. A call that
 /// could not start one leaves nothing behind rather than a session that will never produce
 /// a frame: [`is_playing`] answers for that, and the hover it was for is answered with no
 /// preview.
-pub fn play(path: &Path, width: u32, height: u32, volume: u32) {
+pub fn play(path: &Path, width: u32, height: u32, volume: u32, crop: Option<Crop>) {
     stop();
 
     if width == 0 || height == 0 || !codecs::mf_started() {
         return;
     }
 
-    if let Some(session) = Session::begin(path, Some((width, height)), volume, 0.0) {
+    if let Some(session) = Session::begin(path, Some((width, height)), volume, 0.0, crop) {
         SESSION.with(|slot| *slot.borrow_mut() = Some(session));
     }
 }
@@ -267,7 +324,9 @@ pub fn play_audio(path: &Path, volume: u32, start: f64) {
         return;
     }
 
-    if let Some(session) = Session::begin(path, None, volume, start) {
+    // A sound has no picture, so there is no frame for a crop to be a part of and none is
+    // handed over: the argument is a video's question and is answered as one by the caller.
+    if let Some(session) = Session::begin(path, None, volume, start, None) {
         SESSION.with(|slot| *slot.borrow_mut() = Some(session));
     }
 }
@@ -730,6 +789,7 @@ impl Session {
         surface_size: Option<(u32, u32)>,
         volume: u32,
         start: f64,
+        crop: Option<Crop>,
     ) -> Option<Self> {
         let byte_stream = open_stream(path)?;
 
@@ -739,6 +799,11 @@ impl Session {
             Some((width, height)) => (Some(surface(width, height)?), width, height),
             None => (None, 0, 0),
         };
+
+        // What the picture is taken from, which is settled here rather than at every frame:
+        // the crop where the probe settled on one, and the whole frame where it did not.
+        let source = crop.and_then(source_rect);
+
         let failed = Arc::new(AtomicBool::new(false));
 
         let mut attributes: Option<IMFAttributes> = None;
@@ -816,6 +881,7 @@ impl Session {
             bitmap,
             width,
             height,
+            source,
             path: path.to_path_buf(),
             failed,
             drew: false,
@@ -921,12 +987,20 @@ impl Session {
         };
         let destination: IUnknown = bitmap.cast().ok()?;
 
-        // The whole frame, drawn into the whole surface: what the engine is asked for is
-        // the box the layout planned, and it scales the picture into that box and fills
-        // what is left of it with the border colour.
+        // The picture drawn into the whole surface: the engine is asked for the box the layout
+        // planned and for the part of the frame that goes into it — the crop the probe settled
+        // on, where there is one, which is the shape that box was placed at. What is left of
+        // the box is filled with the border colour, which an ordinary preview has nothing of;
+        // asked for the whole frame while the box is the shape of a crop inside it, the engine
+        // is left with the difference to pad, and the preview grows black bars down the sides
+        // the file's own bars do not cover.
         unsafe {
-            self.engine
-                .TransferVideoFrame(&destination, None, &rect, Some(&BORDER))
+            self.engine.TransferVideoFrame(
+                &destination,
+                self.source.as_ref().map(std::ptr::from_ref),
+                &rect,
+                Some(&BORDER),
+            )
         }
         .ok()?;
 
