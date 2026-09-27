@@ -286,7 +286,6 @@ const ID_TRAY_THEME_LIGHT: u16 = 1050; // Atom One Light
 const ID_TRAY_THEME_DARK: u16 = 1051; // One Dark Pro
 const ID_TRAY_MARKDOWN_RENDERED: u16 = 1052; // Rendered document
 const ID_TRAY_MARKDOWN_SOURCE: u16 = 1053; // Highlighted Markdown source
-const ID_TRAY_TEXT_FULL_MODE: u16 = 1061; // Text previews scroll/select on/off
 /// The `Preview Types` submenu, one command per kind of preview.
 const ID_TRAY_TYPE_IMAGES: u16 = 1062;
 const ID_TRAY_TYPE_VIDEOS: u16 = 1063;
@@ -641,7 +640,6 @@ unsafe extern "system" fn tray_window_proc(
                 }
                 ID_TRAY_MARKDOWN_RENDERED => set_markdown_mode(MarkdownMode::Rendered),
                 ID_TRAY_MARKDOWN_SOURCE => set_markdown_mode(MarkdownMode::Source),
-                ID_TRAY_TEXT_FULL_MODE => toggle_text_preview_full_mode(),
                 ID_TRAY_TYPE_IMAGES => toggle_preview_type(PreviewType::Images),
                 ID_TRAY_TYPE_VIDEOS => toggle_preview_type(PreviewType::Videos),
                 ID_TRAY_TYPE_AUDIO => toggle_preview_type(PreviewType::Audio),
@@ -900,27 +898,11 @@ unsafe fn show_context_menu(hwnd: HWND) {
         w!("Preview Types"),
     );
 
-    // Add the "Text Preview" submenu: whether full mode is on, and the theme, size
-    // and Markdown mode a text preview is painted with.
+    // Add the "Text Preview" submenu: the theme, size and Markdown mode a text preview is
+    // painted with. What a text preview *is* rather than what it shows — the scrollbar, the
+    // selection and the keys that copy it — is the pin's business rather than a setting's: a
+    // text preview pinned with the key becomes one to work in (see the pin in `preview_window`).
     let text_menu = CreatePopupMenu().unwrap();
-
-    // Add "Full Mode" with checkmark
-    let text_full_mode = CONFIG
-        .lock()
-        .map(|c| c.text_preview_full_mode)
-        .unwrap_or(true);
-    let text_full_flags = MF_STRING
-        | if text_full_mode {
-            MF_CHECKED
-        } else {
-            MF_UNCHECKED
-        };
-    let _ = AppendMenuW(
-        text_menu,
-        text_full_flags,
-        ID_TRAY_TEXT_FULL_MODE as usize,
-        w!("Full Mode"),
-    );
 
     // Add the Theme submenu
     let theme = CONFIG.lock().map(|c| c.theme).unwrap_or(TextTheme::Light);
@@ -3423,17 +3405,9 @@ fn set_decode_budget_gb(index: u16) {
     }
 }
 
-/// Full mode changes what a text preview *is* rather than what it shows — it
-/// scrolls, it can be selected from, and the pointer can rest on it — so the
-/// preview on screen is rebuilt the same way a new font size rebuilds it.
-fn toggle_text_preview_full_mode() {
-    if let Ok(mut config) = CONFIG.lock() {
-        config.text_preview_full_mode = !config.text_preview_full_mode;
-        config.save();
-    }
-    refresh_preview();
-}
-
+/// A text preview's own keys and pointer are the pin's business now: the row that used to
+/// switch full mode on for every hover of a text file is gone, and pinning one with the pin key
+/// is what brings it up as something to work in (see `current_text_options`).
 fn set_text_font_scale(percent: u32) {
     if let Ok(mut config) = CONFIG.lock() {
         config.text_font_scale_percent = sanitize_text_font_scale_percent(percent);
@@ -4099,7 +4073,6 @@ mod tests {
 
         // The ids around them, of the menus that grew up beside the `Background` one.
         for elsewhere in [
-            ID_TRAY_TEXT_FULL_MODE,
             ID_TRAY_THEME_LIGHT,
             ID_TRAY_MARKDOWN_RENDERED,
             ID_TRAY_OPEN_CONFIG,

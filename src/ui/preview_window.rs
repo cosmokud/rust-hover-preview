@@ -94,7 +94,7 @@ use windows::Win32::System::Threading::{
 };
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetAsyncKeyState, ReleaseCapture, SetCapture, VK_C, VK_CONTROL,
+    GetAsyncKeyState, ReleaseCapture, SetCapture, VK_A, VK_C, VK_CONTROL,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DispatchMessageW,
@@ -2257,22 +2257,30 @@ fn current_hover_scales() -> HoverScales {
         })
 }
 
-/// The theme, Markdown rendering and font size the configuration currently
-/// selects, read once per hover so a measure and the render that follows agree.
+/// The theme, Markdown rendering and font size the configuration currently selects, read once
+/// per hover so a measure and the render that follow agree.
+///
+/// Whether a text preview is in full mode is not one of the configuration's answers: it is what
+/// being pinned *means* for one. A hover is something to read and then to leave; a window the
+/// user put on the screen with a key and a caption is somewhere to work, and full mode is what
+/// makes one of those out of the other — the scrollbar the whole document is reachable through,
+/// the text a selection can be made of, and the keys that put it on the clipboard.
 fn current_text_options() -> TextPreviewOptions {
+    let full_mode = pinned();
+
     CONFIG
         .lock()
         .map(|cfg| TextPreviewOptions {
             theme: cfg.theme,
             markdown_mode: cfg.markdown_mode,
             font_scale_percent: cfg.text_font_scale_percent,
-            full_mode: cfg.text_preview_full_mode,
+            full_mode,
         })
         .unwrap_or(TextPreviewOptions {
             theme: TextTheme::Light,
             markdown_mode: MarkdownMode::Rendered,
             font_scale_percent: DEFAULT_TEXT_FONT_SCALE_PERCENT,
-            full_mode: true,
+            full_mode,
         })
 }
 
@@ -9547,6 +9555,39 @@ fn text_preview_copy_requested() -> bool {
     }
 }
 
+/// Whether Select All has just been asked for with the keyboard, over a text preview that is
+/// pinned.
+///
+/// The key is polled rather than waited for, for the reason Ctrl+C's is: the preview never takes
+/// focus, so it would never receive the keystroke as a message. It is answered for a pin alone —
+/// a pinned text preview is a window the user put there to work in, and full mode gave it the
+/// selection this makes use of, while a hover is a preview being read and not typed at.
+fn pinned_select_all_requested() -> bool {
+    if !pinned() || !has_text_document() {
+        return false;
+    }
+
+    unsafe {
+        let control = GetAsyncKeyState(VK_CONTROL.0 as i32) as u16 & 0x8000 != 0;
+        let just_pressed = GetAsyncKeyState(VK_A.0 as i32) & 1 != 0;
+        control && just_pressed
+    }
+}
+
+/// Whether the media on screen is a text preview with a document in it: what a selection needs
+/// something to be made against, whatever it is currently holding (see `text_state`).
+fn has_text_document() -> bool {
+    CURRENT_MEDIA
+        .lock()
+        .map(|media| {
+            media
+                .as_ref()
+                .and_then(|media| media.text_state.as_ref())
+                .is_some()
+        })
+        .unwrap_or(false)
+}
+
 /// What the preview's own menu offers: the whole frame selected, and what is
 /// selected put on the clipboard.
 const ID_TEXT_PREVIEW_SELECT_ALL: usize = 1;
@@ -11242,18 +11283,27 @@ fn end_pin_state() -> PreviewMessage {
 /// a card whose engine has stopped is a card with a still clock rather than a window onto
 /// nothing.
 fn pin_media_is_alive() -> bool {
-    let Ok(media) = CURRENT_MEDIA.lock() else {
-        return true;
+    // What kind it is, and whether a player of this app's is behind it, are taken in one look
+    // and the lock is let go of before anything is asked *about* the answer. What a player's
+    // liveness is asked through — `is_video_process_running` — reads the media itself, so
+    // asking it with the media already locked by this thread is asking for a lock this thread
+    // owns, which is not a wait but a stop: the preview loop would never draw another frame,
+    // and the pinned window would stand there answering nothing for the rest of the run.
+    let (kind, has_player) = {
+        let Ok(media) = CURRENT_MEDIA.lock() else {
+            return true;
+        };
+        let Some(media) = media.as_ref() else {
+            // Nothing is on screen: a pin with no media behind it has already come apart.
+            return false;
+        };
+
+        (media.media_type, media.video_process.is_some())
     };
 
-    let Some(media) = media.as_ref() else {
-        // Nothing is on screen: a pin with no media behind it has already come apart.
-        return false;
-    };
-
-    match media.media_type {
+    match kind {
         MediaType::Video => is_video_process_running(),
-        MediaType::Audio if media.video_process.is_some() => is_video_process_running(),
+        MediaType::Audio if has_player => is_video_process_running(),
         MediaType::NativeVideo => video_player::is_playing(),
         MediaType::EngineSvg | MediaType::EngineFont => webview_preview::showing_hwnd() != 0,
         // A frame this app holds is a frame nothing outside this thread can take away.
@@ -12769,6 +12819,16 @@ pub fn run_preview_window() {
             if pinned() {
                 pin_command_request(&mut pin_request);
 
+                // What a key does to a pinned text preview, polled rather than waited for: a
+                // window that never takes focus never receives a keystroke as a message. Ctrl+C
+                // is answered for every preview by the tick below, which puts what is selected on
+                // the clipboard; Ctrl+A is the pin's own answer, because selecting everything in
+                // the frame is a thing asked of a window and not of a hover (see
+                // `pinned_select_all_requested`).
+                if pinned_select_all_requested() {
+                    select_all_text_preview(hwnd);
+                }
+
                 // A window dragged by an edge owes its media a layout at the box it ended up
                 // with: the window procedure owns the drag and asks for it here, because the
                 // media is this thread's.
@@ -14180,12 +14240,26 @@ pub fn run_preview_window() {
                             .ok()
                             .and_then(|media| media.as_ref().map(|media| media.media_type));
                         let dpi = monitor_dpi_from_point(rect.0, rect.1);
-                        let content = (
-                            rect.0,
-                            rect.1,
-                            rect.0 + (rect.2 - rect.0).max(1),
-                            rect.1 + (rect.3 - rect.1).max(1),
+                        let transport_bar = pin_transport_kind(kind);
+
+                        // The window is the media's box with the chrome around it, and it is the
+                        // *window* that is held to the display rather than the media: a hover can
+                        // sit flush against the top of the screen — the placement above it has
+                        // nowhere else to go — and a caption drawn above that would be a caption
+                        // off the top of the screen, with the buttons that close the pin on it.
+                        // So the box the media is given is the media's box shifted back into the
+                        // display by however much of the chrome fell off it.
+                        let window = clamp_pinned_box(
+                            (
+                                rect.0,
+                                rect.1 - pinned_caption_height(dpi),
+                                rect.0 + (rect.2 - rect.0).max(1),
+                                rect.1 + (rect.3 - rect.1).max(1)
+                                    + pinned_transport_height(dpi, transport_bar),
+                            ),
+                            dpi,
                         );
+                        let content = content_box_of(window, dpi, transport_bar);
 
                         if let Ok(mut pinned) = PINNED.lock() {
                             *pinned = Some(PinnedPreview {
@@ -14193,7 +14267,7 @@ pub fn run_preview_window() {
                                 content,
                                 restore: None,
                                 dpi,
-                                transport_bar: pin_transport_kind(kind),
+                                transport_bar,
                                 collapsed: false,
                                 hovered: None,
                                 pressed: None,
@@ -14214,6 +14288,18 @@ pub fn run_preview_window() {
 
                         PIN_ACTIVE.store(true, Ordering::Release);
                         PIN_COLLAPSED.store(false, Ordering::Release);
+
+                        // A text preview is the one kind a pin *changes* rather than frames: it
+                        // comes up in full mode, which is the scrollbar, the selection, and the
+                        // keys that copy it all out (see `current_text_options`). That is the
+                        // media laid out again, and it can only be asked for once the pin is up,
+                        // because being pinned is the whole of what full mode is read from.
+                        if kind == Some(MediaType::Text) {
+                            if let Some((path, dpi)) = pinned_media_owner() {
+                                relayout_pinned_media(&path, content, dpi, None);
+                            }
+                        }
+
                         show_pinned_window(hwnd);
                         place_pinned_siblings();
                         publish_pointer_hold(hwnd);
@@ -18172,5 +18258,40 @@ mod tests {
         assert!(!pin_transport_kind(Some(MediaType::Audio)));
         assert!(!pin_transport_kind(Some(MediaType::StaticImage)));
         assert!(!pin_transport_kind(None));
+    }
+
+    /// What this guards: asking whether the player behind a pinned preview is still alive walks
+    /// the media to reach it, so the media must not be held while the walk is made. Held, it is a
+    /// lock the asking thread already owns — not a wait but a stop, and it is exactly what a
+    /// pinned video and a pinned sound used to do on this app's own loop: the preview froze where
+    /// it stood, the pinned window stayed on the screen answering nothing, and the only way out
+    /// of it was to end the process.
+    ///
+    /// The ask is made on a thread of its own so that a hang is a *reported* failure rather than a
+    /// test run that never comes back.
+    #[test]
+    fn asking_after_a_pinned_players_liveness_does_not_stall_on_the_media_it_asks_about() {
+        let previous = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+
+        let mut video = create_loading_media(8, 8);
+        video.media_type = MediaType::Video;
+        if let Ok(mut media) = CURRENT_MEDIA.lock() {
+            *media = Some(video);
+        }
+
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = sender.send(pin_media_is_alive());
+        });
+
+        let answer = receiver.recv_timeout(Duration::from_secs(5)).expect(
+            "the ask came back: a player is reached *through* the media, so the media must not \
+             still be held when it is asked about",
+        );
+        assert!(!answer, "a video with no player behind it is not alive");
+
+        if let Ok(mut media) = CURRENT_MEDIA.lock() {
+            *media = previous;
+        }
     }
 }
