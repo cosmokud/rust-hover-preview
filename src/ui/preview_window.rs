@@ -12126,7 +12126,12 @@ fn replace_pinned_window() -> Option<PreviewMessage> {
 /// what a maximized window of any shape has always done. For a kind that is laid out to its box
 /// rather than scaled, the largest box is the room itself and the page is drawn into it.
 ///
-/// Restoring puts back the box the window had, exactly as it was.
+/// Restoring down is maximize asked backwards, and it is answered the same way: what the window gets
+/// back is the *size* it had before it was maximized, and where that size is put is the middle of the
+/// display — the centering the maximized box has — rather than the place the window was dragged to
+/// before it was maximized. That place is one the window has long since been taken away from, and a
+/// restore that snapped back across the screen to it would be a jump nobody asked the button for;
+/// what is being undone is the *size*, not the place.
 fn toggle_pin_maximized(request: &mut Option<PreviewMessage>) {
     let Ok(mut pinned) = PINNED.lock() else {
         return;
@@ -12135,11 +12140,18 @@ fn toggle_pin_maximized(request: &mut Option<PreviewMessage>) {
         return;
     };
 
+    let bounds = monitor_bounds_from_point(pin.content.0, pin.content.1);
+    let room = pinned_room(bounds, pin.dpi, pin.transport_bar);
+
     let content = match pin.restore.take() {
-        Some(previous) => previous,
+        Some(previous) => centred_box(
+            (
+                (previous.2 - previous.0).max(1),
+                (previous.3 - previous.1).max(1),
+            ),
+            room,
+        ),
         None => {
-            let bounds = monitor_bounds_from_point(pin.content.0, pin.content.1);
-            let room = pinned_room(bounds, pin.dpi, pin.transport_bar);
             let shape = (
                 (pin.content.2 - pin.content.0).max(1) as u32,
                 (pin.content.3 - pin.content.1).max(1) as u32,
@@ -12153,17 +12165,25 @@ fn toggle_pin_maximized(request: &mut Option<PreviewMessage>) {
             };
 
             pin.restore = Some(pin.content);
-            (
-                room.left + ((room.right - room.left) - width).max(0) / 2,
-                room.top + ((room.bottom - room.top) - height).max(0) / 2,
-                room.left + ((room.right - room.left) - width).max(0) / 2 + width,
-                room.top + ((room.bottom - room.top) - height).max(0) / 2 + height,
-            )
+            centred_box((width, height), room)
         }
     };
 
     pin.content = clamp_pinned_box(content, pin.dpi);
     *request = Some(PreviewMessage::PinBox(pin.content));
+}
+
+/// A box of a given size in the middle of a room: where maximize puts the media, and where a restore
+/// down puts the size the window had before it was maximized.
+///
+/// A size the room cannot hold goes against the room's own top-left corner rather than half past it:
+/// there is no middle to be in when the box is bigger than the place it is being put in.
+fn centred_box(size: (i32, i32), room: ScreenBounds) -> ScreenRegion {
+    let (width, height) = (size.0.max(1), size.1.max(1));
+    let left = room.left + ((room.right - room.left) - width).max(0) / 2;
+    let top = room.top + ((room.bottom - room.top) - height).max(0) / 2;
+
+    (left, top, left + width, top + height)
 }
 
 /// The pin's own answers to the chrome, once a tick: the four buttons, and whether the media
@@ -20128,6 +20148,25 @@ mod tests {
             pinned_media_box((4000, 3000), room, PreviewScale::Percent(100)),
             (1000, 750)
         );
+    }
+
+    #[test]
+    fn a_box_is_centred_in_the_room_it_is_put_in() {
+        let room = ScreenBounds {
+            left: 100,
+            top: 50,
+            right: 1100,
+            bottom: 850,
+        };
+
+        // A box smaller than the room is put in the middle of it, and what the two sides are left
+        // with differs by at most the odd pixel of an odd difference.
+        assert_eq!(centred_box((400, 300), room), (400, 300, 800, 600));
+        assert_eq!(centred_box((401, 301), room), (399, 299, 800, 600));
+
+        // And one the room cannot hold goes against the room's own top-left corner rather than half
+        // past it: there is no middle to be in when the box is bigger than the place it is put in.
+        assert_eq!(centred_box((1200, 900), room), (100, 50, 1300, 950));
     }
 
     #[test]
