@@ -13547,6 +13547,12 @@ pub fn run_preview_window() {
         // where it is until the video replaces it, the way a page landing on a spinner
         // behaves (see `upgrading`).
         let mut video_replay: Option<PathBuf> = None;
+        // The file the engine was watched failing at: the engine took it and then never drew a
+        // frame of it, so it is a file FFmpeg's player is what is left for. The hover that is up
+        // is replayed for the player to take it, which is what this waits to be done where a
+        // replay can be started — the tick that finds the failure out cannot start one itself
+        // (see `video_player::mark_unplayable`).
+        let mut engine_failed: Option<PathBuf> = None;
         // The hover a box measured off the preview thread has just answered for. Its replay is
         // the same wait carried on rather than a new preview, the way a video's is (see
         // `measure_replay`).
@@ -13810,8 +13816,21 @@ pub fn run_preview_window() {
                     // taken here — once a tick, which is as often as one can be shown.
                     // The kind is asked first so that a preview of any other kind pays
                     // for this with one comparison.
-                    if media.media_type.is_native_video() && media.take_native_video_frame() {
-                        needs_repaint = true;
+                    if media.media_type.is_native_video() {
+                        if media.take_native_video_frame() {
+                            needs_repaint = true;
+                        } else if let Some(failing) = video_player::failing_path() {
+                            // An engine that has had the file long enough to have handed a
+                            // frame over many times and has handed over none is an engine
+                            // that cannot draw it: what the probe asked about was a decoder
+                            // and a converter, which this file has, and what it cannot speak
+                            // for is the pipeline the engine plays through. So the file is
+                            // written down as one FFmpeg's player takes, and the replay that
+                            // hands the hover over to it is asked for where a replay can be
+                            // started (see `video_player::mark_unplayable`).
+                            video_player::mark_unplayable(&failing);
+                            engine_failed = Some(failing);
+                        }
                     }
                     // A sound's card is the one painted preview that changes while it is on
                     // screen: the clock and the bar under it are drawn from a player that is
@@ -14788,6 +14807,25 @@ pub fn run_preview_window() {
                 } else {
                     latest_preview_msg = replay_where_the_pointer_is(current_show.clone());
                 }
+            }
+
+            // And a file the engine was watched failing at: the engine took it — every part of
+            // the question the probe asks answered yes — and then never drew a frame of it, so
+            // what plays it is FFmpeg's player and the hover is replayed for the player to take
+            // it (see `video_player::mark_unplayable`). It waits for the tick where the hover of
+            // the file is the one that can be replayed, which is why it is a flag rather than
+            // something the tick does itself.
+            //
+            // A pin is not replayed from a hover, so a file that fails under a pin keeps what it
+            // has: the mark is what the *next* pin of that file takes, and it is FFmpeg's player
+            // that plays the file from then on.
+            let failed_file_is_shown = engine_failed.as_ref().is_some_and(|failed| {
+                !pinned() && current_show.as_ref().and_then(show_path) == Some(failed)
+            });
+
+            if latest_preview_msg.is_none() && failed_file_is_shown {
+                engine_failed = None;
+                latest_preview_msg = replay_where_the_pointer_is(current_show.clone());
             }
 
             // The engine has something to answer for: it could not be had at all, or it
@@ -18070,6 +18108,64 @@ mod tests {
                     "FFmpeg's player"
                 }
             );
+
+            // And the half of the question no probe answers: a file the engine can decode is a
+            // file a preview of which is nothing at all if the engine cannot draw it either. So
+            // the engine is started over the file the way the preview starts one, frames are
+            // asked for the way the preview loop asks for them, and what comes back is counted.
+            // The volume is nothing, so nothing is heard of this.
+            if media_engine_plays(&path) {
+                video_player::play(&path, 320, 240, 0);
+                println!("a session over it started: {}", video_player::is_playing());
+
+                let mut pixels = Vec::new();
+                let mut frames = 0;
+                let waited = Instant::now();
+
+                // A file the engine cannot draw has no frame to take however long it is watched,
+                // and the app only finds out when its give-up has run — so a file with no frame
+                // after the shorter wait is watched for the longer one, which is where the answer
+                // `failing_path` gives is due (see `video_player::FIRST_FRAME_GIVE_UP`).
+                for limit in [600u64, 3600] {
+                    while waited.elapsed() < Duration::from_millis(limit) {
+                        if video_player::copy_frame_into(&mut pixels).is_some() {
+                            frames += 1;
+                        }
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+
+                    if frames > 0 {
+                        break;
+                    }
+                }
+
+                println!(
+                    "and the engine drew {frames} frames of it in {} ms",
+                    waited.elapsed().as_millis()
+                );
+
+                if frames == 0 {
+                    let failing = video_player::failing_path();
+                    println!("and the engine failing at it reads as: {failing:?}");
+
+                    if let Some(failing) = failing {
+                        video_player::mark_unplayable(&failing);
+                    }
+
+                    println!(
+                        "so what plays it reads as {} (plays = {}, engine = {})",
+                        if media_engine_plays(&path) {
+                            "the media engine Windows has"
+                        } else {
+                            "FFmpeg's player"
+                        },
+                        video_player::plays(&path),
+                        media_engine_plays(&path),
+                    );
+                }
+
+                video_player::stop();
+            }
         }
     }
 
