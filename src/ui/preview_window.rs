@@ -12188,10 +12188,6 @@ const PIN_BUBBLE_CLASS: PCWSTR = w!("RustHoverPreviewPinBubble");
 /// The bubble's window, or zero while no pin is collapsed.
 static PIN_BUBBLE_HWND: AtomicIsize = AtomicIsize::new(0);
 
-/// Where the bubble was last left, so that a second collapse puts it back where the user's hand
-/// left the first one rather than at the window the pin came out of.
-static PIN_BUBBLE_POS: Lazy<Mutex<Option<(i32, i32)>>> = Lazy::new(|| Mutex::new(None));
-
 /// A drag of the bubble in progress, as the two things the press measured: where in the bubble the
 /// hand took hold of it — the pointer's offset from the window's own corner — and where the pointer
 /// itself was on the screen. The offset is what the bubble is placed by, so that it is carried from
@@ -12231,13 +12227,53 @@ fn collapse_pin() {
 
         pin.collapsed = true;
         PIN_COLLAPSED.store(true, Ordering::Release);
-        pin.window_box()
+
+        // The bubble takes the place of the button the hand went for, which is looked up in the
+        // caption's own layout rather than taken to be the window's corner (see
+        // `pinned_minimize_box`).
+        pinned_minimize_box(pin)
     };
 
     unsafe {
         hide_pinned_windows();
         show_pin_bubble(anchor);
     }
+}
+
+/// The box of a pinned window's minimize button, in screen coordinates: what each collapse puts its
+/// bubble on.
+///
+/// The button is *found* rather than the window's corner assumed, because the two are not the same
+/// place and never were: a caption puts its buttons against its right edge in Windows' order —
+/// minimize, maximize, close — so a window's corner is the *close* button's place, and a pin with
+/// nothing to maximize carries two buttons where another carries three, which moves the minimize
+/// without moving the corner (see `pin_chrome::button_boxes`). What the buttons are laid out in is
+/// the caption strip across the top of the window (see `pinned_caption_height`).
+fn pinned_minimize_box(pin: &PinnedPreview) -> ScreenRegion {
+    let window = pin.window_box();
+    let caption = pinned_caption_height(pin.dpi);
+
+    let minimize = pin_chrome::button_boxes(
+        window.2 - window.0,
+        caption,
+        pin.dpi,
+        pin.frame != PinFrame::None,
+    )
+    .into_iter()
+    .find(|button| button.kind == pin_chrome::CaptionButton::Minimize);
+
+    // Every caption carries a minimize (see `pin_chrome::button_boxes`); a window whose caption
+    // somehow did not is a window whose own box is the place a bubble goes.
+    let Some(button) = minimize else {
+        return window;
+    };
+
+    (
+        window.0 + button.rect.left,
+        window.1 + button.rect.top,
+        window.0 + button.rect.right,
+        window.1 + button.rect.bottom,
+    )
 }
 
 /// Put a collapsed pin back up: the bubble goes, the window comes back where it was, and
@@ -12329,16 +12365,19 @@ fn hide_pin_bubble() {
 
 /// Put the round bubble up, created the first time a pin is collapsed.
 ///
-/// It goes where the window's own minimize button was — the corner a window's contents collapse
-/// toward — and a bubble that has been dragged somewhere since keeps that place for the next
-/// collapse. It is painted before it is shown, for the reason every other layered window of this
-/// app's is: what one shows between two paints is the surface it already has.
+/// It is put *on the box it is given*, centered on it: that box is the minimize button's own (see
+/// `pinned_minimize_box`), so the circle a collapse leaves stands where the button that collapsed
+/// the window stood, every time — a collapse is the same gesture twice and lands in the same place
+/// twice, and where the hand last left a bubble is not a place the next collapse would be expected
+/// to go. It is painted before it is shown, for the reason every other layered window of this app's
+/// is: what one shows between two paints is the surface it already has.
 unsafe fn show_pin_bubble(anchor: ScreenRegion) {
     let dpi = monitor_dpi_from_point(anchor.0, anchor.1);
     let side = logical_px(dpi, PIN_BUBBLE_PIXELS).max(16);
 
-    let remembered = PIN_BUBBLE_POS.lock().ok().and_then(|position| *position);
-    let (x, y) = remembered.unwrap_or((anchor.2 - side, anchor.1));
+    let centre_x = (anchor.0 + anchor.2) / 2;
+    let centre_y = (anchor.1 + anchor.3) / 2;
+    let (x, y) = (centre_x - side / 2, centre_y - side / 2);
     let clamped = clamp_pinned_box((x, y, x + side, y + side), dpi);
     let (x, y) = (clamped.0, clamped.1);
 
@@ -12628,9 +12667,10 @@ unsafe extern "system" fn pin_bubble_proc(
 /// moment it is picked up reads as having been dropped rather than grabbed. It is measured once, at
 /// the press, and held for the whole drag.
 ///
-/// A press that has not yet moved past the slop a click is told from a drag by places nothing and
-/// remembers nothing: a click on the bubble is a click, however much the mouse shivers while it is
-/// being made. Where the bubble is left once a drag has begun is remembered for the next collapse.
+/// A press that has not yet moved past the slop a click is told from a drag by places nothing: a
+/// click on the bubble is a click, however much the mouse shivers while it is being made. Where the
+/// bubble is left is nothing a later collapse asks about — every collapse puts its bubble back on
+/// the button it came from (see `show_pin_bubble`).
 unsafe fn drag_pin_bubble(hwnd: HWND) {
     let Ok(drag) = PIN_BUBBLE_DRAG.lock() else {
         return;
@@ -12675,10 +12715,6 @@ unsafe fn drag_pin_bubble(hwnd: HWND) {
         0,
         SWP_NOSIZE | SWP_NOACTIVATE,
     );
-
-    if let Ok(mut position) = PIN_BUBBLE_POS.lock() {
-        *position = Some((target.0, target.1));
-    }
 }
 
 /// Whether a drag of the bubble is in progress: what the wait below is waiting to be over, and
