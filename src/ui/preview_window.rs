@@ -8791,21 +8791,6 @@ unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
         });
     }
 
-    // What stands where the picture was when the player that fills it has been stopped: a mark
-    // rather than nothing, since an engine that cannot be paused is stopped instead (see
-    // `toggle_pinned_playback`).
-    if paint.transport.paused_at.is_some() {
-        if let Some(palette) = pin_chrome::ChromePalette::current() {
-            pin_chrome::paint_paused_mark(
-                out,
-                width as u32,
-                caption_height as u32,
-                (height - caption_height - paint.transport_height).max(1) as u32,
-                &palette,
-            );
-        }
-    }
-
     // The transport bar, for the kinds that play.
     if paint.transport_height > 0 {
         if let Some(palette) = pin_chrome::ChromePalette::current() {
@@ -11826,15 +11811,14 @@ fn relayout_pinned_media(
         // The media engine draws into a surface of the size it was started at, and this window
         // draws the frames it hands back: both are resized, and the picture follows.
         Some(MediaType::NativeVideo) => {
-            if let Ok(mut media) = CURRENT_MEDIA.lock() {
-                if let Some(media) = media.as_mut() {
-                    if let Some(frame) = media.frames.first_mut() {
-                        frame.pixels.resize(width as usize * height as usize * 4, 0);
-                        frame.width = width;
-                        frame.height = height;
-                    }
-                }
-            }
+            // What is deliberately *not* done here is redeclaring the frame to be the size of the
+            // box: the frame holds the pixels of the size it was drawn at, and a buffer of one
+            // width read as a buffer of another is a picture sheared a row at a time — the
+            // diagonal striping a resize used to flash for the moment before the engine handed
+            // the next frame over. The band is filled from the frame that is there, scaled, which
+            // is exactly what it is filled with while the edge is still under the hand, and the
+            // frame that lands on the next tick is the one at the size the window now is (see
+            // `compose_media_into_band`).
             video_player::resize(width, height);
         }
         // The browser draws in a window of its own; it is told the new bounds and draws the
@@ -12799,10 +12783,14 @@ unsafe fn pinned_transport_press(hwnd: HWND, x: i32, y: i32) -> bool {
 
 /// Where a drag along the bar has taken the playhead: the share of the bar under the hand turned
 /// into a second of the file, for a file whose length is known.
+///
+/// The length is asked for the way the bar *draws* one rather than read out of what was written
+/// down when the pin was taken up: a container that does not say how long it is, and a length the
+/// probe could not read, are both filled in from the engine's own answer — so a bar that draws a
+/// length and a bar that can be dragged to one are the same bar rather than two questions that
+/// can disagree.
 fn pin_seconds_at(transport: &PinTransport, share: f64) -> Option<f64> {
-    transport
-        .duration
-        .map(|duration| (duration * share).clamp(0.0, duration))
+    pin_duration(transport).map(|duration| (duration * share).clamp(0.0, duration))
 }
 
 /// Carry a drag along the transport bar: the playhead follows the hand, and the file is taken
@@ -18144,6 +18132,30 @@ mod tests {
                     waited.elapsed().as_millis()
                 );
 
+                // And a seek, which is what dragging a pinned video's bar does — asked for late in
+                // the session on purpose, because that is when a bar is dragged, and a seek that
+                // is dropped for arriving after a give-up is a bar that does nothing at all.
+                if frames > 0 {
+                    while waited.elapsed() < Duration::from_millis(3300) {
+                        video_player::copy_frame_into(&mut pixels);
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+
+                    let target = video_player::duration()
+                        .map(|duration| duration * 0.7)
+                        .unwrap_or(7.0);
+
+                    video_player::seek(target);
+                    std::thread::sleep(Duration::from_millis(250));
+                    video_player::copy_frame_into(&mut pixels);
+
+                    println!(
+                        "and a seek to {target:.2}s, asked {:.1}s into the session, reads back as {:?}",
+                        waited.elapsed().as_secs_f32(),
+                        video_player::position()
+                    );
+                }
+
                 if frames == 0 {
                     let failing = video_player::failing_path();
                     println!("and the engine failing at it reads as: {failing:?}");
@@ -19723,6 +19735,55 @@ mod tests {
              still be held when it is asked about",
         );
         assert!(!answer, "a video with no player behind it is not alive");
+
+        if let Ok(mut media) = CURRENT_MEDIA.lock() {
+            *media = previous;
+        }
+    }
+
+    /// What this guards: a pinned video laid out again for the box its window was dragged to, which
+    /// is where a resize used to flash a sheared picture for the moment before the engine handed
+    /// the next frame over.
+    ///
+    /// A frame is a buffer of pixels *and* the size they were written at, and the composition reads
+    /// it at that size: a frame redeclared to be the size of the new box with the pixels of the old
+    /// one still in it is a picture sheared a row at a time — the diagonal striping a hand letting
+    /// go of an edge used to see. What the relayout owes the frame is the new box for the *window*;
+    /// the frame that fills it is the engine's next one, and until it lands the band is filled by
+    /// the frame that is there, scaled (see `relayout_pinned_media` and `compose_media_into_band`).
+    #[test]
+    fn a_resized_pinned_video_keeps_the_frame_its_pixels_are() {
+        let previous = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+
+        let mut video = create_loading_media(8, 4);
+        video.media_type = MediaType::NativeVideo;
+        if let Ok(mut media) = CURRENT_MEDIA.lock() {
+            *media = Some(video);
+        }
+
+        let path = std::env::temp_dir()
+            .join("rust-hover-preview-video-tests")
+            .join("resized-pin.mp4");
+
+        // A box far larger than the frame, which is what a window dragged out to the screen is.
+        relayout_pinned_media(&path, (0, 0, 800, 600), 96, None);
+
+        let frame = {
+            let media = CURRENT_MEDIA
+                .lock()
+                .expect("the media is where it was left");
+            let frame = media
+                .as_ref()
+                .and_then(|media| media.frames.first())
+                .expect("the frame is where it was left");
+            (frame.width, frame.height, frame.pixels.len())
+        };
+
+        assert_eq!(
+            frame,
+            (8, 4, 8 * 4 * 4),
+            "the frame is the size its pixels are, whatever box the window has been dragged to"
+        );
 
         if let Ok(mut media) = CURRENT_MEDIA.lock() {
             *media = previous;

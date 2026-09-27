@@ -524,34 +524,6 @@ fn measure_text(
     }
 }
 
-/// The mark a media band carries when the player that would be filling it has been stopped: what
-/// a paused picture looks like where the picture would be.
-///
-/// The mark is placed in the middle of the band the media occupies, which is a row range of the
-/// window's own surface rather than a surface of its own (see `render_pinned_preview_at`).
-pub(crate) fn paint_paused_mark(
-    buffer: &mut [u8],
-    surface_width: u32,
-    band_top: u32,
-    band_height: u32,
-    palette: &ChromePalette,
-) {
-    let width = surface_width as i32;
-    let size = (band_height as f32 * 0.14).clamp(18.0, 128.0);
-    let center_x = width / 2;
-    let center_y = band_top as i32 + band_height as i32 / 2;
-
-    let left = center_x - (size / 3.0) as i32;
-    for step in 0..=(size as i32) {
-        let x = left + step;
-        let share = 1.0 - (step as f32 / size);
-        for y in 0..=((size / 2.0) * share) as i32 {
-            put(buffer, width, x, center_y - y, palette.foreground, 0.75);
-            put(buffer, width, x, center_y + y, palette.foreground, 0.75);
-        }
-    }
-}
-
 /// The three buttons a caption carries, in the order Windows has them: minimize, maximize or
 /// restore, close.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
