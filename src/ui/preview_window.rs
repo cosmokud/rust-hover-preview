@@ -366,12 +366,13 @@ pub fn pointer_item_box() -> Option<(i32, i32, i32, i32)> {
 /// reveal's own question. A pointer that cannot be read is not a pointer that has
 /// left, so an answer that could not be had holds nothing back either.
 ///
-/// A pinned preview is not the pointer's and is not held to this question at all: the pin *is*
-/// the item the pointer was on when it was taken up, so a pointer that has since gone to the
-/// other end of the desktop — onto the pinned window itself, most likely — has left nothing that
-/// is on screen (see `PIN_ACTIVE`).
+/// A pin standing on the screen is not the pointer's and is not held to this question at all: the
+/// pin *is* the item the pointer was on when it was taken up, so a pointer that has since gone to
+/// the other end of the desktop — onto the pinned window itself, most likely — has left nothing
+/// that is on screen. What is on screen while a pin is a bubble is a hover like any other, and is
+/// held to the question like one (see `previews_paused_by_pin`).
 fn pointer_on_the_hovered_item() -> bool {
-    if pinned() {
+    if previews_paused_by_pin() {
         return true;
     }
 
@@ -1414,6 +1415,20 @@ pub fn pinned() -> bool {
     PIN_ACTIVE.load(Ordering::Acquire)
 }
 
+/// Whether the pin that is up is *holding the screen*, which is the question the preview machinery
+/// and the Explorer hook ask before they raise or take anything down: a pin standing on the screen
+/// is the whole of what this app is showing, and a hover raised beside it would be a second thing on
+/// screen — which is the whole of why a pin pauses them.
+///
+/// A pin collapsed into its bubble is the one that is not, and that is what the bubble is for: the
+/// window is off the screen and what is left of the pin is a marker standing for it, so the desktop
+/// is the user's again. The previews come back for as long as the bubble is there — with the mouse
+/// and with the keyboard, exactly as they were — and the whole of the pause comes back with the
+/// window the moment the bubble is clicked (see `collapse_pin` and `restore_pin`).
+pub fn previews_paused_by_pin() -> bool {
+    pinned() && !PIN_COLLAPSED.load(Ordering::Acquire)
+}
+
 /// Ask for the pinned preview to come down, from any thread. What a pin is belongs to the
 /// preview loop, so the loop is what ends it — on its next tick, by the same path its own
 /// close button takes. Asking twice is asking once.
@@ -1431,10 +1446,11 @@ pub fn take_pin_resumed() -> bool {
 }
 
 pub fn show_preview(path: &Path, x: i32, y: i32, avoid: Option<ScreenRegion>) {
-    // A pinned preview is the whole of what this app is showing: a hover raised while one
-    // is up would be a second thing on screen, and the pin exists to stop exactly that
-    // (see `PIN_ACTIVE`).
-    if pinned() {
+    // A pin standing on the screen is the whole of what this app is showing: a hover raised
+    // while one is up would be a second thing on screen, and the pin exists to stop exactly
+    // that — while a pin that is a bubble is off the screen and the hovers are the pointer's
+    // again (see `previews_paused_by_pin`).
+    if previews_paused_by_pin() {
         return;
     }
 
@@ -1454,9 +1470,9 @@ pub fn show_preview_keyboard(
     avoid: Option<ScreenRegion>,
     draws_columns: bool,
 ) {
-    // A keyboard hover is a hover like any other, and a pinned preview is what is on
-    // screen instead of one.
-    if pinned() {
+    // A keyboard hover is a hover like any other, and a pin standing on the screen is what is
+    // on screen instead of one (see `previews_paused_by_pin`).
+    if previews_paused_by_pin() {
         return;
     }
 
@@ -1481,13 +1497,17 @@ pub fn show_preview_keyboard(
 }
 
 pub fn hide_preview() {
-    // A pinned preview is not a hover, and the twenty-odd dismissals the Explorer hook
+    // A pin standing on the screen is not a hover, and the twenty-odd dismissals the Explorer hook
     // sends while a pointer moves are not about it: coming down is what its close button
     // is for, and a pin that went away because the pointer crossed the window would be no
     // better than the hover it came from. The process behind it is left alone here for
     // the same reason — what ends it is the take-down the pin's own end performs (see
     // `PIN_ACTIVE` and `end_pin`).
-    if pinned() {
+    //
+    // A pin that is a bubble is not standing on the screen, so a hover on one *is* a hover and
+    // is dismissed like one — which is the half of the bubble's bargain that keeps a preview
+    // from outliving the file the pointer was on (see `previews_paused_by_pin`).
+    if previews_paused_by_pin() {
         return;
     }
 
@@ -2324,7 +2344,7 @@ fn current_hover_scales() -> HoverScales {
 /// makes one of those out of the other — the scrollbar the whole document is reachable through,
 /// the text a selection can be made of, and the keys that put it on the clipboard.
 fn current_text_options() -> TextPreviewOptions {
-    let full_mode = pinned();
+    let full_mode = previews_paused_by_pin();
 
     CONFIG
         .lock()
@@ -8635,10 +8655,12 @@ unsafe fn render_layered_preview(hwnd: HWND) {
         return;
     }
 
-    // The window is two things: the hover's own frame, and — while a preview is pinned — a
-    // window with a caption and a bar of its own. Which of the two it is showing is not a
-    // question about its size, so it is asked here rather than worked out by each painter.
-    if pinned() {
+    // The window is two things: the hover's own frame, and — while a preview is pinned and standing
+    // on the screen — a window with a caption and a bar of its own. Which of the two it is showing
+    // is not a question about its size, so it is asked here rather than worked out by each painter.
+    // A pin that is a bubble has given the window back to the hovers, so what is in it is a hover's
+    // (see `previews_paused_by_pin`).
+    if previews_paused_by_pin() {
         render_pinned_preview_at(hwnd, rect.left, rect.top);
     } else {
         render_layered_preview_at(hwnd, rect.left, rect.top);
@@ -9999,7 +10021,7 @@ fn text_preview_copy_requested() -> bool {
 /// a pinned text preview is a window the user put there to work in, and full mode gave it the
 /// selection this makes use of, while a hover is a preview being read and not typed at.
 fn pinned_select_all_requested() -> bool {
-    if !pinned() || !has_text_document() {
+    if !previews_paused_by_pin() || !has_text_document() {
         return false;
     }
 
@@ -11361,10 +11383,71 @@ fn preview_background(kind: MediaType) -> TransparentBackground {
 /// a pin exists exactly while both say so.
 static PINNED: Lazy<Mutex<Option<PinnedPreview>>> = Lazy::new(|| Mutex::new(None));
 
+/// Where a pin that is a bubble has set its media down.
+///
+/// The window and the media this app draws in it are one thing, and a bubble gives the window back
+/// to the hovers — so the pin's own media goes with it rather than staying in hand, where the next
+/// hover would decode over it (see `previews_paused_by_pin`). It is put back the moment the pin is,
+/// before anything is laid out again, so that everything downstream — a player's window, the frames
+/// an engine hands over, the frame a decode lands in — finds the pin where it left it.
+static PIN_HELD_MEDIA: Lazy<Mutex<Option<MediaData>>> = Lazy::new(|| Mutex::new(None));
+
+/// Put the media in hand aside for the pin that is becoming a bubble, and take it back out for the
+/// pin that is coming back up: the two halves of one swap (see `PIN_HELD_MEDIA`).
+fn hold_pin_media() {
+    let Ok(mut held) = PIN_HELD_MEDIA.lock() else {
+        return;
+    };
+    let Ok(mut current) = CURRENT_MEDIA.lock() else {
+        return;
+    };
+
+    *held = current.take();
+}
+
+fn release_pin_media() {
+    let Ok(mut held) = PIN_HELD_MEDIA.lock() else {
+        return;
+    };
+    let Some(media) = held.take() else {
+        return;
+    };
+
+    let Ok(mut current) = CURRENT_MEDIA.lock() else {
+        return;
+    };
+
+    // Whatever the hovers left in hand is not what this window is about to draw, and nothing of
+    // it is worth keeping: it is cancelled the way a superseded load is (see `CURRENT_MEDIA`).
+    if let Some(ref mut existing) = *current {
+        existing.cancel_background_work();
+    }
+    *current = Some(media);
+}
+
+/// Let go of the media a pin had set down, when the pin itself is over: what a take-down of the
+/// pin owes the decode or the decode's worker behind it (see `PIN_HELD_MEDIA`).
+fn drop_held_pin_media() {
+    let Ok(mut held) = PIN_HELD_MEDIA.lock() else {
+        return;
+    };
+
+    if let Some(media) = held.as_mut() {
+        media.cancel_background_work();
+    }
+    *held = None;
+}
+
 struct PinnedPreview {
     /// The file that is pinned — the hover the pin came from, kept by name so that a box that
     /// changes can be laid out again without asking the Explorer hook anything.
     path: PathBuf,
+    /// What the pin is a window onto, as the media said when it was taken up. It is kept because
+    /// what is in hand is not always the pin's: a pin that is a bubble has let the hovers through,
+    /// so what `CURRENT_MEDIA` holds may be a preview of the file the pointer is on — and the
+    /// settings that ask whether this kind is still switched on are asked of the pin itself (see
+    /// `previews_paused_by_pin`).
+    kind: Option<MediaType>,
     /// The box the media occupies on screen. Everything the window draws besides the media is
     /// chrome over or around this box, which is why the box is what the pin remembers and what a
     /// restore puts back (see `PinnedPreview::window_box`).
@@ -12007,6 +12090,8 @@ fn end_pin_state() -> PreviewMessage {
 
     PIN_ACTIVE.store(false, Ordering::Release);
     PIN_COLLAPSED.store(false, Ordering::Release);
+    // And the media a bubble had set aside goes with the pin it belonged to (see `PIN_HELD_MEDIA`).
+    drop_held_pin_media();
     // A pin that is over is a pointer that is on something new: the file the pin was of is not
     // a hover the hook has already answered, and one is due the moment the pin is gone rather
     // than after the delay a re-hover of the same file is given (see `PIN_RESUMED`).
@@ -12034,16 +12119,9 @@ fn pin_media_is_alive() -> bool {
     // asking it with the media already locked by this thread is asking for a lock this thread
     // owns, which is not a wait but a stop: the preview loop would never draw another frame,
     // and the pinned window would stand there answering nothing for the rest of the run.
-    let (kind, has_player) = {
-        let Ok(media) = CURRENT_MEDIA.lock() else {
-            return true;
-        };
-        let Some(media) = media.as_ref() else {
-            // Nothing is on screen: a pin with no media behind it has already come apart.
-            return false;
-        };
-
-        (media.media_type, media.video_process.is_some())
+    let Some((kind, has_player)) = pin_media_facts() else {
+        // Nothing is behind the pin: a pin with no media behind it has already come apart.
+        return false;
     };
 
     match kind {
@@ -12054,6 +12132,23 @@ fn pin_media_is_alive() -> bool {
         // A frame this app holds is a frame nothing outside this thread can take away.
         _ => true,
     }
+}
+
+/// The two facts about a pin's media that the question above is asked of, taken from whichever of
+/// the two places that media is in.
+///
+/// A pin that is a bubble has set its own media aside and what is in hand is a hover's, so a pin's
+/// liveness is not a question about what is in hand (see `PIN_HELD_MEDIA`).
+fn pin_media_facts() -> Option<(MediaType, bool)> {
+    let media = if pin_is_collapsed() {
+        PIN_HELD_MEDIA.lock().ok()
+    } else {
+        CURRENT_MEDIA.lock().ok()
+    }?;
+
+    media
+        .as_ref()
+        .map(|media| (media.media_type, media.video_process.is_some()))
 }
 
 /// Lay the pinned media out again for the box its window has been given — one it was maximized
@@ -12224,6 +12319,14 @@ fn pinned_window_box() -> Option<(ScreenRegion, i32, i32)> {
 /// window shows between one paint and the next is the surface it already has, stretched into
 /// whatever box the window has (see `show_loading_spinner`).
 unsafe fn show_pinned_window(hwnd: HWND) {
+    // A pin that is a bubble has no window to put up: what this window is drawing while one is down
+    // is the hover the bubble has let through, and putting the pinned window over that would be
+    // taking a preview away from a pointer that is still on the file (see
+    // `previews_paused_by_pin`).
+    if pin_is_collapsed() {
+        return;
+    }
+
     let Some((window, width, height)) = pinned_window_box() else {
         return;
     };
@@ -12280,6 +12383,14 @@ fn place_pinned_siblings() {
         }
         _ => {}
     }
+}
+
+/// The file a pin is a window onto, while one is up: what a hover message that arrives while the
+/// pin is standing on the screen is measured against, since the one hover that is still the pin's
+/// own business is a replay of its own file (see `Refresh` and `previews_paused_by_pin`).
+fn pinned_path() -> Option<PathBuf> {
+    let pinned = PINNED.lock().ok()?;
+    pinned.as_ref().map(|pin| pin.path.clone())
 }
 
 /// The media box of the pin that is up, or nothing when there is no pin or it is collapsed: a
@@ -12424,18 +12535,32 @@ fn centred_at(size: (i32, i32), centre: (i32, i32)) -> ScreenRegion {
 
 /// The pin's own answers to the chrome, once a tick: the four buttons, and whether the media
 /// behind the pin is still there at all.
-fn pin_command_request(request: &mut Option<PreviewMessage>) {
-    match take_pin_command() {
-        Some(PinCommand::Close) => *request = Some(end_pin_state()),
-        Some(PinCommand::Minimize) => collapse_pin(),
-        Some(PinCommand::Restore) => restore_pin(),
-        Some(PinCommand::Maximize) => toggle_pin_maximized(request),
-        None => {}
-    }
+///
+/// What it answers with is whether a pin that was a bubble was put back up: the loop reads that as
+/// the hovers the bubble let through being over (see `restore_pin`).
+fn pin_command_request(request: &mut Option<PreviewMessage>) -> bool {
+    let restored = match take_pin_command() {
+        Some(PinCommand::Close) => {
+            *request = Some(end_pin_state());
+            false
+        }
+        Some(PinCommand::Minimize) => {
+            collapse_pin();
+            false
+        }
+        Some(PinCommand::Restore) => restore_pin(request),
+        Some(PinCommand::Maximize) => {
+            toggle_pin_maximized(request);
+            false
+        }
+        None => false,
+    };
 
     if !pin_media_is_alive() {
         *request = Some(end_pin_state());
     }
+
+    restored
 }
 
 /// The class the round bubble a collapsed pin leaves is created from.
@@ -12467,8 +12592,10 @@ static PIN_BUBBLE_MOVED: AtomicBool = AtomicBool::new(false);
 
 /// Collapse a pinned window into the round bubble it leaves: the window and everything standing
 /// in it come off the screen, and a small circle takes their place. A collapsed pin is still a
-/// pin — what is playing goes on playing, and previews are still held back until it is restored
-/// or closed (see `PIN_COLLAPSED`).
+/// pin — what is playing goes on playing, and the pin is put back as it was when the bubble is
+/// clicked — but the window it was in is the hovers' again for as long as the bubble is there, and
+/// the media it was drawing goes out of their way with it (see `previews_paused_by_pin` and
+/// `PIN_HELD_MEDIA`).
 fn collapse_pin() {
     let anchor = {
         let Ok(mut pinned) = PINNED.lock() else {
@@ -12489,6 +12616,15 @@ fn collapse_pin() {
         // `pinned_minimize_box`).
         pinned_minimize_box(pin)
     };
+
+    // And the media goes with the window: what is left of the pin is a marker, and the frame it was
+    // drawing is not the hovers' to decode over while it is down (see `previews_paused_by_pin`).
+    hold_pin_media();
+
+    // The hovers the bubble is about to let through are the pointer's first since the pin, and the
+    // file under it is not one this hook has already answered: what a pin leaves behind is cleared
+    // for the same reason a pin coming down clears it (see `take_pin_resumed`).
+    PIN_RESUMED.store(true, Ordering::Release);
 
     unsafe {
         hide_pinned_windows();
@@ -12534,16 +12670,23 @@ fn pinned_minimize_box(pin: &PinnedPreview) -> ScreenRegion {
 
 /// Put a collapsed pin back up: the bubble goes, the window comes back where it was, and
 /// whatever stands in its media band — the player's window, the browser's — is put back with it.
-fn restore_pin() {
+///
+/// What is *not* put back as it was is the media: while the pin was a bubble the hovers were the
+/// pointer's again, so what is in hand is a preview of whatever file the pointer was last on, and
+/// the frame this window was drawing when it went down is not there to be shown again. So the pin
+/// asks for its own file to be laid out at the box it is coming back at, which is the request a
+/// maximize makes and for the same reason (see `previews_paused_by_pin` and
+/// `PreviewMessage::PinBox`).
+fn restore_pin(request: &mut Option<PreviewMessage>) -> bool {
     {
         let Ok(mut pinned) = PINNED.lock() else {
-            return;
+            return false;
         };
         let Some(pin) = pinned.as_mut() else {
-            return;
+            return false;
         };
         if !pin.collapsed {
-            return;
+            return false;
         }
 
         pin.collapsed = false;
@@ -12560,12 +12703,10 @@ fn restore_pin() {
 
     hide_pin_bubble();
 
-    unsafe {
-        let hwnd = HWND(PREVIEW_HWND.load(Ordering::SeqCst) as *mut _);
-        if !hwnd.is_invalid() {
-            show_pinned_window(hwnd);
-        }
-    }
+    // The pin's own media comes back out of the bubble before anything is laid out again: it is
+    // what the window below is about to draw, and what a hover left in hand is not (see
+    // `PIN_HELD_MEDIA`).
+    release_pin_media();
 
     // A document or a specimen the browser was drawing went down with the window it stood in,
     // so it is asked for again the way a hover asks for it — and a player's window, which
@@ -12595,6 +12736,21 @@ fn restore_pin() {
             place_pinned_siblings();
         }
     }
+
+    // And the pin's own file, laid out at the box the window is coming back at: the same request a
+    // maximize makes, and the one thing that repairs what the hovers did to the media in hand while
+    // the pin was a bubble. A hover the bubble let through is over by the same stroke, and the hook
+    // is told so — the file under the pointer is not a hover it has answered, and the next one is
+    // due at once rather than after the re-hover delay (see `take_pin_resumed`).
+    if let Ok(pinned) = PINNED.lock() {
+        if let Some(pin) = pinned.as_ref() {
+            *request = Some(PreviewMessage::PinBox(pin.content));
+        }
+    }
+
+    PIN_RESUMED.store(true, Ordering::Release);
+
+    true
 }
 
 /// Where a collapsed pin's window goes back up when its bubble is clicked: the box a preview of the
@@ -14287,7 +14443,21 @@ pub fn run_preview_window() {
             }
 
             if pinned() {
-                pin_command_request(&mut pin_request);
+                // A pin that has just come back up from its bubble: the hovers the bubble let
+                // through are over, because the window they were drawn in is this pin's and what
+                // the pin is about is its own file — so none of what a hover leaves behind may
+                // outlive it, and the file under the pointer is one the hook has not answered (see
+                // `restore_pin` and `previews_paused_by_pin`). The pin itself is put back by the
+                // request the same call makes.
+                if pin_command_request(&mut pin_request) {
+                    current_show = None;
+                    pending_load = None;
+                    clear_load_request(&load_request_slot);
+                    if let Some(cancel) = pending_load_cancel.take() {
+                        cancel.store(true, Ordering::Release);
+                    }
+                    clear_pointer_hold();
+                }
 
                 // What a key does to a pinned text preview, polled rather than waited for: a
                 // window that never takes focus never receives a keystroke as a message. Ctrl+C
@@ -14428,7 +14598,7 @@ pub fn run_preview_window() {
                 // The window comes down for the browser's, which draws the whole of what is on
                 // screen — except while a preview is pinned, when what this window is drawing
                 // is the caption around the browser's own window rather than the document.
-                if IsWindowVisible(hwnd).as_bool() && !pinned() {
+                if IsWindowVisible(hwnd).as_bool() && !previews_paused_by_pin() {
                     let _ = ShowWindow(hwnd, SW_HIDE);
                 }
 
@@ -14590,7 +14760,7 @@ pub fn run_preview_window() {
                 } else if media_holds_a_frame() {
                     first_frame_wait = None;
 
-                    if !pinned() {
+                    if !previews_paused_by_pin() {
                         render_layered_preview_at(hwnd, wait.pos.0, wait.pos.1);
                     }
 
@@ -15213,20 +15383,31 @@ pub fn run_preview_window() {
                         //
                         // A pinned preview is the exception: there is no hover to rebuild it
                         // from — the pin is not a hover — so one whose kind was switched off
-                        // comes down, by the path its own close button takes.
+                        // comes down, by the path its own close button takes. What its kind is,
+                        // is the pin's own record of it rather than what is in hand: a pin that is
+                        // a bubble has let the hovers through, so what is in hand may be a preview
+                        // of some other file entirely (see `previews_paused_by_pin`).
                         if pinned() {
-                            let switched_off = current_media_kind()
-                                .is_some_and(|kind| !kind.enabled())
-                                || current_show
-                                    .as_ref()
-                                    .and_then(show_path)
-                                    .and_then(|path| engine_kind_of(path))
-                                    .is_some_and(|kind| !kind.enabled());
+                            let switched_off = PINNED
+                                .lock()
+                                .ok()
+                                .and_then(|pinned| {
+                                    let pin = pinned.as_ref()?;
+                                    pin.kind
+                                        .and_then(|kind| kind.kind())
+                                        .or_else(|| engine_kind_of(&pin.path))
+                                })
+                                .is_some_and(|kind| !kind.enabled());
 
                             if switched_off {
                                 pin_request = Some(end_pin_state());
                             }
-                        } else if latest_preview_msg.is_none() {
+                        }
+
+                        // And a hover, which is what is on screen wherever a pin is not: a pin
+                        // that is a bubble has let the hovers through, and one of those is dropped
+                        // for the same reason and by the same replay.
+                        if !previews_paused_by_pin() && latest_preview_msg.is_none() {
                             match (current_media_kind(), current_show.clone()) {
                                 (Some(kind), Some(show)) if !kind.enabled() => {
                                     latest_preview_msg = Some(show)
@@ -15614,6 +15795,17 @@ pub fn run_preview_window() {
 
                 match preview_msg {
                     PreviewMessage::Show(path, x, y, avoid) => {
+                        // A hover that has outlived the bubble it was raised under is not a hover
+                        // any more: the pin standing on the screen now is the window this message
+                        // would lay another file's media out in. One about the pin's *own* file is
+                        // the pin's own replay — which is how a theme switch rebuilds a pinned
+                        // page — and is let through (see `previews_paused_by_pin` and `Refresh`).
+                        if previews_paused_by_pin()
+                            && pinned_path().as_deref() != Some(path.as_path())
+                        {
+                            continue;
+                        }
+
                         show_requested = true;
                         // Remember where this preview was opened from: the region
                         // that keeps a scrollable preview alive stretches from
@@ -15706,6 +15898,15 @@ pub fn run_preview_window() {
                         }
                     }
                     PreviewMessage::ShowKeyboard(path, il, it, ir, ib, avoid, columns) => {
+                        // The same guard the pointer's own hover is held to, and for the same
+                        // reason: a keyboard hover raised while the pin was a bubble is over
+                        // (see `previews_paused_by_pin`).
+                        if previews_paused_by_pin()
+                            && pinned_path().as_deref() != Some(path.as_path())
+                        {
+                            continue;
+                        }
+
                         show_requested = true;
                         // The focused item lives inside the Explorer window, so
                         // its center resolves to that window's monitor.
@@ -15824,6 +16025,14 @@ pub fn run_preview_window() {
                     // media's box, and what is drawn over it is asked for rather than always
                     // there (see `pin_overlay_chrome`).
                     PreviewMessage::Pin { path, rect } => {
+                        // A pin that is a bubble is a pin the hand has left behind, and the bubble
+                        // is the whole of what stands for it: what is being pinned now is the hover
+                        // that was on screen, so the mark of the old one goes — and the media the
+                        // bubble had set down goes with it — rather than standing over a pin that no
+                        // longer exists (see `previews_paused_by_pin` and `PIN_HELD_MEDIA`).
+                        hide_pin_bubble();
+                        drop_held_pin_media();
+
                         let kind = CURRENT_MEDIA
                             .lock()
                             .ok()
@@ -15854,6 +16063,7 @@ pub fn run_preview_window() {
                             let now = Instant::now();
                             *pinned = Some(PinnedPreview {
                                 path: path.clone(),
+                                kind,
                                 content,
                                 restore: None,
                                 dpi,
@@ -15906,22 +16116,30 @@ pub fn run_preview_window() {
                     // or put back on a display that changed: the media is laid out again at the
                     // size it is now drawn at, and the window is put up around the result.
                     PreviewMessage::PinBox(content) => {
-                        let card = AudioCardClock {
-                            started: audio_started,
-                            from: audio_start_offset,
-                            name_offset: audio_name_scroll
-                                .as_ref()
-                                .map(|scroll| scroll.offset())
-                                .unwrap_or(0),
-                            dpi: audio_card_dpi,
-                        };
+                        // A pin that is a bubble has no window and has not kept its media: what is
+                        // in hand while one is down is the hover the bubble let through, and laying
+                        // the pin's own file out over that would be putting this window's picture
+                        // into somebody else's frame. What the box it was given means is answered
+                        // when the bubble is clicked and the pin asks for it again (see
+                        // `previews_paused_by_pin` and `restore_pin`).
+                        if !pin_is_collapsed() {
+                            let card = AudioCardClock {
+                                started: audio_started,
+                                from: audio_start_offset,
+                                name_offset: audio_name_scroll
+                                    .as_ref()
+                                    .map(|scroll| scroll.offset())
+                                    .unwrap_or(0),
+                                dpi: audio_card_dpi,
+                            };
 
-                        if let Some((path, dpi)) = pinned_media_owner() {
-                            relayout_pinned_media(&path, content, dpi, Some(card));
+                            if let Some((path, dpi)) = pinned_media_owner() {
+                                relayout_pinned_media(&path, content, dpi, Some(card));
+                            }
+                            show_pinned_window(hwnd);
+                            place_pinned_siblings();
+                            publish_pointer_hold(hwnd);
                         }
-                        show_pinned_window(hwnd);
-                        place_pinned_siblings();
-                        publish_pointer_hold(hwnd);
                     }
                     // Likewise answered above: a rendered page replays the hover
                     // it belongs to rather than being handled as a message here.
@@ -20019,6 +20237,7 @@ mod tests {
     fn overlay_pin(content: ScreenRegion, chrome: PinChrome) -> PinnedPreview {
         PinnedPreview {
             path: PathBuf::from("picture.png"),
+            kind: Some(MediaType::StaticImage),
             content,
             restore: None,
             dpi: 96,
@@ -20414,6 +20633,7 @@ mod tests {
     fn a_pinned_window_says_which_of_its_edges_a_point_is_on() {
         let pin = PinnedPreview {
             path: PathBuf::from("picture.png"),
+            kind: Some(MediaType::StaticImage),
             content: (100, 100, 700, 500),
             restore: None,
             dpi: 96,
@@ -20894,6 +21114,7 @@ mod tests {
             if let Ok(mut pinned) = PINNED.lock() {
                 *pinned = Some(PinnedPreview {
                     path: path.clone(),
+                    kind: Some(MediaType::NativeVideo),
                     content: (0, 0, 320, 240),
                     restore: None,
                     dpi: 96,
@@ -20936,5 +21157,147 @@ mod tests {
         if let Ok(mut media) = CURRENT_MEDIA.lock() {
             *media = previous_media;
         }
+    }
+
+    /// A pin pauses the previews exactly while it is standing on the screen. A pin collapsed into
+    /// its bubble is a pin the user has put out of the way, and the desktop is theirs again until
+    /// they click it — which is the whole of what the bubble buys (see `previews_paused_by_pin`).
+    #[test]
+    fn a_pin_pauses_the_previews_only_while_it_is_on_the_screen() {
+        let previous = (
+            PIN_ACTIVE.load(Ordering::Acquire),
+            PIN_COLLAPSED.load(Ordering::Acquire),
+        );
+
+        for (active, collapsed, paused) in [
+            (false, false, false),
+            (false, true, false),
+            (true, false, true),
+            (true, true, false),
+        ] {
+            PIN_ACTIVE.store(active, Ordering::Release);
+            PIN_COLLAPSED.store(collapsed, Ordering::Release);
+            assert_eq!(
+                previews_paused_by_pin(),
+                paused,
+                "a pin whose activity is {active} and whose bubble is {collapsed}"
+            );
+        }
+
+        PIN_ACTIVE.store(previous.0, Ordering::Release);
+        PIN_COLLAPSED.store(previous.1, Ordering::Release);
+    }
+
+    /// Clicking a bubble puts the pin back up and takes the hover with it: the window the hover was
+    /// drawn in is the pin's window, and what the pin is about is its own file — so the restore asks
+    /// for that file to be laid out again rather than showing what is in hand.
+    #[test]
+    fn restoring_a_bubble_puts_the_pin_back_and_asks_for_its_own_media_again() {
+        let previous_pin = PINNED.lock().ok().and_then(|mut pinned| pinned.take());
+        let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+        let was_collapsed = PIN_COLLAPSED.swap(true, Ordering::AcqRel);
+        let was_resumed = take_pin_resumed();
+
+        let content = (100, 100, 500, 400);
+        if let Ok(mut pinned) = PINNED.lock() {
+            let mut pin = overlay_pin(content, PinChrome::always());
+            pin.collapsed = true;
+            *pinned = Some(pin);
+        }
+
+        // A request slot with something already in it, so what the restore does with it is not
+        // mistaken for what was there before it: a restore is a box to lay out again.
+        let mut request = Some(PreviewMessage::Hide);
+        assert!(restore_pin(&mut request));
+
+        let restored = PINNED.lock().ok().and_then(|pinned| {
+            pinned
+                .as_ref()
+                .map(|pin| (pin.collapsed, pin.kind, pin.content))
+        });
+        let Some((collapsed, kind, placed)) = restored else {
+            panic!("the pin is up again");
+        };
+        assert!(!collapsed, "and it is up rather than a bubble");
+        assert_eq!(
+            kind,
+            Some(MediaType::StaticImage),
+            "with the kind it was taken up on, which is what the settings are asked of"
+        );
+        assert!(!pin_is_collapsed(), "and the bubble is not what is up");
+        assert!(
+            matches!(request, Some(PreviewMessage::PinBox(box_)) if box_ == placed),
+            "the pin's own file is laid out again at the box it is coming back at"
+        );
+        assert!(
+            take_pin_resumed(),
+            "and the hook is told the file under the pointer is a hover it has not answered"
+        );
+
+        if let Ok(mut pinned) = PINNED.lock() {
+            *pinned = previous_pin;
+        }
+        if let Ok(mut media) = CURRENT_MEDIA.lock() {
+            *media = previous_media;
+        }
+        PIN_COLLAPSED.store(was_collapsed, Ordering::Release);
+        PIN_RESUMED.store(was_resumed, Ordering::Release);
+    }
+
+    /// A pin that becomes a bubble sets its media down, and takes it back when the bubble is
+    /// clicked: the window is the hovers' again for as long as the bubble is there, and the frame
+    /// the pin was drawing is not the hovers' to decode over (see `PIN_HELD_MEDIA`).
+    #[test]
+    fn a_bubble_sets_the_pins_media_down_and_takes_it_back_up() {
+        let previous_current = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+        let previous_held = PIN_HELD_MEDIA.lock().ok().and_then(|mut held| held.take());
+        let was_collapsed = PIN_COLLAPSED.swap(true, Ordering::AcqRel);
+
+        if let Ok(mut media) = CURRENT_MEDIA.lock() {
+            *media = Some(create_loading_media(320, 240));
+        }
+
+        hold_pin_media();
+        assert!(
+            CURRENT_MEDIA.lock().ok().is_some_and(|media| media.is_none()),
+            "the media in hand is the hovers' again"
+        );
+        assert!(
+            pin_media_facts().is_some(),
+            "and what the pin is drawing is still the pin's to ask about"
+        );
+
+        release_pin_media();
+        assert!(
+            CURRENT_MEDIA.lock().ok().is_some_and(|media| media.is_some()),
+            "the pin's own media is back in hand"
+        );
+        assert!(
+            PIN_HELD_MEDIA
+                .lock()
+                .ok()
+                .is_some_and(|held| held.is_none()),
+            "and nothing is left set down"
+        );
+
+        // And a pin that is over leaves nothing behind: what a bubble had set down is let go of
+        // with it, worker and all.
+        hold_pin_media();
+        drop_held_pin_media();
+        assert!(
+            PIN_HELD_MEDIA
+                .lock()
+                .ok()
+                .is_some_and(|held| held.is_none()),
+            "a pin that is over takes its media with it"
+        );
+
+        if let Ok(mut media) = CURRENT_MEDIA.lock() {
+            *media = previous_current;
+        }
+        if let Ok(mut held) = PIN_HELD_MEDIA.lock() {
+            *held = previous_held;
+        }
+        PIN_COLLAPSED.store(was_collapsed, Ordering::Release);
     }
 }
