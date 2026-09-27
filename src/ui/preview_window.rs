@@ -13799,6 +13799,7 @@ fn resize_pinned_window(
         PinSpace {
             content,
             room: pinned_room(bounds, dpi, transport, overlay),
+            overlay,
         },
         edge,
         dx,
@@ -13815,6 +13816,11 @@ fn resize_pinned_window(
 struct PinSpace {
     content: ScreenRegion,
     room: ScreenBounds,
+    /// Whether the chrome of the pin being dragged is drawn over its media, which is the one fact
+    /// the box a drag *comes out with* needs and neither of the other two carries: a media box is
+    /// the window's for such a kind and has a caption and a bar to be given room around it
+    /// otherwise (see `pinned_window_box_of`).
+    overlay: bool,
 }
 
 /// The same drag, against a room to keep the box inside rather than against the display the box is
@@ -13849,7 +13855,11 @@ fn resize_pinned_content(
     transport: bool,
     frame: PinFrame,
 ) -> ScreenRegion {
-    let PinSpace { content, room } = space;
+    let PinSpace {
+        content,
+        room,
+        overlay,
+    } = space;
     let start_width = (content.2 - content.0).max(1);
     let start_height = (content.3 - content.1).max(1);
 
@@ -13956,12 +13966,11 @@ fn resize_pinned_content(
             .clamp(room.top, (room.bottom - height).max(room.top))
     };
 
-    (
-        left,
-        top - pinned_caption_height(dpi),
-        left + width,
-        top + height + pinned_transport_height(dpi, transport),
-    )
+    // And the box that comes out of it is the window's, which is the media's own for a kind whose
+    // chrome is drawn over it and the media's grown by the two bands otherwise — the one place the
+    // difference is not readable from the numbers either side of it, since a drag works in the
+    // media's box from beginning to end and what it hands back is the window's.
+    pinned_window_box_of((left, top, left + width, top + height), dpi, transport, overlay)
 }
 
 /// A release on a pinned window, answering whether it was the pin's to act on: the button a press
@@ -20216,10 +20225,25 @@ mod tests {
         dx: i32,
         dy: i32,
     ) -> ScreenRegion {
+        dragged_overlay(content, frame, edge, dx, dy, false)
+    }
+
+    /// The same drag for a pin whose chrome is drawn over its media: what the box that comes out of
+    /// it is a different question for, since the window and the media are the same box there (see
+    /// `PinSpace`).
+    fn dragged_overlay(
+        content: ScreenRegion,
+        frame: PinFrame,
+        edge: PinResize,
+        dx: i32,
+        dy: i32,
+        overlay: bool,
+    ) -> ScreenRegion {
         let window = resize_pinned_content(
             PinSpace {
                 content,
                 room: drag_room(),
+                overlay,
             },
             edge,
             dx,
@@ -20229,7 +20253,7 @@ mod tests {
             frame,
         );
 
-        content_box_of(window, 96, false, false)
+        content_box_of(window, 96, false, overlay)
     }
 
     #[test]
@@ -20274,6 +20298,41 @@ mod tests {
             dragged(edge(true, true, false, false), 100, 75),
             (500, 375, 800, 600),
             "the bottom-right corner of the box did not move"
+        );
+    }
+
+    /// The same drag on a pin whose chrome is drawn *over* its media, which is every kind this app
+    /// draws for itself: the window there is the media's own box, so a drag has no caption and no
+    /// bar to give room to — and the box it comes out with is the media's either way.
+    #[test]
+    fn a_resize_of_a_pin_whose_chrome_is_over_its_media_has_no_room_to_leave() {
+        let edge = edge(false, false, true, false);
+
+        // What the drag produces is the media box, and the same one whether or not the kind has
+        // bands of its own: a window a caption taller than the picture in it is a picture the paint
+        // stretches into the band, and the band being where the next drag measures the box from is
+        // what made a hand that kept at it watch the picture grow a caption per gesture.
+        let media = (400, 300, 800, 600);
+        let plain = dragged_from(media, PinFrame::Shaped, edge, 200, 0);
+        let over = dragged_overlay(media, PinFrame::Shaped, edge, 200, 0, true);
+        assert_eq!(plain, (400, 225, 1000, 675));
+        assert_eq!(over, plain, "the window is the media and nothing is added to it");
+
+        // A gesture that asks for the box it already has is the sharpest way to say it: nothing
+        // about the box may move, however many times it is done.
+        let mut box_ = over;
+        for _ in 0..8 {
+            box_ = dragged_overlay(box_, PinFrame::Shaped, edge, 0, 0, true);
+        }
+        assert_eq!(box_, over, "a drag of nothing changes nothing");
+
+        // And one that asks for a bigger box leaves the media's own shape in the box it leaves.
+        let grown = dragged_overlay(over, PinFrame::Shaped, edge, 200, 0, true);
+        assert_eq!(grown, (400, 150, 1200, 750));
+        assert_eq!(
+            (grown.2 - grown.0) as f64 / (grown.3 - grown.1) as f64,
+            4.0 / 3.0,
+            "the media keeps its shape"
         );
     }
 
