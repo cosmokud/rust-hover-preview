@@ -243,6 +243,31 @@ pub fn play_audio(path: &Path, volume: u32, start: f64) {
     }
 }
 
+/// Hold the sound or picture where it is, or let it go on.
+///
+/// It is the engine's own pause, which is the one thing this app cannot do for itself: what is
+/// playing is decoded ahead of the clock, and a pause that only stopped drawing would go on
+/// playing. What it is asked by is a pinned preview's transport bar — the one window of this
+/// app's that has buttons of its own — and it does nothing where nothing is playing, which is a
+/// pin whose file has already been let go.
+pub fn set_paused(paused: bool) {
+    SESSION.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        let Some(session) = slot.as_mut() else {
+            return;
+        };
+
+        let engine = &session.engine;
+        let _ = unsafe {
+            if paused {
+                engine.Pause()
+            } else {
+                engine.Play()
+            }
+        };
+    });
+}
+
 /// Take the sound that is playing to `seconds` into its file, which is what a start position
 /// the probe could not work out asks for once the engine has said how long the file is.
 ///

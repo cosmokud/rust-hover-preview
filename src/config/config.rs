@@ -1265,6 +1265,13 @@ pub struct AppConfig {
     /// Whether the trigger key is watched at all. Off means previews behave as if
     /// no key were held, whatever the mode says.
     pub trigger_key_enabled: bool,
+    /// Whether the pin key is watched: a preview on screen when it is pressed becomes
+    /// a window of its own — captioned, movable, always on top — and previews stay
+    /// quiet until that window is closed (see `pin_key`).
+    pub pin_enabled: bool,
+    /// The key that pins the preview on screen, by name — the same spellings the
+    /// trigger key accepts, since both are read by the same table.
+    pub pin_key: String,
     pub follow_cursor: bool,
     /// How far a preview is placed clear of the item it is about, so the file the
     /// pointer is on or the keyboard is focused on stays readable while its preview is
@@ -1671,6 +1678,8 @@ impl Default for AppConfig {
             trigger_key: "alt".to_string(),
             trigger_key_mode: TriggerKeyMode::Disable,
             trigger_key_enabled: true,
+            pin_enabled: true,
+            pin_key: "space".to_string(),
             follow_cursor: DEFAULT_FOLLOW_CURSOR,
             avoid_mode: DEFAULT_AVOID_MODE,
             same_file_rehover_delay_ms: DEFAULT_SAME_FILE_REHOVER_DELAY_MS,
@@ -1774,7 +1783,15 @@ fn same_entries(list: &[String], canonical: &[String]) -> bool {
 /// order it lists them in, are the one thing that tells the two apart, and the one thing that
 /// brings such a file to be written again (see `headings_are_old`).
 const SETTING_GROUPS: &[(&str, &[&str])] = &[
-    ("General", &["preview_enabled", "run_at_startup"]),
+    (
+        "General",
+        &[
+            "pin_enabled",
+            "pin_key",
+            "preview_enabled",
+            "run_at_startup",
+        ],
+    ),
     (
         "Preview Types",
         &[
@@ -2505,6 +2522,12 @@ impl AppConfig {
         );
         ini.set(
             CONFIG_SECTION,
+            "pin_enabled",
+            Some(self.pin_enabled.to_string()),
+        );
+        ini.set(CONFIG_SECTION, "pin_key", Some(self.pin_key.clone()));
+        ini.set(
+            CONFIG_SECTION,
             "follow_cursor",
             Some(self.follow_cursor.to_string()),
         );
@@ -2919,6 +2942,19 @@ impl AppConfig {
         }
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "trigger_key_enabled") {
             self.trigger_key_enabled = value;
+        }
+        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "pin_enabled") {
+            self.pin_enabled = value;
+        }
+        // The key that pins a preview, by name, read the way the trigger key above is: a name
+        // that is empty is nothing to bind. A name no key is spelled like is left to the watcher
+        // rather than turned away here, which is what lets a build that learns a new spelling
+        // read an older file that already named it (see `key_input::key_to_vk`).
+        if let Some(value) = ini.get(CONFIG_SECTION, "pin_key") {
+            let value = value.trim();
+            if !value.is_empty() {
+                self.pin_key = value.to_string();
+            }
         }
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "follow_cursor") {
             self.follow_cursor = value;

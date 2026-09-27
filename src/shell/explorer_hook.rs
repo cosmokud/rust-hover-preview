@@ -7,10 +7,10 @@ use crate::engines::webview_preview;
 use crate::formats::video_formats::is_video_file;
 use crate::shell::wheel_input;
 use crate::ui::preview_window::{
-    cursor_preview_hover, hide_preview, kill_stray_video_process, monitor_dpi_from_point,
-    pointer_item_box, pointer_item_holds, preview_pointer_hold, preview_screen_rect,
+    cursor_preview_hover, end_pin, hide_preview, kill_stray_video_process, monitor_dpi_from_point,
+    pinned, pointer_item_box, pointer_item_holds, preview_pointer_hold, preview_screen_rect,
     preview_stall_ms, publish_pointer_item_box, show_preview, show_preview_keyboard,
-    PreviewCursorHover,
+    take_pin_resumed, PreviewCursorHover,
 };
 use crate::{CONFIG, RUNNING};
 use once_cell::sync::Lazy;
@@ -3569,59 +3569,6 @@ fn is_pressed_or_down_state(state: u16) -> bool {
     (state & 0x8000) != 0 || (state & 0x0001) != 0
 }
 
-fn off_trigger_key_to_vk(key: &str) -> Option<i32> {
-    let key = key.trim().to_ascii_lowercase();
-    let vk = match key.as_str() {
-        "alt" | "menu" => 0x12,
-        "shift" => 0x10,
-        "ctrl" | "control" => 0x11,
-        "win" | "windows" | "meta" => 0x5B,
-        "space" => 0x20,
-        "tab" => 0x09,
-        "enter" | "return" => 0x0D,
-        "esc" | "escape" => 0x1B,
-        "backspace" => 0x08,
-        "capslock" | "caps_lock" => 0x14,
-        "left" => 0x25,
-        "up" => 0x26,
-        "right" => 0x27,
-        "down" => 0x28,
-        "insert" | "ins" => 0x2D,
-        "delete" | "del" => 0x2E,
-        "home" => 0x24,
-        "end" => 0x23,
-        "pageup" | "pgup" => 0x21,
-        "pagedown" | "pgdn" => 0x22,
-        "lshift" | "leftshift" => 0xA0,
-        "rshift" | "rightshift" => 0xA1,
-        "lctrl" | "leftctrl" | "lcontrol" | "leftcontrol" => 0xA2,
-        "rctrl" | "rightctrl" | "rcontrol" | "rightcontrol" => 0xA3,
-        "lalt" | "leftalt" => 0xA4,
-        "ralt" | "rightalt" => 0xA5,
-        key if key.len() == 1 => {
-            let byte = key.as_bytes()[0];
-            if byte.is_ascii_alphabetic() {
-                byte.to_ascii_uppercase() as i32
-            } else if byte.is_ascii_digit() {
-                byte as i32
-            } else {
-                return None;
-            }
-        }
-        key if key.starts_with('f') => {
-            let n = key[1..].parse::<i32>().ok()?;
-            if (1..=24).contains(&n) {
-                0x70 + (n - 1)
-            } else {
-                return None;
-            }
-        }
-        _ => return None,
-    };
-
-    Some(vk)
-}
-
 /// Whether the resolved off-trigger virtual key is currently held.
 fn key_is_down(vk: i32) -> bool {
     unsafe {
@@ -4068,7 +4015,7 @@ pub fn run_explorer_hook() {
             // Resolved once per config change instead of once per tick: what the tick
             // compares is the spelling, and a spelling that has not changed is a key that
             // has not changed (see the snapshot below).
-            let vk = off_trigger_key_to_vk(&c.trigger_key);
+            let vk = crate::shell::key_input::key_to_vk(&c.trigger_key);
             (snapshot, vk, c.trigger_key.clone())
         })
         .unwrap_or((
@@ -4306,7 +4253,7 @@ pub fn run_explorer_hook() {
             // behind it happens once per change.
             if config.trigger_key != trigger_key_seen {
                 trigger_key_seen = config.trigger_key.clone();
-                trigger_key_vk = off_trigger_key_to_vk(&config.trigger_key);
+                trigger_key_vk = crate::shell::key_input::key_to_vk(&config.trigger_key);
             }
         }
 
@@ -4335,6 +4282,13 @@ pub fn run_explorer_hook() {
                 stationary_search_miss_started_at = None;
                 hover_start = None;
             }
+            // A pinned preview is a window the user put there, and the two settings above are
+            // what says whether previews may be raised at all — which is the question their
+            // leaving it standing would answer wrongly. So it comes down with them, by the path
+            // its own close button takes (see `end_pin`).
+            if pinned() {
+                end_pin();
+            }
             keyboard_file = None;
             last_file = None;
             last_focused_key = None;
@@ -4356,6 +4310,35 @@ pub fn run_explorer_hook() {
             } else {
                 tick_ms
             }));
+            continue;
+        }
+
+        // A pin that has just been closed is a pointer that is on something new. The file the
+        // pin was of is not a hover this hook has already answered, so none of what a hover
+        // leaves behind — the file it was last about, the latch that holds a re-hover of one
+        // back, the gate a folder change raises — may be read as still applying to it: a
+        // preview of whatever the pointer is on now is due the moment the pin is gone.
+        if take_pin_resumed() {
+            last_file = None;
+            keyboard_file = None;
+            last_focused_key = None;
+            hover_start = None;
+            suppressed.clear();
+            pointer_pause.clear();
+            video_hover_guard_until = None;
+            stationary_search_miss_started_at = None;
+            suspend_preview_until_user_input = false;
+            is_keyboard_hover = false;
+            keyboard_screen_owner = false;
+        }
+
+        // A pinned preview is the whole of what this app is showing, and the pin's own promise
+        // is that the hover machinery is quiet behind it: nothing is resolved, nothing is raised
+        // and nothing is taken down until the pin is gone. The loop stays here, at the tick's own
+        // pace, rather than sleeping deeply — the state above is read on every pass, so the first
+        // hover after the pin is answered the moment it is closed.
+        if pinned() {
+            std::thread::sleep(Duration::from_millis(tick_ms));
             continue;
         }
 

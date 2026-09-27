@@ -51,6 +51,8 @@ use crate::shell::cloud_files;
 use crate::shell::wheel_input;
 use crate::text::archive_preview::{self, ArchivePreviewOptions};
 use crate::text::audio_preview::{self, AudioPreviewOptions, Card};
+use crate::text::pin_chrome;
+use crate::text::text_paint::DibSurface;
 use crate::text::text_preview::{self, TextPreviewOptions};
 use crate::{CONFIG, RUNNING};
 use gif::DecodeOptions;
@@ -143,6 +145,26 @@ const VIDEO_GEOMETRY_CACHE_MAX_ENTRIES: usize = 512;
 // Expected executable name of the playback process spawned below, used to
 // verify a recorded PID still belongs to that process before killing it.
 const VIDEO_PROCESS_IMAGE_NAME: &str = "ffplay.exe";
+
+/// What a pinned preview adds to the box its media is in, in the units every other margin
+/// this app's placement is written in and multiplied by the display's scale: the caption
+/// above the media, the transport bar below it, and the round bubble the pin collapses into.
+const PIN_CAPTION_PIXELS: f32 = 30.0;
+const PIN_TRANSPORT_PIXELS: f32 = 30.0;
+const PIN_BUBBLE_PIXELS: f32 = 44.0;
+/// How far a press on a pinned window may wander before it is a drag rather than a click.
+const PIN_DRAG_SLOP_PIXELS: f32 = 4.0;
+/// How much of a pinned window stays on a display. A window dragged past an edge leaves
+/// this much of itself behind, so its caption stays reachable and can drag it back — the
+/// question Windows answers with a maximized window's own rules and this app has to answer
+/// itself, because a captionless window can be dragged anywhere at all.
+const PIN_KEEP_ON_SCREEN_PIXELS: f32 = 64.0;
+/// How wide a band along a pinned window's edge begins a resize.
+const PIN_RESIZE_BORDER_PIXELS: f32 = 6.0;
+/// How often a pinned window with a transport bar is painted again while its file plays: the
+/// playhead is a thing that moves on its own, and a quarter of a second is what a sound's card is
+/// repainted at for the same reason (see `AUDIO_CARD_REPAINT`).
+const PIN_TRANSPORT_REPAINT_MS: u64 = 250;
 
 // Message passing for thread communication
 pub static PREVIEW_SENDER: Lazy<Mutex<Option<Sender<PreviewMessage>>>> =
@@ -298,7 +320,16 @@ pub fn pointer_item_box() -> Option<(i32, i32, i32, i32)> {
 /// Whether the pointer is on that item this moment, read from the cursor: the
 /// reveal's own question. A pointer that cannot be read is not a pointer that has
 /// left, so an answer that could not be had holds nothing back either.
+///
+/// A pinned preview is not the pointer's and is not held to this question at all: the pin *is*
+/// the item the pointer was on when it was taken up, so a pointer that has since gone to the
+/// other end of the desktop — onto the pinned window itself, most likely — has left nothing that
+/// is on screen (see `PIN_ACTIVE`).
 fn pointer_on_the_hovered_item() -> bool {
+    if pinned() {
+        return true;
+    }
+
     cursor_position()
         .map(|cursor| pointer_item_holds(cursor.x, cursor.y))
         .unwrap_or(true)
@@ -464,6 +495,35 @@ static RESUME_FROM_SLEEP: AtomicBool = AtomicBool::new(false);
 // is put back by the loop, which is the side that holds the hover it came from.
 static DISPLAY_RESET: AtomicBool = AtomicBool::new(false);
 
+/// Whether a preview is pinned: the preview that stopped being a hover and became a
+/// window of its own, with a caption of its own, that stays until it is closed.
+///
+/// Every hover-side path asks this. Nothing is spawned while it is up — a pointer
+/// crossing a folder is answered with nothing at all — and nothing is despawned
+/// either: the dismissals the Explorer hook sends twenty times a second would
+/// otherwise take the pinned window down the moment the pointer moved. What the pin
+/// is *for* is being read, and a preview that came and went under the pointer while
+/// it was being read would be no better than the hover it came from (see
+/// `PinnedPreview`).
+static PIN_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+/// Whether the pinned preview is collapsed into the round bubble that stands in for it.
+/// A collapsed pin is still a pin: previews stay quiet until it is restored and closed.
+static PIN_COLLAPSED: AtomicBool = AtomicBool::new(false);
+
+/// A pin was asked to come down, by the Explorer hook (previews were turned off, or the
+/// trigger key is holding them back), by the tray, or by the resumption of the machine
+/// from sleep. What a pin *is* — a window and the media under it — belongs to the
+/// preview loop, so this is a request rather than a take-down: the loop ends it on its
+/// next tick, through the same path its own close button takes.
+static PIN_END_REQUESTED: AtomicBool = AtomicBool::new(false);
+
+/// A pin has been closed since this was last asked. The Explorer hook reads it once to
+/// know that what is under the pointer is a *new* hover: the file it was on when the pin
+/// went up is not a hover it has already answered, and the delay a re-hover of the same
+/// file is given is a delay that belongs to a file the pointer left and came back to.
+static PIN_RESUMED: AtomicBool = AtomicBool::new(false);
+
 static CURRENT_MEDIA: Lazy<Mutex<Option<MediaData>>> = Lazy::new(|| Mutex::new(None));
 /// What a probed geometry is only valid for: the file and the version of it that
 /// was probed, so a video replaced in place is probed again rather than cropped and
@@ -529,6 +589,22 @@ pub enum PreviewMessage {
     /// now off is rebuilt, and it is rebuilt from the hover it came from, so it
     /// goes away on the spot rather than at the next pointer move.
     RefreshTypes,
+    /// The pin key was pressed while a preview was on screen: what is up becomes a
+    /// window of its own — captioned, movable, always on top — and the hover machinery
+    /// stays quiet behind it until it is closed. The rect is the box the preview is
+    /// already in, so nothing about the picture moves when it is pinned.
+    Pin {
+        path: PathBuf,
+        rect: ScreenRegion,
+    },
+    /// The pinned window was given another box — maximized, restored, or resized by an
+    /// edge — and the media in it is laid out again for that box. It is the same
+    /// question a hover asks, with the box already answered.
+    PinBox(ScreenRegion),
+    /// Whether the pin key is watched was changed in the tray, or previews themselves
+    /// were turned off. A pin on screen is ended here rather than left as a window
+    /// nothing would ever take down again.
+    PinChanged,
     /// The render tier is done with a document: a page is waiting in the cache,
     /// or there is no page. The generation is the hover that asked for it, so a
     /// render landing after the pointer has moved on is ignored — the page is
@@ -582,6 +658,7 @@ pub enum PreviewMessage {
 }
 
 /// Represents different types of media we can display
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum MediaType {
     StaticImage,
     /// A `.dds` texture, which is a still picture decoded by this app and drawn by this
@@ -759,6 +836,38 @@ impl MediaType {
     fn is_painted(&self) -> bool {
         matches!(self, Self::Text | Self::Archive | Self::Peazip | Self::Audio)
     }
+
+    /// Whether this kind has a picture for the round bubble a collapsed pin becomes. The
+    /// kinds whose frame *is* a picture have one; a page of text, an archive's listing and a
+    /// sound's card are layouts of text, which at a bubble's size is a grey smear rather than
+    /// a picture of anything, so they are drawn as a mark instead (see `pin_chrome`).
+    fn has_bubble_picture(&self) -> bool {
+        matches!(
+            self,
+            Self::StaticImage
+                | Self::AnimatedGif
+                | Self::AnimatedApng
+                | Self::AnimatedWebP
+                | Self::Dds
+                | Self::Design
+                | Self::Vector
+                | Self::Magick
+                | Self::Pdf
+                | Self::Comic
+                | Self::Office
+                | Self::Libre
+                | Self::Calibre
+        )
+    }
+
+    /// The mark the bubble carries when there is no picture to stand in for one.
+    fn bubble_mark(&self) -> pin_chrome::BubbleMark {
+        match self {
+            Self::Video | Self::NativeVideo | Self::Audio => pin_chrome::BubbleMark::Play,
+            Self::Text | Self::Archive | Self::Peazip => pin_chrome::BubbleMark::Page,
+            _ => pin_chrome::BubbleMark::Picture,
+        }
+    }
 }
 
 /// A single frame of image data
@@ -920,6 +1029,11 @@ struct VideoGeometry {
     width: u32,
     height: u32,
     crop: Option<VideoCrop>,
+    /// How long the file plays, where the probe read it: what a pinned preview's transport bar
+    /// is drawn against. Neither engine hands a length over — FFmpeg's player reports nothing at
+    /// all, and the media engine's duration is only known once it is playing — so the probe that
+    /// measures the file is asked for this at the same time it is asked for the shape.
+    duration: Option<f64>,
 }
 
 impl MediaData {
@@ -961,6 +1075,35 @@ impl MediaData {
         let Some((pixels, width, height)) =
             audio_preview::render(&card, width, height, dpi, current_audio_options())
         else {
+            return false;
+        };
+
+        self.frames[0] = ImageFrame::new(pixels, width, height, 0);
+        true
+    }
+
+    /// Paint the card again at a box of a different size: what a pinned preview of a sound
+    /// costs when its window is maximized or resized. It is the question `refresh_audio_card`
+    /// answers asked of the box the card is being given rather than of the one it already has.
+    fn relayout_audio_card(
+        &mut self,
+        path: &Path,
+        elapsed: Option<f64>,
+        duration: Option<f64>,
+        name_offset: i32,
+        dpi: u32,
+        size: (u32, u32),
+    ) -> bool {
+        let Some(card) = audio_card(path, elapsed, duration, name_offset) else {
+            return false;
+        };
+        let Some((pixels, width, height)) = audio_preview::render(
+            &card,
+            size.0.max(1),
+            size.1.max(1),
+            dpi,
+            current_audio_options(),
+        ) else {
             return false;
         };
 
@@ -1218,7 +1361,38 @@ impl MediaData {
     }
 }
 
+/// Whether a preview is pinned — a window of its own with a caption, which stays until it
+/// is closed. The Explorer hook asks this every tick: while it is true nothing is spawned
+/// and nothing is taken down, which is the whole of what "the preview mode is paused"
+/// means (see `PIN_ACTIVE`).
+pub fn pinned() -> bool {
+    PIN_ACTIVE.load(Ordering::Acquire)
+}
+
+/// Ask for the pinned preview to come down, from any thread. What a pin is belongs to the
+/// preview loop, so the loop is what ends it — on its next tick, by the same path its own
+/// close button takes. Asking twice is asking once.
+pub fn end_pin() {
+    PIN_END_REQUESTED.store(true, Ordering::Release);
+}
+
+/// Whether a pin has been closed since this was last asked. The Explorer hook reads it once
+/// per tick to know that what is under the pointer is a hover it has not answered yet: the
+/// file it was on when the pin went up is not a file the pointer has left and come back to,
+/// and treating it as one would hold the next preview back for the re-hover delay (see
+/// `PIN_RESUMED`).
+pub fn take_pin_resumed() -> bool {
+    PIN_RESUMED.swap(false, Ordering::AcqRel)
+}
+
 pub fn show_preview(path: &Path, x: i32, y: i32, avoid: Option<ScreenRegion>) {
+    // A pinned preview is the whole of what this app is showing: a hover raised while one
+    // is up would be a second thing on screen, and the pin exists to stop exactly that
+    // (see `PIN_ACTIVE`).
+    if pinned() {
+        return;
+    }
+
     if let Ok(sender) = PREVIEW_SENDER.lock() {
         if let Some(ref tx) = *sender {
             let _ = tx.send(PreviewMessage::Show(path.to_path_buf(), x, y, avoid));
@@ -1235,6 +1409,12 @@ pub fn show_preview_keyboard(
     avoid: Option<ScreenRegion>,
     draws_columns: bool,
 ) {
+    // A keyboard hover is a hover like any other, and a pinned preview is what is on
+    // screen instead of one.
+    if pinned() {
+        return;
+    }
+
     // A keyboard preview is not the pointer's, so the item the pointer was last read
     // on has nothing to say about it: the box goes rather than gating a preview the
     // keyboard asked for (see `HOVER_POINTER_BOX`).
@@ -1256,6 +1436,16 @@ pub fn show_preview_keyboard(
 }
 
 pub fn hide_preview() {
+    // A pinned preview is not a hover, and the twenty-odd dismissals the Explorer hook
+    // sends while a pointer moves are not about it: coming down is what its close button
+    // is for, and a pin that went away because the pointer crossed the window would be no
+    // better than the hover it came from. The process behind it is left alone here for
+    // the same reason — what ends it is the take-down the pin's own end performs (see
+    // `PIN_ACTIVE` and `end_pin`).
+    if pinned() {
+        return;
+    }
+
     // The window coming down, the count of its coming down and the item the pointer
     // was last read on are written under one lock, so a load that is still running —
     // started under the count from before this — cannot put the preview back up after
@@ -1311,6 +1501,18 @@ pub fn refresh_preview() {
     if let Ok(sender) = PREVIEW_SENDER.lock() {
         if let Some(ref tx) = *sender {
             let _ = tx.send(PreviewMessage::Refresh);
+        }
+    }
+}
+
+/// The tray's `Enable Pin` row was clicked, or the configuration that decides whether
+/// the key is watched was reloaded. Whether there is a pin to take down is a question
+/// only the preview thread can answer — the window and the media under it are its own
+/// — so the answer is left to it.
+pub fn refresh_pin() {
+    if let Ok(sender) = PREVIEW_SENDER.lock() {
+        if let Some(ref tx) = *sender {
+            let _ = tx.send(PreviewMessage::PinChanged);
         }
     }
 }
@@ -4800,6 +5002,7 @@ fn load_video_thumbnail(
             width: 1920,
             height: 1080,
             crop: None,
+            duration: None,
         },
     };
 
@@ -4881,7 +5084,7 @@ fn wait_bounded(mut child: Child, timeout: Duration) -> Option<Output> {
 }
 
 /// Get video dimensions using ffprobe
-fn get_video_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
+fn get_video_dimensions(path: &PathBuf) -> Option<(u32, u32, Option<f64>)> {
     // Spawned rather than run through `Command::output`, which is these two calls
     // under one name, so that the probe is in the job before it is waited on: a
     // probe left behind by a crash would otherwise go on reading a file that nobody
@@ -4899,9 +5102,9 @@ fn get_video_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
             "-select_streams",
             "v:0",
             "-show_entries",
-            "stream=width,height",
+            "stream=width,height:format=duration",
             "-of",
-            "csv=s=x:p=0",
+            "default=noprint_wrappers=1",
         ])
         .arg(path)
         .stdout(Stdio::piped())
@@ -4913,12 +5116,34 @@ fn get_video_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
     engine_processes::adopt(child.id());
 
     let output = wait_bounded(child, Duration::from_secs(VIDEO_PROBE_TIMEOUT_SECS))?;
-
     let output_str = String::from_utf8_lossy(&output.stdout);
-    let mut parts = output_str.trim().split('x').filter(|part| !part.is_empty());
-    let width = parts.next()?.parse().ok()?;
-    let height = parts.next()?.parse().ok()?;
-    Some((width, height))
+
+    let mut width = None;
+    let mut height = None;
+    let mut duration = None;
+
+    for line in output_str.lines() {
+        let Some((key, value)) = line.trim().split_once('=') else {
+            continue;
+        };
+        let value = value.trim();
+
+        match key.trim() {
+            "width" => width = value.parse::<u32>().ok(),
+            "height" => height = value.parse::<u32>().ok(),
+            // A stream with no length of its own — a live capture, a container that does not
+            // say — answers `N/A`, which is the same answer as nothing at all here.
+            "duration" => {
+                duration = value
+                    .parse::<f64>()
+                    .ok()
+                    .filter(|value| *value > 0.0 && value.is_finite())
+            }
+            _ => {}
+        }
+    }
+
+    Some((width?, height?, duration))
 }
 
 fn parse_cropdetect_line(line: &str) -> Option<VideoCrop> {
@@ -5125,7 +5350,9 @@ fn probe_video_geometry(path: &PathBuf) -> ProbedGeometry {
     // the media engine Windows has, which is also the engine that would play it. That is
     // the whole of the fallback's geometry: there is no crop to detect, because cropdetect
     // is an FFmpeg filter and the engine is handed the frame as the file holds it.
-    let Some((src_w, src_h)) = dimensions.or_else(|| video_player::dimensions(path)) else {
+    let Some((src_w, src_h, src_duration)) = dimensions
+        .or_else(|| video_player::dimensions(path).map(|(width, height)| (width, height, None)))
+    else {
         // No picture in the file at all — which leaves two answers, and the one that matters
         // is asked first. A container of a video's name whose streams hold a sound and no
         // picture is a song: the sound is probed for, and a machine that can play it is
@@ -5176,12 +5403,14 @@ fn probe_video_geometry(path: &PathBuf) -> ProbedGeometry {
             width: crop.width,
             height: crop.height,
             crop: Some(crop),
+            duration: src_duration,
         }
     } else {
         VideoGeometry {
             width: src_w,
             height: src_h,
             crop: None,
+            duration: src_duration,
         }
     };
 
@@ -5443,7 +5672,14 @@ fn set_noactivate_for_process(pid: u32) {
 
 /// Start ffplay for video preview, at the level `Volume → Video` names and with the film's own peak
 /// folded into it where `Normalize` is on for videos (see `normalizing_video`).
-fn start_video_playback(path: &PathBuf, x: i32, y: i32, width: i32, height: i32) -> Option<Child> {
+fn start_video_playback(
+    path: &PathBuf,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+    start: f64,
+) -> Option<Child> {
     // Get volume setting from config (0-100)
     let volume = CONFIG.lock().map(|c| c.video_volume).unwrap_or(0);
 
@@ -5498,6 +5734,15 @@ fn start_video_playback(path: &PathBuf, x: i32, y: i32, width: i32, height: i32)
     };
     if let Some(vf) = vf.as_deref() {
         cmd.args(["-vf", vf]);
+    }
+
+    // Where the player is asked to start. A pinned preview's transport bar is the one caller that
+    // asks for anything but the beginning: FFmpeg's player can be told nothing once it is running,
+    // so a seek is this player ended and another one begun at the second the bar was dragged to —
+    // and its own loop then returns to *that* second, which is the same bargain the sound path
+    // makes (see `start_audio_player`).
+    if start > 0.0 {
+        cmd.args(["-ss", &format!("{start:.3}")]);
     }
 
     let child = cmd
@@ -6124,6 +6369,15 @@ fn video_box(path: &Path) -> Option<(u32, u32)> {
         // Not probed yet: the wait for the probe, which is the box the hover is placed
         // in until the answer lands and the hover is replayed.
         None => Some((office_preview::WAITING_BOX, office_preview::WAITING_BOX)),
+    }
+}
+
+/// How long a video plays, as the probe that measured it read. A container that does not say is
+/// answered with nothing, which is a transport bar with no length to draw a playhead against.
+fn video_duration(path: &Path) -> Option<f64> {
+    match cached_video_geometry(path) {
+        Some(ProbedGeometry::Measured(geometry)) => geometry.duration,
+        _ => None,
     }
 }
 
@@ -8124,30 +8378,51 @@ impl Drop for LayeredSurface {
 }
 
 thread_local! {
-    static LAYERED_SURFACE: RefCell<Option<LayeredSurface>> = const { RefCell::new(None) };
+    /// The surfaces this thread paints layered windows on, one per window and kept between
+    /// repaints. There are two windows at most, and both are painted by the preview thread:
+    /// the preview — which is the pinned window while a pin is up — and the round bubble a
+    /// collapsed pin leaves. A surface rebuilt per repaint would be a display's worth of
+    /// pixels allocated for every frame of a video.
+    static LAYERED_SURFACES: RefCell<Vec<(isize, LayeredSurface)>> = const { RefCell::new(Vec::new()) };
     /// Mutable box for the corner spinner: the small piece of a frame the arc is drawn into
     /// and then composed back over the frame's own pixels, so that drawing the spinner costs
     /// a copy of the box rather than a copy of the frame — which at the size of a display is
     /// the difference between a few kilobytes and thirty megabytes, every eighty milliseconds
     /// (see `render_layered_preview_at`).
     static OVERLAY_SCRATCH: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
+    /// The membrane a pinned window's caption is painted on: the strip is drawn by
+    /// `pin_chrome`, which is GDI's business, into a surface of its own and copied onto the
+    /// window's, which is this module's. It is kept between paints for the reason the windows'
+    /// surfaces are — a pinned video repaints sixty times a second.
+    static CHROME_SURFACE: RefCell<Option<DibSurface>> = const { RefCell::new(None) };
+    /// The membrane a pinned window's transport bar is painted on, kept for the reason the
+    /// caption's is: a pinned video repaints while it plays, and the two strips are painted one
+    /// after the other — so they cannot share one surface without one of them being rebuilt.
+    static TRANSPORT_SURFACE: RefCell<Option<DibSurface>> = const { RefCell::new(None) };
 }
 
-/// DIB bits for a `width` x `height` frame, reusing the cached surface when the
-/// size is unchanged. `None` means the surface could not be created and the
-/// frame is skipped, as a failed `CreateDIBSection` did before.
-fn ensure_layered_surface(width: u32, height: u32) -> Option<*mut u8> {
-    LAYERED_SURFACE.with(|cell| {
-        let mut surface = cell.borrow_mut();
+/// How many windows keep a surface of their own: the preview — pinned or not — and the bubble.
+const LAYERED_SURFACE_WINDOWS: usize = 2;
 
-        if let Some(existing) = surface.as_ref() {
+/// DIB bits for a `width` x `height` frame in one window's own surface, reusing what
+/// that window already has when the size is unchanged. `None` means the surface could
+/// not be created and the frame is skipped, as a failed `CreateDIBSection` did before.
+fn ensure_layered_surface(window: isize, width: u32, height: u32) -> Option<*mut u8> {
+    LAYERED_SURFACES.with(|cell| {
+        let mut surfaces = cell.borrow_mut();
+
+        if let Some((_, existing)) = surfaces.iter().find(|(key, _)| *key == window) {
             if existing.width == width && existing.height == height {
                 return Some(existing.bits);
             }
         }
 
-        // Dropping the previous surface releases its DC and bitmap.
-        *surface = None;
+        // Dropping the previous surface releases its DC and bitmap — this window's only,
+        // since the surface of the other one is left where it is.
+        surfaces.retain(|(key, _)| *key != window);
+        while surfaces.len() >= LAYERED_SURFACE_WINDOWS {
+            surfaces.remove(0);
+        }
 
         let bmi = BITMAPINFO {
             bmiHeader: BITMAPINFOHEADER {
@@ -8189,17 +8464,31 @@ fn ensure_layered_surface(width: u32, height: u32) -> Option<*mut u8> {
             // reads the bitmap through this DC.
             let old_bitmap = SelectObject(mem_dc, bitmap);
 
-            *surface = Some(LayeredSurface {
-                mem_dc,
-                bitmap,
-                old_bitmap,
-                bits: bits as *mut u8,
-                width,
-                height,
-            });
+            surfaces.push((
+                window,
+                LayeredSurface {
+                    mem_dc,
+                    bitmap,
+                    old_bitmap,
+                    bits: bits as *mut u8,
+                    width,
+                    height,
+                },
+            ));
 
             Some(bits as *mut u8)
         }
+    })
+}
+
+/// The memory DC of the surface this thread last ensured for a window, which is what
+/// `UpdateLayeredWindow` reads the bits through.
+fn layered_surface_dc(window: isize) -> Option<HDC> {
+    LAYERED_SURFACES.with(|cell| {
+        cell.borrow()
+            .iter()
+            .find(|(key, _)| *key == window)
+            .map(|(_, surface)| surface.mem_dc)
     })
 }
 
@@ -8209,7 +8498,14 @@ unsafe fn render_layered_preview(hwnd: HWND) {
         return;
     }
 
-    render_layered_preview_at(hwnd, rect.left, rect.top);
+    // The window is two things: the hover's own frame, and — while a preview is pinned — a
+    // window with a caption and a bar of its own. Which of the two it is showing is not a
+    // question about its size, so it is asked here rather than worked out by each painter.
+    if pinned() {
+        render_pinned_preview_at(hwnd, rect.left, rect.top);
+    } else {
+        render_layered_preview_at(hwnd, rect.left, rect.top);
+    }
 }
 
 /// Paint the frame the window is holding at a given place on screen, sizing the
@@ -8265,7 +8561,7 @@ unsafe fn render_layered_preview_at(hwnd: HWND, x: i32, y: i32) {
         } else {
             current_image_background()
         };
-        let bits = ensure_layered_surface(width, height)?;
+        let bits = ensure_layered_surface(hwnd.0 as isize, width, height)?;
         let out = unsafe { std::slice::from_raw_parts_mut(bits, expected_size) };
 
         // The frame is composed once, and the spinner — where there is one — is drawn over
@@ -8303,9 +8599,7 @@ unsafe fn render_layered_preview_at(hwnd: HWND, x: i32, y: i32) {
         return;
     };
 
-    let Some(mem_dc) =
-        LAYERED_SURFACE.with(|cell| cell.borrow().as_ref().map(|surface| surface.mem_dc))
-    else {
+    let Some(mem_dc) = layered_surface_dc(hwnd.0 as isize) else {
         return;
     };
 
@@ -8337,8 +8631,299 @@ unsafe fn render_layered_preview_at(hwnd: HWND, x: i32, y: i32) {
     publish_pointer_hold(hwnd);
 }
 
-/// Put the loading spinner on screen for a pending load, in the box that load's wait
-/// is placed in: the arc's own, at the pointer's corner (see `waiting_placement`).
+/// Paint a pinned window: the caption, the media in the band below it, and — for a kind that
+/// plays — the transport bar below that.
+///
+/// It is the same composition `render_layered_preview_at` performs, for a window that is no
+/// longer the frame's size: the surface is the window's whole box, the frame is composed into
+/// the band the media occupies, and the chrome is drawn over the rest. What makes a pinned
+/// preview worth a painter of its own is exactly that band: a frame lands at the row its band
+/// starts at rather than at the top of the surface, and the window is as large as the media
+/// plus what was added above and below it.
+///
+/// Three kinds leave the media band empty, because the thing really drawn there is a window of
+/// its own placed over it: a video FFmpeg's player plays, and the two kinds the browser engine
+/// draws. What the band is then is nothing at all — alpha zero, which is what lets the window
+/// underneath be seen through it and, more to the point, be *clicked*: hit testing of a layered
+/// window is answered by the shape of its pixels, so a band of transparent ones is a band the
+/// player keeps for itself.
+unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
+    let Some(paint) = pinned_paint() else {
+        return;
+    };
+
+    let (width, height) = (paint.width, paint.height);
+    let caption_height = paint.caption_height;
+    let Some(bits) = ensure_layered_surface(hwnd.0 as isize, width as u32, height as u32) else {
+        return;
+    };
+    let out = std::slice::from_raw_parts_mut(bits, width as usize * height as usize * 4);
+    out.fill(0);
+
+    // The media band. A frame is composed into it whole, at the row the band begins at; a
+    // window whose media has not been laid out for its new box yet shows the frame it has,
+    // centered, for the tick or two that takes.
+    if let Ok(media) = CURRENT_MEDIA.lock() {
+        if let Some(media) = media.as_ref() {
+            if !media.media_type.is_engine() && !matches!(media.media_type, MediaType::Video) {
+                compose_preview_pixels_into_band(
+                    media.current_pixels(),
+                    media.current_width(),
+                    media.current_height(),
+                    preview_background(media.media_type),
+                    media.current_frame_is_opaque(),
+                    BandTarget {
+                        out,
+                        width: width as u32,
+                        origin_y: caption_height as u32,
+                    },
+                );
+            }
+        }
+    }
+
+    // The caption.
+    if let Some(palette) = pin_chrome::ChromePalette::current() {
+        let caption = pin_chrome::Caption {
+            title: &paint.title,
+            maximized: paint.maximized,
+            hovered: paint.hovered,
+            pressed: paint.pressed,
+        };
+
+        CHROME_SURFACE.with(|cell| {
+            let mut surface = cell.borrow_mut();
+            let wanted = (width.max(1) as u32, caption_height.max(1) as u32);
+            if surface
+                .as_ref()
+                .map(|surface| (surface.width, surface.height))
+                != Some(wanted)
+            {
+                *surface = DibSurface::create(wanted.0, wanted.1);
+            }
+            if let Some(surface) = surface.as_ref() {
+                pin_chrome::paint_caption(surface, &palette, &caption, paint.dpi);
+                copy_surface_rows_into(surface, out, width as u32, 0);
+            }
+        });
+    }
+
+    // What stands where the picture was when the player that fills it has been stopped: a mark
+    // rather than nothing, since an engine that cannot be paused is stopped instead (see
+    // `toggle_pinned_playback`).
+    if paint.transport.paused_at.is_some() {
+        if let Some(palette) = pin_chrome::ChromePalette::current() {
+            pin_chrome::paint_paused_mark(
+                out,
+                width as u32,
+                caption_height as u32,
+                (height - caption_height - paint.transport_height).max(1) as u32,
+                &palette,
+            );
+        }
+    }
+
+    // The transport bar, for the kinds that play.
+    if paint.transport_height > 0 {
+        if let Some(palette) = pin_chrome::ChromePalette::current() {
+            let state = pin_chrome::TransportState {
+                playing: paint.playing,
+                position: paint.position,
+                duration: paint.duration,
+                hovered: paint.transport.hovered,
+                pressed: paint.transport.pressed,
+            };
+
+            TRANSPORT_SURFACE.with(|cell| {
+                let mut surface = cell.borrow_mut();
+                let wanted = (width.max(1) as u32, paint.transport_height.max(1) as u32);
+                if surface
+                    .as_ref()
+                    .map(|surface| (surface.width, surface.height))
+                    != Some(wanted)
+                {
+                    *surface = DibSurface::create(wanted.0, wanted.1);
+                }
+                if let Some(surface) = surface.as_ref() {
+                    pin_chrome::paint_transport(surface, &palette, &state, paint.dpi);
+                    copy_surface_rows_into(
+                        surface,
+                        out,
+                        width as u32,
+                        (height - paint.transport_height).max(0) as u32,
+                    );
+                }
+            });
+        }
+    }
+
+    let dst_point = POINT { x, y };
+    let size = SIZE {
+        cx: width,
+        cy: height,
+    };
+    let src_point = POINT { x: 0, y: 0 };
+    let blend = BLENDFUNCTION {
+        BlendOp: AC_SRC_OVER as u8,
+        BlendFlags: 0,
+        SourceConstantAlpha: 255,
+        AlphaFormat: AC_SRC_ALPHA as u8,
+    };
+
+    if let Some(mem_dc) = layered_surface_dc(hwnd.0 as isize) {
+        let _ = UpdateLayeredWindow(
+            hwnd,
+            None,
+            Some(&dst_point),
+            Some(&size),
+            mem_dc,
+            Some(&src_point),
+            COLORREF(0),
+            Some(&blend),
+            ULW_ALPHA,
+        );
+    }
+
+    publish_pointer_hold(hwnd);
+}
+
+/// Everything a repaint of a pinned window needs, taken in one look: what the caption says and
+/// how large the bands are.
+///
+/// It is taken as a value rather than borrowed because a repaint may not hold the lock the
+/// pointer's own answers are written under — the hold regions are asked for at the end of it,
+/// and that question takes the same lock (see `publish_pointer_hold`).
+struct PinnedPaint {
+    width: i32,
+    height: i32,
+    caption_height: i32,
+    transport_height: i32,
+    dpi: u32,
+    title: String,
+    maximized: bool,
+    hovered: Option<pin_chrome::CaptionButton>,
+    pressed: Option<pin_chrome::CaptionButton>,
+    transport: PinTransport,
+    playing: bool,
+    position: Option<f64>,
+    duration: Option<f64>,
+}
+
+fn pinned_paint() -> Option<PinnedPaint> {
+    let pinned = PINNED.lock().ok()?;
+    let pin = pinned.as_ref()?;
+    let (width, height) = pin.window_size();
+
+    Some(PinnedPaint {
+        width,
+        height,
+        caption_height: pinned_caption_height(pin.dpi),
+        transport_height: pinned_transport_height(pin.dpi, pin.transport_bar),
+        dpi: pin.dpi,
+        title: pin
+            .path
+            .file_name()
+            .map(|name| name.to_string_lossy().to_string())
+            .unwrap_or_default(),
+        maximized: pin.restore.is_some(),
+        hovered: pin.hovered,
+        pressed: pin.pressed,
+        // Where the bar is drawn: where the pointer has dragged it while a drag is going, and
+        // where the file really is otherwise (see `PinTransport`).
+        position: pin
+            .transport
+            .seeking
+            .or_else(|| pin_playhead(&pin.transport)),
+        duration: pin_duration(&pin.transport),
+        playing: pin_is_playing(&pin.transport),
+        transport: pin.transport,
+    })
+}
+
+/// Where a frame that is not the whole of a window is composed: the surface, its own row width,
+/// and the row the band the frame goes in begins at.
+struct BandTarget<'a> {
+    out: &'a mut [u8],
+    width: u32,
+    origin_y: u32,
+}
+
+/// `compose_preview_pixels_into` for a frame that is not the whole surface: the frame is
+/// composed into the rows the media band of a pinned window occupies, which is what makes a
+/// window larger than its frame possible.
+///
+/// A frame narrower than the band is centered in it, which happens only in the moment between
+/// a window being given another box and the media being laid out again for it. The frame's own
+/// rows are what the checkerboard is placed by, so a picture keeps the same squares it had at
+/// its own size.
+fn compose_preview_pixels_into_band(
+    bgra: &[u8],
+    width: u32,
+    height: u32,
+    background: TransparentBackground,
+    opaque: bool,
+    target: BandTarget<'_>,
+) {
+    let BandTarget {
+        out,
+        width: out_width,
+        origin_y,
+    } = target;
+
+    if width == 0 || height == 0 || out_width == 0 {
+        return;
+    }
+
+    let row_bytes = width as usize * 4;
+    let out_row_bytes = out_width as usize * 4;
+    let offset_x = out_width.saturating_sub(width) as usize / 2;
+    let start_x = offset_x * 4;
+
+    for (row, src_row) in bgra
+        .chunks_exact(row_bytes)
+        .take(height as usize)
+        .enumerate()
+    {
+        let destination_row = origin_y as usize + row;
+        let start = destination_row * out_row_bytes + start_x;
+        let end = start + row_bytes;
+        if end > out.len() {
+            break;
+        }
+
+        let destination = &mut out[start..end];
+        if opaque && src_row.len() == row_bytes {
+            destination.copy_from_slice(src_row);
+            continue;
+        }
+
+        compose_preview_row(src_row, destination, background, 0, row as u32);
+    }
+}
+
+/// Copy a surface painted by `pin_chrome` into the rows of a pinned window's own surface. The
+/// two are the same width — a caption is as wide as the window it is on — and what the surface
+/// carries is already the form the layered window is in (see `pin_chrome`).
+fn copy_surface_rows_into(surface: &DibSurface, out: &mut [u8], out_width: u32, origin_y: u32) {
+    let width = surface.width as usize;
+    let height = surface.height as usize;
+    if width == 0 || height == 0 || (out_width as usize) < width {
+        return;
+    }
+
+    let row_bytes = width * 4;
+    let out_row_bytes = out_width as usize * 4;
+    let source = unsafe { std::slice::from_raw_parts(surface.bits(), row_bytes * height) };
+
+    for row in 0..height {
+        let start = (origin_y as usize + row) * out_row_bytes;
+        let end = start + row_bytes;
+        if end > out.len() {
+            break;
+        }
+        out[start..end].copy_from_slice(&source[row * row_bytes..(row + 1) * row_bytes]);
+    }
+}
 ///
 /// A window that is not on screen is moved before the spinner is installed, so a
 /// `WM_DPICHANGED` reset from crossing displays cannot discard it, and the spinner
@@ -8474,6 +9059,16 @@ unsafe fn publish_pointer_hold(hwnd: HWND) {
         // is placed at the hand and follows it, so a box of its own would be one the
         // pointer could never leave.
         None
+    };
+
+    // A pinned window holds the pointer through the whole of itself. It is a window the user put
+    // there and is reading, so a region built for a hover — the journey to it and the preview —
+    // is the wrong answer for a place that was chosen by a drag; and what the region is *for*
+    // here is the wheel, which belongs to a scrollable text preview inside a pin exactly as it
+    // does to one on a hover.
+    let keep_alive = match pinned_window_box() {
+        Some((window, _, _)) => Some(vec![(window.0, window.1, window.2, window.3)]),
+        None => keep_alive,
     };
 
     if let Ok(mut published) = POINTER_HOLD_REGIONS.lock() {
@@ -9024,6 +9619,29 @@ unsafe fn reset_preview_after_display_change(hwnd: HWND) {
     webview_preview::hide();
 }
 
+/// Whether the pin that is up is collapsed into the bubble that stands for it: a state in which
+/// nothing of anybody else's belongs on top of the bubble — a player's window included.
+fn pin_is_collapsed() -> bool {
+    PIN_COLLAPSED.load(Ordering::Acquire)
+}
+
+/// A mouse message's point in the coordinates the media of a pinned window is drawn in: the same
+/// point, less the caption that has been added above it.
+///
+/// A hover's own window has no caption, so a point is already in its frame's coordinates and is
+/// handed back unchanged — which is what lets one set of handlers serve both.
+fn media_point(x: i32, y: i32) -> (i32, i32) {
+    let dpi = PINNED
+        .lock()
+        .ok()
+        .and_then(|pinned| pinned.as_ref().map(|pin| pin.dpi));
+
+    match dpi {
+        Some(dpi) if !pin_is_collapsed() => (x, y - pinned_caption_height(dpi)),
+        _ => (x, y),
+    }
+}
+
 /// The point a mouse message was delivered at, in window coordinates.
 fn message_point(lparam: LPARAM) -> (i32, i32) {
     let x = (lparam.0 & 0xFFFF) as u16 as i16 as i32;
@@ -9044,15 +9662,25 @@ unsafe extern "system" fn window_proc(
             LRESULT(0)
         }
         WM_LBUTTONDOWN => {
+            // A press on a pinned window is the pin's before it is anything else's: the caption's
+            // buttons, the caption itself, an edge, and the media under the hand are all things a
+            // window does with a pointer (see `pinned_press`).
+            let (x, y) = message_point(lparam);
+            if pinned() && pinned_press(hwnd, x, y) {
+                return LRESULT(0);
+            }
+
             // A press on the scrollbar starts a drag from where it landed, so the
             // thumb follows the pointer from the first click. Anywhere else, a
-            // press on a text preview starts a selection.
-            let (x, y) = message_point(lparam);
-            if let Some(first_line) = text_scroll_drag_target(x, y) {
+            // press on a text preview starts a selection. What the media's own handlers are
+            // given is the point inside the frame, which for a pinned window begins below the
+            // caption (see `media_point`).
+            let (media_x, media_y) = media_point(x, y);
+            if let Some(first_line) = text_scroll_drag_target(media_x, media_y) {
                 set_text_scroll_dragging(true);
                 let _ = SetCapture(hwnd);
                 scroll_text_preview(hwnd, first_line);
-            } else if begin_text_selection(x, y) {
+            } else if begin_text_selection(media_x, media_y) {
                 let _ = SetCapture(hwnd);
                 repaint_text_preview(hwnd);
             }
@@ -9060,18 +9688,42 @@ unsafe extern "system" fn window_proc(
         }
         WM_MOUSEMOVE => {
             let (x, y) = message_point(lparam);
+            if pinned() {
+                pinned_mouse_move(hwnd, x, y);
+            }
+            let (media_x, media_y) = media_point(x, y);
             if is_text_scroll_dragging() {
-                if let Some(first_line) = drag_target_for_y(y) {
+                if let Some(first_line) = drag_target_for_y(media_y) {
                     scroll_text_preview(hwnd, first_line);
                 }
-            } else if extend_text_selection(x, y) == Some(true) {
+            } else if extend_text_selection(media_x, media_y) == Some(true) {
                 repaint_text_preview(hwnd);
             }
             LRESULT(0)
         }
         WM_LBUTTONUP => {
+            let (x, y) = message_point(lparam);
+            if pinned() && pinned_release(hwnd, x, y) {
+                return LRESULT(0);
+            }
             if set_text_scroll_dragging(false) || end_text_selection() {
                 let _ = ReleaseCapture();
+            }
+            LRESULT(0)
+        }
+        windows::Win32::UI::WindowsAndMessaging::WM_CAPTURECHANGED => {
+            // Whatever a pinned window was doing with the pointer is over: a capture lost to
+            // another window is a drag that is not coming back.
+            if pinned() {
+                if let Ok(mut pinned) = PINNED.lock() {
+                    if let Some(pin) = pinned.as_mut() {
+                        pin.dragging = None;
+                        pin.pressed = None;
+                        pin.transport.pressed = None;
+                        pin.transport.seeking = None;
+                        pin.transport.hovered = None;
+                    }
+                }
             }
             LRESULT(0)
         }
@@ -9100,6 +9752,14 @@ unsafe extern "system" fn window_proc(
                     reset_preview_after_display_change(hwnd);
                 }
                 _ => {}
+            }
+
+            // A pinned preview does not survive either half of it: a suspension has already
+            // taken down every surface and every session the pin was a window onto, and what it
+            // holds is not something a resume can put back. The hook is told, and the loop takes
+            // the pin down on its next tick, which is the same path its close button takes.
+            if pinned() {
+                end_pin();
             }
             LRESULT(0)
         }
@@ -10079,6 +10739,1803 @@ fn compute_keyboard_layout(
     }
 }
 
+/// The height of the caption a pinned preview is given at a display's scale.
+fn pinned_caption_height(dpi: u32) -> i32 {
+    logical_px(dpi, PIN_CAPTION_PIXELS).max(1)
+}
+
+/// The height of the transport bar a pinned preview of a kind that plays is given, and none
+/// at all for a kind that has nothing to play.
+fn pinned_transport_height(dpi: u32, transport: bool) -> i32 {
+    if transport {
+        logical_px(dpi, PIN_TRANSPORT_PIXELS).max(1)
+    } else {
+        0
+    }
+}
+
+/// The room a pinned window leaves its media on the display it is on: the display's work area
+/// with the caption taken off the top and the transport bar off the bottom.
+fn pinned_room(bounds: ScreenBounds, dpi: u32, transport: bool) -> ScreenBounds {
+    ScreenBounds {
+        left: bounds.left,
+        top: bounds.top + pinned_caption_height(dpi),
+        right: bounds.right,
+        bottom: bounds.bottom - pinned_transport_height(dpi, transport),
+    }
+}
+
+/// The box the media of a pinned preview takes when its window is given a room: the largest
+/// box of the media's own shape that fits it — the rule every other preview is placed by (see
+/// `scale_dimensions`).
+///
+/// What a pin is never given is the letterbox a box of a fixed shape would leave: the window
+/// is fitted to the media, so a maximized photograph is the largest the display can show of
+/// it rather than the size of the display, and every band of the window is filled by the
+/// thing it is a band of.
+fn pinned_media_box(orig_dims: (u32, u32), room: ScreenBounds) -> (i32, i32) {
+    let (room_width, room_height) = room.room();
+    let (width, height) = scale_dimensions(
+        orig_dims.0.max(1),
+        orig_dims.1.max(1),
+        room_width,
+        room_height,
+        PreviewScale::Percent(100),
+    );
+
+    (width as i32, height as i32)
+}
+
+/// What a kind of preview is composited over, which is a question a hover and a pinned window
+/// both ask: a texture has a backdrop of its own, the drawing of a design document another,
+/// and everything else the picture's (see the `Background` submenu).
+fn preview_background(kind: MediaType) -> TransparentBackground {
+    if kind.is_loading() {
+        TransparentBackground::Transparent
+    } else if matches!(kind, MediaType::Dds) {
+        current_dds_background()
+    } else if matches!(kind, MediaType::Design) {
+        current_design_background()
+    } else if matches!(kind, MediaType::Vector) {
+        current_vector_background()
+    } else {
+        current_image_background()
+    }
+}
+
+/// The pinned preview: the preview that stopped being a hover.
+///
+/// The media is the same media — pinning is not a reload, so nothing about the picture moves
+/// when the key is pressed. What the pin is, is the room the media is given beside what the
+/// window adds to it: a caption above it, a transport bar below it, and a state of its own
+/// that says who takes it down and what the pointer is doing on it.
+///
+/// It is written by the preview loop, which holds the window and the media, and read by the
+/// window procedure and every repaint — which is why it is a global rather than a local of
+/// the loop. `PIN_ACTIVE` is the same answer as an atomic for the two threads that ask it
+/// without wanting a lock (`show_preview`, `hide_preview`), and the two are written together:
+/// a pin exists exactly while both say so.
+static PINNED: Lazy<Mutex<Option<PinnedPreview>>> = Lazy::new(|| Mutex::new(None));
+
+struct PinnedPreview {
+    /// The file that is pinned — the hover the pin came from, kept by name so that a box that
+    /// changes can be laid out again without asking the Explorer hook anything.
+    path: PathBuf,
+    /// The box the media occupies on screen. The window around it is this box with the caption
+    /// above it and, for a kind that plays, the transport bar below it.
+    content: ScreenRegion,
+    /// The box to go back to when a maximized pin is restored, and `None` while it is not
+    /// maximized.
+    restore: Option<ScreenRegion>,
+    /// The scale of the display the pin was put up on: what the caption's measurements are
+    /// multiplied by, and what the media is laid out at again when the box changes.
+    dpi: u32,
+    /// Whether this kind carries a transport bar, decided when the pin was taken up: it is the
+    /// same answer for as long as the pin lasts, and the window's own height is measured from it.
+    transport_bar: bool,
+    /// Whether the window is collapsed into the round bubble the minimize button leaves.
+    collapsed: bool,
+    /// The caption button the pointer is over and the one it has pressed: what the caption is
+    /// painted from, and what a release acts on.
+    hovered: Option<pin_chrome::CaptionButton>,
+    pressed: Option<pin_chrome::CaptionButton>,
+    /// A drag or a resize in progress.
+    dragging: Option<PinDrag>,
+    /// Where the playback of a video is, which is what the transport bar is drawn from and what
+    /// a seek or a pause is measured against (see `PinTransport`).
+    transport: PinTransport,
+}
+
+/// Where a pinned video's playback is.
+///
+/// Two engines play a video and they answer these questions differently — the media engine
+/// reports where it is, and FFmpeg's player reports nothing at all — so what is kept here is
+/// what both can be asked: the length of the file (read by the probe that measured it), where
+/// this app's own clock says a player it started has got to, and whether that player has been
+/// stopped where it stood (see `pin_playhead`).
+#[derive(Clone, Copy, Default)]
+struct PinTransport {
+    duration: Option<f64>,
+    /// When a player of this app's was started, and the second of the file it was started at.
+    started: Option<(Instant, f64)>,
+    /// Where a player of this app's was stopped — a pause — and nothing while it is running.
+    paused_at: Option<f64>,
+    /// Where the pointer is dragging the bar, while it is: what the playhead is drawn at rather
+    /// than where the file really is, since a drag that is still going is not a seek yet.
+    seeking: Option<f64>,
+    /// Which part of the bar the pointer is over, and which it has pressed.
+    hovered: Option<pin_chrome::TransportPart>,
+    pressed: Option<pin_chrome::TransportPart>,
+}
+
+/// Whether a kind is one the transport bar is drawn for.
+fn pin_transport_kind(kind: Option<MediaType>) -> bool {
+    matches!(kind, Some(MediaType::Video) | Some(MediaType::NativeVideo))
+}
+
+/// The kind of media on screen, which is what the transport's own questions are answered by.
+fn current_media_type() -> Option<MediaType> {
+    CURRENT_MEDIA
+        .lock()
+        .ok()
+        .and_then(|media| media.as_ref().map(|media| media.media_type))
+}
+
+/// Where a pinned preview's playhead is, in seconds: the engine's own answer where the media
+/// engine is playing it, and this app's clock over the player's start where FFmpeg's is — the
+/// same clock a sound's card is drawn from, and for the same reason (see `audio_clock`).
+fn pin_playhead(transport: &PinTransport) -> Option<f64> {
+    if let Some(paused) = transport.paused_at {
+        return Some(paused);
+    }
+
+    match current_media_type() {
+        Some(MediaType::NativeVideo) => video_player::position().or(Some(0.0)),
+        Some(MediaType::Video) => transport.started.map(|(at, from)| {
+            let elapsed = from + at.elapsed().as_secs_f64();
+            match transport.duration {
+                Some(duration) if duration > 0.0 => elapsed % duration,
+                _ => elapsed,
+            }
+        }),
+        _ => None,
+    }
+}
+
+/// How long the pinned file plays: the length the probe read, or the engine's own answer where
+/// the engine is the one that knows.
+fn pin_duration(transport: &PinTransport) -> Option<f64> {
+    transport.duration.or_else(|| {
+        (current_media_type() == Some(MediaType::NativeVideo))
+            .then(video_player::duration)
+            .flatten()
+    })
+}
+
+/// Whether a pinned preview is playing: the engine's own answer, or whether a player of this
+/// app's is running.
+fn pin_is_playing(transport: &PinTransport) -> bool {
+    if transport.paused_at.is_some() {
+        return false;
+    }
+
+    match current_media_type() {
+        Some(MediaType::NativeVideo) => video_player::is_playing(),
+        Some(MediaType::Video) => transport.started.is_some(),
+        _ => false,
+    }
+}
+
+/// What the transport's own actions need of the pin: the file being played, and the box the
+/// player's window fills.
+fn pinned_playback_target() -> Option<(PathBuf, ScreenRegion)> {
+    let pinned = PINNED.lock().ok()?;
+    let pin = pinned.as_ref()?;
+    Some((pin.path.clone(), pin.content))
+}
+
+/// End the player a pinned video is playing in and begin another one at a second of the file.
+///
+/// It is what a seek and a resume from a pause both are with FFmpeg, whose player can be told
+/// nothing once it is running: the same bargain the sound path makes, where a file dropped in
+/// half way is a player started at that second (see `start_audio_player`).
+fn restart_pinned_player(path: &PathBuf, content: ScreenRegion, seconds: f64) {
+    let width = (content.2 - content.0).max(1);
+    let height = (content.3 - content.1).max(1);
+
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        if let Some(media) = current.as_mut() {
+            media.cancel_background_work();
+            stop_video_playback(media);
+        }
+    }
+    kill_stray_video_process();
+
+    let process = start_video_playback(path, content.0, content.1, width, height, seconds);
+    let pid = process.as_ref().map(|child| child.id()).unwrap_or(0);
+
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        if let Some(media) = current.as_mut() {
+            media.video_process = process;
+        }
+    }
+
+    // The window the new player puts up is placed by the tick, which re-asserts it every two
+    // hundred milliseconds; a seek is one window gone and another arriving, so it is asked for
+    // now rather than at the next of those.
+    let _ = ensure_video_window_topmost(content.0, content.1, width, height);
+
+    update_pin_transport(|transport| {
+        transport.started = (pid != 0).then(|| (Instant::now(), seconds));
+        transport.paused_at = None;
+        transport.seeking = None;
+    });
+}
+
+/// Take a pinned video to a second of its file.
+///
+/// The two engines are asked differently: the media engine is told where to go and gets there on
+/// its own, while FFmpeg's player is ended and begun again at that second — which is why a drag
+/// on the bar shows where it is being taken rather than seeking as it moves, and the seek is made
+/// where the pointer lets go.
+fn seek_pinned_playback(path: &PathBuf, content: ScreenRegion, seconds: f64) {
+    match current_media_type() {
+        Some(MediaType::NativeVideo) => {
+            video_player::seek(seconds);
+            update_pin_transport(|transport| transport.seeking = None);
+        }
+        Some(MediaType::Video) => restart_pinned_player(path, content, seconds),
+        _ => {}
+    }
+}
+
+/// Pause a pinned video, or set it going again.
+///
+/// The media engine is asked to hold where it is. FFmpeg's player cannot be, so a pause is that
+/// player ended with the second it had got to kept, and a resume is another one begun there —
+/// which is what the playhead is drawn from in the meantime, so a paused picture sits at the
+/// second it stopped at rather than snapping back to the beginning.
+fn toggle_pinned_playback(path: &PathBuf, content: ScreenRegion, transport: PinTransport) {
+    let playing = pin_is_playing(&transport);
+    let playhead = pin_playhead(&transport).unwrap_or(0.0);
+
+    match current_media_type() {
+        Some(MediaType::NativeVideo) => {
+            video_player::set_paused(playing);
+            update_pin_transport(|state| {
+                state.paused_at = playing.then_some(playhead);
+            });
+        }
+        Some(MediaType::Video) => {
+            if playing {
+                if let Ok(mut current) = CURRENT_MEDIA.lock() {
+                    if let Some(media) = current.as_mut() {
+                        media.cancel_background_work();
+                        stop_video_playback(media);
+                    }
+                }
+                update_pin_transport(|state| {
+                    state.paused_at = Some(playhead);
+                    state.started = None;
+                });
+            } else {
+                restart_pinned_player(path, content, transport.paused_at.unwrap_or(0.0));
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Write an answer about the transport back into the pin, if there is still one.
+fn update_pin_transport(change: impl FnOnce(&mut PinTransport)) {
+    if let Ok(mut pinned) = PINNED.lock() {
+        if let Some(pin) = pinned.as_mut() {
+            change(&mut pin.transport);
+        }
+    }
+}
+
+impl PinnedPreview {
+    /// The box the window occupies: the media's own box with the caption above it and the
+    /// transport bar below it. Nothing of the media moves when a preview is pinned, so the
+    /// window is the media's box grown upward.
+    fn window_box(&self) -> ScreenRegion {
+        (
+            self.content.0,
+            self.content.1 - pinned_caption_height(self.dpi),
+            self.content.2,
+            self.content.3 + pinned_transport_height(self.dpi, self.transport_bar),
+        )
+    }
+
+    /// The size of the window, as the renderer and the hit tests want it.
+    fn window_size(&self) -> (i32, i32) {
+        let window = self.window_box();
+        ((window.2 - window.0).max(1), (window.3 - window.1).max(1))
+    }
+
+    /// Which edge of the window a point is on, if it is on one: what a resize is begun by.
+    fn resize_edge(&self, x: i32, y: i32) -> Option<PinResize> {
+        // A window too small to tell its edges apart is not resized at all: every band would
+        // overlap the others and a press would land on whichever was asked for first.
+        let (width, height) = self.window_size();
+        let border = logical_px(self.dpi, PIN_RESIZE_BORDER_PIXELS).max(2);
+        if width <= border * 4 || height <= border * 4 {
+            return None;
+        }
+
+        let edge = PinResize {
+            left: x < border,
+            top: y < border,
+            right: x >= width - border,
+            bottom: y >= height - border,
+        };
+
+        (edge.left || edge.top || edge.right || edge.bottom).then_some(edge)
+    }
+}
+
+/// A drag of a pinned window: where the pointer was when it began, the box the window had
+/// then, and what the drag is doing with it.
+#[derive(Clone, Copy)]
+struct PinDrag {
+    from: (i32, i32),
+    window: ScreenRegion,
+    action: PinDragAction,
+}
+
+#[derive(Clone, Copy)]
+enum PinDragAction {
+    Move,
+    Resize(PinResize),
+}
+
+/// Which edges of a pinned window a resize is dragging.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct PinResize {
+    left: bool,
+    top: bool,
+    right: bool,
+    bottom: bool,
+}
+
+/// A command the chrome has asked for: a button that was clicked, a window that was dragged or
+/// resized, or a collapse. The window procedure cannot do any of it — the media, the player and
+/// the browser are the preview loop's — so it is written here and drained by the loop.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum PinCommand {
+    Minimize,
+    Maximize,
+    Close,
+    /// The bubble a collapsed pin left was clicked: the window goes back up.
+    Restore,
+}
+
+/// The command the window procedure left for the preview loop, if any: one at a time, which is
+/// all a pointer can ask for at once.
+static PIN_COMMAND: AtomicU32 = AtomicU32::new(0);
+
+const PIN_COMMAND_NONE: u32 = 0;
+
+/// Leave a command for the preview loop to act on.
+fn ask_pin(command: PinCommand) {
+    let code = match command {
+        PinCommand::Minimize => 1,
+        PinCommand::Maximize => 2,
+        PinCommand::Close => 3,
+        PinCommand::Restore => 4,
+    };
+    PIN_COMMAND.store(code, Ordering::Release);
+}
+
+/// Take the command the chrome left, if one was left.
+fn take_pin_command() -> Option<PinCommand> {
+    match PIN_COMMAND.swap(PIN_COMMAND_NONE, Ordering::AcqRel) {
+        1 => Some(PinCommand::Minimize),
+        2 => Some(PinCommand::Maximize),
+        3 => Some(PinCommand::Close),
+        4 => Some(PinCommand::Restore),
+        _ => None,
+    }
+}
+
+/// A pinned window's box, kept on a display: a window dragged past an edge leaves a caption's
+/// worth of itself behind, and a window dragged wholly off one is put back on it. The display
+/// it is kept on is the one the caption is nearest — which is the one the hand is on.
+fn clamp_pinned_box(box_: ScreenRegion, dpi: u32) -> ScreenRegion {
+    let keep = logical_px(dpi, PIN_KEEP_ON_SCREEN_PIXELS).max(8);
+    let width = (box_.2 - box_.0).max(1);
+    let height = (box_.3 - box_.1).max(1);
+
+    let anchor = monitor_bounds_from_point(box_.0 + width / 2, box_.1 + height / 2);
+    let horizontal_keep = keep.min(width);
+    let vertical_keep = keep.min(height);
+
+    let mut left = box_.0;
+    let mut top = box_.1;
+
+    if left + horizontal_keep > anchor.right {
+        left = anchor.right - horizontal_keep;
+    }
+    if left < anchor.left - width + horizontal_keep {
+        left = anchor.left - width + horizontal_keep;
+    }
+    if top + vertical_keep > anchor.bottom {
+        top = anchor.bottom - vertical_keep;
+    }
+    if top < anchor.top {
+        top = anchor.top;
+    }
+
+    (left, top, left + width, top + height)
+}
+
+/// Whether the pin key is watched, as the configuration has it.
+fn pin_enabled() -> bool {
+    CONFIG
+        .lock()
+        .map(|config| config.pin_enabled)
+        .unwrap_or(true)
+}
+
+/// The pin a key press asks for, if there is anything on screen to pin: the file the preview
+/// is of, and the box it occupies at this moment.
+///
+/// Nothing is pinned while a load is still running. What is on screen then is a spinner, and a
+/// spinner is a promise rather than a preview — pinning one would leave a window standing over
+/// a file that had not been read yet, and nothing in the pin's own machinery would ever take
+/// it down.
+fn pin_what_is_on_screen(
+    current_show: &Option<PreviewMessage>,
+    pending: Option<&PendingLoad>,
+) -> Option<PreviewMessage> {
+    if pending.is_some() {
+        return None;
+    }
+
+    let path = current_show.as_ref().and_then(show_path)?.clone();
+    let settled = CURRENT_MEDIA
+        .lock()
+        .ok()
+        .and_then(|media| media.as_ref().map(|media| !media.media_type.is_loading()))
+        .unwrap_or(false);
+    if !settled {
+        return None;
+    }
+
+    let rect = preview_screen_rect()?;
+    Some(PreviewMessage::Pin { path, rect })
+}
+
+/// Take the pin down, answering with the message that does it.
+///
+/// The state goes first, and that is the whole of what this function is: what follows is the
+/// ordinary take-down a hover's dismissal goes through — the window comes down, the player is
+/// ended, the media goes — and it must not be refused by the pin's own guards. The bubble a
+/// collapsed pin left goes with it, and so does the record of a pin being up at all, which is
+/// what lets the next hover through (see `PIN_ACTIVE` and `PIN_RESUMED`).
+fn end_pin_state() -> PreviewMessage {
+    if let Ok(mut pinned) = PINNED.lock() {
+        *pinned = None;
+    }
+
+    PIN_ACTIVE.store(false, Ordering::Release);
+    PIN_COLLAPSED.store(false, Ordering::Release);
+    // A pin that is over is a pointer that is on something new: the file the pin was of is not
+    // a hover the hook has already answered, and one is due the moment the pin is gone rather
+    // than after the delay a re-hover of the same file is given (see `PIN_RESUMED`).
+    PIN_RESUMED.store(true, Ordering::Release);
+    hide_pin_bubble();
+
+    PreviewMessage::Hide
+}
+
+/// Whether the thing a pin is a window onto is still there.
+///
+/// Three kinds of media can go away on their own, because something outside this thread is
+/// drawing them: a video FFmpeg's player is playing, a sound it is playing, and a document or
+/// a specimen the browser is drawing. Each is a process this app started and does not own, and
+/// a pin whose process has died is a window onto nothing — so it comes down and previews
+/// resume, which is the half of "until it is closed, or it comes apart" that is not a button.
+///
+/// What is deliberately not asked about is a sound the media engine plays: a card is text, and
+/// a card whose engine has stopped is a card with a still clock rather than a window onto
+/// nothing.
+fn pin_media_is_alive() -> bool {
+    let Ok(media) = CURRENT_MEDIA.lock() else {
+        return true;
+    };
+
+    let Some(media) = media.as_ref() else {
+        // Nothing is on screen: a pin with no media behind it has already come apart.
+        return false;
+    };
+
+    match media.media_type {
+        MediaType::Video => is_video_process_running(),
+        MediaType::Audio if media.video_process.is_some() => is_video_process_running(),
+        MediaType::NativeVideo => video_player::is_playing(),
+        MediaType::EngineSvg | MediaType::EngineFont => webview_preview::showing_hwnd() != 0,
+        // A frame this app holds is a frame nothing outside this thread can take away.
+        _ => true,
+    }
+}
+
+/// Lay the pinned media out again for the box its window has been given — one it was maximized
+/// to, restored from, or resized to.
+///
+/// What it costs is what a hover of the same file costs: the media is laid out at the size it
+/// is now drawn at, and a frame the image cache already holds is handed back rather than
+/// decoded, so a box that changed once is paid for once. For the kinds something else draws it
+/// is cheaper still: a player's window is resized and its picture scales with it, and a browser
+/// is told the new bounds of the page it is already showing.
+///
+/// It runs on the preview thread, and that is deliberate. A pinned window is not a hover, so
+/// there is no spinner to put up and no generation to match an answer against; what a decode
+/// costs is one tick that takes longer than usual, spent on a box the user has just asked for,
+/// with nothing else on screen for it to be late for.
+fn relayout_pinned_media(
+    path: &PathBuf,
+    content: ScreenRegion,
+    dpi: u32,
+    card: Option<AudioCardClock>,
+) {
+    let width = (content.2 - content.0).max(1) as u32;
+    let height = (content.3 - content.1).max(1) as u32;
+    let kind = CURRENT_MEDIA
+        .lock()
+        .ok()
+        .and_then(|media| media.as_ref().map(|media| media.media_type));
+
+    match kind {
+        // FFmpeg's player draws in a window of its own and scales the picture to it, so the
+        // box that changed is a window that moved.
+        Some(MediaType::Video) => {
+            ensure_pinned_sibling_box(content);
+        }
+        // The media engine draws into a surface of the size it was started at, and this window
+        // draws the frames it hands back: both are resized, and the picture follows.
+        Some(MediaType::NativeVideo) => {
+            if let Ok(mut media) = CURRENT_MEDIA.lock() {
+                if let Some(media) = media.as_mut() {
+                    if let Some(frame) = media.frames.first_mut() {
+                        frame.pixels.resize(width as usize * height as usize * 4, 0);
+                        frame.width = width;
+                        frame.height = height;
+                    }
+                }
+            }
+            video_player::resize(width, height);
+        }
+        // The browser draws in a window of its own; it is told the new bounds and draws the
+        // document it already holds again.
+        Some(MediaType::EngineSvg) | Some(MediaType::EngineFont) => {
+            webview_preview::wanted_here(
+                path,
+                webview_preview::Area {
+                    x: content.0,
+                    y: content.1,
+                    width: width as i32,
+                    height: height as i32,
+                },
+            );
+        }
+        // A sound's card, which is a page of text laid out again rather than a file decoded —
+        // and the one kind whose layout needs something the loop holds rather than the media:
+        // where the player it started is, and how far a name it had no room for has been
+        // scrolled (see `AudioCardClock`).
+        Some(MediaType::Audio) => {
+            let Some(clock) = card else {
+                return;
+            };
+            let (elapsed, duration) = audio_clock(path, clock.started, clock.from);
+
+            if let Ok(mut media) = CURRENT_MEDIA.lock() {
+                if let Some(media) = media.as_mut() {
+                    media.relayout_audio_card(
+                        path,
+                        elapsed,
+                        duration,
+                        clock.name_offset,
+                        clock.dpi,
+                        (width, height),
+                    );
+                }
+            }
+        }
+        // A frame this app draws for itself: the media is loaded again at the box it is now
+        // shown in, which is the same call a hover's own load makes.
+        Some(_) => {
+            let cancel = Arc::new(AtomicBool::new(false));
+            if let Some(media) =
+                load_media(path, width, height, PreviewScale::Percent(100), dpi, cancel)
+            {
+                if let Ok(mut current) = CURRENT_MEDIA.lock() {
+                    if let Some(ref mut existing) = *current {
+                        existing.cancel_background_work();
+                    }
+                    *current = Some(media);
+                }
+            }
+        }
+        None => {}
+    }
+}
+
+/// The clock a sound's card is drawn from, which belongs to the preview loop and not to the
+/// media: when the player this app started was started, the second of the file it was started
+/// at, and how far a name the card has no room for has been scrolled (see `audio_clock`).
+#[derive(Clone, Copy)]
+struct AudioCardClock {
+    started: Option<Instant>,
+    from: f64,
+    name_offset: i32,
+    dpi: u32,
+}
+
+/// The file and the display scale a pin is showing, for the work that has to lay its media out
+/// again — read in one look so that the lock is not held across it.
+fn pinned_media_owner() -> Option<(PathBuf, u32)> {
+    let pinned = PINNED.lock().ok()?;
+    let pin = pinned.as_ref()?;
+    Some((pin.path.clone(), pin.dpi))
+}
+
+/// The box a pinned window is standing at, if one is up.
+fn pinned_window_box() -> Option<(ScreenRegion, i32, i32)> {
+    let pinned = PINNED.lock().ok()?;
+    let pin = pinned.as_ref()?;
+    let window = pin.window_box();
+    Some((
+        window,
+        (window.2 - window.0).max(1),
+        (window.3 - window.1).max(1),
+    ))
+}
+
+/// Put a pinned window up at the box its state says, painted before it is shown: what a layered
+/// window shows between one paint and the next is the surface it already has, stretched into
+/// whatever box the window has (see `show_loading_spinner`).
+unsafe fn show_pinned_window(hwnd: HWND) {
+    let Some((window, width, height)) = pinned_window_box() else {
+        return;
+    };
+
+    if !IsWindowVisible(hwnd).as_bool() {
+        let _ = MoveWindow(hwnd, window.0, window.1, width, height, false);
+    }
+
+    render_pinned_preview_at(hwnd, window.0, window.1);
+    let _ = SetWindowPos(
+        hwnd,
+        HWND_TOPMOST,
+        window.0,
+        window.1,
+        width,
+        height,
+        SWP_NOACTIVATE | SWP_SHOWWINDOW,
+    );
+    let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+}
+
+/// Put the thing a pin leaves a band open for where that band is: the player's own window, or
+/// the browser's, each of which is a window standing in the hole the pinned window leaves — so
+/// that the picture is theirs and the caption is this app's (see `render_pinned_preview_at`).
+///
+/// It is asked where a box changes — a pin taken up, a window maximized, restored, dragged or
+/// resized — and not once a tick: the tick has its own, slower re-assertion for the player's
+/// window, and a browser that is told the same bounds it already has every sixteen milliseconds
+/// is work nobody asked for.
+fn place_pinned_siblings() {
+    let Some(content) = pinned_content() else {
+        return;
+    };
+
+    let kind = CURRENT_MEDIA
+        .lock()
+        .ok()
+        .and_then(|media| media.as_ref().map(|media| media.media_type));
+
+    match kind {
+        Some(MediaType::Video) => ensure_pinned_sibling_box(content),
+        Some(MediaType::EngineSvg) | Some(MediaType::EngineFont) => {
+            if let Some((path, _)) = pinned_media_owner() {
+                webview_preview::wanted_here(
+                    &path,
+                    webview_preview::Area {
+                        x: content.0,
+                        y: content.1,
+                        width: (content.2 - content.0).max(1),
+                        height: (content.3 - content.1).max(1),
+                    },
+                );
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The media box of the pin that is up, or nothing when there is no pin or it is collapsed: a
+/// collapsed pin has no bands for anybody else's window to stand in.
+fn pinned_content() -> Option<ScreenRegion> {
+    let pinned = PINNED.lock().ok()?;
+    let pin = pinned.as_ref()?;
+    (!pin.collapsed).then_some(pin.content)
+}
+
+/// Put a window of somebody else's — the player's — where a pinned window's media band is.
+fn ensure_pinned_sibling_box(content: ScreenRegion) {
+    let _ = ensure_video_window_topmost(
+        content.0,
+        content.1,
+        (content.2 - content.0).max(1),
+        (content.3 - content.1).max(1),
+    );
+}
+
+/// Put a pinned window back on the display it is on now, after the desktop was rearranged or a
+/// display's scale changed: the box is kept where the display still has room for it and pulled
+/// back into the work area where it does not, and the media is laid out again for the display
+/// it ended up on.
+fn replace_pinned_window() -> Option<PreviewMessage> {
+    let mut pinned = PINNED.lock().ok()?;
+    let pin = pinned.as_mut()?;
+
+    pin.dpi = monitor_dpi_from_point(pin.content.0, pin.content.1);
+    let bounds = monitor_bounds_from_point(pin.content.0, pin.content.1);
+    let room = pinned_room(bounds, pin.dpi, pin.transport_bar);
+    let shape = (
+        (pin.content.2 - pin.content.0).max(1) as u32,
+        (pin.content.3 - pin.content.1).max(1) as u32,
+    );
+    let (width, height) = pinned_media_box(shape, room);
+    let content = clamp_pinned_box(
+        (
+            pin.content.0,
+            pin.content.1,
+            pin.content.0 + width,
+            pin.content.1 + height,
+        ),
+        pin.dpi,
+    );
+
+    pin.content = content;
+    pin.restore = None;
+    Some(PreviewMessage::PinBox(content))
+}
+
+/// Maximize a pinned window, or restore one that is maximized.
+///
+/// Maximizing gives the media the largest box of its own shape the display has room for, at
+/// the scale the tray asks a preview to be shown at — a picture's own scale setting, the
+/// document's, whichever kind it turned out to be — so what the button does is what
+/// `Fit to Screen` would have done to the same file, and not a box of the display's shape
+/// stretched to fill it. Restoring puts back the box the window had, exactly as it was.
+fn toggle_pin_maximized(request: &mut Option<PreviewMessage>) {
+    let Ok(mut pinned) = PINNED.lock() else {
+        return;
+    };
+    let Some(pin) = pinned.as_mut() else {
+        return;
+    };
+
+    let content = match pin.restore.take() {
+        Some(previous) => previous,
+        None => {
+            let bounds = monitor_bounds_from_point(pin.content.0, pin.content.1);
+            let room = pinned_room(bounds, pin.dpi, pin.transport_bar);
+            let shape = (
+                (pin.content.2 - pin.content.0).max(1) as u32,
+                (pin.content.3 - pin.content.1).max(1) as u32,
+            );
+            let (width, height) = pinned_media_box(shape, room);
+
+            pin.restore = Some(pin.content);
+            (
+                room.left + ((room.right - room.left) - width).max(0) / 2,
+                room.top + ((room.bottom - room.top) - height).max(0) / 2,
+                room.left + ((room.right - room.left) - width).max(0) / 2 + width,
+                room.top + ((room.bottom - room.top) - height).max(0) / 2 + height,
+            )
+        }
+    };
+
+    pin.content = clamp_pinned_box(content, pin.dpi);
+    *request = Some(PreviewMessage::PinBox(pin.content));
+}
+
+/// The pin's own answers to the chrome, once a tick: the four buttons, and whether the media
+/// behind the pin is still there at all.
+fn pin_command_request(request: &mut Option<PreviewMessage>) {
+    match take_pin_command() {
+        Some(PinCommand::Close) => *request = Some(end_pin_state()),
+        Some(PinCommand::Minimize) => collapse_pin(),
+        Some(PinCommand::Restore) => restore_pin(),
+        Some(PinCommand::Maximize) => toggle_pin_maximized(request),
+        None => {}
+    }
+
+    if !pin_media_is_alive() {
+        *request = Some(end_pin_state());
+    }
+}
+
+/// The class the round bubble a collapsed pin leaves is created from.
+const PIN_BUBBLE_CLASS: PCWSTR = w!("RustHoverPreviewPinBubble");
+
+/// The bubble's window, or zero while no pin is collapsed.
+static PIN_BUBBLE_HWND: AtomicIsize = AtomicIsize::new(0);
+
+/// Where the bubble was last left, so that a second collapse puts it back where the user's hand
+/// left the first one rather than at the window the pin came out of.
+static PIN_BUBBLE_POS: Lazy<Mutex<Option<(i32, i32)>>> = Lazy::new(|| Mutex::new(None));
+
+/// A drag of the bubble in progress: where the pointer was when it began, in the bubble's own
+/// coordinates, and where the bubble stood then. It is one named type because a pair of points
+/// written inline is a pair nobody can read at the place it is used.
+type BubbleDrag = ((i32, i32), (i32, i32));
+
+static PIN_BUBBLE_DRAG: Lazy<Mutex<Option<BubbleDrag>>> = Lazy::new(|| Mutex::new(None));
+
+/// Whether the drag in progress has moved at all: what tells a click on the bubble — which puts
+/// the window back up — from a hand that was carrying it somewhere.
+static PIN_BUBBLE_MOVED: AtomicBool = AtomicBool::new(false);
+
+/// Collapse a pinned window into the round bubble it leaves: the window and everything standing
+/// in it come off the screen, and a small circle takes their place. A collapsed pin is still a
+/// pin — what is playing goes on playing, and previews are still held back until it is restored
+/// or closed (see `PIN_COLLAPSED`).
+fn collapse_pin() {
+    let anchor = {
+        let Ok(mut pinned) = PINNED.lock() else {
+            return;
+        };
+        let Some(pin) = pinned.as_mut() else {
+            return;
+        };
+        if pin.collapsed {
+            return;
+        }
+
+        pin.collapsed = true;
+        PIN_COLLAPSED.store(true, Ordering::Release);
+        pin.window_box()
+    };
+
+    unsafe {
+        hide_pinned_windows();
+        show_pin_bubble(anchor);
+    }
+}
+
+/// Put a collapsed pin back up: the bubble goes, the window comes back where it was, and
+/// whatever stands in its media band — the player's window, the browser's — is put back with it.
+fn restore_pin() {
+    {
+        let Ok(mut pinned) = PINNED.lock() else {
+            return;
+        };
+        let Some(pin) = pinned.as_mut() else {
+            return;
+        };
+        if !pin.collapsed {
+            return;
+        }
+
+        pin.collapsed = false;
+        PIN_COLLAPSED.store(false, Ordering::Release);
+    }
+
+    hide_pin_bubble();
+
+    unsafe {
+        let hwnd = HWND(PREVIEW_HWND.load(Ordering::SeqCst) as *mut _);
+        if !hwnd.is_invalid() {
+            show_pinned_window(hwnd);
+        }
+    }
+
+    // A document or a specimen the browser was drawing went down with the window it stood in,
+    // so it is asked for again the way a hover asks for it — and a player's window, which
+    // nothing of this app's owns, is simply put back where the media band is.
+    if let Some((path, _)) = pinned_media_owner() {
+        let kind = CURRENT_MEDIA
+            .lock()
+            .ok()
+            .and_then(|media| media.as_ref().map(|media| media.media_type));
+        if matches!(
+            kind,
+            Some(MediaType::EngineSvg) | Some(MediaType::EngineFont)
+        ) {
+            if let Some(content) = pinned_content() {
+                webview_preview::show(
+                    &path,
+                    webview_preview::Area {
+                        x: content.0,
+                        y: content.1,
+                        width: (content.2 - content.0).max(1),
+                        height: (content.3 - content.1).max(1),
+                    },
+                    engine_background(&path),
+                );
+            }
+        } else {
+            place_pinned_siblings();
+        }
+    }
+}
+
+/// Take a pinned window and everything of somebody else's that stands in it off the screen:
+/// what a collapse leaves behind, and what a pin that ends leaves to the ordinary take-down.
+unsafe fn hide_pinned_windows() {
+    let hwnd = HWND(PREVIEW_HWND.load(Ordering::SeqCst) as *mut _);
+    if !hwnd.is_invalid() {
+        let _ = ShowWindow(hwnd, SW_HIDE);
+    }
+
+    let video = VIDEO_HWND.load(Ordering::SeqCst);
+    if video != 0 {
+        let _ = ShowWindow(HWND(video as *mut _), SW_HIDE);
+    }
+
+    if webview_preview::is_showing() {
+        webview_preview::hide();
+    }
+}
+
+/// Take the round bubble down, if one is up.
+fn hide_pin_bubble() {
+    let hwnd = PIN_BUBBLE_HWND.load(Ordering::SeqCst);
+    if hwnd == 0 {
+        return;
+    }
+
+    unsafe {
+        let _ = ShowWindow(HWND(hwnd as *mut _), SW_HIDE);
+    }
+}
+
+/// Put the round bubble up, created the first time a pin is collapsed.
+///
+/// It goes where the window's own minimize button was — the corner a window's contents collapse
+/// toward — and a bubble that has been dragged somewhere since keeps that place for the next
+/// collapse. It is painted before it is shown, for the reason every other layered window of this
+/// app's is: what one shows between two paints is the surface it already has.
+unsafe fn show_pin_bubble(anchor: ScreenRegion) {
+    let dpi = monitor_dpi_from_point(anchor.0, anchor.1);
+    let side = logical_px(dpi, PIN_BUBBLE_PIXELS).max(16);
+
+    let remembered = PIN_BUBBLE_POS.lock().ok().and_then(|position| *position);
+    let (x, y) = remembered.unwrap_or((anchor.2 - side, anchor.1));
+    let clamped = clamp_pinned_box((x, y, x + side, y + side), dpi);
+    let (x, y) = (clamped.0, clamped.1);
+
+    let Some(hwnd) = pin_bubble_window() else {
+        return;
+    };
+
+    if !IsWindowVisible(hwnd).as_bool() {
+        let _ = MoveWindow(hwnd, x, y, side, side, false);
+    }
+
+    render_pin_bubble(hwnd);
+    let _ = SetWindowPos(
+        hwnd,
+        HWND_TOPMOST,
+        x,
+        y,
+        side,
+        side,
+        SWP_NOACTIVATE | SWP_SHOWWINDOW,
+    );
+    let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+}
+
+/// The bubble's window, created once for the run: a layered popup that never takes focus and is
+/// never in the taskbar, exactly as the preview window itself is.
+unsafe fn pin_bubble_window() -> Option<HWND> {
+    let existing = PIN_BUBBLE_HWND.load(Ordering::SeqCst);
+    if existing != 0 {
+        return Some(HWND(existing as *mut _));
+    }
+
+    let hinstance = GetModuleHandleW(None).ok()?;
+    let hwnd = CreateWindowExW(
+        WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE,
+        PIN_BUBBLE_CLASS,
+        w!("Pinned preview"),
+        WS_POPUP,
+        0,
+        0,
+        1,
+        1,
+        None,
+        None,
+        hinstance,
+        None,
+    )
+    .ok()?;
+
+    PIN_BUBBLE_HWND.store(hwnd.0 as isize, Ordering::SeqCst);
+    Some(hwnd)
+}
+
+/// Paint the bubble: the round window a collapsed pin leaves, with the picture the pin was
+/// showing inside it where its kind has one (see `pin_chrome::paint_bubble`).
+unsafe fn render_pin_bubble(hwnd: HWND) {
+    let mut rect = RECT::default();
+    if GetWindowRect(hwnd, &mut rect).is_err() {
+        return;
+    }
+
+    let width = (rect.right - rect.left).max(1) as u32;
+    let height = (rect.bottom - rect.top).max(1) as u32;
+    let Some(bits) = ensure_layered_surface(hwnd.0 as isize, width, height) else {
+        return;
+    };
+    let out = std::slice::from_raw_parts_mut(bits, width as usize * height as usize * 4);
+
+    let Some(palette) = pin_chrome::ChromePalette::current() else {
+        return;
+    };
+
+    let (thumbnail, mark) = bubble_art(width);
+    let art = thumbnail.as_deref().map(|pixels| (pixels, width, height));
+
+    pin_chrome::paint_bubble(out, width, height, &palette, art, mark);
+
+    let dst_point = POINT {
+        x: rect.left,
+        y: rect.top,
+    };
+    let size = SIZE {
+        cx: width as i32,
+        cy: height as i32,
+    };
+    let src_point = POINT { x: 0, y: 0 };
+    let blend = BLENDFUNCTION {
+        BlendOp: AC_SRC_OVER as u8,
+        BlendFlags: 0,
+        SourceConstantAlpha: 255,
+        AlphaFormat: AC_SRC_ALPHA as u8,
+    };
+
+    if let Some(mem_dc) = layered_surface_dc(hwnd.0 as isize) {
+        let _ = UpdateLayeredWindow(
+            hwnd,
+            None,
+            Some(&dst_point),
+            Some(&size),
+            mem_dc,
+            Some(&src_point),
+            COLORREF(0),
+            Some(&blend),
+            ULW_ALPHA,
+        );
+    }
+}
+
+/// What the bubble is drawn with: the picture the pin holds, where its kind has one, and the
+/// mark its kind is otherwise.
+fn bubble_art(side: u32) -> (Option<Vec<u8>>, pin_chrome::BubbleMark) {
+    let Ok(media) = CURRENT_MEDIA.lock() else {
+        return (None, pin_chrome::BubbleMark::Picture);
+    };
+    let Some(media) = media.as_ref() else {
+        return (None, pin_chrome::BubbleMark::Picture);
+    };
+
+    let mark = media.media_type.bubble_mark();
+    let thumbnail = media
+        .media_type
+        .has_bubble_picture()
+        .then(|| bubble_thumbnail(media, side))
+        .flatten();
+
+    (thumbnail, mark)
+}
+
+/// The picture inside the bubble: the frame the pin is holding, shrunk to cover a square and
+/// cropped to the middle of it.
+///
+/// It is taken from the frame already in memory rather than from the file: a bubble is drawn at
+/// the moment a window collapses, and a decode for it would be a second read of a file whose
+/// picture this app is holding at that very moment.
+fn bubble_thumbnail(media: &MediaData, side: u32) -> Option<Vec<u8>> {
+    let (width, height) = (media.current_width(), media.current_height());
+    if width == 0 || height == 0 || side == 0 {
+        return None;
+    }
+
+    let frame = media.current_pixels();
+    let expected = width as usize * height as usize * 4;
+    if frame.len() < expected {
+        return None;
+    }
+
+    // A frame is BGRA and the image crate works in RGBA, so the two channels are exchanged on
+    // the way in and on the way out.
+    let rgba: Vec<u8> = frame[..expected]
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .flat_map(|pixel| [pixel[2], pixel[1], pixel[0], pixel[3]])
+        .collect();
+    let picture = image::RgbaImage::from_raw(width, height, rgba)?;
+
+    // Scaled to *cover* the circle rather than to fit inside it, and cropped to the middle: what
+    // a bubble shows of a picture is the middle of it, at the bubble's own size.
+    let scale = (side as f32 / width as f32).max(side as f32 / height as f32);
+    let scaled_width = ((width as f32 * scale).round() as u32).max(side);
+    let scaled_height = ((height as f32 * scale).round() as u32).max(side);
+    let scaled = image::imageops::resize(
+        &picture,
+        scaled_width,
+        scaled_height,
+        image::imageops::FilterType::Triangle,
+    );
+    let cropped = image::imageops::crop_imm(
+        &scaled,
+        (scaled_width - side) / 2,
+        (scaled_height - side) / 2,
+        side,
+        side,
+    )
+    .to_image();
+
+    let mut out = Vec::with_capacity(side as usize * side as usize * 4);
+    for pixel in cropped.pixels() {
+        out.extend_from_slice(&[pixel[2], pixel[1], pixel[0], pixel[3]]);
+    }
+
+    Some(out)
+}
+
+/// The bubble's own window procedure: a click puts the pinned window back, a drag carries the
+/// bubble anywhere on the desktop, and a right click takes the pin down — the three things a
+/// collapsed pin can be asked for, on the one piece of it that is still on screen.
+unsafe extern "system" fn pin_bubble_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    match msg {
+        WM_LBUTTONDOWN => {
+            let (x, y) = message_point(lparam);
+            let origin = window_origin(hwnd).map(|rect| (rect.0, rect.1));
+
+            if let (Ok(mut drag), Some(origin)) = (PIN_BUBBLE_DRAG.lock(), origin) {
+                *drag = Some(((x, y), origin));
+            }
+            PIN_BUBBLE_MOVED.store(false, Ordering::Release);
+            let _ = SetCapture(hwnd);
+            LRESULT(0)
+        }
+        WM_MOUSEMOVE => {
+            drag_pin_bubble(hwnd, message_point(lparam));
+            LRESULT(0)
+        }
+        WM_LBUTTONUP => {
+            let dragging = PIN_BUBBLE_DRAG
+                .lock()
+                .map(|mut drag| drag.take().is_some())
+                .unwrap_or(false);
+
+            if dragging {
+                let _ = ReleaseCapture();
+                if !PIN_BUBBLE_MOVED.load(Ordering::Acquire) {
+                    // A press that did not move is a click, and a click on the bubble is what
+                    // puts the window back up.
+                    ask_pin(PinCommand::Restore);
+                }
+            }
+            LRESULT(0)
+        }
+        WM_RBUTTONUP => {
+            ask_pin(PinCommand::Close);
+            LRESULT(0)
+        }
+        windows::Win32::UI::WindowsAndMessaging::WM_LBUTTONDBLCLK => {
+            ask_pin(PinCommand::Restore);
+            LRESULT(0)
+        }
+        windows::Win32::UI::WindowsAndMessaging::WM_PAINT => {
+            let mut ps = PAINTSTRUCT::default();
+            let _ = BeginPaint(hwnd, &mut ps);
+            render_pin_bubble(hwnd);
+            let _ = EndPaint(hwnd, &ps);
+            LRESULT(0)
+        }
+        _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+    }
+}
+
+/// Carry the bubble with the pointer. The window's own coordinates are what the drag is measured
+/// in — the bubble is never resized while it is dragged, so a delta there is a delta on screen —
+/// and where it lands is remembered for the next collapse.
+unsafe fn drag_pin_bubble(hwnd: HWND, point: (i32, i32)) {
+    let Ok(mut drag) = PIN_BUBBLE_DRAG.lock() else {
+        return;
+    };
+    let Some((from, origin)) = *drag else {
+        return;
+    };
+
+    let moved = (point.0 - from.0).abs() + (point.1 - from.1).abs();
+    let slop = (logical_px(96, PIN_DRAG_SLOP_PIXELS)).max(2);
+    if moved > slop {
+        PIN_BUBBLE_MOVED.store(true, Ordering::Release);
+    }
+
+    let Some((_, _, width, height)) = window_origin(hwnd) else {
+        return;
+    };
+    let dpi = monitor_dpi_from_point(origin.0, origin.1);
+    let target = clamp_pinned_box(
+        (
+            origin.0 + point.0 - from.0,
+            origin.1 + point.1 - from.1,
+            origin.0 + point.0 - from.0 + width,
+            origin.1 + point.1 - from.1 + height,
+        ),
+        dpi,
+    );
+
+    let _ = SetWindowPos(
+        hwnd,
+        HWND_TOPMOST,
+        target.0,
+        target.1,
+        0,
+        0,
+        SWP_NOSIZE | SWP_NOACTIVATE,
+    );
+
+    if let Ok(mut position) = PIN_BUBBLE_POS.lock() {
+        *position = Some((target.0, target.1));
+    }
+
+    // The drag state follows the window, so the next move is measured from where it is now
+    // rather than from where the press began: the two are the same only while nothing clamps it.
+    *drag = Some((point, (target.0, target.1)));
+}
+
+/// The box of a window, as a screen rectangle and its size.
+fn window_origin(hwnd: HWND) -> Option<(i32, i32, i32, i32)> {
+    let mut rect = RECT::default();
+    unsafe {
+        GetWindowRect(hwnd, &mut rect).ok()?;
+    }
+
+    Some((
+        rect.left,
+        rect.top,
+        rect.right - rect.left,
+        rect.bottom - rect.top,
+    ))
+}
+
+/// A box a drag has left a pinned window at, which the preview loop lays the media out for on
+/// its next tick.
+///
+/// The window procedure owns a drag — the pointer is its to follow, and the window has to keep
+/// up with it — and the loop owns the media, so one asks and the other does: what a window
+/// dragged by an edge owes is the media laid out at the box it ended up with, and that is the
+/// same work a maximized window owes (see `PreviewMessage::PinBox`).
+static PIN_BOX_REQUEST: Lazy<Mutex<Option<ScreenRegion>>> = Lazy::new(|| Mutex::new(None));
+
+/// The point the pointer is at, in screen coordinates: what a drag is measured in, since a
+/// window that is being resized moves its own origin out from under a client coordinate.
+fn cursor_screen_point() -> Option<(i32, i32)> {
+    let mut point = POINT::default();
+    unsafe { GetCursorPos(&mut point) }.ok()?;
+    Some((point.x, point.y))
+}
+
+/// The media box a window box implies: the window less the caption above it and the transport
+/// bar below it.
+fn content_box_of(window: ScreenRegion, dpi: u32, transport: bool) -> ScreenRegion {
+    (
+        window.0,
+        window.1 + pinned_caption_height(dpi),
+        window.2,
+        window.3 - pinned_transport_height(dpi, transport),
+    )
+}
+
+/// What the pointer is doing on a pinned window, in the window's own coordinates: which caption
+/// button it is over — a caption lights up as a pointer crosses it, the way a Windows one does —
+/// and, while a press is being held, the drag or the resize it began.
+unsafe fn pinned_mouse_move(hwnd: HWND, x: i32, y: i32) {
+    let Some((caption_height, dpi, width)) = pinned_caption_geometry() else {
+        return;
+    };
+
+    let dragging = {
+        let Ok(pinned) = PINNED.lock() else {
+            return;
+        };
+        pinned.as_ref().and_then(|pin| pin.dragging)
+    };
+
+    if dragging.is_some() {
+        apply_pin_drag(hwnd);
+        return;
+    }
+
+    // A drag along the transport bar, which is a seek being aimed rather than a window being
+    // moved (see `pinned_transport_drag`).
+    if pinned_transport_drag(hwnd, x) {
+        return;
+    }
+
+    let hovered = (y < caption_height)
+        .then(|| pin_chrome::button_at(x, y, width, caption_height, dpi))
+        .flatten();
+    let changed = {
+        let Ok(mut pinned) = PINNED.lock() else {
+            return;
+        };
+        let Some(pin) = pinned.as_mut() else {
+            return;
+        };
+
+        let changed = pin.hovered != hovered;
+        pin.hovered = hovered;
+        changed
+    };
+
+    // The same question of the transport bar, which is the other strip a pointer lights up.
+    let transport_hovered = pinned_transport_geometry().and_then(|bar| {
+        (y >= bar.top)
+            .then(|| pin_chrome::transport_part_at(x, y - bar.top, bar.width, bar.height, bar.dpi))
+            .flatten()
+    });
+    let transport_changed = PINNED
+        .lock()
+        .ok()
+        .and_then(|mut pinned| {
+            let pin = pinned.as_mut()?;
+            let changed = pin.transport.hovered != transport_hovered;
+            pin.transport.hovered = transport_hovered;
+            Some(changed)
+        })
+        .unwrap_or(false);
+
+    if changed || transport_changed {
+        render_layered_preview(hwnd);
+    }
+}
+
+/// The pinned window's caption, as the pointer's questions need it.
+fn pinned_caption_geometry() -> Option<(i32, u32, i32)> {
+    let pinned = PINNED.lock().ok()?;
+    let pin = pinned.as_ref()?;
+    (!pin.collapsed).then(|| {
+        let (width, _) = pin.window_size();
+        (pinned_caption_height(pin.dpi), pin.dpi, width)
+    })
+}
+
+/// Where a pinned window's transport bar is, as the pointer's questions about it need it: the
+/// window's own width, the row the bar begins at, how tall it is, the scale it is drawn at, and
+/// the transport's own state for the parts a press acts on.
+struct PinnedTransportBar {
+    width: i32,
+    top: i32,
+    height: i32,
+    dpi: u32,
+}
+
+fn pinned_transport_geometry() -> Option<PinnedTransportBar> {
+    let pinned = PINNED.lock().ok()?;
+    let pin = pinned.as_ref()?;
+    if pin.collapsed || !pin.transport_bar {
+        return None;
+    }
+
+    let (width, height) = pin.window_size();
+    let band = pinned_transport_height(pin.dpi, true);
+
+    Some(PinnedTransportBar {
+        width,
+        top: height - band,
+        height: band,
+        dpi: pin.dpi,
+    })
+}
+
+/// A press on a pinned window's transport bar, answering whether it was the bar's to act on: the
+/// button pauses and resumes, and the bar is taken hold of where it was pressed.
+///
+/// A drag that is still going is not a seek — with FFmpeg it would be a player restarted for
+/// every pixel of the drag — so what a press on the bar does is put the playhead under the hand
+/// and what the release does is take the file there (see `seek_pinned_playback`).
+unsafe fn pinned_transport_press(hwnd: HWND, x: i32, y: i32) -> bool {
+    let Some(bar) = pinned_transport_geometry() else {
+        return false;
+    };
+    if y < bar.top {
+        return false;
+    }
+
+    let Some(part) = pin_chrome::transport_part_at(x, y - bar.top, bar.width, bar.height, bar.dpi)
+    else {
+        return false;
+    };
+
+    match part {
+        pin_chrome::TransportPart::Play => {
+            update_pin_transport(|transport| transport.pressed = Some(part));
+        }
+        pin_chrome::TransportPart::Seek => {
+            let share = pin_chrome::transport_share_at(x, bar.width, bar.dpi);
+            update_pin_transport(|transport| {
+                transport.seeking = pin_seconds_at(transport, share);
+            });
+        }
+    }
+
+    let _ = SetCapture(hwnd);
+    render_layered_preview(hwnd);
+    true
+}
+
+/// Where a drag along the bar has taken the playhead: the share of the bar under the hand turned
+/// into a second of the file, for a file whose length is known.
+fn pin_seconds_at(transport: &PinTransport, share: f64) -> Option<f64> {
+    transport
+        .duration
+        .map(|duration| (duration * share).clamp(0.0, duration))
+}
+
+/// Carry a drag along the transport bar: the playhead follows the hand, and the file is taken
+/// there only when the pointer lets go.
+unsafe fn pinned_transport_drag(hwnd: HWND, x: i32) -> bool {
+    let Some(bar) = pinned_transport_geometry() else {
+        return false;
+    };
+
+    let dragging = PINNED
+        .lock()
+        .ok()
+        .and_then(|pinned| pinned.as_ref().map(|pin| pin.transport.seeking.is_some()));
+
+    if dragging != Some(true) {
+        return false;
+    }
+
+    let share = pin_chrome::transport_share_at(x, bar.width, bar.dpi);
+    update_pin_transport(|transport| transport.seeking = pin_seconds_at(transport, share));
+    render_layered_preview(hwnd);
+    true
+}
+
+/// What a release on the transport bar does: a click on the button pauses or resumes, and a drag
+/// that has let go of the bar takes the file to where the hand stopped.
+unsafe fn pinned_transport_release(hwnd: HWND, x: i32, y: i32) -> bool {
+    let (part, seeking, transport) = {
+        let Ok(mut pinned) = PINNED.lock() else {
+            return false;
+        };
+        let Some(pin) = pinned.as_mut() else {
+            return false;
+        };
+
+        let part = pin.transport.pressed.take();
+        let seeking = pin.transport.seeking;
+        (part, seeking, pin.transport)
+    };
+
+    if part.is_none() && seeking.is_none() {
+        return false;
+    }
+
+    let _ = ReleaseCapture();
+
+    if let Some(part) = part {
+        // A button is clicked where the pointer is still on it, which is the rule every caption
+        // button of this app's follows.
+        let still_on_it = pinned_transport_geometry()
+            .map(|bar| {
+                y >= bar.top
+                    && pin_chrome::transport_part_at(x, y - bar.top, bar.width, bar.height, bar.dpi)
+                        == Some(part)
+            })
+            .unwrap_or(false);
+
+        if still_on_it && part == pin_chrome::TransportPart::Play {
+            if let Some((path, content)) = pinned_playback_target() {
+                toggle_pinned_playback(&path, content, transport);
+            }
+        }
+
+        update_pin_transport(|transport| transport.pressed = None);
+        render_layered_preview(hwnd);
+        return true;
+    }
+
+    // A drag of the bar: the file is taken to the second the hand stopped at, which is the one
+    // moment an FFmpeg player is ended and begun again (see `seek_pinned_playback`).
+    if let Some(seconds) = seeking {
+        if let Some((path, content)) = pinned_playback_target() {
+            seek_pinned_playback(&path, content, seconds);
+        }
+    }
+
+    render_layered_preview(hwnd);
+    true
+}
+
+/// A press on a pinned window, answering whether it was the pin's to act on.
+///
+/// Four things a press can be, in the order a hand finds them: one of the caption's buttons, the
+/// rest of the caption — which is a title bar, and beginning a move is what a title bar does —
+/// an edge of the window, which begins a resize, and the media itself, which moves the window
+/// under a hand that drags it. What is inside the media is left to the media: a text preview's
+/// scrollbar and its selection are the pointer's own, and a press on either is not a move.
+unsafe fn pinned_press(hwnd: HWND, x: i32, y: i32) -> bool {
+    let Some((caption_height, dpi, width)) = pinned_caption_geometry() else {
+        return false;
+    };
+
+    if y < caption_height {
+        if let Some(button) = pin_chrome::button_at(x, y, width, caption_height, dpi) {
+            if let Ok(mut pinned) = PINNED.lock() {
+                if let Some(pin) = pinned.as_mut() {
+                    pin.pressed = Some(button);
+                }
+            }
+            let _ = SetCapture(hwnd);
+            render_layered_preview(hwnd);
+            return true;
+        }
+
+        begin_pin_drag(hwnd, PinDragAction::Move);
+        return true;
+    }
+
+    // The transport bar, which is the strip along the bottom of a kind that plays.
+    if pinned_transport_press(hwnd, x, y) {
+        return true;
+    }
+
+    let edge = {
+        let Ok(pinned) = PINNED.lock() else {
+            return false;
+        };
+        pinned.as_ref().and_then(|pin| pin.resize_edge(x, y))
+    };
+    if let Some(edge) = edge {
+        begin_pin_drag(hwnd, PinDragAction::Resize(edge));
+        return true;
+    }
+
+    // The media: a picture, an animation, a video's band, a page. All of them are dragged by,
+    // except a text preview, whose own press begins a selection or a scrollbar drag.
+    let interactive = CURRENT_MEDIA
+        .lock()
+        .ok()
+        .and_then(|media| media.as_ref().map(|media| media.text_state.is_some()))
+        .unwrap_or(false);
+    if !interactive {
+        begin_pin_drag(hwnd, PinDragAction::Move);
+        return true;
+    }
+
+    false
+}
+
+/// Begin a drag of a pinned window: where the pointer is, what the press was on, and the box the
+/// window had at that moment — which is what the whole drag is measured against, so a window
+/// follows a hand rather than accumulating a drift of little moves.
+unsafe fn begin_pin_drag(hwnd: HWND, action: PinDragAction) {
+    let Some(from) = cursor_screen_point() else {
+        return;
+    };
+    let Some((window, _, _)) = pinned_window_box() else {
+        return;
+    };
+
+    if let Ok(mut pinned) = PINNED.lock() {
+        if let Some(pin) = pinned.as_mut() {
+            pin.dragging = Some(PinDrag {
+                from,
+                window,
+                action,
+            });
+        }
+    }
+
+    let _ = SetCapture(hwnd);
+}
+
+/// Carry a pinned window's drag on: the pointer has moved, and what the press began is applied to
+/// the box the window had when it began.
+unsafe fn apply_pin_drag(hwnd: HWND) {
+    let (drag, dpi, transport) = {
+        let Ok(pinned) = PINNED.lock() else {
+            return;
+        };
+        let Some(pin) = pinned.as_ref() else {
+            return;
+        };
+        let Some(drag) = pin.dragging else {
+            return;
+        };
+
+        (drag, pin.dpi, pin.transport_bar)
+    };
+
+    let Some(point) = cursor_screen_point() else {
+        return;
+    };
+    let (dx, dy) = (point.0 - drag.from.0, point.1 - drag.from.1);
+
+    let window = match drag.action {
+        PinDragAction::Move => (
+            drag.window.0 + dx,
+            drag.window.1 + dy,
+            drag.window.2 + dx,
+            drag.window.3 + dy,
+        ),
+        PinDragAction::Resize(edge) => {
+            resize_pinned_window(drag.window, edge, dx, dy, dpi, transport)
+        }
+    };
+    let window = clamp_pinned_box(window, dpi);
+    let content = content_box_of(window, dpi, transport);
+
+    {
+        let Ok(mut pinned) = PINNED.lock() else {
+            return;
+        };
+        let Some(pin) = pinned.as_mut() else {
+            return;
+        };
+        pin.content = content;
+    }
+
+    let (width, height) = (window.2 - window.0, window.3 - window.1);
+    let _ = SetWindowPos(
+        hwnd,
+        HWND_TOPMOST,
+        window.0,
+        window.1,
+        width,
+        height,
+        SWP_NOACTIVATE,
+    );
+
+    // Whatever stands in the media band travels with it, and the caption is painted again because
+    // the window under it has moved.
+    place_pinned_siblings();
+    render_layered_preview(hwnd);
+}
+
+/// The window a resize drag has produced.
+///
+/// The media keeps its own shape whatever edge is dragged: a preview is never stretched, so a
+/// edge drag scales both sides by what the dragged edge asked for. The corner opposite the one
+/// being dragged stays where it is, which is what makes a window grow away from the hand that is
+/// pulling it.
+fn resize_pinned_window(
+    window: ScreenRegion,
+    edge: PinResize,
+    dx: i32,
+    dy: i32,
+    dpi: u32,
+    transport: bool,
+) -> ScreenRegion {
+    let content = content_box_of(window, dpi, transport);
+    let width = (content.2 - content.0).max(1) as f32;
+    let height = (content.3 - content.1).max(1) as f32;
+
+    let mut scale = 1.0f32;
+    if edge.right {
+        scale = scale.max((width + dx as f32) / width);
+    }
+    if edge.left {
+        scale = scale.max((width - dx as f32) / width);
+    }
+    if edge.bottom {
+        scale = scale.max((height + dy as f32) / height);
+    }
+    if edge.top {
+        scale = scale.max((height - dy as f32) / height);
+    }
+
+    let scale = scale.clamp(0.05, 20.0);
+    let width = (width * scale).round().max(1.0) as i32;
+    let height = (height * scale).round().max(1.0) as i32;
+    let left = if edge.left {
+        content.2 - width
+    } else {
+        content.0
+    };
+    let top = if edge.top {
+        content.3 - height
+    } else {
+        content.1
+    };
+
+    (
+        left,
+        top - pinned_caption_height(dpi),
+        left + width,
+        top + height + pinned_transport_height(dpi, transport),
+    )
+}
+
+/// A release on a pinned window, answering whether it was the pin's to act on: the button a press
+/// landed on is clicked if the pointer is still on it, and a drag — which is over wherever the
+/// pointer left it — asks for the media to be laid out again at the box the window ended up with.
+unsafe fn pinned_release(hwnd: HWND, x: i32, y: i32) -> bool {
+    // The transport bar first: a bar a press has taken hold of is the bar's pointer until it lets
+    // go, whatever else is under it.
+    if pinned_transport_release(hwnd, x, y) {
+        return true;
+    }
+
+    let (pressed, dragging, caption_height, dpi, width) = {
+        let Ok(mut pinned) = PINNED.lock() else {
+            return false;
+        };
+        let Some(pin) = pinned.as_mut() else {
+            return false;
+        };
+
+        let pressed = pin.pressed.take();
+        let dragging = pin.dragging.take();
+        let (width, _) = pin.window_size();
+        (
+            pressed,
+            dragging,
+            pinned_caption_height(pin.dpi),
+            pin.dpi,
+            width,
+        )
+    };
+
+    if pressed.is_some() || dragging.is_some() {
+        let _ = ReleaseCapture();
+    }
+
+    if let Some(button) = pressed {
+        let still_on_it = y < caption_height
+            && pin_chrome::button_at(x, y, width, caption_height, dpi) == Some(button);
+
+        if still_on_it {
+            match button {
+                pin_chrome::CaptionButton::Minimize => ask_pin(PinCommand::Minimize),
+                pin_chrome::CaptionButton::Maximize => ask_pin(PinCommand::Maximize),
+                pin_chrome::CaptionButton::Close => ask_pin(PinCommand::Close),
+            }
+        }
+
+        render_layered_preview(hwnd);
+        return true;
+    }
+
+    if let Some(drag) = dragging {
+        // A window that was resized owes its media a layout at the box it now has; one that was
+        // moved owes it nothing but the places its bands are in.
+        if matches!(drag.action, PinDragAction::Resize(_)) {
+            if let Some(content) = pinned_content() {
+                if let Ok(mut request) = PIN_BOX_REQUEST.lock() {
+                    *request = Some(content);
+                }
+            }
+        }
+
+        render_layered_preview(hwnd);
+        return true;
+    }
+
+    false
+}
+
 pub fn run_preview_window() {
     // Page sizes come from Windows.Data.Pdf and picture sizes from the codec Windows
     // has, so this thread needs an apartment before the first layout asks for one.
@@ -10112,6 +12569,27 @@ pub fn run_preview_window() {
         };
 
         RegisterClassExW(&wc);
+
+        // And the class the round bubble is created from: a collapsed pin's window is hidden
+        // while the bubble is up, and the bubble is not that window's shape — it is a small
+        // circle standing in for a large window, at whatever place on the desktop the user
+        // leaves it.
+        let bubble_class = WNDCLASSEXW {
+            cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
+            style: CS_HREDRAW | CS_VREDRAW,
+            lpfnWndProc: Some(pin_bubble_proc),
+            cbClsExtra: 0,
+            cbWndExtra: 0,
+            hInstance: hinstance.into(),
+            hIcon: Default::default(),
+            hCursor: LoadCursorW(None, IDC_ARROW).unwrap_or_default(),
+            hbrBackground: Default::default(),
+            lpszMenuName: PCWSTR::null(),
+            lpszClassName: PIN_BUBBLE_CLASS,
+            hIconSm: Default::default(),
+        };
+
+        RegisterClassExW(&bubble_class);
 
         // Create the preview window
         let hwnd = CreateWindowExW(
@@ -10162,6 +12640,9 @@ pub fn run_preview_window() {
         // Track video position/size for periodic topmost re-assertion
         let mut video_pos: (i32, i32, i32, i32) = (0, 0, 0, 0); // (x, y, w, h)
         let mut last_topmost_check = Instant::now();
+        // When the pinned window's transport bar was last painted: its playhead moves on its own,
+        // so the window is painted again at a clock's pace while one is on screen.
+        let mut last_pin_repaint = Instant::now();
 
         // Background loading support
         let (load_tx, load_rx): (Sender<LoadResult>, Receiver<LoadResult>) = channel();
@@ -10212,6 +12693,11 @@ pub fn run_preview_window() {
             // `preview_stall_ms`).
             note_preview_alive();
 
+            // What the pin asks for this tick, if anything: the key, one of the caption's
+            // buttons, or the media behind it having come apart. It is held for the drain
+            // below, which is where a hover's own messages are turned into a preview.
+            let mut pin_request: Option<PreviewMessage> = None;
+
             // Check for Windows messages
             while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
                 let _ = TranslateMessage(&msg);
@@ -10256,6 +12742,77 @@ pub fn run_preview_window() {
                     0,
                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_FRAMECHANGED,
                 );
+            }
+
+            // The pin's own business, once a tick: the key that pins and unpins, the three
+            // buttons of the caption, and whether the thing the pin is a window onto is still
+            // there at all.
+            if PIN_END_REQUESTED.swap(false, Ordering::AcqRel) {
+                pin_request = Some(end_pin_state());
+            }
+
+            // The key is drained whether or not it is watched, so that a press made while the
+            // feature was off is not acted on when it comes back on.
+            let pin_presses = crate::shell::key_input::take_presses();
+            if pin_presses > 0 && pin_enabled() {
+                if pinned() {
+                    // The key that pins is the key that unpins: one gesture for the whole of
+                    // it, which is what a key Explorer also owns has to be.
+                    pin_request = Some(end_pin_state());
+                } else if let Some(request) =
+                    pin_what_is_on_screen(&current_show, pending_load.as_ref())
+                {
+                    pin_request = Some(request);
+                }
+            }
+
+            if pinned() {
+                pin_command_request(&mut pin_request);
+
+                // A window dragged by an edge owes its media a layout at the box it ended up
+                // with: the window procedure owns the drag and asks for it here, because the
+                // media is this thread's.
+                if pin_request.is_none() {
+                    let requested = PIN_BOX_REQUEST
+                        .lock()
+                        .ok()
+                        .and_then(|mut request| request.take());
+                    if let Some(content) = requested {
+                        pin_request = Some(PreviewMessage::PinBox(content));
+                    }
+                }
+
+                // Where the player's window belongs while a pin is up: the media band of the
+                // pin, which is what the tick's own re-assertion below is handed.
+                if let Ok(pinned) = PINNED.lock() {
+                    if let Some(pin) = pinned.as_ref() {
+                        video_pos = (
+                            pin.content.0,
+                            pin.content.1,
+                            pin.content.2 - pin.content.0,
+                            pin.content.3 - pin.content.1,
+                        );
+                    }
+                }
+
+                // A transport bar's playhead moves while its file plays, so the window is painted
+                // again at a clock's own pace rather than only where the picture changes.
+                let transport_showing = PINNED
+                    .lock()
+                    .ok()
+                    .and_then(|pinned| {
+                        pinned
+                            .as_ref()
+                            .map(|pin| pin.transport_bar && !pin.collapsed)
+                    })
+                    .unwrap_or(false);
+
+                if transport_showing
+                    && last_pin_repaint.elapsed() >= Duration::from_millis(PIN_TRANSPORT_REPAINT_MS)
+                {
+                    last_pin_repaint = Instant::now();
+                    render_layered_preview(hwnd);
+                }
             }
 
             // A player that has been started and has not put its window up yet is being
@@ -10315,6 +12872,7 @@ pub fn run_preview_window() {
             // Periodically re-assert topmost on the video window to prevent it
             // from falling behind Explorer or other windows (Bug 2 fix)
             if current_video_path.is_some()
+                && !pin_is_collapsed()
                 && last_topmost_check.elapsed() >= Duration::from_millis(200)
             {
                 last_topmost_check = Instant::now();
@@ -10337,7 +12895,10 @@ pub fn run_preview_window() {
             // any wait is what put a file the pointer had left on screen and dropped the
             // wait for the one it was on (see `webview_preview::showing_path`).
             if let Some(shown) = webview_preview::showing_path() {
-                if IsWindowVisible(hwnd).as_bool() {
+                // The window comes down for the browser's, which draws the whole of what is on
+                // screen — except while a preview is pinned, when what this window is drawing
+                // is the caption around the browser's own window rather than the document.
+                if IsWindowVisible(hwnd).as_bool() && !pinned() {
                     let _ = ShowWindow(hwnd, SW_HIDE);
                 }
 
@@ -11040,7 +13601,23 @@ pub fn run_preview_window() {
                         // Every other preview is left exactly as it is — a
                         // running video is not restarted by a toggle it has
                         // nothing to do with.
-                        if latest_preview_msg.is_none() {
+                        //
+                        // A pinned preview is the exception: there is no hover to rebuild it
+                        // from — the pin is not a hover — so one whose kind was switched off
+                        // comes down, by the path its own close button takes.
+                        if pinned() {
+                            let switched_off = current_media_kind()
+                                .is_some_and(|kind| !kind.enabled())
+                                || current_show
+                                    .as_ref()
+                                    .and_then(show_path)
+                                    .and_then(|path| engine_kind_of(path))
+                                    .is_some_and(|kind| !kind.enabled());
+
+                            if switched_off {
+                                pin_request = Some(end_pin_state());
+                            }
+                        } else if latest_preview_msg.is_none() {
                             match (current_media_kind(), current_show.clone()) {
                                 (Some(kind), Some(show)) if !kind.enabled() => {
                                     latest_preview_msg = Some(show)
@@ -11058,6 +13635,16 @@ pub fn run_preview_window() {
                                 }
                                 _ => {}
                             }
+                        }
+                    }
+                    // The tray's `Enable Pin` row, and the configuration behind it having been
+                    // reloaded. Whether there is a pin to take down is a question only this
+                    // thread can answer, and a pin left standing by a feature that was switched
+                    // off is a window nothing would ever take down again — so it comes down the
+                    // way its own close button takes it.
+                    PreviewMessage::PinChanged => {
+                        if pinned() && !pin_enabled() {
+                            pin_request = Some(end_pin_state());
                         }
                     }
                     PreviewMessage::OfficeRenderReady {
@@ -11309,7 +13896,13 @@ pub fn run_preview_window() {
             // the display the pointer is on now. A newer message in hand is left to
             // speak for itself, and the flag waits for a tick where none does.
             if latest_preview_msg.is_none() && DISPLAY_RESET.swap(false, Ordering::AcqRel) {
-                latest_preview_msg = replay_where_the_pointer_is(current_show.clone());
+                if pinned() {
+                    // A pin is not replayed from a hover: it is put back on the display it has
+                    // to be on now, at the box that display can show of it.
+                    pin_request = replace_pinned_window();
+                } else {
+                    latest_preview_msg = replay_where_the_pointer_is(current_show.clone());
+                }
             }
 
             // The engine has something to answer for: it could not be had at all, or it
@@ -11332,6 +13925,14 @@ pub fn run_preview_window() {
                         *current = None;
                     }
                 }
+            }
+
+            // The pin's request, if it made one, is the newest thing that happened and speaks
+            // for what is on screen: a key that was pressed, a button that was clicked, or the
+            // media behind the pin having come apart. It is put to the same machinery a hover
+            // is, which is what puts the window up and takes it down (see `PreviewMessage::Pin`).
+            if let Some(request) = pin_request.take() {
+                latest_preview_msg = Some(request);
             }
 
             // Anchored one read before the layout it decides, so the box is placed clear of
@@ -11565,6 +14166,79 @@ pub fn run_preview_window() {
                     // is where the kind of the preview on screen is known; it
                     // replays the hover instead of arriving here as itself.
                     PreviewMessage::RefreshTypes => {}
+                    // And a row that was switched off, which is answered by the receive loop
+                    // above the way a type toggle is: only that side reads what the
+                    // configuration now says, and what it does with the answer is take a pin
+                    // down where there is one (see `PinChanged`).
+                    PreviewMessage::PinChanged => {}
+                    // A preview that stopped being a hover: the media stays exactly where it
+                    // is, and the window grows around it — the caption above it, and the
+                    // transport bar below it where the kind has one.
+                    PreviewMessage::Pin { path, rect } => {
+                        let kind = CURRENT_MEDIA
+                            .lock()
+                            .ok()
+                            .and_then(|media| media.as_ref().map(|media| media.media_type));
+                        let dpi = monitor_dpi_from_point(rect.0, rect.1);
+                        let content = (
+                            rect.0,
+                            rect.1,
+                            rect.0 + (rect.2 - rect.0).max(1),
+                            rect.1 + (rect.3 - rect.1).max(1),
+                        );
+
+                        if let Ok(mut pinned) = PINNED.lock() {
+                            *pinned = Some(PinnedPreview {
+                                path: path.clone(),
+                                content,
+                                restore: None,
+                                dpi,
+                                transport_bar: pin_transport_kind(kind),
+                                collapsed: false,
+                                hovered: None,
+                                pressed: None,
+                                dragging: None,
+                                transport: PinTransport {
+                                    // The length the probe read, and where a player this app
+                                    // started has got to: a video FFmpeg plays has been running
+                                    // since before the pin existed, and its own clock starts
+                                    // here — which is the best that can be said about a player
+                                    // that reports nothing at all (see `PinTransport`).
+                                    duration: video_duration(&path),
+                                    started: (kind == Some(MediaType::Video))
+                                        .then_some((Instant::now(), 0.0)),
+                                    ..Default::default()
+                                },
+                            });
+                        }
+
+                        PIN_ACTIVE.store(true, Ordering::Release);
+                        PIN_COLLAPSED.store(false, Ordering::Release);
+                        show_pinned_window(hwnd);
+                        place_pinned_siblings();
+                        publish_pointer_hold(hwnd);
+                    }
+                    // The pinned window was given another box — maximized, restored, resized,
+                    // or put back on a display that changed: the media is laid out again at the
+                    // size it is now drawn at, and the window is put up around the result.
+                    PreviewMessage::PinBox(content) => {
+                        let card = AudioCardClock {
+                            started: audio_started,
+                            from: audio_start_offset,
+                            name_offset: audio_name_scroll
+                                .as_ref()
+                                .map(|scroll| scroll.offset())
+                                .unwrap_or(0),
+                            dpi: audio_card_dpi,
+                        };
+
+                        if let Some((path, dpi)) = pinned_media_owner() {
+                            relayout_pinned_media(&path, content, dpi, Some(card));
+                        }
+                        show_pinned_window(hwnd);
+                        place_pinned_siblings();
+                        publish_pointer_hold(hwnd);
+                    }
                     // Likewise answered above: a rendered page replays the hover
                     // it belongs to rather than being handled as a message here.
                     PreviewMessage::OfficeRenderReady { .. } => {}
@@ -11786,6 +14460,7 @@ pub fn run_preview_window() {
                                     pos_y,
                                     media_width,
                                     media_height,
+                                    0.0,
                                 );
                                 let pid =
                                     video_process.as_ref().map(|child| child.id()).unwrap_or(0);
@@ -13016,6 +15691,7 @@ mod tests {
                 width: 1920,
                 height: 1080,
                 crop: None,
+                duration: None,
             }),
         );
 
@@ -14447,6 +17123,7 @@ mod tests {
                 width: 640,
                 height: 360,
                 crop: None,
+                duration: None,
             }),
         );
         assert_eq!(video_box(&path), Some((640, 360)));
@@ -15413,5 +18090,87 @@ mod tests {
         );
         media.cancel_background_work();
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_pinned_windows_bands_are_the_caption_above_it_and_the_bar_below_it() {
+        // A window with no transport bar is its media with a caption on top; one that plays
+        // carries the bar as well, which is a band the media gives up at the bottom.
+        let window = (100, 100, 500, 600);
+        assert_eq!(content_box_of(window, 96, false), (100, 130, 500, 600));
+        assert_eq!(content_box_of(window, 96, true), (100, 130, 500, 570));
+    }
+
+    #[test]
+    fn a_resize_keeps_the_shape_of_what_is_pinned() {
+        // A window 400 x 300 of media, dragged by its right edge 200 to the right: the media
+        // grows by half in both directions rather than being stretched sideways, and the corner
+        // that was not dragged stays where it was.
+        let window = (0, 0, 400, 300 + pinned_caption_height(96));
+        let resized = resize_pinned_window(
+            window,
+            PinResize {
+                left: false,
+                top: false,
+                right: true,
+                bottom: false,
+            },
+            200,
+            0,
+            96,
+            false,
+        );
+
+        let content = content_box_of(resized, 96, false);
+        assert_eq!(content, (0, 30, 600, 480));
+
+        // And the same drag from the left edge grows it away to the left.
+        let resized = resize_pinned_window(
+            window,
+            PinResize {
+                left: true,
+                top: false,
+                right: false,
+                bottom: false,
+            },
+            -200,
+            0,
+            96,
+            false,
+        );
+        let content = content_box_of(resized, 96, false);
+        assert_eq!(content, (-200, 30, 400, 480));
+    }
+
+    #[test]
+    fn a_pinned_box_keeps_the_shape_of_what_it_is_shown_for() {
+        let room = ScreenBounds {
+            left: 0,
+            top: 0,
+            right: 1000,
+            bottom: 1000,
+        };
+
+        // A file larger than the display is fitted to it by its own shape rather than by the
+        // display's, which is the letterbox a box of the display's shape would leave and the one
+        // thing a pinned window is never given.
+        assert_eq!(pinned_media_box((4000, 3000), room), (1000, 750));
+        assert_eq!(pinned_media_box((3000, 4000), room), (750, 1000));
+
+        // And one smaller than the display keeps its own size: what a preview is enlarged past
+        // 100% is a picture blurred for nothing, which is the rule every other placement follows
+        // (see `scale_in_room`).
+        assert_eq!(pinned_media_box((400, 300), room), (400, 300));
+    }
+
+    #[test]
+    fn only_the_kinds_that_play_carry_a_transport_bar() {
+        // A video of either engine is the kind with a playhead to show. A sound is not: its card
+        // carries a bar of its own, drawn by the page that paints it.
+        assert!(pin_transport_kind(Some(MediaType::Video)));
+        assert!(pin_transport_kind(Some(MediaType::NativeVideo)));
+        assert!(!pin_transport_kind(Some(MediaType::Audio)));
+        assert!(!pin_transport_kind(Some(MediaType::StaticImage)));
+        assert!(!pin_transport_kind(None));
     }
 }

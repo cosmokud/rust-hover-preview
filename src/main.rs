@@ -214,6 +214,10 @@ fn main() {
                 if let Ok(mut config) = CONFIG.lock() {
                     config.reload_from_disk();
                 }
+                // The pin key is a number the keyboard hook reads rather than the
+                // configuration, so a spelling that changed on disk is handed to it here
+                // — off the hook's own path, which may not take a lock.
+                shell::key_input::refresh();
             }
         }
     });
@@ -226,6 +230,12 @@ fn main() {
     // Watch system-wide wheel input so scrolling Explorer refreshes the preview
     // of the item that lands under the parked cursor.
     let wheel_handle = shell::wheel_input::spawn_wheel_watcher();
+
+    // And watch the pin key, which is the one key this app acts on itself: a preview
+    // on screen when it is pressed becomes a window of its own. The watch is bound
+    // before the thread is started, so the first press is already the configured one.
+    shell::key_input::refresh();
+    let key_handle = shell::key_input::spawn_key_watcher();
     trace.step("threads");
 
     // The check for a newer release is asked for here, as the run starts: the row
@@ -242,6 +252,7 @@ fn main() {
     // Signal other threads to stop
     RUNNING.store(false, Ordering::SeqCst);
     shell::wheel_input::request_stop();
+    shell::key_input::request_stop();
 
     // The engine thread is joined only when it is idle: a COM call into Office
     // cannot be cancelled, and the app's exit must not wait on one.
@@ -259,6 +270,7 @@ fn main() {
     let _ = preview_handle.join();
     drop(hook_handle);
     let _ = wheel_handle.join();
+    let _ = key_handle.join();
     let _ = config_watch_handle.join();
 
     // Cleanup COM
