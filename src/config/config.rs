@@ -1603,11 +1603,6 @@ pub struct AppConfig {
     pub hdr_tone_map: Curve,
     /// How many stops those pictures are shifted by before that curve, as `hdr_exposure`.
     pub hdr_exposure: f32,
-    /// Whether a text preview is more than something to look at: a preview that
-    /// scrolls, that can be selected and copied from, and that a pointer can rest
-    /// on without closing it. Off by default, because it changes what a preview
-    /// does rather than what it shows.
-    pub text_preview_full_mode: bool,
     /// Font scale for text previews, as a percentage of the default size.
     pub text_font_scale_percent: u32,
     /// How far past the far edge of a text preview the pointer region reaches, in
@@ -1733,7 +1728,6 @@ impl Default for AppConfig {
             decode_budget_gb: DEFAULT_DECODE_BUDGET_GB,
             hdr_tone_map: DEFAULT_HDR_TONE_MAP,
             hdr_exposure: DEFAULT_HDR_EXPOSURE,
-            text_preview_full_mode: false,
             text_font_scale_percent: DEFAULT_TEXT_FONT_SCALE_PERCENT,
             text_scroll_far_edge_grace_pixels: DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS,
             image_extensions: sanitize_image_extensions(DEFAULT_IMAGE_EXTENSIONS),
@@ -1809,12 +1803,7 @@ const SETTING_GROUPS: &[(&str, &[&str])] = &[
     ),
     (
         "Text Preview",
-        &[
-            "markdown_mode",
-            "text_font_scale",
-            "text_preview_full_mode",
-            "theme",
-        ],
+        &["markdown_mode", "text_font_scale", "theme"],
     ),
     (
         "Timing",
@@ -2781,11 +2770,6 @@ impl AppConfig {
         );
         ini.set(
             CONFIG_SECTION,
-            "text_preview_full_mode",
-            Some(self.text_preview_full_mode.to_string()),
-        );
-        ini.set(
-            CONFIG_SECTION,
             "text_font_scale",
             Some(sanitize_text_font_scale_percent(self.text_font_scale_percent).to_string()),
         );
@@ -3250,9 +3234,6 @@ impl AppConfig {
         }
         if let Ok(Some(value)) = ini.getfloat(CONFIG_SECTION, "hdr_exposure") {
             self.hdr_exposure = sanitize_hdr_exposure(value as f32);
-        }
-        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "text_preview_full_mode") {
-            self.text_preview_full_mode = value;
         }
         if let Some(value) = ini.get(CONFIG_SECTION, "text_font_scale") {
             if let Some(scale) = parse_text_font_scale(&value) {

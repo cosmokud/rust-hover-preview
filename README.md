@@ -215,10 +215,9 @@ Here is a concise, plain-language version:
 A setting marked `(Default)` is what an untouched setting would be. The check or radio mark shows what is set now.
 
 - **Enable Preview** — Turn previews on or off.
-- **Enable Pin (Space)** — Turn pinning on or off. Pressing the key while a preview is up turns it into a window of its own: captioned, movable, always on top, and still there when the pointer leaves — previews are held back until it is closed. The key is named in the item and can be changed in `config.ini` (`pin_key`).
+- **Enable Pin (Space)** — Turn pinning on or off. Pressing the key while a preview is up turns it into a window of its own: captioned, movable, always on top, and still there when the pointer leaves — previews are held back until it is closed. A pinned text preview comes up in full mode: it scrolls, its text can be selected (drag, or `Ctrl+A` for all of it), and `Ctrl+C` copies what is selected. The key is named in the item and can be changed in `config.ini` (`pin_key`).
 - **Preview Types** — Choose which file kinds can preview: Images, Videos, Audio, Text, Ebook, Archives, Document, Vector, Fonts, Design. One switch covers both the original file and the engine-drawn preview. Examples: camera raw uses **Images**; LibreOffice document uses **Document**; PeaZip archive uses **Archives**; Calibre book uses **Ebook** — also the app-drawn PDF and comic pages.
 - **Text Preview**
-  - **Full Mode** — Adds scrolling, selection, and copy. Off by default.
   - **Theme** — Atom One Light, One Dark Pro, or any `.tmTheme` in the theme folder.
   - **Font Size** — `400%` at the top down to `70%` at the bottom.
   - **Markdown** — Rendered or Source.
@@ -301,7 +300,6 @@ video_preview_enabled=true
 ; Text Preview
 markdown_mode=rendered
 text_font_scale=125
-text_preview_full_mode=false
 theme=light
 
 ; Timing
@@ -370,7 +368,6 @@ Here’s what this .INI does:
 
 - `theme`: `light`, `dark`, or `custom:<name>`.
 - `markdown_mode`: show Markdown as `rendered` or `source`.
-- `text_preview_full_mode`: `true` adds scrolling, selection, and copy.
 - `text_font_scale`: 1–1000%, default `125`; archive lists follow it too.
 
 **What can preview**
@@ -405,7 +402,7 @@ Here’s what this .INI does:
 **Trigger and position**
 
 - `trigger_key` / `trigger_key_mode` / `trigger_key_enabled`: the key (`alt`, `ctrl`, `shift`, `win`), what it does (`disable` or `enable`), and whether it is watched. Default `true`.
-- `pin_key` / `pin_enabled`: the key that pins the preview on screen (`space` by default — the same spellings the trigger key takes: `alt`, `f8`, `a`, `space`, …), and whether it is watched. A pinned preview is a window of its own: a caption with minimize, maximize and close, draggable by the caption or by the picture, and previews are held back until it is closed. Minimize collapses it into a round bubble that can be dragged anywhere and clicked to bring the window back, and a right-click on the bubble closes it.
+- `pin_key` / `pin_enabled`: the key that pins the preview on screen (`space` by default — the same spellings the trigger key takes: `alt`, `f8`, `a`, `space`, …), and whether it is watched. A pinned preview is a window of its own: a caption with minimize, maximize and close, draggable by the caption or by the picture, and previews are held back until it is closed. A pinned text preview is laid out in full mode — it scrolls, its text can be selected, `Ctrl+A` selects all of it, and `Ctrl+C` copies what is selected. Minimize collapses it into a round bubble that can be dragged anywhere and clicked to bring the window back, and a right-click on the bubble closes it.
 - `follow_cursor`: `true` = Follow Cursor; `false` = Best Position.
 - `avoid_mode`: `filename` default, `filename_column`, `details`, or `off` — what the preview avoids.
 

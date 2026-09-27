@@ -86,6 +86,8 @@ pub struct TextPreviewOptions {
     /// document is longer than the frame, its text can be selected and copied, and
     /// it keeps the room the scrollbar needs. With it off a frame is a frame: the
     /// text a box cannot hold is said in a line, and nothing responds to a pointer.
+    /// It is not one of the configuration's answers — a preview is built with it
+    /// when it is pinned, and without it otherwise (see `current_text_options`).
     pub full_mode: bool,
 }
 
