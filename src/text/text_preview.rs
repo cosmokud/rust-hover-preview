@@ -119,6 +119,35 @@ pub struct FrameLine {
     pub runs: Vec<FrameRun>,
 }
 
+/// Whether a point in frame coordinates is over painted text: inside a line's own band, and
+/// inside that line's column.
+///
+/// It is what tells the text of a page from the rest of it. Everything a frame paints text into
+/// answers yes — including the gaps between the words and the tail of a line that ended early,
+/// which is where a caret goes when a hand aims at the end of a line — and what is left is the
+/// page's margins: above the first line, below the last, and the gutters either side of the
+/// column. Those are a handle rather than a place in the text (see `pinned_content_is_the_pins`).
+pub fn point_is_on_text(lines: &[FrameLine], x: i32, y: i32) -> bool {
+    lines.iter().any(|line| {
+        if y < line.top || y >= line.top + line.height {
+            return false;
+        }
+
+        let Some(first) = line.runs.first() else {
+            return false;
+        };
+        let left = first.x;
+        let right = line
+            .runs
+            .iter()
+            .map(|run| run.x + run.width)
+            .max()
+            .unwrap_or(left);
+
+        x >= left && x < right
+    })
+}
+
 /// A range of a text preview a reader has selected: where the drag started and
 /// where it is now, both as (frame line, character).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
