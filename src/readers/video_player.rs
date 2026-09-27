@@ -835,12 +835,16 @@ impl Session {
 
     /// Ask to be taken to `seconds` into the file, making the seek now where the engine is
     /// ready for it and keeping it otherwise.
+    ///
+    /// Nothing is a position rather than the beginning: the beginning is somewhere a transport
+    /// bar can be dragged to, and a seek that is dropped because the second asked for is the
+    /// zeroth is a bar that does nothing at the left-hand end of itself.
     fn seek(&mut self, seconds: f64) {
-        if !seconds.is_finite() || seconds <= 0.0 {
+        if !seconds.is_finite() {
             return;
         }
 
-        self.pending_seek = Some(seconds);
+        self.pending_seek = Some(seconds.max(0.0));
         self.take_pending();
     }
 
@@ -858,18 +862,24 @@ impl Session {
     /// is, and asking again would be a sound restarted four times a second; a file whose length
     /// is known and is not past the position asked for, which is a remembered position past the
     /// end of a file that has been edited since (see `audio_seek::planned`); and the wait
-    /// running out, which is an engine that never read the file's header at all.
+    /// running out, which is an engine that never read the file's header at all — and a wait
+    /// that only a seek which had to wait is under at all, a seek asked of a session that is
+    /// already playing being made where it is asked for.
     fn take_pending(&mut self) {
         let Some(target) = self.pending_seek else {
             return;
         };
 
-        if self.began.elapsed() >= SEEK_GIVE_UP {
-            self.pending_seek = None;
-            return;
-        }
-
+        // A seek asked of an engine that has not read the file's header yet is a seek that has to
+        // wait, and the wait is what runs out — an engine that never reads a header is one this
+        // side stops asking. What the wait is *not* about is the session: a seek asked of a file
+        // that has been playing for a minute is not a seek that arrived late, and treating it as
+        // one is what left a transport bar dragged after the first three seconds of a video doing
+        // nothing at all.
         if unsafe { self.engine.GetReadyState() } < MF_MEDIA_ENGINE_READY_HAVE_METADATA.0 as u16 {
+            if self.began.elapsed() >= SEEK_GIVE_UP {
+                self.pending_seek = None;
+            }
             return;
         }
 
