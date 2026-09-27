@@ -102,15 +102,15 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GetWindowThreadProcessId, IsWindow, IsWindowVisible, LoadCursorW, MoveWindow, PeekMessageW,
     RegisterClassExW, SetCursor, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow,
     ShowWindowAsync, SystemParametersInfoW, TrackPopupMenu, TranslateMessage, UpdateLayeredWindow,
-    CS_HREDRAW, CS_VREDRAW, GWL_EXSTYLE, GW_OWNER, HWND_TOPMOST, IDC_ARROW, IDC_SIZENESW,
-    IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE, MF_STRING, MSG,
-    PBT_APMRESUMEAUTOMATIC, PBT_APMRESUMESUSPEND, PBT_APMSTANDBY, PBT_APMSUSPEND, PM_REMOVE,
-    SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SPI_GETWORKAREA,
-    SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SW_HIDE,
-    SW_SHOWNOACTIVATE, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, TPM_LEFTALIGN, TPM_NONOTIFY,
-    TPM_RETURNCMD, TPM_TOPALIGN, ULW_ALPHA, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_LBUTTONDOWN,
-    WM_LBUTTONUP, WM_MOUSEMOVE, WM_POWERBROADCAST, WM_RBUTTONUP, WM_SETCURSOR, WNDCLASSEXW,
-    WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    CS_HREDRAW, CS_VREDRAW, GWL_EXSTYLE, GW_OWNER, HWND_TOPMOST, IDC_ARROW, IDC_SIZEALL,
+    IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE, MF_STRING, MSG, PBT_APMRESUMEAUTOMATIC,
+    PBT_APMRESUMESUSPEND, PBT_APMSTANDBY, PBT_APMSUSPEND, PM_REMOVE, SM_CXVIRTUALSCREEN,
+    SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SPI_GETWORKAREA, SWP_FRAMECHANGED,
+    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SW_HIDE, SW_SHOWNOACTIVATE,
+    SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, TPM_LEFTALIGN, TPM_NONOTIFY, TPM_RETURNCMD, TPM_TOPALIGN,
+    ULW_ALPHA, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
+    WM_POWERBROADCAST, WM_RBUTTONUP, WM_SETCURSOR, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
+    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
 const PREVIEW_CLASS: PCWSTR = w!("RustHoverPreviewWindow");
@@ -160,8 +160,13 @@ const PIN_DRAG_SLOP_PIXELS: f32 = 4.0;
 /// question Windows answers with a maximized window's own rules and this app has to answer
 /// itself, because a captionless window can be dragged anywhere at all.
 const PIN_KEEP_ON_SCREEN_PIXELS: f32 = 64.0;
-/// How wide a band along a pinned window's edge begins a resize.
-const PIN_RESIZE_BORDER_PIXELS: f32 = 6.0;
+/// How wide a band along a pinned window's edge begins a resize: the eight pixels Windows gives a
+/// resizable window's frame at 100% — a four-pixel frame with a four-pixel pad beside it.
+const PIN_RESIZE_BORDER_PIXELS: f32 = 8.0;
+/// How much wider than the band a corner's own band is. A corner is the smallest target of the
+/// eight and the one a hand aims at, and the top-right one shares its place with the caption's
+/// buttons, so it is given the extra room Windows gives the corners of a window of its own.
+const PIN_RESIZE_CORNER_EXTRA_PIXELS: f32 = 4.0;
 /// How small a resize can take the media a pin is showing: the window around it is never given a
 /// smaller body than this, whichever edge is being dragged, so a window cannot be shrunk to
 /// something with no room left to grab.
@@ -8679,22 +8684,27 @@ unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
     let out = std::slice::from_raw_parts_mut(bits, width as usize * height as usize * 4);
     out.fill(0);
 
-    // The media band. A frame is composed into it whole, at the row the band begins at; a
-    // window whose media has not been laid out for its new box yet shows the frame it has,
-    // centered, for the tick or two that takes.
+    // The media band. A frame of the band's own size is composed into it row for row; one that is
+    // not — which is a window whose edge is under the hand — is sampled into it, so the band is
+    // filled by the media at the size it is being dragged to rather than holding a frame of the
+    // size it had (see `compose_media_into_band`).
+    let band_height = (height - caption_height - paint.transport_height).max(1) as u32;
+
     if let Ok(media) = CURRENT_MEDIA.lock() {
         if let Some(media) = media.as_ref() {
             if !media.media_type.is_engine() && !matches!(media.media_type, MediaType::Video) {
-                compose_preview_pixels_into_band(
+                compose_media_into_band(
                     media.current_pixels(),
                     media.current_width(),
                     media.current_height(),
+                    (width.max(1) as u32, band_height),
                     preview_background(media.media_type),
                     media.current_frame_is_opaque(),
                     BandTarget {
                         out,
                         width: width as u32,
                         origin_y: caption_height as u32,
+                        height: band_height,
                     },
                 );
             }
@@ -8869,21 +8879,48 @@ fn pinned_paint() -> Option<PinnedPaint> {
 }
 
 /// Where a frame that is not the whole of a window is composed: the surface, its own row width,
-/// and the row the band the frame goes in begins at.
+/// the row the band the frame goes in begins at, and how tall that band is.
 struct BandTarget<'a> {
     out: &'a mut [u8],
     width: u32,
     origin_y: u32,
+    height: u32,
+}
+
+/// Put the media of a pinned window into the band its window has left for it.
+///
+/// A frame that is already the band's size is composed into it row for row, which is the whole of
+/// the cost of an ordinary paint. One that is not is *sampled* into it, which is the one thing a
+/// window being resized needs and the reason this is a question rather than a call: a box that
+/// changed a moment ago holds a frame of the size it had, and what a drag has to show is that
+/// frame filling the box it is being dragged to rather than standing at its old size inside it
+/// (see `resample_into_band`).
+fn compose_media_into_band(
+    bgra: &[u8],
+    width: u32,
+    height: u32,
+    band: (u32, u32),
+    background: TransparentBackground,
+    opaque: bool,
+    target: BandTarget<'_>,
+) {
+    if width == 0 || height == 0 || band.0 == 0 || band.1 == 0 {
+        return;
+    }
+
+    if (width, height) == band {
+        compose_preview_pixels_into_band(bgra, width, height, background, opaque, target);
+    } else {
+        resample_into_band(bgra, (width, height), band, background, opaque, target);
+    }
 }
 
 /// `compose_preview_pixels_into` for a frame that is not the whole surface: the frame is
 /// composed into the rows the media band of a pinned window occupies, which is what makes a
 /// window larger than its frame possible.
 ///
-/// A frame narrower than the band is centered in it, which happens only in the moment between
-/// a window being given another box and the media being laid out again for it. The frame's own
-/// rows are what the checkerboard is placed by, so a picture keeps the same squares it had at
-/// its own size.
+/// The frame's own rows are what the checkerboard is placed by, so a picture keeps the same
+/// squares it had at its own size.
 fn compose_preview_pixels_into_band(
     bgra: &[u8],
     width: u32,
@@ -8896,9 +8933,10 @@ fn compose_preview_pixels_into_band(
         out,
         width: out_width,
         origin_y,
+        height: band_height,
     } = target;
 
-    if width == 0 || height == 0 || out_width == 0 {
+    if width == 0 || height == 0 || out_width == 0 || band_height == 0 {
         return;
     }
 
@@ -8906,12 +8944,9 @@ fn compose_preview_pixels_into_band(
     let out_row_bytes = out_width as usize * 4;
     let offset_x = out_width.saturating_sub(width) as usize / 2;
     let start_x = offset_x * 4;
+    let rows = (height as usize).min(band_height as usize);
 
-    for (row, src_row) in bgra
-        .chunks_exact(row_bytes)
-        .take(height as usize)
-        .enumerate()
-    {
+    for (row, src_row) in bgra.chunks_exact(row_bytes).take(rows).enumerate() {
         let destination_row = origin_y as usize + row;
         let start = destination_row * out_row_bytes + start_x;
         let end = start + row_bytes;
@@ -8927,6 +8962,145 @@ fn compose_preview_pixels_into_band(
 
         compose_preview_row(src_row, destination, background, 0, row as u32);
     }
+}
+
+/// Sample a frame into a band of another size: what a pinned window draws while an edge of it is
+/// being dragged.
+///
+/// It is the scaling an image viewer does with the picture it is already holding — a destination
+/// pixel is the four source pixels around the point that maps back from it, weighted by how far
+/// into the square between them it falls — rather than the media laid out again for the box, which
+/// is a decode and not something a hand can be made to wait for on every pixel of a drag. The
+/// media is laid out properly once the drag is over, so what this owes the eye is a picture that
+/// fills the window while it moves rather than a sharper one.
+///
+/// What goes in is the straight-alpha BGRA a frame is composed in, and what comes out is what the
+/// layered surface wants: the sample composited over the backdrop at the place it lands, with the
+/// squares of a checkerboard placed by where a pixel is in the *band* rather than by where it came
+/// from, so a picture being resized keeps the backdrop it had instead of dragging it around.
+fn resample_into_band(
+    bgra: &[u8],
+    source: (u32, u32),
+    band: (u32, u32),
+    background: TransparentBackground,
+    opaque: bool,
+    target: BandTarget<'_>,
+) {
+    let BandTarget {
+        out,
+        width: out_width,
+        origin_y,
+        height: band_height,
+    } = target;
+
+    if out_width == 0 || band_height == 0 {
+        return;
+    }
+
+    let (source_width, source_height) = source;
+    let row_bytes = source_width as usize * 4;
+    let expected = row_bytes * source_height as usize;
+    if row_bytes == 0 || bgra.len() < expected {
+        return;
+    }
+
+    let out_row_bytes = out_width as usize * 4;
+    // Where a destination pixel's center maps back to in the source, in 16.16 fixed point: the
+    // mapping is two multiplies a row and two a pixel, and there is no division in the loop.
+    let step_x = ((source_width as u64) << 16) / band.0 as u64;
+    let step_y = ((source_height as u64) << 16) / band.1 as u64;
+    let rows = (band.1 as usize).min(band_height as usize);
+
+    for y in 0..rows {
+        let destination_row = origin_y as usize + y;
+        let start = destination_row * out_row_bytes;
+        let Some(destination) = out.get_mut(start..start + out_row_bytes) else {
+            break;
+        };
+
+        let sy = (y as u64 * step_y + step_y / 2).saturating_sub(0x8000);
+        let top_row = ((sy >> 16) as usize).min(source_height as usize - 1);
+        let bottom_row = (top_row + 1).min(source_height as usize - 1);
+        let wy = ((sy & 0xFFFF) >> 8) as u32;
+        let top = &bgra[top_row * row_bytes..top_row * row_bytes + row_bytes];
+        let bottom = &bgra[bottom_row * row_bytes..bottom_row * row_bytes + row_bytes];
+
+        for (x, pixel) in destination.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+            let sx = (x as u64 * step_x + step_x / 2).saturating_sub(0x8000);
+            let left_column = ((sx >> 16) as usize).min(source_width as usize - 1);
+            let right_column = (left_column + 1).min(source_width as usize - 1);
+            let wx = ((sx & 0xFFFF) >> 8) as u32;
+
+            let [b, g, r, a] =
+                sample_bilinear(top, bottom, left_column * 4, right_column * 4, wx, wy);
+
+            if opaque {
+                pixel.copy_from_slice(&[b, g, r, a]);
+                continue;
+            }
+
+            match background {
+                TransparentBackground::Transparent => {
+                    let alpha = a as u32;
+                    pixel[0] = ((b as u32 * alpha + 127) / 255) as u8;
+                    pixel[1] = ((g as u32 * alpha + 127) / 255) as u8;
+                    pixel[2] = ((r as u32 * alpha + 127) / 255) as u8;
+                    pixel[3] = a;
+                }
+                TransparentBackground::Black => {
+                    blend_pixel_over(&[b, g, r, a], pixel, 0, 0, 0);
+                }
+                TransparentBackground::White => {
+                    blend_pixel_over(&[b, g, r, a], pixel, 255, 255, 255);
+                }
+                TransparentBackground::Checkerboard => {
+                    let (square_r, square_g, square_b) = checkerboard_color(x as u32, y as u32);
+                    blend_pixel_over(
+                        &[b, g, r, a],
+                        pixel,
+                        square_b as u32,
+                        square_g as u32,
+                        square_r as u32,
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// One sample of a frame at a point between four of its pixels: the four are weighted by how far
+/// the point is from each of them, in 256ths, and the sum of the four weights is 65536.
+#[inline]
+fn sample_bilinear(
+    top: &[u8],
+    bottom: &[u8],
+    left: usize,
+    right: usize,
+    wx: u32,
+    wy: u32,
+) -> [u8; 4] {
+    let (left_near, right_near) = (256 - wx, wx);
+    let (top_near, bottom_near) = (256 - wy, wy);
+    let weights = [
+        left_near * top_near,
+        right_near * top_near,
+        left_near * bottom_near,
+        right_near * bottom_near,
+    ];
+    let corners = [left, right, left, right];
+
+    let mut sample = [0u8; 4];
+    for channel in 0..4 {
+        let mut value = 0u32;
+        for (index, weight) in weights.iter().enumerate() {
+            let row = if index < 2 { top } else { bottom };
+            value += row[corners[index] + channel] as u32 * weight;
+        }
+
+        sample[channel] = ((value + 32_768) >> 16) as u8;
+    }
+
+    sample
 }
 
 /// Copy a surface painted by `pin_chrome` into the rows of a pinned window's own surface. The
@@ -9725,13 +9899,21 @@ unsafe extern "system" fn window_proc(
         WM_SETCURSOR => {
             // What the pointer is over on a pinned window, said with the pointer itself: an edge
             // of one is a resize, and a resize is the one thing a window has no other way of
-            // announcing (see `pinned_set_cursor`). The point in this message is in screen
-            // coordinates, unlike every other message this window handles.
-            let (screen_x, screen_y) = message_point(lparam);
-            if pinned() && pinned_set_cursor(hwnd, screen_x, screen_y) {
+            // announcing (see `pinned_set_cursor`). The point is not in this message: its `lParam`
+            // is the hit-test code with the mouse message above it, so the cursor is asked where
+            // it is — which is what the function below does.
+            if pinned() && pinned_set_cursor(hwnd) {
                 return LRESULT(1);
             }
-            LRESULT(0)
+
+            // And everywhere else it is the arrow, set here rather than left to whatever the
+            // pointer was last told to be. A window that answers this message without setting a
+            // cursor is a window that keeps the shape the last one left behind, which is how a
+            // hover came to wear the diagonal that a pinned window's edge had put up.
+            if let Ok(cursor) = LoadCursorW(None, IDC_ARROW) {
+                SetCursor(cursor);
+            }
+            LRESULT(1)
         }
         WM_LBUTTONDOWN => {
             // A press on a pinned window is the pin's before it is anything else's: the caption's
@@ -11176,22 +11358,52 @@ impl PinnedPreview {
         ((window.2 - window.0).max(1), (window.3 - window.1).max(1))
     }
 
-    /// Which edge of the window a point is on, if it is on one: what a resize is begun by.
+    /// Which edge or corner of the window a point is on, if it is on one: what a resize is begun
+    /// by, and what the shape of the pointer is decided from.
+    ///
+    /// Four bands, one to a side, and the corners where two of them meet taken first so that a
+    /// point in one is answered with the corner rather than with whichever side happens to be
+    /// asked about first. A corner's band is the wider of the two: it is the smallest target the
+    /// window has, and the top-right one is under the caption's buttons — which is the same
+    /// bargain Windows makes on a window whose frame is drawn for it.
     fn resize_edge(&self, x: i32, y: i32) -> Option<PinResize> {
-        // A window too small to tell its edges apart is not resized at all: every band would
-        // overlap the others and a press would land on whichever was asked for first.
         let (width, height) = self.window_size();
         let border = logical_px(self.dpi, PIN_RESIZE_BORDER_PIXELS).max(2);
-        if width <= border * 4 || height <= border * 4 {
+        let corner = border + logical_px(self.dpi, PIN_RESIZE_CORNER_EXTRA_PIXELS).max(1);
+
+        // A window too small to tell its edges apart is not resized at all: every band would
+        // overlap the others and a press would land on whichever was asked for first.
+        if width <= corner + border || height <= corner + border {
             return None;
         }
 
-        let edge = PinResize {
+        let mut edge = PinResize {
             left: x < border,
             top: y < border,
             right: x >= width - border,
             bottom: y >= height - border,
         };
+
+        // A corner is the two bands that meet there, and its own is wider than either: a point
+        // inside one is on both of the sides it is between, whether or not it is deep enough into
+        // them to have been read as a side on its own.
+        if y < corner {
+            if x < corner {
+                edge.left = true;
+                edge.top = true;
+            } else if x >= width - corner {
+                edge.right = true;
+                edge.top = true;
+            }
+        } else if y >= height - corner {
+            if x < corner {
+                edge.left = true;
+                edge.bottom = true;
+            } else if x >= width - corner {
+                edge.right = true;
+                edge.bottom = true;
+            }
+        }
 
         (edge.left || edge.top || edge.right || edge.bottom).then_some(edge)
     }
@@ -11213,12 +11425,28 @@ enum PinDragAction {
 }
 
 /// Which edges of a pinned window a resize is dragging.
+///
+/// A side is one of them set and a corner is two, so the two questions a drag asks of it — which
+/// way the box grows, and which way the hand is facing — are asked of the flags rather than kept
+/// beside them.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 struct PinResize {
     left: bool,
     top: bool,
     right: bool,
     bottom: bool,
+}
+
+impl PinResize {
+    /// Whether the drag moves the window's width, which a left or a right edge does.
+    fn horizontal(self) -> bool {
+        self.left || self.right
+    }
+
+    /// Whether the drag moves its height, which a top or a bottom edge does.
+    fn vertical(self) -> bool {
+        self.top || self.bottom
+    }
 }
 
 /// A command the chrome has asked for: a button that was clicked, a window that was dragged or
@@ -12492,16 +12720,37 @@ unsafe fn pinned_transport_release(hwnd: HWND, x: i32, y: i32) -> bool {
 
 /// A press on a pinned window, answering whether it was the pin's to act on.
 ///
-/// Four things a press can be, in the order a hand finds them: one of the caption's buttons, the
-/// rest of the caption — which is a title bar, and beginning a move is what a title bar does —
-/// an edge of the window, which begins a resize, and the media itself, which moves the window
-/// under a hand that drags it. What is inside the media is left to the media: a text preview's
-/// scrollbar and its selection are the pointer's own, and a press on either is not a move.
+/// Four things a press can be, in the order a hand finds them: an edge of the window, which begins
+/// a resize, one of the caption's buttons, the rest of the caption — which is a title bar, and
+/// beginning a move is what a title bar does — and the media itself, which moves the window under
+/// a hand that drags it. What is inside the media is left to the media: a text preview's scrollbar
+/// and its selection are the pointer's own, and a press on either is not a move.
+///
+/// The frame is asked about before the caption, which is the order Windows itself has and the
+/// order the two are drawn in: the band along the top of a window is over the strip the caption is
+/// painted in, so a caption asked about first swallows the top edge and the two corners at the top
+/// of the window — three of the eight places a window can be resized from, and the three a hand
+/// reaches for on a window it wants wider. What the caption keeps is everything outside the band,
+/// which is where its buttons are: a corner's share of a button is a resize, and the rest of it is
+/// the button, exactly as it is on a window whose frame the system draws.
 unsafe fn pinned_press(hwnd: HWND, x: i32, y: i32) -> bool {
     let Some(caption) = pinned_caption_geometry() else {
         return false;
     };
     let framed = caption.frame != PinFrame::None;
+
+    if framed {
+        let edge = {
+            let Ok(pinned) = PINNED.lock() else {
+                return false;
+            };
+            pinned.as_ref().and_then(|pin| pin.resize_edge(x, y))
+        };
+        if let Some(edge) = edge {
+            begin_pin_drag(hwnd, PinDragAction::Resize(edge));
+            return true;
+        }
+    }
 
     if y < caption.height {
         let button = pin_chrome::button_at(
@@ -12530,19 +12779,6 @@ unsafe fn pinned_press(hwnd: HWND, x: i32, y: i32) -> bool {
     // The transport bar, which is the strip along the bottom of a kind that plays.
     if pinned_transport_press(hwnd, x, y) {
         return true;
-    }
-
-    if framed {
-        let edge = {
-            let Ok(pinned) = PINNED.lock() else {
-                return false;
-            };
-            pinned.as_ref().and_then(|pin| pin.resize_edge(x, y))
-        };
-        if let Some(edge) = edge {
-            begin_pin_drag(hwnd, PinDragAction::Resize(edge));
-            return true;
-        }
     }
 
     if pinned_content_is_the_pins(x, y) {
@@ -12580,53 +12816,75 @@ fn pinned_content_is_the_pins(x: i32, y: i32) -> bool {
     !text_preview::point_is_on_text(&state.lines, media_x, media_y)
 }
 
-/// Set the cursor for a point on a pinned window, answering whether this app set it.
+/// Set the cursor for where the pointer is on a pinned window, answering whether this app set it.
 ///
 /// A resize is the one gesture a window gives away with the shape of the pointer rather than with
 /// anything drawn, and a pinned window has no other way of saying its edges are its own: an edge
-/// that does not say so is an edge found by trying. A kind that is scaled whole is resized by
-/// both sides at once whichever edge is taken, which is what the diagonal cursor says; a page
-/// that is laid out to its box takes one edge at a time, and the cursor names the edge.
-unsafe fn pinned_set_cursor(hwnd: HWND, screen_x: i32, screen_y: i32) -> bool {
+/// that does not say so is an edge found by trying. A side names the side it is and a corner the
+/// diagonal it lies on, which is where the edge is rather than which way the box will move — a
+/// kind whose pixels are their own shape moves both sides whichever edge is taken (see `PinFrame`),
+/// and the shape of the pointer is still about the hand.
+///
+/// The point is read from the cursor rather than taken from a message, because the message that
+/// asks the question does not carry one: `WM_SETCURSOR`'s `lParam` is the hit-test code with the
+/// mouse message above it, and read as a point it is a hand a pixel off the left of every window
+/// and five hundred and twelve pixels down — which is the diagonal cursor drawn over the whole of
+/// a pin, since a band is a band whatever the pointer is really on.
+unsafe fn pinned_set_cursor(hwnd: HWND) -> bool {
+    let Some(point) = cursor_screen_point() else {
+        return false;
+    };
     let Some(origin) = window_origin(hwnd) else {
         return false;
     };
-    let (x, y) = (screen_x - origin.0, screen_y - origin.1);
 
-    let (frame, edge) = {
+    let (frame, hovering, dragging) = {
         let Ok(pinned) = PINNED.lock() else {
             return false;
         };
         let Some(pin) = pinned.as_ref() else {
             return false;
         };
-        if pin.frame == PinFrame::None || pin.dragging.is_some() {
+        if pin.collapsed {
             return false;
         }
 
-        (pin.frame, pin.resize_edge(x, y))
-    };
-    let Some(edge) = edge else {
-        return false;
+        (
+            pin.frame,
+            pin.resize_edge(point.0 - origin.0, point.1 - origin.1),
+            pin.dragging.map(|drag| drag.action),
+        )
     };
 
-    let vertical = edge.top || edge.bottom;
-    let horizontal = edge.left || edge.right;
-    let away = (x * 2 < origin.2) == (y * 2 < origin.3);
-    let one_edge = frame == PinFrame::Free && horizontal != vertical;
-
-    let named = if one_edge {
-        // A page that is laid out to its box takes one edge at a time, so the cursor names the
-        // edge the hand is on.
-        if horizontal {
-            IDC_SIZEWE
-        } else {
-            IDC_SIZENS
+    // What a drag that is going says about the pointer stands until it lets go, whatever the
+    // pointer has since been dragged over: a hand that is carrying a window is not asking where
+    // the edges of it are, and a hand that is pulling one should keep the shape it began with.
+    let edge = match dragging {
+        Some(PinDragAction::Move) => {
+            if let Ok(cursor) = LoadCursorW(None, IDC_SIZEALL) {
+                SetCursor(cursor);
+            }
+            return true;
         }
-    } else if away {
-        IDC_SIZENWSE
+        Some(PinDragAction::Resize(edge)) => edge,
+        None if frame != PinFrame::None => match hovering {
+            Some(edge) => edge,
+            None => return false,
+        },
+        None => return false,
+    };
+
+    let named = if edge.horizontal() && edge.vertical() {
+        // The two diagonals: the one that runs down to the right, and the one that runs up to it.
+        if edge.left == edge.top {
+            IDC_SIZENWSE
+        } else {
+            IDC_SIZENESW
+        }
+    } else if edge.horizontal() {
+        IDC_SIZEWE
     } else {
-        IDC_SIZENESW
+        IDC_SIZENS
     };
 
     if let Ok(cursor) = LoadCursorW(None, named) {
@@ -12718,17 +12976,8 @@ unsafe fn apply_pin_drag(hwnd: HWND) {
     render_layered_preview(hwnd);
 }
 
-/// The window a resize drag has produced.
-///
-/// What the media does with a box of another shape is the whole of the rule (see `PinFrame`). A
-/// kind whose pixels are its own shape keeps that shape whatever edge is dragged: the drag scales
-/// both sides by what the dragged edge asked for, so what the window is given is always a box the
-/// media fills exactly — never a picture with a band of nothing beside it, and never one pulled
-/// out of shape. A kind that is laid out to its box takes the drag one dimension at a time, which
-/// is what a page of text wants: a wider window is a longer line, not a bigger letter.
-///
-/// Whichever it is, the corner opposite the one being dragged stays where it is, which is what
-/// makes a window grow away from the hand that is pulling it.
+/// The window a resize drag has produced: the box the drag began on, dragged by one of its edges,
+/// kept inside the room of the display that box is standing on (see `pinned_room`).
 fn resize_pinned_window(
     window: ScreenRegion,
     edge: PinResize,
@@ -12739,60 +12988,170 @@ fn resize_pinned_window(
     frame: PinFrame,
 ) -> ScreenRegion {
     let content = content_box_of(window, dpi, transport);
-    let width = (content.2 - content.0).max(1) as f32;
-    let height = (content.3 - content.1).max(1) as f32;
-    let floor = logical_px(dpi, PIN_MIN_MEDIA_PIXELS).max(8) as f32;
+    let bounds = monitor_bounds_from_point(
+        content.0 + (content.2 - content.0) / 2,
+        content.1 + (content.3 - content.1) / 2,
+    );
+
+    resize_pinned_content(
+        PinSpace {
+            content,
+            room: pinned_room(bounds, dpi, transport),
+        },
+        edge,
+        dx,
+        dy,
+        dpi,
+        transport,
+        frame,
+    )
+}
+
+/// A media box and the room it may be dragged within: the two boxes the geometry of a resize is
+/// arithmetic on. They travel together because they are the same two numbers for the drag that
+/// reads a display and for the tests that fix one — see `resize_pinned_content`.
+struct PinSpace {
+    content: ScreenRegion,
+    room: ScreenBounds,
+}
+
+/// The same drag, against a room to keep the box inside rather than against the display the box is
+/// standing on: the whole of the geometry, with nothing of the desk in it.
+///
+/// What the media does with a box of another shape is the whole of the rule (see `PinFrame`). A
+/// kind whose pixels are their own shape keeps that shape whatever edge is dragged: the edge under
+/// the hand is the one the box follows and the other side is worked out from the shape, so what
+/// the window is given is always a box the media fills exactly — never a picture with a band of
+/// nothing beside it, and never one pulled out of shape. A kind that is laid out to its box takes
+/// the drag one dimension at a time, which is what a page of text wants: a wider window is a
+/// longer line, not a bigger letter.
+///
+/// Which part of the window stays where it is, is the other half of it, and it is the half that
+/// makes a window grow away from the hand rather than under it. The edge opposite the one being
+/// dragged is the one that is nailed down, and for a side the other axis is left centered on the
+/// line it was on — so a window pulled wider grows around its own middle rather than downwards. A
+/// corner nails down the corner opposite it, and the two answers the shape allows for a corner —
+/// one worked out from the width the hand asked for, one from the height — are compared, and the
+/// nearer of the two is the one taken.
+///
+/// What a drag cannot do is take the media past the room, or below the size a hand can still take
+/// hold of (see `PIN_MIN_MEDIA_PIXELS`). A window bigger than the room it is on is a window whose
+/// edges cannot be reached, and the media is drawn at the size it is shown at, so there is nothing
+/// a box past the room would buy.
+fn resize_pinned_content(
+    space: PinSpace,
+    edge: PinResize,
+    dx: i32,
+    dy: i32,
+    dpi: u32,
+    transport: bool,
+    frame: PinFrame,
+) -> ScreenRegion {
+    let PinSpace { content, room } = space;
+    let start_width = (content.2 - content.0).max(1);
+    let start_height = (content.3 - content.1).max(1);
+
+    let floor = logical_px(dpi, PIN_MIN_MEDIA_PIXELS).max(8);
+
+    // What the room leaves the box to grow into. An axis the hand is on has an edge that stays
+    // where it is, so it may grow only as far as the room reaches past that edge; an axis the hand
+    // is not on is only centered on the line it was on, and its limit is the room itself — a box
+    // that cannot be centered where it was put is a box moved along that line, which the placement
+    // below does and which is the one thing a drag is never refused for.
+    let (to_the_left, to_the_right) = (content.0 - room.left, room.right - content.2);
+    let (above, below) = (content.1 - room.top, room.bottom - content.3);
+
+    let to_grow = if edge.left {
+        start_width + to_the_left
+    } else if edge.right {
+        start_width + to_the_right
+    } else {
+        room.right - room.left
+    };
+    let to_grow_up = if edge.top {
+        start_height + above
+    } else if edge.bottom {
+        start_height + below
+    } else {
+        room.bottom - room.top
+    };
+
+    let ceiling = (
+        to_grow.clamp(floor, (room.right - room.left).max(floor)),
+        to_grow_up.clamp(floor, (room.bottom - room.top).max(floor)),
+    );
+
+    // What the hand asked for: the box the press began on, with the distance the pointer has
+    // moved added to or taken off each side it is on.
+    let wanted = (
+        start_width + if edge.left { -dx } else { dx },
+        start_height + if edge.top { -dy } else { dy },
+    );
 
     let (width, height) = if frame == PinFrame::Free {
-        let mut width = width;
-        let mut height = height;
-        if edge.right {
-            width += dx as f32;
-        }
-        if edge.left {
-            width -= dx as f32;
-        }
-        if edge.bottom {
-            height += dy as f32;
-        }
-        if edge.top {
-            height -= dy as f32;
-        }
-
-        (width.max(floor), height.max(floor))
-    } else {
-        let mut scale = 1.0f32;
-        if edge.right {
-            scale = scale.max((width + dx as f32) / width);
-        }
-        if edge.left {
-            scale = scale.max((width - dx as f32) / width);
-        }
-        if edge.bottom {
-            scale = scale.max((height + dy as f32) / height);
-        }
-        if edge.top {
-            scale = scale.max((height - dy as f32) / height);
-        }
-
-        let scale = scale.clamp(0.05, 20.0);
         (
-            (width * scale).round().max(floor),
-            (height * scale).round().max(floor),
+            wanted.0.clamp(floor, ceiling.0),
+            wanted.1.clamp(floor, ceiling.1),
+        )
+    } else {
+        let aspect = start_width as f64 / start_height as f64;
+
+        // The box the shape allows for a width, and for a height. Both ends of each are clamped
+        // before the other side is worked out, so the box that comes out is inside the room in
+        // both directions and is the shape it was asked to be.
+        let from_width = |width: f64| -> (f64, f64) {
+            let width = width.clamp(floor as f64, ceiling.0 as f64);
+            let height = (width / aspect).clamp(floor as f64, ceiling.1 as f64);
+            (height * aspect, height)
+        };
+        let from_height = |height: f64| -> (f64, f64) {
+            let height = height.clamp(floor as f64, ceiling.1 as f64);
+            let width = (height * aspect).clamp(floor as f64, ceiling.0 as f64);
+            (width, width / aspect)
+        };
+
+        let (width, height) = match (edge.horizontal(), edge.vertical()) {
+            (true, false) => from_width(wanted.0 as f64),
+            (false, true) => from_height(wanted.1 as f64),
+            _ => {
+                let (by_width, by_height) =
+                    (from_width(wanted.0 as f64), from_height(wanted.1 as f64));
+                let error = |(width, height): (f64, f64)| {
+                    (width - wanted.0 as f64).powi(2) + (height - wanted.1 as f64).powi(2)
+                };
+
+                if error(by_width) <= error(by_height) {
+                    by_width
+                } else {
+                    by_height
+                }
+            }
+        };
+
+        (
+            (width.round() as i32).clamp(floor, ceiling.0),
+            (height.round() as i32).clamp(floor, ceiling.1),
         )
     };
 
-    let width = width.round() as i32;
-    let height = height.round() as i32;
+    // Where the box comes out. The edge opposite the one being dragged is the one that stays; an
+    // axis the hand is not on is centered on the line it was on, and moved along that line by as
+    // little as the room asks rather than by the whole of what the centering wanted.
     let left = if edge.left {
         content.2 - width
-    } else {
+    } else if edge.right {
         content.0
+    } else {
+        (content.0 + (start_width - width) / 2)
+            .clamp(room.left, (room.right - width).max(room.left))
     };
     let top = if edge.top {
         content.3 - height
-    } else {
+    } else if edge.bottom {
         content.1
+    } else {
+        (content.1 + (start_height - height) / 2)
+            .clamp(room.top, (room.bottom - height).max(room.top))
     };
 
     (
@@ -18538,66 +18897,333 @@ mod tests {
         assert_eq!(content_box_of(window, 96, true), (100, 130, 500, 570));
     }
 
+    fn edge(left: bool, top: bool, right: bool, bottom: bool) -> PinResize {
+        PinResize {
+            left,
+            top,
+            right,
+            bottom,
+        }
+    }
+
+    /// The room every resize test drags inside: a display of 1200 by 900, with a caption taken off
+    /// the top and a transport bar off the bottom, which is what the room of one really is.
+    fn drag_room() -> ScreenBounds {
+        ScreenBounds {
+            left: 0,
+            top: 0,
+            right: 1200,
+            bottom: 900,
+        }
+    }
+
+    /// The media box a drag of one edge or corner comes out with, from a media box of 400 by 300
+    /// standing in the middle of that room: what every test below states its expectations in.
+    fn dragged(edge: PinResize, dx: i32, dy: i32) -> ScreenRegion {
+        dragged_from((400, 300, 800, 600), PinFrame::Shaped, edge, dx, dy)
+    }
+
+    fn dragged_from(
+        content: ScreenRegion,
+        frame: PinFrame,
+        edge: PinResize,
+        dx: i32,
+        dy: i32,
+    ) -> ScreenRegion {
+        let window = resize_pinned_content(
+            PinSpace {
+                content,
+                room: drag_room(),
+            },
+            edge,
+            dx,
+            dy,
+            96,
+            false,
+            frame,
+        );
+
+        content_box_of(window, 96, false)
+    }
+
     #[test]
     fn a_resize_keeps_the_shape_of_what_is_pinned() {
-        // A window 400 x 300 of media, dragged by its right edge 200 to the right: the media
-        // grows by half in both directions rather than being stretched sideways, and the corner
-        // that was not dragged stays where it was.
-        let window = (0, 0, 400, 300 + pinned_caption_height(96));
-        let resized = resize_pinned_window(
-            window,
-            PinResize {
-                left: false,
-                top: false,
-                right: true,
-                bottom: false,
-            },
-            200,
+        // A media box 400 x 300, dragged by its right edge 200 to the right: the media grows by
+        // half in both directions rather than being stretched sideways, the edge that was not
+        // dragged stays where it was, and the window grows around the line it was on — which is
+        // what an image viewer does with a picture it is being made wider.
+        let content = dragged(edge(false, false, true, false), 200, 0);
+        assert_eq!(content, (400, 225, 1000, 675));
+        assert_eq!(
+            (content.2 - content.0) as f64 / (content.3 - content.1) as f64,
+            400.0 / 300.0,
+            "the media keeps its shape"
+        );
+
+        // And the same drag from the left edge grows it away to the left, with the right edge it
+        // did not drag the one that stays.
+        assert_eq!(
+            dragged(edge(true, false, false, false), -200, 0),
+            (200, 225, 800, 675)
+        );
+
+        // A vertical edge keeps the horizontal line it was on for the same reason.
+        assert_eq!(
+            dragged(edge(false, false, false, true), 0, 150),
+            (300, 300, 900, 750)
+        );
+        assert_eq!(
+            dragged(edge(false, true, false, false), 0, -150),
+            (300, 150, 900, 600)
+        );
+
+        // A corner asks for both sides at once, and what the shape allows is one of the two
+        // answers: the nearer of them to what the hand asked for is the one the box takes.
+        assert_eq!(
+            dragged(edge(false, false, true, true), 200, 30),
+            (400, 300, 1000, 750)
+        );
+        // And the corner opposite the one being dragged is the one that stays.
+        assert_eq!(
+            dragged(edge(true, true, false, false), 100, 75),
+            (500, 375, 800, 600),
+            "the bottom-right corner of the box did not move"
+        );
+    }
+
+    /// A window is pulled smaller by the same drags that pull it larger, from every edge and every
+    /// corner: an inward pull is a box under the hand, and a box that only ever grew was a resize
+    /// with half of its range missing.
+    #[test]
+    fn a_pinned_window_is_pulled_smaller_from_every_edge_and_corner() {
+        assert_eq!(
+            dragged(edge(false, false, true, false), -100, 0),
+            (400, 337, 700, 562),
+            "the right edge pulled in"
+        );
+        assert_eq!(
+            dragged(edge(true, false, false, false), 100, 0),
+            (500, 337, 800, 562),
+            "the left edge pulled in"
+        );
+        assert_eq!(
+            dragged(edge(false, false, false, true), 0, -75),
+            (450, 300, 750, 525),
+            "the bottom edge pulled in"
+        );
+        assert_eq!(
+            dragged(edge(false, true, false, false), 0, 75),
+            (450, 375, 750, 600),
+            "the top edge pulled in"
+        );
+        assert_eq!(
+            dragged(edge(false, false, true, true), -100, -75),
+            (400, 300, 700, 525),
+            "the bottom-right corner pulled in"
+        );
+        assert_eq!(
+            dragged(edge(true, true, false, false), 100, 75),
+            (500, 375, 800, 600),
+            "the top-left corner pulled in"
+        );
+    }
+
+    /// A drag cannot take the media off the display it is on, and the shape it keeps is kept
+    /// against that limit rather than cut by the placement afterwards: a box pulled wider than the
+    /// room has, whose other side was then trimmed to bring it back, is a picture of another shape
+    /// inside the box drawn around it.
+    #[test]
+    fn a_drag_is_stopped_by_the_room_rather_than_cut_by_it() {
+        // A box against the top of the room has nowhere to grow upwards, so the line it is centered
+        // on is a line it is moved along rather than held to: a right-edge pull still grows it.
+        let at_the_top = (400, 0, 800, 300);
+        let content = dragged_from(
+            at_the_top,
+            PinFrame::Shaped,
+            edge(false, false, true, false),
+            600,
             0,
-            96,
-            false,
-            PinFrame::Shaped,
+        );
+        assert_eq!(content, (400, 0, 1200, 600));
+        assert_eq!(
+            (content.2 - content.0) as f64 / (content.3 - content.1) as f64,
+            400.0 / 300.0,
+            "and what it grew to is still the shape of the media"
         );
 
-        let content = content_box_of(resized, 96, false);
-        assert_eq!(content, (0, 30, 600, 480));
-
-        // And the same drag from the left edge grows it away to the left.
-        let resized = resize_pinned_window(
-            window,
-            PinResize {
-                left: true,
-                top: false,
-                right: false,
-                bottom: false,
-            },
-            -200,
-            0,
-            96,
-            false,
+        // The same for a corner: the box may not be pulled past the room's own edge.
+        let content = dragged_from(
+            (400, 300, 800, 600),
             PinFrame::Shaped,
+            edge(false, false, true, true),
+            10_000,
+            10_000,
         );
-        let content = content_box_of(resized, 96, false);
-        assert_eq!(content, (-200, 30, 400, 480));
+        assert_eq!(content, (400, 300, 1200, 900));
+    }
 
-        // A corner asks for both sides at once, and it is the larger of the two that the box
-        // takes, so the media is never smaller than the hand asked for.
-        let resized = resize_pinned_window(
-            window,
-            PinResize {
-                left: false,
-                top: false,
-                right: true,
-                bottom: true,
-            },
-            200,
-            30,
-            96,
-            false,
-            PinFrame::Shaped,
+    /// The four places a window can be resized from are found where they are drawn, and the middle
+    /// of it is not one of them: a band is a band, and a pointer that is not on one is a pointer
+    /// with nothing of the frame under it.
+    #[test]
+    fn a_pinned_window_says_which_of_its_edges_a_point_is_on() {
+        let pin = PinnedPreview {
+            path: PathBuf::from("picture.png"),
+            content: (100, 100, 700, 500),
+            restore: None,
+            dpi: 96,
+            transport_bar: false,
+            transport_live: false,
+            frame: PinFrame::Shaped,
+            collapsed: false,
+            hovered: None,
+            pressed: None,
+            dragging: None,
+            transport: PinTransport::default(),
+        };
+        let (width, height) = pin.window_size();
+
+        // A side, at the middle of it, on all four sides.
+        assert_eq!(
+            pin.resize_edge(2, height / 2),
+            Some(edge(true, false, false, false))
         );
-        let content = content_box_of(resized, 96, false);
-        assert_eq!(content, (0, 30, 600, 480));
+        assert_eq!(
+            pin.resize_edge(width - 2, height / 2),
+            Some(edge(false, false, true, false))
+        );
+        assert_eq!(
+            pin.resize_edge(width / 2, 2),
+            Some(edge(false, true, false, false))
+        );
+        assert_eq!(
+            pin.resize_edge(width / 2, height - 2),
+            Some(edge(false, false, false, true))
+        );
+
+        // A corner, on all four of them — the top two included, which are the two a caption asked
+        // about first would have swallowed.
+        assert_eq!(pin.resize_edge(2, 2), Some(edge(true, true, false, false)));
+        assert_eq!(
+            pin.resize_edge(width - 2, 2),
+            Some(edge(false, true, true, false))
+        );
+        assert_eq!(
+            pin.resize_edge(2, height - 2),
+            Some(edge(true, false, false, true))
+        );
+        assert_eq!(
+            pin.resize_edge(width - 2, height - 2),
+            Some(edge(false, false, true, true))
+        );
+
+        // A corner's band is wider than a side's, so a point just inside one is the corner.
+        assert_eq!(
+            pin.resize_edge(10, 10),
+            Some(edge(true, true, false, false)),
+            "inside the corner's band"
+        );
+
+        // And the media, the caption off to one side of it, and every point outside the bands are
+        // none of the eight.
+        assert_eq!(pin.resize_edge(width / 2, height / 2), None);
+        assert_eq!(pin.resize_edge(40, 40), None);
+        assert_eq!(pin.resize_edge(40, height / 2), None);
+        assert_eq!(pin.resize_edge(width / 2, 40), None);
+    }
+
+    /// A band the frame is not the size of is filled by the frame, sampled: it is what a pinned
+    /// window draws while an edge of it is being dragged, and what it may never draw is the frame
+    /// standing at its own size with nothing around it.
+    #[test]
+    fn a_frame_of_another_size_is_sampled_into_the_band_it_is_drawn_in() {
+        fn band(
+            frame: &[u8],
+            source: (u32, u32),
+            size: (u32, u32),
+            background: TransparentBackground,
+            opaque: bool,
+        ) -> Vec<u8> {
+            let mut out = vec![0u8; size.0 as usize * size.1 as usize * 4];
+            resample_into_band(
+                frame,
+                source,
+                size,
+                background,
+                opaque,
+                BandTarget {
+                    out: &mut out,
+                    width: size.0,
+                    origin_y: 0,
+                    height: size.1,
+                },
+            );
+            out
+        }
+
+        // A frame of one color, into a band twice its size: every pixel of the band is the media.
+        let red = [0u8, 0, 255, 255].repeat(4);
+        let scaled = band(
+            &red,
+            (2, 2),
+            (4, 4),
+            TransparentBackground::Transparent,
+            true,
+        );
+        assert_eq!(scaled.len(), 4 * 4 * 4);
+        assert!(
+            scaled
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|pixel| pixel == &[0, 0, 255, 255]),
+            "the whole band is the media"
+        );
+
+        // Four pixels of four colors into a band of one: the sample is the middle of the square
+        // they make, which is a quarter of each of them.
+        let quarters = [
+            0u8, 0, 0, 255, // black
+            255, 0, 0, 255, // blue
+            0, 255, 0, 255, // green
+            0, 0, 255, 255, // red
+        ];
+        assert_eq!(
+            band(
+                &quarters,
+                (2, 2),
+                (1, 1),
+                TransparentBackground::Transparent,
+                true
+            ),
+            [64, 64, 64, 255]
+        );
+
+        // And a frame that is not opaque is composited where it lands: half a white pixel over
+        // black is the grey between them, and the band it lands in is opaque either way.
+        let half = [255u8, 255, 255, 128].repeat(4);
+        assert_eq!(
+            band(&half, (2, 2), (2, 2), TransparentBackground::Black, false),
+            [128, 128, 128, 255].repeat(4)
+        );
+
+        // What the backdrop is placed by is where a pixel is in the *band*: the squares of a
+        // checkerboard do not move with the picture being dragged over them.
+        let squares = band(
+            &half,
+            (2, 2),
+            (32, 32),
+            TransparentBackground::Checkerboard,
+            false,
+        );
+        let corner = &squares[..4];
+        let sixteen_across = &squares[16 * 4..16 * 4 + 4];
+        assert_ne!(corner, sixteen_across, "the next square is another shade");
+        assert_eq!(
+            corner,
+            &squares[..4],
+            "and the first square is where it was"
+        );
     }
 
     /// A page that is laid out to its box — a document, a listing — is resized one dimension at
