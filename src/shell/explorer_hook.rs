@@ -9,8 +9,8 @@ use crate::shell::wheel_input;
 use crate::ui::preview_window::{
     cursor_preview_hover, end_pin, hide_preview, kill_stray_video_process, monitor_dpi_from_point,
     pinned, pointer_item_box, pointer_item_holds, preview_pointer_hold, preview_screen_rect,
-    preview_stall_ms, previews_paused_by_pin, publish_pointer_item_box, show_preview,
-    show_preview_keyboard, take_pin_resumed, PreviewCursorHover,
+    preview_stall_ms, publish_pointer_item_box, show_preview, show_preview_keyboard,
+    take_pin_resumed, PreviewCursorHover,
 };
 use crate::{CONFIG, RUNNING};
 use once_cell::sync::Lazy;
@@ -4332,17 +4332,12 @@ pub fn run_explorer_hook() {
             keyboard_screen_owner = false;
         }
 
-        // A pin standing on the screen is the whole of what this app is showing, and the pin's own
-        // promise is that the hover machinery is quiet behind it: nothing is resolved, nothing is
-        // raised and nothing is taken down until the pin is gone. The loop stays here, at the tick's
-        // own pace, rather than sleeping deeply — the state above is read on every pass, so the
-        // first hover after the pin is answered the moment it is closed.
-        //
-        // A pin collapsed into its bubble is the exception, and it is what the bubble is for: the
-        // window is off the screen and the desktop is the user's again, so this side of the hook
-        // runs exactly as it does with no pin up at all — and stops again the moment the bubble is
-        // clicked and the window comes back (see `previews_paused_by_pin`).
-        if previews_paused_by_pin() {
+        // A pinned preview is the whole of what this app is showing, and the pin's own promise
+        // is that the hover machinery is quiet behind it: nothing is resolved, nothing is raised
+        // and nothing is taken down until the pin is gone. The loop stays here, at the tick's own
+        // pace, rather than sleeping deeply — the state above is read on every pass, so the first
+        // hover after the pin is answered the moment it is closed.
+        if pinned() {
             std::thread::sleep(Duration::from_millis(tick_ms));
             continue;
         }
