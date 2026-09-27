@@ -12342,39 +12342,51 @@ fn restore_pin() {
 }
 
 /// Where a collapsed pin's window goes back up when its bubble is clicked: the box a preview of the
-/// pin would have been given at the pointer, which is the placement the tray's `Placement → Position`
+/// pin would have been given at the bubble, which is the placement the tray's `Placement → Position`
 /// setting asks for and is made by the same algorithm every hover's preview is placed by
-/// (`compute_mouse_layout`) — beside the pointer rather than under it, in the best room the display
-/// has for it, and inside that display whatever the mode.
+/// (`compute_mouse_layout`).
 ///
-/// What is handed to that algorithm is the pin's *window*, the media box with the caption above it
-/// and the transport bar below, so the whole of the window is placed in the display's room rather
-/// than the media alone: a window whose picture is inside the room but whose caption is over the top
-/// edge is a window whose close button cannot be reached. The size it is asked to place is the size
-/// the window already has — a position mode decides *where* a window goes, and the box a pin holds
-/// is the one the user was given — so the media's own size is not measured again the way a hover
-/// measures it: a pin is not a hover, and the frame it holds was laid out for the box it is in.
+/// The bubble's own place is what is handed over as the pointer's — the hand that clicked it was
+/// there, and a bubble being clicked is a bubble nobody is pointing anywhere else — so what comes
+/// out is where a preview of this pin would have gone at that point: beside the hand rather than
+/// under it, in the best room the display has for it under `Follow Cursor`, and in the wider half of
+/// the display beside the pointer under `Best Position`.
 ///
-/// A placement that could not hold the window at its size answers `None`: a box the room has no
-/// place for is a box the algorithm would fit into the corner of it, and a restore that resized the
-/// pin would be changing the pin rather than placing it. A window whose box *is* the room — one
-/// collapsed while it was maximized — is that case, and goes back to the box it had.
+/// What is placed is the pin's *window* — the media box with the caption above it and the transport
+/// bar below — rather than the media alone, so the display's room has to hold the whole of it: a
+/// placement that keeps the picture inside the display but puts the caption over the top edge is a
+/// window whose close button cannot be reached.
 ///
-/// What a hover's placement steps around is the name the file is listed under (see
-/// `avoiding_text`); a bubble is on no name, so nothing is avoided here and the pointer's own
-/// standoff is the whole of the clearance between the hand and the window it just opened.
+/// A position mode decides *where* a window goes, so the box it keeps is the box it has: the
+/// placement is asked for the size the window already is (`PreviewScale::Percent(100)`), the media
+/// is not measured again the way a hover measures it — a pin is not a hover, and its frame was laid
+/// out for the box it is in — and a window the room has no space for at that size keeps its own size
+/// and is kept against the room's own edge rather than shrunk into a corner of it.
+///
+/// A pin collapsed while it was maximized is the one box that is not placed at all: what it holds is
+/// the room itself rather than a place in it, and a window that size is only ever clamped back to
+/// the room it fills, so it goes back exactly as it went down (`pin.restore` is `Some` while a pin is
+/// maximized).
+///
+/// What a hover's placement steps around is the name the file is listed under (see `avoiding_text`);
+/// a bubble is on no name, so nothing is avoided here and the pointer's own standoff is the whole of
+/// the clearance between the hand and the window that opens beside it.
 fn placed_pin_box(pin: &PinnedPreview) -> Option<ScreenRegion> {
+    if pin.restore.is_some() {
+        return None;
+    }
+
     let window = pin.window_box();
     let width = (window.2 - window.0).max(1);
     let height = (window.3 - window.1).max(1);
 
-    let (cursor_x, cursor_y) = cursor_screen_point()?;
-    let bounds = monitor_bounds_from_point(cursor_x, cursor_y);
-    let dpi = monitor_dpi_from_point(cursor_x, cursor_y);
+    let (anchor_x, anchor_y) = pin_bubble_centre().or_else(cursor_screen_point)?;
+    let bounds = monitor_bounds_from_point(anchor_x, anchor_y);
+    let dpi = monitor_dpi_from_point(anchor_x, anchor_y);
 
     let layout = compute_mouse_layout(
-        cursor_x,
-        cursor_y,
+        anchor_x,
+        anchor_y,
         HoverPlacement {
             orig_dims: (width as u32, height as u32),
             avoid: None,
@@ -12389,16 +12401,26 @@ fn placed_pin_box(pin: &PinnedPreview) -> Option<ScreenRegion> {
         dpi,
     )?;
 
-    if layout.preview_w as i32 != width || layout.preview_h as i32 != height {
+    let x = layout
+        .pos_x
+        .clamp(bounds.left, (bounds.right - width).max(bounds.left));
+    let y = layout
+        .pos_y
+        .clamp(bounds.top, (bounds.bottom - height).max(bounds.top));
+
+    Some((x, y, x + width, y + height))
+}
+
+/// The middle of the round bubble a collapsed pin left, while one is up: the place a restore is
+/// placed at, since what clicked the bubble was a hand on the bubble (see `placed_pin_box`).
+fn pin_bubble_centre() -> Option<(i32, i32)> {
+    let hwnd = PIN_BUBBLE_HWND.load(Ordering::SeqCst);
+    if hwnd == 0 {
         return None;
     }
 
-    Some((
-        layout.pos_x,
-        layout.pos_y,
-        layout.pos_x + width,
-        layout.pos_y + height,
-    ))
+    let (left, top, width, height) = window_origin(HWND(hwnd as *mut _))?;
+    Some((left + width / 2, top + height / 2))
 }
 
 /// Take a pinned window and everything of somebody else's that stands in it off the screen:
