@@ -155,6 +155,16 @@ const VIDEO_PROCESS_IMAGE_NAME: &str = "ffplay.exe";
 const PIN_CAPTION_PIXELS: f32 = 30.0;
 const PIN_TRANSPORT_PIXELS: f32 = 30.0;
 const PIN_BUBBLE_PIXELS: f32 = 44.0;
+/// How far from the strip it is drawn in the pointer asks for a pinned window's chrome, and how
+/// long a pin shows its chrome for whether or not the pointer is near it — a moment after the pin
+/// is taken up, which is when a hand is looking for the buttons.
+///
+/// There is no fade between those two states, and none is wanted: the chrome is drawn into the
+/// window's own rows rather than composited over anything, so a half-shown one is a strip with the
+/// picture missing behind it rather than a fainter strip — and what is cheap is the state rather
+/// than a level, since a chrome that has been asked for is drawn whole in the paint that notices.
+const PIN_CHROME_NEAR_PIXELS: f32 = 24.0;
+const PIN_CHROME_ARRIVAL_SECONDS: f32 = 1.5;
 /// How far a press on a pinned window may wander before it is a drag rather than a click.
 const PIN_DRAG_SLOP_PIXELS: f32 = 4.0;
 /// How much of a pinned window stays on a display. A window dragged past an edge leaves
@@ -8790,8 +8800,16 @@ unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
     // The media band. A frame of the band's own size is composed into it row for row; one that is
     // not — which is a window whose edge is under the hand — is sampled into it, so the band is
     // filled by the media at the size it is being dragged to rather than holding a frame of the
-    // size it had (see `compose_media_into_band`).
-    let band_height = (height - caption_height - paint.transport_height).max(1) as u32;
+    // size it had (see `compose_media_into_band`). Where the band is is a question about the kind:
+    // a pin whose chrome is drawn over its media is media the whole of the window down, and one
+    // whose chrome has bands of its own is media between them (see `pinned_band_rows`).
+    let (band_top, band_height) = pinned_band_rows(
+        height,
+        caption_height,
+        paint.transport_height,
+        paint.overlay,
+    );
+    let band_height = band_height.max(1) as u32;
 
     if let Some(mem_dc) = layered_surface_dc(hwnd.0 as isize) {
         if let Ok(media) = CURRENT_MEDIA.lock() {
@@ -8808,7 +8826,7 @@ unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
                             out,
                             dc: mem_dc,
                             width: width as u32,
-                            origin_y: caption_height as u32,
+                            origin_y: band_top.max(0) as u32,
                             height: band_height,
                         },
                     );
@@ -8817,35 +8835,39 @@ unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
         }
     }
 
-    // The caption.
-    if let Some(palette) = pin_chrome::ChromePalette::current() {
-        let caption = pin_chrome::Caption {
-            title: &paint.title,
-            maximized: paint.maximized,
-            maximizable: paint.maximizable,
-            hovered: paint.hovered,
-            pressed: paint.pressed,
-        };
+    // The chrome, for kinds that draw it over their media: whole, or not painted at all, which is
+    // what makes a picture whose chrome has gone a picture and nothing else (see `PinChrome`).
+    // The caption, across the window's first rows.
+    if paint.chrome {
+        if let Some(palette) = pin_chrome::ChromePalette::current() {
+            let caption = pin_chrome::Caption {
+                title: &paint.title,
+                maximized: paint.maximized,
+                maximizable: paint.maximizable,
+                hovered: paint.hovered,
+                pressed: paint.pressed,
+            };
 
-        CHROME_SURFACE.with(|cell| {
-            let mut surface = cell.borrow_mut();
-            let wanted = (width.max(1) as u32, caption_height.max(1) as u32);
-            if surface
-                .as_ref()
-                .map(|surface| (surface.width, surface.height))
-                != Some(wanted)
-            {
-                *surface = DibSurface::create(wanted.0, wanted.1);
-            }
-            if let Some(surface) = surface.as_ref() {
-                pin_chrome::paint_caption(surface, &palette, &caption, paint.dpi);
-                copy_surface_rows_into(surface, out, width as u32, 0);
-            }
-        });
+            CHROME_SURFACE.with(|cell| {
+                let mut surface = cell.borrow_mut();
+                let wanted = (width.max(1) as u32, caption_height.max(1) as u32);
+                if surface
+                    .as_ref()
+                    .map(|surface| (surface.width, surface.height))
+                    != Some(wanted)
+                {
+                    *surface = DibSurface::create(wanted.0, wanted.1);
+                }
+                if let Some(surface) = surface.as_ref() {
+                    pin_chrome::paint_caption(surface, &palette, &caption, paint.dpi);
+                    copy_surface_rows_into(surface, out, width as u32, 0);
+                }
+            });
+        }
     }
 
-    // The transport bar, for the kinds that play.
-    if paint.transport_height > 0 {
+    // The transport bar, for the kinds that play, across the window's last rows.
+    if paint.transport_height > 0 && paint.chrome {
         if let Some(palette) = pin_chrome::ChromePalette::current() {
             let state = pin_chrome::TransportState {
                 interactive: paint.transport_live,
@@ -8920,6 +8942,12 @@ struct PinnedPaint {
     height: i32,
     caption_height: i32,
     transport_height: i32,
+    /// Whether the chrome is drawn over the media rather than in bands around it, which is what
+    /// says where the media's band of the window is and even whether there is one.
+    overlay: bool,
+    /// Whether the chrome is drawn at all this frame: it is whole or it is not there, with nothing
+    /// in between to draw (see `PinChrome`).
+    chrome: bool,
     dpi: u32,
     title: String,
     maximized: bool,
@@ -8946,6 +8974,8 @@ fn pinned_paint() -> Option<PinnedPaint> {
         height,
         caption_height: pinned_caption_height(pin.dpi),
         transport_height: pinned_transport_height(pin.dpi, pin.transport_bar),
+        overlay: pin.overlay,
+        chrome: pin.chrome.wanted,
         dpi: pin.dpi,
         title: pin
             .path
@@ -10070,19 +10100,21 @@ fn pin_is_collapsed() -> bool {
 }
 
 /// A mouse message's point in the coordinates the media of a pinned window is drawn in: the same
-/// point, less the caption that has been added above it.
+/// point, less the band of chrome that has been added above it — and the same point exactly for a
+/// kind whose chrome is drawn over its media, whose media begins at the window's own top (see
+/// `pin_overlay_chrome`).
 ///
 /// A hover's own window has no caption, so a point is already in its frame's coordinates and is
 /// handed back unchanged — which is what lets one set of handlers serve both.
 fn media_point(x: i32, y: i32) -> (i32, i32) {
-    let dpi = PINNED
-        .lock()
-        .ok()
-        .and_then(|pinned| pinned.as_ref().map(|pin| pin.dpi));
+    let caption = PINNED.lock().ok().and_then(|pinned| {
+        let pin = pinned.as_ref()?;
+        (!pin.collapsed && !pin.overlay).then(|| pinned_caption_height(pin.dpi))
+    });
 
-    match dpi {
-        Some(dpi) if !pin_is_collapsed() => (x, y - pinned_caption_height(dpi)),
-        _ => (x, y),
+    match caption {
+        Some(caption) => (x, y - caption),
+        None => (x, y),
     }
 }
 
@@ -11218,13 +11250,52 @@ fn pinned_transport_height(dpi: u32, transport: bool) -> i32 {
 }
 
 /// The room a pinned window leaves its media on the display it is on: the display's work area
-/// with the caption taken off the top and the transport bar off the bottom.
-fn pinned_room(bounds: ScreenBounds, dpi: u32, transport: bool) -> ScreenBounds {
+/// with the caption taken off the top and the transport bar off the bottom — or the work area
+/// itself for a kind whose chrome is drawn over the media, which has no bands to leave room for
+/// (see `pin_overlay_chrome`).
+fn pinned_room(bounds: ScreenBounds, dpi: u32, transport: bool, overlay: bool) -> ScreenBounds {
+    if overlay {
+        return bounds;
+    }
+
     ScreenBounds {
         left: bounds.left,
         top: bounds.top + pinned_caption_height(dpi),
         right: bounds.right,
         bottom: bounds.bottom - pinned_transport_height(dpi, transport),
+    }
+}
+
+/// The box a pinned window occupies: the media's own box with the caption above it and the
+/// transport bar below it — or the media's box itself for a kind whose chrome is drawn over the
+/// media, since the strips the caption and the bar are drawn in are inside it.
+fn pinned_window_box_of(
+    content: ScreenRegion,
+    dpi: u32,
+    transport: bool,
+    overlay: bool,
+) -> ScreenRegion {
+    if overlay {
+        return content;
+    }
+
+    (
+        content.0,
+        content.1 - pinned_caption_height(dpi),
+        content.2,
+        content.3 + pinned_transport_height(dpi, transport),
+    )
+}
+
+/// The rows of a pinned window the media is drawn in, and how many of them there are: the whole
+/// window for a kind whose chrome is drawn over the media, and the rows between the two bands
+/// otherwise. What the chrome is drawn *over* is what this answers — a caption over a picture, or
+/// a caption sharing the window's first rows with nothing else.
+fn pinned_band_rows(height: i32, caption: i32, transport: i32, overlay: bool) -> (i32, i32) {
+    if overlay {
+        (0, height.max(1))
+    } else {
+        (caption, (height - caption - transport).max(1))
     }
 }
 
@@ -11291,8 +11362,9 @@ struct PinnedPreview {
     /// The file that is pinned — the hover the pin came from, kept by name so that a box that
     /// changes can be laid out again without asking the Explorer hook anything.
     path: PathBuf,
-    /// The box the media occupies on screen. The window around it is this box with the caption
-    /// above it and, for a kind that plays, the transport bar below it.
+    /// The box the media occupies on screen. Everything the window draws besides the media is
+    /// chrome over or around this box, which is why the box is what the pin remembers and what a
+    /// restore puts back (see `PinnedPreview::window_box`).
     content: ScreenRegion,
     /// The box to go back to when a maximized pin is restored, and `None` while it is not
     /// maximized.
@@ -11313,6 +11385,15 @@ struct PinnedPreview {
     /// What the edges and the caption do for this kind, decided when the pin was taken up for the
     /// same reason the line above is (see `PinFrame`).
     frame: PinFrame,
+    /// Whether this kind's chrome is drawn over its media rather than in bands around it, decided
+    /// when the pin was taken up for the same reason the two lines above are: it is a question about
+    /// the kind, and the window's own box is measured from the answer (see `pin_overlay_chrome`).
+    overlay: bool,
+    /// How much of that chrome is showing. A title bar painted over a picture is a strip of the
+    /// picture nobody can see, so it is there when the hand is near it and gone a moment after the
+    /// pin comes up otherwise — and a pin whose chrome is *not* drawn over its media has nothing to
+    /// show or hide, so it is always at the one level (see `PinChrome`).
+    chrome: PinChrome,
     /// Whether the window is collapsed into the round bubble the minimize button leaves.
     collapsed: bool,
     /// The caption button the pointer is over and the one it has pressed: what the caption is
@@ -11351,6 +11432,123 @@ struct PinTransport {
 /// Whether a kind is one the transport bar is drawn for.
 fn pin_transport_kind(kind: Option<MediaType>) -> bool {
     matches!(kind, Some(MediaType::Video) | Some(MediaType::NativeVideo))
+}
+
+/// Whether a pinned window's chrome is showing, and what is asking for it.
+///
+/// Only the kinds whose chrome is drawn over their media have anything to show or hide: for those
+/// the caption is a strip over the top of the picture and the transport bar a strip over the
+/// bottom, and both are in the way of the thing the window is for. What asks for them is the
+/// pointer — near the strip it is drawn in, and nothing else: a press or a drag on the media is a
+/// hand on the picture, which is not a hand asking for a title bar — and coming up is one of the
+/// moments a hand is looking for a close button, so a pin shows its chrome for a moment whether or
+/// not the pointer is near it (see `PIN_CHROME_ARRIVAL_SECONDS`).
+#[derive(Clone, Copy)]
+struct PinChrome {
+    /// Whether the pointer (or the arrival window) is asking for it. Everything is answered by
+    /// this, and there is no half-shown state: the strips are drawn into the window's own rows —
+    /// the media is composed there and the chrome replaces it — so a chrome painted at a share of
+    /// itself would be a strip with the picture gone behind it rather than a strip that is on its
+    /// way out. It is drawn whole or not at all (see the note over `PIN_CHROME_NEAR_PIXELS`).
+    wanted: bool,
+    /// When the arrival window closes, while one is open.
+    until: Option<Instant>,
+}
+
+impl PinChrome {
+    /// The chrome a pinned window comes up with: showing, and staying that way for a moment
+    /// whether or not the pointer is near it.
+    fn on_arrival(now: Instant) -> Self {
+        Self {
+            wanted: true,
+            until: Some(now + Duration::from_secs_f32(PIN_CHROME_ARRIVAL_SECONDS)),
+        }
+    }
+
+    /// The chrome of a kind that draws it in bands around its media: always there, never hidden,
+    /// and not something the pointer can ask for or away.
+    fn always() -> Self {
+        Self {
+            wanted: true,
+            until: None,
+        }
+    }
+}
+
+/// Ask whether the pointer is calling for a pinned window's chrome, answering whether that
+/// question's answer changed — which is whether the window owes a repaint, since there is nothing
+/// between shown and hidden for a frame to be drawn at.
+///
+/// What is asked is the pointer's place on the screen rather than anything the window was sent: a
+/// strip that has gone is not a region the mouse can be over, so a window that waited to be told
+/// the pointer had arrived would never be told (see `pin_chrome_near`).
+fn refresh_pin_chrome(pin: &mut PinnedPreview, now: Instant, cursor: Option<(i32, i32)>) -> bool {
+    // Nothing of a pin's chrome is on screen while the pin is a bubble, and nothing of it moves a
+    // repaint that a bubble has no use for: what asks for the chrome there is a mouse over a window
+    // that is not up.
+    if !pin.overlay || pin.collapsed {
+        return false;
+    }
+
+    // The arrival window is spent the moment it closes, and there is no bringing it back: what
+    // asks for the chrome after it is the pointer and nothing else.
+    if pin.chrome.until.is_some_and(|until| now >= until) {
+        pin.chrome.until = None;
+    }
+
+    let wanted = pin.chrome.until.is_some() || pin_chrome_near(pin, cursor);
+    let changed = pin.chrome.wanted != wanted;
+    pin.chrome.wanted = wanted;
+
+    changed
+}
+
+/// Whether the pointer is near the strips a pinned window's chrome is drawn in — near enough that
+/// the chrome comes out. The strips are the caption across the top of the window and, for a kind
+/// that plays, the transport bar across the bottom, and the room beside them is the same either
+/// way: a hand that has come for the title bar is coming for it from the picture below it.
+fn pin_chrome_near(pin: &PinnedPreview, cursor: Option<(i32, i32)>) -> bool {
+    let Some((x, y)) = cursor else {
+        return false;
+    };
+
+    let window = pin.window_box();
+    let margin = logical_px(pin.dpi, PIN_CHROME_NEAR_PIXELS).max(1);
+    let caption = pinned_caption_height(pin.dpi);
+    let transport = pinned_transport_height(pin.dpi, pin.transport_bar);
+
+    let across = x >= window.0 - margin && x <= window.2 + margin;
+    let at_the_top = y >= window.1 - margin && y <= window.1 + caption + margin;
+    let at_the_bottom =
+        transport > 0 && y >= window.3 - transport - margin && y <= window.3 + margin;
+
+    across && (at_the_top || at_the_bottom)
+}
+
+/// Whether a pinned window's chrome — the caption and the transport bar — is drawn *over* the
+/// media rather than in bands above and below it.
+///
+/// Two things have to be true of a kind for that. The band has to be this app's own pixels: the
+/// window FFmpeg's player has, and the page the browser draws an SVG or a font on, are windows of
+/// somebody else's standing *in* the band and asserted over this one, so a caption this app drew
+/// over one of those would be a caption underneath it. And the frame has to be the media's own
+/// shape, which is what makes the window box and the media box the same box: the strips the chrome
+/// is drawn in are then inside the picture rather than beside it, and there is no band of empty
+/// window where a bar used to be.
+///
+/// A page that is laid out to whatever box it is given — a text preview, an archive listing — and
+/// a sound's card are neither, and neither is a video below a minimized one: the first two keep
+/// their bars the way they have always had them, and the player's window keeps the band it stands
+/// in.
+fn pin_overlay_chrome(kind: Option<MediaType>) -> bool {
+    match kind {
+        Some(kind) => {
+            !kind.is_engine()
+                && kind != MediaType::Video
+                && pin_frame(Some(kind)) == PinFrame::Shaped
+        }
+        None => false,
+    }
 }
 
 /// What a pinned window's edges and caption do, which is a question about the kind of thing
@@ -11561,15 +11759,10 @@ fn update_pin_transport(change: impl FnOnce(&mut PinTransport)) {
 
 impl PinnedPreview {
     /// The box the window occupies: the media's own box with the caption above it and the
-    /// transport bar below it. Nothing of the media moves when a preview is pinned, so the
-    /// window is the media's box grown upward.
+    /// transport bar below it — or the media's box itself, for a kind whose chrome is drawn over
+    /// it, since a strip of chrome over a picture needs no room beside it.
     fn window_box(&self) -> ScreenRegion {
-        (
-            self.content.0,
-            self.content.1 - pinned_caption_height(self.dpi),
-            self.content.2,
-            self.content.3 + pinned_transport_height(self.dpi, self.transport_bar),
-        )
+        pinned_window_box_of(self.content, self.dpi, self.transport_bar, self.overlay)
     }
 
     /// The size of the window, as the renderer and the hit tests want it.
@@ -12094,7 +12287,7 @@ fn replace_pinned_window() -> Option<PreviewMessage> {
 
     pin.dpi = monitor_dpi_from_point(pin.content.0, pin.content.1);
     let bounds = monitor_bounds_from_point(pin.content.0, pin.content.1);
-    let room = pinned_room(bounds, pin.dpi, pin.transport_bar);
+    let room = pinned_room(bounds, pin.dpi, pin.transport_bar, pin.overlay);
     let shape = (
         (pin.content.2 - pin.content.0).max(1) as u32,
         (pin.content.3 - pin.content.1).max(1) as u32,
@@ -12143,7 +12336,7 @@ fn toggle_pin_maximized(request: &mut Option<PreviewMessage>) {
     };
 
     let bounds = monitor_bounds_from_point(pin.content.0, pin.content.1);
-    let room = pinned_room(bounds, pin.dpi, pin.transport_bar);
+    let room = pinned_room(bounds, pin.dpi, pin.transport_bar, pin.overlay);
 
     let content = match pin.restore.take() {
         Some(previous) => centred_at(
@@ -12338,7 +12531,7 @@ fn restore_pin() {
         // the bit of the pin the hand is on, and what the hand gets back is a window placed beside
         // it the way this app places everything else (see `placed_pin_box`).
         if let Some(window) = placed_pin_box(pin) {
-            pin.content = content_box_of(window, pin.dpi, pin.transport_bar);
+            pin.content = content_box_of(window, pin.dpi, pin.transport_bar, pin.overlay);
         }
     }
 
@@ -12945,8 +13138,13 @@ fn cursor_screen_point() -> Option<(i32, i32)> {
 }
 
 /// The media box a window box implies: the window less the caption above it and the transport
-/// bar below it.
-fn content_box_of(window: ScreenRegion, dpi: u32, transport: bool) -> ScreenRegion {
+/// bar below it — or the window itself, for a kind whose chrome is drawn over its media and whose
+/// two boxes are therefore one box (see `pin_overlay_chrome`).
+fn content_box_of(window: ScreenRegion, dpi: u32, transport: bool, overlay: bool) -> ScreenRegion {
+    if overlay {
+        return window;
+    }
+
     (
         window.0,
         window.1 + pinned_caption_height(dpi),
@@ -12981,7 +13179,7 @@ unsafe fn pinned_mouse_move(hwnd: HWND, x: i32, y: i32) {
         return;
     }
 
-    let hovered = (y < caption.height)
+    let hovered = (caption.wanted && y < caption.height)
         .then(|| {
             pin_chrome::button_at(
                 x,
@@ -13001,6 +13199,16 @@ unsafe fn pinned_mouse_move(hwnd: HWND, x: i32, y: i32) {
             return;
         };
 
+        // A hand in one of the strips is a hand asking for the chrome, and it is asked here as
+        // well as on the loop's tick because a press can arrive in the same handful of messages as
+        // the move that brought the pointer there: the loop would answer the question a tick too
+        // late for a click that is already on its way (see `pin_chrome_near`).
+        let (_, height) = pin.window_size();
+        let bar_top = height - pinned_transport_height(pin.dpi, pin.transport_bar);
+        if y < caption.height || (pin.transport_bar && y >= bar_top) {
+            pin.chrome.wanted = true;
+        }
+
         let changed = pin.hovered != hovered;
         pin.hovered = hovered;
         changed
@@ -13008,7 +13216,7 @@ unsafe fn pinned_mouse_move(hwnd: HWND, x: i32, y: i32) {
 
     // The same question of the transport bar, which is the other strip a pointer lights up.
     let transport_hovered = pinned_transport_geometry().and_then(|bar| {
-        (y >= bar.top)
+        (bar.wanted && y >= bar.top)
             .then(|| {
                 pin_chrome::transport_part_at(
                     x,
@@ -13044,6 +13252,11 @@ struct PinnedCaption {
     dpi: u32,
     width: i32,
     frame: PinFrame,
+    /// Whether the chrome is asking to be used: the buttons are answers to a hand that has come
+    /// for the caption, and a caption that has faded away is not something a press may act on —
+    /// what is under it then is the picture, which is a handle for moving the window (see
+    /// `PinChrome`).
+    wanted: bool,
 }
 
 fn pinned_caption_geometry() -> Option<PinnedCaption> {
@@ -13056,6 +13269,7 @@ fn pinned_caption_geometry() -> Option<PinnedCaption> {
             dpi: pin.dpi,
             width,
             frame: pin.frame,
+            wanted: pin.chrome.wanted,
         }
     })
 }
@@ -13071,6 +13285,9 @@ struct PinnedTransportBar {
     /// Whether the player behind the bar can be told anything, which is whether its parts are the
     /// pointer's to press at all (see `PinnedPreview::transport_live`).
     live: bool,
+    /// Whether the bar is there to be pressed: the same question the caption's buttons are
+    /// answered by (see `PinnedCaption::wanted`).
+    wanted: bool,
 }
 
 fn pinned_transport_geometry() -> Option<PinnedTransportBar> {
@@ -13089,6 +13306,7 @@ fn pinned_transport_geometry() -> Option<PinnedTransportBar> {
         height: band,
         dpi: pin.dpi,
         live: pin.transport_live,
+        wanted: pin.chrome.wanted,
     })
 }
 
@@ -13102,7 +13320,7 @@ unsafe fn pinned_transport_press(hwnd: HWND, x: i32, y: i32) -> bool {
     let Some(bar) = pinned_transport_geometry() else {
         return false;
     };
-    if y < bar.top {
+    if y < bar.top || !bar.wanted {
         return false;
     }
 
@@ -13265,23 +13483,28 @@ unsafe fn pinned_press(hwnd: HWND, x: i32, y: i32) -> bool {
     }
 
     if y < caption.height {
-        let button = pin_chrome::button_at(
-            x,
-            y,
-            caption.width,
-            caption.height,
-            caption.dpi,
-            framed,
-        );
-        if let Some(button) = button {
-            if let Ok(mut pinned) = PINNED.lock() {
-                if let Some(pin) = pinned.as_mut() {
-                    pin.pressed = Some(button);
+        // The buttons are drawn over the picture only while the chrome is there to be used: with
+        // it gone, the strip across the top of a pinned picture is the picture, and a press on it
+        // is the handle every other part of the media is (see `PinChrome`).
+        if caption.wanted {
+            let button = pin_chrome::button_at(
+                x,
+                y,
+                caption.width,
+                caption.height,
+                caption.dpi,
+                framed,
+            );
+            if let Some(button) = button {
+                if let Ok(mut pinned) = PINNED.lock() {
+                    if let Some(pin) = pinned.as_mut() {
+                        pin.pressed = Some(button);
+                    }
                 }
+                let _ = SetCapture(hwnd);
+                render_layered_preview(hwnd);
+                return true;
             }
-            let _ = SetCapture(hwnd);
-            render_layered_preview(hwnd);
-            return true;
         }
 
         begin_pin_drag(hwnd, PinDragAction::Move);
@@ -13428,7 +13651,7 @@ unsafe fn begin_pin_drag(hwnd: HWND, action: PinDragAction) {
 /// Carry a pinned window's drag on: the pointer has moved, and what the press began is applied to
 /// the box the window had when it began.
 unsafe fn apply_pin_drag(hwnd: HWND) {
-    let (drag, dpi, transport, frame) = {
+    let (drag, dpi, transport, overlay, frame) = {
         let Ok(pinned) = PINNED.lock() else {
             return;
         };
@@ -13439,7 +13662,13 @@ unsafe fn apply_pin_drag(hwnd: HWND) {
             return;
         };
 
-        (drag, pin.dpi, pin.transport_bar, pin.frame)
+        (
+            drag,
+            pin.dpi,
+            pin.transport_bar,
+            pin.overlay,
+            pin.frame,
+        )
     };
 
     let Some(point) = cursor_screen_point() else {
@@ -13455,11 +13684,11 @@ unsafe fn apply_pin_drag(hwnd: HWND) {
             drag.window.3 + dy,
         ),
         PinDragAction::Resize(edge) => {
-            resize_pinned_window(drag.window, edge, dx, dy, dpi, transport, frame)
+            resize_pinned_window(drag.window, edge, dx, dy, dpi, transport, overlay, frame)
         }
     };
     let window = clamp_pinned_box(window, dpi);
-    let content = content_box_of(window, dpi, transport);
+    let content = content_box_of(window, dpi, transport, overlay);
 
     {
         let Ok(mut pinned) = PINNED.lock() else {
@@ -13523,6 +13752,7 @@ unsafe fn apply_pin_drag(hwnd: HWND) {
 
 /// The window a resize drag has produced: the box the drag began on, dragged by one of its edges,
 /// kept inside the room of the display that box is standing on (see `pinned_room`).
+#[allow(clippy::too_many_arguments)] // Each one is a distinct fact about the pin the box is of.
 fn resize_pinned_window(
     window: ScreenRegion,
     edge: PinResize,
@@ -13530,9 +13760,10 @@ fn resize_pinned_window(
     dy: i32,
     dpi: u32,
     transport: bool,
+    overlay: bool,
     frame: PinFrame,
 ) -> ScreenRegion {
-    let content = content_box_of(window, dpi, transport);
+    let content = content_box_of(window, dpi, transport, overlay);
     let bounds = monitor_bounds_from_point(
         content.0 + (content.2 - content.0) / 2,
         content.1 + (content.3 - content.1) / 2,
@@ -13541,7 +13772,7 @@ fn resize_pinned_window(
     resize_pinned_content(
         PinSpace {
             content,
-            room: pinned_room(bounds, dpi, transport),
+            room: pinned_room(bounds, dpi, transport, overlay),
         },
         edge,
         dx,
@@ -15049,6 +15280,24 @@ pub fn run_preview_window() {
                 }
             }
 
+            // A pinned window's chrome is asked for on this loop's clock: the pointer is read from
+            // the cursor rather than waited on, because a strip that has gone is not a region the
+            // mouse can be over — and an answer that has changed owes the window a repaint, which
+            // is the whole of what showing and hiding it costs (see `refresh_pin_chrome`). Nothing
+            // is asked of a pin that is not up, and nothing of one whose chrome is not drawn over
+            // its media, which is the answer both of those questions are asked through.
+            if pinned() {
+                let changed = PINNED.lock().ok().and_then(|mut pinned| {
+                    let pin = pinned.as_mut()?;
+                    let now = Instant::now();
+                    Some(refresh_pin_chrome(pin, now, cursor_screen_point()))
+                });
+
+                if changed == Some(true) {
+                    refresh_requested = true;
+                }
+            }
+
             // A page the render engine draws is not messaged about the way an Office page
             // is: what that engine writes is a file under the app's own folder, so whether
             // the page has arrived — or whether the engine has answered that it will not
@@ -15535,7 +15784,10 @@ pub fn run_preview_window() {
                     PreviewMessage::PinChanged => {}
                     // A preview that stopped being a hover: the media stays exactly where it
                     // is, and the window grows around it — the caption above it, and the
-                    // transport bar below it where the kind has one.
+                    // transport bar below it where the kind has one. A kind whose chrome is
+                    // drawn over its media needs no room for any of it: the window *is* the
+                    // media's box, and what is drawn over it is asked for rather than always
+                    // there (see `pin_overlay_chrome`).
                     PreviewMessage::Pin { path, rect } => {
                         let kind = CURRENT_MEDIA
                             .lock()
@@ -15543,6 +15795,7 @@ pub fn run_preview_window() {
                             .and_then(|media| media.as_ref().map(|media| media.media_type));
                         let dpi = monitor_dpi_from_point(rect.0, rect.1);
                         let transport_bar = pin_transport_kind(kind);
+                        let overlay = pin_overlay_chrome(kind);
 
                         // The window is the media's box with the chrome around it, and it is the
                         // *window* that is held to the display rather than the media: a hover can
@@ -15552,18 +15805,18 @@ pub fn run_preview_window() {
                         // So the box the media is given is the media's box shifted back into the
                         // display by however much of the chrome fell off it.
                         let window = clamp_pinned_box(
-                            (
-                                rect.0,
-                                rect.1 - pinned_caption_height(dpi),
-                                rect.0 + (rect.2 - rect.0).max(1),
-                                rect.1 + (rect.3 - rect.1).max(1)
-                                    + pinned_transport_height(dpi, transport_bar),
+                            pinned_window_box_of(
+                                rect,
+                                dpi,
+                                transport_bar,
+                                overlay,
                             ),
                             dpi,
                         );
-                        let content = content_box_of(window, dpi, transport_bar);
+                        let content = content_box_of(window, dpi, transport_bar, overlay);
 
                         if let Ok(mut pinned) = PINNED.lock() {
+                            let now = Instant::now();
                             *pinned = Some(PinnedPreview {
                                 path: path.clone(),
                                 content,
@@ -15572,6 +15825,12 @@ pub fn run_preview_window() {
                                 transport_bar,
                                 transport_live: kind == Some(MediaType::NativeVideo),
                                 frame: pin_frame(kind),
+                                overlay,
+                                chrome: if overlay {
+                                    PinChrome::on_arrival(now)
+                                } else {
+                                    PinChrome::always()
+                                },
                                 collapsed: false,
                                 hovered: None,
                                 pressed: None,
@@ -19667,8 +19926,219 @@ mod tests {
         // A window with no transport bar is its media with a caption on top; one that plays
         // carries the bar as well, which is a band the media gives up at the bottom.
         let window = (100, 100, 500, 600);
-        assert_eq!(content_box_of(window, 96, false), (100, 130, 500, 600));
-        assert_eq!(content_box_of(window, 96, true), (100, 130, 500, 570));
+        assert_eq!(content_box_of(window, 96, false, false), (100, 130, 500, 600));
+        assert_eq!(content_box_of(window, 96, true, false), (100, 130, 500, 570));
+
+        // And a kind whose chrome is drawn over its media has no bands at all: its window is its
+        // media, and the caption and the bar are strips *of* it rather than room beside it.
+        assert_eq!(content_box_of(window, 96, false, true), window);
+        assert_eq!(content_box_of(window, 96, true, true), window);
+    }
+
+    #[test]
+    fn a_pinned_windows_box_is_its_media_plus_the_room_its_chrome_needs() {
+        let content = (100, 130, 500, 600);
+
+        // The box the window stands in is the media's, with a caption taken above it and, for a
+        // kind that plays, a transport bar below it — and the same box read back the other way
+        // round is the media again.
+        assert_eq!(
+            pinned_window_box_of(content, 96, false, false),
+            (100, 100, 500, 600)
+        );
+        assert_eq!(
+            pinned_window_box_of(content, 96, true, false),
+            (100, 100, 500, 630)
+        );
+        assert_eq!(
+            content_box_of(pinned_window_box_of(content, 96, true, false), 96, true, false),
+            content
+        );
+
+        // A kind whose chrome is drawn over its media is its own box: there is no room to take
+        // beside a picture for something painted on top of it.
+        assert_eq!(pinned_window_box_of(content, 96, true, true), content);
+
+        // And where each part of the window is drawn: the media between the two bands, or under
+        // the chrome the whole of the window down, with the strips over its first and last rows.
+        assert_eq!(pinned_band_rows(500, 30, 30, false), (30, 440));
+        assert_eq!(pinned_band_rows(500, 30, 30, true), (0, 500));
+
+        // What the room of a display is follows from the same answer: a pin that keeps its chrome
+        // inside its own box has the whole work area to be placed in.
+        let bounds = ScreenBounds {
+            left: 0,
+            top: 0,
+            right: 1000,
+            bottom: 800,
+        };
+        assert_eq!(
+            pinned_room(bounds, 96, true, false).room(),
+            (1000, 800 - 30 - 30)
+        );
+        assert_eq!(pinned_room(bounds, 96, true, true).room(), (1000, 800));
+    }
+
+    /// A pin of the kind the chrome's own questions are about: a picture, whose window is its
+    /// media and whose chrome is drawn over it.
+    fn overlay_pin(content: ScreenRegion, chrome: PinChrome) -> PinnedPreview {
+        PinnedPreview {
+            path: PathBuf::from("picture.png"),
+            content,
+            restore: None,
+            dpi: 96,
+            transport_bar: false,
+            transport_live: false,
+            frame: PinFrame::Shaped,
+            overlay: true,
+            chrome,
+            collapsed: false,
+            hovered: None,
+            pressed: None,
+            dragging: None,
+            transport: PinTransport::default(),
+        }
+    }
+
+    #[test]
+    fn the_chrome_is_drawn_over_the_media_of_the_kinds_this_app_draws_itself() {
+        // A picture, a texture, an animation, a drawing, a page of a document or a book, and the
+        // video the media engine decodes: this app holds the band of every one of them, so a strip
+        // of chrome can be painted over it.
+        for kind in [
+            MediaType::StaticImage,
+            MediaType::Dds,
+            MediaType::AnimatedGif,
+            MediaType::Design,
+            MediaType::Vector,
+            MediaType::Pdf,
+            MediaType::NativeVideo,
+        ] {
+            assert!(pin_overlay_chrome(Some(kind)), "{kind:?}");
+        }
+
+        // The kinds that keep their chrome in bands around the media: the two windows this app
+        // does not own (the player's video, and the page an SVG or a font is drawn on), a page that
+        // is laid out to whatever box it is given, and a sound's card.
+        for kind in [
+            MediaType::Text,
+            MediaType::Archive,
+            MediaType::Audio,
+            MediaType::Video,
+            MediaType::EngineSvg,
+            MediaType::EngineFont,
+        ] {
+            assert!(!pin_overlay_chrome(Some(kind)), "{kind:?}");
+        }
+
+        assert!(!pin_overlay_chrome(None));
+    }
+
+    #[test]
+    fn a_pins_chrome_is_asked_for_from_the_strips_it_is_drawn_in() {
+        let caption = pinned_caption_height(96);
+        let pin = overlay_pin((100, 100, 500, 400), PinChrome::always());
+
+        // The caption's strip and the room beside it: a pointer over the picture's first rows, or
+        // just above the window, is a pointer that has come for the title bar.
+        assert!(pin_chrome_near(&pin, Some((300, 100))));
+        assert!(pin_chrome_near(&pin, Some((300, 90))));
+        assert!(pin_chrome_near(&pin, Some((300, 100 + caption))));
+        assert!(pin_chrome_near(&pin, Some((300, 100 + caption + 24))));
+        assert!(!pin_chrome_near(&pin, Some((300, 100 + caption + 25))));
+
+        // And out in the picture, which is where the chrome is out of the way: a hand there is
+        // reading the file rather than looking for its buttons.
+        assert!(!pin_chrome_near(&pin, Some((300, 300))));
+        assert!(!pin_chrome_near(&pin, Some((500 + 25, 100))));
+        assert!(!pin_chrome_near(&pin, None));
+
+        // A kind that plays carries the bar across the bottom as well, which is the other strip a
+        // hand can come for.
+        let mut playing = pin;
+        playing.transport_bar = true;
+        assert!(pin_chrome_near(&playing, Some((300, 400 - 12))));
+        assert!(pin_chrome_near(&playing, Some((300, 400 + 24))));
+        assert!(!pin_chrome_near(&playing, Some((300, 400 - 30 - 25))));
+        assert!(!pin_chrome_near(&playing, Some((300, 300))));
+    }
+
+    #[test]
+    fn a_pins_chrome_is_shown_and_hidden_by_where_the_pointer_is() {
+        let now = Instant::now();
+        let content = (100, 100, 500, 400);
+        let far = Some((-1000, -1000));
+        let near = Some((300, 100 + pinned_caption_height(96) / 2));
+
+        // A pin comes up with its chrome showing, and it stays that way for a moment whether or
+        // not the pointer is anywhere near it — the moment a hand looks for the buttons in — and
+        // nothing about that costs a repaint: it is already drawn.
+        let mut pin = overlay_pin(content, PinChrome::on_arrival(now));
+        assert!(pin.chrome.wanted);
+        assert!(!refresh_pin_chrome(
+            &mut pin,
+            now + Duration::from_millis(1400),
+            far
+        ));
+        assert!(pin.chrome.wanted);
+
+        // Then it is gone, in the tick that notices rather than over a fade of them, and the answer
+        // having changed is the repaint that shows the picture in its place.
+        let leaving = now + Duration::from_millis(1500);
+        assert!(refresh_pin_chrome(&mut pin, leaving, far));
+        assert!(!pin.chrome.wanted);
+
+        // And asking again is not a change: a chrome that has gone costs nothing to keep gone.
+        assert!(!refresh_pin_chrome(
+            &mut pin,
+            leaving + Duration::from_secs(1),
+            far
+        ));
+        assert!(!pin.chrome.wanted);
+
+        // A hand coming back for it gets it at once, and one that leaves again takes it away.
+        assert!(refresh_pin_chrome(
+            &mut pin,
+            leaving + Duration::from_secs(2),
+            near
+        ));
+        assert!(pin.chrome.wanted);
+        assert!(!refresh_pin_chrome(
+            &mut pin,
+            leaving + Duration::from_secs(3),
+            near
+        ));
+        assert!(refresh_pin_chrome(
+            &mut pin,
+            leaving + Duration::from_secs(4),
+            far
+        ));
+        assert!(!pin.chrome.wanted);
+
+        // A press or a drag is a hand on the picture rather than a hand asking for a title bar, so
+        // the chrome is not brought out by one — what is asked is where the pointer is and nothing
+        // else. What holds a button is a pointer that is on the strip the button is in, which is
+        // where the pointer has to be for the press to have landed on it at all.
+        let mut pressed = overlay_pin(content, PinChrome::on_arrival(now));
+        pressed.chrome = PinChrome {
+            wanted: false,
+            until: None,
+        };
+        pressed.pressed = Some(pin_chrome::CaptionButton::Minimize);
+        pressed.dragging = Some(PinDrag {
+            from: (0, 0),
+            window: content,
+            action: PinDragAction::Move,
+        });
+        assert!(!refresh_pin_chrome(&mut pressed, now, far));
+        assert!(!pressed.chrome.wanted);
+
+        // A pin whose chrome is not drawn over its media has nothing to show or hide and nothing it
+        // is asked: a text preview's caption and bar are where they have always been, always there.
+        let mut text = overlay_pin(content, PinChrome::always());
+        text.overlay = false;
+        assert!(!refresh_pin_chrome(&mut text, now, far));
+        assert!(text.chrome.wanted);
     }
 
     fn edge(left: bool, top: bool, right: bool, bottom: bool) -> PinResize {
@@ -19717,7 +20187,7 @@ mod tests {
             frame,
         );
 
-        content_box_of(window, 96, false)
+        content_box_of(window, 96, false, false)
     }
 
     #[test]
@@ -19849,6 +20319,8 @@ mod tests {
             transport_bar: false,
             transport_live: false,
             frame: PinFrame::Shaped,
+            overlay: false,
+            chrome: PinChrome::always(),
             collapsed: false,
             hovered: None,
             pressed: None,
@@ -20082,10 +20554,11 @@ mod tests {
             0,
             96,
             false,
+            false,
             PinFrame::Free,
         );
 
-        let content = content_box_of(resized, 96, false);
+        let content = content_box_of(resized, 96, false, false);
         assert_eq!(content, (0, 30, 600, 330));
 
         // And its own floor holds: a page cannot be dragged to nothing.
@@ -20101,9 +20574,10 @@ mod tests {
             -10_000,
             96,
             false,
+            false,
             PinFrame::Free,
         );
-        let content = content_box_of(resized, 96, false);
+        let content = content_box_of(resized, 96, false, false);
         assert_eq!(content, (0, 30, 400, 30 + PIN_MIN_MEDIA_PIXELS as i32));
     }
 
@@ -20325,6 +20799,8 @@ mod tests {
                     transport_bar: true,
                     transport_live: true,
                     frame: PinFrame::Shaped,
+                    overlay: true,
+                    chrome: PinChrome::on_arrival(Instant::now()),
                     collapsed: false,
                     hovered: None,
                     pressed: None,
