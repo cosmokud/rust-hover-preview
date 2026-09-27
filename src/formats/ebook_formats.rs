@@ -167,7 +167,7 @@ mod tests {
                     path,
                     &config.magick_extensions,
                 )
-                || crate::formats::video_formats::matches_video_list(path, &config.video_extensions)
+                || crate::formats::video_formats::matches_any_video_list(path, &config)
                 || crate::formats::archive_formats::matches_archive_list(
                     path,
                     &config.archive_extensions,

@@ -3751,8 +3751,8 @@ mod tests {
         for (extension, kind) in KIND_BY_NAME {
             let named = PathBuf::from(format!("content.{extension}"));
 
-            if crate::formats::video_formats::claims_video_name(&named, &config.video_extensions) {
-                assert_eq!(*kind, PreviewType::Videos, "`{extension}` is FFmpeg's name");
+            if crate::formats::video_formats::claims_any_video_name(&named, &config) {
+                assert_eq!(*kind, PreviewType::Videos, "`{extension}` is a video name");
                 continue;
             }
 

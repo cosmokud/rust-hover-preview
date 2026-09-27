@@ -49,7 +49,7 @@ Animated GIF, APNG and WebP play. `hdr` and `exr` are tone-mapped for preview. `
 
 Videos the table does not already cover need FFmpeg, and these are all of them: `264` `265` `266` `apv` `av1` `avc` `avs` `avs2` `avs3` `bik` `bk2` `c93` `cavs` `cdg` `cdxl` `cin` `cpk` `dav` `dif` `divx` `drc` `dv` `evc` `f4v` `flm` `flv` `gxf` `h261` `h263` `h264` `h265` `h266` `h26l` `hevc` `ifv` `imx` `ismv` `ivf` `ivr` `kux` `m2p` `mj2` `mjpeg` `mjpg` `mk3d` `moflex` `mpv` `mve` `mvi` `mxf` `mxg` `nsv` `nut` `obu` `ogm` `ogv` `pmp` `psp` `rcv` `rm` `rmvb` `roq` `rsd` `smk` `str` `swf` `thp` `tod` `tp` `tr` `ty` `ty+` `usm` `vc1` `vc2` `viv` `vro` `vvc` `vw` `wtv` `xl` `xmv` `y4m` `yop`.
 
-The containers and codecs the table above lists are the ones Windows plays on its own, and they play better with FFmpeg installed — more codecs inside the same container, and seeking rather than a still frame. The tray's **Codecs** menu shows what this machine can play.
+Those names are `[ffmpeg] extensions` in `config.ini`, and the row above is `[video] extensions`: which of the two a name is in is which engine is asked for it first, so a name moved between them is the whole of asking the other engine. The tray's **Codecs** menu shows what this machine can play.
 
 Sounds Windows does not decode need FFmpeg as well, and these are all of them: `ac3` `ape` `au` `caf` `dff` `dts` `dtshd` `eac3` `mka` `mp2` `mpa` `mpc` `oga` `ogg` `ofr` `ofs` `opus` `ra` `shn` `snd` `spx` `tak` `tta` `voc` `wv`
 
@@ -375,6 +375,7 @@ Here’s what this .INI does:
 - `*_preview_enabled`: turn each preview type on or off. File lists stay normal.
 - `extensions` / `names`: which files get text previews. Extensions have no dots. `names` matches files with no extension.
 - `image_extensions`, `video_extensions`, `archive_extensions`, `office_extensions`, `font_extensions`, `design_extensions`, `vector_extensions`: per-type preview filters. No dots. An entry with a dot, like `tar.gz`, matches the end of the file name.
+- `ffmpeg_extensions`: the video names only FFmpeg's player reads, beside the `video_extensions` a machine without it still plays. Which engine plays a file follows from which list its name is in — the media engine Windows has is asked about `video_extensions` and, where it can decode the file, plays it; everything else is FFmpeg's player's.
 - `audio_extensions`: which files are previewed as sounds. One list rather than two, because which engine plays a file is the machine's answer and not a setting: Windows' own decoders are asked first and an installed FFmpeg second.
 - `ebook_extensions`, `libre_extensions`, `magick_extensions`, `peazip_extensions`, `calibre_extensions`: pages this app draws itself — PDFs, comic covers, LibreOffice documents, ImageMagick pictures, PeaZip archives, and Calibre books.
 

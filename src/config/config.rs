@@ -48,15 +48,22 @@ use crate::formats::vector_formats::{
     VECTOR_EXTENSIONS_BEFORE_THE_EPS_SPELLINGS,
 };
 use crate::formats::audio_formats::{sanitize_audio_extensions, DEFAULT_AUDIO_EXTENSIONS};
-use crate::formats::video_formats::{sanitize_video_extensions, DEFAULT_VIDEO_EXTENSIONS};
+use crate::formats::video_formats::{
+    sanitize_video_extensions, DEFAULT_FFMPEG_EXTENSIONS, DEFAULT_VIDEO_EXTENSIONS,
+    VIDEO_EXTENSIONS_BEFORE_THE_SPLIT,
+};
 use crate::readers::tone_map::Curve;
 
 const CONFIG_SECTION: &str = "settings";
 /// The image extension list lives in its own section so the one long value stays
 /// easy to find and edit by hand.
 const IMAGE_SECTION: &str = "image";
-/// The video extension list lives in its own section for the same reason.
+/// The video extension list lives in its own section for the same reason: what the media
+/// engine Windows has is asked to play.
 const VIDEO_SECTION: &str = "video";
+/// And the list beside it, for the video formats only FFmpeg's player reads: the two are the
+/// one list a video preview used to carry, split where the engines are.
+const FFMPEG_SECTION: &str = "ffmpeg";
 /// And the sound list beside it, for the same reason: the formats this app plays rather than
 /// one it draws.
 const AUDIO_SECTION: &str = "audio";
@@ -1611,8 +1618,23 @@ pub struct AppConfig {
     pub text_scroll_far_edge_grace_pixels: f32,
     /// Extensions previewed as images, already normalized for lookup.
     pub image_extensions: Vec<String>,
-    /// Extensions previewed as videos, already normalized for lookup.
+    /// The video names the media engine Windows has is asked to play, as `[video] extensions`
+    /// in `config.ini`: the containers and streams the codecs Windows ships demux and decode,
+    /// already normalized for lookup.
+    ///
+    /// A file of one of these names is played by the engine, in this app's own window, so its
+    /// frames are this app's to draw — which is what a pinned window of one is resized,
+    /// maximized and dragged by. Whether the machine in hand really decodes *this* file is asked
+    /// of the engine itself, once per file, and a file it turns down is played by FFmpeg's
+    /// player where one is installed. See `video_formats`.
     pub video_extensions: Vec<String>,
+    /// The video names only FFmpeg's player reads, as `[ffmpeg] extensions` in `config.ini`:
+    /// what the two engines' own coverage leaves to it, already normalized for lookup.
+    ///
+    /// The engine is never asked about a name in this list, and a machine with no FFmpeg shows
+    /// nothing for one — moving a name up into `[video]` is the whole of asking the engine to
+    /// play it instead. See `video_formats`.
+    pub ffmpeg_extensions: Vec<String>,
     /// The names of the sounds this app plays, as `[audio] extensions` in `config.ini`: the
     /// formats the media engine Windows has decoders for and the ones only an installed FFmpeg
     /// reads, in one list, because which engine plays a file is the machine's answer rather
@@ -1732,6 +1754,7 @@ impl Default for AppConfig {
             text_scroll_far_edge_grace_pixels: DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS,
             image_extensions: sanitize_image_extensions(DEFAULT_IMAGE_EXTENSIONS),
             video_extensions: sanitize_video_extensions(DEFAULT_VIDEO_EXTENSIONS),
+            ffmpeg_extensions: sanitize_video_extensions(DEFAULT_FFMPEG_EXTENSIONS),
             audio_extensions: sanitize_audio_extensions(DEFAULT_AUDIO_EXTENSIONS),
             text_extensions: sanitize_extensions(DEFAULT_TEXT_EXTENSIONS),
             text_names: sanitize_names(DEFAULT_TEXT_NAMES),
@@ -2087,6 +2110,21 @@ fn repair_older_lists(ini: &mut Ini) -> bool {
             sanitize_peazip_extensions as fn(&str) -> Vec<String>,
         ),
         (
+            VIDEO_SECTION,
+            DEFAULT_VIDEO_EXTENSIONS,
+            &[VIDEO_EXTENSIONS_BEFORE_THE_SPLIT][..],
+            sanitize_video_extensions as fn(&str) -> Vec<String>,
+        ),
+        (
+            FFMPEG_SECTION,
+            DEFAULT_FFMPEG_EXTENSIONS,
+            // The section is new, so there is no list of this app's older than the built-in one:
+            // a file that has it has an edit somebody made by hand, and a file that has not is
+            // given the built-in list as it is read.
+            &[][..],
+            sanitize_video_extensions as fn(&str) -> Vec<String>,
+        ),
+        (
             VECTOR_SECTION,
             DEFAULT_VECTOR_EXTENSIONS,
             &[
@@ -2170,6 +2208,7 @@ fn headings_are_old(text: &str) -> bool {
 struct ExtensionLists {
     image: Vec<String>,
     video: Vec<String>,
+    ffmpeg: Vec<String>,
     audio: Vec<String>,
     text: Vec<String>,
     names: Vec<String>,
@@ -2191,6 +2230,7 @@ impl ExtensionLists {
         Self {
             image: std::mem::take(&mut config.image_extensions),
             video: std::mem::take(&mut config.video_extensions),
+            ffmpeg: std::mem::take(&mut config.ffmpeg_extensions),
             audio: std::mem::take(&mut config.audio_extensions),
             text: std::mem::take(&mut config.text_extensions),
             names: std::mem::take(&mut config.text_names),
@@ -2211,6 +2251,7 @@ impl ExtensionLists {
     fn put(self, config: &mut AppConfig) {
         config.image_extensions = self.image;
         config.video_extensions = self.video;
+        config.ffmpeg_extensions = self.ffmpeg;
         config.audio_extensions = self.audio;
         config.text_extensions = self.text;
         config.text_names = self.names;
@@ -2792,6 +2833,11 @@ impl AppConfig {
             Some(sanitize_video_extensions(&self.video_extensions.join(",")).join(",")),
         );
         ini.set(
+            FFMPEG_SECTION,
+            "extensions",
+            Some(sanitize_video_extensions(&self.ffmpeg_extensions.join(",")).join(",")),
+        );
+        ini.set(
             AUDIO_SECTION,
             "extensions",
             Some(sanitize_audio_extensions(&self.audio_extensions.join(",")).join(",")),
@@ -3269,6 +3315,14 @@ impl AppConfig {
             sanitize_video_extensions,
         );
         self.video_extensions = list;
+        let list = configured_list(
+            ini,
+            FFMPEG_SECTION,
+            "extensions",
+            DEFAULT_FFMPEG_EXTENSIONS,
+            sanitize_video_extensions,
+        );
+        self.ffmpeg_extensions = list;
         let list = configured_list(
             ini,
             TEXT_SECTION,
@@ -4119,6 +4173,62 @@ mod tests {
         );
     }
 
+    /// The `[video]` list is two lists now — the names Windows' own codecs read and the names only
+    /// FFmpeg's player does — and a file written before the split holds the two of them as one
+    /// list. A list holding exactly the entries this app shipped then is this app's own rather
+    /// than an edit somebody made, so it is split as the file is read: the media engine is asked
+    /// about the half it can read, and the rest of the old list is written down beside it.
+    #[test]
+    fn a_video_list_from_before_the_split_is_read_as_the_two_lists_of_now() {
+        let mut ini = written_file_before_this_build(&[FFMPEG_SECTION]);
+        ini.set(
+            VIDEO_SECTION,
+            "extensions",
+            Some(VIDEO_EXTENSIONS_BEFORE_THE_SPLIT.to_string()),
+        );
+
+        let config = read_file(&mut ini);
+
+        assert_eq!(
+            config.video_extensions,
+            sanitize_video_extensions(DEFAULT_VIDEO_EXTENSIONS),
+            "the engine is asked about the names it can read"
+        );
+        assert_eq!(
+            config.ffmpeg_extensions,
+            sanitize_video_extensions(DEFAULT_FFMPEG_EXTENSIONS),
+            "and the rest of the old list is the player's"
+        );
+        assert!(
+            config.differs(&ini),
+            "a file written before the split is one to write again"
+        );
+    }
+
+    /// A list somebody edited is their own, and the split leaves it alone: a `[video]` list with a
+    /// name added to it is not the list this app shipped, so it is kept exactly as it is — the
+    /// repair is for lists this app wrote — and what the section beside it is given is the list of
+    /// now, since a section the file does not have is one the app writes.
+    #[test]
+    fn a_video_list_of_the_users_own_is_left_as_it_is() {
+        let mut ini = written_file_before_this_build(&[FFMPEG_SECTION]);
+        let edited = format!("{},film-of-mine", VIDEO_EXTENSIONS_BEFORE_THE_SPLIT);
+        ini.set(VIDEO_SECTION, "extensions", Some(edited.clone()));
+
+        let config = read_file(&mut ini);
+
+        assert_eq!(
+            config.video_extensions,
+            sanitize_video_extensions(&edited),
+            "an edit is read as the edit it is"
+        );
+        assert_eq!(
+            config.ffmpeg_extensions,
+            sanitize_video_extensions(DEFAULT_FFMPEG_EXTENSIONS),
+            "and the player's list is the one this build writes"
+        );
+    }
+
     /// And the same for the `[peazip]` list, which is new to this table with the backends beside
     /// the console archiver: a file holding the entries this app shipped before those tools were
     /// driven has never been edited, so it is brought up to the list of now — which is how an
@@ -4379,6 +4489,25 @@ mod tests {
     fn written_file() -> Ini {
         let mut ini = Ini::new();
         for (section, keys) in AppConfig::default().to_ini().get_map_ref() {
+            for (key, value) in keys {
+                ini.set(section, key, value.clone());
+            }
+        }
+
+        ini
+    }
+
+    /// And the same file as a build before this one left it: everything this app writes, less the
+    /// sections that build did not have. It is how a file that is missing a whole list is written
+    /// down for the tests — a `[ffmpeg]` a file has never had is one the app adds as it writes,
+    /// and a section set to nothing is not a section that is not there.
+    fn written_file_before_this_build(new_sections: &[&str]) -> Ini {
+        let mut ini = Ini::new();
+        for (section, keys) in AppConfig::default().to_ini().get_map_ref() {
+            if new_sections.contains(&section.as_str()) {
+                continue;
+            }
+
             for (key, value) in keys {
                 ini.set(section, key, value.clone());
             }

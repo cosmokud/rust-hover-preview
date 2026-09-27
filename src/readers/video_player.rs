@@ -923,8 +923,12 @@ fn copy_locked(bitmap: &IWICBitmap, pixels: &mut Vec<u8>, width: u32, height: u3
         return false;
     }
 
-    pixels.clear();
-    pixels.resize(needed, 0);
+    // The buffer is the frame's own and is kept between frames, and every byte of it is written
+    // by the rows below: what it needs is the room rather than a zeroing, which at the size of a
+    // display was a pass of its own over thirty megabytes sixty times a second.
+    if pixels.len() != needed {
+        pixels.resize(needed, 0);
+    }
 
     let source = unsafe { std::slice::from_raw_parts(data, size as usize) };
     for row in 0..height as usize {
