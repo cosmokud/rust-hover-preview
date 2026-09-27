@@ -12192,12 +12192,12 @@ static PIN_BUBBLE_HWND: AtomicIsize = AtomicIsize::new(0);
 /// left the first one rather than at the window the pin came out of.
 static PIN_BUBBLE_POS: Lazy<Mutex<Option<(i32, i32)>>> = Lazy::new(|| Mutex::new(None));
 
-/// A drag of the bubble in progress: where the pointer was when the press began, in screen
-/// coordinates. That is the whole of what a drag holds — the bubble is *put* where the pointer is
-/// rather than moved by it (see `drag_pin_bubble`), so there is no grab point to keep and no second
-/// point to keep it against — and it is what a press that turns out to be a click is measured
-/// against.
-type BubbleDrag = (i32, i32);
+/// A drag of the bubble in progress, as the two things the press measured: where in the bubble the
+/// hand took hold of it — the pointer's offset from the window's own corner — and where the pointer
+/// itself was on the screen. The offset is what the bubble is placed by, so that it is carried from
+/// the point it was grabbed at rather than having its middle put under the hand; the press point is
+/// what a press that turns out to be a click is measured against (see `drag_pin_bubble`).
+type BubbleDrag = ((i32, i32), (i32, i32));
 
 static PIN_BUBBLE_DRAG: Lazy<Mutex<Option<BubbleDrag>>> = Lazy::new(|| Mutex::new(None));
 
@@ -12534,10 +12534,17 @@ unsafe extern "system" fn pin_bubble_proc(
 ) -> LRESULT {
     match msg {
         WM_LBUTTONDOWN => {
-            // The press is remembered as where the pointer was and nothing else: every move from
-            // here on is answered by placing the bubble at the pointer (see `drag_pin_bubble`).
-            if let (Ok(mut drag), Some(cursor)) = (PIN_BUBBLE_DRAG.lock(), cursor_screen_point()) {
-                *drag = Some(cursor);
+            let cursor = cursor_screen_point();
+            let origin = window_origin(hwnd).map(|rect| (rect.0, rect.1));
+
+            // Two things are measured once, here, and held for the whole drag: where in the bubble
+            // the hand took hold of it — the pointer's offset from the window's own corner, which is
+            // what every move from here on is placed by — and where the pointer itself was, which is
+            // what a press that turns out to be a click is measured against (see `drag_pin_bubble`).
+            if let (Ok(mut drag), Some(cursor), Some(origin)) =
+                (PIN_BUBBLE_DRAG.lock(), cursor, origin)
+            {
+                *drag = Some(((cursor.0 - origin.0, cursor.1 - origin.1), cursor));
             }
             PIN_BUBBLE_MOVED.store(false, Ordering::Release);
             let _ = SetCapture(hwnd);
@@ -12595,8 +12602,8 @@ unsafe extern "system" fn pin_bubble_proc(
     }
 }
 
-/// Carry the bubble with the pointer: the bubble is put where the pointer is, centered on it, and
-/// that is the whole of the calculation.
+/// Carry the bubble with the pointer: the bubble is put where the pointer is, less the offset it was
+/// taken hold of by, and that is the whole of the calculation.
 ///
 /// The drag this replaces *moved* the window by the pointer's messages instead — a delta from the
 /// coordinates of one message to the next — and that arithmetic is what was wrong with it, because
@@ -12609,10 +12616,17 @@ unsafe extern "system" fn pin_bubble_proc(
 ///
 /// The pointer is the one thing in this that the drag cannot move, so it is the one thing the box
 /// is taken from: the cursor is read fresh on every message (`cursor_screen_point`, the same source
-/// the pinned window's own drag measures from) and the window is placed around it. Nothing about
-/// the press, the window's own coordinates, or the last message survives into the box — pressing,
-/// moving and releasing is the whole of the state — so a message that arrives late, twice, or not
-/// at all cannot put the window anywhere but under the pointer.
+/// the pinned window's own drag measures from) and the window is put at it less the offset the press
+/// took hold of the bubble by — a subtraction and a `SetWindowPos`, which is the whole of a move's
+/// work. Nothing of the last message, and nothing of the window's own coordinates, reaches the box,
+/// so a message that arrives late, twice, or not at all cannot put the window anywhere but under the
+/// hand that is holding it.
+///
+/// That offset is the one thing a *placing* drag cannot do without: a bubble whose middle was put
+/// under the pointer would leap on the first move by however far from its middle the press landed —
+/// most of the radius, from a hand that took hold of the edge of it — and a window that jumps the
+/// moment it is picked up reads as having been dropped rather than grabbed. It is measured once, at
+/// the press, and held for the whole drag.
 ///
 /// A press that has not yet moved past the slop a click is told from a drag by places nothing and
 /// remembers nothing: a click on the bubble is a click, however much the mouse shivers while it is
@@ -12621,7 +12635,7 @@ unsafe fn drag_pin_bubble(hwnd: HWND) {
     let Ok(drag) = PIN_BUBBLE_DRAG.lock() else {
         return;
     };
-    let Some(from) = *drag else {
+    let Some((grab, press)) = *drag else {
         return;
     };
     drop(drag);
@@ -12631,7 +12645,7 @@ unsafe fn drag_pin_bubble(hwnd: HWND) {
     };
 
     let slop = (logical_px(96, PIN_DRAG_SLOP_PIXELS)).max(2);
-    if (x - from.0).abs() + (y - from.1).abs() > slop {
+    if (x - press.0).abs() + (y - press.1).abs() > slop {
         PIN_BUBBLE_MOVED.store(true, Ordering::Release);
     }
     if !PIN_BUBBLE_MOVED.load(Ordering::Acquire) {
@@ -12644,10 +12658,10 @@ unsafe fn drag_pin_bubble(hwnd: HWND) {
     let dpi = monitor_dpi_from_point(x, y);
     let target = clamp_pinned_box(
         (
-            x - width / 2,
-            y - height / 2,
-            x - width / 2 + width,
-            y - height / 2 + height,
+            x - grab.0,
+            y - grab.1,
+            x - grab.0 + width,
+            y - grab.1 + height,
         ),
         dpi,
     );
