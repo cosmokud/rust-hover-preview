@@ -648,6 +648,10 @@ pub const DEFAULT_DESIGN_SCALE: PreviewScale = PreviewScale::FitToScreen;
 /// is a page of text rather than a document to be studied, and half the display holds the
 /// pangram at a size that can be read at a glance.
 pub const DEFAULT_FONT_SCALE: PreviewScale = PreviewScale::Percent(DEFAULT_FONT_SCALE_PERCENT);
+/// The share of the display a text page is given before it is measured: the whole of it, like
+/// the drawing, the document and the page beside it. A text page has no size of its own to take
+/// a share of, so the setting is the room it may be measured in.
+pub const DEFAULT_TEXT_SCALE: PreviewScale = PreviewScale::FitToScreen;
 
 /// Which engine an Office document's page is asked of, as the tray's
 /// `Engine → Select Engine → Office` lists it.
@@ -1549,6 +1553,17 @@ pub struct AppConfig {
     /// its own because a drawing is asked for a share of the screen the way a page is,
     /// rather than for a share of a size the file asks for.
     pub vector_scale: PreviewScale,
+    /// How large a page of text is measured for, as a share of the room the display has —
+    /// the same question, and the same answers, as the document scales above.
+    ///
+    /// What the share is applied to is the room rather than a size the file asks for, because
+    /// a page of text has no size of its own: it is measured at the font size the display
+    /// gives it, and the answer to how large it is drawn is how much display it is allowed to
+    /// be measured in. A page that takes less room than the share allows keeps the room it
+    /// takes, so this is a ceiling on the measure rather than a zoom over it — and the whole
+    /// of the display is where it starts, which is the room this kind was given before the
+    /// setting existed.
+    pub text_scale: PreviewScale,
     /// Which face of a collection a specimen is drawn from, as the menu numbers faces: `1`
     /// (the default) is the first face the file holds.
     ///
@@ -1790,6 +1805,7 @@ impl Default for AppConfig {
             font_scale: DEFAULT_FONT_SCALE,
             design_scale: DEFAULT_DESIGN_SCALE,
             vector_scale: DEFAULT_VECTOR_SCALE,
+            text_scale: DEFAULT_TEXT_SCALE,
             ttc_face: DEFAULT_TTC_FACE,
             theme: TextTheme::Light,
             markdown_mode: MarkdownMode::Rendered,
@@ -1921,6 +1937,7 @@ const SETTING_GROUPS: &[(&str, &[&str])] = &[
             "ebook_scale",
             "font_scale",
             "preview_scale",
+            "text_scale",
             "vector_scale",
             "video_scale",
         ],
@@ -2774,6 +2791,7 @@ impl AppConfig {
             Some(self.document_scale.as_str()),
         );
         ini.set(CONFIG_SECTION, "font_scale", Some(self.font_scale.as_str()));
+        ini.set(CONFIG_SECTION, "text_scale", Some(self.text_scale.as_str()));
         ini.set(
             CONFIG_SECTION,
             "design_scale",
@@ -3266,6 +3284,14 @@ impl AppConfig {
         if let Some(value) = ini.get(CONFIG_SECTION, "design_scale") {
             if let Some(scale) = PreviewScale::from_str(&value) {
                 self.design_scale = scale;
+            }
+        }
+        // A page of text's is the one read the same way again, against the room it is
+        // measured in rather than against a size of its own — a file that names no share for
+        // it leaves it where a fresh installation starts, which is the whole of the display.
+        if let Some(value) = ini.get(CONFIG_SECTION, "text_scale") {
+            if let Some(scale) = PreviewScale::from_str(&value) {
+                self.text_scale = scale;
             }
         }
         // And which face of a collection the specimen is of, in the numbering the tray's
