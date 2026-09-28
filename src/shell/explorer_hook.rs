@@ -444,18 +444,32 @@ impl HoveredItem {
     /// the view says about it, so an item whose text cannot be measured is avoided as
     /// the whole of itself.
     ///
+    /// The region comes with whether it is a *column* of the view, which is the one
+    /// thing a placement cannot read off the box itself: a view that draws its items
+    /// as rows ([`Self::draws_columns`]) puts every row's text in the same columns, so
+    /// a preview that overlaps the `Name` column — or the columns beside it, at
+    /// `Details` — covers the rows next to the item however it is placed vertically,
+    /// and the ways out of it are the two to its sides (see
+    /// `preview_window::avoiding_text`). The name alone, a label under an icon and the
+    /// item's own box are regions of their own kind however the setting reads, and a
+    /// preview is stepped off them in either axis.
+    ///
     /// It is the pointer's region. A keyboard preview is placed from a region of its
     /// own, which is this one except at `Off` — see [`Self::keyboard_avoid_box`].
-    fn avoid_box(&self) -> Option<(i32, i32, i32, i32)> {
-        let region = match avoid_mode() {
+    fn avoid_box(&self) -> Option<((i32, i32, i32, i32), bool)> {
+        let (region, column) = match avoid_mode() {
             AvoidMode::Off => return None,
-            AvoidMode::Filename => self.name_box(),
-            AvoidMode::FilenameColumn => self.text.map(|text| text.name),
-            AvoidMode::Details => self.text.map(|text| text.all),
-        }
-        .unwrap_or(self.bounds);
+            AvoidMode::Filename => (self.name_box(), false),
+            AvoidMode::FilenameColumn => (self.text.map(|text| text.name), true),
+            AvoidMode::Details => (self.text.map(|text| text.all), true),
+        };
 
-        Some((region.left, region.top, region.right, region.bottom))
+        let region = region.unwrap_or(self.bounds);
+
+        Some((
+            (region.left, region.top, region.right, region.bottom),
+            column && self.draws_columns(),
+        ))
     }
 
     /// The region a *keyboard* preview of this item is kept off: what [`Self::avoid_box`]
@@ -2987,16 +3001,19 @@ fn resolve_file_under_cursor(
 }
 
 /// The region a preview of the file under the pointer is kept off, as the `Avoid`
-/// setting has it for the item that file is: the name the item draws at `Filename`,
-/// that name with the columns beside it at `Details`, or the item's own box at either
-/// setting when the view reports no text for it.
+/// setting has it for the item that file is — with whether that region is a column of
+/// the view, which is what says a placement steps off it to the side rather than over
+/// or under the item (see [`HoveredItem::avoid_box`]).
 ///
 /// Asked when a preview is about to be shown rather than with every probe. A probe
 /// answers which file the pointer is on, and that answer is what the rest of the loop
 /// runs on; where that file's name is drawn is a question only a preview asks, and it
 /// is asked here so that a pointer merely sweeping over a list pays nothing for it. A
 /// walk that finds no item at all leaves the preview placed as it always was.
-fn avoid_box_under_cursor(resolver: &ItemResolver, point: POINT) -> Option<(i32, i32, i32, i32)> {
+fn avoid_box_under_cursor(
+    resolver: &ItemResolver,
+    point: POINT,
+) -> Option<((i32, i32, i32, i32), bool)> {
     // Read before the walk as well as inside `avoid_box`: with the setting off there
     // is no region to be had, so the item is never asked for one.
     if avoid_mode() == AvoidMode::Off {
