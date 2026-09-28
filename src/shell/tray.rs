@@ -14,6 +14,7 @@ use crate::config::config::{
     DEFAULT_PIN_UPDATE_ENABLED, DEFAULT_PIN_UPDATE_ON_HOVER,
     DEFAULT_PREVIEW_SCALE, DEFAULT_SAME_FILE_REHOVER_DELAY_MS,
     DEFAULT_SETTLING_DELAY_MS, DEFAULT_TEXT_FONT_SCALE_PERCENT, DEFAULT_TICK_MS,
+    DEFAULT_TRIGGER_KEY_AFFECT_PIN_MODE,
     DEFAULT_VECTOR_BACKGROUND, DEFAULT_VECTOR_SCALE, DEFAULT_VIDEO_SCALE, DEFAULT_VIDEO_VOLUME,
     DEFAULT_WEBVIEW_IDLE_SECS, DEFAULT_AUDIO_VOLUME, VOLUME_CHOICES,
 };
@@ -75,6 +76,9 @@ const ID_TRAY_PIN_PAUSE_VIDEO: u16 = 1019;
 const ID_TRAY_TRIGGER_DISABLE: u16 = 1005; // Hold the trigger key to stop previews
 const ID_TRAY_TRIGGER_ENABLE: u16 = 1006; // Hold the trigger key to allow previews
 const ID_TRAY_TRIGGER_ENABLED: u16 = 1068; // Whether the trigger key is watched at all
+/// The trigger key's second switch: whether a held key reaches a pinned preview. It sits in the
+/// one id left between the `Audio` gate at 1098 and the `theme` folder's items at 1100.
+const ID_TRAY_TRIGGER_AFFECT_PIN: u16 = 1099;
 /// The `Engine → Select Engine → Office` pair: which engine an Office document's page is
 /// asked of — the application that owns the format, or the render engine beside it. Two ids
 /// rather than a range, the way the trigger key's mode has two, and they sit in the gap the
@@ -540,6 +544,7 @@ unsafe extern "system" fn tray_window_proc(
                 ID_TRAY_TRIGGER_DISABLE => set_trigger_key_mode(TriggerKeyMode::Disable),
                 ID_TRAY_TRIGGER_ENABLE => set_trigger_key_mode(TriggerKeyMode::Enable),
                 ID_TRAY_TRIGGER_ENABLED => toggle_trigger_key_enabled(),
+                ID_TRAY_TRIGGER_AFFECT_PIN => toggle_trigger_key_affect_pin_mode(),
                 ID_TRAY_PRIORITIZE_KEYBOARD => toggle_prioritize_keyboard(),
                 ID_TRAY_ENGINE_OFFICE_MS => set_office_engine(OfficeEngine::MicrosoftOffice),
                 ID_TRAY_ENGINE_OFFICE_LIBRE => set_office_engine(OfficeEngine::LibreOffice),
@@ -1267,6 +1272,25 @@ unsafe fn show_context_menu(hwnd: HWND) {
             },
         ID_TRAY_TRIGGER_ENABLED as usize,
         w!("Enable Trigger Key"),
+    );
+
+    // The second switch: whether the key reaches a pin. Off, which is where it starts, a pinned
+    // preview is not the key's to take down — the key is not read while one is up, collapsed into
+    // its bubble or not — and the two rows below are about hovers alone.
+    let trigger_key_affect_pin_mode = CONFIG
+        .lock()
+        .map(|c| c.trigger_key_affect_pin_mode)
+        .unwrap_or(DEFAULT_TRIGGER_KEY_AFFECT_PIN_MODE);
+    let _ = AppendMenuW(
+        trigger_menu,
+        MF_STRING
+            | if trigger_key_affect_pin_mode {
+                MF_CHECKED
+            } else {
+                MF_UNCHECKED
+            },
+        ID_TRAY_TRIGGER_AFFECT_PIN as usize,
+        w!("Affect Pin Mode"),
     );
     let _ = AppendMenuW(trigger_menu, MF_SEPARATOR, 0, PCWSTR::null());
 
@@ -2271,6 +2295,17 @@ fn toggle_trigger_key_enabled() {
         config.save();
     }
     refresh_preview();
+}
+
+/// Whether the key reaches a pin is a setting rather than a view of one, and nothing on screen
+/// is rebuilt here: the hook reads the switch on its next tick, and a pin it is thrown under is
+/// answered from the key's own state as that tick finds it — nothing of the pin belongs to this
+/// thread.
+fn toggle_trigger_key_affect_pin_mode() {
+    if let Ok(mut config) = CONFIG.lock() {
+        config.trigger_key_affect_pin_mode = !config.trigger_key_affect_pin_mode;
+        config.save();
+    }
 }
 
 /// Whether the keyboard driving Explorer holds a parked pointer back is a setting rather
@@ -4302,6 +4337,31 @@ mod tests {
             !defaults.pin_update_on_hover,
             "the pointer's own hover is not one of the ways until it is asked for"
         );
+    }
+
+    /// The trigger key's second row is a switch of its own beside the one that watches the key,
+    /// and it starts off: a pin is a window the user put there, and the key that stops hovers is
+    /// not what takes it down until it is asked for.
+    #[test]
+    fn the_trigger_keys_pin_row_starts_off_and_is_an_id_of_its_own() {
+        let defaults = crate::config::config::AppConfig::default();
+
+        assert_eq!(
+            defaults.trigger_key_affect_pin_mode, DEFAULT_TRIGGER_KEY_AFFECT_PIN_MODE,
+            "a fresh pin is not the trigger key's to take down"
+        );
+
+        for row in [
+            ID_TRAY_TRIGGER_ENABLED,
+            ID_TRAY_TRIGGER_DISABLE,
+            ID_TRAY_TRIGGER_ENABLE,
+            ID_TRAY_PIN,
+        ] {
+            assert_ne!(
+                ID_TRAY_TRIGGER_AFFECT_PIN, row,
+                "the trigger key's own rows share the id {row}"
+            );
+        }
     }
 
     /// The two halves of the `Volume` submenu carry a range apiece, and the levels they offer

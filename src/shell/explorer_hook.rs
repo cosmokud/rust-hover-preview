@@ -2,7 +2,7 @@ use crate::app::engine_processes;
 use crate::config::config::{
     AvoidMode, TriggerKeyMode, DEFAULT_HOVER_DELAY_MS, DEFAULT_PIN_UPDATE_ENABLED,
     DEFAULT_PIN_UPDATE_ON_HOVER, DEFAULT_SAME_FILE_REHOVER_DELAY_MS, DEFAULT_SETTLING_DELAY_MS,
-    DEFAULT_TICK_MS,
+    DEFAULT_TICK_MS, DEFAULT_TRIGGER_KEY_AFFECT_PIN_MODE,
 };
 use crate::engines::webview_preview;
 use crate::formats::video_formats::is_video_file;
@@ -4192,6 +4192,7 @@ pub fn run_explorer_hook() {
                 c.settling_delay_ms,
                 c.prioritize_keyboard,
                 c.trigger_key_enabled,
+                c.trigger_key_affect_pin_mode,
                 c.tick_ms,
             );
             // Resolved once per config change instead of once per tick: what the tick
@@ -4209,6 +4210,7 @@ pub fn run_explorer_hook() {
                 DEFAULT_SETTLING_DELAY_MS,
                 true,
                 true,
+                DEFAULT_TRIGGER_KEY_AFFECT_PIN_MODE,
                 DEFAULT_TICK_MS,
             ),
             Some(0x12),
@@ -4426,6 +4428,7 @@ pub fn run_explorer_hook() {
                 config.settling_delay_ms,
                 config.prioritize_keyboard,
                 config.trigger_key_enabled,
+                config.trigger_key_affect_pin_mode,
                 config.tick_ms,
             );
             // The trigger key is resolved when it is *spelled* differently, not every
@@ -4446,13 +4449,25 @@ pub fn run_explorer_hook() {
         let settling_delay_ms = config_snapshot.4;
         let prioritize_keyboard = config_snapshot.5;
         let trigger_key_enabled = config_snapshot.6;
-        let tick_ms = config_snapshot.7;
+        let trigger_key_affect_pin_mode = config_snapshot.7;
+        let tick_ms = config_snapshot.8;
 
         // One question, two settings: the key either stops previews while it is
         // held, or is the only thing that lets them happen. Either way, what is left
         // to do when they are not allowed is the same as when they are turned off.
         // A key that is switched off is not asked about, and holds nothing back.
-        let trigger_key_down = trigger_key_enabled && trigger_key_vk.is_some_and(key_is_down);
+        //
+        // A pin is not a hover, and the key that holds hovers back is not read while one is
+        // up — up or collapsed into its bubble — unless `Affect Pin Mode` asks for it, which
+        // is off where the app starts: a pinned preview is a window the user put there, and
+        // its own close button is what takes it down. It is the `Hold to Disable Preview`
+        // mode the setting speaks for; the reverse mode is left as it is.
+        let trigger_key_muted_by_pin = trigger_key_mode == TriggerKeyMode::Disable
+            && pinned()
+            && !trigger_key_affect_pin_mode;
+        let trigger_key_down = trigger_key_enabled
+            && !trigger_key_muted_by_pin
+            && trigger_key_vk.is_some_and(key_is_down);
         let previews_allowed =
             !trigger_key_enabled || trigger_key_mode.allows_previews(trigger_key_down);
 
