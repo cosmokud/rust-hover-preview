@@ -257,6 +257,7 @@ impl WindowViews {
 /// over the navigation pane, the toolbar, the details pane, none of which belongs to a
 /// tab — names no view, and the frame's views are told apart by what they answer, as
 /// they were before this window was read.
+#[derive(Clone, Copy)]
 struct ItemWindow {
     /// The frame the item path resolves against: the root window under the pointer, or
     /// the frame the focused item is drawn in.
@@ -1750,24 +1751,28 @@ fn is_probable_search_view_context(context: &ActiveShellViewContext) -> bool {
         .unwrap_or(false)
 }
 
-/// The place a point is over, out of the views the window under it holds.
+/// The place an item is in, out of the views the window it is drawn in belongs to.
+///
+/// The window is handed in rather than read here, because the two paths that ask are about
+/// two different items: the pointer's own, whose window is what the tick has under it, and the
+/// one the keyboard is on, whose window is the one its provider reports (see `ItemWindow` and
+/// `FocusedItemInfo::item_window`). Both are the same question once a window is named.
 ///
 /// It stands where a walk of every Shell window the desktop has registered once stood, and
 /// what it asks instead is the question the item path already settles a point with: the
-/// window under the pointer is a window, or a child of one, of exactly one of the views a
-/// window holds, and with tabs that is the tab that is showing — so that view, and nothing
-/// else, is asked what it is showing (see `ItemWindow` and `frame_views`). The cost is one
-/// frame's worth of work rather than the desktop's: the set is in hand for all but the
-/// first probe of a window, and what is left is the shell being asked to describe the one
-/// view the pointer is in.
+/// window given is a window, or a child of one, of exactly one of the views a window holds,
+/// and with tabs that is the tab that is showing — so that view, and nothing else, is asked
+/// what it is showing (see `ItemWindow` and `frame_views`). The cost is one frame's worth of
+/// work rather than the desktop's: the set is in hand for all but the first probe of a
+/// window, and what is left is the shell being asked to describe the one view the item is in.
 ///
-/// A pointer in none of the frame's views is a pointer over the navigation pane, the
+/// A window in none of the frame's views is a pointer over the navigation pane, the
 /// toolbar or the details pane, none of which belongs to a tab: which tab the frame is
-/// showing is then not something the pointer can say, and what is answered for is the view
-/// the pointer was last inside of that frame — the tab the hand was last working in — or
-/// the frame's first view where it has never been inside one (see `WindowViews::anchor`).
+/// showing is then not something it can say, and what is answered for is the view the item
+/// was last read inside of that frame — the tab the hand was last working in — or the
+/// frame's first view where it has never been inside one (see `WindowViews::anchor`).
 /// Any of a frame's views is a guess at that point; what this one has over a view picked at
-/// random is that it does not change while the pointer does not, so one place is read as
+/// random is that it does not change while the item does not, so one place is read as
 /// one place.
 ///
 /// What a probe that cannot be answered at all is left with is nothing, which is what it
@@ -1775,12 +1780,11 @@ fn is_probable_search_view_context(context: &ActiveShellViewContext) -> bool {
 /// than a place that changed (see `HoverLocation`).
 fn anchored_view_context(
     resolver: &mut ItemResolver,
-    pointer: &PointerTick,
+    window: ItemWindow,
     want_folder: bool,
 ) -> Option<ActiveShellViewContext> {
-    let window = item_window_of(pointer.window)?;
     // Read before the frame's views are, because reading them borrows the resolver: what
-    // the pointer was last inside of this frame is what a probe that is inside none of them
+    // the item was last read inside of this frame is what a probe that is inside none of them
     // is answered by, and it belongs to the set the borrow is about to be taken of.
     let remembered = resolver.remembered_view(window.frame);
     let registrations = shell_window_count(resolver);
@@ -1839,9 +1843,35 @@ fn hwnd_is_same_or_ancestor(child: HWND, ancestor: HWND) -> bool {
 fn is_current_search_view_legacy(resolver: &mut ItemResolver, pointer: &PointerTick) -> bool {
     // Only the URL is read, so the folder is not asked for: it is a walk through the
     // view's own objects, and this check discards everything but the location.
-    anchored_view_context(resolver, pointer, false)
+    let Some(window) = item_window_of(pointer.window) else {
+        return false;
+    };
+
+    anchored_view_context(resolver, window, false)
         .and_then(|context| context.location_url)
         .is_some_and(|url| is_search_ms_url(&url))
+}
+
+/// The facts one view's own description holds, as the probes that watch for a change of place
+/// read them: the folder it has open, the URL it was opened with, and whether it is a search —
+/// whose root is the folder behind the results rather than the view's own.
+fn view_resolver_hints(context: &ActiveShellViewContext) -> HoverResolverHints {
+    let is_search_view = is_probable_search_view_context(context);
+    let search_root = if is_search_view {
+        resolve_search_root_from_context(context)
+    } else {
+        None
+    };
+
+    HoverResolverHints {
+        // The search root answers for the folder where the view has none to give: a results
+        // view holds no folder of its own, and what is behind it is where its files are.
+        current_folder: context.folder_path.clone().or_else(|| search_root.clone()),
+        location_url: context.location_url.clone(),
+        is_search_view,
+        search_root,
+        shell_view_hwnd: (context.shell_view_hwnd != 0).then_some(context.shell_view_hwnd),
+    }
 }
 
 /// What the view under the pointer is showing, for the probes that need to know a
@@ -1855,23 +1885,13 @@ fn get_current_hover_resolver_hints(
     resolver: &mut ItemResolver,
     pointer: &PointerTick,
 ) -> HoverResolverHints {
-    let mut hints = HoverResolverHints::default();
+    let Some(window) = item_window_of(pointer.window) else {
+        return HoverResolverHints::default();
+    };
 
-    if let Some(context) = anchored_view_context(resolver, pointer, true) {
-        hints.current_folder = context.folder_path.clone();
-        hints.location_url = context.location_url.clone();
-        hints.shell_view_hwnd = (context.shell_view_hwnd != 0).then_some(context.shell_view_hwnd);
-
-        hints.is_search_view = is_probable_search_view_context(&context);
-        if hints.is_search_view {
-            hints.search_root = resolve_search_root_from_context(&context);
-            if hints.current_folder.is_none() {
-                hints.current_folder = hints.search_root.clone();
-            }
-        }
-    }
-
-    hints
+    anchored_view_context(resolver, window, true)
+        .map(|context| view_resolver_hints(&context))
+        .unwrap_or_default()
 }
 
 /// Whether a point is inside a box, read the way a window reads one: the right and
@@ -3665,8 +3685,8 @@ fn pin_update_settings() -> (bool, bool) {
 
 /// What the hook watches while a preview is pinned, so that the tray's `Pin Mode → Update Preview`
 /// can show the pin the file the user picks next: the file the pin is showing, where the pointer
-/// was when it was last read, how long what is under it has been settled, and the item the keyboard
-/// is on.
+/// was when it was last read, how long what is under it has been settled, the item the keyboard
+/// is on, and the place that item was read in.
 ///
 /// It is state of the shape the hover machinery beside it keeps, and it is kept apart from it rather
 /// than shared: a pin is not a hover, so the latch that holds a re-hover back, the gate a folder
@@ -3694,6 +3714,14 @@ struct PinUpdateWatch {
     /// The item the keyboard was last seen on. What is on it when a watch begins is a baseline and
     /// not a choice: it is the items *after* it that are keys the user pressed.
     focused: Option<FocusedItemKey>,
+    /// The place the item the keyboard was last seen on was read in, where the shell described one:
+    /// the view that drew it and what that view was showing.
+    ///
+    /// A key the user presses moves the focus *within* one place, where a folder, a tab and a window
+    /// the user moves to land it in another one — and an item the focus has *landed* on is not a file
+    /// the user picked. The item under the focus is new either way, so this is the one fact that
+    /// tells the two apart (see `PinUpdateWatch::note_place`).
+    place: Option<HoverLocation>,
 }
 
 impl PinUpdateWatch {
@@ -3706,6 +3734,13 @@ impl PinUpdateWatch {
     /// settles on, at the delay and the settling the hover behind the pin would have been given.
     /// A pin is not told about a file the pointer merely crosses, and not about one that was under
     /// a pointer nobody moved.
+    ///
+    /// The keyboard is watched more narrowly than the focus it moves: a folder, a tab and a window
+    /// the user moves to move the focus too, and what they land it on is a file the user did not
+    /// pick — so the item under the focus counts only where the *place* it was read in is the one
+    /// the watch was already watching (see `PinUpdateWatch::note_place`). A click and a hover need
+    /// no such rule: each is the pointer acting on something the user is looking at, whatever
+    /// listing it happens to be in.
     fn follow(
         &mut self,
         resolver: &mut ItemResolver,
@@ -3785,7 +3820,9 @@ impl PinUpdateWatch {
         // The keyboard's own answer: the item the focus is on, which is what a key the user presses
         // moves. It is probed on the terms the hover path probes it — while Explorer has the
         // foreground, and no more often than the hover path asks — and a focus that has moved onto
-        // another file is a file the user picked as surely as one a click selected.
+        // another file *within the place the watch is watching* is a file the user picked as surely
+        // as one a click selected: another folder, another tab and another window move the focus
+        // onto an item as well, and those are moves this setting does not follow (see `note_place`).
         if is_foreground_explorer()
             && last_focus_probe.elapsed() >= Duration::from_millis(KEYBOARD_FOCUS_PROBE_MS)
         {
@@ -3797,13 +3834,51 @@ impl PinUpdateWatch {
                 let known = self.focused.is_some();
                 self.focused = Some(key);
 
-                if changed && known {
-                    if let Some(path) = resolve_focused_item_to_path(resolver, &focused) {
-                        self.offer(&path, &showing);
+                if changed {
+                    // Why the focus has moved, which is what tells a key the user pressed from a
+                    // folder, a tab or a window the user moved to. The place is read for the watch's
+                    // first item as much as for a move — a baseline is taken in a place too — and
+                    // only an item the focus reached *within* the place the watch was watching can
+                    // be one a key put it on.
+                    let landed = self.note_place(focused_item_location(resolver, &focused));
+
+                    if known && !landed {
+                        if let Some(path) = resolve_focused_item_to_path(resolver, &focused) {
+                            self.offer(&path, &showing);
+                        }
                     }
                 }
             }
         }
+    }
+
+    /// Note the place the item the keyboard has landed on was read in, and answer whether the focus
+    /// has landed somewhere the watch was not watching: another folder, another tab of one window,
+    /// another window. Those are the moves that put the focus on a file without a key the user
+    /// pressed having put it there, and what they land it on is the baseline the next key is
+    /// measured against rather than a file the user picked — the three things this setting follows
+    /// are a click, a hover and the keyboard, and a listing that changed under the keyboard is none
+    /// of them.
+    ///
+    /// Two places are told apart by the facts both looks answered and never by one of them failing
+    /// to answer, which is the rule the hover machinery reads its own place by (see
+    /// `hover_location_changed`), asked of the same shell. What a look that answered nothing does
+    /// *not* do is drop the place in hand: a shell that could not describe the view on the tick a
+    /// folder was opened would otherwise leave the next item the focus lands on read as a pick,
+    /// where holding it costs at worst one press — the place is read where the focus moves, and a
+    /// place re-read after a change is a change again.
+    fn note_place(&mut self, place: Option<HoverLocation>) -> bool {
+        let Some(place) = place else {
+            return false;
+        };
+
+        let moved = self
+            .place
+            .as_ref()
+            .is_some_and(|previous| hover_location_changed(previous, &place));
+        self.place = Some(place);
+
+        moved
     }
 
     /// Offer a file to the pin that is up: the one thing this watch does.
@@ -4073,6 +4148,31 @@ fn resolve_focused_item_to_path(
         .value
         .as_deref()
         .and_then(resolve_media_path_from_text)
+}
+
+/// The place the item the keyboard is on was read in: the view that drew it, and what that view
+/// was showing, in the form places are compared in (see `HoverLocation`).
+///
+/// The folder a view *has open* is deliberately not asked for. It is a walk out through the
+/// shell's own objects to a filesystem path, and a `stat` of what comes back, while the URL the
+/// view was opened with is answered by the browser object the view was found through and is
+/// answered every time — and it names the same place as the folder for a folder view (a search
+/// answers with its own query, and its root is resolved out of that). The walk would add a second
+/// witness to a fact this one already answers, at a price this watch would pay over and over: the
+/// place is read once per item the focus lands on, and a key being held lands it on one every few
+/// dozen milliseconds.
+///
+/// The window the view is drawn in comes with it, and is half of the place for the reason two
+/// tabs of one window are two places: two tabs can be showing one folder, and a tab switched
+/// between them is a move the folder alone cannot see (see `hover_location_changed`).
+fn focused_item_location(
+    resolver: &mut ItemResolver,
+    focused: &FocusedItemInfo,
+) -> Option<HoverLocation> {
+    let window = focused.item_window()?;
+    let context = anchored_view_context(resolver, window, false)?;
+
+    Some(HoverLocation::of(&view_resolver_hints(&context)))
 }
 
 /// Main loop for explorer hook
@@ -5799,6 +5899,54 @@ mod tests {
         assert!(here.was_answered(), "a look that answered one is");
     }
 
+    /// The item the keyboard has landed on counts only where it landed in the place the pin's watch
+    /// was already watching: another folder, another tab of one window and another window all move
+    /// the focus without a key having moved it, and read as a pick they are a pin following the
+    /// user's navigation — see `PinUpdateWatch::note_place`.
+    #[test]
+    fn a_focus_item_landed_in_another_place_is_a_baseline() {
+        let view = |url: &str, hwnd: isize| HoverLocation {
+            folder: None,
+            search_root: None,
+            location_url: Some(url.to_string()),
+            view_hwnd: Some(hwnd),
+        };
+        let mut watch = PinUpdateWatch::default();
+
+        assert!(
+            !watch.note_place(Some(view("file:///D:/Pictures", 0x1234))),
+            "the place the watch is shown the focus in first is the one it begins from"
+        );
+        assert!(
+            !watch.note_place(Some(view("file:///D:/Pictures", 0x1234))),
+            "and the same place again is the watch's own: a key moved the focus within it"
+        );
+        assert!(
+            watch.note_place(Some(view("file:///D:/Videos", 0x1234))),
+            "another folder is another place"
+        );
+        assert!(
+            watch.note_place(Some(view("file:///D:/Videos", 0x5678))),
+            "and another tab of the same window is one too"
+        );
+        assert!(
+            watch.note_place(Some(view("file:///D:/Music", 0x9abc))),
+            "as is another window showing another folder"
+        );
+        assert!(
+            !watch.note_place(None),
+            "a look that answered nothing is not a place that changed"
+        );
+        assert!(
+            !watch.note_place(Some(view("file:///D:/Music", 0x9abc))),
+            "and it leaves the place in hand where it is"
+        );
+        assert!(
+            watch.note_place(Some(view("file:///D:/Pictures", 0x1234))),
+            "so a place read after one that answered nothing is still compared with it"
+        );
+    }
+
     /// The width a name is drawn at is the name's own: a longer name measures wider
     /// than a short one, which is what makes the region a preview is kept off the name
     /// rather than the column it sits in.
@@ -6228,9 +6376,13 @@ mod tests {
             println!("no pointer to ask about");
             return;
         };
+        let Some(window) = item_window_of(pointer.window) else {
+            println!("no item window to ask about");
+            return;
+        };
 
         let kept = PROBE_VIEW_SETS_KEPT.load(Ordering::Relaxed);
-        let context = anchored_view_context(&mut resolver, &pointer, true);
+        let context = anchored_view_context(&mut resolver, window, true);
         let walks = PROBE_VIEW_WALKS.load(Ordering::Relaxed);
 
         // An answer names a view, and a view is a window: an answer with no window
@@ -6251,7 +6403,7 @@ mod tests {
             .map(|set| set.views.len())
             .unwrap_or(0);
 
-        let _ = anchored_view_context(&mut resolver, &pointer, true);
+        let _ = anchored_view_context(&mut resolver, window, true);
 
         if held_views > 0 {
             assert_eq!(
