@@ -10,7 +10,8 @@ use crate::config::config::{
     DEFAULT_FONT_SCALE, DEFAULT_HOVER_DELAY_MS, DEFAULT_IMAGE_BACKGROUND, DEFAULT_IMAGE_CACHE_MB,
     DEFAULT_IMAGE_DISK_CACHE_MB, DEFAULT_LIBREOFFICE_IDLE_SECS, DEFAULT_NORMALIZE_VIDEO_VOLUME,
     DEFAULT_NORMALIZE_VOLUME, DEFAULT_OFFICE_ENGINE,
-    DEFAULT_OFFICE_ENGINE_IDLE_SECS, DEFAULT_PIN_UPDATE_ENABLED, DEFAULT_PIN_UPDATE_ON_HOVER,
+    DEFAULT_OFFICE_ENGINE_IDLE_SECS, DEFAULT_PIN_PAUSE_AUDIO, DEFAULT_PIN_PAUSE_VIDEO,
+    DEFAULT_PIN_UPDATE_ENABLED, DEFAULT_PIN_UPDATE_ON_HOVER,
     DEFAULT_PREVIEW_SCALE, DEFAULT_SAME_FILE_REHOVER_DELAY_MS,
     DEFAULT_SETTLING_DELAY_MS, DEFAULT_TEXT_FONT_SCALE_PERCENT, DEFAULT_TICK_MS,
     DEFAULT_VECTOR_BACKGROUND, DEFAULT_VECTOR_SCALE, DEFAULT_VIDEO_SCALE, DEFAULT_VIDEO_VOLUME,
@@ -65,6 +66,12 @@ const ID_TRAY_PIN: u16 = 1004; // Whether a preview can be pinned with a key
 /// it, and the two questions belong together under the one row they hang from.
 const ID_TRAY_PIN_UPDATE: u16 = 1016;
 const ID_TRAY_PIN_UPDATE_HOVER: u16 = 1017;
+/// And the two rows of the `Pin Mode → Pause Preview` submenu: whether a pin collapsed into its
+/// bubble holds the sound it is playing where it is, and whether it holds a video. They sit in
+/// the slack the same block left beside the update pair, for the same reason — both are the
+/// pin's own business and neither is a click on the row beside it.
+const ID_TRAY_PIN_PAUSE_AUDIO: u16 = 1018;
+const ID_TRAY_PIN_PAUSE_VIDEO: u16 = 1019;
 const ID_TRAY_TRIGGER_DISABLE: u16 = 1005; // Hold the trigger key to stop previews
 const ID_TRAY_TRIGGER_ENABLE: u16 = 1006; // Hold the trigger key to allow previews
 const ID_TRAY_TRIGGER_ENABLED: u16 = 1068; // Whether the trigger key is watched at all
@@ -524,6 +531,12 @@ unsafe extern "system" fn tray_window_proc(
                 ID_TRAY_PIN_UPDATE_HOVER => {
                     toggle_pin_update_on_hover();
                 }
+                ID_TRAY_PIN_PAUSE_AUDIO => {
+                    toggle_pin_pause_audio();
+                }
+                ID_TRAY_PIN_PAUSE_VIDEO => {
+                    toggle_pin_pause_video();
+                }
                 ID_TRAY_TRIGGER_DISABLE => set_trigger_key_mode(TriggerKeyMode::Disable),
                 ID_TRAY_TRIGGER_ENABLE => set_trigger_key_mode(TriggerKeyMode::Enable),
                 ID_TRAY_TRIGGER_ENABLED => toggle_trigger_key_enabled(),
@@ -848,26 +861,32 @@ unsafe fn show_context_menu(hwnd: HWND) {
     );
 
     // And the "Pin Mode" submenu below it, which is the pin's own business: whether the key is
-    // watched at all, and whether a pin that is up is shown another file while the user picks
-    // one. The key's row names the key that pins the way the trigger key's own submenu names
-    // its own: the key is a setting, so the row says which one is watched rather than only
-    // whether one is (see `key_input`).
-    let (pin_enabled, pin_key, pin_update, pin_update_on_hover) = CONFIG
-        .lock()
-        .map(|c| {
-            (
-                c.pin_enabled,
-                c.pin_key.clone(),
-                c.pin_update_enabled,
-                c.pin_update_on_hover,
-            )
-        })
-        .unwrap_or((
-            true,
-            "space".to_string(),
-            DEFAULT_PIN_UPDATE_ENABLED,
-            DEFAULT_PIN_UPDATE_ON_HOVER,
-        ));
+    // watched at all, whether a pin that is up is shown another file while the user picks one,
+    // and what a pin collapsed into its bubble does with what it is playing. The key's row names
+    // the key that pins the way the trigger key's own submenu names its own: the key is a
+    // setting, so the row says which one is watched rather than only whether one is (see
+    // `key_input`).
+    let (pin_enabled, pin_key, pin_pause_audio, pin_pause_video, pin_update, pin_update_on_hover) =
+        CONFIG
+            .lock()
+            .map(|c| {
+                (
+                    c.pin_enabled,
+                    c.pin_key.clone(),
+                    c.pin_pause_audio,
+                    c.pin_pause_video,
+                    c.pin_update_enabled,
+                    c.pin_update_on_hover,
+                )
+            })
+            .unwrap_or((
+                true,
+                "space".to_string(),
+                DEFAULT_PIN_PAUSE_AUDIO,
+                DEFAULT_PIN_PAUSE_VIDEO,
+                DEFAULT_PIN_UPDATE_ENABLED,
+                DEFAULT_PIN_UPDATE_ON_HOVER,
+            ));
     let mut pin_key_chars = pin_key.chars();
     let pin_key_display = match pin_key_chars.next() {
         Some(first) => first.to_uppercase().collect::<String>() + pin_key_chars.as_str(),
@@ -917,17 +936,57 @@ unsafe fn show_context_menu(hwnd: HWND) {
     if !pin_update {
         hover_flags |= MF_GRAYED;
     }
+    // A separator between the two, because they are not the same kind of row: the first says
+    // whether the pin follows the selection at all, the second only whether a hover is one of
+    // the ways that selection is made.
+    let _ = AppendMenuW(update_menu, MF_SEPARATOR, 0, PCWSTR::null());
     let _ = AppendMenuW(
         update_menu,
         hover_flags,
         ID_TRAY_PIN_UPDATE_HOVER as usize,
-        w!("Update on Hover"),
+        w!("On Hover"),
     );
     let _ = AppendMenuW(
         pin_menu,
         MF_STRING | MF_POPUP,
         update_menu.0 as usize,
         w!("Update Preview"),
+    );
+
+    // The `Pause Preview` submenu: whether a pin collapsed into its bubble holds what it is
+    // playing where it is until the pin is put back up again. The two are switches of their own
+    // because a video and a sound are two different things to want quiet — a film a user wants to
+    // go on hearing while the bubble is up is not a reason to let a podcast play on, and the other
+    // way round — and both are on, since a bubble is a pin put away and what it was playing is not
+    // what the desktop was asked for. A sound is listed above a video.
+    let pause_menu = CreatePopupMenu().unwrap();
+    let _ = AppendMenuW(
+        pause_menu,
+        MF_STRING
+            | if pin_pause_audio {
+                MF_CHECKED
+            } else {
+                MF_UNCHECKED
+            },
+        ID_TRAY_PIN_PAUSE_AUDIO as usize,
+        w!("Audio"),
+    );
+    let _ = AppendMenuW(
+        pause_menu,
+        MF_STRING
+            | if pin_pause_video {
+                MF_CHECKED
+            } else {
+                MF_UNCHECKED
+            },
+        ID_TRAY_PIN_PAUSE_VIDEO as usize,
+        w!("Video"),
+    );
+    let _ = AppendMenuW(
+        pin_menu,
+        MF_STRING | MF_POPUP,
+        pause_menu.0 as usize,
+        w!("Pause Preview"),
     );
 
     let _ = AppendMenuW(
@@ -2168,6 +2227,26 @@ fn toggle_pin_update_enabled() {
 fn toggle_pin_update_on_hover() {
     if let Ok(mut config) = CONFIG.lock() {
         config.pin_update_on_hover = !config.pin_update_on_hover;
+        config.save();
+    }
+}
+
+/// Whether a pin collapsed into its bubble holds the video it is playing is a setting rather than
+/// a view of one, and the side that acts on a change is the preview loop on its next tick: a film
+/// that is running because the switch was off is held the moment it is switched on, and one that
+/// is already held is left where it is until the pin is put back up, because a player started
+/// beside a bubble would be a picture on screen next to it (see `settle_bubble_playback`).
+fn toggle_pin_pause_video() {
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_pause_video = !config.pin_pause_video;
+        config.save();
+    }
+}
+
+/// The sound's half of the pair above, read on the same tick and acting the same way.
+fn toggle_pin_pause_audio() {
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_pause_audio = !config.pin_pause_audio;
         config.save();
     }
 }

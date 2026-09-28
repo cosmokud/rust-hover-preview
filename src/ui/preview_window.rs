@@ -6,7 +6,8 @@ use crate::config::config::{
     DEFAULT_AUDIO_SEEK, DEFAULT_DDS_BACKGROUND, DEFAULT_DESIGN_BACKGROUND, DEFAULT_DESIGN_SCALE,
     DEFAULT_DOCUMENT_SCALE, DEFAULT_EBOOK_SCALE, DEFAULT_FONT_BACKGROUND, DEFAULT_FONT_SCALE,
     DEFAULT_IMAGE_BACKGROUND, DEFAULT_IMAGE_CACHE_MB, DEFAULT_NORMALIZE_VIDEO_VOLUME,
-    DEFAULT_NORMALIZE_VOLUME, DEFAULT_PIN_UPDATE_ENABLED, DEFAULT_PREVIEW_SCALE_PERCENT,
+    DEFAULT_NORMALIZE_VOLUME, DEFAULT_PIN_PAUSE_AUDIO, DEFAULT_PIN_PAUSE_VIDEO,
+    DEFAULT_PIN_UPDATE_ENABLED, DEFAULT_PREVIEW_SCALE_PERCENT,
     DEFAULT_SPINNER_DELAY_MS,
     DEFAULT_TEXT_FONT_SCALE_PERCENT, DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS,
     DEFAULT_VECTOR_BACKGROUND, DEFAULT_VECTOR_SCALE, DEFAULT_VIDEO_SCALE_PERCENT,
@@ -1455,7 +1456,7 @@ pub fn pinned_path() -> Option<PathBuf> {
 
 /// Ask for the pinned window to be shown another file, from any thread: the Explorer hook's
 /// answer to the user clicking a file, selecting one with the keyboard, or — where
-/// `Pin Mode → Update Preview → Update on Hover` asks for it — settling on one.
+/// `Pin Mode → Update Preview → On Hover` asks for it — settling on one.
 ///
 /// What a pin is belongs to the preview loop, so the loop is what takes the swap up, on its
 /// next tick, by the path the tray's own rows take. A pin that is not up is not a window to
@@ -11535,6 +11536,11 @@ struct PinnedPreview {
     chrome: PinChrome,
     /// Whether the window is collapsed into the round bubble the minimize button leaves.
     collapsed: bool,
+    /// What the bubble has parked while the window is collapsed, and what puts it back when the
+    /// pin is put up again: nothing while nothing was — a gate switched off, a video the bar was
+    /// used to pause before the pin was collapsed, a kind with no player behind it (see
+    /// `BubblePause`).
+    bubble_pause: Option<BubblePause>,
     /// The caption button the pointer is over and the one it has pressed: what the caption is
     /// painted from, and what a release acts on.
     hovered: Option<pin_chrome::CaptionButton>,
@@ -11547,6 +11553,22 @@ struct PinnedPreview {
     /// The level this pin plays at, which belongs to this window rather than to the setting it was
     /// read from (see `PinVolume`).
     volume: PinVolume,
+}
+
+/// What a pin's collapse into its bubble parked, and what it takes to put it back.
+///
+/// Two engines play a moving file and the bubble parks them differently: the media engine
+/// Windows has is told to pause and holds where it stands, while FFmpeg's player takes no pause
+/// at all and is therefore ended, with the second of the file it had reached kept here for the
+/// player that takes its place when the pin comes up again (see `start_audio_player` and
+/// `restart_pinned_player`). Which engine it is is the media's own business rather than the
+/// setting's, so what is parked is asked of the engine that is playing.
+#[derive(Clone, Copy)]
+enum BubblePause {
+    /// The media engine was paused where it stood — a video or a sound it was playing.
+    Engine,
+    /// FFmpeg's player was ended at this second of the file — a video or a sound it was playing.
+    Player(f64),
 }
 
 /// Where a pinned video's playback is.
@@ -12281,6 +12303,26 @@ fn pin_update_enabled() -> bool {
         .unwrap_or(DEFAULT_PIN_UPDATE_ENABLED)
 }
 
+/// Whether a pin collapsed into its bubble holds the video it is playing where it is, as the
+/// configuration has it (see `Pin Mode → Pause Preview → Video`). It is read by the tick that
+/// keeps a collapsed pin's playback in step with the bubble, so a switch thrown while the pin
+/// is a bubble is answered on the next tick (see `settle_bubble_playback`).
+fn pin_pause_video() -> bool {
+    CONFIG
+        .lock()
+        .map(|config| config.pin_pause_video)
+        .unwrap_or(DEFAULT_PIN_PAUSE_VIDEO)
+}
+
+/// And the same question about a sound, asked in the same place (see
+/// `Pin Mode → Pause Preview → Audio`).
+fn pin_pause_audio() -> bool {
+    CONFIG
+        .lock()
+        .map(|config| config.pin_pause_audio)
+        .unwrap_or(DEFAULT_PIN_PAUSE_AUDIO)
+}
+
 /// The pin a key press asks for, if there is anything on screen to pin: the file the preview
 /// is of, and the box it occupies at this moment.
 ///
@@ -12362,6 +12404,15 @@ fn pin_media_is_alive() -> bool {
 
         (media.media_type, media.video_process.is_some())
     };
+
+    // What the bubble parked is not something that came apart: a player this app ended, or an
+    // engine it paused, is the pin's media still — what the pin is a window onto has not gone
+    // anywhere, and the restore that follows is what puts it back (see `BubblePause`). Asked
+    // before the kinds below, two of which would answer "gone" about a player that is
+    // deliberately not running.
+    if pin_bubble_pause().is_some() {
+        return true;
+    }
 
     match kind {
         MediaType::Video => is_video_process_running(),
@@ -13072,8 +13123,9 @@ static PIN_BUBBLE_MOVED: AtomicBool = AtomicBool::new(false);
 
 /// Collapse a pinned window into the round bubble it leaves: the window and everything standing
 /// in it come off the screen, and a small circle takes their place. A collapsed pin is still a
-/// pin — what is playing goes on playing, and previews are still held back until it is restored
-/// or closed (see `PIN_COLLAPSED`).
+/// pin — previews are still held back until it is restored or closed, and what it is playing is
+/// held where it is by the two `Pin Mode → Pause Preview` switches (see `PIN_COLLAPSED` and
+/// `settle_bubble_playback`).
 fn collapse_pin() {
     let anchor = {
         let Ok(mut pinned) = PINNED.lock() else {
@@ -13142,8 +13194,9 @@ fn pinned_minimize_box(pin: &PinnedPreview) -> ScreenRegion {
     )
 }
 
-/// Put a collapsed pin back up: the bubble goes, the window comes back where it was, and
-/// whatever stands in its media band — the player's window, the browser's — is put back with it.
+/// Put a collapsed pin back up: the bubble goes, the window comes back where it was, whatever
+/// stands in its media band — the player's window, the browser's — is put back with it, and what
+/// the collapse parked is started again by the tick this runs in (see `settle_bubble_playback`).
 fn restore_pin() {
     {
         let Ok(mut pinned) = PINNED.lock() else {
@@ -13204,6 +13257,171 @@ fn restore_pin() {
         } else {
             place_pinned_siblings();
         }
+    }
+}
+
+/// What the bubble a collapsed pin left has parked, if anything (see `BubblePause`).
+fn pin_bubble_pause() -> Option<BubblePause> {
+    let pinned = PINNED.lock().ok()?;
+    let pin = pinned.as_ref()?;
+    pin.bubble_pause
+}
+
+/// Write an answer about what the bubble has parked back into the pin, if there is still one.
+fn update_pin_bubble_pause(park: Option<BubblePause>) {
+    if let Ok(mut pinned) = PINNED.lock() {
+        if let Some(pin) = pinned.as_mut() {
+            pin.bubble_pause = park;
+        }
+    }
+}
+
+/// Keep a pin's playback in step with its bubble: hold what is playing when the pin is collapsed
+/// — each kind behind the switch of its own, a video behind `Pin Mode → Pause Preview → Video`
+/// and a sound behind `... → Audio` — and put it back the way it was when the pin comes up again.
+///
+/// It runs on the tick beside the pin's own commands, and the sound's clock is half of why: a
+/// sound FFmpeg plays is timed by this app over the moment its player was started and the second
+/// of the file it was started at, both of which are the loop's own (see `audio_clock`), so a park
+/// made anywhere else would be a sound put back at the beginning of its file. The other half is
+/// that the media, the player and the engine's session are this thread's, so this is the thread
+/// the whole of it can be asked of (see `video_player`).
+///
+/// The switches are read every tick rather than once at the collapse, so one thrown while the pin
+/// is a bubble is answered on the next tick: a film left running because its switch was off is
+/// held the moment the switch is turned on. The other way round is deliberately not symmetric — a
+/// park is not given back until the pin is up again, because a player started beside a bubble
+/// would be a picture on screen next to the one thing a collapse leaves there.
+fn settle_bubble_playback(audio_started: &mut Option<Instant>, audio_start_offset: &mut f64) {
+    let (collapsed, parked) = {
+        let Ok(pinned) = PINNED.lock() else {
+            return;
+        };
+        let Some(pin) = pinned.as_ref() else {
+            return;
+        };
+
+        (pin.collapsed, pin.bubble_pause)
+    };
+
+    if collapsed {
+        if parked.is_some() {
+            return;
+        }
+
+        if let Some(park) = bubble_playback_to_park(audio_started, audio_start_offset) {
+            update_pin_bubble_pause(Some(park));
+        }
+    } else if let Some(park) = parked {
+        put_back_bubble_playback(park, audio_started, audio_start_offset);
+        update_pin_bubble_pause(None);
+    }
+}
+
+/// What the bubble owes the media on screen, if anything: what is playing, behind the switch that
+/// kind answers to, and what it takes to put it back (see `BubblePause`).
+fn bubble_playback_to_park(
+    audio_started: &mut Option<Instant>,
+    audio_start_offset: &mut f64,
+) -> Option<BubblePause> {
+    let kind = current_media_type()?;
+
+    match kind {
+        MediaType::NativeVideo | MediaType::Video if pin_pause_video() => {
+            let (path, content, transport, _) = pinned_playback_state()?;
+
+            // What is not playing is not parked: a video the bar was used to pause before the
+            // pin was collapsed is one a restore has nothing to put back, and the second it is
+            // held at is the bar's business rather than the bubble's.
+            if !pin_is_playing(&transport) {
+                return None;
+            }
+
+            let playhead = pin_playhead(&transport).unwrap_or(0.0);
+            toggle_pinned_playback(&path, content, transport);
+
+            Some(match kind {
+                MediaType::NativeVideo => BubblePause::Engine,
+                _ => BubblePause::Player(playhead),
+            })
+        }
+        MediaType::Audio if pin_pause_audio() => {
+            // A sound FFmpeg plays is a process, and a process is parked by being ended: where it
+            // had got to is read before it goes, because the clock that measures it goes with it,
+            // and the player that takes its place is begun at that second (see
+            // `put_back_bubble_playback`). A sound the engine Windows has is held where it
+            // stands, the way a video is.
+            let playing = CURRENT_MEDIA
+                .lock()
+                .ok()
+                .and_then(|media| media.as_ref().map(|media| media.video_process.is_some()))
+                .unwrap_or(false);
+
+            if playing {
+                let (path, _) = pinned_media_owner()?;
+                let played = audio_clock(&path, *audio_started, *audio_start_offset)
+                    .0
+                    .unwrap_or(0.0);
+
+                if let Ok(mut current) = CURRENT_MEDIA.lock() {
+                    if let Some(media) = current.as_mut() {
+                        kill_player_process(media);
+                    }
+                }
+                // The clock the card is drawn from is taken down with the player: seconds that
+                // went on moving under a bubble would be a card claiming a sound is playing, and
+                // the park is what put this one where it is (see `audio_clock`).
+                *audio_started = None;
+
+                Some(BubblePause::Player(played))
+            } else if video_player::is_playing() {
+                video_player::set_paused(true);
+
+                Some(BubblePause::Engine)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Put back what the bubble parked, in the way the engine that parked it answers to.
+///
+/// A video goes back through the transport, which is where a pause of this app's is kept: the
+/// media engine is told to go on and the second the bar was held at is cleared, and a player
+/// FFmpeg's is begun again at that second (see `toggle_pinned_playback`). A sound the engine
+/// Windows has is simply told to go on; one FFmpeg plays is begun again at the second the park
+/// wrote down, with the clock the card is drawn from set to it, so the card goes on from where
+/// the sound was rather than from the beginning of the file or from the moment the pin returned.
+fn put_back_bubble_playback(
+    park: BubblePause,
+    audio_started: &mut Option<Instant>,
+    audio_start_offset: &mut f64,
+) {
+    match (current_media_type(), park) {
+        (Some(MediaType::Video) | Some(MediaType::NativeVideo), _) => {
+            if let Some((path, content, transport, _)) = pinned_playback_state() {
+                if !pin_is_playing(&transport) {
+                    toggle_pinned_playback(&path, content, transport);
+                }
+            }
+        }
+        (Some(MediaType::Audio), BubblePause::Engine) => video_player::set_paused(false),
+        (Some(MediaType::Audio), BubblePause::Player(from)) => {
+            if let Some((path, _)) = pinned_media_owner() {
+                if let Ok(mut current) = CURRENT_MEDIA.lock() {
+                    if let Some(media) = current.as_mut() {
+                        if start_audio_playback(&path, media, from) && media.video_process.is_some()
+                        {
+                            *audio_started = Some(Instant::now());
+                            *audio_start_offset = from;
+                        }
+                    }
+                }
+            }
+        }
+        _ => {}
     }
 }
 
@@ -15094,6 +15312,12 @@ pub fn run_preview_window() {
             if pinned() {
                 pin_command_request(&mut pin_request);
 
+                // What a collapse into the bubble holds back and what a restore puts back,
+                // read from the two `Pin Mode → Pause Preview` switches every tick: a switch
+                // thrown while the pin is a bubble is answered on the next one (see
+                // `settle_bubble_playback`).
+                settle_bubble_playback(&mut audio_started, &mut audio_start_offset);
+
                 // What a key does to a pinned text preview, polled rather than waited for: a
                 // window that never takes focus never receives a keystroke as a message. Ctrl+C
                 // is answered for every preview by the tick below, which puts what is selected on
@@ -16807,6 +17031,7 @@ pub fn run_preview_window() {
                                     },
                                 },
                                 collapsed: false,
+                                bubble_pause: None,
                                 hovered: None,
                                 pressed: None,
                                 dragging: None,
@@ -20991,6 +21216,7 @@ mod tests {
             overlay: true,
             chrome,
             collapsed: false,
+            bubble_pause: None,
             hovered: None,
             pressed: None,
             dragging: None,
@@ -21527,6 +21753,7 @@ mod tests {
             overlay: false,
             chrome: PinChrome::always(),
             collapsed: false,
+            bubble_pause: None,
             hovered: None,
             pressed: None,
             dragging: None,
@@ -21922,6 +22149,48 @@ mod tests {
         }
     }
 
+    /// What this guards: a pin collapsed into its bubble whose player this app has parked, which
+    /// is a player that is deliberately not running. The liveness of the thing a pin is a window
+    /// onto is answered about a *process* for the two kinds FFmpeg's player serves, so a park not
+    /// told apart from a player that came apart would take the pin down the moment it was
+    /// minimized — the bubble the pause exists for, gone with the film it was holding.
+    #[test]
+    fn a_player_the_bubble_parked_is_not_a_pin_that_came_apart() {
+        let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+        let previous_pin = PINNED.lock().ok().and_then(|mut pinned| pinned.take());
+
+        let mut video = create_loading_media(8, 8);
+        video.media_type = MediaType::Video;
+        if let Ok(mut media) = CURRENT_MEDIA.lock() {
+            *media = Some(video);
+        }
+
+        let mut pin = overlay_pin((0, 0, 80, 60), PinChrome::always());
+        pin.collapsed = true;
+        pin.bubble_pause = Some(BubblePause::Player(12.5));
+        if let Ok(mut pinned) = PINNED.lock() {
+            *pinned = Some(pin);
+        }
+
+        assert!(
+            pin_media_is_alive(),
+            "the player is parked rather than gone: the pin is a bubble standing for it"
+        );
+
+        update_pin_bubble_pause(None);
+        assert!(
+            !pin_media_is_alive(),
+            "and a video whose player is simply gone is what it always was"
+        );
+
+        if let Ok(mut pinned) = PINNED.lock() {
+            *pinned = previous_pin;
+        }
+        if let Ok(mut media) = CURRENT_MEDIA.lock() {
+            *media = previous_media;
+        }
+    }
+
     /// What this guards: a pinned video laid out again for the box its window was dragged to, which
     /// is where a resize used to flash a sheared picture for the moment before the engine handed
     /// the next frame over.
@@ -22008,6 +22277,7 @@ mod tests {
                     overlay: true,
                     chrome: PinChrome::on_arrival(Instant::now()),
                     collapsed: false,
+                    bubble_pause: None,
                     hovered: None,
                     pressed: None,
                     dragging: None,
