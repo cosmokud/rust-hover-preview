@@ -11506,6 +11506,15 @@ struct PinnedPreview {
     /// chrome over or around this box, which is why the box is what the pin remembers and what a
     /// restore puts back (see `PinnedPreview::window_box`).
     content: ScreenRegion,
+    /// The largest box a swap may give this pin's media: the size the media box had when the pin
+    /// went up, or the size a manual resize last left it at, which is the only thing that writes it
+    /// (see `apply_pin_drag`).
+    ///
+    /// It exists because a swap fits one shape inside a box, and a box that was itself the last
+    /// swap's answer can only ever lose a side of it: a pin that followed a listing past files of
+    /// different shapes would walk its way down to nothing with every file picked. What a swap
+    /// writes is `content`; this stays the size the user gave the pin (see `pin_update_plan`).
+    bound: (i32, i32),
     /// The box to go back to when a maximized pin is restored, and `None` while it is not
     /// maximized.
     restore: Option<ScreenRegion>,
@@ -12436,6 +12445,31 @@ struct PinUpdate {
     volume: u32,
 }
 
+/// What a pin that is up has to lay the file that replaces the one it is showing out with: the box
+/// the pin occupies now, the bound it may not grow past, the two facts about the kind on screen
+/// that turn a display's work area into the pin's own room, and whether the window is maximized.
+///
+/// Each one is an answer about how large the new media may be, and each is read off the pin in one
+/// look and carried by value for the reason `PinUpdate` is: the lock that answered is what the
+/// window procedure takes to answer a drag, and a swap must not hold it across a file read (see
+/// `pin_swap_room` and `pin_update_content`).
+#[derive(Clone, Copy)]
+struct PinSwapSpace {
+    /// The media box the pin has now: what the new file is centred on, so a window the hand has
+    /// moved keeps its place while it changes size.
+    current: ScreenRegion,
+    /// The largest box the new file's media may take, which is a swap's ceiling rather than the
+    /// size it is given (see `PinnedPreview::bound`).
+    bound: (i32, i32),
+    /// Whether the kind on screen carries a transport bar.
+    transport_bar: bool,
+    /// Whether its chrome is drawn over its media (see `pin_overlay_chrome`).
+    overlay: bool,
+    /// Whether the window is maximized, where the display's room is the box and the bound is left
+    /// for the restore that follows.
+    maximized: bool,
+}
+
 /// The plan for showing the pinned window another file, if there is one to be had.
 ///
 /// Nothing comes of a pin that is collapsed into its bubble — there is no media on screen to
@@ -12445,12 +12479,22 @@ struct PinUpdate {
 /// one row — is: the work a swap costs is a decode, and it is not work to do twice for one file.
 /// Nothing comes of a file with no shape yet either, or of one this app has no preview for: a pin
 /// that is up can only keep the file it is showing.
+///
+/// What the new file's box is measured against is the pin's own bound rather than the box the file
+/// on screen came out at, which is the whole of what keeps a pin that follows a listing one size
+/// (see `PinnedPreview::bound`).
 fn pin_update_plan(path: &PathBuf) -> Option<PinUpdate> {
-    let (current, volume, collapsed, showing) = {
+    let (space, volume, collapsed, showing) = {
         let pinned = PINNED.lock().ok()?;
         let pin = pinned.as_ref()?;
         (
-            pin.content,
+            PinSwapSpace {
+                current: pin.content,
+                bound: pin.bound,
+                transport_bar: pin.transport_bar,
+                overlay: pin.overlay,
+                maximized: pin.restore.is_some(),
+            },
             pin.volume.level,
             pin.collapsed,
             pin.path.clone(),
@@ -12465,41 +12509,49 @@ fn pin_update_plan(path: &PathBuf) -> Option<PinUpdate> {
     // it, rather than read off the pin: what the take-up computes is the scale it draws the new
     // kind's chrome at, and a media loaded at another one would be a picture and a caption that
     // disagree about how large a pixel is.
-    let dpi = monitor_dpi_from_point(current.0, current.1);
-    let bounds = monitor_bounds_from_point(current.0, current.1);
+    let dpi = monitor_dpi_from_point(space.current.0, space.current.1);
+    let bounds = monitor_bounds_from_point(space.current.0, space.current.1);
 
     Some(PinUpdate {
-        content: pin_update_content(current, path, bounds, dpi)?,
+        content: pin_update_content(space, path, bounds, dpi)?,
         dpi,
         volume,
     })
 }
 
-/// The media box a pin is given for another file: the box the pin has now, with the shape of the
-/// file that replaces it fitted inside it.
+/// The media box a pin is given for another file.
 ///
-/// What a pin promises across a swap is where it stands and how large it is: a window that jumped
-/// to a fresh placement — beside the pointer that picked the file, or into the best room the
-/// display has — would be a window taken out from under the hand that is reading it, and the point
-/// of the setting is for the pin to follow the listing rather than for it to be placed again on
-/// every file. So the box the new media is given is the largest box of its own shape that fits the
-/// box the old one had — the rule every preview is fitted into its room by (see `pinned_media_box`)
-/// — put in the middle of that box, so that a file of another shape looks like the same window
-/// showing something else. Nothing is drawn outside the old box, which is what keeps a swap off
-/// the edges of the display: the window that follows it is the old window with the chrome of the
-/// new kind around it, kept on the display by the clamp a take-up is kept by.
+/// What a pin promises across a swap is where it stands: a window that jumped to a fresh placement
+/// — beside the pointer that picked the file, or into the best room the display has — would be a
+/// window taken out from under the hand that is reading it, and the point of the setting is for the
+/// pin to follow the listing rather than for it to be placed again on every file. So the new media
+/// goes in the middle of the box the pin has now, and how large it may be is answered by three
+/// things, innermost first:
+///
+/// - The bound the pin carries is the ceiling. A swap fits one shape into a box, and a box that was
+///   itself the last swap's answer can only ever lose a side of it, so what the new file is fitted
+///   into is the size the window was given rather than the size the last file left (see
+///   `PinnedPreview::bound`).
+/// - Inside it the file is laid out at the scale the configuration asks for — the scale a hover of
+///   the same file would take: fit-to-screen fills the bound, a percentage takes the file's own
+///   size and is reduced only where the bound cannot hold it (see `effective_preview_scale`).
+/// - And a window that is maximized stays maximized: the box it is given is the one it has, laid
+///   out at fit-to-screen the way the maximize itself was, since a swap is not the gesture that
+///   takes the window out of the state the user put it in.
 ///
 /// A kind with no shape of its own keeps the box exactly: a page of text, a listing either reader
 /// produces, and a sound's card are measured against the room they are drawn in rather than against
-/// a size the file holds, so the box *is* what they are drawn to (see `pin_keeps_its_box`).
+/// a size the file holds, so the box *is* what they are drawn to — and the scaling rules say
+/// nothing about a size they do not have, which is why a swap to one of them neither takes the
+/// bound nor changes it (see `pin_keeps_its_box`).
 fn pin_update_content(
-    current: ScreenRegion,
+    space: PinSwapSpace,
     path: &PathBuf,
     bounds: ScreenBounds,
     dpi: u32,
 ) -> Option<ScreenRegion> {
     if pin_keeps_its_box(path) {
-        return Some(current);
+        return Some(space.current);
     }
 
     // A page that is still being drawn is not a size to lay anything out with: what the new file
@@ -12512,29 +12564,70 @@ fn pin_update_content(
 
     let shape = media_dimensions(path, bounds, dpi)?;
 
-    Some(pin_update_box(current, shape))
+    if space.maximized {
+        return Some(pin_update_box(
+            space.current,
+            shape,
+            PreviewScale::FitToScreen,
+        ));
+    }
+
+    // A video whose probe has not answered has no shape yet either — what was measured is the wait
+    // — and the wait is fitted into the room the way it always was rather than sized by a scale
+    // that is about a file: `effective_preview_scale` answers a wait with its own size, which is
+    // the hover's rule and not this window's, since a pin is not replayed the moment the probe
+    // lands the way a hover is (see `video_probe_due`).
+    let scale = if video_probe_due(path) {
+        PreviewScale::FitToScreen
+    } else {
+        effective_preview_scale(path, current_hover_scales())
+    };
+
+    Some(pin_update_box(pin_swap_room(space, bounds, dpi), shape, scale))
 }
 
-/// The box a pinned window's media takes for another file's shape: the largest box of that shape the
-/// box the pin has can hold, in the middle of it.
+/// The room a swap fits the new file into: the bound, no larger than the room the display has, in
+/// the middle of the box the pin occupies now.
+///
+/// The display's own room is the second limit because a bound outlives the one it was measured on:
+/// a window carried to a smaller display, or one the desktop was rearranged under, is fitted into
+/// the room that is there rather than into the room that was, and the take-up that follows a swap
+/// is kept on the display by the same clamp every other box is (see `clamp_pinned_box`).
+fn pin_swap_room(space: PinSwapSpace, bounds: ScreenBounds, dpi: u32) -> ScreenRegion {
+    let (room_width, room_height) =
+        pinned_room(bounds, dpi, space.transport_bar, space.overlay).room();
+    let centre = (
+        (space.current.0 + space.current.2) / 2,
+        (space.current.1 + space.current.3) / 2,
+    );
+
+    centred_at(
+        (
+            space.bound.0.clamp(1, room_width.max(1) as i32),
+            space.bound.1.clamp(1, room_height.max(1) as i32),
+        ),
+        centre,
+    )
+}
+
+/// The box a pinned window's media takes for another file's shape: the largest box of that shape
+/// the room can hold at the scale it is given, in the middle of the room.
 ///
 /// It is the rule every preview is fitted into its room by, asked of a box rather than of a display
 /// (see `pinned_media_box`), and what it is for is the two promises a swap keeps: nothing of the new
-/// media falls outside the box the old one occupied, and what is left of that box is shared equally
-/// — so a file of another shape is the same window showing something else rather than a window that
-/// has moved or grown.
-fn pin_update_box(room: ScreenRegion, shape: (u32, u32)) -> ScreenRegion {
+/// media falls outside the room, and what is left of that room is shared equally — so a file of
+/// another shape is the same window showing something else rather than a window that has moved.
+fn pin_update_box(room: ScreenRegion, shape: (u32, u32), scale: PreviewScale) -> ScreenRegion {
     let bounds = ScreenBounds {
         left: room.0,
         top: room.1,
         right: room.2,
         bottom: room.3,
     };
-    let (width, height) = pinned_media_box(shape, bounds, PreviewScale::FitToScreen);
-    let left = room.0 + ((room.2 - room.0).max(1) - width) / 2;
-    let top = room.1 + ((room.3 - room.1).max(1) - height) / 2;
+    let (width, height) = pinned_media_box(shape, bounds, scale);
+    let centre = ((room.0 + room.2) / 2, (room.1 + room.3) / 2);
 
-    (left, top, left + width, top + height)
+    centred_at((width, height), centre)
 }
 
 /// Whether a preview of this file is drawn to the box it is given rather than scaled into it by a
@@ -14739,6 +14832,15 @@ unsafe fn apply_pin_drag(hwnd: HWND) {
         let Some(pin) = pinned.as_mut() else {
             return;
         };
+        // A hand that pulled the box to a size is the box's new bound as well as its size: what the
+        // user resized the window to is the size the files that follow are fitted into, and a move
+        // is not a size and leaves it alone (see `PinnedPreview::bound`).
+        if matches!(drag.action, PinDragAction::Resize(_)) {
+            pin.bound = (
+                (content.2 - content.0).max(1),
+                (content.3 - content.1).max(1),
+            );
+        }
         pin.content = content;
     }
 
@@ -17002,7 +17104,13 @@ pub fn run_preview_window() {
                         // exactly as it always did.
                         let carried = PINNED.lock().ok().and_then(|pinned| {
                             pinned.as_ref().map(|pin| {
-                                (pin.restore, pin.chrome, pin.volume, pin.overlay)
+                                (
+                                    pin.restore,
+                                    pin.chrome,
+                                    pin.volume,
+                                    pin.overlay,
+                                    pin.bound,
+                                )
                             })
                         });
 
@@ -17011,6 +17119,17 @@ pub fn run_preview_window() {
                             *pinned = Some(PinnedPreview {
                                 path: path.clone(),
                                 content,
+                                // A pin taken up over another one keeps the bound the window has:
+                                // what a swap is measured against is the size the window was given
+                                // rather than the size the file it is showing came out at. A first
+                                // pin has no bound yet, and its own box becomes one.
+                                bound: match carried {
+                                    Some((.., bound)) => bound,
+                                    None => (
+                                        (content.2 - content.0).max(1),
+                                        (content.3 - content.1).max(1),
+                                    ),
+                                },
                                 restore: carried.and_then(|(restore, ..)| restore),
                                 dpi,
                                 transport_bar,
@@ -17021,7 +17140,7 @@ pub fn run_preview_window() {
                                     // Chrome belongs to the kind it was drawn over: one kind's
                                     // strip has nothing to say about another's, so a swap that
                                     // changes it arrives as the new kind's own does.
-                                    Some((_, chrome, _, was_overlay)) if was_overlay == overlay => {
+                                    Some((_, chrome, _, was_overlay, _)) if was_overlay == overlay => {
                                         chrome
                                     }
                                     _ => if overlay {
@@ -17047,7 +17166,7 @@ pub fn run_preview_window() {
                                     ..Default::default()
                                 },
                                 volume: match carried {
-                                    Some((_, _, volume, _)) => volume,
+                                    Some((_, _, volume, _, _)) => volume,
                                     None => PinVolume {
                                         level: volume,
                                         playing_at: volume,
@@ -21207,6 +21326,7 @@ mod tests {
     fn overlay_pin(content: ScreenRegion, chrome: PinChrome) -> PinnedPreview {
         PinnedPreview {
             path: PathBuf::from("picture.png"),
+            bound: ((content.2 - content.0).max(1), (content.3 - content.1).max(1)),
             content,
             restore: None,
             dpi: 96,
@@ -21589,10 +21709,10 @@ mod tests {
     }
 
     /// A pin shown another file keeps the box it has: what the new file is given is the largest box
-    /// of its own shape that the box the pin is standing in can hold, in the middle of it. So the
-    /// window a swap comes out of stands where the window was and is no larger than it, whatever the
-    /// two files' shapes are, and what is drawn in it is the shape of the file that replaces the
-    /// pin's rather than the shape of the file it replaces.
+    /// of its own shape that the room can hold at the scale it is given, in the middle of it. So the
+    /// window a swap comes out of stands where the window was and is no larger than the room,
+    /// whatever the two files' shapes are, and what is drawn in it is the shape of the file that
+    /// replaces the pin's rather than the shape of the file it replaces.
     #[test]
     fn a_swap_fits_the_new_shape_into_the_box_the_pin_has() {
         // A media box 800 by 500, with a window around it that is nobody's business here.
@@ -21607,7 +21727,7 @@ mod tests {
             (500, 800),
             (800, 500),
         ] {
-            let content = pin_update_box(room, shape);
+            let content = pin_update_box(room, shape, PreviewScale::FitToScreen);
             let width = (content.2 - content.0).max(1);
             let height = (content.3 - content.1).max(1);
             let shape_ratio = shape.0 as f64 / shape.1 as f64;
@@ -21629,6 +21749,151 @@ mod tests {
                 "the box {content:?} is not in the middle of the pin's own"
             );
         }
+    }
+
+    /// The box a swap is fitted into is the bound the pin carries rather than the box the file
+    /// before it left, so a pin that is shown file after file keeps the size it went up with: what
+    /// fitting one shape into the box another came out of does is take a side off it, and a run of
+    /// files whose proportions disagree would walk the window down to nothing one file at a time.
+    #[test]
+    fn a_swap_is_fitted_into_the_bound_rather_than_the_box_the_last_file_left() {
+        // A pin that went up at 800 by 500 on a display with room to spare, and the box it stands
+        // in now: a swap may take the window down from the bound and may never put it past it.
+        let bounds = ScreenBounds {
+            left: 0,
+            top: 0,
+            right: 1920,
+            bottom: 1080,
+        };
+        let bound = (800, 500);
+        let mut current = (100, 200, 900, 700);
+        let centre = ((current.0 + current.2) / 2, (current.1 + current.3) / 2);
+
+        // The shapes a listing holds, and the one setting that fills the bound whatever the file's
+        // own pixels are — the scale that shrinks fastest when the room is the last file's box.
+        let shapes = [
+            (1920u32, 1080u32),
+            (1080, 1920),
+            (4000, 400),
+            (100, 100),
+        ];
+
+        // Twice round the same files: what the pin is given for one is the same answer in both
+        // passes, which is the whole of what the old box being the room had taken away.
+        let mut passes: Vec<Vec<(i32, i32)>> = Vec::new();
+        for _ in 0..2 {
+            let mut sizes = Vec::new();
+
+            for shape in shapes {
+                let space = PinSwapSpace {
+                    current,
+                    bound,
+                    transport_bar: false,
+                    overlay: true,
+                    maximized: false,
+                };
+                current = pin_update_box(
+                    pin_swap_room(space, bounds, 96),
+                    shape,
+                    PreviewScale::FitToScreen,
+                );
+
+                let (width, height) = (current.2 - current.0, current.3 - current.1);
+                let middle = ((current.0 + current.2) / 2, (current.1 + current.3) / 2);
+                assert!(
+                    width <= bound.0 && height <= bound.1,
+                    "a {shape:?} file was given a box larger than the bound: {current:?}"
+                );
+                assert!(
+                    (middle.0 - centre.0).abs() <= 1 && (middle.1 - centre.1).abs() <= 1,
+                    "the box {current:?} has moved from where the window stands"
+                );
+
+                sizes.push((width, height));
+            }
+
+            passes.push(sizes);
+        }
+
+        assert_eq!(
+            passes[0], passes[1],
+            "a file was given a different box the second time it was shown"
+        );
+    }
+
+    /// The scale the tray names decides the box inside the bound: a percentage takes the file's own
+    /// size, reduced only where the bound cannot hold it, and fit-to-screen fills the bound — and
+    /// the bound is the ceiling for both, so a file can be shown smaller than it, and never larger.
+    #[test]
+    fn a_swap_takes_the_scale_setting_and_the_bound_is_its_ceiling() {
+        let bounds = ScreenBounds {
+            left: 0,
+            top: 0,
+            right: 1920,
+            bottom: 1080,
+        };
+        let space = PinSwapSpace {
+            current: (100, 200, 900, 700),
+            bound: (800, 500),
+            transport_bar: false,
+            overlay: true,
+            maximized: false,
+        };
+        let room = pin_swap_room(space, bounds, 96);
+
+        // A small file at a percentage is its own size, in the middle of the room the bound makes:
+        // what the setting asks for is the file's pixels, not the room's.
+        assert_eq!(
+            pin_update_box(room, (400, 250), PreviewScale::Percent(100)),
+            (300, 325, 700, 575)
+        );
+
+        // The same file at fit-to-screen fills the bound, one axis of it exactly.
+        assert_eq!(
+            pin_update_box(room, (400, 250), PreviewScale::FitToScreen),
+            room
+        );
+
+        // And a file larger than the bound, at the same percentage, is reduced to it rather than
+        // drawn at its own pixels.
+        assert_eq!(
+            pin_update_box(room, (2000, 1000), PreviewScale::Percent(100)),
+            (100, 250, 900, 650)
+        );
+    }
+
+    /// A bound outlives the display it was measured on: a window carried to a smaller display, or
+    /// one the desktop was rearranged under, is fitted into the room that is there rather than into
+    /// the room the bound was given, so a swap cannot put a window back up that the display has no
+    /// room to show.
+    #[test]
+    fn a_bound_larger_than_the_display_is_capped_by_the_room_it_is_on() {
+        let bounds = ScreenBounds {
+            left: 0,
+            top: 0,
+            right: 1280,
+            bottom: 800,
+        };
+        let space = PinSwapSpace {
+            current: (0, 0, 2000, 3000),
+            bound: (2000, 3000),
+            transport_bar: true,
+            overlay: false,
+            maximized: false,
+        };
+
+        // The room of a kind with bands is the work area less the caption and the transport bar,
+        // and what stands in the middle of the box the window has now is that room's own size.
+        let room = pin_swap_room(space, bounds, 96);
+        assert_eq!((room.2 - room.0, room.3 - room.1), (1280, 800 - 30 - 30));
+
+        // And what is fitted into it stays inside it: a tall file the size of the bound is taken
+        // down to the display rather than standing 3000 pixels tall on an 800 pixel screen.
+        let content = pin_update_box(room, (2000, 3000), PreviewScale::Percent(100));
+        assert!(
+            content.2 - content.0 <= 1280 && content.3 - content.1 <= 800 - 30 - 30,
+            "a box larger than the room was given back: {content:?}"
+        );
     }
 
     /// The same drag on a pin whose chrome is drawn *over* its media, which is every kind this app
@@ -21744,6 +22009,7 @@ mod tests {
     fn a_pinned_window_says_which_of_its_edges_a_point_is_on() {
         let pin = PinnedPreview {
             path: PathBuf::from("picture.png"),
+            bound: (600, 400),
             content: (100, 100, 700, 500),
             restore: None,
             dpi: 96,
@@ -22268,6 +22534,7 @@ mod tests {
             if let Ok(mut pinned) = PINNED.lock() {
                 *pinned = Some(PinnedPreview {
                     path: path.clone(),
+                    bound: (320, 240),
                     content: (0, 0, 320, 240),
                     restore: None,
                     dpi: 96,
