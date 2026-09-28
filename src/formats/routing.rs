@@ -38,7 +38,7 @@ use std::path::Path;
 /// reading it, and it exists for exactly one pair of names. A `.ts` is a transport stream in
 /// one list and TypeScript in another, and which of the two it is, is the file's own content:
 /// asked of a file, that content is read; asked of a name the content already spoke for, it is
-/// not asked again (see `video_formats::claims_video_name`).
+/// not asked again (see `video_formats::claims_any_video_name`).
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Asked {
     /// The file itself, whose content has not been read.
