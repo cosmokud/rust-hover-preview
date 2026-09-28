@@ -3685,7 +3685,7 @@ impl PinUpdateWatch {
     ///
     /// Three things are watched, and each of them is a way a file is picked in Explorer: a click,
     /// which is the pointer acting on the view; the item the keyboard is on, which is what a key
-    /// the user presses moves; and — where `Update on Hover` asks for it — the file the pointer
+    /// the user presses moves; and — where `On Hover` asks for it — the file the pointer
     /// settles on, at the delay and the settling the hover behind the pin would have been given.
     /// A pin is not told about a file the pointer merely crosses, and not about one that was under
     /// a pointer nobody moved.

@@ -1271,6 +1271,17 @@ pub const DEFAULT_PIN_UPDATE_ENABLED: bool = true;
 /// pointer crossed over a listing — or parked over another file — leaves it where it is.
 pub const DEFAULT_PIN_UPDATE_ON_HOVER: bool = false;
 
+/// Whether a pin collapsed into its bubble holds the video it is playing where it is, which it
+/// does unless the configuration says otherwise: a bubble is a pin put away, and a film playing
+/// on behind one is heard from a window nobody can see. What is held is put back by the pin
+/// coming up again, at the second it was stopped at (see the `Pin Mode` submenu).
+pub const DEFAULT_PIN_PAUSE_VIDEO: bool = true;
+
+/// And whether it holds a sound, which is the same question asked of the other kind and
+/// answered the same way: a card is not read from a bubble either, and a sound is the half of
+/// a preview that is heard where nothing of it is seen (see `DEFAULT_PIN_PAUSE_VIDEO`).
+pub const DEFAULT_PIN_PAUSE_AUDIO: bool = true;
+
 #[derive(Debug, Clone)]
 pub struct AppConfig {
     pub is_first_run: bool,
@@ -1291,6 +1302,16 @@ pub struct AppConfig {
     /// The key that pins the preview on screen, by name — the same spellings the
     /// trigger key accepts, since both are read by the same table.
     pub pin_key: String,
+    /// Whether a pin collapsed into its bubble holds the video it is playing where it is:
+    /// on, a film is paused the moment the window becomes a bubble and started again at the
+    /// second it was stopped at when the pin comes back up, and off, it plays on behind the
+    /// bubble as it always did (see the `Pin Mode` submenu).
+    pub pin_pause_video: bool,
+    /// The same question about a sound, which is a switch of its own because the two are two
+    /// different things to want quiet — a film a user wants to hear while the bubble is up,
+    /// and a podcast they want left alone while the pin beside it is restored (see
+    /// `pin_pause_video`).
+    pub pin_pause_audio: bool,
     /// Whether a pin is shown another file while it is up: a file the pointer clicks, or one
     /// the keyboard selects, becomes the pin's own — shown in the box the pin already has
     /// rather than as a second preview beside it (see the `Pin Mode` submenu).
@@ -1723,6 +1744,8 @@ impl Default for AppConfig {
             trigger_key_enabled: true,
             pin_enabled: true,
             pin_key: "space".to_string(),
+            pin_pause_video: DEFAULT_PIN_PAUSE_VIDEO,
+            pin_pause_audio: DEFAULT_PIN_PAUSE_AUDIO,
             pin_update_enabled: DEFAULT_PIN_UPDATE_ENABLED,
             pin_update_on_hover: DEFAULT_PIN_UPDATE_ON_HOVER,
             follow_cursor: DEFAULT_FOLLOW_CURSOR,
@@ -1833,6 +1856,8 @@ const SETTING_GROUPS: &[(&str, &[&str])] = &[
         &[
             "pin_enabled",
             "pin_key",
+            "pin_pause_audio",
+            "pin_pause_video",
             "pin_update_enabled",
             "pin_update_on_hover",
             "preview_enabled",
@@ -2588,6 +2613,16 @@ impl AppConfig {
         ini.set(CONFIG_SECTION, "pin_key", Some(self.pin_key.clone()));
         ini.set(
             CONFIG_SECTION,
+            "pin_pause_video",
+            Some(self.pin_pause_video.to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
+            "pin_pause_audio",
+            Some(self.pin_pause_audio.to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
             "pin_update_enabled",
             Some(self.pin_update_enabled.to_string()),
         );
@@ -3025,6 +3060,14 @@ impl AppConfig {
             if !value.is_empty() {
                 self.pin_key = value.to_string();
             }
+        }
+        // Whether a pin collapsed into its bubble holds what is playing where it is, asked of
+        // a video and a sound apart — the two switches of the `Pause Preview` submenu.
+        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "pin_pause_video") {
+            self.pin_pause_video = value;
+        }
+        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "pin_pause_audio") {
+            self.pin_pause_audio = value;
         }
         // Whether a pin follows what the user picks while it is up, and whether the pointer's
         // own hover is one of the ways it does.
@@ -3974,6 +4017,35 @@ mod tests {
             read_file(&mut unknown).audio_seek,
             DEFAULT_AUDIO_SEEK,
             "a value the app cannot read is answered with the way it starts rather than guessed at"
+        );
+    }
+
+    /// What a pin collapsed into its bubble does with what it is playing is two settings, each
+    /// read from its own key: a video behind one and a sound behind the other, so a file that
+    /// turns one off leaves the other where it was. Both hold what is playing unless the file
+    /// says otherwise, which is what the tray offers and what a file written before the two
+    /// switches existed is read as.
+    #[test]
+    fn a_collapsed_pin_holds_what_it_plays_by_each_kinds_own_switch() {
+        let mut ini = Ini::new();
+        ini.set(CONFIG_SECTION, "pin_pause_video", Some("false".to_string()));
+        ini.set(CONFIG_SECTION, "pin_pause_audio", Some("true".to_string()));
+
+        let config = read_file(&mut ini);
+        assert!(!config.pin_pause_video);
+        assert!(config.pin_pause_audio);
+
+        let mut older = Ini::new();
+        older.set(CONFIG_SECTION, "pin_key", Some("space".to_string()));
+
+        let config = read_file(&mut older);
+        assert_eq!(
+            config.pin_pause_video, DEFAULT_PIN_PAUSE_VIDEO,
+            "a file written before the switch existed holds a film the way a fresh one does"
+        );
+        assert_eq!(
+            config.pin_pause_audio, DEFAULT_PIN_PAUSE_AUDIO,
+            "and a sound the same way"
         );
     }
 
