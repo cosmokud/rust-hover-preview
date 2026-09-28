@@ -254,13 +254,13 @@ const ID_TRAY_SCALE_BASE: u16 = 1041;
 /// asks for, and both halves of the kind — a document the browser draws and a metafile the
 /// drawing layer replays — are asked with this one setting.
 const ID_TRAY_VECTOR_SCALE_BASE: u16 = 1400;
-/// The `Ebook Scaling` and `Document Scaling` submenus beside it, each listing the same
-/// shares: they sit in the slack the `Avoid` items leave, so a share of the display is
-/// never read as a way of avoiding the item a preview is about.
+/// The `Ebook Scaling` and `Document Scaling` submenus, each listing the same shares:
+/// they sit in the slack the `Avoid` items leave, so a share of the display is never
+/// read as a way of avoiding the item a preview is about.
 const ID_TRAY_EBOOK_SCALE_BASE: u16 = 1405;
 const ID_TRAY_DOCUMENT_SCALE_BASE: u16 = 1415;
-/// `Font Scaling`, the fourth of them, in the range after the Document one: a specimen is
-/// drawn at a share of the display the same way a document is.
+/// `Font Scaling`, in the range after the Document one: a specimen is drawn at a share of
+/// the display the same way a document is.
 const ID_TRAY_FONT_SCALE_BASE: u16 = 1420;
 /// `Video Scaling`, the `Image Scaling` submenu's twin below it, in the range directly
 /// after the font one: it lists the same shares, so the two share a table and a builder,
