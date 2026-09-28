@@ -1,16 +1,17 @@
 use crate::app::engine_processes;
 use crate::config::config::{
-    AvoidMode, TriggerKeyMode, DEFAULT_HOVER_DELAY_MS, DEFAULT_SAME_FILE_REHOVER_DELAY_MS,
-    DEFAULT_SETTLING_DELAY_MS, DEFAULT_TICK_MS,
+    AvoidMode, TriggerKeyMode, DEFAULT_HOVER_DELAY_MS, DEFAULT_PIN_UPDATE_ENABLED,
+    DEFAULT_PIN_UPDATE_ON_HOVER, DEFAULT_SAME_FILE_REHOVER_DELAY_MS, DEFAULT_SETTLING_DELAY_MS,
+    DEFAULT_TICK_MS,
 };
 use crate::engines::webview_preview;
 use crate::formats::video_formats::is_video_file;
 use crate::shell::wheel_input;
 use crate::ui::preview_window::{
     cursor_preview_hover, end_pin, hide_preview, kill_stray_video_process, monitor_dpi_from_point,
-    pinned, pointer_item_box, pointer_item_holds, preview_pointer_hold, preview_screen_rect,
-    preview_stall_ms, publish_pointer_item_box, show_preview, show_preview_keyboard,
-    take_pin_resumed, PreviewCursorHover,
+    pinned, pinned_path, pointer_item_box, pointer_item_holds, preview_pointer_hold,
+    preview_screen_rect, preview_stall_ms, publish_pointer_item_box, show_preview,
+    show_preview_keyboard, take_pin_resumed, update_pinned_preview, PreviewCursorHover,
 };
 use crate::{CONFIG, RUNNING};
 use once_cell::sync::Lazy;
@@ -1023,6 +1024,11 @@ const DISPLAY_CHANGE_BACKOFF_MS: u64 = 1500;
 const DISPLAY_CHECK_MS: u64 = 200;
 const KEYBOARD_FOCUS_INPUT_GRACE_MS: u64 = 500;
 const HOVER_RESOLVER_INPUT_GRACE_MS: u64 = 1500;
+/// How often the item the keyboard is on is looked at, while a key is being pressed or while a
+/// preview is pinned and the pin follows the keyboard: the focus is read through UI Automation,
+/// which is a crossing into Explorer, so it is asked no faster than this — fast enough that a list
+/// walked with the arrow keys is read as being followed rather than as catching up.
+const KEYBOARD_FOCUS_PROBE_MS: u64 = 30;
 
 /// How long the preview loop may go without ticking before the engines it is holding
 /// are ended from here.
@@ -3625,6 +3631,179 @@ fn read_pointer() -> Option<PointerTick> {
     Some(PointerTick::of(point))
 }
 
+/// Whether a pin that is up is shown the file the user picks next, and whether the pointer's own
+/// hover is one of the ways it is told about one, as the configuration has them (see the tray's
+/// `Pin Mode → Update Preview`).
+///
+/// They are read here rather than kept in the tick's own snapshot of the configuration, and they
+/// are read only while a pin is up: the two switches are the hook's answer to a question the rest
+/// of its state has nothing to do with, and a switch thrown in the tray is honoured on the tick
+/// after it is thrown rather than at the next snapshot.
+fn pin_update_settings() -> (bool, bool) {
+    CONFIG
+        .lock()
+        .map(|config| (config.pin_update_enabled, config.pin_update_on_hover))
+        .unwrap_or((DEFAULT_PIN_UPDATE_ENABLED, DEFAULT_PIN_UPDATE_ON_HOVER))
+}
+
+/// What the hook watches while a preview is pinned, so that the tray's `Pin Mode → Update Preview`
+/// can show the pin the file the user picks next: the file the pin is showing, where the pointer
+/// was when it was last read, how long what is under it has been settled, and the item the keyboard
+/// is on.
+///
+/// It is state of the shape the hover machinery beside it keeps, and it is kept apart from it rather
+/// than shared: a pin is not a hover, so the latch that holds a re-hover back, the gate a folder
+/// change raises and the file a preview is "about" all describe a preview that is not on screen.
+/// Nothing here is read unless a pin is up and the setting asks for one to follow, and nothing of
+/// the hover machinery is written by it — what a pin does with an answer is the preview loop's
+/// business, and the file it is showing is read back from there (see `pinned_path`).
+#[derive(Default)]
+struct PinUpdateWatch {
+    /// The file the pin was last seen showing. A pin taken up, and a pin that has been shown
+    /// another file since the last tick, start the watch again from what it is showing now.
+    showing: Option<PathBuf>,
+    /// The pointer as the last tick of the watch read it, or nothing on the first tick of a watch:
+    /// what has been measured since is how the hand has come.
+    pointer: Option<POINT>,
+    /// When the pointer last moved, which is what a hover of what is under it is measured from.
+    settled_at: Option<Instant>,
+    /// Whether the file under a settled pointer has already been resolved for that settle.
+    probed: bool,
+    /// Whether the hand has moved at all since this watch began. What a pin is taken up beside is
+    /// the file under the pointer as often as not, and a hover is something a hand does to a listing
+    /// rather than something it is found in the middle of: a pointer parked on another file while
+    /// the pin goes up has not hovered anything (see `PinUpdateWatch::follow`).
+    arrived: bool,
+    /// The item the keyboard was last seen on. What is on it when a watch begins is a baseline and
+    /// not a choice: it is the items *after* it that are keys the user pressed.
+    focused: Option<FocusedItemKey>,
+}
+
+impl PinUpdateWatch {
+    /// Follow a pin for one tick: whether the file the user has picked while it is up has changed,
+    /// and whether the reason is one the settings count.
+    ///
+    /// Three things are watched, and each of them is a way a file is picked in Explorer: a click,
+    /// which is the pointer acting on the view; the item the keyboard is on, which is what a key
+    /// the user presses moves; and — where `Update on Hover` asks for it — the file the pointer
+    /// settles on, at the delay and the settling the hover behind the pin would have been given.
+    /// A pin is not told about a file the pointer merely crosses, and not about one that was under
+    /// a pointer nobody moved.
+    fn follow(
+        &mut self,
+        resolver: &mut ItemResolver,
+        on_hover: bool,
+        hover_delay_ms: u64,
+        last_focus_probe: &mut Instant,
+    ) {
+        let Some(showing) = pinned_path() else {
+            // Nothing is pinned, so there is nothing to show anybody: the watch starts again from
+            // what the next pin is showing (see `showing`).
+            *self = Self::default();
+            return;
+        };
+
+        if self.showing.as_ref() != Some(&showing) {
+            // A pin taken up, or one shown another file — by this watch, or by a key the preview
+            // loop answered in between. What a swap from here is measured against is that file, and
+            // the pointer and the keyboard are read again from where they are now.
+            *self = Self {
+                showing: Some(showing),
+                ..Self::default()
+            };
+            return;
+        }
+
+        let Some(pointer) = read_pointer() else {
+            return;
+        };
+
+        // What is under the pointer is asked about only where a listing can be: the pinned window
+        // is this app's own and stands over the listing the file was picked in, and neither the
+        // desktop nor a player of this app's own is a file anybody picked.
+        let over_explorer = is_cursor_over_explorer_full(pointer.window);
+
+        // How far the hand has come since the last tick of the watch, by the tolerance the hover
+        // machinery measures a move with. The first tick of a watch has nothing to measure against,
+        // so it is that move: the pointer is taken as it is and the hand has arrived at nothing.
+        let threshold = KeyboardPointerPause::default().move_threshold_px(false, pointer.dpi);
+        let first = self.pointer.is_none();
+        let moved = match self.pointer {
+            Some(last) => {
+                (pointer.point.x - last.x).abs() > threshold
+                    || (pointer.point.y - last.y).abs() > threshold
+            }
+            None => true,
+        };
+        self.pointer = Some(pointer.point);
+
+        if moved {
+            if !first {
+                self.arrived = true;
+            }
+            self.settled_at = Some(Instant::now());
+            self.probed = false;
+        }
+
+        // Whether this tick looks at what the pointer is on, and why. A click is the pointer acting
+        // on the view — what it does in Explorer is select, and the file it selected is the pin's to
+        // show — and it counts whatever else is on: it is the one reason the setting leaves on when
+        // a hover is not wanted. A hover is the file a hand has come to rest on, at the delay the
+        // previews behind the pin are given one, and it is only asked for where the setting asks.
+        let settled = self
+            .settled_at
+            .map(|at| at.elapsed() >= Duration::from_millis(hover_delay_ms))
+            .unwrap_or(false);
+        let hovered = on_hover && self.arrived && !self.probed && settled;
+        let clicked = mouse_button_input_state().1;
+
+        if over_explorer && (clicked || hovered) {
+            self.probed = true;
+
+            if let Some(path) = get_file_under_cursor(resolver, &pointer) {
+                self.offer(&path, &showing);
+            }
+        }
+
+        // The keyboard's own answer: the item the focus is on, which is what a key the user presses
+        // moves. It is probed on the terms the hover path probes it — while Explorer has the
+        // foreground, and no more often than the hover path asks — and a focus that has moved onto
+        // another file is a file the user picked as surely as one a click selected.
+        if is_foreground_explorer()
+            && last_focus_probe.elapsed() >= Duration::from_millis(KEYBOARD_FOCUS_PROBE_MS)
+        {
+            *last_focus_probe = Instant::now();
+
+            if let Some(focused) = get_focused_explorer_item(resolver) {
+                let key = FocusedItemKey::new(focused.item.name.clone(), &focused.item.bounds);
+                let changed = self.focused.as_ref() != Some(&key);
+                let known = self.focused.is_some();
+                self.focused = Some(key);
+
+                if changed && known {
+                    if let Some(path) = resolve_focused_item_to_path(resolver, &focused) {
+                        self.offer(&path, &showing);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Offer a file to the pin that is up: the one thing this watch does.
+    ///
+    /// Nothing is offered where the pin is already showing the file, and nothing where the file is
+    /// not one this app previews at all — a name no kind claims is a file Explorer selects and the
+    /// pin has nothing to show for, and a pin that went blank or took a hover of its own for one
+    /// would be worse than a pin that stayed as it was (see `is_media_file`).
+    fn offer(&self, path: &PathBuf, showing: &PathBuf) {
+        if same_path(path, showing) || !is_media_file(path) {
+            return;
+        }
+
+        update_pinned_preview(path);
+    }
+}
+
 /// Whether the window under the pointer is an Explorer window or one inside one.
 ///
 /// The window is handed in rather than read here: what a tick has under the pointer is one
@@ -3951,6 +4130,10 @@ pub fn run_explorer_hook() {
     let mut last_folder_probe = Instant::now();
     let mut last_hover_probe = Instant::now();
     let mut last_keyboard_focus_probe = Instant::now();
+    // What this hook watches while a preview is pinned, and nothing at all until one is: the file
+    // the pin is showing, where the pointer was the last time it was read, and the item the
+    // keyboard is on (see `PinUpdateWatch`).
+    let mut pin_watch = PinUpdateWatch::default();
     let mut last_user_input_at: Option<Instant> = None;
     let mut last_keyboard_navigation_input_at: Option<Instant> = None;
     // Set on a click, Enter or a navigation key press: the folder probe runs at
@@ -3989,7 +4172,6 @@ pub fn run_explorer_hook() {
     const LONG_SLEEP_MS: u64 = 500; // All minimized or hidden - check twice per second
     const MEDIUM_SLEEP_MS: u64 = 150; // Visible but not focused - moderate checking
     const VIDEO_HOVER_DISMISS_GRACE_MS: u64 = 350;
-    const KEYBOARD_FOCUS_PROBE_MS: u64 = 30;
     const STATIONARY_SEARCH_MISS_HIDE_MS: u64 = 180;
     const VIDEO_PROCESS_SWEEP_MS: u64 = 1000;
 
@@ -4337,7 +4519,26 @@ pub fn run_explorer_hook() {
         // and nothing is taken down until the pin is gone. The loop stays here, at the tick's own
         // pace, rather than sleeping deeply — the state above is read on every pass, so the first
         // hover after the pin is answered the moment it is closed.
+        //
+        // What is not quiet behind it is the pin's own following, where `Pin Mode → Update
+        // Preview` asks for it: the file the user picks while the pin is up is a question about
+        // the pin rather than a hover beside it, and it is answered by the same loop, one tick at
+        // a time, with nothing of the machinery above touched (see `PinUpdateWatch`).
         if pinned() {
+            let (update, on_hover) = pin_update_settings();
+
+            if update {
+                // What the hover of a file under a settled pointer would wait out, which is the
+                // delay the hover behind the pin is given and the settling it must outlast as well.
+                let delay = hover_delay_ms.max(settling_delay_ms);
+                pin_watch.follow(&mut resolver, on_hover, delay, &mut last_keyboard_focus_probe);
+            } else {
+                // A pin that follows nothing watches nothing: the state the watch holds is left
+                // behind, so that a setting switched back on begins from what the pin is showing
+                // rather than from what the pointer was doing while it was off.
+                pin_watch = PinUpdateWatch::default();
+            }
+
             std::thread::sleep(Duration::from_millis(tick_ms));
             continue;
         }

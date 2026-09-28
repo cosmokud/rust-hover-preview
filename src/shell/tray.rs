@@ -10,7 +10,8 @@ use crate::config::config::{
     DEFAULT_FONT_SCALE, DEFAULT_HOVER_DELAY_MS, DEFAULT_IMAGE_BACKGROUND, DEFAULT_IMAGE_CACHE_MB,
     DEFAULT_IMAGE_DISK_CACHE_MB, DEFAULT_LIBREOFFICE_IDLE_SECS, DEFAULT_NORMALIZE_VIDEO_VOLUME,
     DEFAULT_NORMALIZE_VOLUME, DEFAULT_OFFICE_ENGINE,
-    DEFAULT_OFFICE_ENGINE_IDLE_SECS, DEFAULT_PREVIEW_SCALE, DEFAULT_SAME_FILE_REHOVER_DELAY_MS,
+    DEFAULT_OFFICE_ENGINE_IDLE_SECS, DEFAULT_PIN_UPDATE_ENABLED, DEFAULT_PIN_UPDATE_ON_HOVER,
+    DEFAULT_PREVIEW_SCALE, DEFAULT_SAME_FILE_REHOVER_DELAY_MS,
     DEFAULT_SETTLING_DELAY_MS, DEFAULT_TEXT_FONT_SCALE_PERCENT, DEFAULT_TICK_MS,
     DEFAULT_VECTOR_BACKGROUND, DEFAULT_VECTOR_SCALE, DEFAULT_VIDEO_SCALE, DEFAULT_VIDEO_VOLUME,
     DEFAULT_WEBVIEW_IDLE_SECS, DEFAULT_AUDIO_VOLUME, VOLUME_CHOICES,
@@ -55,6 +56,15 @@ const ID_TRAY_EXIT: u16 = 1001;
 const ID_TRAY_STARTUP: u16 = 1002;
 const ID_TRAY_ENABLE: u16 = 1003;
 const ID_TRAY_PIN: u16 = 1004; // Whether a preview can be pinned with a key
+/// The two rows of the `Pin Mode → Update Preview` submenu: whether a pin is shown another
+/// file while it is up — the one the pointer clicks or the keyboard selects — and whether the
+/// pointer's own hover is one of the ways it is told about one.
+///
+/// They sit in the slack between the pin's own row and the trigger key's, which is the gap
+/// this block has left: a row of the submenu must never be read as a click on the row beside
+/// it, and the two questions belong together under the one row they hang from.
+const ID_TRAY_PIN_UPDATE: u16 = 1016;
+const ID_TRAY_PIN_UPDATE_HOVER: u16 = 1017;
 const ID_TRAY_TRIGGER_DISABLE: u16 = 1005; // Hold the trigger key to stop previews
 const ID_TRAY_TRIGGER_ENABLE: u16 = 1006; // Hold the trigger key to allow previews
 const ID_TRAY_TRIGGER_ENABLED: u16 = 1068; // Whether the trigger key is watched at all
@@ -508,6 +518,12 @@ unsafe extern "system" fn tray_window_proc(
                 ID_TRAY_PIN => {
                     toggle_pin_enabled();
                 }
+                ID_TRAY_PIN_UPDATE => {
+                    toggle_pin_update_enabled();
+                }
+                ID_TRAY_PIN_UPDATE_HOVER => {
+                    toggle_pin_update_on_hover();
+                }
                 ID_TRAY_TRIGGER_DISABLE => set_trigger_key_mode(TriggerKeyMode::Disable),
                 ID_TRAY_TRIGGER_ENABLE => set_trigger_key_mode(TriggerKeyMode::Enable),
                 ID_TRAY_TRIGGER_ENABLED => toggle_trigger_key_enabled(),
@@ -831,31 +847,94 @@ unsafe fn show_context_menu(hwnd: HWND) {
         w!("Enable Preview"),
     );
 
-    // And "Enable Pin" below it, naming the key that pins the way the trigger key's
-    // own submenu names its own: the key is a setting, so the row says which one is
-    // watched rather than only whether one is.
-    let (pin_enabled, pin_key) = CONFIG
+    // And the "Pin Mode" submenu below it, which is the pin's own business: whether the key is
+    // watched at all, and whether a pin that is up is shown another file while the user picks
+    // one. The key's row names the key that pins the way the trigger key's own submenu names
+    // its own: the key is a setting, so the row says which one is watched rather than only
+    // whether one is (see `key_input`).
+    let (pin_enabled, pin_key, pin_update, pin_update_on_hover) = CONFIG
         .lock()
-        .map(|c| (c.pin_enabled, c.pin_key.clone()))
-        .unwrap_or((true, "space".to_string()));
+        .map(|c| {
+            (
+                c.pin_enabled,
+                c.pin_key.clone(),
+                c.pin_update_enabled,
+                c.pin_update_on_hover,
+            )
+        })
+        .unwrap_or((
+            true,
+            "space".to_string(),
+            DEFAULT_PIN_UPDATE_ENABLED,
+            DEFAULT_PIN_UPDATE_ON_HOVER,
+        ));
     let mut pin_key_chars = pin_key.chars();
     let pin_key_display = match pin_key_chars.next() {
         Some(first) => first.to_uppercase().collect::<String>() + pin_key_chars.as_str(),
         None => pin_key,
     };
-    let pin_label = format!("Enable Pin ({pin_key_display})");
+    let pin_label = format!("Enable ({pin_key_display})");
     let pin_label_wide: Vec<u16> = pin_label.encode_utf16().chain(std::iter::once(0)).collect();
-    let pin_flags = MF_STRING
-        | if pin_enabled {
+    let pin_menu = CreatePopupMenu().unwrap();
+    let _ = AppendMenuW(
+        pin_menu,
+        MF_STRING
+            | if pin_enabled {
+                MF_CHECKED
+            } else {
+                MF_UNCHECKED
+            },
+        ID_TRAY_PIN as usize,
+        PCWSTR(pin_label_wide.as_ptr()),
+    );
+
+    // The `Update Preview` submenu: whether a pin that is up is shown the file the user picks
+    // next — the one the pointer clicks, or the one the keyboard selects — and whether the
+    // pointer's own hover is one of the ways it is told about one. A pin is a window to read
+    // or to watch, so both are off the pin's own row rather than part of it.
+    //
+    // The second row is greyed while the first is off, because it says nothing then: a pin
+    // that follows nothing does not follow a hover either, and a row that could be ticked
+    // without effect would be a setting a user cannot tell from one that does nothing.
+    let update_menu = CreatePopupMenu().unwrap();
+    let _ = AppendMenuW(
+        update_menu,
+        MF_STRING
+            | if pin_update {
+                MF_CHECKED
+            } else {
+                MF_UNCHECKED
+            },
+        ID_TRAY_PIN_UPDATE as usize,
+        w!("Enabled"),
+    );
+    let mut hover_flags = MF_STRING
+        | if pin_update_on_hover {
             MF_CHECKED
         } else {
             MF_UNCHECKED
         };
+    if !pin_update {
+        hover_flags |= MF_GRAYED;
+    }
+    let _ = AppendMenuW(
+        update_menu,
+        hover_flags,
+        ID_TRAY_PIN_UPDATE_HOVER as usize,
+        w!("Update on Hover"),
+    );
+    let _ = AppendMenuW(
+        pin_menu,
+        MF_STRING | MF_POPUP,
+        update_menu.0 as usize,
+        w!("Update Preview"),
+    );
+
     let _ = AppendMenuW(
         menu,
-        pin_flags,
-        ID_TRAY_PIN as usize,
-        PCWSTR(pin_label_wide.as_ptr()),
+        MF_STRING | MF_POPUP,
+        pin_menu.0 as usize,
+        w!("Pin Mode"),
     );
 
     // Add the "Preview Types" submenu: one gate per kind of preview, on by
@@ -2071,6 +2150,26 @@ fn toggle_pin_enabled() {
     }
     crate::shell::key_input::refresh();
     refresh_pin();
+}
+
+/// Whether a pin that is up is shown the file the user picks next is a setting rather than a
+/// view of one, and it is the one switch here that changes nothing that is already on screen:
+/// the pin keeps the file it is showing until the user picks another, and what the switch says
+/// is read by the Explorer hook on its next tick (see `pin_update_enabled`).
+fn toggle_pin_update_enabled() {
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_update_enabled = !config.pin_update_enabled;
+        config.save();
+    }
+}
+
+/// And whether the pointer's own hover is one of the ways it is told about one, which is read
+/// in the same place and changes nothing on screen either (see `pin_update_on_hover`).
+fn toggle_pin_update_on_hover() {
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_update_on_hover = !config.pin_update_on_hover;
+        config.save();
+    }
 }
 
 /// What the trigger key does is a setting rather than a view of one, so the preview
@@ -4090,6 +4189,40 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// The rows of the `Pin Mode` submenu are ids of their own, and neither is the row of the
+    /// pin itself: the three hang from one submenu and are clicked in the same place, so a
+    /// collision here is a click that switches previews off where it meant to leave a pin
+    /// following the listing.
+    ///
+    /// What each switch starts at is the answer the tray draws its ticks from, so it is checked
+    /// with them: a row whose setting starts one way and whose id is read another is a switch
+    /// that appears to do nothing for one click.
+    #[test]
+    fn the_pin_mode_rows_are_ids_of_their_own() {
+        for (row, other) in [
+            (ID_TRAY_PIN, ID_TRAY_PIN_UPDATE),
+            (ID_TRAY_PIN, ID_TRAY_PIN_UPDATE_HOVER),
+            (ID_TRAY_PIN_UPDATE, ID_TRAY_PIN_UPDATE_HOVER),
+            (ID_TRAY_PIN, ID_TRAY_ENABLE),
+            (ID_TRAY_PIN, ID_TRAY_TRIGGER_ENABLED),
+            (ID_TRAY_PIN_UPDATE, ID_TRAY_TRIGGER_ENABLED),
+            (ID_TRAY_PIN_UPDATE_HOVER, ID_TRAY_TRIGGER_ENABLED),
+        ] {
+            assert_ne!(row, other, "two rows of the menu share the id {row}");
+        }
+
+        let defaults = crate::config::config::AppConfig::default();
+
+        assert!(
+            defaults.pin_update_enabled,
+            "a pin follows what the user picks unless it is switched off"
+        );
+        assert!(
+            !defaults.pin_update_on_hover,
+            "the pointer's own hover is not one of the ways until it is asked for"
+        );
     }
 
     /// The two halves of the `Volume` submenu carry a range apiece, and the levels they offer
