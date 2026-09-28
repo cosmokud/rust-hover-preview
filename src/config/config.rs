@@ -1259,6 +1259,13 @@ pub const DEFAULT_AVOID_MODE: AvoidMode = AvoidMode::Filename;
 /// wherever the pointer happens to be — and `Follow Cursor` is the other answer.
 pub const DEFAULT_FOLLOW_CURSOR: bool = false;
 
+/// Whether the trigger key reaches a pinned preview unless the configuration says otherwise:
+/// off, which is where the app starts — a pin is a window the user put there, and the key that
+/// stops hovers is not read while one is up — and on, the key is what brings a pin down with the
+/// previews it stops. It is `Hold to Disable Preview` the setting speaks for; the reverse mode is
+/// left as it is (see the `Timing → Trigger Key` submenu).
+pub const DEFAULT_TRIGGER_KEY_AFFECT_PIN_MODE: bool = false;
+
 /// Whether a pin is shown another file while it is up unless the configuration says otherwise:
 /// a file the pointer clicks, or one the keyboard selects, becomes what the pin is showing.
 ///
@@ -1295,6 +1302,13 @@ pub struct AppConfig {
     /// Whether the trigger key is watched at all. Off means previews behave as if
     /// no key were held, whatever the mode says.
     pub trigger_key_enabled: bool,
+    /// Whether the trigger key reaches a pinned preview: on, holding the key brings the pin
+    /// down with the previews it stops, and off — where the app starts — the key is not read
+    /// while a preview is pinned, up or collapsed into its bubble, since a pin is a window the
+    /// user put there rather than a hover for the key to hold back. It is the `Hold to Disable
+    /// Preview` mode the setting speaks for; the reverse mode is left as it is (see the
+    /// `Timing → Trigger Key` submenu).
+    pub trigger_key_affect_pin_mode: bool,
     /// Whether the pin key is watched: a preview on screen when it is pressed becomes
     /// a window of its own — captioned, movable, always on top — and previews stay
     /// quiet until that window is closed (see `pin_key`).
@@ -1742,6 +1756,7 @@ impl Default for AppConfig {
             trigger_key: "alt".to_string(),
             trigger_key_mode: TriggerKeyMode::Disable,
             trigger_key_enabled: true,
+            trigger_key_affect_pin_mode: DEFAULT_TRIGGER_KEY_AFFECT_PIN_MODE,
             pin_enabled: true,
             pin_key: "space".to_string(),
             pin_pause_video: DEFAULT_PIN_PAUSE_VIDEO,
@@ -1891,6 +1906,7 @@ const SETTING_GROUPS: &[(&str, &[&str])] = &[
             "same_file_rehover_delay_ms",
             "settling_delay_ms",
             "trigger_key",
+            "trigger_key_affect_pin_mode",
             "trigger_key_enabled",
             "trigger_key_mode",
         ],
@@ -2607,6 +2623,11 @@ impl AppConfig {
         );
         ini.set(
             CONFIG_SECTION,
+            "trigger_key_affect_pin_mode",
+            Some(self.trigger_key_affect_pin_mode.to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
             "pin_enabled",
             Some(self.pin_enabled.to_string()),
         );
@@ -3047,6 +3068,9 @@ impl AppConfig {
         }
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "trigger_key_enabled") {
             self.trigger_key_enabled = value;
+        }
+        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "trigger_key_affect_pin_mode") {
+            self.trigger_key_affect_pin_mode = value;
         }
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "pin_enabled") {
             self.pin_enabled = value;
@@ -4755,6 +4779,7 @@ mod tests {
             text_scroll_far_edge_grace_pixels: 12.5,
             document_cache_mb: 1024,
             tick_ms: 47,
+            trigger_key_affect_pin_mode: true,
             ..Default::default()
         };
 

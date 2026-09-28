@@ -7,8 +7,7 @@ use crate::config::config::{
     DEFAULT_DOCUMENT_SCALE, DEFAULT_EBOOK_SCALE, DEFAULT_FONT_BACKGROUND, DEFAULT_FONT_SCALE,
     DEFAULT_IMAGE_BACKGROUND, DEFAULT_IMAGE_CACHE_MB, DEFAULT_NORMALIZE_VIDEO_VOLUME,
     DEFAULT_NORMALIZE_VOLUME, DEFAULT_PIN_PAUSE_AUDIO, DEFAULT_PIN_PAUSE_VIDEO,
-    DEFAULT_PIN_UPDATE_ENABLED, DEFAULT_PREVIEW_SCALE_PERCENT,
-    DEFAULT_SPINNER_DELAY_MS,
+    DEFAULT_PIN_UPDATE_ENABLED, DEFAULT_PREVIEW_SCALE_PERCENT, DEFAULT_SPINNER_DELAY_MS,
     DEFAULT_TEXT_FONT_SCALE_PERCENT, DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS,
     DEFAULT_VECTOR_BACKGROUND, DEFAULT_VECTOR_SCALE, DEFAULT_VIDEO_SCALE_PERCENT,
     DEFAULT_WEBP_PLAYBACK_FPS,
@@ -281,9 +280,9 @@ fn media_holds_a_frame() -> bool {
         .lock()
         .ok()
         .and_then(|media| {
-            media.as_ref().map(|media| {
-                media.media_type.is_native_video() && media.current_frame_is_opaque()
-            })
+            media
+                .as_ref()
+                .map(|media| media.media_type.is_native_video() && media.current_frame_is_opaque())
         })
         .unwrap_or(false)
 }
@@ -887,7 +886,10 @@ impl MediaType {
     /// than recomposited from shared pixels, which is what decides whether a
     /// theme switch means rebuilding it.
     fn is_painted(&self) -> bool {
-        matches!(self, Self::Text | Self::Archive | Self::Peazip | Self::Audio)
+        matches!(
+            self,
+            Self::Text | Self::Archive | Self::Peazip | Self::Audio
+        )
     }
 
     /// Whether this kind has a picture for the round bubble a collapsed pin becomes. The
@@ -11450,11 +11452,7 @@ fn pinned_band_rows(height: i32, caption: i32, transport: i32, overlay: bool) ->
 /// sitting in the middle of the screen at its own size — and at a percentage it is the size the
 /// app would have hovered it at, which is what a display change keeps (see `toggle_pin_maximized`
 /// and `replace_pinned_window`).
-fn pinned_media_box(
-    orig_dims: (u32, u32),
-    room: ScreenBounds,
-    scale: PreviewScale,
-) -> (i32, i32) {
+fn pinned_media_box(orig_dims: (u32, u32), room: ScreenBounds, scale: PreviewScale) -> (i32, i32) {
     let (room_width, room_height) = room.room();
     let (width, height) = scale_dimensions(
         orig_dims.0.max(1),
@@ -12445,6 +12443,31 @@ struct PinUpdate {
     volume: u32,
 }
 
+/// What a pin that is up is to do with the file it was offered.
+enum PinPlan {
+    /// Show it: the box its media takes, the display it is laid out for, and the level the pin
+    /// plays at are what the swap is made with (see `PinUpdate`).
+    Show(PinUpdate),
+    /// Show it in a moment: the file has no box of its own yet, because what was measured for it is
+    /// the wait for a read or a probe that is in flight. The pin keeps the file it is showing, and
+    /// the offer is made again — by name, from the answer itself — when the box lands (see
+    /// `PinBox::Waiting`).
+    Awaiting,
+}
+
+/// What a swap has of the file it is for: the box its media takes, or the wait for one.
+///
+/// The two are not the same answer and may not be used as one: the wait is a placeholder the
+/// measurers hand back while the read that would know runs, and a placeholder has no shape — a swap
+/// laid out at it is a square window with the file's picture stretched into it (see
+/// `box_is_the_wait`).
+enum PinBox {
+    /// The box the new file's media takes on screen.
+    Measured(ScreenRegion),
+    /// No box yet, and one is on its way.
+    Waiting,
+}
+
 /// What a pin that is up has to lay the file that replaces the one it is showing out with: the box
 /// the pin occupies now, the bound it may not grow past, the two facts about the kind on screen
 /// that turn a display's work area into the pin's own room, and whether the window is maximized.
@@ -12483,7 +12506,7 @@ struct PinSwapSpace {
 /// What the new file's box is measured against is the pin's own bound rather than the box the file
 /// on screen came out at, which is the whole of what keeps a pin that follows a listing one size
 /// (see `PinnedPreview::bound`).
-fn pin_update_plan(path: &PathBuf) -> Option<PinUpdate> {
+fn pin_update_plan(path: &PathBuf) -> Option<PinPlan> {
     let (space, volume, collapsed, showing) = {
         let pinned = PINNED.lock().ok()?;
         let pin = pinned.as_ref()?;
@@ -12512,10 +12535,13 @@ fn pin_update_plan(path: &PathBuf) -> Option<PinUpdate> {
     let dpi = monitor_dpi_from_point(space.current.0, space.current.1);
     let bounds = monitor_bounds_from_point(space.current.0, space.current.1);
 
-    Some(PinUpdate {
-        content: pin_update_content(space, path, bounds, dpi)?,
-        dpi,
-        volume,
+    Some(match pin_update_content(space, path, bounds, dpi)? {
+        PinBox::Measured(content) => PinPlan::Show(PinUpdate {
+            content,
+            dpi,
+            volume,
+        }),
+        PinBox::Waiting => PinPlan::Awaiting,
     })
 }
 
@@ -12544,14 +12570,19 @@ fn pin_update_plan(path: &PathBuf) -> Option<PinUpdate> {
 /// a size the file holds, so the box *is* what they are drawn to — and the scaling rules say
 /// nothing about a size they do not have, which is why a swap to one of them neither takes the
 /// bound nor changes it (see `pin_keeps_its_box`).
+///
+/// And a file whose box is still being read — a page being measured, a video being probed — is not
+/// laid out at all: what the measure answered is the wait for a box rather than one, and a window
+/// made of it would be a square with the file's picture in it at the wrong shape. What comes of one
+/// is the wait the swap is made in rather than a box (see `PinBox`).
 fn pin_update_content(
     space: PinSwapSpace,
     path: &PathBuf,
     bounds: ScreenBounds,
     dpi: u32,
-) -> Option<ScreenRegion> {
+) -> Option<PinBox> {
     if pin_keeps_its_box(path) {
-        return Some(space.current);
+        return Some(PinBox::Measured(space.current));
     }
 
     // A page that is still being drawn is not a size to lay anything out with: what the new file
@@ -12564,26 +12595,48 @@ fn pin_update_content(
 
     let shape = media_dimensions(path, bounds, dpi)?;
 
+    // A box still being read is the same answer, reached the other way: the measure this call has
+    // just taken starts the read that settles it, so what the pin has of the new file is a wait to
+    // keep rather than a shape to lay out (see `pin_swap_awaits`).
+    if pin_swap_awaits(path, shape) {
+        return Some(PinBox::Waiting);
+    }
+
     if space.maximized {
-        return Some(pin_update_box(
+        return Some(PinBox::Measured(pin_update_box(
             space.current,
             shape,
             PreviewScale::FitToScreen,
-        ));
+        )));
     }
 
-    // A video whose probe has not answered has no shape yet either — what was measured is the wait
-    // — and the wait is fitted into the room the way it always was rather than sized by a scale
-    // that is about a file: `effective_preview_scale` answers a wait with its own size, which is
-    // the hover's rule and not this window's, since a pin is not replayed the moment the probe
-    // lands the way a hover is (see `video_probe_due`).
-    let scale = if video_probe_due(path) {
-        PreviewScale::FitToScreen
-    } else {
-        effective_preview_scale(path, current_hover_scales())
-    };
+    Some(PinBox::Measured(pin_update_box(
+        pin_swap_room(space, bounds, dpi),
+        shape,
+        effective_preview_scale(path, current_hover_scales()),
+    )))
+}
 
-    Some(pin_update_box(pin_swap_room(space, bounds, dpi), shape, scale))
+/// Whether a swap for this file has to wait for a box: what the file was measured by is the
+/// placeholder rather than a size, and the read or the probe that would answer it is running.
+///
+/// Both halves are asked because either alone is the wrong question. A file really is the size of
+/// the placeholder sometimes, and a box of that size held for one is the file's own size rather
+/// than a wait — while a placeholder nothing is reading behind is a size that will never change,
+/// and a pick that waited on it would wait forever.
+fn pin_swap_awaits(path: &Path, shape: (u32, u32)) -> bool {
+    box_is_the_wait(shape) && (measure_waiting(path) || video_probe_due(path))
+}
+
+/// Whether a measured shape is the wait for a box rather than one: the placeholder every measurer
+/// answers with while it runs, which is what a video nobody has probed is measured by too (see
+/// `measured_off_the_tick` and `video_box`).
+///
+/// It is square, which is the whole of why it may not be laid out as a file's shape: fitted into
+/// the room it becomes a square box, and the file's own picture is drawn into that box with its
+/// aspect gone — the 16:9 video in a 1:1 window.
+fn box_is_the_wait(shape: (u32, u32)) -> bool {
+    shape == (office_preview::WAITING_BOX, office_preview::WAITING_BOX)
 }
 
 /// The room a swap fits the new file into: the bound, no larger than the room the display has, in
@@ -12642,7 +12695,10 @@ fn pin_keeps_its_box(path: &Path) -> bool {
         {
             return matches!(
                 kind,
-                PreviewType::Text | PreviewType::Archives | PreviewType::Peazip | PreviewType::Audio
+                PreviewType::Text
+                    | PreviewType::Archives
+                    | PreviewType::Peazip
+                    | PreviewType::Audio
             );
         }
     }
@@ -14277,14 +14333,9 @@ unsafe fn pinned_transport_press(hwnd: HWND, x: i32, y: i32) -> bool {
         return false;
     }
 
-    let Some(part) = pin_chrome::transport_part_at(
-        x,
-        y - bar.top,
-        bar.width,
-        bar.height,
-        bar.dpi,
-        bar.live,
-    ) else {
+    let Some(part) =
+        pin_chrome::transport_part_at(x, y - bar.top, bar.width, bar.height, bar.dpi, bar.live)
+    else {
         return false;
     };
 
@@ -14622,14 +14673,8 @@ unsafe fn pinned_press(hwnd: HWND, x: i32, y: i32) -> bool {
         // it gone, the strip across the top of a pinned picture is the picture, and a press on it
         // is the handle every other part of the media is (see `PinChrome`).
         if caption.wanted {
-            let button = pin_chrome::button_at(
-                x,
-                y,
-                caption.width,
-                caption.height,
-                caption.dpi,
-                framed,
-            );
+            let button =
+                pin_chrome::button_at(x, y, caption.width, caption.height, caption.dpi, framed);
             if let Some(button) = button {
                 if let Ok(mut pinned) = PINNED.lock() {
                     if let Some(pin) = pinned.as_mut() {
@@ -14797,13 +14842,7 @@ unsafe fn apply_pin_drag(hwnd: HWND) {
             return;
         };
 
-        (
-            drag,
-            pin.dpi,
-            pin.transport_bar,
-            pin.overlay,
-            pin.frame,
-        )
+        (drag, pin.dpi, pin.transport_bar, pin.overlay, pin.frame)
     };
 
     let Some(point) = cursor_screen_point() else {
@@ -15088,7 +15127,12 @@ fn resize_pinned_content(
     // chrome is drawn over it and the media's grown by the two bands otherwise — the one place the
     // difference is not readable from the numbers either side of it, since a drag works in the
     // media's box from beginning to end and what it hands back is the window's.
-    pinned_window_box_of((left, top, left + width, top + height), dpi, transport, overlay)
+    pinned_window_box_of(
+        (left, top, left + width, top + height),
+        dpi,
+        transport,
+        overlay,
+    )
 }
 
 /// A release on a pinned window, answering whether it was the pin's to act on: the button a press
@@ -15313,6 +15357,12 @@ pub fn run_preview_window() {
         // the same wait carried on rather than a new preview, the way a video's is (see
         // `measure_replay`).
         let mut measure_replay: Option<PathBuf> = None;
+        // The file a pinned window is waiting for a box of: what the user picked has no box of its
+        // own yet — a page being measured off the preview thread, a video being probed — so what
+        // the pick comes to is a wait rather than a swap. The file is picked up again by name when
+        // the answer lands, which is a tick of its own, so this outlives the tick the way the
+        // replay flags above it do (see `PinPlan::Awaiting`).
+        let mut pin_awaiting_box: Option<PathBuf> = None;
         // A player that has been started and has not put its window up yet: the wait
         // for a video, which the spinner stands in for until the player's window is
         // there (see `VideoStart`).
@@ -15669,8 +15719,7 @@ pub fn run_preview_window() {
                                 // beginning (see `video_player::seek`). A player that says
                                 // nothing about its length leaves the ask standing rather than
                                 // spending it on a tick it cannot answer.
-                                if let (Some(seek), Some(duration)) = (audio_share_seek, duration)
-                                {
+                                if let (Some(seek), Some(duration)) = (audio_share_seek, duration) {
                                     audio_share_seek = None;
 
                                     let shared =
@@ -16405,6 +16454,12 @@ pub fn run_preview_window() {
                     // one a file to decode — so the ones it passes through on its way are not work
                     // anything is owed (see the swap below).
                     PreviewMessage::PinUpdate(path) => {
+                        // A newer pick is what the pin is owed an answer to, so the file an older
+                        // one is still waiting for a box of stops being the one it waits on: the
+                        // answer that comes for it is then no answer to this pick, and the file
+                        // the user actually picked last is the one that is shown (see
+                        // `pin_awaiting_box`).
+                        pin_awaiting_box = None;
                         pin_pick = Some(path);
                     }
                     PreviewMessage::OfficeRenderReady {
@@ -16420,6 +16475,18 @@ pub fn run_preview_window() {
                         }
                     }
                     PreviewMessage::VideoProbed { path, generation } => {
+                        // A pin waiting for this file's box is picked again the moment the answer
+                        // is here, before the hover bookkeeping below — which is about a hover, a
+                        // thing a pinned window is not (see `pin_awaiting_box`). A pin that has
+                        // gone in the meantime is shown nothing: the wait was the pin's, and a
+                        // window that is not up is not owed a file.
+                        if pin_awaiting_box.as_deref() == Some(path.as_path()) {
+                            pin_awaiting_box = None;
+                            if pinned() {
+                                pin_pick = Some(path.clone());
+                            }
+                        }
+
                         // Held apart the way a render's answer is: it is not a hover to
                         // act on but an answer about the one that is waiting.
                         if latest_preview_msg.is_none() && video_probed.is_none() {
@@ -16427,6 +16494,17 @@ pub fn run_preview_window() {
                         }
                     }
                     PreviewMessage::MeasureProbed { path, size } => {
+                        // The same pick again for a pin, where the measure answered with a box:
+                        // that a reader has no box for the file at all is no box to lay anything
+                        // out with, so the pin keeps the file it is showing rather than picking
+                        // one up again (see `PinPlan::Awaiting`).
+                        if pin_awaiting_box.as_deref() == Some(path.as_path()) {
+                            pin_awaiting_box = None;
+                            if size.is_some() && pinned() {
+                                pin_pick = Some(path.clone());
+                            }
+                        }
+
                         // And a measured box, held apart with the box itself: what is waiting
                         // on it is a hover, and the box is what that hover is laid out with
                         // (see `measure_probed`).
@@ -16736,14 +16814,29 @@ pub fn run_preview_window() {
             // switched off behind it, where a wait is already in hand, or where the file cannot be
             // shown at all: a pin that is up can only keep the file it is showing.
             if let Some(path) = pin_pick.take() {
+                pin_awaiting_box = None;
                 if pinned() && pin_update_enabled() && pending_load.is_none() {
-                    if let Some(update) = pin_update_plan(&path) {
-                        if let Some((media, audio)) = swap_pinned_media(
-                            &path,
-                            update.content,
-                            update.dpi,
-                            update.volume,
-                        ) {
+                    let update = match pin_update_plan(&path) {
+                        Some(PinPlan::Show(update)) => Some(update),
+                        // The file has no box yet — what was measured for it is the wait for a
+                        // read, or for a probe that has not answered — so the pin keeps the file it
+                        // is showing and picks this one up again when the answer lands. The wait is
+                        // started here where it is a video's: a box read is started where it is
+                        // taken, which is `media_dimensions` (see `pin_swap_awaits`).
+                        Some(PinPlan::Awaiting) => {
+                            if video_probe_due(&path) {
+                                spawn_video_probe(path.clone(), current_generation);
+                            }
+                            pin_awaiting_box = Some(path.clone());
+                            None
+                        }
+                        None => None,
+                    };
+
+                    if let Some(update) = update {
+                        if let Some((media, audio)) =
+                            swap_pinned_media(&path, update.content, update.dpi, update.volume)
+                        {
                             // A volume popup floating over the media belongs to the box it was
                             // opened over, and that box has just been given another file: it is put
                             // away rather than left where the hand left it (see the box change
@@ -17060,6 +17153,11 @@ pub fn run_preview_window() {
                     // media's box, and what is drawn over it is asked for rather than always
                     // there (see `pin_overlay_chrome`).
                     PreviewMessage::Pin { path, rect } => {
+                        // A window that has just been taken up is waiting for nothing: a file an
+                        // earlier pin was still waiting for a box of is that pin's wait, and this
+                        // window is not it (see `pin_awaiting_box`).
+                        pin_awaiting_box = None;
+
                         let kind = CURRENT_MEDIA
                             .lock()
                             .ok()
@@ -17076,12 +17174,7 @@ pub fn run_preview_window() {
                         // So the box the media is given is the media's box shifted back into the
                         // display by however much of the chrome fell off it.
                         let window = clamp_pinned_box(
-                            pinned_window_box_of(
-                                rect,
-                                dpi,
-                                transport_bar,
-                                overlay,
-                            ),
+                            pinned_window_box_of(rect, dpi, transport_bar, overlay),
                             dpi,
                         );
                         let content = content_box_of(window, dpi, transport_bar, overlay);
@@ -17104,13 +17197,7 @@ pub fn run_preview_window() {
                         // exactly as it always did.
                         let carried = PINNED.lock().ok().and_then(|pinned| {
                             pinned.as_ref().map(|pin| {
-                                (
-                                    pin.restore,
-                                    pin.chrome,
-                                    pin.volume,
-                                    pin.overlay,
-                                    pin.bound,
-                                )
+                                (pin.restore, pin.chrome, pin.volume, pin.overlay, pin.bound)
                             })
                         });
 
@@ -17140,14 +17227,18 @@ pub fn run_preview_window() {
                                     // Chrome belongs to the kind it was drawn over: one kind's
                                     // strip has nothing to say about another's, so a swap that
                                     // changes it arrives as the new kind's own does.
-                                    Some((_, chrome, _, was_overlay, _)) if was_overlay == overlay => {
+                                    Some((_, chrome, _, was_overlay, _))
+                                        if was_overlay == overlay =>
+                                    {
                                         chrome
                                     }
-                                    _ => if overlay {
-                                        PinChrome::on_arrival(now)
-                                    } else {
-                                        PinChrome::always()
-                                    },
+                                    _ => {
+                                        if overlay {
+                                            PinChrome::on_arrival(now)
+                                        } else {
+                                            PinChrome::always()
+                                        }
+                                    }
                                 },
                                 collapsed: false,
                                 bubble_pause: None,
@@ -19988,7 +20079,10 @@ mod tests {
                 "the lists call it a sound: {}, and the preview is shown: {}",
                 crate::formats::audio_formats::matches_audio_list(
                     &path,
-                    &CONFIG.lock().map(|config| config.audio_extensions.clone()).unwrap_or_default(),
+                    &CONFIG
+                        .lock()
+                        .map(|config| config.audio_extensions.clone())
+                        .unwrap_or_default(),
                 ),
                 drawn_as_audio(&path)
             );
@@ -20026,16 +20120,23 @@ mod tests {
                 continue;
             };
 
-            println!("the card says: {:?}", audio_preview::facts_of(&track, &path));
-            for (elapsed, duration) in [(None, None), (Some(67.0), track.duration), (Some(0.5), None)] {
+            println!(
+                "the card says: {:?}",
+                audio_preview::facts_of(&track, &path)
+            );
+            for (elapsed, duration) in [
+                (None, None),
+                (Some(67.0), track.duration),
+                (Some(0.5), None),
+            ] {
                 let Some(card) = audio_card(&path, elapsed, duration, 0) else {
                     continue;
                 };
                 let options = current_audio_options();
-                let (width, height) =
-                    audio_preview::measure(&card, 4096, 2160, 96, options).expect("a measured card");
-                let painted =
-                    audio_preview::render(&card, width, height, 96, options).expect("a painted card");
+                let (width, height) = audio_preview::measure(&card, 4096, 2160, 96, options)
+                    .expect("a measured card");
+                let painted = audio_preview::render(&card, width, height, 96, options)
+                    .expect("a painted card");
 
                 println!(
                     "card at {elapsed:?} / {duration:?}: {width}x{height}, {} bytes of frame",
@@ -20117,14 +20218,19 @@ mod tests {
                 "the engine can decode it: {can_play} ({} ms, uncached)",
                 started.elapsed().as_millis()
             );
-            println!("and the router reads that back: {}", video_player::plays(&path));
+            println!(
+                "and the router reads that back: {}",
+                video_player::plays(&path)
+            );
 
             let geometry = probe_video_geometry(&path);
             println!(
                 "the geometry probe: {}",
                 match &geometry {
-                    ProbedGeometry::Measured(geometry) =>
-                        format!("{}x{}, duration {:?}", geometry.width, geometry.height, geometry.duration),
+                    ProbedGeometry::Measured(geometry) => format!(
+                        "{}x{}, duration {:?}",
+                        geometry.width, geometry.height, geometry.duration
+                    ),
                     ProbedGeometry::Unmeasurable => "nothing to measure".to_string(),
                 }
             );
@@ -21268,8 +21374,14 @@ mod tests {
         // A window with no transport bar is its media with a caption on top; one that plays
         // carries the bar as well, which is a band the media gives up at the bottom.
         let window = (100, 100, 500, 600);
-        assert_eq!(content_box_of(window, 96, false, false), (100, 130, 500, 600));
-        assert_eq!(content_box_of(window, 96, true, false), (100, 130, 500, 570));
+        assert_eq!(
+            content_box_of(window, 96, false, false),
+            (100, 130, 500, 600)
+        );
+        assert_eq!(
+            content_box_of(window, 96, true, false),
+            (100, 130, 500, 570)
+        );
 
         // And a kind whose chrome is drawn over its media has no bands at all: its window is its
         // media, and the caption and the bar are strips *of* it rather than room beside it.
@@ -21293,7 +21405,12 @@ mod tests {
             (100, 100, 500, 630)
         );
         assert_eq!(
-            content_box_of(pinned_window_box_of(content, 96, true, false), 96, true, false),
+            content_box_of(
+                pinned_window_box_of(content, 96, true, false),
+                96,
+                true,
+                false
+            ),
             content
         );
 
@@ -21326,7 +21443,10 @@ mod tests {
     fn overlay_pin(content: ScreenRegion, chrome: PinChrome) -> PinnedPreview {
         PinnedPreview {
             path: PathBuf::from("picture.png"),
-            bound: ((content.2 - content.0).max(1), (content.3 - content.1).max(1)),
+            bound: (
+                (content.2 - content.0).max(1),
+                (content.3 - content.1).max(1),
+            ),
             content,
             restore: None,
             dpi: 96,
@@ -21388,9 +21508,18 @@ mod tests {
         // just above the window, is a pointer that has come for the title bar.
         assert_eq!(pin_chrome_near(&pin, Some((300, 100))), (true, false));
         assert_eq!(pin_chrome_near(&pin, Some((300, 90))), (true, false));
-        assert_eq!(pin_chrome_near(&pin, Some((300, 100 + caption))), (true, false));
-        assert_eq!(pin_chrome_near(&pin, Some((300, 100 + caption + 24))), (true, false));
-        assert_eq!(pin_chrome_near(&pin, Some((300, 100 + caption + 25))), (false, false));
+        assert_eq!(
+            pin_chrome_near(&pin, Some((300, 100 + caption))),
+            (true, false)
+        );
+        assert_eq!(
+            pin_chrome_near(&pin, Some((300, 100 + caption + 24))),
+            (true, false)
+        );
+        assert_eq!(
+            pin_chrome_near(&pin, Some((300, 100 + caption + 25))),
+            (false, false)
+        );
 
         // And out in the picture, which is where the chrome is out of the way: a hand there is
         // reading the file rather than looking for its buttons. A hand out beside the window is not
@@ -21403,9 +21532,18 @@ mod tests {
         // has asked for: the title bar is the other end of the window, and it stays where it is.
         let mut playing = pin;
         playing.transport_bar = true;
-        assert_eq!(pin_chrome_near(&playing, Some((300, 400 - 12))), (false, true));
-        assert_eq!(pin_chrome_near(&playing, Some((300, 400 + 24))), (false, true));
-        assert_eq!(pin_chrome_near(&playing, Some((300, 400 - 30 - 25))), (false, false));
+        assert_eq!(
+            pin_chrome_near(&playing, Some((300, 400 - 12))),
+            (false, true)
+        );
+        assert_eq!(
+            pin_chrome_near(&playing, Some((300, 400 + 24))),
+            (false, true)
+        );
+        assert_eq!(
+            pin_chrome_near(&playing, Some((300, 400 - 30 - 25))),
+            (false, false)
+        );
         assert_eq!(pin_chrome_near(&playing, Some((300, 300))), (false, false));
         assert_eq!(pin_chrome_near(&playing, Some((300, 100))), (true, false));
     }
@@ -21771,12 +21909,7 @@ mod tests {
 
         // The shapes a listing holds, and the one setting that fills the bound whatever the file's
         // own pixels are — the scale that shrinks fastest when the room is the last file's box.
-        let shapes = [
-            (1920u32, 1080u32),
-            (1080, 1920),
-            (4000, 400),
-            (100, 100),
-        ];
+        let shapes = [(1920u32, 1080u32), (1080, 1920), (4000, 400), (100, 100)];
 
         // Twice round the same files: what the pin is given for one is the same answer in both
         // passes, which is the whole of what the old box being the room had taken away.
@@ -21896,6 +22029,42 @@ mod tests {
         );
     }
 
+    /// The box a measure answers with while it runs is a wait rather than a shape, and what makes
+    /// it a wait is the read running behind it: the placeholder is a square, so laying a swap out
+    /// at it is a square window whatever the file is (see `box_is_the_wait` and `pin_swap_awaits`).
+    #[test]
+    fn a_placeholder_box_is_a_wait_only_while_a_read_is_running_for_it() {
+        let path = std::env::temp_dir()
+            .join("rust-hover-preview-wait-tests")
+            .join("waited-page.pdf");
+        let wait = (office_preview::WAITING_BOX, office_preview::WAITING_BOX);
+
+        assert!(box_is_the_wait(wait));
+        assert!(
+            !box_is_the_wait((1920, 1080)),
+            "a box of a file's own shape is not the wait for one"
+        );
+
+        // Nothing is reading this file, so what it was measured by is its own box, whatever that
+        // is — and there is nothing for a swap to wait for.
+        assert!(!pin_swap_awaits(&path, wait));
+
+        // A read is running for it, and the box in hand is what that read answered with.
+        begin_measure(&path);
+        assert!(pin_swap_awaits(&path, wait));
+        assert!(
+            !pin_swap_awaits(&path, (1920, 1080)),
+            "a box that is the file's own is not the wait, however a read is going"
+        );
+
+        end_measure(&path);
+        assert!(
+            !pin_swap_awaits(&path, wait),
+            "a placeholder nothing is reading behind is a size that never changes, and a wait on \
+             it would never end"
+        );
+    }
+
     /// The same drag on a pin whose chrome is drawn *over* its media, which is every kind this app
     /// draws for itself: the window there is the media's own box, so a drag has no caption and no
     /// bar to give room to — and the box it comes out with is the media's either way.
@@ -21911,7 +22080,10 @@ mod tests {
         let plain = dragged_from(media, PinFrame::Shaped, edge, 200, 0);
         let over = dragged_overlay(media, PinFrame::Shaped, edge, 200, 0, true);
         assert_eq!(plain, (400, 225, 1000, 675));
-        assert_eq!(over, plain, "the window is the media and nothing is added to it");
+        assert_eq!(
+            over, plain,
+            "the window is the media and nothing is added to it"
+        );
 
         // A gesture that asks for the box it already has is the sharpest way to say it: nothing
         // about the box may move, however many times it is done.
@@ -22189,10 +22361,7 @@ mod tests {
         let (width, height, band_height, origin_y) = (8u32, 6u32, 4u32, 2u32);
         let surface = DibSurface::create(width, height).expect("a surface to stretch into");
         let out = unsafe {
-            std::slice::from_raw_parts_mut(
-                surface.bits(),
-                (width * height * 4) as usize,
-            )
+            std::slice::from_raw_parts_mut(surface.bits(), (width * height * 4) as usize)
         };
 
         let media = [32u8, 64, 128, 255].repeat(4);
