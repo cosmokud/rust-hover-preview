@@ -4,13 +4,20 @@
 
 ### Added
 
-- **`Enable Pin (Space)`**: press the key while a preview is up and the preview becomes a window of its own — captioned, movable, always on top, and still there when the pointer leaves. The key is shown in the menu and set by `pin_key` (`space` by default; `pin_enabled` turns the feature off).
+- **`Pin Mode → Enable (Space)`**: press the key while a preview is up and the preview becomes a window of its own — captioned, movable, always on top, and still there when the pointer leaves. The key is shown in the menu and set by `pin_key` (`space` by default; `pin_enabled` turns the feature off).
 - A pinned window's **caption** carries minimize, maximize and close. Minimize collapses it into a round bubble that can be dragged anywhere and clicked to bring it back; right-clicking the bubble closes it. Maximize fits the media to the screen, centered, keeping its shape.
 - A pinned window is **movable by the picture** as well as by the caption. The exceptions are a text preview's own text and scrollbar, and a video FFmpeg's player has.
 - A pinned **video** gets a transport bar of this app's own: play/pause, a draggable seek bar and the two clocks. A video the media engine plays can be paused and seeked; one FFmpeg's player has shows a read-out bar instead, because that player can be told nothing.
 - **Previews are held back while a pin is up**: nothing is raised or dismissed until the pin closes.
 - **Videos now play through the media engine Windows ships with wherever it can decode the file**, and through FFmpeg only where it cannot — the reverse of the previous order. Whether a file can be played is asked of the machine once per file, so a hover never asks twice.
 - **The video format list is now two lists in `config.ini`**: `[video]` is what the media engine is asked to play, and `[ffmpeg]` is what only FFmpeg's player reads. An existing `config.ini` is divided between the two on the next run, and a list you have edited is left as it is.
+- **A pinned picture now wears its caption and bar on top of it** rather than in bands above and below, so the window is exactly the size of the picture and no longer carries a strip of empty window. Both fade in when the pointer arrives and fade out when it leaves, and **only the strip under the pointer is shown** — the other stays out of the way.
+- **A pinned video has a volume of its own**: a speaker button on its transport bar opens a knob over the video, and the level it is set to belongs to that window alone, independent of **Volume → Video** for hovers. The knob stays up while the pointer is on it and closes when the pointer leaves.
+- **`Pin Mode → Update Preview`**: a pinned window can now be shown the file you pick while it is up — one you click, or one the keyboard selects — in the box it already has, where it stands. **Enabled** (`default`) turns this on; **On Hover** adds the pointer's own hover as one of the ways a file is picked.
+- **`Pin Mode → Pause Preview`**: a window collapsed into its bubble now **pauses what it was playing** instead of going on behind a bubble nobody can see, and starts again at the second it stopped at when the window comes back. **Audio** and **Video** are switches of their own, both on by default.
+- **`Timing → Trigger Key → Affect Pin Mode`**: off — where the app starts — the key that holds back hovers is not read while a preview is pinned; on, holding it brings the pin down along with the previews it stops.
+- A video's **letterboxed picture is cropped to what is in it** whichever engine plays it, so a black-barred file fills its box instead of growing bars inside it.
+- A video shown larger than its own picture is now **scaled up to fill the box**, rather than drawn at its native size in the middle of it.
 
 ### Fixed
 
@@ -27,14 +34,21 @@
 - A pinned video **no longer flashes a sheared picture** when a resize is released.
 - Dragging a pinned video is **faster**: moving it no longer repaints the whole window on every pointer move, and resizing it no longer resamples it a pixel at a time.
 - A video played by the media engine **no longer flashes a blank backdrop** for a moment at the start of a hover.
+- **A pinned window comes back centered** where it is when you bring it out of the bubble, rather than jumping back to where it was before it went away, and a maximized one restores around the center of the screen it is on.
+- **The bubble always lands in the same place**: it is put on the minimize button rather than on the window's corner, so repeated collapses no longer wander, and it no longer remembers a position from an earlier move.
+- **Dragging a bubble no longer stutters or overshoots**, and it stays under the hand where it was grabbed rather than jumping to its middle.
+- **A pinned window being shown another file no longer shrinks as it goes**: the new file is fitted to the window's own longest side, so a portrait pin followed by a widescreen file is not walked down a size at a time.
+- A pinned window **kept where the hand put it** when it is shown another file, rather than being placed back beside the cursor.
 
 ### Changed
 
 - Version bumped to `0.4.0` in `Cargo.toml` and `Cargo.lock`.
 - **`Text Preview → Full Mode` is gone from the tray, and `text_preview_full_mode` with it**: a pinned text preview now comes up in full mode instead, so it scrolls and its text can be selected and copied.
 - The play triangle a paused pinned video was drawn with is gone; a paused pin now shows the last frame and nothing over it.
+- A pinned picture's **caption and bar now fade in and out** as the pointer arrives and leaves, instead of appearing and vanishing outright.
+- `pin_enabled`, `pin_key`, `pin_update_enabled`, `pin_update_on_hover`, `pin_pause_audio`, `pin_pause_video` and `trigger_key_affect_pin_mode` are new keys in `config.ini`; a file written before them keeps the behavior it had.
 - The `video_engine_probe` diagnostic (`RHP_VIDEO_PROBE`) now plays the file as well as probing it, and can report a seek.
-- `README.md`, `ARCHITECTURE.md` and `PRIVACY.md` describe pinning, the two video lists and the media engine's role.
+- `README.md`, `ARCHITECTURE.md` and `PRIVACY.md` describe pinning, its `Pin Mode` submenus, the two video lists and the media engine's role.
 
 ## [0.3.6] - 2026-09-27
 
