@@ -11548,8 +11548,10 @@ struct PinnedPreview {
     /// a third of the size, for no reason the user could see. A side is what the user's own hand
     /// asked for when it dragged an edge, so a side is what every shape gets to use.
     bound: i32,
-    /// The box to go back to when a maximized pin is restored, and `None` while it is not
-    /// maximized.
+    /// The box a restore down puts back, and `None` while the pin is not maximized: the box the
+    /// window had before it was maximized, kept in step with the hand while it is one — a drag
+    /// moves the place that box is put back at, and a resize gives it up altogether, since a
+    /// maximize the hand has resized is one there is nothing left to undo (see `pin_restore_box`).
     restore: Option<ScreenRegion>,
     /// The scale of the display the pin was put up on: what the caption's measurements are
     /// multiplied by, and what the media is laid out at again when the box changes.
@@ -13187,14 +13189,14 @@ fn replace_pinned_window() -> Option<PreviewMessage> {
 /// what a maximized window of any shape has always done. For a kind that is laid out to its box
 /// rather than scaled, the largest box is the room itself and the page is drawn into it.
 ///
-/// Restoring down is maximize asked backwards, and it is answered the same way: what the window gets
-/// back is the *size* it had before it was maximized, and where that size is put is the middle of the
-/// box it is being restored out of. For a maximized window that has not been moved since — the usual
-/// case, and the one where the button is a plain undo — that middle *is* the middle of the display,
-/// since it is where maximize put it; for one that has been dragged somewhere since, it is wherever
-/// the hand left it, which is the window the button's own hand is looking at. What is never used is
-/// the place the window was dragged to *before* the maximize: that is a place it has long since been
-/// taken away from, and one no hand asked the button for.
+/// Restoring down puts back the box the window had before it was maximized, place and size alike:
+/// the plain undo the button is when nothing has been done to the window since. A window that has
+/// been *carried* since — and nothing more — is answered with the window the hand has been looking
+/// at rather than with the one that stood there before it: the size a restore remembers, at the
+/// place the hand left it. A window the hand has *resized*, on the other hand, is no longer a
+/// maximized window to restore at all: that maximize is given up as the resize is made (see
+/// `pin_restore_box`), so the caption draws a maximize where the restore glyph was, and this
+/// maximizes the box the hand has left behind.
 fn toggle_pin_maximized(request: &mut Option<PreviewMessage>) {
     let Ok(mut pinned) = PINNED.lock() else {
         return;
@@ -13207,16 +13209,9 @@ fn toggle_pin_maximized(request: &mut Option<PreviewMessage>) {
     let room = pinned_room(bounds, pin.dpi, pin.transport_bar, pin.overlay);
 
     let content = match pin.restore.take() {
-        Some(previous) => centred_at(
-            (
-                (previous.2 - previous.0).max(1),
-                (previous.3 - previous.1).max(1),
-            ),
-            (
-                (pin.content.0 + pin.content.2) / 2,
-                (pin.content.1 + pin.content.3) / 2,
-            ),
-        ),
+        // The box kept for exactly this: the one the window had before the maximize, or the one
+        // the hand has since made of it (see `pin_restore_box`).
+        Some(previous) => previous,
         None => {
             let shape = (
                 (pin.content.2 - pin.content.0).max(1) as u32,
@@ -13239,12 +13234,51 @@ fn toggle_pin_maximized(request: &mut Option<PreviewMessage>) {
     *request = Some(PreviewMessage::PinBox(pin.content));
 }
 
+/// The box a restore down owes once the hand has had a maximized window: the box the maximize put
+/// aside, brought in step with the drag that has just been applied — or nothing at all, where the
+/// hand has ended the maximize rather than moved it.
+///
+/// A drag that came out on the box it began with is no drag at all — a press nothing moved, or a
+/// box already held against the room's own edge — and leaves the box the maximize put aside alone.
+///
+/// A window that was *carried* keeps the size a restore remembers, which is the size it had before
+/// it was maximized, and takes the place the hand has left it at: the size is the thing the button
+/// undoes, while the place is where the user is looking at the window now, which is the place they
+/// mean by having moved it there.
+///
+/// A window that was *pulled to a size* is the other answer: the size the maximize gave it has been
+/// replaced by one the hand asked for, so there is no longer a maximize for the button to undo. It
+/// comes back as nothing, which is what leaves the caption drawing a maximize where the restore
+/// glyph was and the button maximizing again (see `toggle_pin_maximized`).
+fn pin_restore_box(
+    restore: Option<ScreenRegion>,
+    dragged_from: ScreenRegion,
+    dragged_to: ScreenRegion,
+    action: PinDragAction,
+) -> Option<ScreenRegion> {
+    let restore = restore?;
+
+    if dragged_from == dragged_to {
+        return Some(restore);
+    }
+
+    match action {
+        PinDragAction::Move => Some((
+            dragged_to.0,
+            dragged_to.1,
+            dragged_to.0 + (restore.2 - restore.0).max(1),
+            dragged_to.1 + (restore.3 - restore.1).max(1),
+        )),
+        PinDragAction::Resize(_) => None,
+    }
+}
+
 /// A box of a given size in the middle of a room: what maximize puts the media in.
 ///
 /// A size the room cannot hold goes against the room's own top-left corner rather than half past it:
 /// there is no middle to be in when the box is bigger than the place it is being put in. Centring a
 /// size on a *point* rather than on a room is the other half of the same question, and is what a
-/// restore down asks for (see `centred_at`).
+/// swap asks for when another file's shape is fitted where the pin already is (see `centred_at`).
 fn centred_box(size: (i32, i32), room: ScreenBounds) -> ScreenRegion {
     let (width, height) = (size.0.max(1), size.1.max(1));
     let left = room.left + ((room.right - room.left) - width).max(0) / 2;
@@ -13253,8 +13287,9 @@ fn centred_box(size: (i32, i32), room: ScreenBounds) -> ScreenRegion {
     (left, top, left + width, top + height)
 }
 
-/// A box of a given size centred on a point: where a restore down puts the size the window had before
-/// it was maximized, around the middle of the box it is being restored out of.
+/// A box of a given size centred on a point: where a swap puts another file's shape, around the
+/// middle of the box the pin occupies now — and, for the room a swap is fitted into before that, the
+/// middle of the room (see `pin_swap_room` and `pin_update_box`).
 ///
 /// What the point is near is not this function's business: a box left hanging off the edge of a
 /// display by a middle near one is held against that display by the keep-on-screen rule the caller
@@ -13636,10 +13671,11 @@ fn put_back_bubble_playback(
 /// out for the box it is in — and a window the room has no space for at that size keeps its own size
 /// and is kept against the room's own edge rather than shrunk into a corner of it.
 ///
-/// A pin collapsed while it was maximized is the one box that is not placed at all: what it holds is
-/// the room itself rather than a place in it, and a window that size is only ever clamped back to
-/// the room it fills, so it goes back exactly as it went down (`pin.restore` is `Some` while a pin is
-/// maximized).
+/// A pin collapsed while it was maximized is the one box that is not placed at all: it is a window
+/// the user has already settled where they want it — the room itself where nothing has been done to
+/// it since the maximize, and the place a carry has left it at where the hand has moved it (see
+/// `pin_restore_box`) — and placing it again would be the app moving a window the user put there. It
+/// goes back exactly as it went down, a maximized window being the one `pin.restore` is `Some` for.
 ///
 /// What a hover's placement steps around is the name the file is listed under (see `avoiding_text`);
 /// a bubble is on no name, so nothing is avoided here and the pointer's own standoff is the whole of
@@ -14917,6 +14953,11 @@ unsafe fn apply_pin_drag(hwnd: HWND) {
         if matches!(drag.action, PinDragAction::Resize(_)) {
             pin.bound = (content.2 - content.0).max(content.3 - content.1).max(1);
         }
+        // And a maximized window's restore is carried along with the hand — or given up where the
+        // hand has pulled the box to a size of its own, which is a maximize there is nothing left
+        // to undo: the caption's restore glyph goes back to a maximize with it, and the button
+        // maximizes again (see `pin_restore_box`).
+        pin.restore = pin_restore_box(pin.restore, pin.content, content, drag.action);
         pin.content = content;
     }
 
@@ -22616,12 +22657,57 @@ mod tests {
         // past it: there is no middle to be in when the box is bigger than the place it is put in.
         assert_eq!(centred_box((1200, 900), room), (100, 50, 1300, 950));
 
-        // A size centred on a point — where a restore down puts the size the window had before it
-        // was maximized — is put around that point, wherever it is: a middle is not a place, so
-        // nothing here holds the box on a display.
+        // A size centred on a point — where a swap puts another file's shape — is put around that
+        // point, wherever it is: a middle is not a place, so nothing here holds the box on a
+        // display.
         assert_eq!(centred_at((400, 300), (600, 400)), (400, 250, 800, 550));
         assert_eq!(centred_at((401, 301), (600, 400)), (400, 250, 801, 551));
         assert_eq!(centred_at((400, 300), (-100, 40)), (-300, -110, 100, 190));
+    }
+
+    /// What a restore down owes after the hand has had a maximized window: the box the window had
+    /// before it was maximized while nothing has been done to it, the place the hand left it at
+    /// with the size a restore remembers for a window that was carried, and nothing at all for one
+    /// the hand has resized — a maximize that has been resized is one there is nothing left to
+    /// undo, so the caption draws a maximize again (see `pin_restore_box`).
+    #[test]
+    fn a_restore_puts_back_the_size_the_window_came_from() {
+        // The box the window had before the maximize button was pressed, and the box maximize put
+        // it in.
+        let before = (400, 300, 800, 600);
+        let maximized = (100, 100, 1100, 850);
+
+        // Untouched since the maximize — a press the hand did not move is no drag — and the box
+        // the maximize put aside is the box a restore puts back.
+        assert_eq!(
+            pin_restore_box(Some(before), maximized, maximized, PinDragAction::Move),
+            Some(before)
+        );
+
+        // Carried somewhere: the size it came from, at the place the hand left it.
+        assert_eq!(
+            pin_restore_box(
+                Some(before),
+                maximized,
+                (150, 400, 1150, 1150),
+                PinDragAction::Move
+            ),
+            Some((150, 400, 550, 700))
+        );
+
+        // Resized: the maximize is given up rather than brought along, which is what puts a
+        // maximize back in the caption and makes the button maximize again — and a carry that
+        // follows one has nothing left to carry, there being no restore any more.
+        let corner = PinDragAction::Resize(edge(false, false, true, true));
+        let resized = (100, 100, 700, 550);
+        assert_eq!(
+            pin_restore_box(Some(before), maximized, resized, corner),
+            None
+        );
+        assert_eq!(
+            pin_restore_box(None, resized, (300, 700, 900, 1150), PinDragAction::Move),
+            None
+        );
     }
 
     #[test]
