@@ -6,7 +6,8 @@ use crate::config::config::{
     DEFAULT_AUDIO_SEEK, DEFAULT_DDS_BACKGROUND, DEFAULT_DESIGN_BACKGROUND, DEFAULT_DESIGN_SCALE,
     DEFAULT_DOCUMENT_SCALE, DEFAULT_EBOOK_SCALE, DEFAULT_FONT_BACKGROUND, DEFAULT_FONT_SCALE,
     DEFAULT_IMAGE_BACKGROUND, DEFAULT_IMAGE_CACHE_MB, DEFAULT_NORMALIZE_VIDEO_VOLUME,
-    DEFAULT_NORMALIZE_VOLUME, DEFAULT_PREVIEW_SCALE_PERCENT, DEFAULT_SPINNER_DELAY_MS,
+    DEFAULT_NORMALIZE_VOLUME, DEFAULT_PIN_UPDATE_ENABLED, DEFAULT_PREVIEW_SCALE_PERCENT,
+    DEFAULT_SPINNER_DELAY_MS,
     DEFAULT_TEXT_FONT_SCALE_PERCENT, DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS,
     DEFAULT_VECTOR_BACKGROUND, DEFAULT_VECTOR_SCALE, DEFAULT_VIDEO_SCALE_PERCENT,
     DEFAULT_WEBP_PLAYBACK_FPS,
@@ -646,6 +647,12 @@ pub enum PreviewMessage {
     /// edge — and the media in it is laid out again for that box. It is the same
     /// question a hover asks, with the box already answered.
     PinBox(ScreenRegion),
+    /// The file the user picked while a preview was pinned, which the pin is asked to show
+    /// instead of the one it has: the window keeps its place and its size, and the media in it
+    /// becomes the new file's, fitted to the box the pin already has (see `Pin Mode → Update
+    /// Preview`). The Explorer hook sends it — for a click, for a key, and — where the setting
+    /// asks for it — for the pointer settling on another file (see `update_pinned_preview`).
+    PinUpdate(PathBuf),
     /// Whether the pin key is watched was changed in the tray, or previews themselves
     /// were turned off. A pin on screen is ended here rather than left as a window
     /// nothing would ever take down again.
@@ -1436,6 +1443,40 @@ pub fn take_pin_resumed() -> bool {
     PIN_RESUMED.swap(false, Ordering::AcqRel)
 }
 
+/// The file the pinned window is showing, if there is one. It is what the Explorer hook reads
+/// to know whether the file the pointer picks is a file the pin is already showing, and it is
+/// the file a *new* pin is told apart from an old one by (see `PINNED`).
+pub fn pinned_path() -> Option<PathBuf> {
+    PINNED
+        .lock()
+        .ok()
+        .and_then(|pinned| pinned.as_ref().map(|pin| pin.path.clone()))
+}
+
+/// Ask for the pinned window to be shown another file, from any thread: the Explorer hook's
+/// answer to the user clicking a file, selecting one with the keyboard, or — where
+/// `Pin Mode → Update Preview → Update on Hover` asks for it — settling on one.
+///
+/// What a pin is belongs to the preview loop, so the loop is what takes the swap up, on its
+/// next tick, by the path the tray's own rows take. A pin that is not up is not a window to
+/// show anything in, and a file the pin is already showing is not another file: both are
+/// dropped here rather than sent, since the hook has no other answer to give them.
+pub fn update_pinned_preview(path: &Path) {
+    if !pinned() || !pin_update_enabled() {
+        return;
+    }
+
+    if pinned_path().as_deref() == Some(path) {
+        return;
+    }
+
+    if let Ok(sender) = PREVIEW_SENDER.lock() {
+        if let Some(ref tx) = *sender {
+            let _ = tx.send(PreviewMessage::PinUpdate(path.to_path_buf()));
+        }
+    }
+}
+
 pub fn show_preview(path: &Path, x: i32, y: i32, avoid: Option<ScreenRegion>) {
     // A pinned preview is the whole of what this app is showing: a hover raised while one
     // is up would be a second thing on screen, and the pin exists to stop exactly that
@@ -1556,7 +1597,7 @@ pub fn refresh_preview() {
     }
 }
 
-/// The tray's `Enable Pin` row was clicked, or the configuration that decides whether
+/// The tray's `Pin Mode → Enable` row was clicked, or the configuration that decides whether
 /// the key is watched was reloaded. Whether there is a pin to take down is a question
 /// only the preview thread can answer — the window and the media under it are its own
 /// — so the answer is left to it.
@@ -12230,6 +12271,16 @@ fn pin_enabled() -> bool {
         .unwrap_or(true)
 }
 
+/// Whether a pin that is up is shown the file the user picks next, as the configuration has it
+/// (see `Pin Mode → Update Preview`). It is read on both sides of the swap: by the Explorer hook
+/// before it watches for anything at all, and here before one is taken up.
+fn pin_update_enabled() -> bool {
+    CONFIG
+        .lock()
+        .map(|config| config.pin_update_enabled)
+        .unwrap_or(DEFAULT_PIN_UPDATE_ENABLED)
+}
+
 /// The pin a key press asks for, if there is anything on screen to pin: the file the preview
 /// is of, and the box it occupies at this moment.
 ///
@@ -12320,6 +12371,294 @@ fn pin_media_is_alive() -> bool {
         // A frame this app holds is a frame nothing outside this thread can take away.
         _ => true,
     }
+}
+
+/// What a pin that is up needs to be shown another file: the box the new file's media is given,
+/// the scale of the display it is laid out at, and the level the pin plays at.
+///
+/// It is read off the pin in one look and carried by value, because what follows the plan — a
+/// file read, a decode, a player started — is work the pin's own lock must not be held across:
+/// that lock is what the window procedure takes to answer a drag, a button, or a tick's repaint.
+struct PinUpdate {
+    content: ScreenRegion,
+    dpi: u32,
+    volume: u32,
+}
+
+/// The plan for showing the pinned window another file, if there is one to be had.
+///
+/// Nothing comes of a pin that is collapsed into its bubble — there is no media on screen to
+/// replace, and a swap taken up under one would be a window that came back from its bubble
+/// showing a file nobody picked in it. Nothing comes of the file the pin is already showing, which
+/// is what a second ask for one — a click and the focus that moved with it, a key pressed twice on
+/// one row — is: the work a swap costs is a decode, and it is not work to do twice for one file.
+/// Nothing comes of a file with no shape yet either, or of one this app has no preview for: a pin
+/// that is up can only keep the file it is showing.
+fn pin_update_plan(path: &PathBuf) -> Option<PinUpdate> {
+    let (current, volume, collapsed, showing) = {
+        let pinned = PINNED.lock().ok()?;
+        let pin = pinned.as_ref()?;
+        (
+            pin.content,
+            pin.volume.level,
+            pin.collapsed,
+            pin.path.clone(),
+        )
+    };
+
+    if collapsed || showing == *path {
+        return None;
+    }
+
+    // The scale the media is laid out at is asked of the box the way the take-up that follows asks
+    // it, rather than read off the pin: what the take-up computes is the scale it draws the new
+    // kind's chrome at, and a media loaded at another one would be a picture and a caption that
+    // disagree about how large a pixel is.
+    let dpi = monitor_dpi_from_point(current.0, current.1);
+    let bounds = monitor_bounds_from_point(current.0, current.1);
+
+    Some(PinUpdate {
+        content: pin_update_content(current, path, bounds, dpi)?,
+        dpi,
+        volume,
+    })
+}
+
+/// The media box a pin is given for another file: the box the pin has now, with the shape of the
+/// file that replaces it fitted inside it.
+///
+/// What a pin promises across a swap is where it stands and how large it is: a window that jumped
+/// to a fresh placement — beside the pointer that picked the file, or into the best room the
+/// display has — would be a window taken out from under the hand that is reading it, and the point
+/// of the setting is for the pin to follow the listing rather than for it to be placed again on
+/// every file. So the box the new media is given is the largest box of its own shape that fits the
+/// box the old one had — the rule every preview is fitted into its room by (see `pinned_media_box`)
+/// — put in the middle of that box, so that a file of another shape looks like the same window
+/// showing something else. Nothing is drawn outside the old box, which is what keeps a swap off
+/// the edges of the display: the window that follows it is the old window with the chrome of the
+/// new kind around it, kept on the display by the clamp a take-up is kept by.
+///
+/// A kind with no shape of its own keeps the box exactly: a page of text, a listing either reader
+/// produces, and a sound's card are measured against the room they are drawn in rather than against
+/// a size the file holds, so the box *is* what they are drawn to (see `pin_keeps_its_box`).
+fn pin_update_content(
+    current: ScreenRegion,
+    path: &PathBuf,
+    bounds: ScreenBounds,
+    dpi: u32,
+) -> Option<ScreenRegion> {
+    if pin_keeps_its_box(path) {
+        return Some(current);
+    }
+
+    // A page that is still being drawn is not a size to lay anything out with: what the new file
+    // asks for would be the spinner's own box, and the swap would be a pin re-sized for a wait
+    // nothing in this path asks for (see `page_is_on_the_way`). The pin keeps what it is showing
+    // until the file has a page to show.
+    if page_is_on_the_way(path) {
+        return None;
+    }
+
+    let shape = media_dimensions(path, bounds, dpi)?;
+
+    Some(pin_update_box(current, shape))
+}
+
+/// The box a pinned window's media takes for another file's shape: the largest box of that shape the
+/// box the pin has can hold, in the middle of it.
+///
+/// It is the rule every preview is fitted into its room by, asked of a box rather than of a display
+/// (see `pinned_media_box`), and what it is for is the two promises a swap keeps: nothing of the new
+/// media falls outside the box the old one occupied, and what is left of that box is shared equally
+/// — so a file of another shape is the same window showing something else rather than a window that
+/// has moved or grown.
+fn pin_update_box(room: ScreenRegion, shape: (u32, u32)) -> ScreenRegion {
+    let bounds = ScreenBounds {
+        left: room.0,
+        top: room.1,
+        right: room.2,
+        bottom: room.3,
+    };
+    let (width, height) = pinned_media_box(shape, bounds, PreviewScale::FitToScreen);
+    let left = room.0 + ((room.2 - room.0).max(1) - width) / 2;
+    let top = room.1 + ((room.3 - room.1).max(1) - height) / 2;
+
+    (left, top, left + width, top + height)
+}
+
+/// Whether a preview of this file is drawn to the box it is given rather than scaled into it by a
+/// shape of its own: a page of text, a listing this app or an engine reads out of an archive, and a
+/// sound's card are all measured against the room they are drawn in — there is no size in the file
+/// to take a shape from — and they are the kinds `media_dimensions` answers for itself rather than
+/// through the file's own dimensions (see `media_dimensions`).
+fn pin_keeps_its_box(path: &Path) -> bool {
+    if let Ok(config) = CONFIG.lock() {
+        if let crate::formats::content_type::Content::Kind(kind) =
+            crate::formats::content_type::of(path, &config)
+        {
+            return matches!(
+                kind,
+                PreviewType::Text | PreviewType::Archives | PreviewType::Peazip | PreviewType::Audio
+            );
+        }
+    }
+
+    is_text_preview(path)
+        || archive_formats::is_archive_preview(path)
+        || peazip_formats::is_peazip_preview(path)
+        || drawn_as_audio(path)
+}
+
+/// Show a pinned window another file: what is on screen is taken down — the frame this app holds,
+/// the player it started, the browser another engine draws in — and the file that replaces it is
+/// loaded for the box the pin's media occupies.
+///
+/// The load is this thread's and it is synchronous, which is the same bargain a pin's own box change
+/// makes: a pinned window is not a hover, so there is no spinner to put up and no generation for an
+/// answer to be matched against, and what a decode costs is one tick longer than usual, spent on a
+/// file the user has just picked, with nothing else on screen for it to be late for (see
+/// `relayout_pinned_media`).
+///
+/// The media answered with is installed by the caller and put up by the take-up that follows, so a
+/// swap reaches the window by the same path a first pin does. Nothing is answered where the file
+/// cannot be shown: the pin keeps the file it is showing, which is the only other thing a window
+/// that is already up can do for a file that has no preview.
+fn swap_pinned_media(
+    path: &PathBuf,
+    content: ScreenRegion,
+    dpi: u32,
+    volume: u32,
+) -> Option<(MediaData, Option<SwappedAudio>)> {
+    let width = (content.2 - content.0).max(1);
+    let height = (content.3 - content.1).max(1);
+
+    // The file's own frame for the box the pin has: the call a hover's load makes and the one a
+    // pin's own relayout makes, so what is drawn is what any other preview of the file would be.
+    // Nothing of the pin is touched until this has answered.
+    let cancel = Arc::new(AtomicBool::new(false));
+    let mut media = load_media(
+        path,
+        width as u32,
+        height as u32,
+        PreviewScale::FitToScreen,
+        dpi,
+        cancel,
+    )?;
+
+    // What was showing goes before what replaces it: the player a video of this app's was started
+    // in, and the frame this side holds. A browser is left to the branch below, because whether it
+    // goes or is pointed at another document is a question about the *new* file's kind.
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        if let Some(ref mut existing) = *current {
+            existing.cancel_background_work();
+            stop_video_playback(existing);
+        }
+        *current = None;
+    }
+
+    if media.media_type.is_engine() {
+        // A document or a specimen is drawn by the browser in a window of its own, and the engine
+        // the old document was in is the same engine: what it is told is another file and the box
+        // it goes in, which is a navigation rather than a browser started again (see
+        // `webview_preview` and `restore_pin`, which asks it the same way).
+        webview_preview::show(
+            path,
+            webview_preview::Area {
+                x: content.0,
+                y: content.1,
+                width,
+                height,
+            },
+            engine_background(path),
+        );
+    } else {
+        // Every other kind is drawn here, so a browser still up — a document the pin was showing
+        // before this file — comes down with the frame that replaces it.
+        webview_preview::hide();
+    }
+
+    if media.media_type.is_native_video() {
+        // A video the media engine plays is started before it is shown, for the reason a hover
+        // starts one before its preview goes up: an engine that will not play the file is a file
+        // with no preview rather than a box of the placeholder pixels a video is loaded with.
+        let (video_width, video_height) = (media.current_width(), media.current_height());
+        video_player::play(
+            path,
+            video_width,
+            video_height,
+            volume,
+            probed_picture(path, video_width, video_height),
+        );
+
+        if !video_player::is_playing() {
+            return None;
+        }
+
+        media.take_native_video_frame();
+
+        return Some((media, None));
+    }
+
+    if media.media_type == MediaType::Video && codecs::ffplay_available() {
+        // FFmpeg's player draws it in a window of its own, which the take-up puts in the pin's
+        // media band — and a player that would not start is the same answer an engine that will not
+        // play gets: there is nothing of the file to show, so the pin keeps the file it has. The
+        // player of the file the pin was showing may have survived its own stop (a dropped handle,
+        // a kill nobody confirmed), and one of those playing over the file that replaces it is what
+        // the sweep before every other player start is for (see `start_audio_playback`).
+        kill_stray_video_process();
+
+        let process = start_video_playback(path, content.0, content.1, width, height, 0.0, volume)?;
+
+        media.video_process = Some(process);
+
+        return Some((media, None));
+    }
+
+    // A sound is started here, the way it is started for a hover, and where it is started *from* is
+    // read the way the hover reads it: the tray's `Volume → Audio Seek` decides, and a share of a
+    // length nothing has read yet is kept for the tick that can ask for it (see
+    // `audio_seek::start_position`). A sound no player will take is a card with no clock behind it,
+    // which is the same answer the load path gives one.
+    if media.media_type.is_audio() {
+        let seek = current_audio_seek();
+        let length = audio_track::playable(path).and_then(|track| track.duration);
+        let start = audio_seek::start_position(path, seek, length);
+
+        if !start_audio_playback(path, &mut media, start) {
+            return None;
+        }
+
+        // What the loop's clock is written down from, read before the media is handed on: a sound
+        // is timed from the player this app started, and there is one to time from exactly where
+        // one was started — at `Volume → Audio` 0% nothing was, and a card whose clock ran anyway
+        // would be a sound it says is playing that is not.
+        let started = media.video_process.is_some().then(Instant::now);
+
+        return Some((
+            media,
+            Some(SwappedAudio {
+                started,
+                from: start,
+                share: (start == 0.0
+                    && matches!(seek, AudioSeek::Middle | AudioSeek::Random)
+                    && length.is_none())
+                .then_some(seek),
+            }),
+        ));
+    }
+
+    Some((media, None))
+}
+
+/// Where the player a sound's card is drawn against was started, read by the caller into the clock
+/// the loop draws that card from — the instant a player this app started began, the second of the
+/// file it was begun at, and a start that was a share of a length nothing has read yet, which is
+/// asked for on the first tick a player can answer (see `audio_clock`).
+struct SwappedAudio {
+    started: Option<Instant>,
+    from: f64,
+    share: Option<AudioSeek>,
 }
 
 /// Lay the pinned media out again for the box its window has been given — one it was maximized
@@ -15652,6 +15991,10 @@ pub fn run_preview_window() {
             // layouts for files the cursor has already left.
             let mut latest_preview_msg: Option<PreviewMessage> = None;
             let mut refresh_requested = false;
+            // The newest file the user has picked while a preview was pinned, if any arrived this
+            // tick: what the loop answers by showing the pin that file instead of the one it has
+            // (see `PinUpdate`).
+            let mut pin_pick: Option<PathBuf> = None;
             // A probe's answer, held apart the same way and for the same reason.
             let mut video_probed: Option<(PathBuf, u64)> = None;
             // And a measure's, which is held apart with the box it answered with: what is
@@ -15719,8 +16062,8 @@ pub fn run_preview_window() {
                             }
                         }
                     }
-                    // The tray's `Enable Pin` row, and the configuration behind it having been
-                    // reloaded. Whether there is a pin to take down is a question only this
+                    // The tray's `Pin Mode → Enable` row, and the configuration behind it having
+                    // been reloaded. Whether there is a pin to take down is a question only this
                     // thread can answer, and a pin left standing by a feature that was switched
                     // off is a window nothing would ever take down again — so it comes down the
                     // way its own close button takes it.
@@ -15728,6 +16071,15 @@ pub fn run_preview_window() {
                         if pinned() && !pin_enabled() {
                             pin_request = Some(end_pin_state());
                         }
+                    }
+                    // The file the user picked while a preview was pinned, which the pin is to be
+                    // shown instead of the one it has (see the tray's `Pin Mode → Update Preview`).
+                    // It is held rather than handled here, the way a hover is: what the loop acts on
+                    // is the newest pick, and a key walked down a listing is a pick a tick — each
+                    // one a file to decode — so the ones it passes through on its way are not work
+                    // anything is owed (see the swap below).
+                    PreviewMessage::PinUpdate(path) => {
+                        pin_pick = Some(path);
                     }
                     PreviewMessage::OfficeRenderReady {
                         path,
@@ -16046,6 +16398,91 @@ pub fn run_preview_window() {
                 }
             }
 
+            // A file the user picked while a preview is pinned, which the pin is to be shown
+            // instead of the one it has (see the tray's `Pin Mode → Update Preview`). What is on
+            // screen is not a hover — there is no layout to make and no generation for an answer to
+            // be matched against — so what is swapped is the media, here, and the take-up asked for
+            // below is the pin's own: the box is the one the pin already has with the new file's
+            // shape fitted inside it, and what comes of it is the same window showing something
+            // else (see `PreviewMessage::Pin`).
+            //
+            // Nothing is swapped where the pin has gone in the meantime, where the setting was
+            // switched off behind it, where a wait is already in hand, or where the file cannot be
+            // shown at all: a pin that is up can only keep the file it is showing.
+            if let Some(path) = pin_pick.take() {
+                if pinned() && pin_update_enabled() && pending_load.is_none() {
+                    if let Some(update) = pin_update_plan(&path) {
+                        if let Some((media, audio)) = swap_pinned_media(
+                            &path,
+                            update.content,
+                            update.dpi,
+                            update.volume,
+                        ) {
+                            // A volume popup floating over the media belongs to the box it was
+                            // opened over, and that box has just been given another file: it is put
+                            // away rather than left where the hand left it (see the box change
+                            // below, which does the same).
+                            close_pin_volume();
+
+                            // A sound's card is drawn against the clock of the player this app
+                            // started, and the clock is the loop's rather than the media's: where
+                            // that player was started and from which second is read here the way
+                            // the load path reads it, so a card swapped into a pin ticks like a
+                            // card a hover put up (see `audio_clock`). The marquee its name needs is
+                            // the card's own box, which is the frame that has just been loaded.
+                            if let Some(start) = audio {
+                                let card_width = media.current_width();
+
+                                audio_started = start.started;
+                                audio_start_offset = start.from;
+                                audio_share_seek = start.share;
+                                audio_repaint_at = Instant::now();
+                                audio_card_dpi = update.dpi;
+                                audio_name_scroll = Some(audio_preview::NameScroll::of(
+                                    &audio_preview::name_of(&path),
+                                    card_width,
+                                    audio_card_dpi,
+                                    current_audio_options(),
+                                ));
+                            }
+
+                            // Where a player's window belongs while a pin is up is the pin's media
+                            // band, which is what the tick's own re-assertion reads.
+                            video_pos = (
+                                update.content.0,
+                                update.content.1,
+                                update.content.2 - update.content.0,
+                                update.content.3 - update.content.1,
+                            );
+                            current_video_path = match media.media_type {
+                                MediaType::Video => Some(path.clone()),
+                                _ => None,
+                            };
+
+                            if let Ok(mut current) = CURRENT_MEDIA.lock() {
+                                *current = Some(media);
+                            }
+
+                            // What the loop's own bookkeeping is about is the file on screen, and
+                            // the pin is showing another one now: the card a sound is drawn from,
+                            // the render tier's own record, and the hover a take-down ends are all
+                            // read of this.
+                            current_show = Some(PreviewMessage::Show(
+                                path.clone(),
+                                update.content.0,
+                                update.content.1,
+                                None,
+                            ));
+
+                            pin_request = Some(PreviewMessage::Pin {
+                                path,
+                                rect: update.content,
+                            });
+                        }
+                    }
+                }
+            }
+
             // The pin's request, if it made one, is the newest thing that happened and speaks
             // for what is on screen: a key that was pressed, a button that was clicked, or the
             // media behind the pin having come apart. It is put to the same machinery a hover
@@ -16330,21 +16767,44 @@ pub fn run_preview_window() {
                         // `PinVolume`).
                         let volume = current_video_volume();
 
+                        // A pin taken up over another one — the file it was showing was picked by
+                        // the pointer or the keyboard while it was up (see `PinUpdate`) — is the
+                        // same window showing another file, so what belongs to the window rather
+                        // than to the file is carried over: a maximized pin stays maximized and
+                        // restores to the box it would have restored to, a level moved on its own
+                        // bar stays where it was moved to, and chrome that is showing over a
+                        // picture is not brought back as if the window had just arrived. There is
+                        // nothing to carry for a first pin, which is why the take-up below reads
+                        // exactly as it always did.
+                        let carried = PINNED.lock().ok().and_then(|pinned| {
+                            pinned.as_ref().map(|pin| {
+                                (pin.restore, pin.chrome, pin.volume, pin.overlay)
+                            })
+                        });
+
                         if let Ok(mut pinned) = PINNED.lock() {
                             let now = Instant::now();
                             *pinned = Some(PinnedPreview {
                                 path: path.clone(),
                                 content,
-                                restore: None,
+                                restore: carried.and_then(|(restore, ..)| restore),
                                 dpi,
                                 transport_bar,
                                 transport_live: kind == Some(MediaType::NativeVideo),
                                 frame: pin_frame(kind),
                                 overlay,
-                                chrome: if overlay {
-                                    PinChrome::on_arrival(now)
-                                } else {
-                                    PinChrome::always()
+                                chrome: match carried {
+                                    // Chrome belongs to the kind it was drawn over: one kind's
+                                    // strip has nothing to say about another's, so a swap that
+                                    // changes it arrives as the new kind's own does.
+                                    Some((_, chrome, _, was_overlay)) if was_overlay == overlay => {
+                                        chrome
+                                    }
+                                    _ => if overlay {
+                                        PinChrome::on_arrival(now)
+                                    } else {
+                                        PinChrome::always()
+                                    },
                                 },
                                 collapsed: false,
                                 hovered: None,
@@ -16361,10 +16821,13 @@ pub fn run_preview_window() {
                                         .then_some((Instant::now(), 0.0)),
                                     ..Default::default()
                                 },
-                                volume: PinVolume {
-                                    level: volume,
-                                    playing_at: volume,
-                                    ..Default::default()
+                                volume: match carried {
+                                    Some((_, _, volume, _)) => volume,
+                                    None => PinVolume {
+                                        level: volume,
+                                        playing_at: volume,
+                                        ..Default::default()
+                                    },
                                 },
                             });
                         }
@@ -16432,6 +16895,10 @@ pub fn run_preview_window() {
                     // once more: a page's worth of content arriving for the hover that asked
                     // for it, replayed rather than handled as a hover here.
                     PreviewMessage::PeazipReady { .. } => {}
+                    // And the file a pinned window is to be shown instead of the one it has,
+                    // which is answered above: it is not a hover, so nothing here has a layout
+                    // to make for it (see `PreviewMessage::PinUpdate`).
+                    PreviewMessage::PinUpdate(_) => {}
                 }
 
                 // Shared load/display logic for Show and ShowKeyboard
@@ -20893,6 +21360,49 @@ mod tests {
             (500, 375, 800, 600),
             "the bottom-right corner of the box did not move"
         );
+    }
+
+    /// A pin shown another file keeps the box it has: what the new file is given is the largest box
+    /// of its own shape that the box the pin is standing in can hold, in the middle of it. So the
+    /// window a swap comes out of stands where the window was and is no larger than it, whatever the
+    /// two files' shapes are, and what is drawn in it is the shape of the file that replaces the
+    /// pin's rather than the shape of the file it replaces.
+    #[test]
+    fn a_swap_fits_the_new_shape_into_the_box_the_pin_has() {
+        // A media box 800 by 500, with a window around it that is nobody's business here.
+        let room = (100, 200, 900, 700);
+
+        for shape in [
+            (1920u32, 1080u32),
+            (1080, 1920),
+            (100, 100),
+            (4000, 400),
+            (1, 1),
+            (500, 800),
+            (800, 500),
+        ] {
+            let content = pin_update_box(room, shape);
+            let width = (content.2 - content.0).max(1);
+            let height = (content.3 - content.1).max(1);
+            let shape_ratio = shape.0 as f64 / shape.1 as f64;
+
+            assert!(
+                content.0 >= room.0
+                    && content.1 >= room.1
+                    && content.2 <= room.2
+                    && content.3 <= room.3,
+                "a {shape:?} file was given a box outside the pin's own: {content:?}"
+            );
+            assert!(
+                (width as f64 / height as f64 - shape_ratio).abs() < 0.02 * shape_ratio,
+                "the box {content:?} does not have the shape of the file ({shape:?})"
+            );
+            assert!(
+                (content.0 - room.0 - (room.2 - content.2)).abs() <= 1
+                    && (content.1 - room.1 - (room.3 - content.3)).abs() <= 1,
+                "the box {content:?} is not in the middle of the pin's own"
+            );
+        }
     }
 
     /// The same drag on a pin whose chrome is drawn *over* its media, which is every kind this app

@@ -1259,6 +1259,18 @@ pub const DEFAULT_AVOID_MODE: AvoidMode = AvoidMode::Filename;
 /// wherever the pointer happens to be — and `Follow Cursor` is the other answer.
 pub const DEFAULT_FOLLOW_CURSOR: bool = false;
 
+/// Whether a pin is shown another file while it is up unless the configuration says otherwise:
+/// a file the pointer clicks, or one the keyboard selects, becomes what the pin is showing.
+///
+/// On, which is what makes a pin the thing a Quick Look window is — a window that follows the
+/// listing rather than one that has to be closed and taken up again on every file read.
+pub const DEFAULT_PIN_UPDATE_ENABLED: bool = true;
+
+/// And whether the pointer's own hover is one of the ways it follows, which the configuration
+/// does not ask for by default: off, a pin moves when the user clicks or presses a key, and a
+/// pointer crossed over a listing — or parked over another file — leaves it where it is.
+pub const DEFAULT_PIN_UPDATE_ON_HOVER: bool = false;
+
 #[derive(Debug, Clone)]
 pub struct AppConfig {
     pub is_first_run: bool,
@@ -1279,6 +1291,20 @@ pub struct AppConfig {
     /// The key that pins the preview on screen, by name — the same spellings the
     /// trigger key accepts, since both are read by the same table.
     pub pin_key: String,
+    /// Whether a pin is shown another file while it is up: a file the pointer clicks, or one
+    /// the keyboard selects, becomes the pin's own — shown in the box the pin already has
+    /// rather than as a second preview beside it (see the `Pin Mode` submenu).
+    ///
+    /// It is a setting of its own rather than part of the pin, because a pin is also a window
+    /// to read or work in — a text frame, a video being watched — and one that swapped its file
+    /// out from under the hand every time a key crossed the folder would be a window nobody
+    /// could read. Off, the pin keeps the file it was taken up on until it is closed.
+    pub pin_update_enabled: bool,
+    /// Whether that following includes the pointer's own hover, or only what the user asks for
+    /// with a click or a key: on, the pin is shown whatever the pointer settles on, one file
+    /// after another, the way a Quick Look window does; off, moving the pointer across a
+    /// listing leaves the pin alone (see `pin_update_enabled`).
+    pub pin_update_on_hover: bool,
     pub follow_cursor: bool,
     /// How far a preview is placed clear of the item it is about, so the file the
     /// pointer is on or the keyboard is focused on stays readable while its preview is
@@ -1697,6 +1723,8 @@ impl Default for AppConfig {
             trigger_key_enabled: true,
             pin_enabled: true,
             pin_key: "space".to_string(),
+            pin_update_enabled: DEFAULT_PIN_UPDATE_ENABLED,
+            pin_update_on_hover: DEFAULT_PIN_UPDATE_ON_HOVER,
             follow_cursor: DEFAULT_FOLLOW_CURSOR,
             avoid_mode: DEFAULT_AVOID_MODE,
             same_file_rehover_delay_ms: DEFAULT_SAME_FILE_REHOVER_DELAY_MS,
@@ -1805,6 +1833,8 @@ const SETTING_GROUPS: &[(&str, &[&str])] = &[
         &[
             "pin_enabled",
             "pin_key",
+            "pin_update_enabled",
+            "pin_update_on_hover",
             "preview_enabled",
             "run_at_startup",
         ],
@@ -2558,6 +2588,16 @@ impl AppConfig {
         ini.set(CONFIG_SECTION, "pin_key", Some(self.pin_key.clone()));
         ini.set(
             CONFIG_SECTION,
+            "pin_update_enabled",
+            Some(self.pin_update_enabled.to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
+            "pin_update_on_hover",
+            Some(self.pin_update_on_hover.to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
             "follow_cursor",
             Some(self.follow_cursor.to_string()),
         );
@@ -2985,6 +3025,14 @@ impl AppConfig {
             if !value.is_empty() {
                 self.pin_key = value.to_string();
             }
+        }
+        // Whether a pin follows what the user picks while it is up, and whether the pointer's
+        // own hover is one of the ways it does.
+        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "pin_update_enabled") {
+            self.pin_update_enabled = value;
+        }
+        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "pin_update_on_hover") {
+            self.pin_update_on_hover = value;
         }
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "follow_cursor") {
             self.follow_cursor = value;
