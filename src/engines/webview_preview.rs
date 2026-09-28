@@ -116,7 +116,7 @@ type ScreenRect = (i32, i32, i32, i32);
 static ENGINE: Lazy<Mutex<Option<Engine>>> = Lazy::new(|| Mutex::new(None));
 
 /// Where the engine is asked to put its window, in screen coordinates.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct Area {
     pub x: i32,
     pub y: i32,
@@ -302,6 +302,29 @@ pub fn last_timings() -> Timings {
 /// document or a font, and the engine is not in one of its own bad spells.
 pub fn draws(path: &Path) -> bool {
     can_draw() && (svg_preview::is_svg_file(path) || font_formats::is_font_file(path))
+}
+
+/// Whether the engine still owes `path`: a want published for it that has not been
+/// superseded, and the engine not in one of its own bad spells.
+///
+/// A *want* is what is owed rather than what is drawn, and the two are different for as
+/// long as a browser takes to come up: `showing_hwnd` is zero until the host exists, so a
+/// document that was asked for a moment ago is one the engine owes and has no window for
+/// yet (see `is_behind`, which is the question a pinned preview asks).
+pub fn owed(path: &Path) -> bool {
+    !is_failing() && wanted().is_some_and(|wanted| wanted.path == path)
+}
+
+/// Whether the engine still stands behind this document: the window it draws in exists —
+/// up, or hidden because the pin that shows it is a bubble — or the document is still on
+/// its way and no failure has stood the engine down.
+///
+/// It is what a pinned window asks to know whether the thing it is a window onto is still
+/// there, and the window alone is not the answer: a browser being begun has no window yet,
+/// and reading that as "gone" closed a pin the moment it was shown a document the engine
+/// had to start one for.
+pub fn is_behind(path: &Path) -> bool {
+    !is_failing() && (showing_hwnd() != 0 || owed(path))
 }
 
 /// Whether the engine can draw anything at all.
@@ -691,6 +714,90 @@ pub fn wanted_here(path: &Path, area: Area) {
             wanted.area = area;
         }
     }
+}
+
+/// Move the engine's window to another box, for a preview whose *own* window has changed
+/// rather than for a pointer that moved: a pinned document is dragged, resized, maximized,
+/// restored or carried to another display, and what stands in its media band has to travel
+/// with the box.
+///
+/// It is both of the asks above in one, and either half applies: a document still on its
+/// way has only a want to move — moving one sends no command, exactly as `wanted_here` does
+/// — while one the engine is already holding has the window put in the new box, which is a
+/// `show` that does not navigate again because the document it is asked for is the document
+/// it holds (`Host::show`). Nothing is asked for another file: a box belongs to the preview
+/// it was measured for, and a preview for another file is a `show`, which is the ask that
+/// takes this want's place altogether. A box that is already the one asked for is nothing
+/// to do at all — a drag is many of these.
+pub fn place(path: &Path, area: Area, background: TransparentBackground) {
+    // Nothing to do where the box is already the one asked for: a want that is this document at
+    // this box is one the engine has been told about, and a drag is many of these.
+    let already = WANTED
+        .lock()
+        .ok()
+        .and_then(|wanted| {
+            wanted.as_ref().map(|wanted| {
+                wanted.path == path && wanted.background == background && wanted.area == area
+            })
+        })
+        .unwrap_or(false);
+
+    if already {
+        return;
+    }
+
+    // A document still on its way has only a want to move, and moving one sends nothing: what is
+    // drawn is drawn in the box the newest want asks for when it lands, so a box that changed
+    // while a browser was coming up is a document that arrives in the right place and an engine
+    // that is not asked again (see `wanted_here`).
+    if owed(path) {
+        wanted_here(path, area);
+        return;
+    }
+
+    // A document the engine is holding has a window that has to move with the box: `show`, which
+    // re-places it and does not navigate again, because the document it is asked for is the
+    // document it holds (see `Host::show`). Nothing is asked where the engine holds nothing at
+    // all — neither the document nor a window to put it in — which is a preview with nothing to
+    // move, and a `show` for it is the ask that takes a want's place, not this.
+    if showing_hwnd() != 0 {
+        show(path, area, background);
+    }
+}
+
+/// Publish a want for a document and take it back again, without asking for a browser.
+///
+/// What `owed` and `is_behind` answer is a question about the *want*, and a want is otherwise
+/// only ever made by asking the engine for one — which in a test means a browser, and there is no
+/// browser in a test. This is the want those questions are about and nothing else: what is owed,
+/// and no engine behind it yet.
+#[cfg(test)]
+pub fn publish_want_for_test(path: &Path) {
+    let generation = WANTED_GENERATION.fetch_add(1, Ordering::AcqRel) + 1;
+
+    if let Ok(mut wanted) = WANTED.lock() {
+        *wanted = Some(Wanted {
+            generation,
+            path: path.to_path_buf(),
+            background: TransparentBackground::Black,
+            area: Area {
+                x: 0,
+                y: 0,
+                width: 8,
+                height: 8,
+            },
+        });
+    }
+}
+
+/// And the same want taken back, for the same reason (see `publish_want_for_test`).
+#[cfg(test)]
+pub fn clear_want_for_test() {
+    if let Ok(mut wanted) = WANTED.lock() {
+        *wanted = None;
+    }
+
+    WANTED_GENERATION.fetch_add(1, Ordering::AcqRel);
 }
 
 /// Let the engine go, window, browser process and thread together. Called when the app

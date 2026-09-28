@@ -2548,6 +2548,28 @@ fn replay_where_the_pointer_is(show: Option<PreviewMessage>) -> Option<PreviewMe
     }
 }
 
+/// Whether a hover message is one the loop may act on, given whether a preview is pinned.
+///
+/// A pinned preview is the whole of what this app is showing, and the hover machinery is refused
+/// at three doors for it: the Explorer hook's `show_preview` and `show_preview_keyboard`, which
+/// answer nothing while a pin is up, and this one. It is asked here as well because the hook is
+/// not the only thing a hover comes from — what is on screen is recorded as a hover message
+/// whoever put it there, so an answer that lands for the file the *pin* is showing (a box
+/// measured, a video probed, a page drawn, a setting changed in the tray, a hover that was in
+/// flight when the pin came up) is replayed out of that record as a hover, and one acted on would
+/// stop the pin's media and put a hover where the window was (see the swap's own record and the
+/// gate in `run_preview_window`).
+///
+/// What a pin answers for itself is not a hover: a take-up, a box and a take-down go on to the
+/// match as they always did.
+fn hover_is_shown(message: &PreviewMessage, pinned: bool) -> bool {
+    !pinned
+        || !matches!(
+            message,
+            PreviewMessage::Show(..) | PreviewMessage::ShowKeyboard(..)
+        )
+}
+
 /// Whether this hover is owed a render: an Office document with no page in the
 /// cache yet — or one whose page was exported narrower than a render asked for this
 /// hover's room would be, which is a deck that was first previewed on a smaller
@@ -12554,6 +12576,13 @@ fn end_pin_state() -> PreviewMessage {
 /// What is deliberately not asked about is a sound the media engine plays: a card is text, and
 /// a card whose engine has stopped is a card with a still clock rather than a window onto
 /// nothing.
+///
+/// And the question is whether the thing is *there*, not whether it has drawn anything yet: a
+/// browser that is still coming up, and a document it has been asked for that has not landed, are
+/// a pin with something to be a window onto — taking the window as the answer is what closed a
+/// pin on the first document of a run (see `webview_preview::is_behind`). A browser that has
+/// failed is where the pin does come down, and that arrives as the engine's own failure notice
+/// (see the loop's answer to it).
 fn pin_media_is_alive() -> bool {
     // What kind it is, and whether a player of this app's is behind it, are taken in one look
     // and the lock is let go of before anything is asked *about* the answer. What a player's
@@ -12586,7 +12615,17 @@ fn pin_media_is_alive() -> bool {
         MediaType::Video => is_video_process_running(),
         MediaType::Audio if has_player => is_video_process_running(),
         MediaType::NativeVideo => video_player::is_playing(),
-        MediaType::EngineSvg | MediaType::EngineFont => webview_preview::showing_hwnd() != 0,
+        // A document or a specimen is the browser's, and what says it is still there is the
+        // engine standing behind the file rather than a window with pixels in it: a window is
+        // what a browser being *started* has none of yet, and reading that as "gone" closed a
+        // pin the moment it was shown the first document of a run — the browser has to come up
+        // before it can be checked for, so the check has to know what coming up looks like (see
+        // `webview_preview::is_behind`). Which file that is, is the pin's to say rather than the
+        // media's, and it is read here because the media's own lock has been let go of by now:
+        // the two are taken one after the other, never across each other.
+        MediaType::EngineSvg | MediaType::EngineFont => {
+            pinned_media_owner().is_some_and(|(path, _)| webview_preview::is_behind(&path))
+        }
         // A frame this app holds is a frame nothing outside this thread can take away.
         _ => true,
     }
@@ -12622,6 +12661,7 @@ enum PinPlan {
 /// measurers hand back while the read that would know runs, and a placeholder has no shape — a swap
 /// laid out at it is a square window with the file's picture stretched into it (see
 /// `box_is_the_wait`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum PinBox {
     /// The box the new file's media takes on screen.
     Measured(ScreenRegion),
@@ -12655,6 +12695,20 @@ struct PinSwapSpace {
     maximized: bool,
 }
 
+/// What a pin has to lay another file out with, read off it in one look: see `PinSwapSpace`.
+///
+/// It is read rather than asked for piece by piece so that the lock is let go of before
+/// anything is measured or asked for an engine — the same rule `PinUpdate` keeps.
+fn pin_swap_space(pin: &PinnedPreview) -> PinSwapSpace {
+    PinSwapSpace {
+        current: pin.content,
+        bound: pin.bound,
+        transport_bar: pin.transport_bar,
+        overlay: pin.overlay,
+        maximized: pin.restore.is_some(),
+    }
+}
+
 /// The plan for showing the pinned window another file, if there is one to be had.
 ///
 /// Nothing comes of a pin that is collapsed into its bubble — there is no media on screen to
@@ -12675,13 +12729,7 @@ fn pin_update_plan(path: &PathBuf) -> Option<PinPlan> {
         let pinned = PINNED.lock().ok()?;
         let pin = pinned.as_ref()?;
         (
-            PinSwapSpace {
-                current: pin.content,
-                bound: pin.bound,
-                transport_bar: pin.transport_bar,
-                overlay: pin.overlay,
-                maximized: pin.restore.is_some(),
-            },
+            pin_swap_space(pin),
             pin.volume.level,
             pin.collapsed,
             pin.path.clone(),
@@ -12707,6 +12755,70 @@ fn pin_update_plan(path: &PathBuf) -> Option<PinPlan> {
         }),
         PinBox::Waiting => PinPlan::Awaiting,
     })
+}
+
+/// The room an engine that has to draw a pin's new file is asked for: the room of the display the
+/// pin is on, which is the room the ask is sized by wherever a preview is picked up — the hover
+/// asks its own display for the same file the same way (see `PendingLoad::room`).
+///
+/// It is the display's rather than the pin's own box, and the two are different questions: what an
+/// engine is told is how large the page or the picture it writes may be, and it is the pin's box
+/// that answer is then fitted into (see `pin_swap_room`). Sizing the ask by the pin's box instead
+/// would have a pinned document's page written at a size the same file's hover writes again — one
+/// page per document and version is kept, whichever side asked for it (`document_cache`) — and a
+/// page drawn for a small window is one that could never be shown any larger, which a pin that is
+/// maximized afterwards asks for. What the engine is asked for is what a hover asks for, so the
+/// two share what comes back.
+fn pin_engine_room() -> Option<(u32, u32)> {
+    let pinned = PINNED.lock().ok()?;
+    let pin = pinned.as_ref()?;
+
+    if pin.collapsed {
+        return None;
+    }
+
+    Some(monitor_bounds_from_point(pin.content.0, pin.content.1).room())
+}
+
+/// Ask whichever engine owes a pinned window's new file its page, a picture or a listing — and
+/// answer what is now being waited on.
+///
+/// It is the ask the hover loader makes for the same file (see `request_engine_render`), made
+/// here because a swap does not go through the loader: the pin keeps the file it is showing
+/// until the answer lands, and the landing is taken up where it arrives — a message for Office,
+/// the image converter and the listing engine, and the page itself for the two engines that
+/// write one into the app's own folder (see `PinPlan::Awaiting` and `engine_page_answer`).
+fn request_pin_engine_render(path: &Path, generation: u64) -> Option<(PathBuf, u64)> {
+    request_engine_render(path, generation, pin_engine_room()?)
+}
+
+/// Take an engine's answer for a pinned window, where the pin is what was waiting on it: whether
+/// this answer was the pin's, and — where it was — that the file is picked up again when there is
+/// something to pick up.
+///
+/// A page, a picture or a listing a pin is owed is taken here rather than by the hover machinery
+/// the same answer feeds: what takes it up is the swap, which lays the file out for the pin's own
+/// box, where a hover replayed for it would be a second preview on screen beside a window that is
+/// not one. A file the engine turns down (`ok` false) is the answer too, and what it leaves is the
+/// pin showing the file it has — the wait is over either way, and a refusal is remembered, so a
+/// second pick of the file costs no launch (see `page_is_on_the_way` and `refused`).
+fn take_pin_engine_answer(
+    path: &Path,
+    ok: bool,
+    awaiting: &mut Option<PathBuf>,
+    pick: &mut Option<PathBuf>,
+) -> bool {
+    if !pinned() || awaiting.as_deref() != Some(path) {
+        return false;
+    }
+
+    *awaiting = None;
+
+    if ok {
+        *pick = Some(path.to_path_buf());
+    }
+
+    true
 }
 
 /// The media box a pin is given for another file.
@@ -12737,26 +12849,49 @@ fn pin_update_plan(path: &PathBuf) -> Option<PinPlan> {
 /// nor gives one: a pin that has none keeps none until a file with a shape of its own is picked (see
 /// `pin_keeps_its_box` and `pin_bound_after`).
 ///
-/// And a file whose box is still being read — a page being measured, a video being probed — is not
-/// laid out at all: what the measure answered is the wait for a box rather than one, and a window
-/// made of it would be a square with the file's picture in it at the wrong shape. What comes of one
-/// is the wait the swap is made in rather than a box (see `PinBox`).
+/// And a file whose box is still being read — a page being measured, a video being probed, a sound
+/// being probed — is not laid out at all: what the measure answered is the wait for a box rather
+/// than one, and a window made of it would be a square with the file's picture in it at the wrong
+/// shape. The same answer is what a file gets whose media does not exist yet at all: a page, a
+/// picture or a listing an engine still owes it is asked for rather than refused, and the pin keeps
+/// the file it is showing until the answer lands (see `PinBox` and `request_pin_engine_render`).
 fn pin_update_content(
     space: PinSwapSpace,
     path: &PathBuf,
     bounds: ScreenBounds,
     dpi: u32,
 ) -> Option<PinBox> {
-    if pin_keeps_its_box(path) {
-        return Some(PinBox::Measured(space.current));
+    // A sound is the one kind drawn to its box whose media is not in hand until a probe has
+    // answered: the card is built from what the machine has for the file, and that verdict is a
+    // read of it — a source reader, or an `ffprobe` run — which is felt, so it is taken where a
+    // hover takes it, off this thread (see `audio_box`). The measure is also what starts the
+    // probe, which is the whole of why it is asked ahead of the box the pin keeps: what the card
+    // says, and whether there is a card at all, is the answer this is for.
+    if drawn_as_audio(path) {
+        return match media_dimensions(path, bounds, dpi) {
+            // Nothing here plays the file, so there is no card to swap in: the pin keeps what it
+            // is showing. The verdict is remembered, so this is not a wait that comes back.
+            None => None,
+            // The probe is in flight, which is the wait `pin_swap_awaits` names.
+            Some(shape) if pin_swap_awaits(path, shape) => Some(PinBox::Waiting),
+            // The card is there to be laid out: a sound has no shape of its own, so the pin
+            // keeps the box it has and the card is painted into it (see `pin_keeps_its_box`).
+            Some(_) => Some(PinBox::Measured(space.current)),
+        };
     }
 
-    // A page that is still being drawn is not a size to lay anything out with: what the new file
-    // asks for would be the spinner's own box, and the swap would be a pin re-sized for a wait
-    // nothing in this path asks for (see `page_is_on_the_way`). The pin keeps what it is showing
-    // until the file has a page to show.
+    // A page, a picture or a listing an engine still owes the file is a wait rather than a
+    // refusal: nothing of the new file can be laid out yet, and the pin keeps the file it is
+    // showing while the loop asks for what is owed (see `request_pin_engine_render`). A file an
+    // engine has turned down is not on the way — the question is the one that was asked before
+    // the engine was, and it answers no for a file already refused — so it comes through here
+    // and is measured, or is nothing, as it always was (see `page_is_on_the_way`).
     if page_is_on_the_way(path) {
-        return None;
+        return Some(PinBox::Waiting);
+    }
+
+    if pin_keeps_its_box(path) {
+        return Some(PinBox::Measured(space.current));
     }
 
     let shape = media_dimensions(path, bounds, dpi)?;
@@ -13112,10 +13247,11 @@ fn relayout_pinned_media(
             // `compose_media_into_band`).
             video_player::resize(width, height);
         }
-        // The browser draws in a window of its own; it is told the new bounds and draws the
-        // document it already holds again.
+        // The browser draws in a window of its own, so the band that changed is a window that has
+        // to travel with the box: it is moved rather than only asked again — a document still on
+        // its way is moved too, by the want it will land on (see `webview_preview::place`).
         Some(MediaType::EngineSvg) | Some(MediaType::EngineFont) => {
-            webview_preview::wanted_here(
+            webview_preview::place(
                 path,
                 webview_preview::Area {
                     x: content.0,
@@ -13123,6 +13259,7 @@ fn relayout_pinned_media(
                     width: width as i32,
                     height: height as i32,
                 },
+                engine_background(path),
             );
         }
         // A sound's card, which is a page of text laid out again rather than a file decoded —
@@ -13276,9 +13413,12 @@ fn place_pinned_siblings() {
 
     match kind {
         Some(MediaType::Video) => ensure_pinned_sibling_box(content),
+        // A document is the same kind of thing — a window of somebody else's standing in the pin's
+        // band — and it is *moved* rather than told again where it is, because a browser holding a
+        // page has no reason to put it anywhere else by itself (see `webview_preview::place`).
         Some(MediaType::EngineSvg) | Some(MediaType::EngineFont) => {
             if let Some((path, _)) = pinned_media_owner() {
-                webview_preview::wanted_here(
+                webview_preview::place(
                     &path,
                     webview_preview::Area {
                         x: content.0,
@@ -13286,6 +13426,7 @@ fn place_pinned_siblings() {
                         width: (content.2 - content.0).max(1),
                         height: (content.3 - content.1).max(1),
                     },
+                    engine_background(&path),
                 );
             }
         }
@@ -16632,8 +16773,16 @@ pub fn run_preview_window() {
                             // an archive listing alike — so a theme switch rebuilds
                             // it from the hover it came from; every other preview
                             // only needs the frame composited again.
-                            match (current_media_is_painted(), current_show.clone()) {
-                                (true, Some(show)) => latest_preview_msg = Some(show),
+                            match (pinned(), current_media_is_painted(), current_show.clone()) {
+                                // A pin is not rebuilt from the hover it came from: what is on
+                                // screen is a window of this app's own, and what a setting
+                                // changed under it is owed is the repaint that composes its
+                                // band and its chrome again (see `render_layered_preview`).
+                                // The record of what the pin is showing is a `Show` like a
+                                // hover's, and taken as one it would put a hover up where the
+                                // pin was (see the gate before the match below).
+                                (true, ..) => refresh_requested = true,
+                                (_, true, Some(show)) => latest_preview_msg = Some(show),
                                 _ => refresh_requested = true,
                             }
                         }
@@ -16711,10 +16860,19 @@ pub fn run_preview_window() {
                         generation,
                         ok,
                     } => {
-                        // The newest hover wins, as it does over every other
+                        // A page a pin is waiting for is the pin's answer, and it is taken here
+                        // rather than by the hover machinery below: what takes it up is the swap,
+                        // which lays the file out for the pin's own box, where a hover replayed
+                        // for it would be a second preview on screen beside a window that is not
+                        // one (see `take_pin_engine_answer`).
+                        //
+                        // The newest hover wins otherwise, as it does over every other
                         // message: a page that lands in the same tick as a new
                         // hover is not the answer to it.
-                        if latest_preview_msg.is_none() && page_ready.is_none() {
+                        if !take_pin_engine_answer(&path, ok, &mut pin_awaiting_box, &mut pin_pick)
+                            && latest_preview_msg.is_none()
+                            && page_ready.is_none()
+                        {
                             page_ready = Some((path, generation, ok));
                         }
                     }
@@ -16729,11 +16887,12 @@ pub fn run_preview_window() {
                             if pinned() {
                                 pin_pick = Some(path.clone());
                             }
-                        }
-
-                        // Held apart the way a render's answer is: it is not a hover to
-                        // act on but an answer about the one that is waiting.
-                        if latest_preview_msg.is_none() && video_probed.is_none() {
+                        } else if latest_preview_msg.is_none() && video_probed.is_none() {
+                            // Held apart the way a render's answer is: it is not a hover to
+                            // act on but an answer about the one that is waiting. An answer
+                            // the pin above has taken is not one of those — what it was for is
+                            // the pick, and a hover replayed for it as well would be a second
+                            // thing on screen beside the window that took it.
                             video_probed = Some((path, generation));
                         }
                     }
@@ -16747,12 +16906,11 @@ pub fn run_preview_window() {
                             if size.is_some() && pinned() {
                                 pin_pick = Some(path.clone());
                             }
-                        }
-
-                        // And a measured box, held apart with the box itself: what is waiting
-                        // on it is a hover, and the box is what that hover is laid out with
-                        // (see `measure_probed`).
-                        if latest_preview_msg.is_none() && measure_probed.is_none() {
+                        } else if latest_preview_msg.is_none() && measure_probed.is_none() {
+                            // And a measured box, held apart with the box itself: what is waiting
+                            // on it is a hover, and the box is what that hover is laid out with
+                            // (see `measure_probed`). A box the pin above has taken is spent on
+                            // the pick rather than on a hover, on the terms the probe's is.
                             measure_probed = Some((path, size));
                         }
                     }
@@ -16761,11 +16919,17 @@ pub fn run_preview_window() {
                         generation,
                         ok,
                     } => {
+                        // A pinned window's picture first, on the terms the render tier's page
+                        // above it is taken (see `take_pin_engine_answer`).
+                        //
                         // The engine's answer, held apart for the reason the render tier's
                         // is: what the hover that asked is waiting for is a picture to be
                         // placed with, not another hover — and an engine that will not draw
                         // the file is the same wait answered, with nothing in it.
-                        if latest_preview_msg.is_none() && page_ready.is_none() {
+                        if !take_pin_engine_answer(&path, ok, &mut pin_awaiting_box, &mut pin_pick)
+                            && latest_preview_msg.is_none()
+                            && page_ready.is_none()
+                        {
                             page_ready = Some((path, generation, ok));
                         }
                     }
@@ -16774,10 +16938,14 @@ pub fn run_preview_window() {
                         generation,
                         ok,
                     } => {
-                        // And a listing, which is the same answer once more: what the hover is
-                        // waiting for is a table of contents to draw a page from, and an archive
-                        // the engine will not list is that wait answered with nothing.
-                        if latest_preview_msg.is_none() && page_ready.is_none() {
+                        // And a listing, which is the same answer once more, taken for a pin the
+                        // same way: what the hover is waiting for is a table of contents to draw
+                        // a page from, and an archive the engine will not list is that wait
+                        // answered with nothing.
+                        if !take_pin_engine_answer(&path, ok, &mut pin_awaiting_box, &mut pin_pick)
+                            && latest_preview_msg.is_none()
+                            && page_ready.is_none()
+                        {
                             page_ready = Some((path, generation, ok));
                         }
                     }
@@ -16825,6 +16993,22 @@ pub fn run_preview_window() {
                     if let Some(drawn) = engine_page_answer(path) {
                         page_ready = Some((path.clone(), *generation, drawn));
                     }
+                }
+            }
+
+            // A pinned window waits on the same two engines the same way, and it is watched for
+            // here for the same reason a hover is: neither engine messages when it is done, so
+            // what says a page is there is the page. The pin's wait is its own — what takes the
+            // answer up is the swap rather than a hover replayed — so it is asked apart from the
+            // request above, which is a hover's (see `take_pin_engine_answer` and `PinPlan::Awaiting`).
+            if let Some(path) = pin_awaiting_box.clone() {
+                // Either answer ends the wait: a page that has landed is picked up, and a refusal
+                // leaves the pin showing the file it has, as a refusal always does. Nothing to
+                // say at all — which is every Office document and every picture the image
+                // converter develops, those two answering by message instead — leaves the wait
+                // standing until its answer arrives.
+                if let Some(drawn) = engine_page_answer(&path) {
+                    take_pin_engine_answer(&path, drawn, &mut pin_awaiting_box, &mut pin_pick);
                 }
             }
 
@@ -17044,6 +17228,24 @@ pub fn run_preview_window() {
                         *current = None;
                     }
                 }
+
+                // A pin is the same answer with one difference: a hover whose wait has gone is
+                // nothing on screen, while a pin whose browser has failed is a window standing
+                // over an empty band — this app draws none of a document itself, so there is
+                // nothing to fall back to and it comes down the way its own close button takes
+                // it. What a failed *navigation* leaves behind is the document that was asked
+                // for and never arrived, which is exactly this case: the wait is over and what
+                // it was waiting for is not there (see `note_document_failed`).
+                let pinned_engine_failed = pinned()
+                    && matches!(
+                        current_media_type(),
+                        Some(MediaType::EngineSvg) | Some(MediaType::EngineFont)
+                    )
+                    && !webview_preview::is_showing();
+
+                if pinned_engine_failed {
+                    pin_request = Some(end_pin_state());
+                }
             }
 
             // A file the user picked while a preview is pinned, which the pin is to be shown
@@ -17057,22 +17259,68 @@ pub fn run_preview_window() {
             // Nothing is swapped where the pin has gone in the meantime, where the setting was
             // switched off behind it, where a wait is already in hand, or where the file cannot be
             // shown at all: a pin that is up can only keep the file it is showing.
+            //
+            // A pin that has gone waits for nothing either: the slot a wait is held in outlives
+            // the window it belongs to, and an entry left behind by a pin that has been closed
+            // would take the landing of a hover's wait for its own (see `pin_awaiting_box`).
+            if !pinned() {
+                pin_awaiting_box = None;
+            }
+
             if let Some(path) = pin_pick.take() {
                 pin_awaiting_box = None;
                 if pinned() && pin_update_enabled() && pending_load.is_none() {
                     let update = match pin_update_plan(&path) {
                         Some(PinPlan::Show(update)) => Some(update),
-                        // The file has no box yet — what was measured for it is the wait for a
-                        // read, or for a probe that has not answered — so the pin keeps the file it
-                        // is showing and picks this one up again when the answer lands. The wait is
-                        // started here where it is a video's: a box read is started where it is
-                        // taken, which is `media_dimensions` (see `pin_swap_awaits`).
+                        // The file has no box of its own yet — what was measured for it is the
+                        // wait for a read, for a probe that has not answered, or for a page an
+                        // engine still owes it — so the pin keeps the file it is showing and picks
+                        // this one up again when the answer lands. A box read and a sound's probe
+                        // are started where they are taken, which is `media_dimensions`; a video's
+                        // probe and an engine's page, picture or listing are asked for here (see
+                        // `pin_swap_awaits`, `audio_box` and `request_pin_engine_render`).
                         Some(PinPlan::Awaiting) => {
                             if video_probe_due(&path) {
                                 spawn_video_probe(path.clone(), current_generation);
                             }
-                            pin_awaiting_box = Some(path.clone());
-                            None
+
+                            // What nothing has asked for yet is what an engine owes the file. It is
+                            // asked only where an engine really can be asked, so a file no engine
+                            // here reaches keeps the rule a swap has always had: the pin keeps the
+                            // file it is showing.
+                            let asked = page_is_on_the_way(&path)
+                                && request_pin_engine_render(&path, current_generation).is_some();
+
+                            // What the pin is waiting for, if anything: a read or a probe in
+                            // flight, or an engine that has just been asked. Nothing at all is a
+                            // pick to make again rather than a wait — an answer that landed between
+                            // the plan and the ask is one no engine will announce (see the hover's
+                            // own `requested.is_none` arm) — while a file no engine can be asked
+                            // about is left showing what it has.
+                            let outstanding =
+                                measure_waiting(&path) || video_probe_due(&path) || asked;
+
+                            if outstanding {
+                                pin_awaiting_box = Some(path.clone());
+                                None
+                            } else if page_is_on_the_way(&path) {
+                                // A file the layout reads as waiting on an engine that no reader of
+                                // its kind can be asked for — a tier this machine has not got, a
+                                // kind whose engine was switched off — has nothing coming and
+                                // nothing to keep: the pin keeps the file it is showing, which is
+                                // the only thing a window that is already up can do for a file it
+                                // cannot show (the hover comes down on the same answer, having
+                                // nothing to keep).
+                                None
+                            } else {
+                                // Nothing was on its way after all — an answer that landed between
+                                // the plan and the ask is one no engine will announce — so the file
+                                // is planned once more, and this time there is a box to lay out.
+                                match pin_update_plan(&path) {
+                                    Some(PinPlan::Show(update)) => Some(update),
+                                    _ => None,
+                                }
+                            }
                         }
                         None => None,
                     };
@@ -17152,6 +17400,16 @@ pub fn run_preview_window() {
             // is, which is what puts the window up and takes it down (see `PreviewMessage::Pin`).
             if let Some(request) = pin_request.take() {
                 latest_preview_msg = Some(request);
+            }
+
+            // While a preview is pinned, nothing is shown as a hover — including the hovers this
+            // loop makes for itself out of the record of what is pinned, which is why the gate is
+            // here and not only at the hook's own doors (see `hover_is_shown`). The messages a pin
+            // answers for itself are not hovers and go on to the match below as they always did.
+            if let Some(message) = latest_preview_msg.as_ref() {
+                if !hover_is_shown(message, pinned()) {
+                    latest_preview_msg = None;
+                }
             }
 
             // Anchored one read before the layout it decides, so the box is placed clear of
@@ -18156,6 +18414,51 @@ mod tests {
         );
 
         clear_pointer_hold();
+    }
+
+    /// A pinned preview is the whole of what is on screen, and no hover is shown beside it or in
+    /// its place — not even the hovers the loop makes for itself out of the record of what is
+    /// pinned, which is what a folder, a tab or a window changed under a pin used to leave behind.
+    /// What the pin answers for itself is not a hover and goes on (see `hover_is_shown`).
+    #[test]
+    fn a_hover_is_not_shown_while_a_preview_is_pinned() {
+        let hover = PreviewMessage::Show(PathBuf::from("D:\\Pictures\\cat.png"), 100, 200, None);
+        let keyboard = PreviewMessage::ShowKeyboard(
+            PathBuf::from("D:\\Pictures\\cat.png"),
+            100,
+            200,
+            300,
+            220,
+            None,
+            false,
+        );
+
+        assert!(
+            hover_is_shown(&hover, false),
+            "a hover is shown while no preview is pinned"
+        );
+        assert!(
+            !hover_is_shown(&hover, true),
+            "and none is shown while one is, however the hover was asked for"
+        );
+        assert!(
+            !hover_is_shown(&keyboard, true),
+            "a keyboard hover is a hover"
+        );
+        assert!(
+            hover_is_shown(&PreviewMessage::Hide, true),
+            "while the pin's own take-down is not one"
+        );
+        assert!(
+            hover_is_shown(
+                &PreviewMessage::Pin {
+                    path: PathBuf::from("D:\\Pictures\\cat.png"),
+                    rect: (100, 200, 300, 220),
+                },
+                true
+            ),
+            "nor is the take-up that puts a window up"
+        );
     }
 
     /// A reveal is held to the item the hover was resolved from: the pointer inside
@@ -22498,6 +22801,139 @@ mod tests {
         assert_eq!(pin_swap_room(banded, bounds, 96), (0, 30, 1920, 1050));
     }
 
+    /// The rule a sound picked into a pin lives or dies by: the card is built from what the machine
+    /// has for the file, and that verdict is a *probe* — a source reader, or an `ffprobe` run, both
+    /// of them felt — so what a pin is owed for one is the probe rather than a card that cannot be
+    /// built yet. The probe's own two answers are the branches beside it: a file the machine will
+    /// not play is no preview at all, and one it plays is a card painted into the box the pin
+    /// already has, a sound being one of the kinds with no shape of its own (see `pin_update_content`
+    /// and `audio_box`).
+    #[test]
+    fn a_sound_picked_into_a_pin_is_the_wait_for_its_probe_until_that_has_answered() {
+        let folder = std::env::temp_dir().join("rust-hover-preview-pin-sound");
+        std::fs::create_dir_all(&folder).expect("a test folder");
+
+        let bounds = ScreenBounds {
+            left: 0,
+            top: 0,
+            right: 1920,
+            bottom: 1080,
+        };
+        let space = PinSwapSpace {
+            current: (760, 440, 1160, 640),
+            bound: None,
+            transport_bar: false,
+            overlay: false,
+            maximized: false,
+        };
+
+        // What the measure a card is asked for is keyed by, so that an answer can be held for a
+        // file the way the measure thread would have held it.
+        let scope = {
+            let options = current_audio_options();
+            MeasureScope::Room {
+                cap_width: (bounds.right - bounds.left).max(1) as u32,
+                cap_height: bounds.height().max(1) as u32,
+                dpi: 96,
+                theme: options.theme,
+                font_scale_percent: options.font_scale_percent,
+            }
+        };
+
+        // A playable sound whose card has been measured, which is the state a hover leaves the file
+        // in: the pin keeps the box it has, and the card is painted into that box.
+        let playable = folder.join("song.mp3");
+        std::fs::write(
+            &playable,
+            b"ID3\x04\x00\x00\x00\x00\x00\x00\x10\x00\x00\x00",
+        )
+        .expect("a written file");
+        audio_track::remember(
+            &playable,
+            audio_track::Probed::Track(audio_track::Track {
+                player: audio_track::Player::Ffmpeg,
+                codec: Some("MP3".to_string()),
+                rate: Some(44_100),
+                channels: Some(2),
+                bitrate: Some(192_000),
+                duration: Some(180.0),
+            }),
+        );
+        hold_box(
+            &playable,
+            &file_version(&playable),
+            &scope,
+            Some((240, 200)),
+        );
+
+        assert_eq!(
+            pin_update_content(space, &playable, bounds, 96),
+            Some(PinBox::Measured(space.current)),
+            "a card that has been measured keeps the box the pin has"
+        );
+
+        // A file the machine will not play is the other answer a probe leaves behind, and it is no
+        // preview at all: there is no card to swap in, so the pin keeps the file it is showing.
+        let silent = folder.join("silence.mp3");
+        std::fs::write(&silent, b"ID3\x04\x00\x00\x00\x00\x00\x00\x20\x00\x00\x00")
+            .expect("a written file");
+        audio_track::remember(&silent, audio_track::Probed::Nothing);
+        hold_box(&silent, &file_version(&silent), &scope, None);
+
+        assert_eq!(
+            pin_update_content(space, &silent, bounds, 96),
+            None,
+            "a file no engine here plays has no card"
+        );
+
+        // And a sound nothing has looked at yet is the wait for the probe that would say which of
+        // the two it is — started by the measure this call takes, and answered on the thread it
+        // runs on.
+        let fresh = folder.join("unheard.mp3");
+        std::fs::write(&fresh, b"ID3\x04\x00\x00\x00\x00\x00\x00\x30\x00\x00\x00")
+            .expect("a written file");
+
+        assert_eq!(
+            pin_update_content(space, &fresh, bounds, 96),
+            Some(PinBox::Waiting),
+            "a sound no probe has answered for is a wait"
+        );
+
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    /// And the kinds that *are* drawn to their box keep it, which is what the rule above would take
+    /// from them if it were asked of everything: a page of text is measured against the room it is
+    /// drawn in, and the pin's own box is the room it is being read in (see `pin_keeps_its_box`).
+    #[test]
+    fn a_text_file_picked_into_a_pin_keeps_the_box_it_has() {
+        let folder = std::env::temp_dir().join("rust-hover-preview-pin-text");
+        std::fs::create_dir_all(&folder).expect("a test folder");
+        let path = folder.join("notes.txt");
+        std::fs::write(&path, b"one line\nand another\n").expect("a written file");
+
+        let bounds = ScreenBounds {
+            left: 0,
+            top: 0,
+            right: 1920,
+            bottom: 1080,
+        };
+        let space = PinSwapSpace {
+            current: (760, 440, 1160, 640),
+            bound: Some(400),
+            transport_bar: false,
+            overlay: false,
+            maximized: false,
+        };
+
+        assert_eq!(
+            pin_update_content(space, &path, bounds, 96),
+            Some(PinBox::Measured(space.current))
+        );
+
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+
     /// The bound a pin has once the file just taken up is on screen, which is the rule a pin that
     /// follows a listing lives or dies by: one the window already has is carried over untouched, a
     /// pin that has none keeps none while the file on screen is drawn to its own box, and the first
@@ -23171,6 +23607,62 @@ mod tests {
         if let Ok(mut media) = CURRENT_MEDIA.lock() {
             *media = previous;
         }
+    }
+
+    /// What this guards: a pin shown a document the browser has to *start* for. `showing_hwnd` is
+    /// zero until the host is up, so a liveness read off the window alone takes the browser's first
+    /// document of a run — every one it is not already warm for — as a pin that came apart, and
+    /// takes the pin down with it: the window closed before the drawing it was asked for appeared.
+    /// What the question is asked of is the engine standing behind the file, which is the document
+    /// owed and no window yet (see `pin_media_is_alive` and `webview_preview::is_behind`).
+    #[test]
+    fn an_engine_coming_up_for_a_pinned_document_is_not_a_pin_that_came_apart() {
+        let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+        let previous_pin = PINNED.lock().ok().and_then(|mut pinned| pinned.take());
+
+        let folder = std::env::temp_dir().join("rust-hover-preview-pin-engine");
+        std::fs::create_dir_all(&folder).expect("a test folder");
+        let path = folder.join("drawing.svg");
+        std::fs::write(
+            &path,
+            br#"<svg xmlns="http://www.w3.org/2000/svg" width="40" height="24"/>"#,
+        )
+        .expect("a written file");
+
+        let mut media = create_loading_media(8, 8);
+        media.media_type = MediaType::EngineSvg;
+        if let Ok(mut current) = CURRENT_MEDIA.lock() {
+            *current = Some(media);
+        }
+
+        let mut pin = overlay_pin((0, 0, 80, 60), PinChrome::always());
+        pin.path = path.clone();
+        if let Ok(mut pinned) = PINNED.lock() {
+            *pinned = Some(pin);
+        }
+
+        // The browser is coming up for this document: the engine owes it, and no window exists yet.
+        webview_preview::publish_want_for_test(&path);
+        assert!(
+            pin_media_is_alive(),
+            "a browser that is coming up is the thing the pin is a window onto"
+        );
+
+        // And a document nothing is owed for and nothing is showing is what it always was: the pin
+        // comes down.
+        webview_preview::clear_want_for_test();
+        assert!(
+            !pin_media_is_alive(),
+            "a document the engine no longer owes and no window shows is a window onto nothing"
+        );
+
+        if let Ok(mut pinned) = PINNED.lock() {
+            *pinned = previous_pin;
+        }
+        if let Ok(mut media) = CURRENT_MEDIA.lock() {
+            *media = previous_media;
+        }
+        let _ = std::fs::remove_dir_all(&folder);
     }
 
     /// What this guards: a pin collapsed into its bubble whose player this app has parked, which
