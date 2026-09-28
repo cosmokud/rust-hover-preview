@@ -3070,9 +3070,12 @@ fn scale_of_kind(kind: PreviewType, path: &Path, scales: HoverScales) -> Preview
 
         // Text is drawn at a fixed, display-scaled font size and a listing is painted to
         // the frame it is given, so neither is enlarged or reduced by a setting: the size
-        // the box came out at is the size they are drawn at. An archive an engine listed is
-        // the second of those: the same page, painted the same way, from a listing that came
-        // back from somewhere else.
+        // the box came out at is the size they are drawn at. A text page is measured
+        // against the share its own `text_scale` setting asks for rather than at the share
+        // written here, so what is left for placement to do is only to shrink a box that
+        // the room cannot take. An archive an engine listed is the second of those: the
+        // same page, painted the same way, from a listing that came back from somewhere
+        // else.
         PreviewType::Text | PreviewType::Archives | PreviewType::Peazip | PreviewType::Audio => {
             PreviewScale::Percent(100)
         }
@@ -7931,11 +7934,39 @@ fn media_dimensions(path: &PathBuf, bounds: ScreenBounds, dpi: u32) -> Option<(u
     get_media_dimensions(path)
 }
 
-/// The box a page of text asks for: as many lines and columns as the room the display has
-/// holds, at the font size its DPI gives them.
+/// The room a page of text is measured in: the display's work area cut down to the share
+/// `text_scale` asks for.
+///
+/// A page of text has no size of its own to be drawn at — it is measured at the font size the
+/// DPI beside it gives, and the answer is however many rows and columns that font takes in the
+/// room it is measured in — so what the setting names is that room rather than a share of
+/// anything the file holds. `Fit to Screen` is the whole of the work area, which is the room
+/// this kind was given before the setting existed, and a share past the whole is the whole: a
+/// page is never measured in more display than the display has.
+///
+/// It is a ceiling and not a zoom, which is the whole of the difference between this and the
+/// scale of a picture: a page that takes less room than the share allows keeps the room it
+/// takes, and a `Text Size` large enough to fill the share cannot grow the page past it (see
+/// `text_box`).
+fn text_box_room(bounds: ScreenBounds) -> (u32, u32) {
+    let share = CONFIG
+        .lock()
+        .map(|config| config.text_scale.target_scale().unwrap_or(1.0).min(1.0))
+        .unwrap_or(1.0);
+
+    // A column is a whole character and a row a whole line, so each side is rounded to the
+    // nearest one rather than cut: the share is a room to measure in, and a room a pixel
+    // narrower than it asks for is a page with a column missing from it.
+    let width = ((bounds.right - bounds.left).max(1) as f32 * share).round();
+    let height = (bounds.height().max(1) as f32 * share).round();
+
+    (width.max(1.0) as u32, height.max(1.0) as u32)
+}
+
+/// The box a page of text asks for: as many lines and columns as the room its own setting
+/// gives it holds, at the font size its DPI gives them.
 fn text_box(path: &Path, bounds: ScreenBounds, dpi: u32) -> Option<(u32, u32)> {
-    let cap_width = (bounds.right - bounds.left).max(1) as u32;
-    let cap_height = bounds.height().max(1) as u32;
+    let (cap_width, cap_height) = text_box_room(bounds);
 
     text_preview::measure(path, cap_width, cap_height, dpi, current_text_options())
 }
@@ -7996,9 +8027,17 @@ fn peazip_box(path: &Path, bounds: ScreenBounds, dpi: u32) -> Option<(u32, u32)>
 /// wait that follows the pointer re-places from the size it was given as well: left
 /// at the display's own measurement it would step around the name for a height the
 /// wrapped frame does not have (see `HoverPlacement`).
+///
+/// The re-measure is held to the room `text_scale` named rather than to the work area
+/// (see `text_box_room`): wrapping at a narrower width takes *more* rows, so a page
+/// measured at a share of the display and again at the width the layout gave it would
+/// otherwise come back taller than the share allows — and at `Fit to Screen` the room is
+/// the whole work area, which is wider and taller than the layout is, so nothing is
+/// clamped at the setting's own start.
 fn text_preview_layout(
     path: &Path,
     layout: PreviewLayout,
+    bounds: ScreenBounds,
     dpi: u32,
     place: impl FnOnce((u32, u32)) -> Option<PreviewLayout>,
 ) -> (PreviewLayout, Option<(u32, u32)>) {
@@ -8006,10 +8045,11 @@ fn text_preview_layout(
         return (layout, None);
     }
 
+    let room = text_box_room(bounds);
     let Some(size) = text_preview::measure(
         path,
-        layout.preview_w,
-        layout.max_height,
+        layout.preview_w.min(room.0),
+        layout.max_height.min(room.1),
         dpi,
         current_text_options(),
     ) else {
@@ -12840,14 +12880,21 @@ fn take_pin_engine_answer(
 ///   size and is reduced only where the bound cannot hold it (see `effective_preview_scale`).
 /// - And a window that is maximized stays maximized: the box it is given is the one it has, laid
 ///   out at fit-to-screen the way the maximize itself was, since a swap is not the gesture that
-///   takes the window out of the state the user put it in.
+///   takes the window out of the state the user put it in. A sound's card is the one exception,
+///   and the paragraph below is where it is made.
 ///
-/// A kind with no shape of its own keeps the box exactly: a page of text, a listing either reader
-/// produces, and a sound's card are measured against the room they are drawn in rather than against
-/// a size the file holds, so the box *is* what they are drawn to — and the scaling rules say
-/// nothing about a size they do not have, which is why a swap to one of them neither takes a bound
-/// nor gives one: a pin that has none keeps none until a file with a shape of its own is picked (see
-/// `pin_keeps_its_box` and `pin_bound_after`).
+/// A page of text and a listing either reader produces keep the box exactly: they are measured
+/// against the room they are drawn in rather than against a size the file holds, so the box *is*
+/// what they are drawn to — and the scaling rules say nothing about a size they do not have, which
+/// is why a swap to one of them neither takes a bound nor gives one: a pin that has none keeps none
+/// until a file with a shape of its own is picked (see `pin_keeps_its_box` and `pin_bound_after`).
+///
+/// A sound's card is the one drawn kind a swap does not keep the box for, and the maximize above
+/// is no part of that either — a card offers no maximize to stay in, there being nothing to fill
+/// (`PinFrame::None`) — so what the swap gives it is the box its own measure came out at, centred
+/// on the box the pin has now: the box the file before it left is no size for a card, and a card a
+/// listing is followed into is the card a hover of the same file would have drawn rather than one
+/// cut to whatever box was standing there.
 ///
 /// And a file whose box is still being read — a page being measured, a video being probed, a sound
 /// being probed — is not laid out at all: what the measure answered is the wait for a box rather
@@ -12865,8 +12912,8 @@ fn pin_update_content(
     // answered: the card is built from what the machine has for the file, and that verdict is a
     // read of it — a source reader, or an `ffprobe` run — which is felt, so it is taken where a
     // hover takes it, off this thread (see `audio_box`). The measure is also what starts the
-    // probe, which is the whole of why it is asked ahead of the box the pin keeps: what the card
-    // says, and whether there is a card at all, is the answer this is for.
+    // probe, which is the whole of why it is asked before the box is settled: what the card says,
+    // and whether there is a card at all, is the answer this is for.
     if drawn_as_audio(path) {
         return match media_dimensions(path, bounds, dpi) {
             // Nothing here plays the file, so there is no card to swap in: the pin keeps what it
@@ -12874,9 +12921,20 @@ fn pin_update_content(
             None => None,
             // The probe is in flight, which is the wait `pin_swap_awaits` names.
             Some(shape) if pin_swap_awaits(path, shape) => Some(PinBox::Waiting),
-            // The card is there to be laid out: a sound has no shape of its own, so the pin
-            // keeps the box it has and the card is painted into it (see `pin_keeps_its_box`).
-            Some(_) => Some(PinBox::Measured(space.current)),
+            // The card is there to be laid out, and a card is its own size: the box it is given
+            // is the one its own measure came out at, in the middle of the box the pin has now —
+            // never the box another file left, which no card is drawn to or fitted into.
+            Some(shape) => {
+                let centre = (
+                    (space.current.0 + space.current.2) / 2,
+                    (space.current.1 + space.current.3) / 2,
+                );
+
+                Some(PinBox::Measured(centred_at(
+                    (shape.0 as i32, shape.1 as i32),
+                    centre,
+                )))
+            }
         };
     }
 
@@ -12999,6 +13057,10 @@ fn pin_update_box(room: ScreenRegion, shape: (u32, u32), scale: PreviewScale) ->
 /// sound's card are all measured against the room they are drawn in — there is no size in the file
 /// to take a shape from — and they are the kinds `media_dimensions` answers for itself rather than
 /// through the file's own dimensions (see `media_dimensions`).
+///
+/// A sound's card is asked of this for the bound alone: the box a swap gives a card is the one its
+/// own measure came out at rather than the box the pin has (see `pin_update_content`), and what the
+/// answer is for here is that a box the file was *drawn* to is no ceiling for the files after it.
 fn pin_keeps_its_box(path: &Path) -> bool {
     if let Ok(config) = CONFIG.lock() {
         if let crate::formats::content_type::Content::Kind(kind) =
@@ -13048,6 +13110,23 @@ fn pin_bound_after(
     }
 
     Some((content.2 - content.0).max(content.3 - content.1).max(1))
+}
+
+/// The maximize a pin has once the file just taken up is on screen: the state the window was in,
+/// kept by every kind but a sound's card.
+///
+/// A maximize is a state about the box rather than about the file, and a card is the one kind a
+/// swap does not lay the new file out in the pin's own box: a card is its own size and offers no
+/// maximize to stay in (`PinFrame::None`), so the file after it is laid out from the box the card
+/// stands in, exactly as it is for any other card window — and a restore carried onto one would be
+/// a state about a box the card has just left, with no button anywhere to reach it and the file
+/// after the card measured by a maximum that is no longer standing (see `pin_update_content`).
+fn pin_restore_after(carried: Option<ScreenRegion>, card: bool) -> Option<ScreenRegion> {
+    if card {
+        return None;
+    }
+
+    carried
 }
 
 /// Show a pinned window another file: what is on screen is taken down — the frame this app holds,
@@ -17491,7 +17570,7 @@ pub fn run_preview_window() {
                             let placed = compute_mouse_layout(x, y, placement, bounds, dpi);
                             if let Some(layout) = placed {
                                 let (layout, text_size) =
-                                    text_preview_layout(&path, layout, dpi, |size| {
+                                    text_preview_layout(&path, layout, bounds, dpi, |size| {
                                         compute_mouse_layout(
                                             x,
                                             y,
@@ -17559,16 +17638,17 @@ pub fn run_preview_window() {
                                 preview_scale,
                             };
                             if let Some(layout) = compute_keyboard_layout(placement, bounds, dpi) {
-                                let (layout, _) = text_preview_layout(&path, layout, dpi, |size| {
-                                    compute_keyboard_layout(
-                                        KeyboardPlacement {
-                                            orig_dims: size,
-                                            ..placement
-                                        },
-                                        bounds,
-                                        dpi,
-                                    )
-                                });
+                                let (layout, _) =
+                                    text_preview_layout(&path, layout, bounds, dpi, |size| {
+                                        compute_keyboard_layout(
+                                            KeyboardPlacement {
+                                                orig_dims: size,
+                                                ..placement
+                                            },
+                                            bounds,
+                                            dpi,
+                                        )
+                                    });
                                 show_is_video = is_video;
                                 show_video_probe = video_probe_due(&path);
                                 show_measure_probe = measure_waiting(&path);
@@ -17692,11 +17772,12 @@ pub fn run_preview_window() {
                         // the pointer or the keyboard while it was up (see `PinUpdate`) — is the
                         // same window showing another file, so what belongs to the window rather
                         // than to the file is carried over: a maximized pin stays maximized and
-                        // restores to the box it would have restored to, a level moved on its own
-                        // bar stays where it was moved to, and chrome that is showing over a
-                        // picture is not brought back as if the window had just arrived. There is
-                        // nothing to carry for a first pin, which is why the take-up below reads
-                        // exactly as it always did.
+                        // restores to the box it would have restored to — a sound's card excepted,
+                        // which is shown no maximize to stay in and is given the state up as it
+                        // arrives (`pin_restore_after`) — a level moved on its own bar stays where
+                        // it was moved to, and chrome that is showing over a picture is not brought
+                        // back as if the window had just arrived. There is nothing to carry for a
+                        // first pin, which is why the take-up below reads exactly as it always did.
 
                         // The length the probe read is asked before the pin's own lock is taken:
                         // the answer comes from the geometry cache, which is a lock and the
@@ -17727,7 +17808,10 @@ pub fn run_preview_window() {
                                     pin_keeps_its_box(&path),
                                     content,
                                 ),
-                                restore: carried.and_then(|(restore, ..)| restore),
+                                restore: pin_restore_after(
+                                    carried.and_then(|(restore, ..)| restore),
+                                    drawn_as_audio(&path),
+                                ),
                                 dpi,
                                 transport_bar,
                                 transport_live: kind == Some(MediaType::NativeVideo),
@@ -22805,9 +22889,9 @@ mod tests {
     /// has for the file, and that verdict is a *probe* — a source reader, or an `ffprobe` run, both
     /// of them felt — so what a pin is owed for one is the probe rather than a card that cannot be
     /// built yet. The probe's own two answers are the branches beside it: a file the machine will
-    /// not play is no preview at all, and one it plays is a card painted into the box the pin
-    /// already has, a sound being one of the kinds with no shape of its own (see `pin_update_content`
-    /// and `audio_box`).
+    /// not play is no preview at all, and one it plays is the card at its own size, laid out at the
+    /// box the card's own measure came out at rather than at the box the pin is standing in (see
+    /// `pin_update_content` and `audio_box`).
     #[test]
     fn a_sound_picked_into_a_pin_is_the_wait_for_its_probe_until_that_has_answered() {
         let folder = std::env::temp_dir().join("rust-hover-preview-pin-sound");
@@ -22841,7 +22925,7 @@ mod tests {
         };
 
         // A playable sound whose card has been measured, which is the state a hover leaves the file
-        // in: the pin keeps the box it has, and the card is painted into that box.
+        // in: the card is drawn at its own size, in the middle of the box the pin has.
         let playable = folder.join("song.mp3");
         std::fs::write(
             &playable,
@@ -22866,10 +22950,46 @@ mod tests {
             Some((240, 200)),
         );
 
+        let card_box = centred_at((240, 200), (960, 540));
+
         assert_eq!(
             pin_update_content(space, &playable, bounds, 96),
-            Some(PinBox::Measured(space.current)),
-            "a card that has been measured keeps the box the pin has"
+            Some(PinBox::Measured(card_box)),
+            "a measured card is drawn at its own size rather than at the box the pin has"
+        );
+
+        // And the box another file left — a picture's, with the bound its take-up wrote — is no
+        // size for a card either, nor is the card put where the display would put it: what comes
+        // back is the card box in the middle of the pin's own, wherever the pin is standing.
+        let after_a_picture = PinSwapSpace {
+            current: (100, 100, 500, 400),
+            bound: Some(400),
+            transport_bar: false,
+            overlay: false,
+            maximized: false,
+        };
+
+        assert_eq!(
+            pin_update_content(after_a_picture, &playable, bounds, 96),
+            Some(PinBox::Measured(centred_at((240, 200), (300, 250)))),
+            "the box and the bound another file left are no size for a card"
+        );
+
+        // A maximize is no part of it either: a card offers no maximize to stay in, so a swap to
+        // one takes the card's own box even where the window is maximized — and the take-up gives
+        // the maximize up with it (see `pin_restore_after`).
+        let maximized = PinSwapSpace {
+            current: (0, 30, 1920, 1050),
+            bound: Some(1400),
+            transport_bar: false,
+            overlay: false,
+            maximized: true,
+        };
+
+        assert_eq!(
+            pin_update_content(maximized, &playable, bounds, 96),
+            Some(PinBox::Measured(card_box)),
+            "a maximized window is given a card's own box like any other"
         );
 
         // A file the machine will not play is the other answer a probe leaves behind, and it is no
@@ -22961,6 +23081,27 @@ mod tests {
         // not by one drawn to its own box, which keeps the box it is given.
         assert_eq!(pin_bound_after(Some(800), false, page), Some(800));
         assert_eq!(pin_bound_after(Some(800), true, card), Some(800));
+    }
+
+    /// The maximize a swap leaves behind, which is what the file after a card is laid out from: a
+    /// window shown a picture stays maximized, and one shown a sound's card gives the maximize up —
+    /// a card is its own size, offers no maximize to stay in, and the box it stands in is no box
+    /// for a maximum that is still standing (see `pin_restore_after`).
+    #[test]
+    fn a_swap_to_a_card_gives_up_the_maximize_the_window_was_in() {
+        let restore = (100, 100, 500, 400);
+
+        assert_eq!(
+            pin_restore_after(Some(restore), false),
+            Some(restore),
+            "a kind a maximize can be shown for keeps the state the window was in"
+        );
+        assert_eq!(
+            pin_restore_after(Some(restore), true),
+            None,
+            "a card offers no maximize to stay in"
+        );
+        assert_eq!(pin_restore_after(None, true), None);
     }
 
     /// The case the rule above is for: a pin taken up on a sound's card — a 400 by 200 box with no

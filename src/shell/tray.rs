@@ -12,8 +12,8 @@ use crate::config::config::{
     DEFAULT_NORMALIZE_VOLUME, DEFAULT_OFFICE_ENGINE,
     DEFAULT_OFFICE_ENGINE_IDLE_SECS, DEFAULT_PIN_PAUSE_AUDIO, DEFAULT_PIN_PAUSE_VIDEO,
     DEFAULT_PIN_UPDATE_ENABLED, DEFAULT_PIN_UPDATE_ON_HOVER,
-    DEFAULT_PREVIEW_SCALE, DEFAULT_SAME_FILE_REHOVER_DELAY_MS,
-    DEFAULT_SETTLING_DELAY_MS, DEFAULT_TEXT_FONT_SCALE_PERCENT, DEFAULT_TICK_MS,
+    DEFAULT_PREVIEW_SCALE, DEFAULT_SAME_FILE_REHOVER_DELAY_MS, DEFAULT_SETTLING_DELAY_MS,
+    DEFAULT_TEXT_FONT_SCALE_PERCENT, DEFAULT_TEXT_SCALE, DEFAULT_TICK_MS,
     DEFAULT_TRIGGER_KEY_AFFECT_PIN_MODE,
     DEFAULT_VECTOR_BACKGROUND, DEFAULT_VECTOR_SCALE, DEFAULT_VIDEO_SCALE, DEFAULT_VIDEO_VOLUME,
     DEFAULT_WEBVIEW_IDLE_SECS, DEFAULT_AUDIO_VOLUME, VOLUME_CHOICES,
@@ -276,6 +276,11 @@ const ID_TRAY_ANIMATED_SCALE_BASE: u16 = 1435;
 /// from a picture the file keeps of the whole of itself, so it is asked for a share of the
 /// display the way a page is rather than for a share of its own size.
 const ID_TRAY_DESIGN_SCALE_BASE: u16 = 1445;
+/// `Text Scaling`, in the range after the design one: a text page is measured against a
+/// share of the display rather than drawn at a share of a size of its own, so it is asked the
+/// same question a page is — and the share is its own because what a page of text is given
+/// and what a drawing is given are not the same answer.
+const ID_TRAY_TEXT_SCALE_BASE: u16 = 1450;
 /// The shares of the display every `… Scaling` submenu offers, in the order it lists
 /// them: the whole room a document can be given at the top, then the shares of it a
 /// document is asked for below. What differs between the settings is where they start —
@@ -781,6 +786,14 @@ unsafe extern "system" fn tray_window_proc(
                     .contains(&cmd) =>
                 {
                     set_design_scale(cmd - ID_TRAY_DESIGN_SCALE_BASE)
+                }
+                // And how much of the display a page of text is measured in, the same
+                // question the rows above it are asked of a document.
+                cmd if (ID_TRAY_TEXT_SCALE_BASE
+                    ..ID_TRAY_TEXT_SCALE_BASE + DOCUMENT_SCALE_CHOICES.len() as u16)
+                    .contains(&cmd) =>
+                {
+                    set_text_scale(cmd - ID_TRAY_TEXT_SCALE_BASE)
                 }
                 // How large a video is drawn, by the position its item was listed at: the
                 // same shares the pictures above it are offered, in a range of their own
@@ -1487,17 +1500,17 @@ unsafe fn show_context_menu(hwnd: HWND) {
         DEFAULT_ANIMATED_SCALE,
     );
 
-    // Add the Vector Scaling, Ebook Scaling, Document Scaling, Font Scaling and Design Scaling
-    // submenus: how much of the display each kind of document is drawn over. They sit beside
-    // the picture scale because they are the same question about other kinds of preview, and
-    // each is a submenu of its own because the answers are not the same answers: a picture's
-    // percentage is of its own size, a document's is of the display — and a document and a
-    // page do not start at the same share of it either.
+    // Add the Vector Scaling, Text Scaling, Ebook Scaling, Document Scaling, Font Scaling and
+    // Design Scaling submenus: how much of the display each kind of document is drawn over, or
+    // measured in. They sit beside the picture scale because they are the same question about
+    // other kinds of preview, and each is a submenu of its own because the answers are not the
+    // same answers: a picture's percentage is of its own size, a document's is of the display —
+    // and a document and a page do not start at the same share of it either.
     //
     // One of them covers both halves of the `Document` kind, since a page the render engine
     // drew is a page like any other: what the setting answers is how much of the display one
     // is given, whichever engine drew it.
-    let (ebook_scale, document_scale, font_scale, design_scale, vector_scale) = CONFIG
+    let (ebook_scale, document_scale, font_scale, design_scale, vector_scale, text_scale) = CONFIG
         .lock()
         .map(|c| {
             (
@@ -1506,6 +1519,7 @@ unsafe fn show_context_menu(hwnd: HWND) {
                 c.font_scale,
                 c.design_scale,
                 c.vector_scale,
+                c.text_scale,
             )
         })
         .unwrap_or((
@@ -1514,6 +1528,7 @@ unsafe fn show_context_menu(hwnd: HWND) {
             DEFAULT_FONT_SCALE,
             DEFAULT_DESIGN_SCALE,
             DEFAULT_VECTOR_SCALE,
+            DEFAULT_TEXT_SCALE,
         ));
 
     append_document_scale_menu(
@@ -1522,6 +1537,13 @@ unsafe fn show_context_menu(hwnd: HWND) {
         ID_TRAY_VECTOR_SCALE_BASE,
         vector_scale,
         DEFAULT_VECTOR_SCALE,
+    );
+    append_document_scale_menu(
+        scaling_menu,
+        w!("Text Scaling"),
+        ID_TRAY_TEXT_SCALE_BASE,
+        text_scale,
+        DEFAULT_TEXT_SCALE,
     );
     append_document_scale_menu(
         scaling_menu,
@@ -3884,6 +3906,21 @@ fn set_vector_scale(index: u16) {
     }
 }
 
+/// How much of the display a page of text is measured in, by the position the item was listed
+/// at. The same rule as the documents beside it: the box a text page is measured for is part of
+/// the placement that was made when the preview was opened, so this applies to the next hover
+/// rather than resizing the page that is already up.
+fn set_text_scale(index: u16) {
+    let Some(scale) = document_scale_at(index) else {
+        return;
+    };
+
+    if let Ok(mut config) = CONFIG.lock() {
+        config.text_scale = scale;
+        config.save();
+    }
+}
+
 /// The share of its own size an item of the `Image Scaling` or `Video Scaling` submenu
 /// stands for, by the position it was listed at. An id past the last choice the menu
 /// offered is one that is not there.
@@ -4584,7 +4621,7 @@ mod tests {
         );
     }
 
-    /// The five `… Scaling` submenus are one range each, and the `Avoid` items sit in
+    /// The `… Scaling` submenus are one range each, and the `Avoid` items sit in
     /// the slack between them: a click on a share of the display is never read as a way
     /// of avoiding the item a preview is about, and the other way round.
     #[test]
@@ -4592,6 +4629,7 @@ mod tests {
         let avoid = ID_TRAY_AVOID_BASE..ID_TRAY_AVOID_BASE + AVOID_CHOICES.len() as u16;
         let document_scales = [
             ID_TRAY_VECTOR_SCALE_BASE,
+            ID_TRAY_TEXT_SCALE_BASE,
             ID_TRAY_EBOOK_SCALE_BASE,
             ID_TRAY_DOCUMENT_SCALE_BASE,
             ID_TRAY_FONT_SCALE_BASE,
@@ -4720,6 +4758,7 @@ mod tests {
 
         for base in [
             ID_TRAY_VECTOR_SCALE_BASE,
+            ID_TRAY_TEXT_SCALE_BASE,
             ID_TRAY_EBOOK_SCALE_BASE,
             ID_TRAY_DOCUMENT_SCALE_BASE,
             ID_TRAY_FONT_SCALE_BASE,
@@ -4773,6 +4812,10 @@ mod tests {
             ID_TRAY_VECTOR_SCALE_BASE,
             ID_TRAY_VECTOR_SCALE_BASE + DOCUMENT_SCALE_CHOICES.len() as u16,
         );
+        let text_scales = (
+            ID_TRAY_TEXT_SCALE_BASE,
+            ID_TRAY_TEXT_SCALE_BASE + DOCUMENT_SCALE_CHOICES.len() as u16,
+        );
 
         let overlaps = |ours: (u16, u16), theirs: (u16, u16)| {
             (ours.0 < theirs.1 && theirs.0 < ours.1).then_some((ours, theirs))
@@ -4793,6 +4836,7 @@ mod tests {
                 ebook_scales,
                 document_scales,
                 vector_scales,
+                text_scales,
             ] {
                 assert_eq!(
                     overlaps(*range, document),

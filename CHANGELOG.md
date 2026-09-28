@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- **`Pin Mode → Update Preview`**: a sound's card is now drawn at its own size, in the middle of the box the window already stands in, rather than filling whatever box the file before it left — a picture's, say, which turned the card into a slab. A window shown a card while maximized now gives the maximize up rather than carrying a restore no card offers a button for.
+
 ## [0.4.0] - 2026-09-27
 
 ### Added
