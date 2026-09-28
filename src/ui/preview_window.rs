@@ -11649,9 +11649,10 @@ struct PinnedPreview {
     /// chrome over or around this box, which is why the box is what the pin remembers and what a
     /// restore puts back (see `PinnedPreview::window_box`).
     content: ScreenRegion,
-    /// The longest side a swap may give this pin's media, in either direction: the longest side of
-    /// the box the pin went up with, or of the one a manual resize last left it at, which is the
-    /// only thing that writes it (see `apply_pin_drag`).
+    /// The longest side a swap may give this pin's media, in either direction, or nothing while the
+    /// pin has no bound yet: the longest side of the box the pin went up with, or of the one a
+    /// manual resize last left it at, which are the two things that write it (see `apply_pin_drag`
+    /// and `pin_bound_after`).
     ///
     /// It exists because a swap fits one shape inside a box, and a box that was itself the last
     /// swap's answer can only ever lose a side of it: a pin that followed a listing past files of
@@ -11663,7 +11664,14 @@ struct PinnedPreview {
     /// widescreen file that followed it a box no wider than the portrait was — the same preview,
     /// a third of the size, for no reason the user could see. A side is what the user's own hand
     /// asked for when it dragged an edge, so a side is what every shape gets to use.
-    bound: i32,
+    ///
+    /// And a pin *starts* with none where the file it went up on is drawn to its own box rather than
+    /// laid out from a shape of its own — a page of text, a listing, a sound's card (see
+    /// `pin_keeps_its_box`): there is no size of that file in that box, and a two-line file's window
+    /// or a four-hundred-pixel card is no ceiling for the picture that follows it. The first file
+    /// with a shape of its own is laid out against the room the display has at the scale its kind
+    /// names, and the box that comes out of it is where the bound is taken from (`pin_bound_after`).
+    bound: Option<i32>,
     /// The box a restore down puts back, and `None` while the pin is not maximized: the box the
     /// window had before it was maximized, kept in step with the hand while it is one — a drag
     /// moves the place that box is put back at, and a resize gives it up altogether, since a
@@ -12635,8 +12643,9 @@ struct PinSwapSpace {
     /// moved keeps its place while it changes size.
     current: ScreenRegion,
     /// The longest side the new file's media may take, in either direction, which is a swap's
-    /// ceiling rather than the size it is given (see `PinnedPreview::bound`).
-    bound: i32,
+    /// ceiling rather than the size it is given — and nothing while the pin has no bound yet,
+    /// where the room is the display's own (see `PinnedPreview::bound`).
+    bound: Option<i32>,
     /// Whether the kind on screen carries a transport bar.
     transport_bar: bool,
     /// Whether its chrome is drawn over its media (see `pin_overlay_chrome`).
@@ -12658,7 +12667,9 @@ struct PinSwapSpace {
 ///
 /// What the new file's box is measured against is the pin's own bound rather than the box the file
 /// on screen came out at, which is the whole of what keeps a pin that follows a listing from walking
-/// its way down it file by file (see `PinnedPreview::bound`).
+/// its way down it file by file — and the room the display has where the pin has no bound yet, which
+/// is every pin taken up on a file drawn to its own box that has not been shown a shape since (see
+/// `PinnedPreview::bound` and `pin_swap_room`).
 fn pin_update_plan(path: &PathBuf) -> Option<PinPlan> {
     let (space, volume, collapsed, showing) = {
         let pinned = PINNED.lock().ok()?;
@@ -12710,7 +12721,8 @@ fn pin_update_plan(path: &PathBuf) -> Option<PinPlan> {
 /// - The bound the pin carries is the ceiling, and it is a side rather than a box: the room is a
 ///   square of the longest side the pin has been given, so every shape may use the whole of it. A
 ///   box instead would hand the widescreen file that follows a tall pin a box no wider than the tall
-///   one was (see `PinnedPreview::bound`).
+///   one was (see `PinnedPreview::bound`). A pin with no bound yet is given the room the display has
+///   instead, since no size has been asked of the window to fit the file inside (see `pin_swap_room`).
 /// - Inside it the file is laid out at the scale the configuration asks for — the scale a hover of
 ///   the same file would take: fit-to-screen fills the bound, a percentage takes the file's own
 ///   size and is reduced only where the bound cannot hold it (see `effective_preview_scale`).
@@ -12721,8 +12733,9 @@ fn pin_update_plan(path: &PathBuf) -> Option<PinPlan> {
 /// A kind with no shape of its own keeps the box exactly: a page of text, a listing either reader
 /// produces, and a sound's card are measured against the room they are drawn in rather than against
 /// a size the file holds, so the box *is* what they are drawn to — and the scaling rules say
-/// nothing about a size they do not have, which is why a swap to one of them neither takes the
-/// bound nor changes it (see `pin_keeps_its_box`).
+/// nothing about a size they do not have, which is why a swap to one of them neither takes a bound
+/// nor gives one: a pin that has none keeps none until a file with a shape of its own is picked (see
+/// `pin_keeps_its_box` and `pin_bound_after`).
 ///
 /// And a file whose box is still being read — a page being measured, a video being probed — is not
 /// laid out at all: what the measure answered is the wait for a box rather than one, and a window
@@ -12803,22 +12816,27 @@ fn box_is_the_wait(shape: (u32, u32)) -> bool {
 /// asked of each side apart, which is what lets a display that is wider than it is tall keep its
 /// width for the room while bounding the height: the square is cut to the room rather than shrunk
 /// within it.
+///
+/// A pin with no bound yet is given the whole of that room: no size has been asked of this window
+/// to fit anything inside, and the box a page of text or a sound's card came out at is a size the
+/// file was drawn to rather than one the user gave the pin (see `PinnedPreview::bound`).
 fn pin_swap_room(space: PinSwapSpace, bounds: ScreenBounds, dpi: u32) -> ScreenRegion {
     let (room_width, room_height) =
         pinned_room(bounds, dpi, space.transport_bar, space.overlay).room();
-    let side = space.bound.max(1);
+    let (room_width, room_height) = (room_width.max(1) as i32, room_height.max(1) as i32);
     let centre = (
         (space.current.0 + space.current.2) / 2,
         (space.current.1 + space.current.3) / 2,
     );
 
-    centred_at(
-        (
-            side.min(room_width.max(1) as i32),
-            side.min(room_height.max(1) as i32),
-        ),
-        centre,
-    )
+    // The bound is the room's own ceiling, and a pin without one is left the whole of it — which
+    // is what the file swapped into such a pin is scaled into, at the scale its kind names.
+    let (width, height) = match space.bound {
+        Some(side) => (side.max(1).min(room_width), side.max(1).min(room_height)),
+        None => (room_width, room_height),
+    };
+
+    centred_at((width, height), centre)
 }
 
 /// The box a pinned window's media takes for another file's shape: the largest box of that shape
@@ -12865,6 +12883,36 @@ fn pin_keeps_its_box(path: &Path) -> bool {
         || archive_formats::is_archive_preview(path)
         || peazip_formats::is_peazip_preview(path)
         || drawn_as_audio(path)
+}
+
+/// The bound a pin has once the file just taken up is the one on screen: a side the files that
+/// follow may be fitted into, or nothing while the pin has none to give.
+///
+/// A bound the window already has is carried through a swap untouched, and that is not a question
+/// about the new file at all: what a swap is measured against is the size the window was given
+/// rather than the size the file it is showing came out at (see `PinnedPreview::bound`).
+///
+/// A pin that has none yet keeps none while the file on screen is one drawn to its own box — a page
+/// of text, a listing, a sound's card — since that box is a size the file was drawn to and no
+/// ceiling for anything else (see `pin_keeps_its_box`). The first file with a shape of its own takes
+/// the longest side of the box it came out at, which is where a pin taken up on a picture gets its
+/// bound too: what a swap hands such a pin is the box the file was laid out at against the room the
+/// display has — the scale its kind names, which is the scale a hover of it would have been given —
+/// and that box is the size this window has now shown it can hold.
+fn pin_bound_after(
+    carried: Option<i32>,
+    keeps_its_box: bool,
+    content: ScreenRegion,
+) -> Option<i32> {
+    if let Some(bound) = carried {
+        return Some(bound);
+    }
+
+    if keeps_its_box {
+        return None;
+    }
+
+    Some((content.2 - content.0).max(content.3 - content.1).max(1))
 }
 
 /// Show a pinned window another file: what is on screen is taken down — the frame this app holds,
@@ -15064,10 +15112,12 @@ unsafe fn apply_pin_drag(hwnd: HWND) {
             return;
         };
         // A hand that pulled the box to a size is the box's new bound as well as its size: the
-        // side the user dragged the window out to is the side the files that follow may use, and a
-        // move is not a size and leaves it alone (see `PinnedPreview::bound`).
+        // side the user dragged the window out to is the side the files that follow may use, and
+        // it writes one where the pin had none — a size asked for by hand is the size, not the box
+        // the file on screen came out at. A move is not a size and leaves it alone (see
+        // `PinnedPreview::bound`).
         if matches!(drag.action, PinDragAction::Resize(_)) {
-            pin.bound = (content.2 - content.0).max(content.3 - content.1).max(1);
+            pin.bound = Some((content.2 - content.0).max(content.3 - content.1).max(1));
         }
         // And a maximized window's restore is carried along with the hand — or given up where the
         // hand has pulled the box to a size of its own, which is a maximize there is nothing left
@@ -17409,14 +17459,16 @@ pub fn run_preview_window() {
                                 content,
                                 // A pin taken up over another one keeps the bound the window has:
                                 // what a swap is measured against is the size the window was given
-                                // rather than the size the file it is showing came out at. A first
-                                // pin has no bound yet, and its own longest side becomes one.
-                                bound: match carried {
-                                    Some((.., bound)) => bound,
-                                    None => (content.2 - content.0)
-                                        .max(content.3 - content.1)
-                                        .max(1),
-                                },
+                                // rather than the size the file it is showing came out at. A pin
+                                // without one keeps none while the file on screen is drawn to its
+                                // own box, and takes the longest side of the box the first file
+                                // with a shape of its own came out at — which is where a pin taken
+                                // up on a picture gets its bound too (see `pin_bound_after`).
+                                bound: pin_bound_after(
+                                    carried.and_then(|(.., bound)| bound),
+                                    pin_keeps_its_box(&path),
+                                    content,
+                                ),
                                 restore: carried.and_then(|(restore, ..)| restore),
                                 dpi,
                                 transport_bar,
@@ -21766,7 +21818,7 @@ mod tests {
     fn overlay_pin(content: ScreenRegion, chrome: PinChrome) -> PinnedPreview {
         PinnedPreview {
             path: PathBuf::from("picture.png"),
-            bound: (content.2 - content.0).max(content.3 - content.1).max(1),
+            bound: Some((content.2 - content.0).max(content.3 - content.1).max(1)),
             content,
             restore: None,
             dpi: 96,
@@ -22245,7 +22297,7 @@ mod tests {
             for shape in shapes {
                 let space = PinSwapSpace {
                     current,
-                    bound,
+                    bound: Some(bound),
                     transport_bar: false,
                     overlay: true,
                     maximized: false,
@@ -22293,7 +22345,7 @@ mod tests {
         // A pin that went up as a 1000 by 2000 portrait, whose longest side is 2000.
         let space = PinSwapSpace {
             current: (1000, 100, 2000, 2100),
-            bound: 2000,
+            bound: Some(2000),
             transport_bar: false,
             overlay: true,
             maximized: false,
@@ -22328,7 +22380,7 @@ mod tests {
         };
         let space = PinSwapSpace {
             current: (100, 200, 900, 700),
-            bound: 800,
+            bound: Some(800),
             transport_bar: false,
             overlay: true,
             maximized: false,
@@ -22374,7 +22426,7 @@ mod tests {
         };
         let space = PinSwapSpace {
             current: (0, 0, 2000, 3000),
-            bound: 3000,
+            bound: Some(3000),
             transport_bar: true,
             overlay: false,
             maximized: false,
@@ -22392,6 +22444,132 @@ mod tests {
         assert!(
             content.2 - content.0 <= 1280 && content.3 - content.1 <= 800 - 30 - 30,
             "a box larger than the room was given back: {content:?}"
+        );
+    }
+
+    /// A pin that went up on a file drawn to its own box — a page of text, a listing, a sound's card
+    /// — has no bound yet, and the file that follows it is laid out against the whole of the room
+    /// the display has rather than inside a square of that box: a box the file was *drawn* to is no
+    /// size to fit anything into, and it is the scale its kind names that decides what comes of it
+    /// (see `pin_swap_room` and `PinnedPreview::bound`).
+    #[test]
+    fn a_pin_with_no_bound_is_fitted_into_the_room_the_display_has() {
+        let bounds = ScreenBounds {
+            left: 0,
+            top: 0,
+            right: 1920,
+            bottom: 1080,
+        };
+
+        // A kind whose chrome is drawn over its media: the room is the whole display, wherever the
+        // small window the pin went up in stands.
+        let space = PinSwapSpace {
+            current: (760, 440, 1160, 640),
+            bound: None,
+            transport_bar: false,
+            overlay: true,
+            maximized: false,
+        };
+        let room = pin_swap_room(space, bounds, 96);
+        assert_eq!(room, (0, 0, 1920, 1080));
+
+        // A 16:9 file at fit-to-screen fills it — where the box the card left would have shown it
+        // at a fraction of the size.
+        assert_eq!(
+            pin_update_box(room, (1920, 1080), PreviewScale::FitToScreen),
+            (0, 0, 1920, 1080)
+        );
+
+        // And a percentage is the file's own pixels, inside that room.
+        assert_eq!(
+            pin_update_box(room, (400, 250), PreviewScale::Percent(400)),
+            (160, 40, 1760, 1040)
+        );
+
+        // A kind with bands is given the room those leave: the display's work area less the caption
+        // and the transport bar.
+        let banded = PinSwapSpace {
+            current: (760, 440, 1160, 640),
+            bound: None,
+            transport_bar: true,
+            overlay: false,
+            maximized: false,
+        };
+        assert_eq!(pin_swap_room(banded, bounds, 96), (0, 30, 1920, 1050));
+    }
+
+    /// The bound a pin has once the file just taken up is on screen, which is the rule a pin that
+    /// follows a listing lives or dies by: one the window already has is carried over untouched, a
+    /// pin that has none keeps none while the file on screen is drawn to its own box, and the first
+    /// file with a shape of its own locks the longest side of the box it came out at (see
+    /// `pin_bound_after`).
+    #[test]
+    fn a_pin_taken_up_on_a_file_drawn_to_its_box_takes_a_bound_from_the_first_shaped_file() {
+        // The boxes two of those kinds leave: a short page of text and a sound's card, both small
+        // and neither of them a size anything was asked to fit inside.
+        let page = (0, 0, 300, 900);
+        let card = (100, 200, 500, 400);
+
+        // A first pin on one of them: no bound.
+        assert_eq!(pin_bound_after(None, true, card), None);
+
+        // Another of them following it leaves the pin unbound still, however much of a side that
+        // one happens to have.
+        assert_eq!(pin_bound_after(None, true, page), None);
+
+        // The first file with a shape of its own takes the longest side of the box it came out at —
+        // here the 900 the tall page left, which is the size this window has shown it can hold.
+        assert_eq!(pin_bound_after(None, false, page), Some(900));
+
+        // And a bound the window already has is never rewritten: not by another shaped file, and
+        // not by one drawn to its own box, which keeps the box it is given.
+        assert_eq!(pin_bound_after(Some(800), false, page), Some(800));
+        assert_eq!(pin_bound_after(Some(800), true, card), Some(800));
+    }
+
+    /// The case the rule above is for: a pin taken up on a sound's card — a 400 by 200 box with no
+    /// size of a file in it — shown a picture. The picture is laid out against the room the display
+    /// has at the scale its kind names rather than inside the card's box, and the side that comes
+    /// out of it is the bound the files after it are fitted into (see `pin_bound_after`).
+    #[test]
+    fn a_picture_shown_to_a_sound_pin_fills_the_room_and_takes_the_bound() {
+        let bounds = ScreenBounds {
+            left: 0,
+            top: 0,
+            right: 1920,
+            bottom: 1080,
+        };
+        // The card the pin went up on, in the middle of the display.
+        let space = PinSwapSpace {
+            current: (760, 440, 1160, 640),
+            bound: None,
+            transport_bar: false,
+            overlay: false,
+            maximized: false,
+        };
+
+        // The room is the display's own, which the card's box does not shrink.
+        let room = pin_swap_room(space, bounds, 96);
+        assert_eq!(room, (0, 15, 1920, 1065));
+
+        // A 4:3 photograph at fit-to-screen fills the room's height, and the card's 400 pixels are
+        // no ceiling for it.
+        let content = pin_update_box(room, (4000, 3000), PreviewScale::FitToScreen);
+        assert_eq!(content, (260, 15, 1660, 1065));
+        assert_eq!(pin_bound_after(None, false, content), Some(1400));
+
+        // The file after it is fitted into a square of that side, cut to the room it is on.
+        let next = PinSwapSpace {
+            current: content,
+            bound: Some(1400),
+            transport_bar: false,
+            overlay: false,
+            maximized: false,
+        };
+        let next_room = pin_swap_room(next, bounds, 96);
+        assert_eq!(
+            (next_room.2 - next_room.0, next_room.3 - next_room.1),
+            (1400, 1050)
         );
     }
 
@@ -22547,7 +22725,7 @@ mod tests {
     fn a_pinned_window_says_which_of_its_edges_a_point_is_on() {
         let pin = PinnedPreview {
             path: PathBuf::from("picture.png"),
-            bound: 600,
+            bound: Some(600),
             content: (100, 100, 700, 500),
             restore: None,
             dpi: 96,
@@ -23114,7 +23292,7 @@ mod tests {
             if let Ok(mut pinned) = PINNED.lock() {
                 *pinned = Some(PinnedPreview {
                     path: path.clone(),
-                    bound: 320,
+                    bound: Some(320),
                     content: (0, 0, 320, 240),
                     restore: None,
                     dpi: 96,
