@@ -439,6 +439,46 @@ fn configured_far_edge_grace_pixels() -> f32 {
 /// A region on screen: left, top, right, bottom.
 type ScreenRegion = (i32, i32, i32, i32);
 
+/// The region a preview of an item is kept off, as the `Avoid` setting measured it off
+/// the item, and the one thing about it a placement cannot see: whether it is a *column*
+/// of the item's view rather than the text the item itself draws.
+///
+/// An item's own text is a box, and a preview that comes out over one is stepped off it in
+/// whichever direction asks the least — past its right edge, past its left, under it or
+/// over it. A column is not one item's text: the view draws every row's in it — the `Name`
+/// column of a `Details` or `Content` row at `Avoid Filename Column`, the columns a row
+/// writes beside its name at `Avoid Details` — so a preview that comes out over a column
+/// covers the rows beside the item however it is placed vertically, and the ways out of it
+/// are the two to its sides. The ways off the item's own text are taken only where the
+/// display leaves no room in either, since a preview over the item it describes is worse
+/// than one over its neighbours (see `avoiding_text`).
+#[derive(Clone, Copy)]
+pub(crate) struct AvoidRegion {
+    /// Where the region is on screen: left, top, right, bottom.
+    region: ScreenRegion,
+    /// Whether it is a column of the view rather than the item's own text.
+    column: bool,
+}
+
+impl AvoidRegion {
+    /// The text the item itself draws, which a preview is stepped off in either axis.
+    fn text(region: ScreenRegion) -> Self {
+        Self {
+            region,
+            column: false,
+        }
+    }
+
+    /// A column of the view — a region every row of it draws its text in — which a
+    /// preview is stepped off to one of its two sides.
+    fn column(region: ScreenRegion) -> Self {
+        Self {
+            region,
+            column: true,
+        }
+    }
+}
+
 /// The regions that keep a preview on screen, in screen coordinates, or `None`
 /// when the preview on screen is not one that holds the pointer: the journey to a
 /// text preview and the preview itself, or the box a waiting spinner occupies.
@@ -617,10 +657,13 @@ pub enum PreviewMessage {
     ///
     /// The region that comes with it is what the `Avoid` setting measured off the
     /// hovered item — its name, and the columns beside it at `Avoid Details` — which
-    /// the placement is kept off at either way of avoiding. See `avoiding_text`. It is
-    /// `None` when the setting is off, when the view reported
-    /// no text for the item, or when the walk found no item at the cursor.
-    Show(PathBuf, i32, i32, Option<ScreenRegion>),
+    /// the placement is kept off at either way of avoiding, and whether that region is
+    /// a column of the item's view, which decides *how* a placement is kept off it: a
+    /// column is stepped off to one of its sides, an item's own text in whichever
+    /// direction asks the least. See `AvoidRegion` and `avoiding_text`. It is `None`
+    /// when the setting is off, when the view reported no text for the item, or when
+    /// the walk found no item at the cursor.
+    Show(PathBuf, i32, i32, Option<AvoidRegion>),
     /// A preview of the focused item, whose box comes with it, and the region the
     /// `Avoid` setting keeps it off — the item's own text, or the name alone, or the
     /// column the name sits in, depending on the way the setting is on. That region is
@@ -1480,13 +1523,31 @@ pub fn update_pinned_preview(path: &Path) {
     }
 }
 
-pub fn show_preview(path: &Path, x: i32, y: i32, avoid: Option<ScreenRegion>) {
+/// Show a preview of the file the pointer hovers, opened from the cursor it was hovered
+/// at.
+///
+/// The region that comes with it is the one the Explorer hook measured off the item the
+/// file is — left, top, right and bottom of it, with whether it is a column of the
+/// view rather than the item's own text — and it is what the placement is kept off (see
+/// `AvoidRegion`). A hover the hook could not measure a region for comes as `None` and
+/// is placed by its position mode alone.
+pub fn show_preview(path: &Path, x: i32, y: i32, avoid: Option<((i32, i32, i32, i32), bool)>) {
     // A pinned preview is the whole of what this app is showing: a hover raised while one
     // is up would be a second thing on screen, and the pin exists to stop exactly that
     // (see `PIN_ACTIVE`).
     if pinned() {
         return;
     }
+
+    // The hook answers with the region and whether it is a column of the view rather
+    // than the item's own text (see `AvoidRegion`).
+    let avoid = avoid.map(|(region, column)| {
+        if column {
+            AvoidRegion::column(region)
+        } else {
+            AvoidRegion::text(region)
+        }
+    });
 
     if let Ok(sender) = PREVIEW_SENDER.lock() {
         if let Some(ref tx) = *sender {
@@ -8387,7 +8448,10 @@ fn load_spinner_delay() -> Duration {
 #[derive(Clone, Copy)]
 struct HoverPlacement {
     orig_dims: (u32, u32),
-    avoid: Option<ScreenRegion>,
+    /// The region the Explorer hook measured off the hovered item, and what kind of
+    /// region it is — the item's own text, or a column the view draws every row's text
+    /// in — which is what the placement is kept off (see `AvoidRegion`).
+    avoid: Option<AvoidRegion>,
     follow_cursor: bool,
     preview_scale: PreviewScale,
     /// Whether this placement is the waiting spinner's own box rather than a
@@ -10587,13 +10651,16 @@ const MIN_AVOID_ROOM_PIXELS: f32 = 64.0;
 /// with the columns a row writes beside it at `Avoid Details`.
 ///
 /// What a placement is kept clear of, and how far: the region the `Avoid` setting
-/// measured off the item, the distance the placement keeps from it, and the pointer a
+/// measured off the item — and what kind of region it is, which decides which steps off
+/// it are steps at all — the distance the placement keeps from it, and the pointer a
 /// mouse hover's placement is held clear of as well (see `avoiding_text`).
 struct Clearance {
     /// The region the `Avoid` setting measured off the hovered item: the name the file
     /// is listed under, that name with the columns a row writes beside it, or `None`
-    /// where the setting is off or the view reported no text for the item.
-    text: Option<ScreenRegion>,
+    /// where the setting is off or the view reported no text for the item — with whether
+    /// it is a column of the view rather than the item's own text, which is what the ways
+    /// out are read against (see `AvoidRegion`).
+    text: Option<AvoidRegion>,
     /// The distance the placement keeps from `text`, so the text is stepped off rather
     /// than touched at its edge. Already in the pixels of the display the placement is
     /// for — like the least room a way out is worth taking, which `avoiding_text`
@@ -10623,7 +10690,18 @@ struct Clearance {
 /// of the preview — and only a step the display has room for is taken, so a preview
 /// moved off one edge is never pushed off another. A step that would put the preview
 /// over the pointer is not one a mouse hover can use either, whether or not it is the
-/// shortest: the two rules the ways out are held to are the ones `Clearance` names.
+/// shortest: the rules the ways out are held to are the ones `Clearance` names.
+///
+/// A *column* is the one region the ways over and under do not clear. The view draws
+/// every row's text in it — the `Name` column at `Avoid Filename Column`, the columns
+/// beside the name at `Avoid Details` — so a preview stepped off the item's own row is
+/// still over the rows next to it, which is the whole of what the setting exists to
+/// keep the preview off: in a `Details` or `Content` view, a preview placed above or
+/// below the hovered item covers its neighbours' names exactly as one placed over it
+/// would. The ways out of a column are therefore the two to its sides, and the four
+/// ways are taken only where the display leaves no room in either — a preview over the
+/// neighbours' names is then the lesser thing, because the item the preview describes
+/// is the one it would cover instead (see `AvoidRegion`).
 ///
 /// A preview too large for every one of those rooms is *resized* into the roomiest of
 /// them rather than left where it covers the text. That is the case a preview filling
@@ -10642,24 +10720,39 @@ fn avoiding_text(
     dpi: u32,
 ) -> PreviewLayout {
     let Clearance { text, gap, cursor } = clearance;
-    let Some((text_left, text_top, text_right, text_bottom)) = text else {
+    let Some(AvoidRegion { region, column }) = text else {
         return layout;
     };
+    let (text_left, text_top, text_right, text_bottom) = region;
 
     let (left, top) = (layout.pos_x, layout.pos_y);
     let (width, height) = (layout.preview_w as i32, layout.preview_h as i32);
     let min_room = logical_px(dpi, MIN_AVOID_ROOM_PIXELS);
 
+    // What the placement is kept clear of: the region itself for the text one item
+    // draws, and the region's own span *down the display* for a column — every row of
+    // the view draws its text in the column, so a preview that overlaps it across is
+    // over the column wherever it sits, and the ways out of it are the two to its
+    // sides, the ways over and under the row being only the ones left where the
+    // display has no room in either (see below).
+    let (block_top, block_bottom) = match column {
+        true => (bounds.top, bounds.bottom),
+        false => (text_top, text_bottom),
+    };
+
     let covers_text = left < text_right
         && left + width > text_left
-        && top < text_bottom
-        && top + height > text_top;
+        && top < block_bottom
+        && top + height > block_top;
     if !covers_text {
         return layout;
     }
 
     // Where a preview clear of the text would sit: past the text's right edge, before
-    // its left one, under it and over it, each a gap away from it.
+    // its left one, under it and over it, each a gap away from it. The ways over and
+    // under are read off the region's own box, which for a column is the row it was
+    // measured at: they are the ways out a preview of a column takes only where the
+    // display leaves no room beside it (see the note on `clear_of_column` below).
     let past_right = text_right + gap;
     let before_left = text_left - gap;
     let under = text_bottom + gap;
@@ -10677,9 +10770,10 @@ fn avoiding_text(
         (over - bounds.top, false, over, true),
     ];
 
-    // The ways out are compared by whether they keep the pointer clear, then by the
-    // preview's own size, then by how short the step is — see the note on `cursor`.
-    let mut best: Option<(bool, i64, i32, PreviewLayout)> = None;
+    // The ways out are compared by whether they keep the pointer clear, then by whether
+    // they keep the preview clear of a column, then by the preview's own size, then by
+    // how short the step is — see the notes on `cursor` and on `clear_of_column`.
+    let mut best: Option<(bool, bool, i64, i32, PreviewLayout)> = None;
     for (room, along_width, anchor, far_edge) in ways_out {
         let room = room.max(0);
 
@@ -10742,12 +10836,24 @@ fn avoiding_text(
             preview_h,
         };
 
-        // A way out that keeps the pointer clear of the preview comes first, then the
-        // largest preview, and the shortest move breaks a tie: every way out that fits
-        // the preview as it stands offers it the same size, so those are the ones the
-        // move decides between, and only a preview that has to shrink is chosen between
-        // by what the room holds. See the note on `cursor` above for why the pointer
-        // comes ahead of both.
+        // Whether this way out leaves the preview clear of the region's own column: a
+        // way clear of it leaves every row's text readable, where one over or under the
+        // item covers the rows beside it — which is the whole of what a column is kept
+        // off for. The two ways to the sides are clear of it by construction; the ways
+        // over and under it are only as clear as the place the mode put the preview
+        // already was, which is what leaves them as the ways out of last resort. For
+        // the text of one item every way out answers `true`, so nothing is chosen by
+        // this (see the note on `Clearance`).
+        let clear_of_column = !column
+            || placement.pos_x >= text_right
+            || placement.pos_x + preview_w as i32 <= text_left;
+
+        // A way out that keeps the pointer clear of the preview comes first, then one
+        // that is clear of a column, then the largest preview, and the shortest move
+        // breaks a tie: every way out that fits the preview as it stands offers it the
+        // same size, so those are the ones the move decides between, and only a preview
+        // that has to shrink is chosen between by what the room holds. See the note on
+        // `cursor` above for why the pointer comes ahead of both.
         let clear_of_cursor = cursor.is_none_or(|(x, y)| {
             !box_holds(
                 x,
@@ -10763,11 +10869,15 @@ fn avoiding_text(
         let area = preview_w as i64 * preview_h as i64;
         let step = (placement.pos_x - left).abs() + (placement.pos_y - top).abs();
         let better = match &best {
-            Some((best_clear, best_area, best_step, _)) => {
+            Some((best_clear, best_column, best_area, best_step, _)) => {
                 if clear_of_cursor != *best_clear {
                     // One of the two keeps the pointer clear and the other does not, and
                     // that is the whole of the choice between them.
                     clear_of_cursor
+                } else if clear_of_column != *best_column {
+                    // And one of them is clear of a column the other covers, which for a
+                    // column is the whole of what the move is for.
+                    clear_of_column
                 } else {
                     area > *best_area || (area == *best_area && step < *best_step)
                 }
@@ -10775,12 +10885,12 @@ fn avoiding_text(
             None => true,
         };
         if better {
-            best = Some((clear_of_cursor, area, step, placement));
+            best = Some((clear_of_cursor, clear_of_column, area, step, placement));
         }
     }
 
     match best {
-        Some((_, _, _, placement)) => placement,
+        Some((_, _, _, _, placement)) => placement,
         None => layout,
     }
 }
@@ -11043,6 +11153,12 @@ struct KeyboardPlacement {
     /// reads `Avoid Nothing` as `Avoid Filename` and answers with the item's own box
     /// when the view reported no text (see
     /// `explorer_hook::HoveredItem::keyboard_avoid_box`).
+    ///
+    /// It is read as the item's own text whatever the setting measured it as, rather
+    /// than as a column the view draws every row in: a column's ways out are its own
+    /// two sides, and a keyboard preview of a row is already placed past the region's
+    /// right edge (see `compute_keyboard_layout`), so the region is left as what a
+    /// fallback placement is stepped off.
     avoid: Option<ScreenRegion>,
     /// Whether the item draws anything beside the piece its name is drawn in, which
     /// with the item's shape is what says it is a row of its view rather than a box —
@@ -11174,7 +11290,7 @@ fn compute_keyboard_layout(
                 orig_dims,
                 preview_scale,
                 Clearance {
-                    text: avoid,
+                    text: avoid.map(AvoidRegion::text),
                     gap,
                     cursor: None,
                 },
@@ -11297,7 +11413,7 @@ fn compute_keyboard_layout(
             orig_dims,
             preview_scale,
             Clearance {
-                text: avoid,
+                text: avoid.map(AvoidRegion::text),
                 gap,
                 cursor: None,
             },
@@ -11393,7 +11509,7 @@ fn compute_keyboard_layout(
             orig_dims,
             preview_scale,
             Clearance {
-                text: avoid,
+                text: avoid.map(AvoidRegion::text),
                 gap,
                 cursor: None,
             },
@@ -18063,12 +18179,25 @@ mod tests {
         cursor: Option<(i32, i32)>,
         bounds: ScreenBounds,
     ) -> PreviewLayout {
+        placed_off(placement, media, AvoidRegion::text(name), cursor, bounds)
+    }
+
+    /// The same placement kept off a region of a kind of its own — the text one item
+    /// draws, or a column the view draws every row's in — which is what decides the
+    /// ways out of it; see `placed` for the rest.
+    fn placed_off(
+        placement: PreviewLayout,
+        media: (u32, u32),
+        region: AvoidRegion,
+        cursor: Option<(i32, i32)>,
+        bounds: ScreenBounds,
+    ) -> PreviewLayout {
         avoiding_text(
             placement,
             media,
             PreviewScale::Percent(100),
             Clearance {
-                text: Some(name),
+                text: Some(region),
                 gap: logical_px(TEST_DPI, POINTER_STANDOFF_PIXELS),
                 cursor,
             },
@@ -19467,7 +19596,7 @@ mod tests {
                 cursor_y,
                 HoverPlacement {
                     orig_dims: (side, side),
-                    avoid: Some(name),
+                    avoid: Some(AvoidRegion::text(name)),
                     follow_cursor: false,
                     preview_scale: PreviewScale::Percent(100),
                     at_the_pointer_corner: true,
@@ -19525,6 +19654,89 @@ mod tests {
         // where its own column already was.
         let name = (100, 300, 400, 320);
         let placement = placed(layout(120, 300, 300, 300), (300, 300), name, None, bounds());
+
+        assert_eq!((placement.pos_x, placement.pos_y), (120, 340));
+        assert_eq!((placement.preview_w, placement.preview_h), (300, 300));
+    }
+
+    /// A column of the view — the `Name` column at `Avoid Filename Column`, the columns
+    /// a row writes beside its name at `Avoid Details` — is not the text of the one item
+    /// the hover is about: every row draws its text in it, so a preview stepped off the
+    /// item's own row and left at the column's width covers the rows beside it, which is
+    /// exactly what the setting keeps a preview off. The ways out of a column are the two
+    /// to its sides, however much room the ways under and over it offer — see
+    /// `AvoidRegion` and `avoiding_text`.
+    #[test]
+    fn steps_a_preview_off_a_column_to_the_side_and_not_under_the_row() {
+        // The `Name` column the name above is drawn in — the same region, as the way of
+        // avoiding that keeps the whole column off measures it.
+        let column = AvoidRegion::column((100, 300, 400, 320));
+
+        // The placement the text of one item is stepped *under* the row by — see
+        // `moves_a_preview_out_of_the_name_it_covers` — is taken past the column's right
+        // edge instead: the name the preview came out over is the one of the item's own
+        // row, and the step leaves every row's name readable.
+        let placement = placed_off(
+            layout(120, 300, 300, 300),
+            (300, 300),
+            column,
+            None,
+            bounds(),
+        );
+        assert_eq!((placement.pos_x, placement.pos_y), (420, 300));
+        assert_eq!((placement.preview_w, placement.preview_h), (300, 300));
+
+        // A preview that came out *below* the row is off the column's width as well,
+        // rather than off the row's own line: what the last row of the display draws in
+        // the column is covered by a preview the row's own step would clear.
+        let placement = placed_off(
+            layout(120, 500, 300, 300),
+            (300, 300),
+            column,
+            None,
+            bounds(),
+        );
+        assert_eq!((placement.pos_x, placement.pos_y), (420, 500));
+    }
+
+    /// A preview beside the column is left where the position mode put it, above or
+    /// below the item's own row: what a column is kept off is the column, and a preview
+    /// clear of it across covers no row's text wherever it sits.
+    #[test]
+    fn leaves_a_placement_beside_a_column_where_it_is() {
+        let column = AvoidRegion::column((100, 300, 400, 320));
+
+        let below = placed_off(
+            layout(420, 500, 300, 300),
+            (300, 300),
+            column,
+            None,
+            bounds(),
+        );
+        assert_eq!((below.pos_x, below.pos_y), (420, 500));
+
+        let above = placed_off(layout(420, 0, 300, 300), (300, 300), column, None, bounds());
+        assert_eq!((above.pos_x, above.pos_y), (420, 0));
+    }
+
+    /// Where the display has no room beside a column, the ways out of the item's own
+    /// text are the ones left: a preview over the neighbours' names is then the lesser
+    /// thing, because the item the preview describes is the one it would cover instead.
+    /// The ways under and over a column are read off the row the column was measured at
+    /// for exactly this — see `avoiding_text`.
+    #[test]
+    fn steps_a_preview_under_the_row_where_the_display_leaves_no_room_beside_a_column() {
+        // A column reaching both edges of the display, so neither side of it is a way
+        // out: the room past its right edge and the room before its left one are both
+        // nothing.
+        let column = AvoidRegion::column((0, 300, 1000, 320));
+        let placement = placed_off(
+            layout(120, 300, 300, 300),
+            (300, 300),
+            column,
+            None,
+            bounds(),
+        );
 
         assert_eq!((placement.pos_x, placement.pos_y), (120, 340));
         assert_eq!((placement.preview_w, placement.preview_h), (300, 300));
@@ -19819,8 +20031,9 @@ mod tests {
     /// The one thing a hovered preview may never do: leave the display it was planned
     /// for. Every position mode, every scale, every shape of media, anchored at each
     /// corner of the display and at its middle, with a name under the pointer and with a
-    /// row across the display's top to be kept off — because a preview that grows past
-    /// its display takes an edge and a room that disagree to find, and the ones that
+    /// row across the display's top to be kept off — each as the text one item draws and
+    /// as a column the view draws every row in — because a preview that grows past its
+    /// display takes an edge and a room that disagree to find, and the ones that
     /// disagree are not the ones anyone hovers over on purpose.
     #[test]
     fn places_every_hover_inside_its_display() {
@@ -19847,16 +20060,42 @@ mod tests {
                 for preview_scale in scales {
                     for follow_cursor in [true, false] {
                         for (cursor_x, cursor_y) in points {
-                            let names = [
+                            let regions = [
                                 None,
                                 // The name of the item the pointer is on.
-                                Some((cursor_x - 100, cursor_y - 8, cursor_x + 100, cursor_y + 8)),
+                                Some(AvoidRegion::text((
+                                    cursor_x - 100,
+                                    cursor_y - 8,
+                                    cursor_x + 100,
+                                    cursor_y + 8,
+                                ))),
                                 // A row's text across the whole display's top, which a
                                 // preview above the middle of the display covers.
-                                Some((bounds.left, bounds.top, bounds.right, bounds.top + 40)),
+                                Some(AvoidRegion::text((
+                                    bounds.left,
+                                    bounds.top,
+                                    bounds.right,
+                                    bounds.top + 40,
+                                ))),
+                                // The same two regions read as columns of the view — as
+                                // `Avoid Filename Column` and `Avoid Details` measure
+                                // them — which a placement is kept off to the side (see
+                                // `AvoidRegion`).
+                                Some(AvoidRegion::column((
+                                    cursor_x - 100,
+                                    cursor_y - 8,
+                                    cursor_x + 100,
+                                    cursor_y + 8,
+                                ))),
+                                Some(AvoidRegion::column((
+                                    bounds.left,
+                                    bounds.top,
+                                    bounds.right,
+                                    bounds.top + 40,
+                                ))),
                             ];
 
-                            for avoid in names {
+                            for avoid in regions {
                                 let placement = HoverPlacement {
                                     orig_dims: (orig_width, orig_height),
                                     avoid,
