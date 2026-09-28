@@ -46,8 +46,8 @@ use windows::Win32::UI::Accessibility::{
 };
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, GetDpiForSystem, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetAsyncKeyState, VK_DOWN, VK_END, VK_HOME, VK_LBUTTON, VK_LEFT, VK_MBUTTON, VK_NEXT, VK_PRIOR,
-    VK_RBUTTON, VK_RETURN, VK_RIGHT, VK_UP, VK_XBUTTON1, VK_XBUTTON2,
+    GetAsyncKeyState, VK_DELETE, VK_DOWN, VK_END, VK_HOME, VK_LBUTTON, VK_LEFT, VK_MBUTTON,
+    VK_NEXT, VK_PRIOR, VK_RBUTTON, VK_RETURN, VK_RIGHT, VK_TAB, VK_UP, VK_XBUTTON1, VK_XBUTTON2,
 };
 use windows::Win32::UI::Shell::{
     IFolderView, IFolderView2, IPersistFolder2, IShellBrowser, IShellItem, IShellView,
@@ -1069,6 +1069,8 @@ const VK_BACK_CODE: i32 = 0x08;
 const VK_CONTROL_CODE: i32 = 0x11;
 const VK_MENU_CODE: i32 = 0x12;
 const VK_T_CODE: i32 = 0x54;
+const VK_LWIN_CODE: i32 = 0x5B;
+const VK_RWIN_CODE: i32 = 0x5C;
 /// How far up from the element under the pointer the item that holds it is looked
 /// for. The item is the nearest list row or data item; what lies between it and
 /// the element under the pointer is the view's own chrome — an icon, a label, a
@@ -3498,6 +3500,69 @@ fn mouse_press_buttons() -> [windows::Win32::UI::Input::KeyboardAndMouse::VIRTUA
     [VK_LBUTTON, VK_RBUTTON, VK_MBUTTON]
 }
 
+/// Which of the two things that move the focus did so on one tick, as the rule that tells a pin's
+/// keyboard pick from a listing that changed under it reads them (see `focus_move_input` and
+/// `PinUpdateWatch::focus_moved_by_key`).
+#[derive(Clone, Copy, Default)]
+struct FocusMoveInput {
+    /// A key that walks a listing was pressed or is held: an arrow, Home, End, a page key, or a
+    /// letter or a digit, which Explorer answers with its own type-ahead.
+    walked_by_key: bool,
+    /// Something that moves the focus without a key having walked it did so: an Enter, a shortcut
+    /// of Explorer's own, a button of the mouse's own, or a key held with a modifier down.
+    moved_otherwise: bool,
+    /// The pointer acted on the view, which is a click: what Explorer does with one is select,
+    /// open or navigate, and the watch follows the file it selected by reading it under the pointer
+    /// (see `PinUpdateWatch::follow`). It is read here because the press bit a click is known by can
+    /// only be read once a tick.
+    clicked: bool,
+}
+
+/// What the keyboard and the pointer did on one tick, for the rule above.
+///
+/// Two things move the focus in Explorer, and only one of them lands it on a file the user picked.
+/// A key the user presses — an arrow, Home, End, a page key, or a letter or a digit, which Explorer
+/// answers with its own type-ahead — *walks* the selection, and what it comes to rest on is the
+/// user's own choice. Everything else puts the focus on an item that nobody chose: an Enter, which
+/// opens the folder or the document the focus was on; a shortcut of Explorer's own, which is a
+/// Backspace, an arrow under Alt, or a Ctrl+T; a Tab, which moves between the view's own elements
+/// and switches Explorer's own tabs under Ctrl; a click, which is the pointer acting on the view —
+/// a tab, a breadcrumb, a folder in the tree, or a file; the mouse's own navigation buttons; a
+/// Delete, which takes what the focus was on out of the listing and lands the focus on whatever
+/// takes its place; and any key held with Ctrl, Alt or Windows down, which is a command rather than
+/// a move (a Ctrl+Tab, a Ctrl+1, a Ctrl+L and an Alt+Tab all change which listing is on screen or
+/// what it is showing, and none of them walks a selection).
+///
+/// It is read on every tick a pin is up — where the setting asks the pin to follow, and where it
+/// does not, so that a click nobody asked about is not left standing as the answer the next read
+/// gets — and a pinned tick is the one place that reads these keys at all: the loop returns at the
+/// pin before its own input reads, so the press bits this spends are ones nothing else in the tick
+/// was going to have (see `navigation_input`, whose one read per key per tick has to be the first).
+fn focus_move_input() -> FocusMoveInput {
+    let navigation = navigation_input();
+    let (_, activation_pressed) = activation_key_input_state();
+    let (_, deletion_pressed) = key_input_state(&[VK_DELETE]);
+    // A Tab is not a key that walks a listing: it moves between the view's own elements, and a Tab
+    // under Ctrl is a tab of Explorer's switched — the one move onto another listing that neither
+    // the shortcut set nor a button of the mouse's answers (see `is_explorer_navigation_shortcut_key`).
+    let (_, tab_pressed) = key_input_state(&[VK_TAB]);
+    let (_, mouse_clicked) = mouse_button_input_state();
+
+    FocusMoveInput {
+        walked_by_key: navigation.active,
+        moved_otherwise: navigation.shortcut
+            || activation_pressed
+            || deletion_pressed
+            || tab_pressed
+            || is_mouse_navigation_button_detected()
+            || is_key_down(VK_CONTROL_CODE)
+            || is_key_down(VK_MENU_CODE)
+            || is_key_down(VK_LWIN_CODE)
+            || is_key_down(VK_RWIN_CODE),
+        clicked: mouse_clicked,
+    }
+}
+
 /// What a look at the view under the pointer said about the place it is showing, one
 /// fact per field: the folder the view has open, the search root under it, the URL it
 /// was opened with, and the view's own window.
@@ -3719,9 +3784,20 @@ struct PinUpdateWatch {
     ///
     /// A key the user presses moves the focus *within* one place, where a folder, a tab and a window
     /// the user moves to land it in another one — and an item the focus has *landed* on is not a file
-    /// the user picked. The item under the focus is new either way, so this is the one fact that
-    /// tells the two apart (see `PinUpdateWatch::note_place`).
+    /// the user picked. The item under the focus is new either way, so this tells the two apart
+    /// wherever the shell describes a place, and where it does not there is the fact beside it (see
+    /// `PinUpdateWatch::note_place`).
     place: Option<HoverLocation>,
+    /// When a key that walks a listing was last seen, or nothing where something that moves the
+    /// focus by other means has been seen since: the other witness a focus moved by the keyboard
+    /// has, and the one that answers where the place cannot (see
+    /// `PinUpdateWatch::focus_moved_by_key`).
+    ///
+    /// It is a key walking the selection and nothing else that sets it, so that an arrow pressed
+    /// before an Enter — which is how a folder is opened from the keyboard — does not stand as the
+    /// witness for the item that Enter lands the focus on. And it is a time rather than a flag, so a
+    /// witness nothing made good on cannot outlive the press that gave it.
+    walk_at: Option<Instant>,
 }
 
 impl PinUpdateWatch {
@@ -3735,19 +3811,26 @@ impl PinUpdateWatch {
     /// A pin is not told about a file the pointer merely crosses, and not about one that was under
     /// a pointer nobody moved.
     ///
-    /// The keyboard is watched more narrowly than the focus it moves: a folder, a tab and a window
-    /// the user moves to move the focus too, and what they land it on is a file the user did not
-    /// pick — so the item under the focus counts only where the *place* it was read in is the one
-    /// the watch was already watching (see `PinUpdateWatch::note_place`). A click and a hover need
-    /// no such rule: each is the pointer acting on something the user is looking at, whatever
-    /// listing it happens to be in.
+    /// The keyboard is watched more narrowly than the focus it moves, because a folder, a tab and a
+    /// window the user moves to move the focus too, and what they land it on is a file the user did
+    /// not pick. Two facts are asked of such a move, and a move has to be the keyboard's by both of
+    /// them: the *place* it was read in has to be the one the watch was already watching, and a key
+    /// that walks a listing has to be what moved it (see `PinUpdateWatch::note_place` and
+    /// `PinUpdateWatch::focus_moved_by_key`). A click and a hover need neither rule: each is the
+    /// pointer acting on something the user is looking at, whatever listing it happens to be in.
     fn follow(
         &mut self,
         resolver: &mut ItemResolver,
         on_hover: bool,
         hover_delay_ms: u64,
         last_focus_probe: &mut Instant,
+        focus_move: FocusMoveInput,
     ) {
+        let now = Instant::now();
+        // What the keyboard and the pointer did is noted before anything can return: one of the two
+        // takes the witness away, and a tick that takes it away has to be a tick that keeps it taken
+        // (see `walk_at`).
+        self.note_focus_move(focus_move, now);
         let Some(showing) = pinned_path() else {
             // Nothing is pinned, so there is nothing to show anybody: the watch starts again from
             // what the next pin is showing (see `showing`).
@@ -3807,7 +3890,9 @@ impl PinUpdateWatch {
             .map(|at| at.elapsed() >= Duration::from_millis(hover_delay_ms))
             .unwrap_or(false);
         let hovered = on_hover && self.arrived && !self.probed && settled;
-        let clicked = mouse_button_input_state().1;
+        // Read by the tick that hands the watch its input rather than here, because the press bit is
+        // the one thing about a click that can only be read once a tick (see `focus_move_input`).
+        let clicked = focus_move.clicked;
 
         if over_explorer && (clicked || hovered) {
             self.probed = true;
@@ -3820,9 +3905,9 @@ impl PinUpdateWatch {
         // The keyboard's own answer: the item the focus is on, which is what a key the user presses
         // moves. It is probed on the terms the hover path probes it — while Explorer has the
         // foreground, and no more often than the hover path asks — and a focus that has moved onto
-        // another file *within the place the watch is watching* is a file the user picked as surely
-        // as one a click selected: another folder, another tab and another window move the focus
-        // onto an item as well, and those are moves this setting does not follow (see `note_place`).
+        // another file is a file the user picked as surely as one a click selected: another folder,
+        // another tab and another window move the focus onto an item as well, and those are moves
+        // this setting does not follow.
         if is_foreground_explorer()
             && last_focus_probe.elapsed() >= Duration::from_millis(KEYBOARD_FOCUS_PROBE_MS)
         {
@@ -3837,12 +3922,18 @@ impl PinUpdateWatch {
                 if changed {
                     // Why the focus has moved, which is what tells a key the user pressed from a
                     // folder, a tab or a window the user moved to. The place is read for the watch's
-                    // first item as much as for a move — a baseline is taken in a place too — and
-                    // only an item the focus reached *within* the place the watch was watching can
-                    // be one a key put it on.
+                    // first item as much as for a move — a baseline is taken in a place too.
                     let landed = self.note_place(focused_item_location(resolver, &focused));
 
-                    if known && !landed {
+                    // And a place is not the whole of it, which is why the keyboard's own keys are
+                    // asked as well: the place a focused item is read in is the view the *pointer*
+                    // was last seen working in rather than the one the item is drawn in — an item's
+                    // provider reports no window for a frame's views to be told apart by — so a tab
+                    // switched or a folder opened under the keyboard reads as the place the watch was
+                    // already watching. A move both facts call the keyboard's is a file the user
+                    // picked; one either of them calls somebody else's is not (see
+                    // `focus_moved_by_key`).
+                    if known && !landed && self.focus_moved_by_key(now) {
                         if let Some(path) = resolve_focused_item_to_path(resolver, &focused) {
                             self.offer(&path, &showing);
                         }
@@ -3850,6 +3941,43 @@ impl PinUpdateWatch {
                 }
             }
         }
+    }
+
+    /// Note what the keyboard and the pointer did on one tick, as the witness a focus moved by the
+    /// keyboard is made of: a key walked a listing, or something moved the focus by other means.
+    ///
+    /// A key that walks the selection is what makes the item under the focus a file the user picked,
+    /// and everything else takes that reading away from whatever key press came before it — an
+    /// Enter, a shortcut, a click, a key held with a modifier down. Those are what a folder, a tab
+    /// and a window are reached by, and what a listing the shell is still filling in looks like too
+    /// (see `FocusMoveInput` and `walk_at`).
+    fn note_focus_move(&mut self, input: FocusMoveInput, now: Instant) {
+        if input.walked_by_key {
+            self.walk_at = Some(now);
+        }
+
+        if input.moved_otherwise || input.clicked {
+            // Noted after the key, so that a chord — a Ctrl+PageDown, say — is the command it is
+            // rather than the walk its keys look like.
+            self.walk_at = None;
+        }
+    }
+
+    /// Whether the keyboard's own keys are what put the focus where it is: a key that walks a
+    /// listing was seen within the window a key press is given to have moved something, and nothing
+    /// that moves the focus by other means has been seen since.
+    ///
+    /// It is asked of a focus that has moved beside the place it moved in, because neither answers
+    /// alone. The place a focused item is read in is the view the *pointer* was last seen working in
+    /// rather than the one the item is drawn in — an item's provider reports no window for a frame's
+    /// views to be told apart by, so the view that answers is the remembered one — which leaves a tab
+    /// switched, a folder opened with Enter and a window moved to reading as the place the watch was
+    /// already watching; and what knows better is the keys themselves.
+    fn focus_moved_by_key(&self, now: Instant) -> bool {
+        recent_elapsed_within(
+            self.walk_at.map(|at| now.saturating_duration_since(at)),
+            KEYBOARD_FOCUS_INPUT_GRACE_MS,
+        )
     }
 
     /// Note the place the item the keyboard has landed on was read in, and answer whether the focus
@@ -3862,11 +3990,12 @@ impl PinUpdateWatch {
     ///
     /// Two places are told apart by the facts both looks answered and never by one of them failing
     /// to answer, which is the rule the hover machinery reads its own place by (see
-    /// `hover_location_changed`), asked of the same shell. What a look that answered nothing does
-    /// *not* do is drop the place in hand: a shell that could not describe the view on the tick a
-    /// folder was opened would otherwise leave the next item the focus lands on read as a pick,
-    /// where holding it costs at worst one press — the place is read where the focus moves, and a
-    /// place re-read after a change is a change again.
+    /// `hover_location_changed`), asked of the same shell — and what a look that answered nothing
+    /// leaves is the place in hand rather than a change, the way it leaves it there. What holds the
+    /// line where a place cannot is the keyboard's own keys, which are asked beside it: a look that
+    /// answers nothing is a shell that could not describe the view on the tick a folder was opened
+    /// in, and the item that opening lands the focus on is not one a key walked onto (see
+    /// `PinUpdateWatch::focus_moved_by_key`).
     fn note_place(&mut self, place: Option<HoverLocation>) -> bool {
         let Some(place) = place else {
             return false;
@@ -4663,12 +4792,27 @@ pub fn run_explorer_hook() {
                 // What the hover of a file under a settled pointer would wait out, which is the
                 // delay the hover behind the pin is given and the settling it must outlast as well.
                 let delay = hover_delay_ms.max(settling_delay_ms);
-                pin_watch.follow(&mut resolver, on_hover, delay, &mut last_keyboard_focus_probe);
+                // What the keyboard and the pointer did, read here rather than by the watch: it is
+                // the tick's own answer about the machine, and the press bits it reads are ones the
+                // loop never comes back for while a pin is up (see `focus_move_input`).
+                let focus_move = focus_move_input();
+                pin_watch.follow(
+                    &mut resolver,
+                    on_hover,
+                    delay,
+                    &mut last_keyboard_focus_probe,
+                    focus_move,
+                );
             } else {
                 // A pin that follows nothing watches nothing: the state the watch holds is left
                 // behind, so that a setting switched back on begins from what the pin is showing
                 // rather than from what the pointer was doing while it was off.
                 pin_watch = PinUpdateWatch::default();
+                // And what the keyboard and the pointer did is read and dropped, which is the only
+                // thing that spends the press bits: a click nobody asked about is still the answer
+                // the next read of that bit gets, and the setting coming back on would find it and
+                // read it as a file the user picked just now (see `focus_move_input`).
+                let _ = focus_move_input();
             }
 
             std::thread::sleep(Duration::from_millis(tick_ms));
@@ -5944,6 +6088,84 @@ mod tests {
         assert!(
             watch.note_place(Some(view("file:///D:/Pictures", 0x1234))),
             "so a place read after one that answered nothing is still compared with it"
+        );
+    }
+
+    /// The item the focus lands on is a file the user picked only where a key that walks a listing
+    /// is what moved it there: an Enter, a Delete, a click, a shortcut and any key held with a
+    /// modifier down all put the focus somewhere without a key walking it there, and the place
+    /// cannot be asked for an answer where the shell describes one — see
+    /// `PinUpdateWatch::focus_moved_by_key`.
+    #[test]
+    fn a_focus_moved_by_anything_but_a_key_walking_is_not_a_pick() {
+        let walking = FocusMoveInput {
+            walked_by_key: true,
+            ..Default::default()
+        };
+        let command = FocusMoveInput {
+            moved_otherwise: true,
+            ..Default::default()
+        };
+        let click = FocusMoveInput {
+            clicked: true,
+            ..Default::default()
+        };
+        let started = Instant::now();
+        let mut watch = PinUpdateWatch::default();
+
+        assert!(
+            !watch.focus_moved_by_key(started),
+            "a watch that has seen nothing has no witness to give"
+        );
+
+        watch.note_focus_move(walking, started);
+        assert!(
+            watch.focus_moved_by_key(started),
+            "a key walking the listing is the witness"
+        );
+        assert!(
+            watch
+                .focus_moved_by_key(started + Duration::from_millis(KEYBOARD_FOCUS_INPUT_GRACE_MS)),
+            "and it stands while a key is given to have moved something"
+        );
+        assert!(
+            !watch.focus_moved_by_key(
+                started + Duration::from_millis(KEYBOARD_FOCUS_INPUT_GRACE_MS + 1)
+            ),
+            "but no longer: a witness nothing made good on is not the key's"
+        );
+
+        // A key held down says so on every tick, which is what a listing walked with a held arrow
+        // is: the witness is taken again for as long as the walk lasts.
+        watch.note_focus_move(walking, started + Duration::from_millis(1000));
+        watch.note_focus_move(walking, started + Duration::from_millis(1030));
+        assert!(watch.focus_moved_by_key(started + Duration::from_millis(1040)));
+
+        // And a move that is not a walk takes it away — an arrow pressed before an Enter, which is
+        // how a folder is opened from the keyboard, does not stand as the witness for the item that
+        // Enter lands the focus on, and neither does a key that is part of a chord.
+        watch.note_focus_move(command, started + Duration::from_millis(1100));
+        assert!(
+            !watch.focus_moved_by_key(started + Duration::from_millis(1110)),
+            "an Enter, a shortcut or a modifier-held key is not a walk"
+        );
+        watch.note_focus_move(click, started + Duration::from_millis(1200));
+        assert!(
+            !watch.focus_moved_by_key(started + Duration::from_millis(1210)),
+            "and neither is a click, which is the pointer acting on the view"
+        );
+        watch.note_focus_move(walking, started + Duration::from_millis(1300));
+        watch.note_focus_move(
+            FocusMoveInput {
+                walked_by_key: true,
+                moved_otherwise: true,
+                clicked: false,
+            },
+            started + Duration::from_millis(1350),
+        );
+        assert!(
+            !watch.focus_moved_by_key(started + Duration::from_millis(1360)),
+            "a key pressed with a modifier down is a command, not a walk"
         );
     }
 

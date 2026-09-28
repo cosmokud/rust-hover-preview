@@ -246,6 +246,7 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
   - **Video Scaling** — Same shares for a video. Default `100%`.
   - **Animated Scaling** — Same shares for an animated GIF, WebP, or PNG. A still GIF or PNG uses **Image Scaling**. Default `100%`.
   - **Vector Scaling** — Fit to Screen (`default`), or `75%`, `50%`, `25%`, `10%` of the display.
+  - **Text Scaling** — Same display shares for a text preview — a plain text file, code, or Markdown. It caps how much of the screen the preview box may take when it opens; a short file still gets the small box its own text needs. Default **Fit to Screen**.
   - **Ebook Scaling** — Fit to Screen (`default`), or the same display shares for a PDF page, a comic’s first page, and a Calibre-converted book.
   - **Document Scaling** — Same display shares for a document drawn as a page, whether by its own Office app or by LibreOffice. A workbook’s fallback bitmap is never enlarged.
   - **Font Scaling** — Same shares for a font specimen. Default `50%`.
@@ -336,6 +337,7 @@ document_scale=fit
 ebook_scale=fit
 font_scale=50
 preview_scale=100
+text_scale=fit
 vector_scale=fit
 video_scale=100
 
@@ -431,6 +433,7 @@ Here’s what this .INI does:
 - `video_scale`: same for video. Default `100`.
 - `animated_scale`: same for animated GIF, WebP, or PNG. Default `100`. Still GIF/PNG follow `preview_scale`.
 - `vector_scale`: percentage or `fit`, based on the screen. Default `fit`; `100` or more reads as `fit`. Covers all Vector drawings. Old `svg_scale` is ignored and removed.
+- `text_scale`: how much of the screen a text preview box may take when it opens, for plain text, code, and Markdown. Default `fit`; `100` or more reads as `fit`. `Text Size` still scales the text inside that box.
 - `ebook_scale`: PDF page scale against the screen. Default `fit`; `100` or more reads as `fit`.
 - `document_scale`: document page scale against the screen. Default `fit`. A workbook’s fallback bitmap keeps its own size and is never enlarged.
 - `font_scale`: font preview scale against the screen. Default `50`; `fit` means all of it; `100` or more reads as `fit`.

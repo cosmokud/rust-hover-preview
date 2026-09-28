@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- **`Scaling → Text Scaling`** (default **Fit to Screen**): caps how much of the screen a text preview box may take when it opens — a plain text file, code, or Markdown — while a short file still gets the small box its own text needs. `Text Size` still scales the text inside that box.
+
 ### Fixed
 
 - **`Pin Mode → Update Preview`**: a sound's card is now drawn at its own size, in the middle of the box the window already stands in, rather than filling whatever box the file before it left — a picture's, say, which turned the card into a slab. A window shown a card while maximized now gives the maximize up rather than carrying a restore no card offers a button for.
