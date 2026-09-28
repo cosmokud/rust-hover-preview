@@ -110,41 +110,52 @@ pub fn matches_video_list(path: &Path, extensions: &[String]) -> bool {
         return false;
     };
 
-    if !extensions.contains(&extension) {
+    list_matches_video(&extension, path, extensions)
+}
+
+/// Whether one list claims a name already looked up, asking the file only for the two names the
+/// text lists share with these (see [`matches_video_list`]).
+fn list_matches_video(extension: &str, path: &Path, extensions: &[String]) -> bool {
+    if !extensions.iter().any(|claimed| claimed.as_str() == extension) {
         return false;
     }
 
-    if TYPESCRIPT_SHARED_EXTENSIONS.contains(&extension.as_str()) {
+    if TYPESCRIPT_SHARED_EXTENSIONS.contains(&extension) {
         return looks_like_mpegts(path);
     }
 
     true
 }
 
-/// Whether the list claims a file by its name alone: the half of [`matches_video_list`]
-/// that asks nothing of the file.
-///
-/// It is what a caller that already has its own answer about the content asks. The two
-/// extensions this list shares with the text lists are settled by their content — the
-/// question this half does not ask — and a caller holding the content's own answer has
-/// already had it settled (see `content_type`).
-pub fn claims_video_name(path: &Path, extensions: &[String]) -> bool {
-    crate::formats::text_formats::lookup_extension(path)
-        .is_some_and(|extension| extensions.contains(&extension))
+/// Whether one list claims a name already looked up, asking nothing of the file: the half of
+/// [`list_matches_video`] that does not settle the two shared extensions by their content.
+fn list_claims_video_name(extension: &str, extensions: &[String]) -> bool {
+    extensions.iter().any(|claimed| claimed.as_str() == extension)
 }
 
 /// Whether either of the two lists claims `path`, asked of a configuration in hand: what every
 /// caller that already holds the configuration asks rather than the one above, which is the
 /// question with the global read out of it.
 pub fn matches_any_video_list(path: &Path, config: &AppConfig) -> bool {
-    matches_video_list(path, &config.video_extensions)
-        || matches_video_list(path, &config.ffmpeg_extensions)
+    // The name is read once for both lists: a lookup is an allocation, and this is the question
+    // every caller without an answer of its own asks (see `lookup_extension`).
+    let Some(extension) = crate::formats::text_formats::lookup_extension(path) else {
+        return false;
+    };
+
+    list_matches_video(&extension, path, &config.video_extensions)
+        || list_matches_video(&extension, path, &config.ffmpeg_extensions)
 }
 
 /// As above, by name alone: the half of [`matches_any_video_list`] that asks nothing of the file.
 pub fn claims_any_video_name(path: &Path, config: &AppConfig) -> bool {
-    claims_video_name(path, &config.video_extensions)
-        || claims_video_name(path, &config.ffmpeg_extensions)
+    // The name is read once for both lists, as above (see `lookup_extension`).
+    let Some(extension) = crate::formats::text_formats::lookup_extension(path) else {
+        return false;
+    };
+
+    list_claims_video_name(&extension, &config.video_extensions)
+        || list_claims_video_name(&extension, &config.ffmpeg_extensions)
 }
 
 /// Whether the configured lists claim `path`, without asking whether video previews

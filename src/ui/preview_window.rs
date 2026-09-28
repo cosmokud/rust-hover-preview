@@ -8944,9 +8944,17 @@ unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
     // The chrome, for kinds that draw it over their media: each strip whole, or not painted at
     // all, which is what makes a picture whose chrome has gone a picture and nothing else — and the
     // two are asked about one at a time, so a hand at one end of a window does not bring out what
-    // is at the other end of it (see `PinChrome`). The caption, across the window's first rows.
+    // is at the other end of it (see `PinChrome`). The palette both strips are drawn in is read
+    // once for the paint, and not at all where neither is drawn. The caption, across the window's
+    // first rows.
+    let palette = if paint.caption || (paint.transport_height > 0 && paint.bar) {
+        pin_chrome::ChromePalette::current()
+    } else {
+        None
+    };
+
     if paint.caption {
-        if let Some(palette) = pin_chrome::ChromePalette::current() {
+        if let Some(palette) = palette.as_ref() {
             let caption = pin_chrome::Caption {
                 title: &paint.title,
                 maximized: paint.maximized,
@@ -8966,7 +8974,7 @@ unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
                     *surface = DibSurface::create(wanted.0, wanted.1);
                 }
                 if let Some(surface) = surface.as_ref() {
-                    pin_chrome::paint_caption(surface, &palette, &caption, paint.dpi);
+                    pin_chrome::paint_caption(surface, palette, &caption, paint.dpi);
                     copy_surface_rows_into(surface, out, width as u32, 0);
                 }
             });
@@ -8975,7 +8983,7 @@ unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
 
     // The transport bar, for the kinds that play, across the window's last rows.
     if paint.transport_height > 0 && paint.bar {
-        if let Some(palette) = pin_chrome::ChromePalette::current() {
+        if let Some(palette) = palette.as_ref() {
             let state = pin_chrome::TransportState {
                 interactive: paint.transport_live,
                 playing: paint.playing,
@@ -8998,7 +9006,7 @@ unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
                     *surface = DibSurface::create(wanted.0, wanted.1);
                 }
                 if let Some(surface) = surface.as_ref() {
-                    pin_chrome::paint_transport(surface, &palette, &state, paint.dpi);
+                    pin_chrome::paint_transport(surface, palette, &state, paint.dpi);
                     copy_surface_rows_into(
                         surface,
                         out,
@@ -9099,41 +9107,51 @@ struct PinnedPaint {
     duration: Option<f64>,
 }
 
+/// What a repaint of a pinned window is composed of, read out of the pin in one look: the pin's
+/// lock is let go of before the media engine is asked anything, because the playhead and the
+/// length are COM calls and the Explorer hook asks `pinned_path` on a tick of its own (see
+/// `pin_media_is_alive`, which lets go for the same reason).
 fn pinned_paint() -> Option<PinnedPaint> {
-    let pinned = PINNED.lock().ok()?;
-    let pin = pinned.as_ref()?;
-    let (width, height) = pin.window_size();
+    let mut paint = {
+        let pinned = PINNED.lock().ok()?;
+        let pin = pinned.as_ref()?;
+        let (width, height) = pin.window_size();
 
-    Some(PinnedPaint {
-        width,
-        height,
-        caption_height: pinned_caption_height(pin.dpi),
-        transport_height: pinned_transport_height(pin.dpi, pin.transport_bar),
-        overlay: pin.overlay,
-        caption: pin.chrome.caption,
-        bar: pin.chrome.bar,
-        dpi: pin.dpi,
-        title: pin
-            .path
-            .file_name()
-            .map(|name| name.to_string_lossy().to_string())
-            .unwrap_or_default(),
-        maximized: pin.restore.is_some(),
-        maximizable: pin.frame != PinFrame::None,
-        hovered: pin.hovered,
-        pressed: pin.pressed,
-        // Where the bar is drawn: where the pointer has dragged it while a drag is going, and
-        // where the file really is otherwise (see `PinTransport`).
-        position: pin
-            .transport
-            .seeking
-            .or_else(|| pin_playhead(&pin.transport)),
-        duration: pin_duration(&pin.transport),
-        playing: pin_is_playing(&pin.transport),
-        transport: pin.transport,
-        volume: pin.volume,
-        transport_live: pin.transport_live,
-    })
+        PinnedPaint {
+            width,
+            height,
+            caption_height: pinned_caption_height(pin.dpi),
+            transport_height: pinned_transport_height(pin.dpi, pin.transport_bar),
+            overlay: pin.overlay,
+            caption: pin.chrome.caption,
+            bar: pin.chrome.bar,
+            dpi: pin.dpi,
+            title: pin
+                .path
+                .file_name()
+                .map(|name| name.to_string_lossy().to_string())
+                .unwrap_or_default(),
+            maximized: pin.restore.is_some(),
+            maximizable: pin.frame != PinFrame::None,
+            hovered: pin.hovered,
+            pressed: pin.pressed,
+            position: None,
+            duration: None,
+            playing: false,
+            transport: pin.transport,
+            volume: pin.volume,
+            transport_live: pin.transport_live,
+        }
+    };
+
+    // Where the bar is drawn: where the pointer has dragged it while a drag is going, and
+    // where the file really is otherwise (see `PinTransport`).
+    let transport = paint.transport;
+    paint.position = transport.seeking.or_else(|| pin_playhead(&transport));
+    paint.duration = pin_duration(&transport);
+    paint.playing = pin_is_playing(&transport);
+
+    Some(paint)
 }
 
 /// Where a frame that is not the whole of a window is composed: the surface it goes on and the
@@ -9607,7 +9625,7 @@ unsafe fn publish_pointer_hold(hwnd: HWND) {
     TEXT_PREVIEW_HOLDING.store(text.is_some(), Ordering::Release);
     WAITING_PREVIEW_HOLDING.store(waiting, Ordering::Release);
 
-    let keep_alive = if let Some((dpi, _)) = text {
+    let mut keep_alive = if let Some((dpi, _)) = text {
         let mut rect = RECT::default();
         GetWindowRect(hwnd, &mut rect)
             .ok()
@@ -9643,11 +9661,13 @@ unsafe fn publish_pointer_hold(hwnd: HWND) {
     // there and is reading, so a region built for a hover — the journey to it and the preview —
     // is the wrong answer for a place that was chosen by a drag; and what the region is *for*
     // here is the wheel, which belongs to a scrollable text preview inside a pin exactly as it
-    // does to one on a hover.
-    let keep_alive = match pinned_window_box() {
-        Some((window, _, _)) => Some(vec![(window.0, window.1, window.2, window.3)]),
-        None => keep_alive,
-    };
+    // does to one on a hover. Nothing pinned is asked at all: this runs on every tick of a hover
+    // and on every repaint of one (see `PIN_ACTIVE`).
+    if pinned() {
+        if let Some((window, _, _)) = pinned_window_box() {
+            keep_alive = Some(vec![(window.0, window.1, window.2, window.3)]);
+        }
+    }
 
     if let Ok(mut published) = POINTER_HOLD_REGIONS.lock() {
         *published = keep_alive;
@@ -10244,6 +10264,13 @@ fn pin_is_collapsed() -> bool {
 /// A hover's own window has no caption, so a point is already in its frame's coordinates and is
 /// handed back unchanged — which is what lets one set of handlers serve both.
 fn media_point(x: i32, y: i32) -> (i32, i32) {
+    // Nothing pinned leaves the point as it is, and that answer does not need the pin's lock:
+    // this is asked on every mouse message the window is sent, and a hover's own window has no
+    // caption (see `PIN_ACTIVE`).
+    if !pinned() {
+        return (x, y);
+    }
+
     let caption = PINNED.lock().ok().and_then(|pinned| {
         let pin = pinned.as_ref()?;
         (!pin.collapsed && !pin.overlay).then(|| pinned_caption_height(pin.dpi))
@@ -11491,9 +11518,11 @@ fn preview_background(kind: MediaType) -> TransparentBackground {
 ///
 /// It is written by the preview loop, which holds the window and the media, and read by the
 /// window procedure and every repaint — which is why it is a global rather than a local of
-/// the loop. `PIN_ACTIVE` is the same answer as an atomic for the two threads that ask it
-/// without wanting a lock (`show_preview`, `hide_preview`), and the two are written together:
-/// a pin exists exactly while both say so.
+/// the loop. `PIN_ACTIVE` is the same answer as an atomic for the threads that ask it without
+/// wanting a lock, and the two are written in one order at both ends: the state under this
+/// lock first, the flag after — set once a pin is in place, cleared once it is gone (see
+/// `end_pin_state`). A reader that finds `pinned()` true therefore finds the pin, or the tail
+/// of one being taken down, which is an answer its own `None` already handles.
 static PINNED: Lazy<Mutex<Option<PinnedPreview>>> = Lazy::new(|| Mutex::new(None));
 
 struct PinnedPreview {
@@ -17203,6 +17232,13 @@ pub fn run_preview_window() {
                         // picture is not brought back as if the window had just arrived. There is
                         // nothing to carry for a first pin, which is why the take-up below reads
                         // exactly as it always did.
+
+                        // The length the probe read is asked before the pin's own lock is taken:
+                        // the answer comes from the geometry cache, which is a lock and the
+                        // file's own metadata besides, and a take-up is no place to hold the pin
+                        // across either (see `cached_video_geometry`).
+                        let duration = video_duration(&path);
+
                         let carried = PINNED.lock().ok().and_then(|pinned| {
                             pinned.as_ref().map(|pin| {
                                 (pin.restore, pin.chrome, pin.volume, pin.overlay, pin.bound)
@@ -17258,7 +17294,7 @@ pub fn run_preview_window() {
                                     // since before the pin existed, and its own clock starts
                                     // here — which is the best that can be said about a player
                                     // that reports nothing at all (see `PinTransport`).
-                                    duration: video_duration(&path),
+                                    duration,
                                     started: (kind == Some(MediaType::Video))
                                         .then_some((Instant::now(), 0.0)),
                                     ..Default::default()
