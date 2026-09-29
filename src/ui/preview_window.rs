@@ -102,7 +102,10 @@ use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, GetCapture, ReleaseCapture, SetCapture, VK_A, VK_C, VK_CONTROL,
 };
-use windows::Win32::UI::Shell::ShellExecuteW;
+use windows::Win32::UI::Shell::{
+    AssocQueryStringW, ShellExecuteW, ASSOCF_NONE, ASSOCSTR_FRIENDLYAPPNAME, OPENASINFO,
+    SHOpenWithDialog,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DispatchMessageW,
     EnumWindows, GetCursorPos, GetSystemMetrics, GetWindow, GetWindowLongPtrW, GetWindowRect,
@@ -9063,6 +9066,17 @@ thread_local! {
     /// the two strips above are — an edge under a hand is a repaint per pointer move — and its
     /// size follows the frame, not the box being dragged to.
     static BAND_SOURCE: RefCell<Option<DibSurface>> = const { RefCell::new(None) };
+    /// The membrane a caption's tooltip is written on. It is the size of the whole window rather
+    /// than of a strip, because a name is measured and drawn through GDI and needs a device
+    /// context of its own, and it is kept between paints for the reason the surfaces above are:
+    /// a pinned video repaints sixty times a second, and a name is up for as long as a pointer
+    /// rests on a button.
+    ///
+    /// It is cleared before each use, because what is carried off it is decided by the alpha
+    /// byte GDI leaves behind — a run's box is sealed opaque and the rest of the surface is
+    /// nothing, and a name from the last frame left opaque on this one would be a second name
+    /// drawn over the first.
+    static TOOLTIP_SURFACE: RefCell<Option<DibSurface>> = const { RefCell::new(None) };
 }
 
 /// How many windows keep a surface of their own: the preview — pinned or not — and the bubble.
@@ -9462,6 +9476,13 @@ unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
         }
     }
 
+    // The caption's tooltip, floated over the media below the strip — which is where it is
+    // because a name like "Open With Adobe Photoshop" is wider than the buttons it describes,
+    // and a tooltip drawn inside the strip would cover them for as long as it was up (see
+    // `tooltip_layout`). It is drawn last of everything, like the volume popup, because it is
+    // over everything.
+    paint_pin_tooltip(out, width, height, &paint, caption_height);
+
     let dst_point = POINT { x, y };
     let size = SIZE {
         cx: width,
@@ -9517,6 +9538,13 @@ struct PinnedPaint {
     maximizable: bool,
     hovered: Option<pin_chrome::CaptionButton>,
     pressed: Option<pin_chrome::CaptionButton>,
+    /// What the caption's button under the pointer is saying, and which one it is — nothing,
+    /// and nothing at all, while the pointer is somewhere that says nothing.
+    ///
+    /// It is a value rather than a reference because the paint takes the pin's lock in one look
+    /// and gives it up again before anything is drawn, so a name has to be copied out of the
+    /// lock rather than held across the drawing (see `PinTooltip::text_for`).
+    tooltip: Option<PinTooltipPaint>,
     transport: PinTransport,
     /// The level this pin plays at, and whether its popup is open (see `PinVolume`).
     volume: PinVolume,
@@ -9526,6 +9554,15 @@ struct PinnedPaint {
     playing: bool,
     position: Option<f64>,
     duration: Option<f64>,
+}
+
+/// A repaint's one tooltip, taken out of the pin as a value: which button is saying it and what
+/// it is saying. Owned rather than borrowed because the pin's lock is let go of before anything
+/// is drawn, and a caption drawn from a name that lived under a lock would be a caption holding
+/// that lock for the length of a paint.
+struct PinTooltipPaint {
+    kind: pin_chrome::CaptionButton,
+    text: String,
 }
 
 /// What a repaint of a pinned window is composed of, read out of the pin in one look: the pin's
@@ -9556,6 +9593,12 @@ fn pinned_paint() -> Option<PinnedPaint> {
             maximizable: pin.frame != PinFrame::None,
             hovered: pin.hovered,
             pressed: pin.pressed,
+            tooltip: pin.tooltip.shown.and_then(|button| {
+                pin.tooltip.text_for(button).map(|text| PinTooltipPaint {
+                    kind: button,
+                    text,
+                })
+            }),
             position: None,
             duration: None,
             playing: false,
@@ -9941,7 +9984,98 @@ fn copy_surface_rows_into(surface: &DibSurface, out: &mut [u8], out_width: u32, 
         out[start..end].copy_from_slice(&source[row * row_bytes..(row + 1) * row_bytes]);
     }
 }
+
+/// Draw the name of a pinned window's caption button over its media, if it has one to say.
 ///
+/// It is a panel of its own hanging below the caption rather than a part of the caption, and it
+/// is the one piece of chrome that is not a strip of its own: it needs a name measured through
+/// GDI, a surface with a device context to measure and draw it on, and a place in the window
+/// that is neither the strip nor the bar (see `pin_chrome::tooltip_layout`).
+///
+/// Nothing about it is asked of the window while it is up, and nothing is asked of it beyond
+/// the one string the pin already holds: a name is a word or two of a program's own name, and
+/// this is the whole of the drawing.
+///
+/// # Safety
+///
+/// `out` must be the window's own premultiplied surface, of at least `width * height` pixels,
+/// and `width`/`height` that surface's own size. Nothing else is dereferenced.
+unsafe fn paint_pin_tooltip(
+    out: &mut [u8],
+    width: i32,
+    height: i32,
+    paint: &PinnedPaint,
+    caption_height: i32,
+) {
+    let (Some(tooltip), Some(palette)) = (
+        paint.tooltip.as_ref(),
+        pin_chrome::ChromePalette::current(),
+    ) else {
+        return;
+    };
+
+    // The buttons the caption was drawn with, so the name hangs off the button it belongs to
+    // rather than off a box worked out a second time and a half a step out of step with it.
+    let Some(anchor) = pin_chrome::button_boxes(width, caption_height, paint.dpi, paint.maximizable)
+        .into_iter()
+        .find(|button| button.kind == tooltip.kind)
+        .map(|button| button.rect)
+    else {
+        return;
+    };
+
+    // A surface of the window's own size, because the name is measured and drawn through GDI
+    // and GDI needs a device context — the layered surface has none of its own, and the
+    // caption's is only as tall as the bar. It is a DIB section, so the text lands in memory
+    // that is carried across rather than on a device, and it is kept between paints and rebuilt
+    // only when the window changes size (see `TOOLTIP_SURFACE`).
+    let wanted = (width.max(1) as u32, height.max(1) as u32);
+    TOOLTIP_SURFACE.with(|cell| {
+        let mut surface = cell.borrow_mut();
+        if surface
+            .as_ref()
+            .map(|surface| (surface.width, surface.height))
+            != Some(wanted)
+        {
+            *surface = DibSurface::create(wanted.0, wanted.1);
+        }
+        let Some(surface) = surface.as_ref() else {
+            return;
+        };
+
+        // The surface is blanked before it is used rather than left as the last name left it:
+        // what is carried off it afterwards is decided by the alpha byte GDI leaves behind, so a
+        // run left opaque from the last paint is a run drawn twice.
+        let blanked = unsafe {
+            std::slice::from_raw_parts_mut(
+                surface.bits(),
+                surface.width as usize * surface.height as usize * 4,
+            )
+        };
+        blanked.fill(0);
+
+        let text_width = pin_chrome::measure_caption_text(surface, &tooltip.text, paint.dpi);
+        let Some(panel) =
+            pin_chrome::tooltip_layout(width, height, caption_height, anchor, text_width, paint.dpi)
+        else {
+            return;
+        };
+
+        pin_chrome::paint_tooltip(
+            out,
+            width,
+            &palette,
+            panel,
+            pin_chrome::TooltipText {
+                text: &tooltip.text,
+                width: text_width,
+                surface,
+            },
+            paint.dpi as f32 / 96.0,
+        );
+    });
+}
+
 /// A window that is not on screen is moved before the spinner is installed, so a
 /// `WM_DPICHANGED` reset from crossing displays cannot discard it, and the spinner
 /// is painted before the window is revealed, so the previous preview cannot flash
@@ -12130,6 +12264,9 @@ struct PinnedPreview {
     /// painted from, and what a release acts on.
     hovered: Option<pin_chrome::CaptionButton>,
     pressed: Option<pin_chrome::CaptionButton>,
+    /// What the caption's buttons are saying out loud, and which of them the pointer has been
+    /// resting on since enough time for a name to have been read (see `PinTooltip`).
+    tooltip: PinTooltip,
     /// A drag or a resize in progress.
     dragging: Option<PinDrag>,
     /// Where the playback of a video is, which is what the transport bar is drawn from and what
@@ -12181,6 +12318,157 @@ struct PinTransport {
 /// Whether a kind is one the transport bar is drawn for.
 fn pin_transport_kind(kind: Option<MediaType>) -> bool {
     matches!(kind, Some(MediaType::Video) | Some(MediaType::NativeVideo))
+}
+
+/// The name a pinned window's caption button is saying out loud, and the button it belongs to.
+///
+/// A caption is drawn from glyphs, and a glyph is only a picture of an action. That is enough
+/// for the window's own three — a hand has been reaching for a close button on every window it
+/// has ever had — and not enough for the two that hand the file to another program, where the
+/// one icon cannot say whether it is reaching for the program already chosen or asking the user
+/// to choose. So a button says its name while the pointer rests on it, and the name is the only
+/// part of this that is read from the machine rather than written here: which program opens a
+/// PNG is an answer about the user's own associations, not a fact this app has.
+///
+/// The name is looked up once, when the pin is taken up, rather than per repaint: it is a
+/// question about the registry, and a repaint happens sixty times a second. A file the machine
+/// has nothing filed against has no name, which is a button whose default is the Shell's
+/// fallback and no more.
+#[derive(Clone, Default)]
+struct PinTooltip {
+    /// The program the Shell would open the pinned file with, as it names it — empty where the
+    /// machine has no answer to give.
+    default_app: String,
+    /// The button the pointer has been resting on, and when it got there. A name is written
+    /// after a moment rather than at once, which is the delay every tooltip on the desktop has
+    /// and the only reason a pointer crossing a caption does not leave a trail of words.
+    button: Option<pin_chrome::CaptionButton>,
+    since: Option<Instant>,
+    /// The button whose name is on the caption right now, which is `button` once the wait is
+    /// over and nothing before it. It is kept so that asking again can tell a change worth a
+    /// repaint from the same answer twice — a pointer that has not moved is asked about on
+    /// every tick of the loop, and sixty repaints a second of an unchanged name is a window
+    /// burning a core to say the same thing.
+    shown: Option<pin_chrome::CaptionButton>,
+}
+
+/// How long a pointer has to rest on a caption button before the button says what it is. Long
+/// enough that crossing a caption does not leave words behind it, short enough that a hand
+/// arriving and stopping has been told something.
+const PIN_TOOLTIP_DELAY: Duration = Duration::from_millis(500);
+
+impl PinTooltip {
+    /// Ask what the caption should be saying, answering whether that is a change — which is the
+    /// whole of what a name costs, since a caption is either painting one or not.
+    ///
+    /// This is the one question about the caption that is asked on the loop's tick rather than
+    /// on the pointer's, because it is a question about time: a name appears half a second
+    /// after a pointer arrives and not one message before, and the tick is the only clock here
+    /// that is running anyway. Asking it on a move instead would mean a name that appears only
+    /// when the pointer next twitches.
+    fn refresh(&mut self, button: Option<pin_chrome::CaptionButton>, now: Instant) -> bool {
+        if self.button != button {
+            self.button = button;
+            self.since = button.map(|_| now);
+        }
+
+        // What should be said now: the button the pointer is on, once it has been still long
+        // enough, and only if that button has anything to say.
+        let showing = self
+            .button
+            .filter(|button| self.text_for(*button).is_some())
+            .filter(|_| {
+                self.since
+                    .is_some_and(|since| now.duration_since(since) >= PIN_TOOLTIP_DELAY)
+            });
+
+        // Compared before it is written, because a pointer leaving a button that was naming
+        // itself is as much a change as one arriving at one that was not: the name that was on
+        // the caption has to come off it, and a tick that saw both answers as "nothing" would
+        // leave it there for ever.
+        if showing == self.shown {
+            return false;
+        }
+
+        self.shown = showing;
+        true
+    }
+
+    /// What the button under the pointer would say, or nothing for a button that has no name
+    /// to give — which is every button but the two that hand the file away. A button with a
+    /// glyph that already says what it is does not need to say it again in words, and the
+    /// default's own name is worth nothing where the machine has filed the format under nothing.
+    fn text_for(&self, button: pin_chrome::CaptionButton) -> Option<String> {
+        match button {
+            pin_chrome::CaptionButton::OpenWith if !self.default_app.is_empty() => {
+                Some(format!("Open With {}", self.default_app))
+            }
+            pin_chrome::CaptionButton::OpenWithList => Some("Open With...".to_string()),
+            _ => None,
+        }
+    }
+}
+
+/// The program the Shell would open a file with, as it names it, or nothing where the machine
+/// has no association for it at all.
+///
+/// This is the one string about a pinned file that is not in the file's name, and it is read
+/// once per pin rather than per frame (see `PinTooltip`). `ASSOCSTR_FRIENDLYAPPNAME` is the
+/// association's own display name rather than the class it is stored under, so what comes back
+/// is what the user would read in Explorer's "Open with" — which is the whole point of naming
+/// the default on a button that opens it.
+///
+/// Two calls, because the Shell asks for the length first: a call with no buffer is how it says
+/// how long the answer is. A file nothing is filed against, a format the machine has no program
+/// for, and a path the Shell will not take are all one answer — no name — and none of them is a
+/// fault here, so nothing is asserted and nothing is reported.
+///
+/// # Safety
+///
+/// `AssocQueryStringW` is a plain `extern "system"` call whose every pointer is this function's
+/// own: the two buffers are allocated here, sized by the first call from the count it wrote,
+/// and both are dropped before the function returns. The wide string handed in is the caller's
+/// file, which outlives the call.
+unsafe fn default_app_name(path: &Path) -> String {
+    let wide: Vec<u16> = std::ffi::OsStr::new(&plain_path(path))
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let file = PCWSTR(wide.as_ptr());
+
+    let mut length = 0u32;
+    let asked = AssocQueryStringW(
+        ASSOCF_NONE,
+        ASSOCSTR_FRIENDLYAPPNAME,
+        file,
+        PCWSTR::null(),
+        PWSTR::null(),
+        &mut length,
+    );
+    if asked.is_err() || length == 0 {
+        return String::new();
+    }
+
+    let mut buffer = vec![0u16; length as usize];
+    let answered = AssocQueryStringW(
+        ASSOCF_NONE,
+        ASSOCSTR_FRIENDLYAPPNAME,
+        file,
+        PCWSTR::null(),
+        PWSTR(buffer.as_mut_ptr()),
+        &mut length,
+    );
+    if answered.is_err() {
+        return String::new();
+    }
+
+    buffer.truncate(
+        buffer
+            .iter()
+            .position(|unit| *unit == 0)
+            .unwrap_or(buffer.len()),
+    );
+    String::from_utf16_lossy(&buffer)
 }
 
 /// The volume a pinned preview is playing at.
@@ -12312,34 +12600,66 @@ fn refresh_pin_chrome(pin: &mut PinnedPreview, now: Instant, cursor: Option<(i32
     // a popup that belongs on screen only while it is being used (see `refresh_pin_volume`).
     let closed = refresh_pin_volume(pin, cursor);
 
-    // Nothing of a pin's chrome is on screen while the pin is a bubble, and nothing of it moves a
-    // repaint that a bubble has no use for: what asks for the chrome there is a mouse over a window
-    // that is not up.
-    if !pin.overlay || pin.collapsed {
-        return closed;
+    // A bubble has no caption and no window of its own on the screen, so it has no name to be
+    // saying and no button to say it about: a name is put away with the window it belongs to.
+    if pin.collapsed {
+        return closed || pin.tooltip.refresh(None, now);
     }
 
-    // The arrival window is spent the moment it closes, and there is no bringing it back: what asks
-    // for a strip after it is the pointer and nothing else.
-    if pin.chrome.until.is_some_and(|until| now >= until) {
-        pin.chrome.until = None;
+    // A kind whose chrome is drawn *over* its media has strips the pointer asks for, and this is
+    // the question about them. A kind whose chrome is in bands around its media has a caption
+    // that is always there instead, and so has nothing to be asked: `PinChrome::always` already
+    // carries that answer in the pin (see `pin_overlay_chrome`).
+    let mut shown = false;
+    if pin.overlay {
+        // The arrival window is spent the moment it closes, and there is no bringing it back:
+        // what asks for a strip after it is the pointer and nothing else.
+        if pin.chrome.until.is_some_and(|until| now >= until) {
+            pin.chrome.until = None;
+        }
+
+        let (caption, bar) = match pin.chrome.until.is_some() {
+            true => (true, true),
+            false => pin_chrome_near(pin, cursor),
+        };
+
+        // The strip the popup came out of stays showing while it is open, whatever the pointer
+        // is doing: the popup is drawn in this window's own rows above that strip, and a bar
+        // that went away underneath it would take the button that opened it with it.
+        let bar = bar || pin.volume.open;
+
+        shown = (pin.chrome.caption, pin.chrome.bar) != (caption, bar);
+        pin.chrome.caption = caption;
+        pin.chrome.bar = bar;
     }
 
-    let (caption, bar) = match pin.chrome.until.is_some() {
-        true => (true, true),
-        false => pin_chrome_near(pin, cursor),
-    };
+    // A name belongs to a button, and a button belongs to a pointer that is still on it. The
+    // pointer is read from the cursor rather than from `pin.hovered`, because that is only
+    // written on a move *this* window is sent, and a pointer that has left the pin — over a
+    // modal dialog, or simply off to one side — sends it nothing more. A name left up for a
+    // pointer that has gone is a caption naming a button the hand is not on. This is the same
+    // reading `pin_chrome_near` does, and for the same reason: a strip that is not under the
+    // pointer cannot be asked for by looking at where the pointer was.
+    //
+    // It is asked on every kind, because a caption is a caption whichever kind it belongs to and
+    // the two hand-off buttons are on all of them — the name hangs below the strip rather than
+    // inside it, so it is drawn over the media band a kind without a hidden caption still has.
+    //
+    // It is asked *before* the two above are answered, and that is the whole of why: `||`
+    // short-circuits, so a tick that was already going to repaint because a strip came or went
+    // would never reach this question — and the name it was about to start saying, or stop
+    // saying, would sit wrong on the caption until the pointer happened to move again. All
+    // three are asked every tick; whether any of them changed is the answer.
+    let spoken = cursor
+        .filter(|(x, y)| {
+            let window = pin.window_box();
+            let height = pinned_caption_height(pin.dpi);
+            *x >= window.0 && *x < window.2 && *y >= window.1 && *y < window.1 + height
+        })
+        .and(pin.hovered);
+    let spoken = pin.tooltip.refresh(spoken, now);
 
-    // The strip the popup came out of stays showing while it is open, whatever the pointer is
-    // doing: the popup is drawn in this window's own rows above that strip, and a bar that went
-    // away underneath it would take the button that opened it with it.
-    let bar = bar || pin.volume.open;
-
-    let changed = (pin.chrome.caption, pin.chrome.bar) != (caption, bar);
-    pin.chrome.caption = caption;
-    pin.chrome.bar = bar;
-
-    changed || closed
+    spoken || shown || closed
 }
 
 /// Whether the volume popup is still wanted, answering whether it has been put away — which is
@@ -16234,17 +16554,25 @@ fn resize_pinned_content(
     )
 }
 
+/// A file's path in the spelling the Shell will take.
+///
+/// The path the pin holds is the verbatim `\\?\` form, which is not a legal thing to hand a
+/// Shell call: a file named in that form is a file it cannot find, and both buttons that hand
+/// a file away would do nothing at all. So the prefix is taken off first — the same adjustment
+/// the browser and the Office engine make before they point anything at a file (see `plain_path`
+/// in `shell::pin_navigation`, which is the other end of the same question).
+fn plain_path(path: &Path) -> String {
+    let text = path.to_string_lossy();
+    match text.strip_prefix(r"\\?\UNC\") {
+        Some(rest) => format!(r"\\{rest}"),
+        None => text.strip_prefix(r"\\?\").unwrap_or(&text).to_string(),
+    }
+}
+
 /// Hand a file to whatever the machine has filed it under — the program the user chose for
 /// this kind of file, or the one Windows picked — which is the one way out of a pin into the
 /// program that owns the format. A pin shows a file rather than opening it, so this is the
 /// only button that gives it away.
-///
-/// The path is the one the pin holds, and the Shell canonicalizes to the verbatim `\\?\`
-/// spelling, which is not a legal thing to hand `ShellExecuteW`: a file handed to the Shell
-/// in that form is a file it cannot find, and the button does nothing at all. So the prefix
-/// is taken off first — the same adjustment the browser and the Office engine make before
-/// they point anything at a file (see `plain_path` in `shell::pin_navigation`, which is the
-/// other end of the same question).
 ///
 /// Nothing is asked of the file here and nothing is waited for: the Shell hands the file to
 /// the program and returns, and what that program does with it is the program's own business
@@ -16259,13 +16587,7 @@ fn resize_pinned_content(
 /// across the call and nothing it can invalidate underneath it. The file itself belongs to
 /// whichever program the Shell starts, and this side has no handle on it to release.
 unsafe fn open_path_with_default_app(path: &Path) {
-    let text = path.to_string_lossy();
-    let plain = match text.strip_prefix(r"\\?\UNC\") {
-        Some(rest) => format!(r"\\{rest}"),
-        None => text.strip_prefix(r"\\?\").unwrap_or(&text).to_string(),
-    };
-
-    let wide: Vec<u16> = std::ffi::OsStr::new(&plain)
+    let wide: Vec<u16> = std::ffi::OsStr::new(&plain_path(path))
         .encode_wide()
         .chain(std::iter::once(0))
         .collect();
@@ -16287,6 +16609,83 @@ unsafe fn open_path_with_default_app(path: &Path) {
         SW_SHOWNORMAL,
     );
     let _ = launched.0 as usize > 32;
+}
+
+/// Show the Shell's own "How do you want to open this?" dialog for a file: the list of
+/// programs installed on this machine that could open it, which is the only way into a second
+/// program when the default is the wrong one. The button beside this one can only ever reach
+/// the program the Shell has already chosen.
+///
+/// It is the system's dialog rather than a list this app drew, and that is the whole of the
+/// decision: the answer to "what can open this?" is the set of associations the user has
+/// installed and chosen, it changes under them, and a list built here would be a copy of it
+/// that is wrong the moment they install anything. Windows draws it in the user's own theme,
+/// in their own language, with their own accessibility, and it is the dialog they have already
+/// seen a thousand times from Explorer's own context menu.
+///
+/// It is given the pin's window as its owner, and that is what keeps it in front of the pin
+/// rather than behind it: a dialog with no owner is a window of its own, and this pin is
+/// topmost and would sit over it. The pin cannot take the focus — it is `WS_EX_NOACTIVATE` —
+/// so it is brought to the foreground first, the same way the tray's own menu is put up on it
+/// (see `show_text_preview_menu`), because a dialog opened against a window that was not the
+/// foreground is a dialog that can open behind somebody else's.
+///
+/// The call blocks while the dialog is up, which is the Shell's own doing and not something
+/// this window chose — the pin's message loop is inside it until the user has picked a program
+/// or closed the dialog, which is what lets the dialog paint and be moved, and leaves the pin
+/// showing the file underneath it afterwards.
+///
+/// # Safety
+///
+/// `SHOpenWithDialog` is a plain `extern "system"` call whose pointers are both this
+/// function's own: the `OPENASINFO` is a value on this stack and its one string is a buffer
+/// built here, both of which live longer than the call and are dropped after it. The owner is
+/// the pin's own window, which the caller holds for the length of the call; a dialog is modal
+/// over its owner for exactly as long as this call takes, and the pin is a topmost window with
+/// no caption of its own for anything to close it with while it stands there.
+unsafe fn show_open_with_dialog(hwnd: HWND, path: &Path) {
+    let wide: Vec<u16> = std::ffi::OsStr::new(&plain_path(path))
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+
+    // The class is left null so that the dialog offers the file's own registered types, and the
+    // flags are zero: the dialog is the user's to answer, not a hint about what this app would
+    // have opened.
+    let info = OPENASINFO {
+        pcszFile: PCWSTR(wide.as_ptr()),
+        pcszClass: PCWSTR::null(),
+        oaifInFlags: Default::default(),
+    };
+
+    // The pin is `WS_EX_NOACTIVATE` and so cannot be brought forward by this call, which is
+    // asked for anyway for the same reason the tray's menu asks for it (see
+    // `show_text_preview_menu`): it is the one place a window that has just been clicked is
+    // entitled to say it is the window being worked on. What actually puts the dialog in front
+    // is the pin being topmost and the dialog being owned by it — an owned window is placed
+    // above its owner — so nothing here is what makes the dialog visible.
+    let _ = SetForegroundWindow(hwnd);
+
+    // The same answer as the button beside it: the dialog was refused, closed, or a Shell that
+    // is not answering, and none of those is a fault here. The file is left with whichever
+    // program the user picked, and this side has no handle on what that program does next.
+    let _ = SHOpenWithDialog(hwnd, &info);
+}
+
+/// Put away whatever name the caption is currently saying, whether or not it has been long
+/// enough to be showing one.
+///
+/// It is a button being *pressed*, and the thing it is about to open is going to take the
+/// pointer away from this window for as long as the user takes to answer it. The name is put
+/// away rather than left for the tick to notice, because the tick does not run while a modal
+/// dialog has this thread: a name still up would be a caption still naming a button the hand
+/// is no longer on, for the whole of the time the dialog is up.
+fn put_pin_tooltip_away() {
+    if let Ok(mut pinned) = PINNED.lock() {
+        if let Some(pin) = pinned.as_mut() {
+            pin.tooltip.shown = None;
+        }
+    }
 }
 
 /// A release on a pinned window, answering whether it was the pin's to act on: the button a press
@@ -16348,6 +16747,21 @@ unsafe fn pinned_release(hwnd: HWND, x: i32, y: i32) -> bool {
                 pin_chrome::CaptionButton::OpenWith => {
                     if let Some(path) = pinned_path() {
                         open_path_with_default_app(&path);
+                    }
+                }
+                // The Shell's own list, the same way round: the file is in hand and the dialog
+                // is the system's, so the only thing asked of the loop here is the window the
+                // dialog is hung off, which this function already has.
+                //
+                // The name goes away first, and the window is repainted without it, because the
+                // dialog runs its own message loop on this thread and no tick runs while it is
+                // up: a name left on the caption naming a button the pointer left when it
+                // clicked would stay there for as long as the user takes to choose a program.
+                pin_chrome::CaptionButton::OpenWithList => {
+                    if let Some(path) = pinned_path() {
+                        put_pin_tooltip_away();
+                        render_layered_preview(hwnd);
+                        show_open_with_dialog(hwnd, &path);
                     }
                 }
             }
@@ -18617,6 +19031,15 @@ pub fn run_preview_window() {
                                 bubble_pause: None,
                                 hovered: None,
                                 pressed: None,
+                                // The name the hand-off button says, read once here rather
+                                // than on every repaint: which program would open this file
+                                // is a question about the machine's own associations,
+                                // and a pin is answered about the file it holds until it
+                                // holds another one (see `PinTooltip`).
+                                tooltip: PinTooltip {
+                                    default_app: default_app_name(&path),
+                                    ..Default::default()
+                                },
                                 dragging: None,
                                 transport: PinTransport {
                                     // The length the probe read, and where a player this app
@@ -23101,6 +23524,7 @@ mod tests {
             bubble_pause: None,
             hovered: None,
             pressed: None,
+            tooltip: PinTooltip::default(),
             dragging: None,
             transport: PinTransport::default(),
             volume: PinVolume::default(),
@@ -23280,6 +23704,152 @@ mod tests {
         text.overlay = false;
         assert!(!refresh_pin_chrome(&mut text, now, far));
         assert!(text.chrome.caption && text.chrome.bar);
+    }
+
+    /// A caption's two hand-off buttons say what they are, and say it only after the pointer has
+    /// settled on one.
+    ///
+    /// The two are the pair a glyph cannot tell apart — one icon for "open this" and one for
+    /// "open this with something else" is a question asked twice with the same picture — so
+    /// each names itself, and the name of the default is the program the machine would really
+    /// use, which is the one fact a hand cannot work out from the icon.
+    ///
+    /// The wait is the other half of it: a name that appeared as the pointer crossed the strip
+    /// would be a word left behind on every button the pointer passed, and a caption is where
+    /// the pointer is already moving through on its way to somewhere else.
+    #[test]
+    fn the_two_hand_off_buttons_name_themselves_once_the_pointer_settles() {
+        let now = Instant::now();
+        let content = (100, 100, 500, 400);
+
+        let mut pin = overlay_pin(content, PinChrome::always());
+        pin.tooltip = PinTooltip {
+            default_app: "Adobe Photoshop".to_string(),
+            ..Default::default()
+        };
+
+        // The default's own name, which is the one a hand cannot get from the icon.
+        assert_eq!(
+            pin.tooltip
+                .text_for(pin_chrome::CaptionButton::OpenWith)
+                .as_deref(),
+            Some("Open With Adobe Photoshop")
+        );
+        // And the list, which says what it is rather than what it would open with.
+        assert_eq!(
+            pin.tooltip
+                .text_for(pin_chrome::CaptionButton::OpenWithList)
+                .as_deref(),
+            Some("Open With...")
+        );
+        // A button whose glyph already says what it is does not say it again in words.
+        assert_eq!(pin.tooltip.text_for(pin_chrome::CaptionButton::Close), None);
+        assert_eq!(pin.tooltip.text_for(pin_chrome::CaptionButton::Next), None);
+
+        // Arriving is not saying: the pointer has to rest before the name is written, and every
+        // tick before that is the same answer and costs no repaint.
+        pin.hovered = Some(pin_chrome::CaptionButton::OpenWith);
+        assert!(!pin.tooltip.refresh(pin.hovered, now));
+        assert!(!pin
+            .tooltip
+            .refresh(pin.hovered, now + PIN_TOOLTIP_DELAY / 2));
+        assert_eq!(pin.tooltip.shown, None);
+
+        // And then it is said, once, and the tick after that says nothing new.
+        let said = now + PIN_TOOLTIP_DELAY;
+        assert!(pin.tooltip.refresh(pin.hovered, said));
+        assert_eq!(pin.tooltip.shown, Some(pin_chrome::CaptionButton::OpenWith));
+        assert!(!pin.tooltip.refresh(pin.hovered, said + Duration::from_secs(1)));
+
+        // Moving on puts it away at once rather than waiting out the delay a second time, and
+        // a different button starts its own wait from scratch.
+        pin.hovered = Some(pin_chrome::CaptionButton::OpenWithList);
+        assert!(pin.tooltip.refresh(pin.hovered, said + Duration::from_secs(1)));
+        assert_eq!(pin.tooltip.shown, None);
+        assert!(!pin
+            .tooltip
+            .refresh(pin.hovered, said + Duration::from_millis(1)));
+        assert!(pin
+            .tooltip
+            .refresh(pin.hovered, said + Duration::from_secs(1) + PIN_TOOLTIP_DELAY));
+        assert_eq!(
+            pin.tooltip.shown,
+            Some(pin_chrome::CaptionButton::OpenWithList)
+        );
+
+        // A caption that has gone takes the name with it: a button that is not drawn is not a
+        // button a hand is on, and a name left over would be a caption naming nothing.
+        assert!(pin.tooltip.refresh(None, said + Duration::from_secs(3)));
+        assert_eq!(pin.tooltip.shown, None);
+
+        // And a machine with nothing filed against the format has no program to name, so the
+        // default's button says nothing rather than saying "Open With" on its own.
+        let unnamed = PinTooltip::default();
+        assert_eq!(unnamed.text_for(pin_chrome::CaptionButton::OpenWith), None);
+        assert_eq!(
+            unnamed
+                .text_for(pin_chrome::CaptionButton::OpenWithList)
+                .as_deref(),
+            Some("Open With..."),
+            "the list is there whatever the machine has filed the format under"
+        );
+    }
+
+    /// Every kind of pin says the name of its two hand-off buttons — not only the kinds whose
+    /// caption the pointer has to ask for.
+    ///
+    /// The two kinds of pin are different in one way only: whether the pointer can bring the
+    /// caption out. A kind whose caption is in bands around its media has it always, which is
+    /// no reason for it to be a caption that says nothing — and it carries the same two buttons
+    /// and answers a press on both the same way, so a hand on a text preview's "Open With..."
+    /// has as much to learn from a name as a hand on a picture's.
+    #[test]
+    fn a_caption_says_its_name_whatever_kind_of_pin_it_is_on() {
+        let now = Instant::now();
+        let content = (100, 100, 500, 400);
+
+        for (name, overlay) in [("a picture", true), ("a page of text", false)] {
+            let mut pin = overlay_pin(content, PinChrome::always());
+            pin.overlay = overlay;
+            pin.hovered = Some(pin_chrome::CaptionButton::OpenWithList);
+
+            // The caption is in a different place on the two kinds: over the picture's own first
+            // rows, and in a strip of its own above them. The pointer is put where each kind
+            // actually carries it, because the question a name is asked on is the same one for
+            // both and it is about where the pointer is.
+            let window = pin.window_box();
+            let on_the_caption =
+                Some((window.0 + 300, window.1 + pinned_caption_height(pin.dpi) / 2));
+
+            // The first tick also settles the chrome itself, which is a repaint of its own; the
+            // name is measured from where the pointer was noticed, so it is asked about on the
+            // next one rather than this.
+            let _ = refresh_pin_chrome(&mut pin, now, on_the_caption);
+            assert_eq!(
+                pin.tooltip.shown, None,
+                "{name}: arriving is not saying"
+            );
+
+            // And once the wait is over, the name is written on both kinds alike.
+            let said_at = now + PIN_TOOLTIP_DELAY;
+            assert!(
+                refresh_pin_chrome(&mut pin, said_at, on_the_caption),
+                "{name}: a name is a repaint the window owes"
+            );
+            assert_eq!(
+                pin.tooltip.shown,
+                Some(pin_chrome::CaptionButton::OpenWithList),
+                "{name}: the button under the pointer names itself"
+            );
+
+            // And asking again while nothing has moved is not a change, which is what keeps a
+            // name up without the tick repainting the window sixty times a second for it.
+            assert!(!refresh_pin_chrome(
+                &mut pin,
+                said_at + Duration::from_secs(1),
+                on_the_caption
+            ));
+        }
     }
 
     /// The volume popup belongs to the button that opened it and to nothing else: it is kept while
@@ -24524,6 +25094,7 @@ mod tests {
             bubble_pause: None,
             hovered: None,
             pressed: None,
+            tooltip: PinTooltip::default(),
             dragging: None,
             transport: PinTransport::default(),
             volume: PinVolume::default(),
@@ -25147,6 +25718,7 @@ mod tests {
                     bubble_pause: None,
                     hovered: None,
                     pressed: None,
+                    tooltip: PinTooltip::default(),
                     dragging: None,
                     transport: PinTransport {
                         duration: Some(120.0),
