@@ -31,7 +31,7 @@ Almost everything is previewed by **Windows 11 and this app alone** — a codec 
 | Kind | Extensions |
 | --- | --- |
 | Pictures | jpg jpeg jfif jpe png apng gif bmp ico tif tiff tga hdr exr ff qoi pnm pam pbm pgm ppm dds webp |
-| Pictures through a Windows codec extension | heic heif avif avci jxl |
+| Stills through a Windows codec extension | heic heif avif avci jxl |
 | Videos Windows 11 plays itself | mp4 m4v mov qt avi wmv asf dvr-ms mkv webm ts m2ts mts m2t mpg mpeg mpe m2v m1v vob 3gp 3g2 3gpp |
 | Sounds Windows 11 plays itself | mp3 wav wave m4a m4b aac wma aif aifc aiff amr awb flac dsf |
 | Drawings | svg svgz (WebView2) · wmf emf (the drawing layer) · eps epsi epsf epi ept ept2 ept3 (the preview the file carries) |
@@ -45,6 +45,8 @@ Almost everything is previewed by **Windows 11 and this app alone** — a codec 
 ### Notes on the table
 
 Animated GIF, APNG and WebP play. `hdr` and `exr` are tone-mapped for preview. `dds` previews BC1–BC7, both BC6H variants and uncompressed textures — including packed HDR and depth — at the first face and the nearest-size mip.
+
+A **still** `heic`, `heif`, `avif` and `jxl` is decoded by a codec Windows provides rather than one shipped with the app, so each of those four needs its Store extension installed once. An **animated** AVIF and an **animated** JPEG XL are decoded by the app and need none of them — a moving JPEG XL is read by a JPEG XL decoder compiled in, and a moving AVIF by the media engine Windows already has. A multi-image file that is not one of those two — a HEIC burst, say — still shows its first frame.
 
 ### Needs FFmpeg
 
@@ -144,18 +146,22 @@ All are free. Windows 11 usually has HEVC, VP9, and AV1 already. Installing one 
 
 ### Optional: Enable HEIC, AVIF, JPEG XL and WebP Preview (Windows Codecs)
 
-`heic`, `heif`, `avif`, `jxl`, and still `webp` are decoded by a codec Windows provides rather than one shipped with the app. Each needs its extension installed once from the Microsoft Store:
+A **still** `heic`, `heif`, `avif`, `jxl`, and still `webp` is decoded by a codec Windows provides rather than one shipped with the app. Each still needs its extension installed once from the Microsoft Store:
 
 
-| Format         | Needs                                                                                                                                            |
-| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Still format | Needs                                                                                                                                           |
+| ------------ | --------------------------------------------------------------------------------------------------------------------------------------------- |
 | `heic`, `heif` | [HEIF Image Extension](https://apps.microsoft.com/detail/9PMMSR1CGPWG) + [HEVC Video Extensions](https://apps.microsoft.com/detail/9N4WGH0Z6VHQ) |
 | `avif`         | [HEIF Image Extension](https://apps.microsoft.com/detail/9PMMSR1CGPWG) + [AV1 Video Extension](https://apps.microsoft.com/detail/9MVZQVXJBQ9V)   |
 | `jxl`          | [JPEG XL Image Extension](https://apps.microsoft.com/detail/9MZPRTH5C0TB), or the **JXL support** optional feature on Windows 11 24H2            |
 | `webp`         | [WebP Image Extension](https://apps.microsoft.com/detail/9PG2DK419DRG) — optional: the app decodes WebP without it                               |
 
 
-All are free. Windows 11 often has HEIF, AV1, and WebP already. Where one is missing, hovering such a file shows no preview rather than an error, and a multi-image file — a HEIC burst, an animated AVIF, an animated JPEG XL — shows its first frame. A `.webp` is the exception: it needs none of them, because the app carries its own libwebp decoder, so WebP previews even on Windows 10.
+All are free. Windows 11 often has HEIF, AV1, and WebP already. Where one is missing, hovering such a file shows no preview rather than an error.
+
+A **moving** AVIF and a **moving** JPEG XL are decoded by the app itself rather than by that codec, and so need none of the packages above — an animated `.jxl` is read by the JPEG XL decoder compiled into the app, and an animated `.avif` by the media engine Windows already has, which needs the AV1 or HEVC codec it would need for a video of the same encoding. That last part is best-effort rather than promised: Windows does not document that its media stack can open an AVIF or HEIF image sequence as a source at all, and where it cannot — no demuxer for the file's brands, or the AV1/HEVC codec not installed — the file falls back to its first frame, which is what the app has always shown. A **still** `.jxl` is the one that still needs its package, because a still is a still whichever way it arrived.
+
+A `.webp` is the other exception: it needs none of them, because the app carries its own libwebp decoder, so WebP previews even on Windows 10. A multi-image file that moves but is neither an animated AVIF nor an animated JPEG XL — a HEIC burst, say — still shows its first frame.
 
 ### Optional: Enable CorelDRAW and Other Documents (LibreOffice)
 
@@ -248,7 +254,7 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
 - **Scaling**
   - **Image Scaling** — Fit to Screen or `25%`–`400%` of the image’s own size.
   - **Video Scaling** — Same shares for a video. Default `100%`.
-  - **Animated Scaling** — Same shares for an animated GIF, WebP, or PNG. A still GIF or PNG uses **Image Scaling**. Default `100%`.
+  - **Animated Scaling** — Same shares for an animated GIF, WebP, or PNG — and for an animated AVIF or JPEG XL, which play through the same machinery. A still GIF or PNG uses **Image Scaling**. Default `100%`.
   - **Vector Scaling** — Fit to Screen (`default`), or `75%`, `50%`, `25%`, `10%` of the display.
   - **Text Scaling** — Same display shares for a text preview — a plain text file, code, or Markdown. It caps how much of the screen the preview box may take when it opens; a short file still gets the small box its own text needs. Default **Fit to Screen**.
   - **Ebook Scaling** — Fit to Screen (`default`), or the same display shares for a PDF page, a comic’s first page, and a Calibre-converted book.
@@ -439,7 +445,7 @@ Here’s what this .INI does:
 
 - `preview_scale`: percentage or `fit`, based on the picture’s own size.
 - `video_scale`: same for video. Default `100`.
-- `animated_scale`: same for animated GIF, WebP, or PNG. Default `100`. Still GIF/PNG follow `preview_scale`.
+- `animated_scale`: same for animated GIF, WebP, or PNG — and for an animated AVIF or JPEG XL, which are played as pictures rather than as videos. Default `100`. Still GIF/PNG follow `preview_scale`.
 - `vector_scale`: percentage or `fit`, based on the screen. Default `fit`; `100` or more reads as `fit`. Covers all Vector drawings. Old `svg_scale` is ignored and removed.
 - `text_scale`: how much of the screen a text preview box may take when it opens, for plain text, code, and Markdown. Default `fit`; `100` or more reads as `fit`. `Text Size` still scales the text inside that box.
 - `ebook_scale`: PDF page scale against the screen. Default `fit`; `100` or more reads as `fit`.

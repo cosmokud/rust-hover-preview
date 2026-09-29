@@ -38,6 +38,8 @@ use crate::readers::comic_preview;
 use crate::readers::dds_image;
 use crate::readers::eps_image;
 use crate::readers::font_preview;
+use crate::readers::heif_sequence;
+use crate::readers::jxl_image;
 use crate::readers::metafile_image;
 use crate::readers::office_preview;
 use crate::readers::pdf_preview;
@@ -800,6 +802,12 @@ enum MediaType {
     AnimatedGif,
     AnimatedApng,
     AnimatedWebP,
+    /// An AVIF or HEIF image sequence, played frame by frame out of the media engine
+    /// Windows has and fed through the same queue every other animation is (see
+    /// `heif_sequence`).
+    AnimatedHeif,
+    /// An animated JPEG XL, read by `jxl-oxide` (see `jxl_image`).
+    AnimatedJxl,
     /// A video played by `ffplay`, whose own window is the preview while it is up.
     Video,
     /// A video the media engine Windows has decodes and this window draws — the kind of
@@ -881,9 +889,12 @@ impl MediaType {
     /// The kind of preview this media is, as the tray's gates name them.
     fn kind(&self) -> Option<PreviewType> {
         match self {
-            Self::StaticImage | Self::AnimatedGif | Self::AnimatedApng | Self::AnimatedWebP => {
-                Some(PreviewType::Images)
-            }
+            Self::StaticImage
+            | Self::AnimatedGif
+            | Self::AnimatedApng
+            | Self::AnimatedWebP
+            | Self::AnimatedHeif
+            | Self::AnimatedJxl => Some(PreviewType::Images),
             // A texture is a picture as far as the gates go: the list a `.dds` is in is the
             // image list, and the switch for pictures is the switch for it.
             Self::Dds => Some(PreviewType::Images),
@@ -967,6 +978,8 @@ impl MediaType {
                 | Self::AnimatedGif
                 | Self::AnimatedApng
                 | Self::AnimatedWebP
+                | Self::AnimatedHeif
+                | Self::AnimatedJxl
                 | Self::Dds
                 | Self::Design
                 | Self::Vector
@@ -1417,7 +1430,11 @@ impl MediaData {
     fn is_streaming(&self) -> bool {
         matches!(
             self.media_type,
-            MediaType::AnimatedGif | MediaType::AnimatedApng | MediaType::AnimatedWebP
+            MediaType::AnimatedGif
+                | MediaType::AnimatedApng
+                | MediaType::AnimatedWebP
+                | MediaType::AnimatedHeif
+                | MediaType::AnimatedJxl
         ) && !self.is_fully_loaded()
     }
 
@@ -4331,6 +4348,158 @@ fn load_animated_webp(
     })
 }
 
+/// An AVIF or HEIF image sequence, played through the media engine Windows has.
+///
+/// This is a *decode* of the sequence, not the video path: frames are pulled synchronously
+/// and handed to the same queue every other animation is, so a moving `.avif` behaves like
+/// a moving `.gif` — it keeps the animated scale, the sliding window, and the picture's
+/// gate — rather than becoming a video the moment it moves. That is a deliberate choice:
+/// the alternative is a preview that changes kind the moment the file turns out to
+/// animate, and the user is looking at a picture.
+///
+/// The media engine is asked for a sequence it may not have a demuxer for, and the AV1 and
+/// HEVC codecs may not be installed, so every failure here is `None` — and `None` means the
+/// still path draws the first frame, which is what this app did before any of it existed.
+/// Nothing about a moving picture is a reason to show nothing at all (see
+/// `heif_sequence`).
+fn load_animated_heif(
+    path: &Path,
+    max_width: u32,
+    max_height: u32,
+    _preview_scale: PreviewScale,
+    cancel: Arc<AtomicBool>,
+) -> Option<MediaData> {
+    if cancel.load(Ordering::Acquire) {
+        return None;
+    }
+
+    let sequence = heif_sequence::decode_sequence(path, max_width, max_height, &cancel)?;
+
+    if sequence.frames.len() <= 1 {
+        // One frame is a picture, not an animation: the animated reader is turned down for
+        // it and the still path draws it, exactly as it does for a `.gif` with one frame.
+        return None;
+    }
+
+    let mut frames = Vec::with_capacity(sequence.frames.len());
+    for (pixels, delay_ms) in sequence.frames {
+        frames.push(ImageFrame::new(
+            pixels,
+            sequence.width,
+            sequence.height,
+            delay_ms,
+        ));
+    }
+
+    Some(MediaData {
+        frames,
+        shared_frames: None,
+        all_frames_loaded: None,
+        current_frame: 0,
+        last_frame_time: Instant::now(),
+        media_type: MediaType::AnimatedHeif,
+        stream_cancel: Some(cancel),
+        video_process: None,
+        loading_start: None,
+        text_state: None,
+    })
+}
+
+/// An animated JPEG XL, read by `jxl-oxide`.
+///
+/// Where every other animation here is streamed, this one is decoded whole: the delays
+/// live in the codestream's image header, so the frame count and every frame's hold are
+/// known before a single pixel is rendered, and there is nothing to learn after the first
+/// frame that would be worth opening the preview early for. So there is no queue and no
+/// decoder thread, and the bounds that hold here are its own rather than the sliding
+/// window's — which does not reach this path at all, it is the streaming path's, and a
+/// `MediaData` with no queue behind it never releases anything.
+fn load_animated_jxl(
+    path: &Path,
+    max_width: u32,
+    max_height: u32,
+    _preview_scale: PreviewScale,
+    cancel: Arc<AtomicBool>,
+) -> Option<MediaData> {
+    if cancel.load(Ordering::Acquire) {
+        return None;
+    }
+
+    // The timing first, and separately from the pixels: it is cheap beside a decode, and a
+    // file that is not a sequence is settled here without a single frame being rendered.
+    let (delays_ms, (orig_width, orig_height)) = jxl_image::animation(path)?;
+
+    if delays_ms.len() <= 1 {
+        return None;
+    }
+    if orig_width == 0 || orig_height == 0 {
+        return None;
+    }
+    frame_bytes_within_budget(orig_width, orig_height, 4)?;
+
+    // `jxl-oxide` has no scaler of its own, so the frame is decoded whole and the bound
+    // is a refusal rather than a target: a picture larger than the box is not shown at a
+    // smaller size here, it is not shown. What the other decoders spend a filter on, this
+    // one spends a return of `None` on.
+    if orig_width > max_width || orig_height > max_height {
+        return None;
+    }
+
+    // Everything is held at once, so the total is what has to be bounded rather than any
+    // one frame. A thousand-frame sequence at a size that fits a display is gigabytes, and
+    // there is no window to release them through: the preview holds them until the next
+    // hover replaces the whole `MediaData`. So this is refused, and refused the same way
+    // a file over the decode budget is — a first frame is the right answer for it, and the
+    // still path gives exactly that.
+    let frame_bytes = usize::try_from(orig_width)
+        .ok()
+        .and_then(|width| width.checked_mul(usize::try_from(orig_height).ok()?))
+        .and_then(|pixels| pixels.checked_mul(4))?;
+    let retained = frame_bytes.checked_mul(delays_ms.len())?;
+    if retained > ANIMATION_RETAINED_BYTES {
+        return None;
+    }
+
+    let mut frames = Vec::with_capacity(delays_ms.len());
+    let mut retained = 0usize;
+    for (index, delay_ms) in delays_ms.iter().copied().enumerate() {
+        if cancel.load(Ordering::Acquire) {
+            return None;
+        }
+
+        let pixels = jxl_image::decode_frame(path, index, max_width, max_height)?;
+        retained = retained.saturating_add(pixels.len());
+        if retained > ANIMATION_RETAINED_BYTES {
+            return None;
+        }
+
+        // The same floor every other animation here applies, and for the same reason: a
+        // frame's own duration is whatever the file says, and a file saying zero — or a
+        // still timebase, which is zero too — is a frame the playhead would advance
+        // through as fast as the message pump allows, spinning the render loop on a
+        // picture that never appears to change.
+        frames.push(ImageFrame::new(
+            pixels,
+            orig_width,
+            orig_height,
+            delay_ms.max(MIN_ANIMATION_FRAME_DELAY_MS),
+        ));
+    }
+
+    Some(MediaData {
+        frames,
+        shared_frames: None,
+        all_frames_loaded: None,
+        current_frame: 0,
+        last_frame_time: Instant::now(),
+        media_type: MediaType::AnimatedJxl,
+        stream_cancel: Some(cancel),
+        video_process: None,
+        loading_start: None,
+        text_state: None,
+    })
+}
+
 /// A frame's place in the cache, and when it was last asked for. The stamp is a
 /// counter rather than a clock, so the order frames are dropped in cannot be
 /// changed by the system clock moving.
@@ -6630,6 +6799,28 @@ fn load_picture(
         }
         native_formats::NativeJob::AnimatedApng => {
             if let Some(media) = load_animated_apng(
+                path,
+                max_width,
+                max_height,
+                preview_scale,
+                Arc::clone(cancel),
+            ) {
+                return Some(media);
+            }
+        }
+        native_formats::NativeJob::AnimatedJxl => {
+            if let Some(media) = load_animated_jxl(
+                path,
+                max_width,
+                max_height,
+                preview_scale,
+                Arc::clone(cancel),
+            ) {
+                return Some(media);
+            }
+        }
+        native_formats::NativeJob::AnimatedHeif => {
+            if let Some(media) = load_animated_heif(
                 path,
                 max_width,
                 max_height,
@@ -19979,6 +20170,54 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    /// Every animated kind this app has is a kind whose queue is drained while it plays.
+    ///
+    /// This is here because getting it wrong does not look like getting it wrong. A new
+    /// animated `MediaType` left out of `is_streaming` still decodes and still advances:
+    /// what it does not do is drain its queue, so the decoder waits forever in
+    /// `await_frame_queue_room` and the animation plays its first two frames and stops —
+    /// a hang, in a thread, that no test above would catch and no compiler enforces,
+    /// because `MediaType` is not `#[non_exhaustive]`.
+    #[test]
+    fn every_animated_kind_drains_its_queue() {
+        for media_type in [
+            MediaType::AnimatedGif,
+            MediaType::AnimatedApng,
+            MediaType::AnimatedWebP,
+            MediaType::AnimatedHeif,
+            MediaType::AnimatedJxl,
+        ] {
+            // A player whose decode is finished is not streaming whatever its kind is, so
+            // the kind is asked of one that has not finished.
+            let media = MediaData {
+                frames: vec![],
+                shared_frames: None,
+                all_frames_loaded: Some(Arc::new(AtomicBool::new(false))),
+                current_frame: 0,
+                last_frame_time: Instant::now(),
+                media_type,
+                stream_cancel: None,
+                video_process: None,
+                loading_start: None,
+                text_state: None,
+            };
+
+            assert!(
+                media.is_streaming(),
+                "{media_type:?} is decoded on its own thread and its queue must be drained"
+            );
+            assert_eq!(
+                media.media_type.kind(),
+                Some(PreviewType::Images),
+                "{media_type:?} is a moving picture, and a moving picture is a picture"
+            );
+            assert!(
+                media.media_type.has_bubble_picture(),
+                "{media_type:?} has a frame, and a frame is what a bubble draws"
+            );
+        }
     }
 
     #[test]
