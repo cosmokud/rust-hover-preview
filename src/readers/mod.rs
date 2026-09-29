@@ -6,6 +6,8 @@ pub(crate) mod comic_preview;
 pub(crate) mod dds_image;
 pub(crate) mod eps_image;
 pub(crate) mod font_preview;
+pub(crate) mod heif_sequence;
+pub(crate) mod jxl_image;
 pub(crate) mod metafile_image;
 pub(crate) mod office_preview;
 pub(crate) mod pdf_preview;

@@ -126,6 +126,17 @@ libwebp-sys2 = "0.2"
 # decode options, the color output, the frame records — is the same in both.
 gif = "0.14"
 
+# Animated JPEG XL. Where Windows has no JPEG XL codec — which is the usual Windows 10
+# machine — this is the one that plays a `.jxl` that moves, and it is also what the head
+# probe asks whether a `.jxl` is one picture or a sequence: the anim flag is in the
+# codestream's own image header, behind the container box, so the only reading of it is
+# through a real decoder (see `jxl_image` and `head::facts`).
+#
+# `rayon` is off deliberately. It is the crate's default and it would be the only
+# parallel dependency in this graph, for a decoder that runs on a thread of its own
+# already; nothing here decodes frames side by side (see `jxl_image::render`).
+jxl-oxide = { version = "0.12.6", default-features = false }
+
 # For async operations
 once_cell = "1.19"
 
