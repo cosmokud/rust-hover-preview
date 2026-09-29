@@ -13,16 +13,20 @@
 What a file's own head says is what this app routes by, and for the still-or-moving question
 the head settles everything a name cannot: a `.png` with an `acTL` chunk is an animation, a
 `.gif` with a second frame block is one, a `.webp` with an `ANIM` chunk is one, and the `ftyp`
-brand of an `.avif`, `.heic` or `.jxl` says whether the file is one picture or a sequence.
-Five more hold a second picture that nothing in the front of the file announces, so each is
+brands of an `.avif` or `.heic` say whether the file is a picture or a sequence — a brand list
+rather than the one at the front, since an animated AVIF is commonly written with `avis` behind
+`avif`. A `.jxl` is the one that cannot be settled from a brand at all, and is asked of a
+decoder instead: whether its codestream animates is a flag in the image header, behind whatever
+container box the file opens with, so `head` checks the two signature forms it arrives in
+against the bytes it already holds and only then opens the file to read that one flag
+(`jxl_image::is_animated`).
+Four more hold a second picture that nothing in the front of the file announces, so each is
 drawn as its first frame — which is what it was drawn as before this was read at all — and
 each would take a reader rather than a byte to change:
 
 - **A stereo or multi-picture JPEG (`.jpg` `.jpeg` `.jpe` `.jfif`).** The second picture is
   named in an `APP2` segment, and an Exif segment of any size may sit in front of it, so
   counting one is a walk of the segment chain rather than a read of the file's front.
-- **An animated JPEG XL (`.jxl`).** Whether the codestream animates is a flag in its own frame
-  header rather than in the container box the front of the file carries.
 - **A multi-frame DICOM (`.dcm`).** The frame count is the dataset's `(0028,0008)` element,
   behind the tag structure rather than at a fixed offset; the front of a `.dcm` is a preamble
   of zero bytes, so nothing at all is read of one before the byte tables name it.
@@ -32,6 +36,23 @@ each would take a reader rather than a byte to change:
 - **A `.dds` with more than one surface (`.dds`), and a multi-extension FITS (`.fits`).** Both
   carry more than one picture behind a header this app reads only the first surface of; what
   each is drawn as is that first surface, which is the picture either way.
+
+Two of the formats that were on this list are no longer on it, and both are on it for
+opposite reasons, which is what the list is for. **An animated AVIF and an animated HEIF
+sequence** are drawn now — through the media engine Windows has, used as a decoder rather than
+as the app's video path, because HEVC and AV1 have no decoder in this graph and libheif and
+libde265 were rejected for a tree that compiles zero C/C++ (`heif_sequence`). Whether the media
+stack can open one at all is a property of the machine rather than of this code, so the
+answer is allowed to be no, and every failure is the first frame this app always showed. **An
+animated JPEG XL** is drawn now too, by a decoder compiled in (`jxl_image`), and needs nothing
+installed on the machine at all.
+
+**And one that was never on the list, because it is a name rather than a flag.** A multi-image
+HEIC — a camera burst — carries its pictures as items behind a `mif1` brand, and `mif1` is the
+generic HEIF *image* brand an ordinary single-image HEIC is written under, so treating it as a
+sequence would hand every camera photo the animated scaling and a pointless attempt to open it
+as one. It is drawn as its first frame, and what would change that is a walk of the `meta` box
+counting the items behind the brand rather than reading the brand.
 
 ## Unsupported Audio Formats
 

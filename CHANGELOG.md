@@ -4,10 +4,14 @@
 
 ### Added
 
+- **An animated AVIF and an animated JPEG XL now play** instead of showing their first frame. An animated `.jxl` is decoded by a JPEG XL decoder compiled into the app, so it needs no Store package at all; an animated `.avif` is decoded by the media engine Windows already has, best-effort — Windows does not document that its media stack can open an AVIF image sequence as a source, so where it cannot, the file falls back to its first frame exactly as before. Both play through the same machinery as a GIF, an APNG or an animated WebP, so **Animated Scaling** and the **Images** gate apply to them.
 - **`Scaling → Text Scaling`** (default **Fit to Screen**): caps how much of the screen a text preview box may take when it opens — a plain text file, code, or Markdown — while a short file still gets the small box its own text needs. `Text Size` still scales the text inside that box.
 
 ### Fixed
 
+- **A still `.avif` written with a sequence brand behind it is no longer mistaken for a picture.** The ISO base media probe now reads the file's whole list of brands rather than only the one at the front, which is what an animated AVIF is ordinarily written as — `avif` in front, `avis` behind it — so one that was being drawn as a still now plays.
+- **A single-image HEIC is no longer at risk of being treated as a sequence.** The `mif1` brand is the generic HEIF image brand an ordinary HEIC is written under rather than a sequence brand, and is now read as the still picture it is.
+- **A `.jxl` is recognized in both the forms it arrives in** — a naked codestream and a container — which it was not before; a file whose front settles nothing was left to the tables.
 - **`Pin Mode → Update Preview`**: a sound's card is now drawn at its own size, in the middle of the box the window already stands in, rather than filling whatever box the file before it left — a picture's, say, which turned the card into a slab. A window shown a card while maximized now gives the maximize up rather than carrying a restore no card offers a button for.
 
 ## [0.4.0] - 2026-09-27
