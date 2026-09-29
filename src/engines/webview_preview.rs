@@ -33,7 +33,10 @@
 //! it, which is no preview for the rest of the run. An app left alone has no browser
 //! process and one thread asleep — and the settings it is given are the app's own rules
 //! rather than a browser's: a document is drawn and not run, and nothing about it is a
-//! way out of the preview.
+//! way out of the preview. A page of HTML is the one exception, and the exception is
+//! deliberate rather than a leak: it is handed to the browser as a page rather than as an
+//! image, a page that draws itself is nothing without a run, and what a run is given stops
+//! at everything that is a way out of the frame it is in (see `html_page`, `page_runs`).
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, AtomicU64, Ordering};
@@ -57,11 +60,11 @@ use windows::Win32::System::Com::{CoInitializeEx, CoTaskMemFree, COINIT_APARTMEN
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::System::WinRT::EventRegistrationToken;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW, KillTimer,
-    PeekMessageW, PostThreadMessageW, RegisterClassW, SetTimer, SetWindowPos, ShowWindow,
-    TranslateMessage, HWND_TOPMOST, MSG, PM_NOREMOVE, PM_REMOVE, SWP_NOACTIVATE, SWP_SHOWWINDOW,
-    SW_HIDE, SW_SHOWNOACTIVATE, WM_APP, WM_MOUSEACTIVATE, WNDCLASSW, WS_EX_NOACTIVATE,
-    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW,
+    GetWindowLongPtrW, KillTimer, PeekMessageW, PostThreadMessageW, RegisterClassW, SetTimer,
+    SetWindowLongPtrW, SetWindowPos, ShowWindow, TranslateMessage, GWL_EXSTYLE, HWND_TOPMOST, MSG,
+    PM_NOREMOVE, PM_REMOVE, SWP_NOACTIVATE, SWP_SHOWWINDOW, SW_HIDE, SW_SHOWNOACTIVATE, WM_APP,
+    WM_MOUSEACTIVATE, WNDCLASSW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
 use crate::app::engine_processes;
@@ -73,9 +76,11 @@ use crate::formats::text_formats;
 use crate::readers::font_preview;
 use crate::{readers::svg_preview, CONFIG};
 
-/// The window class the engine's window is made from. It exists to refuse activation: a
-/// preview never takes the keyboard away from what the pointer is over, and a browser
-/// hosted in one is no different.
+/// The window class the engine's window is made from. It exists to refuse activation, and
+/// the refusal is a default rather than a fixed answer: a document and a specimen never
+/// take the keyboard away from what the pointer is over, and a page that runs is the one
+/// thing a browser is brought here for — so a window of this class asks whether it is
+/// holding a page before it says no (see `mouse_activate_answers`).
 const WEBVIEW_CLASS: PCWSTR = w!("RustHoverPreviewWebView");
 
 /// The browser arguments this app passes. The first answers for no host at all, so
@@ -104,6 +109,21 @@ static RUNTIME: Lazy<Option<String>> = Lazy::new(runtime_version);
 /// Whether the engine's window is on screen. The preview loop reads this to know when
 /// to take its own window down, so it is an atomic rather than a message.
 static SHOWING: AtomicBool = AtomicBool::new(false);
+
+/// Whether the document the engine's window is showing right now is one that runs, and so may
+/// take the pointer and the keyboard: the window is made `WS_EX_NOACTIVATE` and refuses
+/// activation for `WM_MOUSEACTIVATE`, which is right for a document that is only looked at and
+/// wrong for a page whose own scripts are reading keys and whose own pointer is dragging it
+/// about, so both of those answers are about what the window is holding rather than about the
+/// window.
+///
+/// It is a fact about the document on screen, kept by the thread that puts the window up, and
+/// read by the window procedure, which is that thread's own — an atomic rather than a
+/// message because the two are the same thread at different moments, and because a window
+/// procedure that had to ask the engine's lock to answer a click would be a click answered
+/// late. Nothing is set when the window comes down: a window that is not on screen cannot be
+/// clicked into, so the next document to be put up is what sets it again.
+static RUNNING_DOCUMENT: AtomicBool = AtomicBool::new(false);
 
 /// Where the engine's window is while it is on screen, in screen coordinates: the box
 /// the document was last handed over in. Kept as a rectangle rather than as the window
@@ -302,15 +322,51 @@ pub fn last_timings() -> Timings {
 /// Whether a file is one the engine draws: the runtime is on the machine, the file is a
 /// document or a font, and the engine is not in one of its own bad spells.
 ///
-/// A page of HTML is the third of those, and only while `render_html` asks for it: the same
-/// file is a page of text without it, so the switch is read here rather than being answered
-/// by the name — and a machine with no runtime answers no for all three alike, which is what
-/// leaves such a file its text preview (see `load_media_of_kind`).
+/// A page of HTML is the third of those, and only while `render_html` asks for it — which is
+/// what `page_runs` answers. A machine with no runtime answers no for all three alike, which
+/// is what leaves such a file its text preview (see `load_media_of_kind`).
 pub fn draws(path: &Path) -> bool {
     can_draw()
-        && (svg_preview::is_svg_file(path)
-            || font_formats::is_font_file(path)
-            || (renders_html() && text_formats::is_html_extension(path)))
+        && (svg_preview::is_svg_file(path) || font_formats::is_font_file(path) || page_runs(path))
+}
+
+/// Whether `path` is a page this app hands to the browser as a page rather than as an image,
+/// and runs the code in it.
+///
+/// It is the one kind of document that is given to a browser whole: a document with a size of
+/// its own and a specimen of a font are both pictures, and a picture in a browser is never
+/// anything but a picture — no code in it, no pointer of its own, nothing outside itself. A
+/// page of HTML has none of that as a picture, and a page that draws itself with WebGL, or
+/// lays itself out from a script, is a page that nothing but a run can show at all: run with
+/// the page withheld and it comes up blank. So the script is given here and nowhere else, and
+/// it is given to this one kind because it is the one kind this app ever opens in a browser's
+/// hands rather than in a frame of its own making — the wrapper is a file of this run's
+/// profile folder and the document is another file, so nothing a document runs can reach the
+/// page that framed it.
+///
+/// The two names are the two the text lists already claim, read through the same helper they
+/// are read by, and the switch is `render_html`: the same file is a page of text without it,
+/// so the name alone does not make a page run — it is the tray, or `config.ini`, that says a
+/// page of HTML is drawn at all, and a preview that is not being drawn has no engine to run
+/// anything in. The question is about the document's kind and the switch, not about the
+/// machine: whether a browser is here to draw it is `can_draw`, which is deliberately not
+/// folded in, because the answer a caller wants here is the rule and not whether it can be
+/// carried out.
+pub fn page_runs(path: &Path) -> bool {
+    page_runs_under(renders_html(), path)
+}
+
+/// The same question as `page_runs`, with the switch handed in rather than read.
+///
+/// The two names a page goes by and the switch that says a page is drawn at all are two
+/// separate questions, and only one of them is about a name: which names count is a matter
+/// of the text lists, and can be asked — and answered — of any file at any time. The switch
+/// belongs to the tray, or to `config.ini`, and is kept behind this app's one configuration
+/// lock, so handing it in is what lets the part of the rule that is about a name be asked
+/// without the configuration at all. A test that took the lock to ask it would be waiting on
+/// the lock it is already holding.
+fn page_runs_under(renders_html: bool, path: &Path) -> bool {
+    renders_html && text_formats::is_html_extension(path)
 }
 
 /// Whether the configuration asks for a page of HTML to be drawn rather than its markup.
@@ -434,11 +490,13 @@ fn note_engine_up() {
 /// document the same size at every scale.
 ///
 /// Nothing is given up for that. An SVG drawn as an image is animated and not scripted,
-/// which is the rule this engine runs under anyway: in an image a document cannot run
-/// code, cannot take the pointer, and cannot reach anything outside itself — not a file
-/// beside it, not a URL — so a document that links to the world is drawn without it.
-/// Chromium parses it as XML, in the mode built for animated images, so the document is
-/// the document rather than a copy of it in a page of our own.
+/// and here nothing runs either — an image is a picture a browser shows, and a picture
+/// cannot run code, take the pointer, or reach anything outside itself — not a file beside
+/// it, not a URL — so a document that links to the world is drawn without it. A page of
+/// HTML is the one document this engine runs, and it is not this page: that one is a frame
+/// around the file (see `html_page`), with its own rule, which is the same reach and one
+/// more thing given. Chromium parses a document as XML, in the mode built for animated
+/// images, so the document is the document rather than a copy of it in a page of our own.
 ///
 /// The version is the document's own modification time, which is what keeps an edited
 /// file from being answered out of the browser's image cache: the URL changes when the
@@ -476,8 +534,8 @@ fn frame_page(
     write_page(&page, &html, version)
 }
 
-/// The page a page of HTML is drawn in: the file itself, whole, in a frame that fills the
-/// window it is given.
+/// The page a page of HTML is drawn in, and the one it runs in: the file itself, whole, in a
+/// frame that fills the window it is given.
 ///
 /// The frame is what a standalone document is not: a browser draws an SVG at the size it
 /// asks for and will not stretch one to the window, and a page of HTML asked for as the page
@@ -486,12 +544,27 @@ fn frame_page(
 /// display `document_scale` names is a share of the room — see `frame_page`, which is the
 /// same arrangement for a document that has a size of its own.
 ///
-/// The frame is sandboxed to its own origin and nothing else, which is the one allowance
-/// that keeps the page itself: a page's stylesheets and its pictures are relative to it, so a
-/// frame loaded as a document of its own origin would come up unstyled. What that also
-/// withholds is everything else — scripts, popups, forms, and any navigation out of the
-/// frame — which is the rule an SVG drawn as an image runs under anyway, and which
-/// `BROWSER_ARGUMENTS` reaches from the outside for the links a page keeps.
+/// The frame is given its own origin, without which the page itself would not arrive: a
+/// page's stylesheets and its pictures are relative to it, so a frame loaded as a document
+/// of an opaque origin of its own comes up unstyled. It is given script as well, and that is
+/// the one thing a page of HTML is handed the browser's own engine for: a page that draws
+/// itself with WebGL, or lays itself out from a script, is a page nothing but a run can show,
+/// and withheld it comes up a blank rectangle. So these two allowances are what the frame
+/// gets, and what is still withheld is everything that is a way *out* of it — popups, forms,
+/// and any navigation of the top frame — which is the same reach a document drawn as an
+/// image has, since a picture cannot pop up, submit, or navigate either, and which
+/// `BROWSER_ARGUMENTS` reaches from the outside for the links a page keeps. Nor is it given
+/// the three things a run would otherwise bring with it: a browser that plays sound without
+/// a gesture, a page that reads the files beside it, and a page that takes the whole screen
+/// — no autoplay policy is passed, no `--allow-file-access-from-files`, and no
+/// `allowfullscreen` for a page asking to be shown full screen to be refused.
+///
+/// The two together are not the loosening they would be for same-origin content, where an
+/// allowance to keep one's own origin alongside one to run would let a framed document reach
+/// out of itself and take the frame with it. They are not same-origin here: the wrapper is a
+/// file this app wrote into this run's own profile folder and the document is another file
+/// altogether, so the two are separate origins whatever the sandbox is told, and a document
+/// that runs reaches its own file and no further out of it.
 ///
 /// The target is in the page's own name as well as in its content, for the reason the
 /// backdrop and the face are: two pages of HTML are two pages the browser has not seen,
@@ -513,7 +586,7 @@ fn html_page(
          <style>html,body{{margin:0;padding:0;height:100%;overflow:hidden}}\
          iframe{{display:block;width:100%;height:100%;border:0}}</style>\
          {checkerboard}\
-         <iframe src=\"{}?v={version}\" sandbox=\"allow-same-origin\" title=\"\"></iframe>",
+         <iframe src=\"{}?v={version}\" sandbox=\"allow-same-origin allow-scripts\" title=\"\"></iframe>",
         escape_attribute(&page_url),
         checkerboard = checkerboard_style(background)
     );
@@ -1408,6 +1481,16 @@ impl Host {
         // takes a moment to be drawn lands where the hand is rather than where it was.
         let area = wanted_area(*generation).unwrap_or(area);
 
+        // What the window is being asked to show decides what it may be activated for: a
+        // page of HTML that runs is a program the user clicks into, and every other
+        // document is a picture the caret is not to be taken out of for. The style is set
+        // here rather than at the window's making, because the window is made once and
+        // drawn in for every document this engine is given — and it is set before the
+        // window is put up, so a click that lands on the first frame already has the
+        // answer it is going to get.
+        let runs = page_runs(path);
+        RUNNING_DOCUMENT.store(runs, Ordering::Release);
+
         unsafe {
             let _ = self.controller.SetBounds(RECT {
                 left: 0,
@@ -1415,6 +1498,12 @@ impl Host {
                 right: area.width,
                 bottom: area.height,
             });
+
+            let current = GetWindowLongPtrW(self.hwnd, GWL_EXSTYLE);
+            let style = ex_style_for(current, runs);
+            if style != current {
+                SetWindowLongPtrW(self.hwnd, GWL_EXSTYLE, style);
+            }
 
             let _ = self.controller.SetIsVisible(true);
             let _ = SetWindowPos(
@@ -1424,6 +1513,9 @@ impl Host {
                 area.y,
                 area.width,
                 area.height,
+                // The placement never activates, whatever the document is: a hover is not a
+                // click, and a preview that appeared over a window being named would put
+                // the caret somewhere else than where it was.
                 SWP_NOACTIVATE | SWP_SHOWWINDOW,
             );
             let _ = ShowWindow(self.hwnd, SW_SHOWNOACTIVATE);
@@ -1524,6 +1616,12 @@ impl Host {
         ));
         let url = wide(&url);
         let (sender, receiver) = mpsc::channel();
+
+        // Whether the browser runs what it is about to be given is settled here, before the
+        // navigation rather than after it, because the document is read as it loads: a page
+        // that draws itself would be a blank canvas by the time a setting asked for after
+        // the fact could reach it (see `set_scripts`).
+        set_scripts(&self.webview, page_runs(path));
 
         unsafe {
             let handler =
@@ -1672,7 +1770,9 @@ impl Drop for Host {
 }
 
 /// The window the engine draws into: a popup of its own, topmost, tool-windowed and
-/// never activated.
+/// refusing activation to begin with. The refusal is put on here rather than answered here
+/// alone because it is the style that makes a click refuse as well, and it comes off for the
+/// one document that runs (see `ex_style_for`).
 fn create_host_window() -> Option<HWND> {
     unsafe {
         CreateWindowExW(
@@ -1711,21 +1811,62 @@ fn register_class() {
     }
 }
 
-/// A preview never takes the keyboard: the pointer may be over it, but what is being
-/// worked in is Explorer.
+/// A preview never takes the keyboard by itself: the pointer may be over it, but what is
+/// being worked in is Explorer — unless the thing on screen is a page that runs, which is
+/// the one document whose whole reading is a script answering keys, and a page that is
+/// never activated is a page nothing can be typed into (see `mouse_activate_answers`).
 extern "system" fn window_proc(
     hwnd: HWND,
     message: u32,
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
-    const MA_NOACTIVATE: LRESULT = LRESULT(3);
-
     if message == WM_MOUSEACTIVATE {
-        return MA_NOACTIVATE;
+        return mouse_activate_answers(RUNNING_DOCUMENT.load(Ordering::Acquire));
     }
 
     unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
+}
+
+/// What a click into the engine's window is answered with, given what the window is showing.
+///
+/// Two answers, because a preview is two things. A document and a specimen are looked at, and
+/// the pointer being over one of them says nothing about the user having left the window they
+/// are working in, so a click is refused activation and the caret stays where it was. A page
+/// of HTML that runs is interacted with, and a click that refused to activate it would leave
+/// a page on screen that no key could reach, which is a page the user is looking at a picture
+/// of. So the one document that is a program rather than a picture takes the keyboard, and it
+/// takes it only on a click — showing it is still `SW_SHOWNOACTIVATE`, so a hover never
+/// steals the caret from what the hand is on.
+fn mouse_activate_answers(runs: bool) -> LRESULT {
+    const MA_ACTIVATE: LRESULT = LRESULT(1);
+    const MA_NOACTIVATE: LRESULT = LRESULT(3);
+
+    if runs {
+        MA_ACTIVATE
+    } else {
+        MA_NOACTIVATE
+    }
+}
+
+/// The window's extended style as it is for a document that runs, or for one that is only
+/// looked at: `WS_EX_NOACTIVATE` off for the first and on for the second.
+///
+/// The style is the standing part of the refusal — a window that carries it cannot be
+/// activated by anything, the click included, which is why it has to come off before
+/// `WM_MOUSEACTIVATE` can answer `MA_ACTIVATE` for a page that runs. Nothing else in the
+/// style is touched: the window stays a tool window so it is nothing in the taskbar or on
+/// the alt-tab, and stays topmost, since it is a preview the pointer is on top of. A style
+/// that has come off for a page is put back for the next document, which is not one — so the
+/// refusal is the default and the allowance is the exception made and taken away again.
+fn ex_style_for(style: isize, runs: bool) -> isize {
+    let noactivate = WS_EX_NOACTIVATE.0 as isize;
+
+    if runs {
+        style & !noactivate
+    } else {
+        style | noactivate
+    }
 }
 
 /// Retrieve and dispatch whatever is waiting, without blocking.
@@ -1898,13 +2039,17 @@ fn create_controller(
     receiver.recv_timeout(remaining(deadline)).ok()?.ok()
 }
 
-/// What the engine is and is not allowed to do, all of it the app's own rules rather
-/// than a browser's: a document is drawn and not run, and nothing about it is a way out
-/// of the preview.
+/// The browser's own furniture, all of it taken away: the context menu, the tools, the zoom,
+/// the status bar, the web messages a page could reach this app's threads through, and the
+/// accelerator keys a browser answers for itself — a find bar, a print dialog — which belong
+/// to no preview.
+///
+/// None of these says anything about the document. Whether it runs is not decided here, and
+/// that is the one setting of the browser's that is not the same for every document this
+/// engine is given (see `set_scripts`).
 fn configure(webview: &ICoreWebView2) {
     unsafe {
         if let Ok(settings) = webview.Settings() {
-            let _ = settings.SetIsScriptEnabled(false);
             let _ = settings.SetAreDefaultContextMenusEnabled(false);
             let _ = settings.SetAreDevToolsEnabled(false);
             let _ = settings.SetIsZoomControlEnabled(false);
@@ -1919,6 +2064,29 @@ fn configure(webview: &ICoreWebView2) {
         }) {
             let _ = settings3.SetAreBrowserAcceleratorKeysEnabled(false);
         }
+    }
+}
+
+/// Whether the engine is to run the code in the document it is pointed at.
+///
+/// This is the one setting of the browser's that is not a property of the engine but of the
+/// document in it, and the engine is one window reused for every document it draws: a
+/// document is a specimen for ten seconds and the next hover is a page of HTML, on the same
+/// `ICoreWebView2` and in the same window. A setting made when the engine is begun would be
+/// one answer for all of them, and there is no one answer — a page of HTML is handed to a
+/// browser to run and a document and a specimen are handed to it to be looked at. So it is
+/// read as the document is being pointed at, which is also the only moment at which the
+/// browser is about to read it (see `Host::navigate`), and a setting that were left off
+/// would stay off for the documents that follow until one of them said otherwise.
+///
+/// The document is the whole of the answer: the sandbox around a page of HTML is what stops
+/// a page that runs from being a way out of the preview (see `html_page`), and the network
+/// is dead from the outside whatever this says (see `BROWSER_ARGUMENTS`). Nor is the setting
+/// a grant of a capability to a document that is being looked at: an SVG and a specimen are
+/// given it off, and an image in a browser has nowhere to put it.
+fn set_scripts(webview: &ICoreWebView2, on: bool) {
+    if let Ok(settings) = unsafe { webview.Settings() } {
+        let _ = unsafe { settings.SetIsScriptEnabled(on) };
     }
 }
 
@@ -2152,10 +2320,13 @@ mod tests {
 
     /// A page of HTML is the one thing previewed in a page of this app's own, so the wrapper
     /// is the one construct that widens what a previewed file may do — and what it is given
-    /// is exactly one allowance: its own origin, without which a page's own stylesheets and
-    /// pictures would not load. The page is named for the file it draws, so a hover on one
-    /// page and then on another is two pages the browser has not seen, and the URL carries the
-    /// version for the reason the other pages' do.
+    /// is two allowances, both of them the page's own: its origin, without which a page's
+    /// stylesheets and pictures would not load, and script, without which a page that draws
+    /// itself is a blank rectangle. What is kept back is every way *out* of the frame, and
+    /// those two together are not the loosening they would be for same-origin content, since
+    /// the wrapper and the document are two files and so two origins. The page is named for
+    /// the file it draws, so a hover on one page and then on another is two pages the browser
+    /// has not seen, and the URL carries the version for the reason the other pages' do.
     #[test]
     fn the_page_a_page_of_html_is_drawn_in_is_a_sandboxed_frame_of_the_file_itself() {
         let folder = std::env::temp_dir().join("rust-hover-preview-html-page-tests");
@@ -2191,8 +2362,9 @@ mod tests {
         assert!(url.starts_with("file:///"));
 
         assert!(
-            html.contains("sandbox=\"allow-same-origin\""),
-            "the frame runs in the page's own origin, which is what keeps its stylesheets"
+            html.contains("sandbox=\"allow-same-origin allow-scripts\""),
+            "the frame keeps its own origin, which is what keeps its stylesheets, and is \
+             given script, which is the whole of what a page that draws itself can be shown by"
         );
         let target = escape_attribute(&file_url(&one).expect("a url"));
         assert!(
@@ -2200,19 +2372,96 @@ mod tests {
             "the target is the file itself, at the version that was read"
         );
 
-        for refused in [
-            "allow-scripts",
-            "allow-forms",
-            "allow-popups",
-            "allow-top-navigation",
-        ] {
+        for refused in ["allow-forms", "allow-popups", "allow-top-navigation"] {
             assert!(
                 !html.contains(refused),
-                "{refused} is not given to a page previewed, so the page cannot do it"
+                "{refused} is a way out of the frame, so a page previewed cannot do it"
             );
         }
 
         let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    /// The one kind of document the engine hands to a browser as a page rather than as an
+    /// image is the one kind that runs, and it is the two names a page goes by under the one
+    /// setting that says a page is drawn at all. The setting is an argument here and not a
+    /// lock, because which names count is a question the text lists can be asked, and a test
+    /// that took the application's one configuration lock to ask it would be waiting on the
+    /// lock it is already holding. So each name is asked twice, under each setting, and the
+    /// setting can only turn the answer off: a document and a specimen are pictures to a
+    /// browser, and a picture is never anything but a picture however it was named, so `.svg`
+    /// and `.ttf` are not pages under either setting, and `.xhtml` is XML the text preview
+    /// reads, and is not one of the two names either.
+    #[test]
+    fn a_page_runs_only_under_one_of_the_two_names_a_page_goes_by() {
+        for name in ["page.html", "page.htm", "some/deeper/page.HTML"] {
+            assert!(
+                page_runs_under(true, Path::new(name)),
+                "`{name}` is a page of HTML, and a page of HTML is drawn as a page"
+            );
+            assert!(
+                !page_runs_under(false, Path::new(name)),
+                "`{name}` is markup until the tray says otherwise, and so is drawn as text"
+            );
+        }
+
+        for name in ["clock.svg", "specimen.ttf", "page.xhtml"] {
+            assert!(
+                !page_runs_under(true, Path::new(name)),
+                "`{name}` is not one of the two names a page goes by, so it is drawn and not run"
+            );
+            assert!(
+                !page_runs_under(false, Path::new(name)),
+                "`{name}` is not a page under either setting, and the switch cannot make it one"
+            );
+        }
+    }
+
+    /// The keyboard follows the document, and nothing else does. A page that runs is a program
+    /// the user clicks into, and a click that refused to activate it would leave a page on
+    /// screen that no key could reach; every other document is a picture, and a picture is
+    /// not what the pointer being over it means the user has left the window they are working
+    /// in. So the two answers are one each way round, and the two styles with them: a window
+    /// carrying `WS_EX_NOACTIVATE` cannot be activated by anything, so it has to be taken off
+    /// before a click into a running page can be answered with an activation at all — and put
+    /// back on for the next document, which is never one.
+    #[test]
+    fn the_keyboard_goes_to_a_page_that_runs_and_to_nothing_else() {
+        assert_eq!(
+            mouse_activate_answers(true),
+            LRESULT(1),
+            "MA_ACTIVATE, so a click into a page that runs reaches the page"
+        );
+        assert_eq!(
+            mouse_activate_answers(false),
+            LRESULT(3),
+            "MA_NOACTIVATE, so a click on a document leaves the caret where it is"
+        );
+
+        let bare = WS_EX_TOOLWINDOW.0 as isize | WS_EX_TOPMOST.0 as isize;
+        let noactivate = WS_EX_NOACTIVATE.0 as isize;
+        let refusing = bare | noactivate;
+
+        assert_eq!(
+            ex_style_for(refusing, true),
+            bare,
+            "a page that runs is a window that can be activated, and is otherwise untouched"
+        );
+        assert_eq!(
+            ex_style_for(bare, true),
+            bare,
+            "a style with nothing to clear is left as it is"
+        );
+        assert_eq!(
+            ex_style_for(bare, false),
+            refusing,
+            "a document is refused activation, and the tool window and topmost are kept"
+        );
+        assert_eq!(
+            ex_style_for(refusing, false),
+            refusing,
+            "and a window already refusing is not asked twice"
+        );
     }
 
     /// A font of this test's own making: an sfnt with a `cmap` covering the pangram and a

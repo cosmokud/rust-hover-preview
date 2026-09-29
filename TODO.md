@@ -371,42 +371,36 @@ is a solid colour, shows that. The same walk would answer it — read the next p
 first is one colour — and what it costs is one more decode per plate, which is why it is a change of its
 own rather than part of the reader.
 
-## A Page Of HTML Is Previewed With Scripting Withheld
+## What A Running Page Is Still Not Given
 
-A page drawn by `render_html` is shown as a static picture of itself, and that is deliberate:
-the wrapper frame is sandboxed without `allow-scripts`, and the engine's own settings switch
-scripting off outright (`SetIsScriptEnabled(false)` in `configure`), so nothing a page draws
-with script runs. A page that draws *itself* with script — a WebGL canvas, a game — therefore
-shows its own background and nothing else, and can never play. This is not WebView2's limit:
-the runtime is Chromium, WebGL2 included, and the app withholds it on purpose, which the
-architecture already states as the sandbox rule a page is previewed under.
+A page drawn by `render_html` is the one document this app hands to the browser whole rather than
+as a picture, and the one document it runs: the wrapper frame is given `allow-scripts` beside
+`allow-same-origin`, and the engine's scripting is set per document rather than for the engine
+(`set_scripts`), so a page that draws *itself* — a WebGL canvas, a game — is a page shown by a run.
+That was measured on a single-file WebGL2 raytracer (`quasar.html`) with no network, no audio and no
+external references, and under the old rule it came up a blank black canvas. The pointer and the
+keyboard follow: the page's own rectangle holds the pointer, a drag that began there survives the
+pointer leaving it, and a click into the page activates it and its keys arrive. What is left over is
+the two things a run on its own does not bring, and each is a browser argument this app does not
+pass:
 
-**Whether a playable mode should exist is an open question, not a commitment**, and the file
-it was measured on is a single-file WebGL2 raytracer (`quasar.html`) with no network, no audio
-and no external references — so nothing outside the app stands in its way. Each thing a
-playable mode would take, measured against this app's own code:
-
-- **Scripts on, for the HTML kind alone.** The engine's `SetIsScriptEnabled(false)` is applied
-  to every document it draws, so turning scripts on is a per-want setting rather than one
-  global, and `allow-scripts` has to be added to the frame's sandbox token beside
-  `allow-same-origin` — a sandbox without it withholds script no matter what the settings say.
-- **Focus.** The engine's window is `WS_EX_NOACTIVATE` and its window proc returns
-  `MA_NOACTIVATE` for `WM_MOUSEACTIVATE`, so it can never take the keyboard. No key, and no
-  pointer lock, would reach the page. A playable mode is also the first thing that would have
-  to want a focus this app's windows deliberately never take.
-- **The pointer.** The pointer arriving on the engine's window currently counts as arriving on
-  the preview (`cursor_preview_hover`) and takes the preview down. The first click would have to
-  reach the page instead, which means relaxing that rule for a playing page — and the rule is
-  what keeps a hover from being sticky.
-- **Autoplay.** A page with sound needs `--autoplay-policy=no-user-gesture-required`, and
-  `BROWSER_ARGUMENTS` passes only `--host-resolver-rules="MAP * ~NOTFOUND" --hide-scrollbars`
-  today, so there is no flag for it.
+- **Autoplay.** A page with sound of its own needs `--autoplay-policy=no-user-gesture-required`, and
+  `BROWSER_ARGUMENTS` passes only `--host-resolver-rules="MAP * ~NOTFOUND" --hide-scrollbars`, so
+  there is no flag for it. A page can still make a sound on a click, which is the page's own business
+  and is not withheld.
 - **Local file access.** A page that reads its siblings needs
-  `--allow-file-access-from-files`; the sandbox's one allowance is the page's own origin, which
-  is what currently lets a page load its relative stylesheets and pictures and nothing more.
+  `--allow-file-access-from-files`. Without it a page reaches its own file and nothing beside it,
+  and the page's own origin is what lets a page load its relative stylesheets and pictures at all —
+  which is also why the two sandbox allowances together are not the loosening they would be for
+  same-origin content: the wrapper is a file of this run's profile folder and the document is
+  another file, so the two are separate origins whatever the sandbox is told.
 
-WebGL2 is the harder question and is not on this list because nothing here blocks it: the
-runtime has it, and what stands in front of it today is scripts being off.
+Fullscreen is refused rather than missing (`allowfullscreen` is not given to the frame), and the
+browser's own furniture — context menus, devtools, zoom, the accelerator keys a browser answers for
+itself — is taken away for a page as it is for a drawing.
+
+WebGL2 is not on this list because nothing here blocks it: the runtime has it, and what stood in
+front of it was the script that is now given.
 
 ## Configuration
 
