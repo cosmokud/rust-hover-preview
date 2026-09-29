@@ -101,7 +101,7 @@ use windows::Win32::System::Threading::{
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, GetCapture, GetFocus, ReleaseCapture, SetCapture, SetFocus, VK_A, VK_C,
-    VK_CONTROL, VK_DOWN, VK_ESCAPE, VK_LEFT, VK_LBUTTON, VK_RIGHT, VK_UP,
+    VK_CONTROL, VK_DOWN, VK_ESCAPE, VK_LEFT, VK_LBUTTON, VK_RIGHT, VK_SPACE, VK_UP,
 };
 use windows::Win32::UI::Shell::{
     AssocQueryStringW, ShellExecuteW, ASSOCF_NONE, ASSOCSTR_FRIENDLYAPPNAME,
@@ -7150,6 +7150,17 @@ const AUDIO_CARD_REPAINT: Duration = Duration::from_millis(250);
 /// `AUDIO_CARD_REPAINT`).
 const AUDIO_NAME_REPAINT: Duration = Duration::from_millis(33);
 
+/// A card that is stale the moment it is asked about, rather than at the next of its own
+/// repaints: a sound a key has held or let go, and a second a press on the card's own bar has
+/// taken the file to.
+///
+/// Both are answered here rather than in the window that asked — the clock a card is drawn from
+/// is this loop's (see `toggle_pinned_audio` and `settle_pinned_audio_seek`) — so this is how
+/// either of them says so. A card a quarter of a second behind the hand that just used it is a
+/// card that has not caught up, and the quarter of a second is the whole of what the cadence
+/// above is.
+static AUDIO_CARD_DIRTY: AtomicBool = AtomicBool::new(false);
+
 /// The box a sound's card asks for, with the probe that fills it beside it on the same thread.
 ///
 /// Two things a hover on a sound waits for, and both of them are here. The first is the probe:
@@ -7852,10 +7863,25 @@ fn wrap_audio_player(
 /// and its bar at its middle only if this side counts the first half as already played, and
 /// what a hover would otherwise show is a sound playing from its middle with a card saying it
 /// has just begun.
-fn audio_clock(path: &Path, started: Option<Instant>, from: f64) -> (Option<f64>, Option<f64>) {
+///
+/// `paused_at` is what a key answered by holding a pinned sound has to say in its place: a player
+/// this app ended is a player that measures nothing, and a card with no clock at all is a card
+/// that has forgotten where in the file the sound was left. A sound the engine Windows has is not
+/// in this branch, because that engine holds where it is told to and keeps reporting that second
+/// for itself (see `toggle_pinned_audio`).
+fn audio_clock(
+    path: &Path,
+    started: Option<Instant>,
+    from: f64,
+    paused_at: Option<f64>,
+) -> (Option<f64>, Option<f64>) {
     let Some(track) = audio_track::playable(path) else {
         return (None, None);
     };
+
+    if let Some(at) = paused_at {
+        return (Some(at), track.duration);
+    }
 
     // The engine's own clock is what a sound the engine plays is measured by, and a sound this side
     // started a player for is measured by the clock over that player's start — whichever engine the
@@ -11210,6 +11236,11 @@ unsafe fn pin_set_focusable(hwnd: HWND, focusable: bool) {
     );
 }
 
+/// Whether a key-down is Windows repeating a key that is already down rather than a second press
+/// of it: the flag is bit 30 of a `WM_KEYDOWN` message's `lParam`, which is set on every
+/// auto-repeat and clear on the first one (see the pinned window's own procedure).
+const KEY_REPEAT: isize = 1 << 30;
+
 /// What one key pressed on a pinned window that has the focus means, as the command it asks for.
 ///
 /// A key the pin is given the keyboard for is the pin's alone — it was not sent on to Explorer,
@@ -11217,9 +11248,20 @@ unsafe fn pin_set_focusable(hwnd: HWND, focusable: bool) {
 /// an arrow a walk of the pin's own folder: while the pin is the window the user is in, there is
 /// no listing in the keyboard for the arrow to move.
 ///
-/// A Space is the one key that means nothing at all, and it is not an oversight: a pin used to
-/// hide or swap on it, which read as a pin that got in the way of a Space typed anywhere near it.
-/// A key this window is in front of is not a key to be dismissed with.
+/// The keys here are the pin's own window answering as a window in the foreground does, and
+/// that window is the gate: a key reaches it because Windows routed it there, which it does only
+/// while the pin is the window the keyboard is in. There is no reading of the keyboard behind
+/// this, and nothing to switch off — a pin the user has not clicked is a window nobody is in,
+/// and a window nobody is in is sent no keystrokes at all.
+///
+/// A Space is the one key that is a play/pause, and only for a sound: a card is drawn with no
+/// buttons on it and a card with no way to hold a sound is a sound that can only be listened to
+/// from beginning to end, so the key answers it here. It used to hide or swap the window, which
+/// read as a pin that got in the way of a Space typed anywhere near it; a key this window is in
+/// front of is not a key to be dismissed with, and the pin is not dismissed by this one any more.
+/// What a Space means to the file on screen is the loop's answer rather than this one's — a
+/// picture, a page, and a sound at no volume at all are all swallowed (see
+/// `pin_command_request`).
 fn pinned_key_command(vk: i32) -> Option<PinCommand> {
     // The keys are the virtual-key codes of the message's `wParam`, which are constants
     // rather than patterns, so the two directions are told apart by guards rather than by
@@ -11236,7 +11278,23 @@ fn pinned_key_command(vk: i32) -> Option<PinCommand> {
         return Some(PinCommand::Close);
     }
 
+    if vk == VK_SPACE.0 as i32 {
+        return Some(PinCommand::TogglePlayback);
+    }
+
     None
+}
+
+/// What one key-down on a pinned window leaves for the loop, if anything.
+///
+/// It is the mapping above, and one more question: is this message Windows repeating a key that
+/// is already down rather than pressing it again? A Space is the one command that cannot answer
+/// one — a sound flickering between playing and held for as long as the hand is on the key — while
+/// a walk is a thing a hand can sensibly hold down, so the arrows still repeat.
+fn pinned_key_down_command(vk: i32, lparam: isize) -> Option<PinCommand> {
+    let command = pinned_key_command(vk)?;
+
+    (!matches!(command, PinCommand::TogglePlayback) || lparam & KEY_REPEAT == 0).then_some(command)
 }
 
 /// A mouse message's point in the coordinates the media of a pinned window is drawn in: the same
@@ -11304,14 +11362,15 @@ unsafe extern "system" fn window_proc(
             // The key is left as the same command a caption button leaves, rather than acted on
             // here, because that is where the walk is answered (see `ask_pin` and
             // `pin_command_request`).
-            if let Some(command) = pinned_key_command(wparam.0 as i32) {
+            if let Some(command) = pinned_key_down_command(wparam.0 as i32, lparam.0) {
                 ask_pin(command);
             }
 
-            // Nothing is beeped at, and nothing is forwarded. A Space reaches a window the user is
-            // in and is answered by doing nothing, and letting `DefWindowProcW` ring for the one
-            // key that is meant to be swallowed is a beep out of a window nobody can see
-            // (see `pinned_key_command`).
+            // Nothing is beeped at, and nothing is forwarded. A Space that reaches a pinned sound
+            // is answered by the loop rather than here, and a Space that reaches a pin of any
+            // other kind is answered by doing nothing at all, and letting `DefWindowProcW` ring
+            // for the one key that is meant to be swallowed is a beep out of a window nobody can
+            // see (see `pinned_key_command`).
             LRESULT(0)
         }
         WM_SYSKEYDOWN => {
@@ -13460,6 +13519,179 @@ fn update_pin_transport(change: impl FnOnce(&mut PinTransport)) {
     }
 }
 
+/// Hold a pinned sound where it stands, or set it going again: what a Space in a window the
+/// keyboard is in is, and the only pause a sound's card has (see `pinned_key_command`).
+///
+/// The two players are answered the way each of them takes a pause, which is the same answer the
+/// bubble parks one with (see `bubble_playback_to_park`) because they are the same two players:
+/// the engine Windows has is told to hold where it is and keeps reporting that second for itself,
+/// so nothing is written down for it; a player this app started cannot be told anything and is
+/// ended instead, with the second it had got to kept — on the card, so that the sound is still
+/// drawn where the hand left it, and for the player that takes its place when the key is pressed
+/// again.
+///
+/// What this has in common with the bubble's is the mechanics and not the setting:
+/// `Pin Mode → Pause Preview` is about what a collapse does, and this is about a key pressed in
+/// a window the user is in. A sound with no player behind it is left alone on both counts — there
+/// is no playback to hold — which is the answer a card at `Volume → Audio` 0% gets.
+fn toggle_pinned_audio(started: &mut Option<Instant>, offset: &mut f64, paused: &mut Option<f64>) {
+    let Some((path, _)) = pinned_media_owner() else {
+        return;
+    };
+
+    // Which player plays the file is the file's own answer, and it is the answer the card's
+    // clock is measured against as well (see `audio_clock`).
+    let Some(track) = audio_track::playable(&path) else {
+        return;
+    };
+
+    match track.player {
+        Player::Native => {
+            // The engine is asked to hold, and to go on from where it is holding. A session that
+            // is not there — a sound at `Volume → Audio` 0%, a file already let go — is asked to
+            // play, which begins no session rather than starting a sound nobody asked for.
+            video_player::set_paused(video_player::is_playing());
+        }
+        Player::Ffmpeg => {
+            if let Some(from) = *paused {
+                // A key while a sound is held is a sound let go: another player is begun at the
+                // second it stopped at. A player that does not come up is a card left held, which
+                // is the answer a machine with no sound to play with gives (see
+                // `restart_pinned_audio`).
+                if restart_pinned_audio(&path, from).is_some() {
+                    *started = Some(Instant::now());
+                    *offset = from;
+                    *paused = None;
+                }
+            } else if started.is_none() {
+                // A sound with no player behind it has no playback of ours to hold: a card at
+                // `Volume → Audio` 0% asked for no player at all, and a decoder that would not
+                // have the file never got one. The key is then a key that did nothing, which is
+                // what a sound nobody is hearing is.
+                return;
+            } else {
+                // And a key while it is playing is a sound held: the player is ended, and the
+                // second it had got to is where the card is left standing.
+                let played = audio_clock(&path, *started, *offset, None).0.unwrap_or(0.0);
+                if let Ok(mut current) = CURRENT_MEDIA.lock() {
+                    if let Some(media) = current.as_mut() {
+                        kill_player_process(media);
+                    }
+                }
+
+                *started = None;
+                *offset = played;
+                *paused = Some(played);
+            }
+        }
+    }
+
+    // The card is at the second the key moved it to, and is asked for again at once rather than
+    // at the cadence a clock is watched at (see `AUDIO_CARD_DIRTY`).
+    AUDIO_CARD_DIRTY.store(true, Ordering::Release);
+}
+
+/// Begin another player of this app's for a pinned sound, at a second of its file, in place of
+/// whatever was playing it: the whole of both a resume from a hold and a seek taken by a press
+/// on the card's bar.
+///
+/// A player of this app's can be told nothing once it is running, so a sound that goes on from
+/// another second is a new player begun there rather than a session moved (see
+/// `start_audio_player`). The player that is playing the file now is ended first, which is the
+/// question a video's seek asks as well: a handle is dropped rather than killed when the media
+/// is replaced, so a sound that is not ended here goes on playing over the one beginning at the
+/// second (see `restart_pinned_player`).
+///
+/// The answer is when the player was started, and it is nothing where none came up — at
+/// `Volume → Audio` 0% no player is asked for at all, and a decoder that will not have the file
+/// is the same answer. Which is the answer a caller keeps a sound held on rather than one that
+/// begins counting a clock nothing is moving.
+fn restart_pinned_audio(path: &Path, from: f64) -> Option<Instant> {
+    let mut current = CURRENT_MEDIA.lock().ok()?;
+    let media = current.as_mut()?;
+
+    kill_player_process(media);
+
+    if !start_audio_playback(path, media, from) || media.video_process.is_none() {
+        return None;
+    }
+
+    Some(Instant::now())
+}
+
+/// The length a pinned sound's card is drawn with, which is the length its bar is a share of: the
+/// engine's own answer where the engine is the one playing the file, and the file's own otherwise
+/// — the same pair a card's own clock is measured against, so that a bar drawn to a length and a
+/// bar pressed to one are the same bar (see `audio_clock`).
+fn pinned_audio_duration(path: &Path) -> Option<f64> {
+    audio_clock(path, None, 0.0, None).1
+}
+
+/// The second of a pinned sound a press on its card's bar asked the file to be taken to, which
+/// the preview loop answers on its next tick.
+///
+/// The clock a card is drawn from is the loop's, and so is the player behind a sound this app
+/// plays, and a seek in one of those is a player ended and another begun. The engine Windows has
+/// is the exception — it is told where to go rather than replaced — and the seek is left for the
+/// loop all the same, so that a press has one door and the card is asked for again in the same
+/// tick the file was taken (see `settle_pinned_audio_seek`).
+static PIN_AUDIO_SEEK: Lazy<Mutex<Option<f64>>> = Lazy::new(|| Mutex::new(None));
+
+/// Take a pinned sound to the second a press on its card's bar asked for, in the way the player
+/// playing it answers to.
+///
+/// The engine is told where to go and gets there on its own clock, which is the clock the card is
+/// drawn from, so nothing is written down for it. A player of this app's is ended and another
+/// begun at that second, with the clock the card is measured against set to it — the same bargain
+/// a resume from a hold makes, and the same one the bubble's park makes (see
+/// `restart_pinned_audio`).
+///
+/// A seek made while a sound is held is a hold that has moved: the second it is held at is the
+/// one the press named, so a key pressed afterwards lets it go from where the hand put it rather
+/// than from where it was left.
+fn settle_pinned_audio_seek(
+    started: &mut Option<Instant>,
+    offset: &mut f64,
+    paused: &mut Option<f64>,
+) {
+    let seconds = {
+        let Ok(mut request) = PIN_AUDIO_SEEK.lock() else {
+            return;
+        };
+        let Some(seconds) = request.take() else {
+            return;
+        };
+        seconds
+    };
+
+    let Some((path, _)) = pinned_media_owner() else {
+        return;
+    };
+
+    // Which player plays the file is the file's own answer (see `audio_clock`).
+    let Some(track) = audio_track::playable(&path) else {
+        return;
+    };
+
+    match track.player {
+        Player::Native => video_player::seek(seconds),
+        Player::Ffmpeg => {
+            // A sound that is already held is not begun again by a seek: the hold moves to the
+            // second the press named and the player that takes its place when the key comes is
+            // begun there, which is what a seek does to a picture the engine is holding.
+            if paused.is_none() && restart_pinned_audio(&path, seconds).is_some() {
+                *started = Some(Instant::now());
+                *offset = seconds;
+            }
+            *paused = Some(seconds);
+        }
+    }
+
+    // The card is at the second the hand named, and is asked for again at once (see
+    // `AUDIO_CARD_DIRTY`).
+    AUDIO_CARD_DIRTY.store(true, Ordering::Release);
+}
+
 /// Move the pin's level to `level`, giving it to a player that can be told one while it runs.
 ///
 /// The media engine takes a level while it plays, which is what makes a knob dragged on the pin
@@ -13650,6 +13882,10 @@ pub(crate) enum PinCommand {
     Close,
     /// The bubble a collapsed pin left was clicked: the window goes back up.
     Restore,
+    /// Hold the sound on screen where it stands, or set it going again: what a Space in a
+    /// pinned sound is. It is the only pause a sound's card has — the transport bar is a
+    /// video's, and a card is drawn with no buttons on it (see `pinned_key_command`).
+    TogglePlayback,
 }
 
 /// The command the window procedure left for the preview loop, if any: one at a time, which is
@@ -13667,6 +13903,7 @@ pub(crate) fn ask_pin(command: PinCommand) {
         PinCommand::Maximize => 2,
         PinCommand::Close => 3,
         PinCommand::Restore => 4,
+        PinCommand::TogglePlayback => 7,
     };
     PIN_COMMAND.store(code, Ordering::Release);
 }
@@ -13680,6 +13917,7 @@ fn take_pin_command() -> Option<PinCommand> {
         4 => Some(PinCommand::Restore),
         5 => Some(PinCommand::Previous),
         6 => Some(PinCommand::Next),
+        7 => Some(PinCommand::TogglePlayback),
         _ => None,
     }
 }
@@ -14727,13 +14965,13 @@ fn relayout_pinned_media(
         }
         // A sound's card, which is a page of text laid out again rather than a file decoded —
         // and the one kind whose layout needs something the loop holds rather than the media:
-        // where the player it started is, and how far a name it had no room for has been
-        // scrolled (see `AudioCardClock`).
+        // where the player it started is, how far a name it had no room for has been scrolled,
+        // and where a key put it on hold (see `AudioCardClock`).
         Some(MediaType::Audio) => {
             let Some(clock) = card else {
                 return;
             };
-            let (elapsed, duration) = audio_clock(path, clock.started, clock.from);
+            let (elapsed, duration) = audio_clock(path, clock.started, clock.from, clock.paused);
 
             if let Ok(mut media) = CURRENT_MEDIA.lock() {
                 if let Some(media) = media.as_mut() {
@@ -14802,11 +15040,16 @@ fn keep_text_place(media: MediaData) -> MediaData {
 
 /// The clock a sound's card is drawn from, which belongs to the preview loop and not to the
 /// media: when the player this app started was started, the second of the file it was started
-/// at, and how far a name the card has no room for has been scrolled (see `audio_clock`).
+/// at, where a key has held it, and how far a name the card has no room for has been scrolled
+/// (see `audio_clock`).
 #[derive(Clone, Copy)]
 struct AudioCardClock {
     started: Option<Instant>,
     from: f64,
+    /// The second of the file a sound is being held at, where a key in the window has paused
+    /// one: a player of this app's was ended to pause it, and this is what the card is drawn
+    /// at in its place.
+    paused: Option<f64>,
     name_offset: i32,
     dpi: u32,
 }
@@ -15201,8 +15444,8 @@ fn centred_at(size: (i32, i32), centre: (i32, i32)) -> ScreenRegion {
     (left, top, left + width, top + height)
 }
 
-/// The pin's own answers to the chrome, once a tick: its buttons, and whether the media
-/// behind the pin is still there at all.
+/// The pin's own answers to the chrome, once a tick: its buttons, a key it was given, and whether
+/// the media behind the pin is still there at all.
 ///
 /// A step along the walk is answered with the walk itself rather than with a message,
 /// because the walk is taken up where a pick is taken up (`pin_pick`) and nowhere else: a
@@ -15213,7 +15456,19 @@ fn centred_at(size: (i32, i32), centre: (i32, i32)) -> ScreenRegion {
 /// What comes back is more than the file, because a walk is not one file: a file the pin
 /// cannot be shown is stepped over rather than stopped at, and what is stepped over is
 /// bounded by the list the walk is made of (see `PinStep`).
-fn pin_command_request(request: &mut Option<PreviewMessage>) -> Option<PinStep> {
+///
+/// A key is answered here rather than in the window procedure because what it means is a
+/// question about the file on screen, and the player behind that file is the loop's: a Space
+/// holds a sound or lets it go, which is a player ended and another begun rather than a state
+/// this window can set (see `toggle_pinned_audio`). The card is asked for at once rather than
+/// at the cadence it watches the clock at, so that what the key did is on screen in the frame
+/// the key was pressed in.
+fn pin_command_request(
+    request: &mut Option<PreviewMessage>,
+    audio_started: &mut Option<Instant>,
+    audio_start_offset: &mut f64,
+    audio_paused: &mut Option<f64>,
+) -> Option<PinStep> {
     let step = match take_pin_command() {
         Some(PinCommand::Close) => {
             *request = Some(end_pin_state());
@@ -15233,6 +15488,10 @@ fn pin_command_request(request: &mut Option<PreviewMessage>) -> Option<PinStep> 
         }
         Some(PinCommand::Previous) => step_pinned_file(-1),
         Some(PinCommand::Next) => step_pinned_file(1),
+        Some(PinCommand::TogglePlayback) => {
+            toggle_pinned_audio(audio_started, audio_start_offset, audio_paused);
+            None
+        }
         None => None,
     };
 
@@ -15647,7 +15906,10 @@ fn bubble_playback_to_park(
 
             if playing {
                 let (path, _) = pinned_media_owner()?;
-                let played = audio_clock(&path, *audio_started, *audio_start_offset)
+                // Nothing to do about a hold here: a sound a key has paused has no player to
+                // park, and a restore that parks nothing is a restore that changes nothing
+                // (see `toggle_pinned_audio`).
+                let played = audio_clock(&path, *audio_started, *audio_start_offset, None)
                     .0
                     .unwrap_or(0.0);
 
@@ -16836,12 +17098,71 @@ unsafe fn pinned_press(hwnd: HWND, x: i32, y: i32) -> bool {
         return true;
     }
 
+    // And then the one control a sound's card has, which is drawn on the card rather than in a
+    // strip of its own, and so is asked of before the media becomes a handle for moving the
+    // window (see `pinned_audio_bar_press`).
+    if pinned_audio_bar_press(x, y) {
+        return true;
+    }
+
     if pinned_content_is_the_pins(x, y) {
         begin_pin_drag(hwnd, PinDragAction::Move);
         return true;
     }
 
     false
+}
+
+/// A press on the bar a pinned sound's card is drawn with: take the file to the second under the
+/// hand, which is the one control a card carries and the only way of moving a pinned sound within
+/// its own file.
+///
+/// The bar is asked of the card's own layout rather than of a bar this app draws, because the
+/// line being pressed is one the card's painter drew (see `audio_preview::bar_share_at`). The
+/// press is taken where it landed: nothing is captured and no drag follows, since a bar on a card
+/// is a place to press rather than a thing to be carried — the whole of the window is already
+/// the thing to be carried, and a press on the rest of the card does that instead.
+///
+/// Nothing is played here either: the clock a card is drawn from and the player behind a sound
+/// this app plays are the preview loop's, so the second is left for it (see
+/// `settle_pinned_audio_seek`).
+fn pinned_audio_bar_press(x: i32, y: i32) -> bool {
+    if current_media_type() != Some(MediaType::Audio) {
+        return false;
+    }
+
+    // The card fills the pin's media box, because a card is its own size and is not framed into
+    // one (see `PinFrame`), so the box is the width the bar is drawn across. The point is taken
+    // in the media's own coordinates, which is the frame the card is painted in (see
+    // `media_point`).
+    let Some(content) = pinned_content() else {
+        return false;
+    };
+    let Some((path, dpi)) = pinned_media_owner() else {
+        return false;
+    };
+    let width = (content.2 - content.0).max(1) as u32;
+
+    // A file that does not say how long it is is drawn with a block crossing its track rather
+    // than a played part of it, and there is no second of such a file for a press to mean: the
+    // press is the card's own, and a hand on a card is a window being carried.
+    let Some(duration) = pinned_audio_duration(&path).filter(|length| *length > 0.0) else {
+        return false;
+    };
+
+    let (media_x, media_y) = media_point(x, y);
+    let Some(share) =
+        audio_preview::bar_share_at(media_x, media_y, width, dpi, current_audio_options())
+    else {
+        return false;
+    };
+
+    if let Ok(mut request) = PIN_AUDIO_SEEK.lock() {
+        *request = Some((duration * share).clamp(0.0, duration));
+    }
+    AUDIO_CARD_DIRTY.store(true, Ordering::Release);
+
+    true
 }
 
 /// Whether a press on the media belongs to the pin rather than to the media.
@@ -17847,6 +18168,11 @@ pub fn run_preview_window() {
         // that started at its beginning: what a card's clock is measured from where the player
         // reports no clock of its own (see `audio_clock`).
         let mut audio_start_offset = 0.0f64;
+        // The second of the file a key in a pinned window has held a sound at, which is what its
+        // card is drawn at while it is held: a player of this app's is ended to pause one, and
+        // the card is left standing on the second it stopped at rather than with no clock at all
+        // (see `toggle_pinned_audio` and `audio_clock`).
+        let mut audio_paused: Option<f64> = None;
         // A `Volume → Audio Seek` of `Middle` or `Random` asked of a file whose length nothing
         // had read yet, which is the one start position that cannot be worked out where the
         // sound is started: a share of a length is asked for again the moment a player reports
@@ -18087,8 +18413,14 @@ pub fn run_preview_window() {
                 // A step the caption's own walk buttons took is a pick like any other, and is
                 // held in the walk rather than in the pick slot: the file it stands on is the
                 // file to be shown, and the walk is what carries it on when that file turns out
-                // to be one the pin cannot be shown (see `PinStep`).
-                if let Some(walk) = pin_command_request(&mut pin_request) {
+                // to be one the pin cannot be shown (see `PinStep`). A key a pinned window was
+                // given is answered here too, because the player it acts on is this thread's.
+                if let Some(walk) = pin_command_request(
+                    &mut pin_request,
+                    &mut audio_started,
+                    &mut audio_start_offset,
+                    &mut audio_paused,
+                ) {
                     pin_walk = Some(walk);
                 }
 
@@ -18098,6 +18430,16 @@ pub fn run_preview_window() {
                 if !pin_is_collapsed() {
                     pin_bubble_pick = None;
                 }
+
+                // A press on the bar a sound's card is drawn with, which is the loop's to answer:
+                // the clock that card is drawn from is this thread's, and so is a player of this
+                // app's. Taken before the collapse below, so that a sound held and then put away
+                // is put away at the second the hand asked for (see `settle_pinned_audio_seek`).
+                settle_pinned_audio_seek(
+                    &mut audio_started,
+                    &mut audio_start_offset,
+                    &mut audio_paused,
+                );
 
                 // What a collapse into the bubble holds back and what a restore puts back,
                 // read from the two `Pin Mode → Pause Preview` switches every tick: a switch
@@ -18352,7 +18694,9 @@ pub fn run_preview_window() {
                             _ => AUDIO_CARD_REPAINT,
                         };
 
-                        if audio_repaint_at.elapsed() >= cadence {
+                        if audio_repaint_at.elapsed() >= cadence
+                            || AUDIO_CARD_DIRTY.swap(false, Ordering::AcqRel)
+                        {
                             audio_repaint_at = Instant::now();
 
                             let name_offset = match audio_name_scroll.as_mut() {
@@ -18364,8 +18708,12 @@ pub fn run_preview_window() {
                             };
 
                             if let Some(path) = current_show.as_ref().and_then(self::show_path) {
-                                let (elapsed, duration) =
-                                    audio_clock(path, audio_started, audio_start_offset);
+                                let (elapsed, duration) = audio_clock(
+                                    path,
+                                    audio_started,
+                                    audio_start_offset,
+                                    audio_paused,
+                                );
 
                                 // A start position that was a share of a length nothing had
                                 // read is asked for here, on the first tick a player says how
@@ -18683,10 +19031,13 @@ pub fn run_preview_window() {
                                 // `Volume → Audio` 0% nothing was, and a card whose clock ran
                                 // anyway would be a sound it says is playing that is not — and
                                 // a position this side would write down as one the file had
-                                // been left at (see `audio_seek::remember`).
+                                // been left at (see `audio_seek::remember`). A file that has
+                                // just been started is not one a key has held, whatever the
+                                // file before it was doing.
                                 audio_started =
                                     media_data.video_process.is_some().then(Instant::now);
                                 audio_start_offset = start;
+                                audio_paused = None;
                                 audio_repaint_at = Instant::now();
                                 // The marquee the card's name is drawn with, if it needs one:
                                 // what a name is scrolled by is the card's own box, which is
@@ -19736,6 +20087,10 @@ pub fn run_preview_window() {
                         audio_started = start.started;
                         audio_start_offset = start.from;
                         audio_share_seek = start.share;
+                        // A file swapped into the window is not held, whatever the file it
+                        // replaced was doing: the sound a card is drawn at belongs to the
+                        // sound behind it.
+                        audio_paused = None;
                         audio_repaint_at = Instant::now();
                         audio_card_dpi = update.dpi;
                         audio_name_scroll = Some(audio_preview::NameScroll::of(
@@ -20237,6 +20592,7 @@ pub fn run_preview_window() {
                         let card = AudioCardClock {
                             started: audio_started,
                             from: audio_start_offset,
+                            paused: audio_paused,
                             name_offset: audio_name_scroll
                                 .as_ref()
                                 .map(|scroll| scroll.offset())
@@ -24594,8 +24950,8 @@ mod tests {
         assert_eq!(content_box_of(window, 96, true, true), window);
     }
 
-    /// A key pressed on a pin that is the window the user is in walks the pin's own folder, and
-    /// a Space thrown at the same window does nothing at all.
+    /// A key pressed on a pin that is the window the user is in walks the pin's own folder, and a
+    /// Space thrown at the same window holds a sound or lets it go.
     ///
     /// The gate is the window itself, not a reading of the keyboard: these keys arrive here
     /// because Windows routed them to the pin, and that is a thing Windows does and not a
@@ -24609,6 +24965,7 @@ mod tests {
             (VK_RIGHT.0 as i32, Some(PinCommand::Next), "right"),
             (VK_DOWN.0 as i32, Some(PinCommand::Next), "down"),
             (VK_ESCAPE.0 as i32, Some(PinCommand::Close), "escape"),
+            (VK_SPACE.0 as i32, Some(PinCommand::TogglePlayback), "space"),
         ] {
             assert_eq!(
                 pinned_key_command(vk),
@@ -24616,12 +24973,6 @@ mod tests {
                 "{name} is the key a pin answers with {expected:?}"
             );
         }
-
-        // A Space is the key that used to hide the window, and it is the one key that is
-        // swallowed and asked nothing. A window the user is in cannot be dismissed by a key
-        // typed at it, and the character the key-down has already answered is swallowed in
-        // the window procedure beside it, so the system does not ring for it either.
-        assert_eq!(pinned_key_command(VK_SPACE.0 as i32), None);
 
         // Nor is any other key the pin's to answer. An unmodified letter belongs to whatever
         // the user is typing into, and a modified one is a command of some other program: both
@@ -24643,6 +24994,88 @@ mod tests {
                 "{vk:#x} is nobody's to answer with"
             );
         }
+    }
+
+    /// A key held down is one press and not a run of them. Windows repeats the key it is holding,
+    /// and a play/pause answered on every repeat is a sound flickering between playing and held
+    /// for as long as the hand is on the key; a walk is a thing a hand can sensibly hold down, so
+    /// the arrows still repeat.
+    #[test]
+    fn a_key_this_app_is_still_holding_is_pressed_once() {
+        let held = KEY_REPEAT;
+
+        assert_eq!(
+            pinned_key_down_command(VK_SPACE.0 as i32, 0),
+            Some(PinCommand::TogglePlayback),
+            "a Space pressed is a play/pause"
+        );
+        assert_eq!(
+            pinned_key_down_command(VK_SPACE.0 as i32, held),
+            None,
+            "and a Space held is one press, not a sound flickering for as long as it is down"
+        );
+        assert_eq!(
+            pinned_key_down_command(VK_LEFT.0 as i32, held),
+            Some(PinCommand::Previous),
+            "while an arrow held still walks, which is what holding one is for"
+        );
+    }
+
+    /// A card is drawn at the second a key held a sound at rather than with no clock at all: a    /// player of this app's is ended to pause one, so the clock that measured it is gone, and a
+    /// card that has forgotten where the file was left says nothing about the pause — which is
+    /// the one thing a pause has to say.
+    #[test]
+    fn a_sound_a_key_held_is_drawn_where_it_was_held() {
+        let folder = std::env::temp_dir().join("rust-hover-preview-pin-held-sound");
+        std::fs::create_dir_all(&folder).expect("a test folder");
+        let path = folder.join("song.mp3");
+        std::fs::write(&path, b"ID3\x04\x00\x00\x00\x00\x00\x00\x10\x00\x00\x00")
+            .expect("a written file");
+        audio_track::remember(
+            &path,
+            audio_track::Probed::Track(audio_track::Track {
+                player: audio_track::Player::Ffmpeg,
+                codec: Some("MP3".to_string()),
+                rate: Some(44_100),
+                channels: Some(2),
+                bitrate: Some(192_000),
+                duration: Some(180.0),
+            }),
+        );
+
+        // A sound this app plays is measured by its own clock over the moment its player was
+        // started, counted from the second it was started at — so a file dropped into the middle
+        // of itself draws its bar where it is rather than at the beginning.
+        let started = Instant::now() - Duration::from_secs(10);
+        let (playing, length) = audio_clock(&path, Some(started), 30.0, None);
+        assert!(
+            playing.is_some_and(|at| (at - 40.0).abs() < 0.5),
+            "thirty seconds into a file plus ten of playing is forty: {playing:?}"
+        );
+        assert_eq!(length, Some(180.0), "and the whole is the file's own");
+
+        // A sound held is drawn where it was held, and at nothing else: the clock that measured
+        // it is gone, so this is the only thing that can say where in the file it was left.
+        assert_eq!(
+            audio_clock(&path, Some(started), 30.0, Some(67.0)).0,
+            Some(67.0),
+            "a held sound stands at the second it stopped at"
+        );
+        assert_eq!(
+            audio_clock(&path, None, 0.0, Some(67.0)).1,
+            Some(180.0),
+            "and the whole it is measured against is still the file's own"
+        );
+
+        // While a card with no player behind it says nothing about where the sound is at all,
+        // which is the answer a sound at `Volume → Audio` 0% gives.
+        assert_eq!(
+            audio_clock(&path, None, 0.0, None).0,
+            None,
+            "a card with nothing playing it has no clock to draw"
+        );
+
+        let _ = std::fs::remove_dir_all(&folder);
     }
 
     /// The note that the keyboard was taken is dropped on every road out of a pin, and kept
@@ -24713,6 +25146,9 @@ mod tests {
     /// and back, and a tick drains one of them and leaves the rest alone. The codes are the
     /// whole of the crossing — the loop and the window procedure share nothing else — so a
     /// button whose code nothing reads back is a button that does nothing at all.
+    ///
+    /// The last of them is not a button's: it is what a Space in a window the keyboard is in
+    /// leaves, which is the same crossing for the same reason (see `pinned_key_command`).
     #[test]
     fn every_command_a_caption_asks_for_comes_back_to_the_loop() {
         for command in [
@@ -24722,6 +25158,7 @@ mod tests {
             PinCommand::Maximize,
             PinCommand::Close,
             PinCommand::Restore,
+            PinCommand::TogglePlayback,
         ] {
             ask_pin(command);
             assert_eq!(
