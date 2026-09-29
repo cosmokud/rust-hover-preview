@@ -524,6 +524,18 @@ static TEXT_PREVIEW_HOLDING: AtomicBool = AtomicBool::new(false);
 /// `preview_pointer_hold`).
 static WAITING_PREVIEW_HOLDING: AtomicBool = AtomicBool::new(false);
 
+/// Whether a drag that began on a page the engine is drawing is still down, which is a
+/// question the rectangle on screen cannot answer for itself: the page is under the
+/// pointer only where the drag started, and a drag that orbits the view or pans it is
+/// read long after the pointer has walked off the box the page was drawn in.
+///
+/// The hook keeps it — a press inside the engine's rectangle arms it, and a tick with no
+/// button down at all stands it down, which is the only reading that says the drag is
+/// over. This side only reads it, and through a predicate of its own rather than through
+/// the published regions, because a region published here is a region the wheel hook
+/// reads and the wheel belongs to the page (see `note_engine_page_drag`).
+static ENGINE_PAGE_DRAG: AtomicBool = AtomicBool::new(false);
+
 /// The regions that keep a preview alive: the journey to it, and the preview.
 ///
 /// A preview is placed beside what it belongs to rather than over it, so the
@@ -2054,8 +2066,11 @@ pub struct PreviewCursorHover {
     pub image: bool,
     pub video: bool,
     /// A document the engine draws, in a window of its own: a preview of this app's in every
-    /// way but the window it is drawn in, and one the pointer takes the same way — a
-    /// document is closed by the pointer arriving at it, exactly as a picture is.
+    /// way but the window it is drawn in. A document and a specimen are pictures, so the
+    /// pointer takes them the way it takes any other preview — arriving at the engine's
+    /// window is arriving at the preview, and a document is closed by that arrival. A page
+    /// that runs is not a picture: its own rectangle holds the pointer instead, which is a
+    /// question asked of the hold and not of this surface (see `preview_pointer_hold`).
     pub engine: bool,
 }
 
@@ -10248,6 +10263,11 @@ fn clear_pointer_hold() {
     TEXT_PREVIEW_SCROLLABLE.store(false, Ordering::Release);
     TEXT_PREVIEW_HOLDING.store(false, Ordering::Release);
     WAITING_PREVIEW_HOLDING.store(false, Ordering::Release);
+    // A drag is held through the page it began on, and a preview that is being taken down
+    // is not one: whatever the hand was doing to it ends with it, and the latch is cleared
+    // here rather than by the tick that finds the buttons up so that every caller's own
+    // withdrawal is the whole of what a stale latch needs.
+    ENGINE_PAGE_DRAG.store(false, Ordering::Release);
     if let Ok(mut published) = POINTER_HOLD_REGIONS.lock() {
         *published = None;
     }
@@ -10279,10 +10299,21 @@ pub fn text_preview_scrollable() -> bool {
 /// has gone wherever it liked, spinner or no spinner (see `HOVER_POINTER_BOX`).
 ///
 /// An item box nobody could be read for is *not* a hold here, which is the reverse of the
-/// rule a reveal follows, and for the reason the hold exists: a hold is the hook leaving
-/// the mouse alone, so it is only ever taken on an answer. A wait whose item could not be
+/// rule a reveal follows, and for the reason the hold exists: a hold is the hook leaving the
+/// mouse alone, so it is only ever taken on an answer. A wait whose item could not be
 /// read is a wait the pointer may still dismiss — what it costs is a page read again from
 /// the cache, and what the other reading costs is a preview nothing can close.
+///
+/// A page the engine is drawing holds the pointer through its own rectangle while the
+/// document on screen is a page that runs, and that is the third thing beside the regions
+/// above: a page the user has clicked into is a page the user is working, so the pointer
+/// arriving on it is the arrival that hands the page its drag, not the arrival that takes
+/// the preview down. It is held through the rectangle and through a drag that began in it —
+/// an orbit carries the pointer outside the page it is orbiting — and only for a document
+/// that runs, so an SVG or a font, which is drawn in the engine's window and cannot be
+/// touched, is dismissed by the pointer as it always was. The hold is what keeps a hover
+/// from being sticky here: without it the preview would be gone the moment the pointer
+/// arrived, and there would be nothing left to click.
 pub fn preview_pointer_hold(x: i32, y: i32) -> bool {
     if TEXT_PREVIEW_HOLDING.load(Ordering::Acquire) {
         let Ok(published) = POINTER_HOLD_REGIONS.lock() else {
@@ -10299,8 +10330,55 @@ pub fn preview_pointer_hold(x: i32, y: i32) -> bool {
             .unwrap_or(false);
     }
 
+    if engine_page_holds(
+        x,
+        y,
+        preview_screen_rect().unwrap_or((0, 0, 0, 0)),
+        webview_preview::showing_path().is_some_and(|path| html_is_engine_drawn(&path)),
+        ENGINE_PAGE_DRAG.load(Ordering::Acquire),
+    ) {
+        return true;
+    }
+
     WAITING_PREVIEW_HOLDING.load(Ordering::Acquire)
         && pointer_item_box().is_some_and(|item| box_holds(x, y, item))
+}
+
+/// Whether the engine's own rectangle holds a point, as the page rule reads it: a document
+/// that runs is held through the box the engine drew it in, and through a drag that began
+/// in that box, and nothing else.
+///
+/// The box is the engine's own and not the hold regions published beside the text preview
+/// on purpose. A published region is a region the wheel hook reads to decide whether the
+/// wheel is this app's, and the wheel of a page that runs is the page's own — a page being
+/// scrolled here is the page moving, and reading it as a scroll of the text preview behind
+/// it moves something the user is not looking at. So this is a predicate of its own and the
+/// page is held by it without ever being published.
+fn engine_page_holds(
+    x: i32,
+    y: i32,
+    rect: (i32, i32, i32, i32),
+    runs: bool,
+    dragging: bool,
+) -> bool {
+    if !runs {
+        return false;
+    }
+
+    box_holds(x, y, rect) || dragging
+}
+
+/// Note whether a drag that began on a page the engine is drawing is still down, which the
+/// hook reads once a tick from the buttons it has already read for itself.
+///
+/// The hook keeps this rather than the preview side working it out from the pointer alone,
+/// because a drag cannot be seen from where the pointer has got to: the page is under the
+/// hand only where the drag began, and everything after that is the page being orbited or
+/// panned. A press inside the engine's rectangle arms it, a tick with no button down at all
+/// stands it down, and a tick in between leaves it standing — which is the reading a drag
+/// that has wandered off the page is given.
+pub fn note_engine_page_drag(down: bool) {
+    ENGINE_PAGE_DRAG.store(down, Ordering::Release);
 }
 
 /// The published preview region, without blocking. The wheel hook runs inside a
@@ -19866,6 +19944,52 @@ mod tests {
         );
 
         clear_pointer_hold();
+    }
+
+    /// A page the engine is drawing holds the pointer through the engine's own rectangle, and
+    /// through a drag that began in it once the drag has carried the pointer off the page.
+    ///
+    /// The rectangle is read here as an argument and the drag as a flag rather than taken from
+    /// the state of the process, because both are the outside world's answer: where the engine
+    /// has put the window and where the hand has got to are not this side's to know. What is
+    /// decided here — and what the test is for — is the rule those two answers are read by, and
+    /// it is the whole of what makes a pointer on a page a pointer that is not a dismissal.
+    #[test]
+    fn a_page_that_runs_holds_the_pointer_where_the_engine_drew_it() {
+        // The engine's window, placed where a page is drawn.
+        let page = (200, 150, 600, 450);
+
+        assert!(
+            engine_page_holds(400, 300, page, true, false),
+            "a pointer standing on a page that runs is the user working on the page"
+        );
+        assert!(
+            !engine_page_holds(600, 450, page, true, false),
+            "a point on the far corner is outside a half-open box"
+        );
+        assert!(
+            !engine_page_holds(700, 300, page, true, false),
+            "a pointer that has left the page has left the preview it was holding"
+        );
+
+        // A document the engine draws that is not a page that runs — a drawing, a specimen, a
+        // page drawn with `render_html` switched off — is not held: the pointer on it is the
+        // pointer closing the preview, which is what it always did.
+        assert!(
+            !engine_page_holds(400, 300, page, false, false),
+            "a document that does not run holds nothing, the pointer dismisses it as before"
+        );
+        assert!(
+            !engine_page_holds(400, 300, page, false, true),
+            "and a drag standing on one is not a hold either — the page was never there to drag"
+        );
+
+        // A drag that began inside the page is the page's own, and an orbit carries the pointer
+        // well outside the box the page was drawn in; that is the whole of what the latch is for.
+        assert!(
+            engine_page_holds(900, 700, page, true, true),
+            "a drag begun on the page holds the pointer wherever the page's own view has taken it"
+        );
     }
 
     /// A pinned preview is the whole of what is on screen, and no hover is shown beside it or in
