@@ -264,6 +264,7 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
 - **Background**
   - **Image Background** — Transparent, Black, White, or Checkerboard. Default **Checkerboard**.
   - **Vector Background** — Same backdrops for an SVG document or metafile. Default **Checkerboard**.
+  - **HTML Background** — White, Black, or Checkerboard for a page of HTML. Default **White**. The see-through backdrop is not offered: a page is drawn on a page.
   - **Font Background** — Same backdrops for a font specimen. Default **White**.
   - **DDS Background** — Black or White for `.dds` textures. Default **White**. The two see-through backdrops are not offered.
   - **Design Background** — Same as picture backdrops for a design document. Default **Checkerboard**.
@@ -357,6 +358,7 @@ video_scale=100
 dds_background=white
 design_background=checkerboard
 font_background=white
+html_background=white
 image_background=checkerboard
 vector_background=checkerboard
 
@@ -463,6 +465,7 @@ Here’s what this .INI does:
 - `font_background`: `white` default, `black`, `checkerboard`, or `transparent`.
 - `dds_background`: `white` default or `black`, and only those two. Any other value reads as `white`.
 - `vector_background`: `checkerboard` default, `white`, `black`, or `transparent`. Used for SVG pages and metafiles. Old `svg_background` is ignored and removed.
+- `html_background`: `white` default, `black`, or `checkerboard`, and only those three. Any other value reads as `white`. Used for a page of HTML drawn by `render_html`; a page is drawn on a page, so transparency is not one of the backdrops it is offered.
 - `design_background`: `checkerboard` default, `white`, `black`, or `transparent`.
 
 **Old or removed names**
