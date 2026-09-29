@@ -13637,6 +13637,31 @@ fn pinned_audio_duration(path: &Path) -> Option<f64> {
 /// tick the file was taken (see `settle_pinned_audio_seek`).
 static PIN_AUDIO_SEEK: Lazy<Mutex<Option<f64>>> = Lazy::new(|| Mutex::new(None));
 
+/// Where a pinned sound's clock stands after a seek has been answered, and whether the sound is
+/// left being held: the player's start, the second it was started at, and the second it is held at.
+///
+/// A sound that was playing is taken to the second and goes on playing it, so what is left is a
+/// clock begun there and no hold. A sound a key was holding is not begun again by a seek — it is
+/// held at the second instead, and the player that takes the hold's place is begun there when the
+/// key comes — so what is left is the hold and no clock. A player that did not come up at all is
+/// neither: a card with no clock rather than a hold over a sound that is not playing.
+///
+/// The one answer this must never give is a hold standing over a sound a player is playing. That
+/// is a card frozen at a single second over a sound going on, and — because a hold is what a later
+/// press reads as a pause rather than a sound to take somewhere — a seek after it does nothing at
+/// all until a key is pressed and lifted again.
+fn pinned_audio_after_seek(
+    was_playing: bool,
+    player_came_up: bool,
+    seconds: f64,
+) -> (Option<Instant>, f64, Option<f64>) {
+    if !was_playing {
+        return (None, seconds, Some(seconds));
+    }
+
+    (player_came_up.then(Instant::now), seconds, None)
+}
+
 /// Take a pinned sound to the second a press on its card's bar asked for, in the way the player
 /// playing it answers to.
 ///
@@ -13648,7 +13673,8 @@ static PIN_AUDIO_SEEK: Lazy<Mutex<Option<f64>>> = Lazy::new(|| Mutex::new(None))
 ///
 /// A seek made while a sound is held is a hold that has moved: the second it is held at is the
 /// one the press named, so a key pressed afterwards lets it go from where the hand put it rather
-/// than from where it was left.
+/// than from where it was left, and the press does not begin a sound the user is not listening to
+/// (see `pinned_audio_after_seek`).
 fn settle_pinned_audio_seek(
     started: &mut Option<Instant>,
     offset: &mut f64,
@@ -13676,14 +13702,13 @@ fn settle_pinned_audio_seek(
     match track.player {
         Player::Native => video_player::seek(seconds),
         Player::Ffmpeg => {
-            // A sound that is already held is not begun again by a seek: the hold moves to the
-            // second the press named and the player that takes its place when the key comes is
-            // begun there, which is what a seek does to a picture the engine is holding.
-            if paused.is_none() && restart_pinned_audio(&path, seconds).is_some() {
-                *started = Some(Instant::now());
-                *offset = seconds;
-            }
-            *paused = Some(seconds);
+            let was_playing = paused.is_none();
+            let player = was_playing
+                .then(|| restart_pinned_audio(&path, seconds))
+                .flatten();
+
+            (*started, *offset, *paused) =
+                pinned_audio_after_seek(was_playing, player.is_some(), seconds);
         }
     }
 
@@ -25018,6 +25043,42 @@ mod tests {
             pinned_key_down_command(VK_LEFT.0 as i32, held),
             Some(PinCommand::Previous),
             "while an arrow held still walks, which is what holding one is for"
+        );
+    }
+
+    /// A seek taken of a sound that is playing leaves it playing, and that is the whole of what a
+    /// second seek depends on: a sound left recorded as held reads as a pause to the next press,
+    /// so the card stands at one second over a sound that is still going — and no further seek
+    /// does anything at all, because a hold is what a seek moves rather than one it follows,
+    /// until a key is pressed and lifted again.
+    #[test]
+    fn a_seek_of_a_playing_sound_leaves_it_playing() {
+        let (started, from, held) = pinned_audio_after_seek(true, true, 90.0);
+        assert!(started.is_some(), "a player came up for the second named");
+        assert_eq!(from, 90.0, "and the card's clock is counted from it");
+        assert_eq!(held, None, "while a sound that is playing is not left recorded as held");
+
+        // So the next press is a second seek rather than a hold being moved, and the sound goes on
+        // being played while the card follows it to the new second.
+        let (started, from, held) = pinned_audio_after_seek(held.is_none(), true, 30.0);
+        assert!(started.is_some(), "and it is a real seek, with a player of its own");
+        assert_eq!(from, 30.0, "begun at the second the hand named");
+        assert_eq!(held, None, "and still nothing held over it");
+
+        // A player that did not come up is a card with no clock rather than a hold over a sound
+        // that is not playing: at `Volume → Audio` 0% there is no player to seek and none to hold.
+        assert_eq!(
+            pinned_audio_after_seek(true, false, 90.0),
+            (None, 90.0, None),
+            "a sound with no player behind it has neither a clock nor a pause"
+        );
+
+        // And a sound a key is holding is held at the second rather than begun again by it, so
+        // the key is what sets it going, from where the hand put it.
+        assert_eq!(
+            pinned_audio_after_seek(false, false, 90.0),
+            (None, 90.0, Some(90.0)),
+            "a seek of a held sound moves the hold rather than starting it"
         );
     }
 
