@@ -8,11 +8,10 @@ use crate::engines::webview_preview;
 use crate::formats::video_formats::is_video_file;
 use crate::shell::wheel_input;
 use crate::ui::preview_window::{
-    ask_pin, cursor_preview_hover, end_pin, hide_preview, kill_stray_video_process,
-    monitor_dpi_from_point, pinned, pinned_path, pointer_item_box, pointer_item_holds,
-    preview_pointer_hold, preview_screen_rect, preview_stall_ms, publish_pointer_item_box,
-    show_preview, show_preview_keyboard, take_pin_resumed, update_pinned_preview, PinCommand,
-    PreviewCursorHover,
+    cursor_preview_hover, end_pin, hide_preview, kill_stray_video_process, monitor_dpi_from_point,
+    pinned, pinned_path, pointer_item_box, pointer_item_holds, preview_pointer_hold,
+    preview_screen_rect, preview_stall_ms, publish_pointer_item_box, show_preview,
+    show_preview_keyboard, take_pin_resumed, update_pinned_preview, PreviewCursorHover,
 };
 use crate::{CONFIG, RUNNING};
 use once_cell::sync::Lazy;
@@ -3269,8 +3268,10 @@ fn avoid_box_under_cursor(
 
 /// Quick check if foreground window is Explorer (cheap, no COM)
 ///
-/// The pin's own key asks it as well, because a key pressed while another program is in front is a
-/// press about that program and not about the pin.
+/// The pin key asks it as well, because a key pressed while another program is in front is a press
+/// about that program and not about the pin. A pin the user has pressed is not that case: it is
+/// the window in front itself, and the keyboard it answers is a question asked of the pin's own
+/// window procedure rather than of this (see `pinned_key_command`).
 pub(crate) fn is_foreground_explorer() -> bool {
     unsafe {
         let foreground = GetForegroundWindow();
@@ -3607,21 +3608,18 @@ fn is_explorer_navigation_shortcut_key(key_vk: i32, alt_down: bool, ctrl_down: b
 ///
 /// `shortcut` is Explorer's own navigation being *asked* for — a Backspace, an arrow under
 /// Alt, a Ctrl+T — which is input the app acts on rather than state it waits out.
+///
+/// There is no arrow here that walks a pinned window. An arrow a pin answers is a key Windows
+/// routed to the pin because the pin is the window the user is in, so it arrives as a message
+/// and is answered in the pin's own window procedure (see `pinned_key_command`). Reading the
+/// arrow from the keyboard instead would be reading a key nobody sent this app, and would
+/// answer it in addition to the listing behind, which is where a folder listing moved while a
+/// preview nobody was in had come to.
 #[derive(Clone, Copy, Default)]
 struct NavigationInput {
     active: bool,
     pressed: bool,
     shortcut: bool,
-    /// Which way along a pinned window's own walk the user is asking to go, read off the two
-    /// arrows. `Some(1)` is the way on and `Some(-1)` the way back, and `None` is every other
-    /// key on the keyboard and a tick where neither was asked for.
-    ///
-    /// This is a fresh press and not a key held down, because the walk is one file at a time:
-    /// a key held walks the whole folder, which is what the arrow does inside Explorer and not
-    /// what a button held down does here. The press bit is read on the same pass as everything
-    /// else above rather than by a reader of its own — a second read in the same tick finds
-    /// the bit already taken, and would find it gone and answer nothing at all.
-    step: Option<i32>,
 }
 
 /// The keys a file name is typed with: the letters and the digits, the numpad's own among
@@ -3686,19 +3684,6 @@ fn navigation_input() -> NavigationInput {
         }
         if (state & 0x0001) != 0 {
             input.pressed = true;
-            // A plain press of one of the two arrows is a step along a pinned window's walk.
-            // A shortcut is not: an arrow under Alt is Explorer's own way back through the
-            // folders it has been in, and it belongs to Explorer however the pin is sitting.
-            // Nor is a walk the user is being walked — an arrow the pin itself made as it
-            // moved the keyboard to the folder is a change of folder, not a choice of file
-            // (see `pin_navigation_step`).
-            if !alt_down && !ctrl_down && input.step.is_none() {
-                if key_vk == VK_LEFT.0 as i32 {
-                    input.step = Some(-1);
-                } else if key_vk == VK_RIGHT.0 as i32 {
-                    input.step = Some(1);
-                }
-            }
         }
         if is_key_down_state(state)
             && is_explorer_navigation_shortcut_key(key_vk, alt_down, ctrl_down)
@@ -3763,9 +3748,6 @@ struct FocusMoveInput {
     /// (see `PinUpdateWatch::follow`). It is read here because the press bit a click is known by can
     /// only be read once a tick.
     clicked: bool,
-    /// Which way along a pinned window's own walk the two arrows are asking to go on this
-    /// tick, or nothing where neither was pressed (see `pin_navigation_step`).
-    step: Option<i32>,
 }
 
 /// What the keyboard and the pointer did on one tick, for the rule above.
@@ -3810,32 +3792,7 @@ fn focus_move_input() -> FocusMoveInput {
             || is_key_down(VK_LWIN_CODE)
             || is_key_down(VK_RWIN_CODE),
         clicked: mouse_clicked,
-        step: navigation.step,
     }
-}
-
-/// Whether a pinned window steps to the next or the previous file on an arrow key, and which
-/// way.
-///
-/// The gate is Explorer. With the keyboard in a folder listing, an arrow is Explorer's own: it
-/// walks the selection, and the pin follows the file that lands under the pointer like any
-/// other pick (see `PinUpdateWatch::follow`). A listing that has been minimized is in the
-/// keyboard no more than a listing behind another window is, and either way the key is
-/// reaching for a window the user is not in — so where Explorer is not the window in front,
-/// the arrow has no listing to move, and the walk the pin is already showing is what is left
-/// for it to mean. That is the same question `pin_press_action` asks of a pin key, asked the
-/// same way: of the foreground window, which is the one fact about where the user is that
-/// Windows will answer for a window that cannot take focus of its own.
-///
-/// Nothing is asked of the walk here — which files it holds, whether the file it is showing is
-/// even on it, whether it wraps. That is `step_pinned_file`'s answer, and it is asked where the
-/// buttons' own clicks are asked, so a key and a click reach the same place by the same road.
-fn pin_navigation_step(step: Option<i32>, explorer_in_foreground: bool) -> Option<i32> {
-    if explorer_in_foreground {
-        return None;
-    }
-
-    step
 }
 
 /// What a look at the view under the pointer said about the place it is showing, one
@@ -5062,15 +5019,7 @@ pub fn run_explorer_hook() {
         // a time, with nothing of the machinery above touched (see `PinUpdateWatch`).
         if pinned() {
             let (update, on_hover) = pin_update_settings();
-            // Asked of the same pass that reads the arrows, and of the foreground window at the
-            // same moment, so that the key is read by whoever reads a key first and answered by
-            // where the user actually is (see `pin_navigation_step`).
-            let explorer_in_foreground = is_foreground_explorer();
             let focus_move = focus_move_input();
-            // The key is asked for out of the same reading whether or not the pin follows
-            // anything: what is being read is a press of an arrow, and `Update Preview` is
-            // about the Explorer half of the question, not this one.
-            let step = pin_navigation_step(focus_move.step, explorer_in_foreground);
 
             if update {
                 // What the hover of a file under a settled pointer would wait out, which is the
@@ -5095,18 +5044,6 @@ pub fn run_explorer_hook() {
                 // that bit gets, and the setting coming back on would find it and read it as a
                 // file the user picked just now (see `focus_move_input`).
                 pin_watch = PinUpdateWatch::default();
-            }
-
-            // A key and a click are the same gesture, so the key is left as the same command a
-            // click leaves (see `ask_pin`). It is asked for by no setting: `Update Preview` is
-            // about the Explorer half of this, and where Explorer is not in front there is no
-            // Explorer half to be about.
-            if let Some(step) = step {
-                ask_pin(if step < 0 {
-                    PinCommand::Previous
-                } else {
-                    PinCommand::Next
-                });
             }
 
             std::thread::sleep(Duration::from_millis(tick_ms));
@@ -6583,37 +6520,6 @@ mod tests {
         assert!(
             !watch.focus_moved_by_key(started + Duration::from_millis(1360)),
             "a key pressed with a modifier down is a command, not a walk"
-        );
-    }
-
-    /// The two arrows walk a pinned window's own folder, and only where the keyboard is not in
-    /// a listing. With Explorer in front, an arrow is Explorer's: it moves its selection, and
-    /// the pin follows the file that lands under the pointer as it follows any other pick.
-    /// Anywhere else — another window in front, or Explorer minimized, which puts it in the
-    /// keyboard no more than being behind does — there is no listing for the key to move, and
-    /// the walk the pin is already showing is what the arrow is left to mean.
-    #[test]
-    fn an_arrow_walks_a_pin_only_where_a_listing_is_not_in_the_keyboard() {
-        for (step, name) in [(Some(-1), "the back arrow"), (Some(1), "the on arrow")] {
-            assert_eq!(
-                pin_navigation_step(step, false),
-                step,
-                "{name} walks a pin while a listing is not in the keyboard"
-            );
-            assert_eq!(
-                pin_navigation_step(step, true),
-                None,
-                "{name} belongs to Explorer while Explorer is the window the keyboard is in"
-            );
-        }
-
-        // Every other key is nobody's to walk with, and a tick where the arrows were not
-        // pressed is a tick with nothing to do — a held key answers on the press bit alone,
-        // so a key left down is not a folder walked end to end.
-        assert_eq!(
-            pin_navigation_step(None, false),
-            None,
-            "a tick with no arrow pressed walks nowhere"
         );
     }
 

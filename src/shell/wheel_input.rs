@@ -7,10 +7,11 @@
 //! tick counter that the polling loop consumes to re-resolve the item under the
 //! cursor once the list settles.
 //!
-//! The same hook is what lets a scrollable text preview take the wheel: the
-//! preview window never has focus, so Windows would deliver its wheel messages to
-//! Explorer instead. When the pointer is inside the region a scrollable preview
-//! published, the message is swallowed here and counted for the preview thread.
+//! The same hook is what lets a scrollable text preview take the wheel: a preview the
+//! user has not pressed is a window the keyboard is not in, so Windows would deliver
+//! its wheel messages to Explorer instead. When the pointer is inside the region a
+//! scrollable preview published, the message is swallowed here and counted for the
+//! preview thread.
 
 use std::sync::atomic::{AtomicI32, AtomicU32, AtomicU64, Ordering};
 use std::time::Duration;

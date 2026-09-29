@@ -5,12 +5,12 @@ use crate::config::config::{
     PreviewScale, PreviewType, TextTheme, TransparentBackground, DEFAULT_ANIMATED_SCALE_PERCENT,
     DEFAULT_AUDIO_SEEK, DEFAULT_DDS_BACKGROUND, DEFAULT_DESIGN_BACKGROUND, DEFAULT_DESIGN_SCALE,
     DEFAULT_DOCUMENT_SCALE, DEFAULT_EBOOK_SCALE, DEFAULT_FONT_BACKGROUND, DEFAULT_FONT_SCALE,
-    DEFAULT_IMAGE_BACKGROUND, DEFAULT_IMAGE_CACHE_MB, DEFAULT_NORMALIZE_VIDEO_VOLUME,
-    DEFAULT_NORMALIZE_VOLUME, DEFAULT_PIN_PAUSE_AUDIO, DEFAULT_PIN_PAUSE_VIDEO,
-    DEFAULT_PIN_UPDATE_ENABLED, DEFAULT_PREVIEW_SCALE_PERCENT, DEFAULT_SPINNER_DELAY_MS,
-    DEFAULT_TEXT_FONT_SCALE_PERCENT, DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS,
-    DEFAULT_VECTOR_BACKGROUND, DEFAULT_VECTOR_SCALE, DEFAULT_VIDEO_SCALE_PERCENT,
-    DEFAULT_WEBP_PLAYBACK_FPS,
+    DEFAULT_HTML_BACKGROUND, DEFAULT_IMAGE_BACKGROUND, DEFAULT_IMAGE_CACHE_MB,
+    DEFAULT_NORMALIZE_VIDEO_VOLUME, DEFAULT_NORMALIZE_VOLUME, DEFAULT_PIN_PAUSE_AUDIO,
+    DEFAULT_PIN_PAUSE_VIDEO, DEFAULT_PIN_UPDATE_ENABLED, DEFAULT_PREVIEW_SCALE_PERCENT,
+    DEFAULT_SPINNER_DELAY_MS, DEFAULT_TEXT_FONT_SCALE_PERCENT,
+    DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS, DEFAULT_VECTOR_BACKGROUND, DEFAULT_VECTOR_SCALE,
+    DEFAULT_VIDEO_SCALE_PERCENT, DEFAULT_WEBP_PLAYBACK_FPS,
 };
 use crate::engines::calibre_render;
 use crate::engines::imagemagick_render;
@@ -100,7 +100,8 @@ use windows::Win32::System::Threading::{
 };
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetAsyncKeyState, GetCapture, ReleaseCapture, SetCapture, VK_A, VK_C, VK_CONTROL,
+    GetAsyncKeyState, GetCapture, GetFocus, ReleaseCapture, SetCapture, SetFocus, VK_A, VK_C,
+    VK_CONTROL, VK_DOWN, VK_ESCAPE, VK_LEFT, VK_RIGHT, VK_UP,
 };
 use windows::Win32::UI::Shell::{
     AssocQueryStringW, ShellExecuteW, ASSOCF_NONE, ASSOCSTR_FRIENDLYAPPNAME, OPENASINFO,
@@ -108,8 +109,8 @@ use windows::Win32::UI::Shell::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DispatchMessageW,
-    EnumWindows, GetCursorPos, GetSystemMetrics, GetWindow, GetWindowLongPtrW, GetWindowRect,
-    GetWindowThreadProcessId, IsWindow, IsWindowVisible, LoadCursorW, MoveWindow,
+    EnumWindows, GetCursorPos, GetForegroundWindow, GetSystemMetrics, GetWindow, GetWindowLongPtrW,
+    GetWindowRect, GetWindowThreadProcessId, IsWindow, IsWindowVisible, LoadCursorW, MoveWindow,
     MsgWaitForMultipleObjectsEx, PeekMessageW, RegisterClassExW, SetCursor, SetForegroundWindow,
     SetWindowLongPtrW, SetWindowPos, ShowWindow, ShowWindowAsync, SystemParametersInfoW,
     TrackPopupMenu, TranslateMessage, UpdateLayeredWindow, CS_HREDRAW, CS_VREDRAW, GWL_EXSTYLE,
@@ -117,11 +118,12 @@ use windows::Win32::UI::WindowsAndMessaging::{
     IDC_SIZEWE, MF_STRING, MSG, MWMO_INPUTAVAILABLE, PBT_APMRESUMEAUTOMATIC, PBT_APMRESUMESUSPEND,
     PBT_APMSTANDBY, PBT_APMSUSPEND, PM_REMOVE, QS_ALLINPUT, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN,
     SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SPI_GETWORKAREA, SWP_FRAMECHANGED, SWP_NOACTIVATE,
-    SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SW_HIDE, SW_SHOWNOACTIVATE, SW_SHOWNORMAL,
-    SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, TPM_LEFTALIGN, TPM_NONOTIFY, TPM_RETURNCMD, TPM_TOPALIGN,
-    ULW_ALPHA, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
-    WM_POWERBROADCAST, WM_RBUTTONUP, WM_SETCURSOR, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
-    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SW_HIDE, SW_SHOWNOACTIVATE,
+    SW_SHOWNORMAL, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, TPM_LEFTALIGN, TPM_NONOTIFY, TPM_RETURNCMD,
+    TPM_TOPALIGN, ULW_ALPHA, WA_INACTIVE, WM_ACTIVATE, WM_CHAR, WM_CLOSE, WM_DISPLAYCHANGE,
+    WM_DPICHANGED, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_POWERBROADCAST,
+    WM_RBUTTONUP, WM_SETCURSOR, WM_SYSCOMMAND, WM_SYSKEYDOWN, WNDCLASSEXW, WS_EX_LAYERED,
+    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
 const PREVIEW_CLASS: PCWSTR = w!("RustHoverPreviewWindow");
@@ -605,23 +607,15 @@ static PIN_ACTIVE: AtomicBool = AtomicBool::new(false);
 /// A collapsed pin is still a pin: previews stay quiet until it is restored and closed.
 static PIN_COLLAPSED: AtomicBool = AtomicBool::new(false);
 
-/// Whether the hand is on one of the pin's own windows: a mouse press has landed on the pinned
-/// window or on the bubble, and the pointer has not been taken off it since.
+/// Whether this app took the keyboard and has not given it back yet.
 ///
-/// This is a fact the app keeps about itself rather than a fact asked of Windows, because neither of
-/// those windows can take focus. A pinned window is created `WS_EX_NOACTIVATE` so that a pin does
-/// not steal the caret out of a folder being named, and the bubble is made the same way, so a
-/// question that would be settled in one call for an ordinary window — is this the window the user
-/// is in — cannot be settled at all for these two. What is left is the two things a key press
-/// really is: whether the keyboard is in Explorer, and whether a press has been made on the pin.
-/// Both are kept here; the keyboard is asked of the foreground window at the moment of the press
-/// (see `pin_press_action`).
-///
-/// It goes with the pin, and it is set again by a window coming up rather than left over from the
-/// last one: a pin is placed where the pointer already is, so a press the pointer is merely
-/// resting inside says nothing about the pin that has just appeared under it (see
-/// `note_pin_hand`).
-static PIN_HAND: AtomicBool = AtomicBool::new(false);
+/// This is not what decides whether a key belongs to the pin — that is asked of Windows
+/// (see `pin_is_focused`) — but a note that the keyboard was taken, so that the pin can put it
+/// back when it ends. A window that is hidden while it still holds the focus leaves Windows to
+/// pick what to activate next, and a `WS_EX_TOOLWINDOW` popup is not reliably followed by the
+/// Explorer window that was in front a moment ago; so the handover has to be a thing this app
+/// does rather than one it hopes for (see `pin_drop_focus`).
+static PIN_FOCUSED: AtomicBool = AtomicBool::new(false);
 
 /// A pin was asked to come down, by the Explorer hook (previews were turned off, or the
 /// trigger key is holding them back), by the tray, or by the resumption of the machine
@@ -2355,6 +2349,17 @@ fn current_vector_background() -> TransparentBackground {
         .unwrap_or(DEFAULT_VECTOR_BACKGROUND)
 }
 
+/// The backdrop a page of HTML is drawn over, which the tray keeps apart from a vector
+/// drawing's: a document the browser is handed is a page already — it brings its own markup
+/// and its own stylesheet — so what is behind it is the page to read it against rather than
+/// a transparency to look through, which is why it does not borrow the drawing's answer.
+fn current_html_background() -> TransparentBackground {
+    CONFIG
+        .lock()
+        .map(|cfg| cfg.html_background)
+        .unwrap_or(DEFAULT_HTML_BACKGROUND)
+}
+
 /// How loud a video is played, which is read when one is started rather than when the
 /// setting changes: a preview is a few seconds long, and the next one is played at
 /// whatever the volume is by then.
@@ -2396,12 +2401,14 @@ fn current_audio_options() -> AudioPreviewOptions {
 
 /// The backdrop an engine-drawn preview of `path` is drawn over: the kind decides it, the
 /// same way it decides everything else about a document. The one engine draws all the kinds
-/// this app hands it — an SVG document, which is a vector drawing, a font file's specimen,
-/// and a page of HTML — and a drawing and a page stand behind the same backdrop, the
-/// specimen's is a page of its own.
+/// this app hands it, and each of the three answers for itself — a font file's specimen is a
+/// page of its own, an SVG document is a vector drawing, and a page of HTML is a page, so
+/// the backdrop the tray keeps for the kind is the one it is given.
 fn engine_background(path: &Path) -> TransparentBackground {
     if font_formats::is_font_file(path) {
         current_font_background()
+    } else if crate::formats::text_formats::is_html_extension(path) {
+        current_html_background()
     } else {
         current_vector_background()
     }
@@ -10703,10 +10710,11 @@ fn text_preview_copy_requested() -> bool {
 /// Whether Select All has just been asked for with the keyboard, over a text preview that is
 /// pinned.
 ///
-/// The key is polled rather than waited for, for the reason Ctrl+C's is: the preview never takes
-/// focus, so it would never receive the keystroke as a message. It is answered for a pin alone —
-/// a pinned text preview is a window the user put there to work in, and full mode gave it the
-/// selection this makes use of, while a hover is a preview being read and not typed at.
+/// The key is polled rather than waited for, for the reason Ctrl+C's is: a preview the user
+/// has not pressed is a window nobody is in, and a window nobody is in is never sent a
+/// keystroke. It is answered for a pin alone — a pinned text preview is a window the user put
+/// there to work in, and full mode gave it the selection this makes use of, while a hover is a
+/// preview being read and not typed at.
 fn pinned_select_all_requested() -> bool {
     if !pinned() || !has_text_document() {
         return false;
@@ -10811,57 +10819,184 @@ fn pin_is_collapsed() -> bool {
     PIN_COLLAPSED.load(Ordering::Acquire)
 }
 
-/// Note that a press has landed on one of the pin's own windows. The window procedures are the
-/// only places a press can be seen — a window that is behind another one is sent nothing, and a
-/// window that is not there is sent nothing either — so the fact is left here for the loop to ask
-/// about when the key comes (see `pin_has_the_hand`).
-fn note_pin_hand() {
-    PIN_HAND.store(true, Ordering::Release);
-}
-
-/// Whether the hand is on one of the pin's own windows: a press landed on one and the pointer has
-/// not been taken off it since. The press is what keeps a preview that merely stands where the
-/// pointer happens to be — which is where a preview is placed — from reading as one the hand is on.
-fn pin_has_the_hand() -> bool {
-    PIN_HAND.load(Ordering::Acquire) && pointer_on_a_pin_window()
-}
-
-/// Whether the pointer is inside the pin's own window, or inside the bubble a collapsed one left.
+/// Whether the pinned window is the window the user is in, and so whether a key belongs to it.
 ///
-/// A collapsed pin has no window of its own on the screen, so the bubble is what the hand can be
-/// on; an uncollapsed one is the window, whose box the media is laid out in (see `window_box`).
-/// Anything that cannot be read — no cursor position, a pin that has gone between the two reads, a
-/// box that could not be asked for — answers no: the fact being asked for is a hand, and a hand
-/// that cannot be placed on anything is not one.
-fn pointer_on_a_pin_window() -> bool {
-    let Some((x, y)) = cursor_screen_point() else {
+/// It is answered of Windows rather than remembered, because Windows is what decides it: the flag
+/// the app kept about itself was a guess that could be wrong in the one direction that cannot be
+/// recovered from — a `SetFocus` refused by the foreground lock left the guess standing, and a
+/// guess that stands keeps every later press from asking again, so the pin went deaf to the
+/// arrows for the rest of its life with no way back. Asking costs one call, on a press, and
+/// cannot be wrong.
+pub(crate) fn pin_is_focused() -> bool {
+    if !pinned() {
         return false;
-    };
+    }
 
-    // The bubble is a window of its own, so it is asked for its own box; a window that is up is
-    // asked for the box its media is laid out in, which is the box on the screen (see
-    // `window_box`).
-    let (left, top, right, bottom) = if pin_is_collapsed() {
-        let bubble = PIN_BUBBLE_HWND.load(Ordering::SeqCst);
-        if bubble == 0 {
-            return false;
+    // Safety: asks the keyboard for the window that holds it, and names this thread's own
+    // window. Neither is a dereference and neither can fail.
+    unsafe { GetFocus() == HWND(PREVIEW_HWND.load(Ordering::SeqCst) as *mut _) }
+}
+
+/// Give the pin the keyboard, from a press that has landed on it.
+///
+/// A pin is a window of this app's that stands over a listing, and a window the user presses is a
+/// window the user is in: asking for the foreground is what puts the caret on a folder being named
+/// into the pin instead, and the key that would have finished the name is answered here instead.
+/// It is asked for on the press rather than on the pin coming up, because a pin comes up wherever
+/// the pointer happens to be — a pin that took the focus as it appeared would take it out of
+/// whatever the user was typing, under a preview that has not been touched at all.
+unsafe fn pin_take_focus(hwnd: HWND) {
+    if !pinned() {
+        return;
+    }
+
+    // Where the keyboard is being taken from, remembered before it is taken: this is the only
+    // moment the window in front is still the one the user was in (see `PIN_PREVIOUS_FOREGROUND`).
+    PIN_PREVIOUS_FOREGROUND.store(GetForegroundWindow().0 as isize, Ordering::Release);
+
+    // The window is only focusable while a pin is up, so the style is asked to change
+    // before the focus is asked for: `SetFocus` on a `WS_EX_NOACTIVATE` window is refused
+    // (see `pin_set_focusable`).
+    pin_set_focusable(hwnd, true);
+
+    let _ = SetForegroundWindow(hwnd);
+    let _ = SetFocus(hwnd);
+    PIN_FOCUSED.store(true, Ordering::Release);
+}
+
+/// Hand the keyboard back, from the pin having lost it: the user has clicked into another window,
+/// or the pin is on its way down.
+///
+/// Nothing is done to the window now in front — it has the focus already, and asking for it again
+/// is the kind of thing that brings a window up over the user. What is dropped is the claim: the
+/// pin is not the window the user is in, so the keys the caption walks its folder with are the keys
+/// of whatever is in front of it, which is the ordinary arrangement everywhere else in Windows.
+fn pin_release_focus() {
+    PIN_FOCUSED.store(false, Ordering::Release);
+}
+
+/// The window that was in front when the pin took the focus, so that the pin can hand it back.
+///
+/// This has to be remembered rather than asked for on the way out. A window that is hidden while
+/// it is still the one holding the focus leaves Windows to pick whatever it likes to activate next,
+/// and for a `WS_EX_TOOLWINDOW` popup that is not reliably the Explorer window that was in front a
+/// moment ago — the arrangement that leaves a desktop on which nothing answers the keyboard. A
+/// popup has no owner to ask either: a window with no parent has no `GW_OWNER` at all, so the
+/// window the caret was in is the one that was in front a moment before the press, and the only
+/// moment it can be read is the moment the pin takes over from it.
+static PIN_PREVIOUS_FOREGROUND: AtomicIsize = AtomicIsize::new(0);
+
+/// Give the keyboard up entirely, from the pin that owned it having ended: the claim is dropped and
+/// the window goes back to being a window nobody types into, because the window this one lives in
+/// is put up again as an ordinary hover preview the moment the pin is over.
+///
+/// The keyboard is handed over rather than merely let go of, which is why this is not the same as
+/// `pin_release_focus`: that is what losing the focus means, and it is the window now in front that
+/// already holds the keyboard. This is the pin that is going away, and the keyboard is somewhere it
+/// has to be put back by hand.
+fn pin_drop_focus() {
+    if !PIN_FOCUSED.swap(false, Ordering::AcqRel) {
+        return;
+    }
+
+    let hwnd = HWND(PREVIEW_HWND.load(Ordering::SeqCst) as *mut _);
+    let behind = PIN_PREVIOUS_FOREGROUND.swap(0, Ordering::AcqRel);
+    if hwnd.is_invalid() {
+        return;
+    }
+
+    // Safety: the handle is this thread's own window, read from the slot it was stored in when it
+    // was created, and only its extended style and its focus are touched here. The window behind is
+    // the one that was in front a moment ago, which is by then a live window or a handle to one
+    // that has since gone — in which case the call is refused and nothing else is disturbed.
+    unsafe {
+        // The focus is given up before the style is changed, because a window that has been made
+        // non-activating while it still holds the focus holds it in a state Windows does not expect.
+        let _ = SetFocus(None);
+        pin_set_focusable(hwnd, false);
+
+        if behind != 0 {
+            let _ = SetForegroundWindow(HWND(behind as *mut _));
         }
-        let Some((left, top, width, height)) = window_origin(HWND(bubble as *mut _)) else {
-            return false;
-        };
-        (left, top, left + width, top + height)
+    }
+}
+
+/// Whether a pinned window can take the focus at all, which is what `WS_EX_NOACTIVATE` takes away
+/// and a hover preview must never have: a preview is put up under a pointer that is often inside
+/// a file name being renamed, and a window that took the focus out from under that name would
+/// swallow the rest of it.
+///
+/// A pin is not that: the hand pressed it, and the user is in it. So the style is put on when a
+/// pin comes up and taken off when it goes, and the window itself is created the way a hover has
+/// to be created.
+unsafe fn pin_set_focusable(hwnd: HWND, focusable: bool) {
+    let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+    if style == 0 {
+        // A style of zero is a failure, not a window with no style: this window always carries
+        // `WS_EX_LAYERED`, `WS_EX_TOOLWINDOW` and `WS_EX_TOPMOST`, so a genuine zero cannot
+        // occur. Writing a style computed from it would wipe the three rather than fail, and the
+        // window would stop being layered — a preview that draws nothing, with nothing to report
+        // it.
+        return;
+    }
+
+    let wanted = if focusable {
+        style & !(WS_EX_NOACTIVATE.0 as isize)
     } else {
-        let window = PINNED
-            .lock()
-            .ok()
-            .and_then(|pinned| pinned.as_ref().map(|pin| pin.window_box()));
-        match window {
-            Some(window) => window,
-            None => return false,
-        }
+        style | WS_EX_NOACTIVATE.0 as isize
     };
 
-    x >= left && x < right && y >= top && y < bottom
+    if wanted == style {
+        return;
+    }
+
+    // Both the old and the new style come back, and the new one is the one that counts only if it
+    // is not the error sentinel: a refused write leaves the window exactly as it was, which is a
+    // window that cannot be focused rather than one that can.
+    if SetWindowLongPtrW(hwnd, GWL_EXSTYLE, wanted) == 0 {
+        return;
+    }
+
+    // The style is not a thing a window is told about live: without being asked to re-read it,
+    // a window keeps refusing the focus it was created with.
+    let _ = SetWindowPos(
+        hwnd,
+        None,
+        0,
+        0,
+        0,
+        0,
+        SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+    );
+}
+
+/// What one key pressed on a pinned window that has the focus means, as the command it asks for.
+///
+/// A key the pin is given the keyboard for is the pin's alone — it was not sent on to Explorer,
+/// and nothing here is asked of the window in front of the pin. Which is the whole of what makes
+/// an arrow a walk of the pin's own folder: while the pin is the window the user is in, there is
+/// no listing in the keyboard for the arrow to move.
+///
+/// A Space is the one key that means nothing at all, and it is not an oversight: a pin used to
+/// hide or swap on it, which read as a pin that got in the way of a Space typed anywhere near it.
+/// A key this window is in front of is not a key to be dismissed with.
+fn pinned_key_command(vk: i32) -> Option<PinCommand> {
+    // The keys are the virtual-key codes of the message's `wParam`, which are constants
+    // rather than patterns, so the two directions are told apart by guards rather than by
+    // arms: `VK_LEFT` and `VK_UP` both mean back, and `VK_RIGHT` and `VK_DOWN` both mean on.
+    if vk == VK_LEFT.0 as i32 || vk == VK_UP.0 as i32 {
+        return Some(PinCommand::Previous);
+    }
+
+    if vk == VK_RIGHT.0 as i32 || vk == VK_DOWN.0 as i32 {
+        return Some(PinCommand::Next);
+    }
+
+    if vk == VK_ESCAPE.0 as i32 {
+        return Some(PinCommand::Close);
+    }
+
+    None
 }
 
 /// A mouse message's point in the coordinates the media of a pinned window is drawn in: the same
@@ -10909,6 +11044,67 @@ unsafe extern "system" fn window_proc(
             DISPLAY_RESET.store(true, Ordering::Release);
             LRESULT(0)
         }
+        WM_ACTIVATE => {
+            // Windows is the only thing that can say which window the user is in, and it says it
+            // here: a pin that has lost the focus is a pin the user has clicked away from, and
+            // the keys belong to whatever is in front of it now. Nothing is asked of the pin on
+            // the way out — a walk the user started with the pin in front and finished with it
+            // behind is half a walk, not one.
+            if wparam.0 as u32 == WA_INACTIVE {
+                pin_release_focus();
+            }
+            LRESULT(0)
+        }
+        WM_KEYDOWN => {
+            // A key that arrives here is one Windows decided belonged to this window, which is the
+            // whole of the gate: while the pin is the window the user is in, an arrow walks the
+            // pin's own folder and is not sent on to the listing behind, and while it is not, no
+            // key arrives here at all and the arrow belongs to whatever the user is working in.
+            //
+            // The key is left as the same command a caption button leaves, rather than acted on
+            // here, because that is where the walk is answered (see `ask_pin` and
+            // `pin_command_request`).
+            if let Some(command) = pinned_key_command(wparam.0 as i32) {
+                ask_pin(command);
+            }
+
+            // Nothing is beeped at, and nothing is forwarded. A Space reaches a window the user is
+            // in and is answered by doing nothing, and letting `DefWindowProcW` ring for the one
+            // key that is meant to be swallowed is a beep out of a window nobody can see
+            // (see `pinned_key_command`).
+            LRESULT(0)
+        }
+        WM_SYSKEYDOWN => {
+            // A key held with a modifier. None of them is a walk and none of them is the pin's to
+            // answer, so they are swallowed exactly as the unshifted keys are — and swallowing
+            // them is also what keeps the system chords away from `DefWindowProcW`, which is where
+            // Alt+F4 turns into a close and Alt+Tab into an application switcher.
+            LRESULT(0)
+        }
+        WM_CLOSE | WM_SYSCOMMAND => {
+            // The window is never to be destroyed. It is created once, for the life of the
+            // process, and put up and taken down a thousand times over as previews come and go;
+            // letting a close reach `DestroyWindow` would end every preview from here on with
+            // nothing to report it, which is what Alt+F4 against a pin the user has clicked
+            // would otherwise do.
+            //
+            // A close is answered the way a close button is — by ending the pin, and with it the
+            // media under it and the claim on the keyboard. On a pin, a close is a close. On a
+            // hover, of which there is no window to close and no claim to drop, it is nothing at
+            // all, exactly as it was before this window could be activated (see
+            // `pin_drop_focus`).
+            if pinned() {
+                end_pin();
+            }
+            LRESULT(0)
+        }
+        WM_CHAR => {
+            // The character a key press has already been answered as. It is swallowed for the
+            // same reason the key-down is: the pin has had the keyboard, and what it does with a
+            // key is decided there — a character left to the default procedure would beep for
+            // every key the pin answered silently, and would type into a caret there is none of.
+            LRESULT(0)
+        }
         WM_SETCURSOR => {
             // What the pointer is over on a pinned window, said with the pointer itself: an edge
             // of one is a resize, and a resize is the one thing a window has no other way of
@@ -10929,11 +11125,12 @@ unsafe extern "system" fn window_proc(
             LRESULT(1)
         }
         WM_LBUTTONDOWN => {
-            // A press on the pin is what puts the hand on it, and the pin's key asks that before it
-            // takes the window down, because this window cannot take focus and so cannot be found
-            // out from Windows (see `PIN_HAND`).
-            if pinned() {
-                note_pin_hand();
+            // A press on a pinned window is what makes it the window the user is in. A pin is
+            // behind everything, so the press is the only thing that says the user means it rather
+            // than the file behind it — and once the keyboard is here, the keys the pin answers are
+            // keys the listing behind it is not sent (see `pin_take_focus`).
+            if pinned() && !pin_is_focused() {
+                pin_take_focus(hwnd);
             }
 
             // A press on a pinned window is the pin's before it is anything else's: the volume
@@ -12224,9 +12421,9 @@ struct PinnedPreview {
     /// names, and the box that comes out of it is where the bound is taken from (`pin_bound_after`).
     bound: Option<i32>,
     /// The box a restore down puts back, and `None` while the pin is not maximized: the box the
-    /// window had before it was maximized, kept in step with the hand while it is one — a drag
-    /// moves the place that box is put back at, and a resize gives it up altogether, since a
-    /// maximize the hand has resized is one there is nothing left to undo (see `pin_restore_box`).
+    /// window had before it was maximized, kept in step with the hand while it is one — and given up
+    /// altogether the moment a hand moves the window, since a maximize the user has taken hold of
+    /// is one there is nothing left to undo (see `pin_restore_box`).
     restore: Option<ScreenRegion>,
     /// The scale of the display the pin was put up on: what the caption's measurements are
     /// multiplied by, and what the media is laid out at again when the box changes.
@@ -13123,8 +13320,10 @@ impl PinResize {
 /// resized, or a collapse. The window procedure cannot do any of it — the media, the player and
 /// the browser are the preview loop's — so it is written here and drained by the loop.
 ///
-/// Public because a key asks for the same two as a click does, and the key is read on the hook
-/// thread rather than in the window procedure (see `shell::explorer_hook::pin_navigation_step`).
+/// Public because a key asks for the same two as a click does, and a key that walks a pin
+/// arrives in the window procedure rather than being read on the hook thread (see
+/// `pinned_key_command`).
+///
 /// One door, whichever side of the app the gesture came from.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum PinCommand {
@@ -13284,11 +13483,13 @@ fn end_pin_state() -> PreviewMessage {
         *pinned = None;
     }
 
+    // The window goes back to being a window nobody types into before it is hidden, because a
+    // hover preview uses this same window and must never be able to take the focus (see
+    // `pin_set_focusable`).
+    pin_drop_focus();
+
     PIN_ACTIVE.store(false, Ordering::Release);
     PIN_COLLAPSED.store(false, Ordering::Release);
-    // A pin that is over is not a thing the hand is on any more, and the next one comes up
-    // somewhere the pointer may well be (see `PIN_HAND`).
-    PIN_HAND.store(false, Ordering::Release);
     // A pin that is over is a pointer that is on something new: the file the pin was of is not
     // a hover the hook has already answered, and one is due the moment the pin is gone rather
     // than after the delay a re-hover of the same file is given (see `PIN_RESUMED`).
@@ -14285,13 +14486,11 @@ fn replace_pinned_window() -> Option<PreviewMessage> {
 /// rather than scaled, the largest box is the room itself and the page is drawn into it.
 ///
 /// Restoring down puts back the box the window had before it was maximized, place and size alike:
-/// the plain undo the button is when nothing has been done to the window since. A window that has
-/// been *carried* since — and nothing more — is answered with the window the hand has been looking
-/// at rather than with the one that stood there before it: the size a restore remembers, at the
-/// place the hand left it. A window the hand has *resized*, on the other hand, is no longer a
-/// maximized window to restore at all: that maximize is given up as the resize is made (see
-/// `pin_restore_box`), so the caption draws a maximize where the restore glyph was, and this
-/// maximizes the box the hand has left behind.
+/// the plain undo the button is while nothing has been done to the window since. A window the hand
+/// has *moved* — carried to another place or pulled to a size — is no longer a maximized window to
+/// restore at all: that maximize is given up as the drag is made (see `pin_restore_box`), so the
+/// caption draws a maximize where the restore glyph was, and this maximizes the box the hand has
+/// left behind.
 fn toggle_pin_maximized(request: &mut Option<PreviewMessage>) {
     // What the pin has is read out under its lock and the lock is let go of before anything is
     // measured, which is the rule every other reader of a pin keeps: a measure is a file read,
@@ -14376,8 +14575,8 @@ fn pin_maximize_decided(asked: PinMaximize) -> (ScreenRegion, Option<ScreenRegio
     } = asked;
 
     match restore {
-        // The box kept for exactly this: the one the window had before the maximize, or the one
-        // the hand has since made of it (see `pin_restore_box`).
+        // The box kept for exactly this: the one the window had before the maximize, which is still
+        // here only because no hand has moved the window since (see `pin_restore_box`).
         //
         // Put back as it was, unless the file on screen is not the one it was kept for — in
         // which case it is the box *this* file wants, at the size the user chose, rather than
@@ -14481,20 +14680,16 @@ fn pin_restored_box(shape: (u32, u32), previous: ScreenRegion, room: ScreenBound
 /// A drag that came out on the box it began with is no drag at all — a press nothing moved, or a
 /// box already held against the room's own edge — and leaves the box the maximize put aside alone.
 ///
-/// A window that was *carried* keeps the size a restore remembers, which is the size it had before
-/// it was maximized, and takes the place the hand has left it at: the size is the thing the button
-/// undoes, while the place is where the user is looking at the window now, which is the place they
-/// mean by having moved it there.
-///
-/// A window that was *pulled to a size* is the other answer: the size the maximize gave it has been
-/// replaced by one the hand asked for, so there is no longer a maximize for the button to undo. It
-/// comes back as nothing, which is what leaves the caption drawing a maximize where the restore
-/// glyph was and the button maximizing again (see `toggle_pin_maximized`).
+/// A hand that moved the box ends the maximize, whichever way it moved it. A window *carried* to
+/// another place is no longer the one the button put across the room, and one *pulled to a size* has
+/// had the size the maximize gave it replaced by one the hand asked for; neither is a maximize there
+/// is anything left to undo. The box comes back as nothing, which is what leaves the caption drawing
+/// a maximize where the restore glyph was and the button maximizing again (see
+/// `toggle_pin_maximized`).
 fn pin_restore_box(
     restore: Option<ScreenRegion>,
     dragged_from: ScreenRegion,
     dragged_to: ScreenRegion,
-    action: PinDragAction,
 ) -> Option<ScreenRegion> {
     let restore = restore?;
 
@@ -14502,15 +14697,7 @@ fn pin_restore_box(
         return Some(restore);
     }
 
-    match action {
-        PinDragAction::Move => Some((
-            dragged_to.0,
-            dragged_to.1,
-            dragged_to.0 + (restore.2 - restore.0).max(1),
-            dragged_to.1 + (restore.3 - restore.1).max(1),
-        )),
-        PinDragAction::Resize(_) => None,
-    }
+    None
 }
 
 /// A box of a given size in the middle of a room: what maximize puts the media in.
@@ -14607,45 +14794,20 @@ fn step_pinned_file(step: i32) -> Option<PathBuf> {
         .and_then(|list| pin_navigation::step_to(&current, &list, step))
 }
 
-/// The three answers a pin's key can get when a pin is up: take it down, show it a file picked
-/// since, or do nothing at all.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum PinPress {
-    /// The pin comes down, by the ordinary take-down a close button goes through.
-    Unpin,
-    /// The window is put back up on a file picked in Explorer since the collapse: a bubble is a
-    /// thing that was put away to be brought out again, not a thing the key ends.
-    Swap,
-    /// The key was not about the pin, and the pin is left exactly as it is.
-    Nothing,
-}
-
-/// What the key does to a pin that is up, from the three facts that make the question askable.
+/// Whether the pin key brings a bubble back, from the two facts that make the question askable.
 ///
-/// The hand is asked first because it is the only one of the three that cannot be a coincidence:
-/// a press on the pin is the pin being touched, whatever the keyboard happens to be doing, and it
-/// is the one a drag of the bubble leaves behind.
-fn pin_press_action(collapsed: bool, explorer_focused: bool, hand: bool) -> PinPress {
-    if hand {
-        return PinPress::Unpin;
-    }
-
-    // With the keyboard in another program, the key belongs to that program. A pin never took
-    // focus, so this is the only thing that says the press was not about the pin at all.
-    if !explorer_focused {
-        return PinPress::Nothing;
-    }
-
-    // Explorer holding the keyboard, and the pin not in front of the user, is a key thrown at the
-    // folder tree. A window that is up is what stands between the tree and the files in it, so
-    // that press is about the pin; a bubble is not — it has been put away on purpose, and what the
-    // user is doing behind it is picking files, which the pin is owed an answer to rather than an
-    // end (see `pin_bubble_pick`).
-    if collapsed {
-        PinPress::Swap
-    } else {
-        PinPress::Unpin
-    }
+/// It never hides anything, which is the whole of the change: the key used to answer a window
+/// that was up by taking it down, and that read as a pin that got in the way of a key thrown at a
+/// window the user was not in — a Space in particular, which is Explorer's own and is as likely to
+/// be finishing a name as anything else.
+///
+/// What is left is the one thing the key is still for: a bubble is a window the user put away on
+/// purpose, so the key that put it away is the key that brings it back. It is answered only where
+/// the keyboard is in Explorer, because behind a bubble is a listing the user is working in and the
+/// file picked there is what the window should come back up on — anywhere else the key is that
+/// program's (see `pin_bubble_pick`).
+fn pin_key_restores_bubble(collapsed: bool, explorer_focused: bool) -> bool {
+    collapsed && explorer_focused
 }
 
 /// The class the round bubble a collapsed pin leaves is created from.
@@ -14694,10 +14856,6 @@ fn collapse_pin() {
 
         pin.collapsed = true;
         PIN_COLLAPSED.store(true, Ordering::Release);
-        // The press that collapsed the window was on the minimize button, and what it leaves is a
-        // bubble the hand has not been on: the pin is not on the bubble until it is pressed (see
-        // `PIN_HAND`).
-        PIN_HAND.store(false, Ordering::Release);
 
         // A bubble has no bar and no level to be read off: the popup goes with the window it was
         // drawn over, and a pin put back up is put back up without it.
@@ -14709,6 +14867,17 @@ fn collapse_pin() {
         // `pinned_minimize_box`).
         pinned_minimize_box(pin)
     };
+
+    // A window that is being taken off the screen is not a window the user is in, and the bubble
+    // that takes its place cannot be — it is a circle standing in for a window, and it is made the
+    // way every preview is. The keyboard goes back now rather than whenever Windows notices the
+    // window has gone, so that a pin collapsed with the caret on it does not leave the caret on a
+    // window that is not there (see `pin_drop_focus`).
+    //
+    // Asked for outside the lock above because giving a focus up is a message to this app's own
+    // window procedure, and a window procedure that arrives back here while the lock is held would
+    // be a second thread waiting on it — this one, from its own loop.
+    pin_drop_focus();
 
     unsafe {
         hide_pinned_windows();
@@ -15306,11 +15475,6 @@ unsafe extern "system" fn pin_bubble_proc(
 ) -> LRESULT {
     match msg {
         WM_LBUTTONDOWN => {
-            // The hand is on the bubble from the press that takes hold of it, whatever that press
-            // turns out to be — a click, or a drag that carries the bubble somewhere and leaves it
-            // there under the pointer (see `PIN_HAND`).
-            note_pin_hand();
-
             let cursor = cursor_screen_point();
             let origin = window_origin(hwnd).map(|rect| (rect.0, rect.1));
 
@@ -16294,11 +16458,11 @@ unsafe fn apply_pin_drag(hwnd: HWND) {
         if matches!(drag.action, PinDragAction::Resize(_)) {
             pin.bound = Some((content.2 - content.0).max(content.3 - content.1).max(1));
         }
-        // And a maximized window's restore is carried along with the hand — or given up where the
-        // hand has pulled the box to a size of its own, which is a maximize there is nothing left
-        // to undo: the caption's restore glyph goes back to a maximize with it, and the button
-        // maximizes again (see `pin_restore_box`).
-        pin.restore = pin_restore_box(pin.restore, pin.content, content, drag.action);
+        // And a maximized window gives its restore up to any hand that has moved it, carried to
+        // another place or pulled to a size of its own: a window the user has taken hold of is one
+        // there is no maximize left to undo, so the caption's restore glyph goes back to a maximize
+        // with it and the button maximizes again (see `pin_restore_box`).
+        pin.restore = pin_restore_box(pin.restore, pin.content, content);
         pin.content = content;
     }
 
@@ -16944,7 +17108,7 @@ pub fn run_preview_window() {
         // The file picked in Explorer while the pin is a bubble: held rather than shown, because a
         // pin that is a bubble has no window to show anything in, and what the user is doing
         // behind it is walking through files. The key is what brings the window back up on it
-        // (see `pin_press_action`).
+        // (see `pin_key_restores_bubble`).
         let mut pin_bubble_pick: Option<PathBuf> = None;
         // A player that has been started and has not put its window up yet: the wait
         // for a video, which the spinner stands in for until the player's window is
@@ -17038,40 +17202,33 @@ pub fn run_preview_window() {
             let pin_presses = crate::shell::key_input::take_presses();
             if pin_presses > 0 && pin_enabled() {
                 if pinned() {
-                    // The key that pins is the key that unpins: one gesture for the whole of
-                    // it, which is what a key Explorer also owns has to be. It only unpins what
-                    // it is about, though, and neither the pin nor its bubble can be found out
-                    // from Windows as the window the user is in — so what is asked instead is
-                    // the keyboard, and whether the hand is on one of the pin's own windows
-                    // (see `pin_press_action`).
-                    match pin_press_action(
+                    // The key no longer hides a window that is up. A pin the user has not pressed
+                    // is a pin they are not in, and a key pressed at a window nobody is in is not a
+                    // request to close it — least of all one that reads as a Space thrown at
+                    // whatever the user was typing when the pin came up. A window that is up
+                    // answers the keyboard itself now, as a window in the foreground does (see
+                    // `pinned_key_command`).
+                    //
+                    // What the key still does is bring back a bubble. A bubble is a window the
+                    // user put away on purpose, so the key that put it away is the key that brings
+                    // it back, and it is answered only where the keyboard is in Explorer — behind
+                    // a bubble is a listing the user is working in, and the file picked there is
+                    // what the window should come back up on (see `pin_bubble_pick`).
+                    if pin_key_restores_bubble(
                         pin_is_collapsed(),
                         crate::shell::explorer_hook::is_foreground_explorer(),
-                        pin_has_the_hand(),
                     ) {
-                        PinPress::Unpin => pin_request = Some(end_pin_state()),
-                        // A bubble is not a thing the key ends: it is a window the user put away
-                        // and is working behind, so the key brings it back on the file that has
-                        // been picked since it went down. The window is put back up first, so
-                        // that the swap below runs against a pin that is on screen again, at the
-                        // box a restore leaves it in.
-                        PinPress::Swap => {
-                            // The window comes back only where the swap has room to be made in the
-                            // same tick: a load already in hand is a tick the pick below has no
-                            // work for, and a window put back up without the file it was brought
-                            // back for is a worse answer than the bubble it stayed in. The file is
-                            // left in hand for the next press either way.
-                            if pending_load.is_none() {
-                                if let Some(path) = pin_bubble_pick.take() {
-                                    restore_pin();
-                                    pin_swap_requested = Some(path);
-                                }
+                        // The window comes back only where the swap has room to be made in the
+                        // same tick: a load already in hand is a tick the pick below has no
+                        // work for, and a window put back up without the file it was brought
+                        // back for is a worse answer than the bubble it stayed in. The file is
+                        // left in hand for the next press either way.
+                        if pending_load.is_none() {
+                            if let Some(path) = pin_bubble_pick.take() {
+                                restore_pin();
+                                pin_swap_requested = Some(path);
                             }
                         }
-                        // A key thrown at another program is that program's, and the pin is left
-                        // as it stands: closing it here would lose a window nothing asked to be
-                        // lost.
-                        PinPress::Nothing => {}
                     }
                 } else if let Some(request) =
                     pin_what_is_on_screen(&current_show, pending_load.as_ref())
@@ -17101,12 +17258,12 @@ pub fn run_preview_window() {
                 // `settle_bubble_playback`).
                 settle_bubble_playback(&mut audio_started, &mut audio_start_offset);
 
-                // What a key does to a pinned text preview, polled rather than waited for: a
-                // window that never takes focus never receives a keystroke as a message. Ctrl+C
-                // is answered for every preview by the tick below, which puts what is selected on
-                // the clipboard; Ctrl+A is the pin's own answer, because selecting everything in
-                // the frame is a thing asked of a window and not of a hover (see
-                // `pinned_select_all_requested`).
+                // What a key does to a pinned text preview, polled rather than waited for: a pin
+                // that the user has not pressed is a window nobody is in, and a window nobody is
+                // in is never sent a keystroke. Ctrl+C is answered for every preview by the tick
+                // below, which puts what is selected on the clipboard; Ctrl+A is the pin's own
+                // answer, because selecting everything in the frame is a thing asked of a window
+                // and not of a hover (see `pinned_select_all_requested`).
                 if pinned_select_all_requested() {
                     select_all_text_preview(hwnd);
                 }
@@ -19065,10 +19222,11 @@ pub fn run_preview_window() {
 
                         PIN_ACTIVE.store(true, Ordering::Release);
                         PIN_COLLAPSED.store(false, Ordering::Release);
-                        // A window coming up is one nobody has pressed on yet, and a pin is placed
-                        // where the pointer already is, so a pointer resting inside the new box is
-                        // not a hand on it (see `PIN_HAND`).
-                        PIN_HAND.store(false, Ordering::Release);
+                        // A pin comes up under a pointer that may be anywhere, including inside a
+                        // name being renamed, so it may take the focus but is not given it until
+                        // the hand presses it (see `pin_set_focusable`).
+                        PIN_FOCUSED.store(false, Ordering::Release);
+                        pin_set_focusable(hwnd, true);
 
                         // A text preview is the one kind a pin *changes* rather than frames: it
                         // comes up in full mode, which is the scrollbar, the selection, and the
@@ -19522,9 +19680,10 @@ pub fn run_preview_window() {
             }
 
             // Ctrl+C over a text preview copies what is selected in it. The key
-            // is polled rather than waited for: the preview never takes focus, so
-            // it would never receive the keystroke as a message. Selecting
-            // everything is the menu's `Select All`, not a key of its own.
+            // is polled rather than waited for: a preview the user has not pressed
+            // is a window nobody is in, so it would never receive the keystroke as
+            // a message. Selecting everything is the menu's `Select All`, not a key
+            // of its own.
             if text_preview_copy_requested() {
                 copy_text_preview(hwnd);
             }
@@ -19642,6 +19801,9 @@ pub fn run_preview_window() {
 mod tests {
     use super::*;
     use crate::config::config::DEFAULT_FONT_SCALE_PERCENT;
+    // The key a pin answers with nothing, which is the one the mapping has to name explicitly
+    // and which nothing outside a test ever has to read.
+    use windows::Win32::UI::Input::KeyboardAndMouse::VK_SPACE;
 
     /// A display to place on: 1000 by 800 at its top-left corner.
     fn bounds() -> ScreenBounds {
@@ -23405,26 +23567,119 @@ mod tests {
         assert_eq!(content_box_of(window, 96, true, true), window);
     }
 
+    /// A key pressed on a pin that is the window the user is in walks the pin's own folder, and
+    /// a Space thrown at the same window does nothing at all.
+    ///
+    /// The gate is the window itself, not a reading of the keyboard: these keys arrive here
+    /// because Windows routed them to the pin, and that is a thing Windows does and not a
+    /// thing this app polls for. So the mapping is the whole of what decides which keys a pin
+    /// answers, and a key it does not answer is a key the listing behind it is sent as usual.
     #[test]
-    fn the_pin_key_only_closes_the_window_it_is_about() {
-        // The hand on the pin and another program in front of it: the key was about the pin
-        // whatever the keyboard is doing, so the window comes down. A press on the pin is the
-        // one fact that cannot be a coincidence, and it is a drag of the bubble that leaves it
-        // behind.
-        assert_eq!(pin_press_action(false, false, true), PinPress::Unpin);
+    fn a_key_reaches_a_pin_by_being_the_one_the_keyboard_is_in() {
+        for (vk, expected, name) in [
+            (VK_LEFT.0 as i32, Some(PinCommand::Previous), "left"),
+            (VK_UP.0 as i32, Some(PinCommand::Previous), "up"),
+            (VK_RIGHT.0 as i32, Some(PinCommand::Next), "right"),
+            (VK_DOWN.0 as i32, Some(PinCommand::Next), "down"),
+            (VK_ESCAPE.0 as i32, Some(PinCommand::Close), "escape"),
+        ] {
+            assert_eq!(
+                pinned_key_command(vk),
+                expected,
+                "{name} is the key a pin answers with {expected:?}"
+            );
+        }
 
-        // Nothing anywhere near the pin: no hand on it and the keyboard in somebody else's
-        // program, so the key is that program's and the window is left standing.
-        assert_eq!(pin_press_action(false, false, false), PinPress::Nothing);
+        // A Space is the key that used to hide the window, and it is the one key that is
+        // swallowed and asked nothing. A window the user is in cannot be dismissed by a key
+        // typed at it, and the character the key-down has already answered is swallowed in
+        // the window procedure beside it, so the system does not ring for it either.
+        assert_eq!(pinned_key_command(VK_SPACE.0 as i32), None);
 
-        // Explorer holding the keyboard, and a window up in front of the tree: the key was
-        // thrown at the pin, and one key for the whole of a pin is the gesture there is.
-        assert_eq!(pin_press_action(false, true, false), PinPress::Unpin);
+        // Nor is any other key the pin's to answer. An unmodified letter belongs to whatever
+        // the user is typing into, and a modified one is a command of some other program: both
+        // are keys this window was never asked about, and answering them would be a preview
+        // acting on the keyboard it is merely standing in front of.
+        for vk in [
+            VK_A.0 as i32,
+            VK_C.0 as i32,
+            0x41,
+            0x0D,
+            0x09,
+            0x2E,
+            0x21,
+            0x22,
+        ] {
+            assert_eq!(
+                pinned_key_command(vk),
+                None,
+                "{vk:#x} is nobody's to answer with"
+            );
+        }
+    }
 
-        // The same key at the same keyboard, but the pin is a bubble: it comes back up on the
-        // file that has been picked behind it, which is what a key means when what is up is a
-        // thing the user put away and is working behind.
-        assert_eq!(pin_press_action(true, true, false), PinPress::Swap);
+    /// The note that the keyboard was taken is dropped on every road out of a pin, and kept
+    /// everywhere else.
+    ///
+    /// The note is what makes a handover happen at all. A window hidden while it still holds the
+    /// focus leaves Windows to pick what to activate next, and a `WS_EX_TOOLWINDOW` popup is not
+    /// reliably followed by the Explorer window that was in front a moment ago — so the flag is
+    /// what `pin_drop_focus` asks before it goes to the trouble of putting the keyboard back, and
+    /// leaving it standing on a road out is what strands a caret on a window that is not there.
+    ///
+    /// Which window the user is in is not asked here, because it is not this flag's job: that is
+    /// `GetFocus` (see `pin_is_focused`), which is the one answer that cannot be wrong.
+    #[test]
+    fn the_keyboard_is_given_back_on_every_road_out_of_a_pin() {
+        // A pin that has just come up has taken nothing, and so owes nobody a handover.
+        assert!(
+            !PIN_FOCUSED.swap(true, Ordering::AcqRel),
+            "a pin nobody pressed holds no keyboard to give back"
+        );
+
+        // Windows taking the focus away is the user clicking into something else: the window now
+        // in front holds the keyboard, so there is nothing to hand over and the note is dropped.
+        pin_release_focus();
+        assert!(
+            !PIN_FOCUSED.swap(true, Ordering::AcqRel),
+            "losing the focus drops the note as well"
+        );
+
+        // A pin ending is the road that has to do the work: it drops the note and remembers where
+        // the keyboard came from, and the handover is what that note is asked for.
+        PIN_FOCUSED.store(true, Ordering::Release);
+        pin_drop_focus();
+        assert!(
+            !PIN_FOCUSED.swap(true, Ordering::AcqRel),
+            "a pin that is over holds no keyboard"
+        );
+        assert_eq!(
+            PIN_PREVIOUS_FOREGROUND.swap(0, Ordering::AcqRel),
+            0,
+            "a pin that is over remembers no window to hand the keyboard back to"
+        );
+    }
+
+    /// The pin key brings a bubble back, and it does not take a window down any more.
+    ///
+    /// Taking a window down is gone rather than narrowed, which is the point: a pin the user has
+    /// not pressed is a pin they are not in, and a key thrown at a window nobody is in is not a
+    /// request to close it.
+    #[test]
+    fn the_pin_key_only_brings_a_bubble_back_and_never_hides_a_window() {
+        // The one thing it still does: a bubble is a window the user put away, and the key that
+        // put it away brings it back on the file picked behind it.
+        assert!(pin_key_restores_bubble(true, true));
+        assert!(
+            !pin_key_restores_bubble(true, false),
+            "a bubble behind another program is not brought back by a key that program's"
+        );
+
+        // A window that is up is never brought back and never taken down, wherever the keyboard
+        // is: a window already up and a key pressed at nothing are the two halves of a pin that
+        // did nothing at all, which is the answer a Space now always gets.
+        assert!(!pin_key_restores_bubble(false, true));
+        assert!(!pin_key_restores_bubble(false, false));
     }
 
     /// Every command a caption's button asks for survives the trip out of the window procedure
@@ -25440,10 +25695,10 @@ mod tests {
     }
 
     /// What a restore down owes after the hand has had a maximized window: the box the window had
-    /// before it was maximized while nothing has been done to it, the place the hand left it at
-    /// with the size a restore remembers for a window that was carried, and nothing at all for one
-    /// the hand has resized — a maximize that has been resized is one there is nothing left to
-    /// undo, so the caption draws a maximize again (see `pin_restore_box`).
+    /// before it was maximized while nothing has moved it, and nothing at all the moment the hand
+    /// has moved it — carried to another place or pulled to a size, a maximize the user has taken
+    /// hold of is one there is nothing left to undo, so the caption draws a maximize again (see
+    /// `pin_restore_box`).
     #[test]
     fn a_restore_puts_back_the_size_the_window_came_from() {
         // The box the window had before the maximize button was pressed, and the box maximize put
@@ -25454,34 +25709,23 @@ mod tests {
         // Untouched since the maximize — a press the hand did not move is no drag — and the box
         // the maximize put aside is the box a restore puts back.
         assert_eq!(
-            pin_restore_box(Some(before), maximized, maximized, PinDragAction::Move),
+            pin_restore_box(Some(before), maximized, maximized),
             Some(before)
         );
 
-        // Carried somewhere: the size it came from, at the place the hand left it.
+        // Carried somewhere: the maximize is given up rather than brought along, which is what puts
+        // a maximize back in the caption and makes the button maximize again.
         assert_eq!(
-            pin_restore_box(
-                Some(before),
-                maximized,
-                (150, 400, 1150, 1150),
-                PinDragAction::Move
-            ),
-            Some((150, 400, 550, 700))
+            pin_restore_box(Some(before), maximized, (150, 400, 1150, 1150)),
+            None
         );
 
-        // Resized: the maximize is given up rather than brought along, which is what puts a
-        // maximize back in the caption and makes the button maximize again — and a carry that
-        // follows one has nothing left to carry, there being no restore any more.
-        let corner = PinDragAction::Resize(edge(false, false, true, true));
+        // Resized: the same answer, for the same reason — the size the maximize gave the window has
+        // been replaced by one the hand asked for. And a carry that follows either one has nothing
+        // left to carry, there being no restore any more.
         let resized = (100, 100, 700, 550);
-        assert_eq!(
-            pin_restore_box(Some(before), maximized, resized, corner),
-            None
-        );
-        assert_eq!(
-            pin_restore_box(None, resized, (300, 700, 900, 1150), PinDragAction::Move),
-            None
-        );
+        assert_eq!(pin_restore_box(Some(before), maximized, resized), None);
+        assert_eq!(pin_restore_box(None, resized, (300, 700, 900, 1150)), None);
     }
 
     #[test]

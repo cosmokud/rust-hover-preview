@@ -50,6 +50,7 @@ it decodes both, and has no demuxer for the image-sequence brands. The reader th
 the first frame — which is the behaviour it was written to have, and is why these show a still
 rather than nothing. What is needed is a demuxer for `avis` and `msf1` that this graph does not
 have, and the ways to get one are not small: **libheif** (which brings libde265 for HEVC, and is
+the first C/C++ build in a tree that compiles none), or a pure-Rust container reader that hands
 its samples to a decoder the same way this one does — [`heic`](https://github.com/imazen/heic)
 parses `msf1`/`moov` in pure Rust, but is AGPL-3.0 or a paid commercial licence, decodes HEVC
 I-slices only with no inter prediction, and reads a movie structure for its first I-frame rather
@@ -370,6 +371,43 @@ chosen by *name* and shown as it is, so a scan that opens on a blank leaf, or a 
 is a solid colour, shows that. The same walk would answer it — read the next plate by name when the
 first is one colour — and what it costs is one more decode per plate, which is why it is a change of its
 own rather than part of the reader.
+
+## A Page Of HTML Is Previewed With Scripting Withheld
+
+A page drawn by `render_html` is shown as a static picture of itself, and that is deliberate:
+the wrapper frame is sandboxed without `allow-scripts`, and the engine's own settings switch
+scripting off outright (`SetIsScriptEnabled(false)` in `configure`), so nothing a page draws
+with script runs. A page that draws *itself* with script — a WebGL canvas, a game — therefore
+shows its own background and nothing else, and can never play. This is not WebView2's limit:
+the runtime is Chromium, WebGL2 included, and the app withholds it on purpose, which the
+architecture already states as the sandbox rule a page is previewed under.
+
+**Whether a playable mode should exist is an open question, not a commitment**, and the file
+it was measured on is a single-file WebGL2 raytracer (`quasar.html`) with no network, no audio
+and no external references — so nothing outside the app stands in its way. Each thing a
+playable mode would take, measured against this app's own code:
+
+- **Scripts on, for the HTML kind alone.** The engine's `SetIsScriptEnabled(false)` is applied
+  to every document it draws, so turning scripts on is a per-want setting rather than one
+  global, and `allow-scripts` has to be added to the frame's sandbox token beside
+  `allow-same-origin` — a sandbox without it withholds script no matter what the settings say.
+- **Focus.** The engine's window is `WS_EX_NOACTIVATE` and its window proc returns
+  `MA_NOACTIVATE` for `WM_MOUSEACTIVATE`, so it can never take the keyboard. No key, and no
+  pointer lock, would reach the page. A playable mode is also the first thing that would have
+  to want a focus this app's windows deliberately never take.
+- **The pointer.** The pointer arriving on the engine's window currently counts as arriving on
+  the preview (`cursor_preview_hover`) and takes the preview down. The first click would have to
+  reach the page instead, which means relaxing that rule for a playing page — and the rule is
+  what keeps a hover from being sticky.
+- **Autoplay.** A page with sound needs `--autoplay-policy=no-user-gesture-required`, and
+  `BROWSER_ARGUMENTS` passes only `--host-resolver-rules="MAP * ~NOTFOUND" --hide-scrollbars`
+  today, so there is no flag for it.
+- **Local file access.** A page that reads its siblings needs
+  `--allow-file-access-from-files`; the sandbox's one allowance is the page's own origin, which
+  is what currently lets a page load its relative stylesheets and pictures and nothing more.
+
+WebGL2 is the harder question and is not on this list because nothing here blocks it: the
+runtime has it, and what stands in front of it today is scripts being off.
 
 ## Configuration
 
