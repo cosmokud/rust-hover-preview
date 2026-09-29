@@ -50,6 +50,13 @@ pub enum NativeJob {
     AnimatedApng,
     /// And for an animated WebP, which is libwebp's rather than the codec's.
     AnimatedWebp,
+    /// An AVIF or HEIF image sequence, which is the ISO base media family read by the media
+    /// engine Windows has — the only decoder in this graph that codes AV1 or HEVC, and
+    /// either of those may be missing from a machine (see `heif_sequence`).
+    AnimatedHeif,
+    /// An animated JPEG XL, which `jxl-oxide` reads for this app, with no codec of Windows
+    /// asked about it (see `jxl_image`).
+    AnimatedJxl,
     /// A Photoshop document, read for the merged picture it keeps past its layers.
     Psd,
     /// A design container — a Krita or OpenRaster project, a Procreate document — read for the
@@ -170,6 +177,8 @@ pub fn picture_job(path: &Path) -> NativeJob {
             PictureForm::Plays(PictureFamily::Gif) => return NativeJob::AnimatedGif,
             PictureForm::Plays(PictureFamily::Webp) => return NativeJob::AnimatedWebp,
             PictureForm::Plays(PictureFamily::Apng) => return NativeJob::AnimatedApng,
+            PictureForm::Plays(PictureFamily::Heif) => return NativeJob::AnimatedHeif,
+            PictureForm::Plays(PictureFamily::Jxl) => return NativeJob::AnimatedJxl,
             PictureForm::Still | PictureForm::Unplayable | PictureForm::Paged => {}
         }
     }
