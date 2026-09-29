@@ -22,6 +22,8 @@ use std::time::SystemTime;
 
 use once_cell::sync::Lazy;
 
+use crate::readers::jxl_image;
+
 /// How much of a file is read before it is decided whether the rest of it is wanted:
 /// enough for every signature written at the very start of a file, which is where the
 /// picture families are. RIFF's form type — `WEBP` against `AVI` — is why it is sixteen
@@ -73,6 +75,12 @@ pub(crate) enum PictureFamily {
     Gif,
     Webp,
     Apng,
+    /// An AVIF or HEIF image sequence — the ISO base media family, played through the media
+    /// engine Windows has rather than by a decoder of this app's own, since HEVC and AV1
+    /// have no other one here (see `heif_sequence`).
+    Heif,
+    /// An animated JPEG XL, which the `jxl-oxide` decoder reads (see `jxl_image`).
+    Jxl,
 }
 
 /// The head of one file: what was read of it, and what that says.
@@ -263,7 +271,7 @@ fn read(path: &Path, whole: bool, remote: bool) -> Option<Head> {
         .read_to_end(&mut bytes)
         .ok()?;
 
-    let (front, nature) = facts(&mut file, &bytes);
+    let (front, nature) = facts(path, &mut file, &bytes);
 
     // A front whose form this module knows is the whole answer — what it says does not change
     // for the rest of the window being read — so nothing more of it is read. It is still held
@@ -297,6 +305,7 @@ fn read(path: &Path, whole: bool, remote: bool) -> Option<Head> {
 /// (a PNG's `acTL` may sit behind an ancillary chunk of any size), but they are walks by
 /// length and not reads: no pixels are decoded to answer any of this.
 fn facts(
+    path: &Path,
     file: &mut File,
     front: &[u8],
 ) -> (Option<&'static [&'static str]>, Option<PictureNature>) {
@@ -338,28 +347,102 @@ fn facts(
     // The ISO base media family, where the brand at the front of the file is what says
     // whether it is one picture or a sequence of them. A brand this module does not know
     // is a front that settles nothing, which is what leaves a `.mov` to the tables.
+    //
+    // The brand that settles it is the *major* one at the front only most of the time: an
+    // encoder is free to name a compatible brand behind a still major brand, and `avis`
+    // behind `avif` is the ordinary way an animated AVIF is written. So the whole
+    // compatible list is read, and the first brand of either kind that is recognised is
+    // the one that decides.
     if front.len() >= 12 && &front[4..8] == b"ftyp" {
-        return match &front[8..12] {
-            // An AVIF sequence, and the sequence form of HEIF: what moves is a sequence in
-            // time that this app has no reader for.
-            b"avis" | b"msf1" => (
-                Some(&["avif"]),
-                Some(nature(PictureForm::Unplayable, true, false)),
-            ),
-            b"avif" | b"av01" => (
+        // The compatible brands are past the sixteen bytes the front window holds, so this
+        // is a walk of the file and not a read of what is already in hand — the same
+        // shape as `webp_is_animated`, and for the same reason: a box of any size may sit
+        // in front of the thing being asked about.
+        let brands = ftyp_brands(&mut BufReader::new(&mut *file), front);
+
+        // What makes a sequence a sequence is a *sequence* brand, and only that. `mif1` is
+        // not one: it is the generic HEIF image brand, and an ordinary single-image HEIC
+        // is commonly written with it in front. Treating it as a sequence would give every
+        // camera photo the animated scale and a pointless attempt to open it as one.
+        //
+        // `av01` is likewise a codec brand, not a container brand. It is read only where it
+        // is the *major* brand, which is the one position that says what the file is rather
+        // than what it was made with: as a compatible brand it appears behind `heic` on
+        // files that are HEIC and nothing else, and answering those as AVIF renames them.
+        let major = brands.first().copied().unwrap_or([0; 4]);
+        let is_sequence = brands
+            .iter()
+            .any(|brand| matches!(&brand[..], b"avis" | b"msf1"));
+        let is_avif = major == *b"av01"
+            || brands
+                .iter()
+                .any(|brand| matches!(&brand[..], b"avis" | b"avif" | b"msf1"));
+
+        if is_sequence {
+            // A sequence in time: an AVIF sequence is named `avis`, and the sequence form
+            // of HEIF is `msf1`. An AVIF one answers as `avif`; a HEIF one is named after
+            // what it codes with, or `heic`.
+            let names: &'static [&'static str] = if is_avif { &["avif"] } else { &["heic"] };
+
+            return (
+                Some(names),
+                Some(nature(PictureForm::Plays(PictureFamily::Heif), true, false)),
+            );
+        }
+
+        if is_avif {
+            return (
                 Some(&["avif"]),
                 Some(nature(PictureForm::Still, false, false)),
-            ),
-            b"heic" | b"heix" | b"hevc" | b"hevx" | b"mif1" | b"heim" => (
+            );
+        }
+
+        if brands.iter().any(|brand| {
+            matches!(
+                &brand[..],
+                b"heic" | b"heix" | b"hevc" | b"hevx" | b"mif1" | b"heim"
+            )
+        }) {
+            return (
                 Some(&["heic"]),
                 Some(nature(PictureForm::Still, false, false)),
-            ),
-            b"avci" => (
+            );
+        }
+
+        if brands.iter().any(|brand| brand == b"avci") {
+            return (
                 Some(&["avci"]),
                 Some(nature(PictureForm::Still, false, false)),
-            ),
-            _ => (None, None),
-        };
+            );
+        }
+
+        return (None, None);
+    }
+
+    // A JPEG XL arrives in two forms, and both are common: a naked codestream, which opens
+    // with the two signature bytes, and a container, which wraps one in a box. The
+    // container is the easy half — a fourcc walk finds the codestream behind `jxlc` — but
+    // the question this is asked is not where the pixels are but whether the file is a
+    // sequence in time, and that is a flag in the codestream's own image header, behind the
+    // box. So the second question is put to a decoder rather than walked.
+    //
+    // The first is the signature, and it is asked first and of the bytes already in hand,
+    // because this arm is reached by every file whose front settled nothing above — which
+    // is a great many files that are not JPEG XL at all. Opening one of those to read a
+    // header it does not have would put a header parse on this app's hover path for a
+    // format it almost never has.
+    if jxl_image::begins_like_jxl(front) {
+        if jxl_image::is_animated(path) {
+            return (
+                Some(&["jxl"]),
+                Some(nature(PictureForm::Plays(PictureFamily::Jxl), true, false)),
+            );
+        }
+
+        return (
+            Some(&["jxl"]),
+            Some(nature(PictureForm::Still, false, false)),
+        );
     }
 
     // A TIFF is the one still container a camera raw is written in — a `.dng`, a `.cr2`, a
@@ -421,6 +504,67 @@ fn facts(
     };
 
     (Some(names), Some(nature(PictureForm::Still, false, false)))
+}
+
+/// How many brands an ISO base media file is asked for: the major one and three compatible
+/// ones behind it. Past any real file's list, and the bound that keeps a file claiming a
+/// very large `ftyp` box from being walked end to end to answer a question its first two
+/// entries answer (see `ftyp_brands`).
+const FTYP_BRANDS_MAX: usize = 4;
+
+/// The brands an ISO base media file declares: the major one first, then every compatible
+/// one behind it, up to a handful.
+///
+/// The compatible list is the reason this is not simply a read of the bytes at the front.
+/// An `ftyp` box is a size, the fourcc `ftyp`, the major brand, a minor version, and then a
+/// run of further brands the file says it is also readable as — and an animated AVIF is
+/// commonly written with `avif` in front and `avis` in that run. Reading only the first
+/// brand is what made an animated AVIF look like a still one.
+///
+/// The list is past the front window, so it is read out of the file: this is a walk by
+/// length, and no pixels are decoded to answer any of it.
+///
+/// A handful is all that is read, and the bound is what keeps that a cheap question. The
+/// size the box declares is the file's own claim, and a file that claims a gigabyte of
+/// brands and then has a gigabyte behind it would otherwise be walked four bytes at a
+/// time to answer a question its first two entries answer. Four is past any real file's
+/// list and well inside what a hover may spend.
+///
+/// A box that claims no room for anything has no compatible brands in it, which is a still
+/// file of the ordinary shape. A file that has run out before the end of its own declared
+/// box yields the brands it did declare.
+fn ftyp_brands(reader: &mut Reader<'_>, front: &[u8]) -> Vec<[u8; 4]> {
+    let mut brands = Vec::new();
+    if front.len() < 16 || &front[4..8] != b"ftyp" {
+        return brands;
+    }
+
+    // The major brand, which is in the front window and is where every file that names one
+    // at all names it.
+    brands.push([front[8], front[9], front[10], front[11]]);
+
+    // The size the box declares, as the end of the brand list.
+    let declared = u32::from_be_bytes([front[0], front[1], front[2], front[3]]) as i64;
+    if declared <= 16 {
+        return brands;
+    }
+
+    if reader.seek(SeekFrom::Start(16)).is_err() {
+        return brands;
+    }
+
+    let mut at = 16i64;
+    while at + 4 <= declared && brands.len() < FTYP_BRANDS_MAX {
+        let mut brand = [0u8; 4];
+        if reader.read_exact(&mut brand).is_err() {
+            break;
+        }
+
+        brands.push(brand);
+        at += 4;
+    }
+
+    brands
 }
 
 const fn nature(form: PictureForm, moves: bool, container_of_a_raw: bool) -> PictureNature {
@@ -781,30 +925,145 @@ pub(crate) mod tests {
         );
     }
 
+    /// An ISO base media sequence: the brand at the front is what says whether it is one
+    /// picture or a sequence of them, and the whole of the brand list is read — not only
+    /// the major one, which is the half that made an animated AVIF look like a still one.
     #[test]
-    fn a_sequence_this_app_cannot_play_is_still_recognised_as_one() {
-        let mut sequence = b"\x00\x00\x00\x20".to_vec();
-        sequence.extend_from_slice(b"ftypavis");
-        sequence.extend_from_slice(&[0u8; 16]);
+    fn an_iso_base_media_sequence_is_told_apart_by_the_brands_it_declares() {
+        // `avis` in front, which is the sequence form of AVIF.
+        let mut avif_sequence = b"\x00\x00\x00\x20".to_vec();
+        avif_sequence.extend_from_slice(b"ftypavis");
+        avif_sequence.extend_from_slice(&[0u8; 16]);
 
+        // `mif1`, the generic HEIF brand a HEIC burst is usually written under, with `heic`
+        // behind it as a compatible brand. `mif1` on its own is *not* a sequence: it is the
+        // brand an ordinary single-image HEIC is written under too, so it is the still case
+        // as much as the moving one, and is settled as a picture.
+        let mut heic_single_under_mif1 = b"\x00\x00\x00\x20".to_vec();
+        heic_single_under_mif1.extend_from_slice(b"ftypmif1");
+        heic_single_under_mif1.extend_from_slice(&[0u8; 8]);
+        heic_single_under_mif1.extend_from_slice(b"heic");
+        heic_single_under_mif1.extend_from_slice(&[0u8; 8]);
+
+        // A HEIF sequence, which is `msf1` — the brand that does say so.
+        let mut heif_sequence = b"\x00\x00\x00\x20".to_vec();
+        heif_sequence.extend_from_slice(b"ftypmsf1");
+        heif_sequence.extend_from_slice(&[0u8; 16]);
+
+        // The ordinary way an animated AVIF is written: a still major brand, with the
+        // sequence brand behind it. Reading only the front four bytes misses this one.
+        let mut avis_behind_avif = b"\x00\x00\x00\x28".to_vec();
+        avis_behind_avif.extend_from_slice(b"ftypavif");
+        avis_behind_avif.extend_from_slice(&[0u8; 8]);
+        avis_behind_avif.extend_from_slice(b"avis");
+        avis_behind_avif.extend_from_slice(&[0u8; 8]);
+
+        // A still AVIF: `avif` in front and no sequence brand anywhere behind it.
         let mut single = b"\x00\x00\x00\x20".to_vec();
         single.extend_from_slice(b"ftypavif");
         single.extend_from_slice(&[0u8; 16]);
 
+        // A still HEIC, which is the ordinary `.heic` a camera writes.
+        let mut heic_single = b"\x00\x00\x00\x20".to_vec();
+        heic_single.extend_from_slice(b"ftypheic");
+        heic_single.extend_from_slice(&[0u8; 16]);
+
         assert_eq!(
-            picture_nature(&sample("avis", "picture.avif", &sequence)),
-            Some(nature(PictureForm::Unplayable, true, false)),
-            "an `avis` brand is a sequence in time, and it is drawn as its first frame"
+            picture_nature(&sample("avis", "picture.avif", &avif_sequence)),
+            Some(nature(PictureForm::Plays(PictureFamily::Heif), true, false)),
+            "an `avis` brand is a sequence in time, and it is played"
+        );
+        assert_eq!(
+            picture_nature(&sample("msf1", "picture.heic", &heif_sequence)),
+            Some(nature(PictureForm::Plays(PictureFamily::Heif), true, false)),
+            "`msf1` is the HEIF sequence brand, and it is a sequence whatever it codes with"
+        );
+        assert_eq!(
+            picture_nature(&sample(
+                "avis-behind-avif",
+                "picture.avif",
+                &avis_behind_avif
+            )),
+            Some(nature(PictureForm::Plays(PictureFamily::Heif), true, false)),
+            "an `avis` behind an `avif` is still a sequence: the major brand is not the only brand"
         );
         assert_eq!(
             picture_nature(&sample("avif", "picture.avif", &single)),
             Some(nature(PictureForm::Still, false, false))
+        );
+        assert_eq!(
+            picture_nature(&sample("heic", "picture.heic", &heic_single)),
+            Some(nature(PictureForm::Still, false, false)),
+            "a `heic` with no sequence brand behind it is the still picture a camera writes"
+        );
+        assert_eq!(
+            picture_nature(&sample("mif1", "picture.heic", &heic_single_under_mif1)),
+            Some(nature(PictureForm::Still, false, false)),
+            "`mif1` is the generic HEIF *image* brand, and a single-image HEIC is written \
+             under it — treating it as a sequence would give every camera photo the \
+             animated scale"
+        );
+
+        // A codec brand behind a container brand says what the file was made with, not
+        // what it is: a HEIF that lists `av01` is a HEIC and must still be answered as one.
+        let mut heic_coded_with_av1 = b"\x00\x00\x00\x20".to_vec();
+        heic_coded_with_av1.extend_from_slice(b"ftypheic");
+        heic_coded_with_av1.extend_from_slice(&[0u8; 8]);
+        heic_coded_with_av1.extend_from_slice(b"av01");
+        heic_coded_with_av1.extend_from_slice(&[0u8; 8]);
+
+        assert_eq!(
+            picture_nature(&sample("heic-av01", "picture.heic", &heic_coded_with_av1)),
+            Some(nature(PictureForm::Still, false, false)),
+            "an `av01` behind a `heic` is the codec it was made with, not an AVIF"
         );
 
         let mng = sample("mng", "picture.mng", &[0x8A, b'M', b'N', b'G', 0, 0, 0, 0]);
         assert_eq!(
             picture_nature(&mng),
             Some(nature(PictureForm::Unplayable, true, false))
+        );
+    }
+
+    /// A JPEG XL is recognised in both the forms it arrives in — a naked codestream and a
+    /// container — from its own signature, whichever it is.
+    ///
+    /// Whether one *moves* is a different question, and is not answered here: the anim flag
+    /// is in the codestream's image header, behind the container box, so it is the decoder
+    /// that is asked (`jxl_image::is_animated`). What this test holds is that the signature
+    /// is recognised at all — which it was not, before: a `.jxl` fell through the whole of
+    /// this module and was left to the tables.
+    #[test]
+    fn a_jpeg_xl_is_recognised_in_both_the_forms_it_arrives_in() {
+        let codestream = sample(
+            "jxl-codestream",
+            "picture.jxl",
+            &[0xFF, 0x0A, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
+        );
+        let container = sample(
+            "jxl-container",
+            "picture.jxl",
+            &[b"\x00\x00\x00\x0CJXL \r\n\x87\n".to_vec(), vec![0u8; 16]].concat(),
+        );
+
+        // Neither of the two above carries a codestream, so neither is a sequence — but both
+        // are JPEG XL files, and both are answered as the still pictures they are rather
+        // than as a front that settles nothing.
+        assert_eq!(
+            picture_nature(&codestream),
+            Some(nature(PictureForm::Still, false, false)),
+            "a naked codestream is a JPEG XL"
+        );
+        assert_eq!(
+            picture_nature(&container),
+            Some(nature(PictureForm::Still, false, false)),
+            "the container form is a JPEG XL too"
+        );
+
+        // A file that is none of these is still a front that settles nothing.
+        assert_eq!(
+            picture_nature(&sample("jxl-none", "picture.jxl", b"not a jpeg xl")),
+            None
         );
     }
 
