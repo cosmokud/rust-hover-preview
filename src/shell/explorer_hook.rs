@@ -1041,6 +1041,16 @@ const DISPLAY_CHANGE_BACKOFF_MS: u64 = 1500;
 const DISPLAY_CHECK_MS: u64 = 200;
 const KEYBOARD_FOCUS_INPUT_GRACE_MS: u64 = 500;
 const HOVER_RESOLVER_INPUT_GRACE_MS: u64 = 1500;
+/// How long a click a pinned preview never got to look at is held for before it is let go.
+///
+/// The press bit that says a click happened can only be read once, and the tick that reads it is
+/// the only tick it is on: a click that takes the focus away from the pinned window, and a click
+/// that gives it back to Explorer, are both asked about before UI Automation has caught up with
+/// the listing under the hand, and what is under the pointer is answered on a tick the hand has
+/// already moved on (see `PinUpdateWatch::follow`). Half a second is the same window the
+/// keyboard's own input is given to move something in, and a hand that clicks and then leaves has
+/// not asked for anything to be looked up on its behalf after that.
+const PIN_CLICK_RETRY_MS: u64 = 500;
 /// How often the item the keyboard is on is looked at, while a key is being pressed or while a
 /// preview is pinned and the pin follows the keyboard: the focus is read through UI Automation,
 /// which is a crossing into Explorer, so it is asked no faster than this — fast enough that a list
@@ -4078,6 +4088,21 @@ struct PinUpdateWatch {
     /// witness for the item that Enter lands the focus on. And it is a time rather than a flag, so a
     /// witness nothing made good on cannot outlive the press that gave it.
     walk_at: Option<Instant>,
+    /// When a click was seen while a pin was up that asking what was under the pointer answered
+    /// nothing, and where the pointer was standing when it was seen: a click the tick it arrived
+    /// on could not resolve, held for the short while the shell takes to catch up rather than
+    /// dropped with the press bit that is the only evidence it happened (see
+    /// `PinUpdateWatch::follow`).
+    ///
+    /// A click that resolved, however it was resolved — a file the pin is already showing, a file
+    /// nothing can be shown for — is not held: the answer was had and the pin has done what it
+    /// does with it.
+    pending_click_at: Option<Instant>,
+    /// Where the pointer was on the click `pending_click_at` was noted, which is what the retry
+    /// looks the file up under and what a hand that has since moved on is told from one that has
+    /// not: a click is a file the user picked at the spot they picked it, and a hand that has
+    /// travelled since is asking about whatever is under it now.
+    pending_click_point: Option<POINT>,
 }
 
 impl PinUpdateWatch {
@@ -4105,6 +4130,13 @@ impl PinUpdateWatch {
     /// is what leaves the first selection a user makes after pressing the pin to give it the
     /// keyboard and then clicking back into Explorer a pick rather than a baseline, with the one
     /// after it not the first that counts (see `PinUpdateWatch::note_shown`).
+    ///
+    /// A click is also held for a moment rather than answered once. The press bit it comes from is
+    /// spent by the read, and the tick it is spent on is the only tick it is on — which is exactly
+    /// the tick a click that lands as a pin takes the focus away from Explorer, or as Explorer takes
+    /// it back, is asked about, with the shell not yet answering for the listing under it. Such a
+    /// click is held and asked again while the hand stays where it left it (see
+    /// `pending_click_at`).
     fn follow(
         &mut self,
         resolver: &mut ItemResolver,
@@ -4184,7 +4216,58 @@ impl PinUpdateWatch {
             self.probed = true;
 
             if let Some(path) = get_file_under_cursor(resolver, &pointer) {
+                // What was resolved is answered whatever it turned out to be — a file the pin is
+                // already showing and a file nothing can be shown for are both answers the pin
+                // deals with — so there is nothing here left to ask about again.
                 self.offer(&path, &showing);
+                self.pending_click_at = None;
+                self.pending_click_point = None;
+            } else if clicked {
+                // The lookup answered nothing, and the click is the only evidence it happened: the
+                // press bit it came from has been spent by the read that gave this tick its input
+                // and is not on any later tick. Explorer is commonly still coming up when a click
+                // lands on it — a click that takes the focus out of the pinned window and a click
+                // back into Explorer are both read before the shell has caught up with either — so
+                // it is held and asked again below rather than spent for nothing.
+                self.pending_click_at = Some(now);
+                self.pending_click_point = Some(pointer.point);
+            }
+        } else if clicked {
+            // The same click, one step earlier in the race: what is under the pointer is not
+            // Explorer's own window because the window is not there yet, and a click is asked
+            // about wherever it landed rather than dropped for having landed early.
+            self.pending_click_at = Some(now);
+            self.pending_click_point = Some(pointer.point);
+        }
+
+        // The click above, asked again now that the shell may have caught up. It runs only where
+        // something is held, and only something a click put there, so a tick that never saw a
+        // click offers nothing here — the held click is a user's pick and never a hover.
+        if !clicked {
+            if let (Some(at), Some(point)) = (self.pending_click_at, self.pending_click_point) {
+                if now - at > Duration::from_millis(PIN_CLICK_RETRY_MS) {
+                    // Nothing has come of it by now, and what a click held for half a second is
+                    // not worth a stale file being shown beside it (see `PIN_CLICK_RETRY_MS`).
+                    self.pending_click_at = None;
+                    self.pending_click_point = None;
+                } else if (pointer.point.x - point.x).abs() > threshold
+                    || (pointer.point.y - point.y).abs() > threshold
+                {
+                    // The hand has moved on since the click: it is asking about whatever is under
+                    // it now, and resolving the file it clicked on a moment ago would be a file
+                    // the user has not picked.
+                    self.pending_click_at = None;
+                    self.pending_click_point = None;
+                } else if over_explorer {
+                    // The hand is where it clicked and Explorer is answering for it. The lookup is
+                    // kept only while it answers nothing: a file it does resolve is offered and
+                    // stops the retry, whatever the offer then does with it.
+                    if let Some(path) = get_file_under_cursor(resolver, &pointer) {
+                        self.offer(&path, &showing);
+                        self.pending_click_at = None;
+                        self.pending_click_point = None;
+                    }
+                }
             }
         }
 
@@ -4246,7 +4329,9 @@ impl PinUpdateWatch {
     /// the pin. A swap is a window being shown another file, and the listing is where it was.
     ///
     /// A pin taken up is the watch beginning, and it begins from nothing: what is on the keyboard
-    /// when a pin comes up is a baseline and not a choice, whatever the listing had on it.
+    /// when a pin comes up is a baseline and not a choice, whatever the listing had on it. A click
+    /// held for a retry goes with the pointer's reading of it, for the same reason: it was measured
+    /// against what the pin was showing before, and this is what the pin shows now.
     fn note_shown(&mut self, showing: &Path) {
         let mut next = Self {
             showing: Some(showing.to_path_buf()),
@@ -4699,6 +4784,10 @@ pub fn run_explorer_hook() {
     // the pin is showing, where the pointer was the last time it was read, and the item the
     // keyboard is on (see `PinUpdateWatch`).
     let mut pin_watch = PinUpdateWatch::default();
+    // Whether Explorer held the foreground the last time a pinned tick asked: the pin takes the
+    // focus away from it and gives it back, and what the resolver has cached across that is what
+    // a listing that has moved on under the pin still reads as (see the pinned branch below).
+    let mut pin_saw_explorer_foreground = is_foreground_explorer();
     let mut last_user_input_at: Option<Instant> = None;
     let mut last_keyboard_navigation_input_at: Option<Instant> = None;
     // Set on a click, Enter or a navigation key press: the folder probe runs at
@@ -5110,6 +5199,24 @@ pub fn run_explorer_hook() {
         // the pin rather than a hover beside it, and it is answered by the same loop, one tick at
         // a time, with nothing of the machinery above touched (see `PinUpdateWatch`).
         if pinned() {
+            // What the item and the view caches hold is frozen while a pin is up — nothing
+            // resolves on this branch but the pin's own following — so every view and every item
+            // is still the one the listing had when the pin came up. A pin that has just taken the
+            // focus, or that has just given it back, is exactly when that is least true, and it is
+            // when the user is about to pick: a file the click lands on read from a stale view set
+            // resolves to nothing, and the first item the keyboard lands on is place-compared
+            // against the view it was read in the pin was raised over, which reads as a landing and
+            // drops the one pick that has a hand behind it. Both caches are dropped on the
+            // transition itself rather than on a timer, so the first pick after the pin is focused
+            // or clicked resolves against — and is compared against — the listing as it is now
+            // (see `ItemResolver::forget_item` and `ItemResolver::forget_window_views`).
+            let explorer_fg = is_foreground_explorer();
+            if explorer_fg != pin_saw_explorer_foreground {
+                resolver.forget_item();
+                resolver.forget_window_views();
+                pin_saw_explorer_foreground = explorer_fg;
+            }
+
             let (update, on_hover) = pin_update_settings();
             let focus_move = focus_move_input();
 
@@ -6667,10 +6774,13 @@ mod tests {
             "a watch that has not watched anything holds no baseline to keep"
         );
 
-        // A listing is read into it, and the hand arrives.
+        // A listing is read into it, and the hand arrives. A click is held for a retry, as one
+        // that landed while the shell was still catching up would be.
         watch.focused = Some(item("one.png", 100));
         watch.note_place(Some(here.clone()));
         watch.arrived = true;
+        watch.pending_click_at = Some(Instant::now());
+        watch.pending_click_point = Some(POINT { x: 120, y: 240 });
 
         // A swap throws the pointer's own reading away and nothing else.
         watch.note_shown(Path::new("D:/Pictures/two.png"));
@@ -6696,6 +6806,10 @@ mod tests {
         assert!(
             watch.pointer.is_none() && watch.settled_at.is_none() && !watch.probed,
             "the settle and the probe were measured against a window that has since moved"
+        );
+        assert!(
+            watch.pending_click_at.is_none() && watch.pending_click_point.is_none(),
+            "and a click held for a retry was measured against the showing before this one"
         );
 
         // And so the first item the focus lands on after the swap is a change the watch already
@@ -6732,11 +6846,19 @@ mod tests {
         // A pin is up again on another file, after the first was taken down: the watch was reset
         // while nothing was pinned (see `PinUpdateWatch::follow`), so this is a take-up.
         watch = PinUpdateWatch::default();
+        // A click is left held across a pin that is over, and a pin taken up afterwards is the
+        // watch beginning: the click was measured against a window that is not there now.
+        watch.pending_click_at = Some(Instant::now());
+        watch.pending_click_point = Some(POINT { x: 40, y: 60 });
         watch.note_shown(Path::new("D:/Videos/clip.mp4"));
 
         assert!(
             watch.focused.is_none() && watch.place.is_none() && !watch.arrived,
             "what is on the keyboard when a pin comes up is a baseline, not a choice"
+        );
+        assert!(
+            watch.pending_click_at.is_none() && watch.pending_click_point.is_none(),
+            "and a click held for a retry was held against the pin before this one"
         );
         assert_eq!(
             watch.showing.as_deref(),

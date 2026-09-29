@@ -17713,6 +17713,12 @@ pub fn run_preview_window() {
         // asked for on a tick of its own, with the walk carried onto it. What the walk stands
         // on is the file to be shown next (see `PinStep`).
         let mut pin_walk: Option<PinStep> = None;
+        // A listing pick that arrived while a hover load was in flight, held across ticks until
+        // nothing is loading rather than dropped with the per-tick slot: the per-tick pick below
+        // is consumed where it is taken up and never read again that tick, so a pick held in it
+        // would not survive into the tick that takes it up. The walk, if any, rides in the
+        // existing outer `pin_walk` (see the `pending_load.is_some()` re-queue arm).
+        let mut pin_held_pick: Option<PathBuf> = None;
         // A player that has been started and has not put its window up yet: the wait
         // for a video, which the spinner stands in for until the player's window is
         // there (see `VideoStart`).
@@ -19338,6 +19344,7 @@ pub fn run_preview_window() {
 
             if let Some(path) = pin_pick
                 .take()
+                .or_else(|| pin_held_pick.take())
                 .or_else(|| pin_swap_requested.take())
                 .or_else(|| pin_walk.as_ref().map(|walk| walk.at.clone()))
             {
@@ -19359,99 +19366,110 @@ pub fn run_preview_window() {
                 // window lost for a file they did not ask to see (see `pin_bubble_pick`).
                 if pinned() && pin_is_collapsed() {
                     pin_bubble_pick = Some(path);
-                } else if pinned()
-                    && (pin_update_enabled() || walk.is_some())
-                    && pending_load.is_none()
-                {
-                    // The setting is the gate on a *pick in the listing* — a file the pointer or
-                    // the keyboard chose behind the window — and not on a step of the pin's own
-                    // walk, which is a thing the user pressed on the window and is asked for by
-                    // no setting: a caption's next and previous did nothing at all with
-                    // `Pin Mode → Update Preview` off, which is the same "the navigation stopped"
-                    // a file with no preview causes, asked for by no one (see `step_pinned_file`).
-                    // Whether the plan answered that the file cannot be shown at all, as
-                    // opposed to a box or an engine that has not answered yet. Only the first
-                    // of the two is a file the walk steps over: a wait is a wait, and what
-                    // ends it is the answer it was asked for.
-                    let mut refused = false;
-                    let update = match pin_update_plan(&path) {
-                        Some(PinPlan::Show(update)) => Some(update),
-                        // The file has no box of its own yet — what was measured for it is the
-                        // wait for a read, for a probe that has not answered, or for a page an
-                        // engine still owes it — so the pin keeps the file it is showing and picks
-                        // this one up again when the answer lands. A box read and a sound's probe
-                        // are started where they are taken, which is `media_dimensions`; a video's
-                        // probe and an engine's page, picture or listing are asked for here (see
-                        // `pin_swap_awaits`, `audio_box` and `request_pin_engine_render`).
-                        Some(PinPlan::Awaiting) => {
-                            if video_probe_due(&path) {
-                                spawn_video_probe(path.clone(), current_generation);
-                            }
+                } else if pinned() && (pin_update_enabled() || walk.is_some()) {
+                    if pending_load.is_some() {
+                        // A hover somewhere behind the pin is loading, and a pick that arrived
+                        // while it did was the user's first pick after the pin took the focus —
+                        // the one whose click or key press is a single press bit the hook never
+                        // reads twice. It is held here and taken up on a tick when nothing is
+                        // loading, rather than dropped: the walk is carried with it, so a caption
+                        // step held this way is still a step of the walk it was a part of.
+                        pin_walk = walk;
+                        pin_held_pick = Some(path);
+                    } else {
+                        // The setting is the gate on a *pick in the listing* — a file the pointer
+                        // or the keyboard chose behind the window — and not on a step of the pin's
+                        // own walk, which is a thing the user pressed on the window and is asked
+                        // for by no setting: a caption's next and previous did nothing at all with
+                        // `Pin Mode → Update Preview` off, which is the same "the navigation
+                        // stopped" a file with no preview causes, asked for by no one (see
+                        // `step_pinned_file`). Whether the plan answered that the file cannot be
+                        // shown at all, as opposed to a box or an engine that has not answered yet.
+                        // Only the first of the two is a file the walk steps over: a wait is a
+                        // wait, and what ends it is the answer it was asked for.
+                        let mut refused = false;
+                        let update = match pin_update_plan(&path) {
+                            Some(PinPlan::Show(update)) => Some(update),
+                            // The file has no box of its own yet — what was measured for it is the
+                            // wait for a read, for a probe that has not answered, or for a page an
+                            // engine still owes it — so the pin keeps the file it is showing and
+                            // picks this one up again when the answer lands. A box read and a
+                            // sound's probe are started where they are taken, which is
+                            // `media_dimensions`; a video's probe and an engine's page, picture or
+                            // listing are asked for here (see `pin_swap_awaits`, `audio_box` and
+                            // `request_pin_engine_render`).
+                            Some(PinPlan::Awaiting) => {
+                                if video_probe_due(&path) {
+                                    spawn_video_probe(path.clone(), current_generation);
+                                }
 
-                            // What nothing has asked for yet is what an engine owes the file. It is
-                            // asked only where an engine really can be asked, so a file no engine
-                            // here reaches keeps the rule a swap has always had: the pin keeps the
-                            // file it is showing.
-                            let asked = page_is_on_the_way(&path)
-                                && request_pin_engine_render(&path, current_generation).is_some();
+                                // What nothing has asked for yet is what an engine owes the file.
+                                // It is asked only where an engine really can be asked, so a file
+                                // no engine here reaches keeps the rule a swap has always had: the
+                                // pin keeps the file it is showing.
+                                let asked = page_is_on_the_way(&path)
+                                    && request_pin_engine_render(&path, current_generation)
+                                        .is_some();
 
-                            // What the pin is waiting for, if anything: a read or a probe in
-                            // flight, or an engine that has just been asked. Nothing at all is a
-                            // pick to make again rather than a wait — an answer that landed between
-                            // the plan and the ask is one no engine will announce (see the hover's
-                            // own `requested.is_none` arm) — while a file no engine can be asked
-                            // about is left showing what it has.
-                            let outstanding =
-                                measure_waiting(&path) || video_probe_due(&path) || asked;
+                                // What the pin is waiting for, if anything: a read or a probe in
+                                // flight, or an engine that has just been asked. Nothing at all is a
+                                // pick to make again rather than a wait — an answer that landed
+                                // between the plan and the ask is one no engine will announce (see
+                                // the hover's own `requested.is_none` arm) — while a file no engine
+                                // can be asked about is left showing what it has.
+                                let outstanding =
+                                    measure_waiting(&path) || video_probe_due(&path) || asked;
 
-                            if outstanding {
-                                pin_awaiting_box = Some(path.clone());
-                                None
-                            } else if page_is_on_the_way(&path) {
-                                // A file the layout reads as waiting on an engine that no reader of
-                                // its kind can be asked for — a tier this machine has not got, a
-                                // kind whose engine was switched off — has nothing coming and
-                                // nothing to keep: the pin keeps the file it is showing, which is
-                                // the only thing a window that is already up can do for a file it
-                                // cannot show (the hover comes down on the same answer, having
-                                // nothing to keep).
-                                refused = true;
-                                None
-                            } else {
-                                // Nothing was on its way after all — an answer that landed between
-                                // the plan and the ask is one no engine will announce — so the file
-                                // is planned once more, and this time there is a box to lay out.
-                                match pin_update_plan(&path) {
-                                    Some(PinPlan::Show(update)) => Some(update),
-                                    _ => {
-                                        refused = true;
-                                        None
+                                if outstanding {
+                                    pin_awaiting_box = Some(path.clone());
+                                    None
+                                } else if page_is_on_the_way(&path) {
+                                    // A file the layout reads as waiting on an engine that no
+                                    // reader of its kind can be asked for — a tier this machine
+                                    // has not got, a kind whose engine was switched off — has
+                                    // nothing coming and nothing to keep: the pin keeps the file
+                                    // it is showing, which is the only thing a window that is
+                                    // already up can do for a file it cannot show (the hover comes
+                                    // down on the same answer, having nothing to keep).
+                                    refused = true;
+                                    None
+                                } else {
+                                    // Nothing was on its way after all — an answer that landed
+                                    // between the plan and the ask is one no engine will announce
+                                    // — so the file is planned once more, and this time there is a
+                                    // box to lay out.
+                                    match pin_update_plan(&path) {
+                                        Some(PinPlan::Show(update)) => Some(update),
+                                        _ => {
+                                            refused = true;
+                                            None
+                                        }
                                     }
                                 }
                             }
-                        }
-                        None => {
-                            // A file no kind previews, and a file the pin is already showing —
-                            // the walk's own list of one steps onto it. The first is stepped
-                            // over, because a walk that stopped on a file with no preview would
-                            // stop on every one of them; the second is not, because there is
-                            // nothing to show it again and nowhere to step on to.
-                            refused =
-                                walk.is_some() && pinned_path().as_deref() != Some(path.as_path());
-                            None
-                        }
-                    };
+                            None => {
+                                // A file no kind previews, and a file the pin is already showing —
+                                // the walk's own list of one steps onto it. The first is stepped
+                                // over, because a walk that stopped on a file with no preview
+                                // would stop on every one of them; the second is not, because there
+                                // is nothing to show it again and nowhere to step on to.
+                                refused = walk.is_some()
+                                    && pinned_path().as_deref() != Some(path.as_path());
+                                None
+                            }
+                        };
 
-                    if let Some(update) = update {
-                        // The read and the decode are a thread's work, so a file whose load is
-                        // slow is a wait the pin is painted for rather than a window frozen for
-                        // as long as the disk takes (see `PinLoad`).
-                        pin_load = Some(PinLoad::start(&path, update, walk));
-                    } else if refused {
-                        // A file the pin cannot be shown is stepped over rather than stopped
-                        // at: one press of a caption button is one gesture, and the gesture is
-                        // the next file there is to look at (see `PinStep`).
-                        step_pin_over(walk, &mut pin_walk);
+                        if let Some(update) = update {
+                            // The read and the decode are a thread's work, so a file whose load is
+                            // slow is a wait the pin is painted for rather than a window frozen
+                            // for as long as the disk takes (see `PinLoad`).
+                            pin_load = Some(PinLoad::start(&path, update, walk));
+                        } else if refused {
+                            // A file the pin cannot be shown is stepped over rather than stopped
+                            // at: one press of a caption button is one gesture, and the gesture
+                            // is the next file there is to look at (see `PinStep`).
+                            step_pin_over(walk, &mut pin_walk);
+                        }
                     }
                 }
             }
