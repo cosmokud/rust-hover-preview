@@ -114,7 +114,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     IDC_SIZEWE, MF_STRING, MSG, MWMO_INPUTAVAILABLE, PBT_APMRESUMEAUTOMATIC, PBT_APMRESUMESUSPEND,
     PBT_APMSTANDBY, PBT_APMSUSPEND, PM_REMOVE, QS_ALLINPUT, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN,
     SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SPI_GETWORKAREA, SWP_FRAMECHANGED, SWP_NOACTIVATE,
-    SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SW_HIDE, SW_SHOWNORMAL, SW_SHOWNOACTIVATE,
+    SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SW_HIDE, SW_SHOWNOACTIVATE, SW_SHOWNORMAL,
     SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, TPM_LEFTALIGN, TPM_NONOTIFY, TPM_RETURNCMD, TPM_TOPALIGN,
     ULW_ALPHA, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
     WM_POWERBROADCAST, WM_RBUTTONUP, WM_SETCURSOR, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
@@ -10717,8 +10717,10 @@ fn pointer_on_a_pin_window() -> bool {
         };
         (left, top, left + width, top + height)
     } else {
-        let window =
-            PINNED.lock().ok().and_then(|pinned| pinned.as_ref().map(|pin| pin.window_box()));
+        let window = PINNED
+            .lock()
+            .ok()
+            .and_then(|pinned| pinned.as_ref().map(|pin| pin.window_box()));
         match window {
             Some(window) => window,
             None => return false,
@@ -13104,6 +13106,9 @@ struct PinSwapSpace {
     /// Whether the window is maximized, where the display's room is the box and the bound is left
     /// for the restore that follows.
     maximized: bool,
+    /// The room the display has, which is where a maximized window's file is laid out — the
+    /// whole of what keeps a walk through shapes a window of one size (see `pin_update_content`).
+    room: ScreenBounds,
 }
 
 /// What a pin has to lay another file out with, read off it in one look: see `PinSwapSpace`.
@@ -13111,12 +13116,14 @@ struct PinSwapSpace {
 /// It is read rather than asked for piece by piece so that the lock is let go of before
 /// anything is measured or asked for an engine — the same rule `PinUpdate` keeps.
 fn pin_swap_space(pin: &PinnedPreview) -> PinSwapSpace {
+    let bounds = monitor_bounds_from_point(pin.content.0, pin.content.1);
     PinSwapSpace {
         current: pin.content,
         bound: pin.bound,
         transport_bar: pin.transport_bar,
         overlay: pin.overlay,
         maximized: pin.restore.is_some(),
+        room: pinned_room(bounds, pin.dpi, pin.transport_bar, pin.overlay),
     }
 }
 
@@ -13333,8 +13340,21 @@ fn pin_update_content(
     }
 
     if space.maximized {
+        // The room the display has, and not the box the file before this one came out at. A
+        // maximized window is the one that fills its display, and a swap that measured the
+        // new file against the last one would make every step a smaller step: 16:9 into a
+        // 16:9 box, then 4:3 into that, then 1:1 into that, is a window walking itself down
+        // to the smallest shape in the folder while the caption goes on drawing the restore
+        // glyph, because the maximize is a state about the room and never stopped being one.
+        // Measured against the room every time, a walk of shapes is a window of the same
+        // size showing something else — which is what every other swap in this file is for.
         return Some(PinBox::Measured(pin_update_box(
-            space.current,
+            (
+                space.room.left,
+                space.room.top,
+                space.room.right,
+                space.room.bottom,
+            ),
             shape,
             PreviewScale::FitToScreen,
         )));
@@ -13953,40 +13973,185 @@ fn replace_pinned_window() -> Option<PreviewMessage> {
 /// `pin_restore_box`), so the caption draws a maximize where the restore glyph was, and this
 /// maximizes the box the hand has left behind.
 fn toggle_pin_maximized(request: &mut Option<PreviewMessage>) {
-    let Ok(mut pinned) = PINNED.lock() else {
-        return;
-    };
-    let Some(pin) = pinned.as_mut() else {
+    // What the pin has is read out under its lock and the lock is let go of before anything is
+    // measured, which is the rule every other reader of a pin keeps: a measure is a file read,
+    // and this is the thread that pumps the pinned window's own messages, so a read held under
+    // the lock is a window that stops answering for as long as it takes (see `pin_swap_space`).
+    let Some((path, dpi, frame, overlay, transport_bar, content, restore)) = pin_maximize_inputs()
+    else {
         return;
     };
 
-    let bounds = monitor_bounds_from_point(pin.content.0, pin.content.1);
-    let room = pinned_room(bounds, pin.dpi, pin.transport_bar, pin.overlay);
+    let bounds = monitor_bounds_from_point(content.0, content.1);
+    let room = pinned_room(bounds, dpi, transport_bar, overlay);
+    let shape = media_dimensions(&path, bounds, dpi).filter(|shape| !box_is_the_wait(*shape));
 
-    let content = match pin.restore.take() {
+    // The maximize as the pin stood when it was read, kept for the write below: the two are
+    // the same question asked twice, and a walk that has landed elsewhere in between is a pin
+    // whose restore has been taken or written since, which is what a changed value says.
+    let maximize = restore;
+    let (content, restore) = pin_maximize_decided(PinMaximize {
+        frame,
+        content,
+        restore,
+        shape,
+        room,
+    });
+
+    let content = clamp_pinned_box(content, dpi);
+
+    // The check and the write are one lock and one step, because a walk taken between the read
+    // above and this write has changed what the pin is showing, and a box decided from the file
+    // it was on is not the box that file's window wants. The tick that answers the walk is
+    // already queued, so the right answer is to leave it to that rather than to lay out over the
+    // top of it — which is a decision not to write, so it is made beside the write and not
+    // before it.
+    let written = PINNED
+        .lock()
+        .ok()
+        .and_then(|mut pinned| {
+            let pin = pinned.as_mut()?;
+            if pin.path != path || pin.restore != maximize {
+                return None;
+            }
+
+            pin.restore = restore;
+            pin.content = content;
+            Some(())
+        })
+        .is_some();
+
+    if written {
+        *request = Some(PreviewMessage::PinBox(content));
+    }
+}
+
+/// What a maximize is decided from, once the file's own shape is known: the kind the pin is
+/// showing, the box it is standing in, the box the maximize put aside if it has one, and the
+/// room both are laid out in.
+struct PinMaximize {
+    frame: PinFrame,
+    content: ScreenRegion,
+    restore: Option<ScreenRegion>,
+    shape: Option<(u32, u32)>,
+    room: ScreenBounds,
+}
+
+/// The box the window is put in, and the box to remember for a restore: the whole of what a
+/// press of the maximize button decides.
+///
+/// Told apart from the reading and the writing around it, because a toggle is a state machine
+/// and this is its only transition: a window with a restore put aside is put back to it and
+/// gives it up, and one without is maximized to the room and remembers the box it had. Which of
+/// those it is must be read from the restore that came *in*, never from the one going out —
+/// the two are never the same value, and a button that checks its answer against itself is a
+/// button that does nothing.
+fn pin_maximize_decided(asked: PinMaximize) -> (ScreenRegion, Option<ScreenRegion>) {
+    let PinMaximize {
+        frame,
+        content,
+        restore,
+        shape,
+        room,
+    } = asked;
+
+    match restore {
         // The box kept for exactly this: the one the window had before the maximize, or the one
         // the hand has since made of it (see `pin_restore_box`).
-        Some(previous) => previous,
+        //
+        // Put back as it was, unless the file on screen is not the one it was kept for — in
+        // which case it is the box *this* file wants, at the size the user chose, rather than
+        // the size and shape of a file that was here before the walk moved on. A window drawn
+        // into a box of another file's shape is a stretched one, and a walk through shapes is
+        // the surest way to get there.
+        //
+        // No shape to fit it to — a file whose measure is still running, or one with no shape
+        // of its own — and the box is the only answer there is, and the user's own.
+        Some(previous) => (
+            shape.map_or(previous, |shape| pin_restored_box(shape, previous, room)),
+            None,
+        ),
         None => {
-            let shape = (
-                (pin.content.2 - pin.content.0).max(1) as u32,
-                (pin.content.3 - pin.content.1).max(1) as u32,
-            );
-            let (width, height) = match pin.frame {
+            let (width, height) = match frame {
+                // A kind laid out to whatever box it is given has no shape of its own to fit,
+                // so the room is what maximizing means for it.
                 PinFrame::Free => (
                     (room.right - room.left).max(1),
                     (room.bottom - room.top).max(1),
                 ),
-                _ => pinned_media_box(shape, room, PreviewScale::FitToScreen),
+                // A shaped kind is the file's own shape fitted to the room — read from the
+                // file, and not from the box the window happens to be standing in, which is
+                // already a fitted box and so a shape of nothing but its own container.
+                _ => {
+                    let shape = shape.unwrap_or_else(|| {
+                        // Nothing to fit — a file whose measure is still out, or one with no
+                        // shape of its own. The box on screen is the only shape there is.
+                        (
+                            (content.2 - content.0).max(1) as u32,
+                            (content.3 - content.1).max(1) as u32,
+                        )
+                    });
+                    pinned_media_box(shape, room, PreviewScale::FitToScreen)
+                }
             };
 
-            pin.restore = Some(pin.content);
-            centred_box((width, height), room)
+            (centred_box((width, height), room), Some(content))
         }
+    }
+}
+
+/// What a pin has to decide a maximize with, read out of it in one look: see `PinSwapSpace` for
+/// why it is read rather than asked for piece by piece.
+type PinMaximizeInputs = (
+    PathBuf,
+    u32,
+    PinFrame,
+    bool,
+    bool,
+    ScreenRegion,
+    Option<ScreenRegion>,
+);
+
+fn pin_maximize_inputs() -> Option<PinMaximizeInputs> {
+    let pinned = PINNED.lock().ok()?;
+    let pin = pinned.as_ref()?;
+
+    Some((
+        pin.path.clone(),
+        pin.dpi,
+        pin.frame,
+        pin.overlay,
+        pin.transport_bar,
+        pin.content,
+        pin.restore,
+    ))
+}
+
+/// The box a restore down puts back for a file of a given shape: the size the user had the
+/// window at, in the middle of the room.
+///
+/// The size is the user's and is kept exactly — a restore undoes a maximize, it does not resize.
+/// The *shape* is the file's, and is fitted into that size rather than assumed to match it,
+/// because the box put aside was a box for whatever file was on screen when the maximize
+/// happened, and a window that has since walked along the pin to a file of another shape would
+/// otherwise be drawn into it and stretched. Fitting a shape into the chosen size is the same
+/// rule every preview is fitted by, asked of a box rather than of a display (see
+/// `pinned_media_box`).
+///
+/// A file taller than the size is given the full height and a width of its own rather than
+/// being squashed, and one wider than it likewise: the size is the ceiling, not the shape.
+fn pin_restored_box(shape: (u32, u32), previous: ScreenRegion, room: ScreenBounds) -> ScreenRegion {
+    let chosen = ScreenBounds {
+        left: 0,
+        top: 0,
+        right: (previous.2 - previous.0).max(1),
+        bottom: (previous.3 - previous.1).max(1),
     };
 
-    pin.content = clamp_pinned_box(content, pin.dpi);
-    *request = Some(PreviewMessage::PinBox(pin.content));
+    centred_box(
+        pinned_media_box(shape, chosen, PreviewScale::FitToScreen),
+        room,
+    )
 }
 
 /// The box a restore down owes once the hand has had a maximized window: the box the maximize put
@@ -16097,10 +16262,7 @@ unsafe fn open_path_with_default_app(path: &Path) {
     let text = path.to_string_lossy();
     let plain = match text.strip_prefix(r"\\?\UNC\") {
         Some(rest) => format!(r"\\{rest}"),
-        None => text
-            .strip_prefix(r"\\?\")
-            .unwrap_or(&text)
-            .to_string(),
+        None => text.strip_prefix(r"\\?\").unwrap_or(&text).to_string(),
     };
 
     let wide: Vec<u16> = std::ffi::OsStr::new(&plain)
@@ -23409,6 +23571,7 @@ mod tests {
                     transport_bar: false,
                     overlay: true,
                     maximized: false,
+                    room: bounds,
                 };
                 current = pin_update_box(
                     pin_swap_room(space, bounds, 96),
@@ -23439,6 +23602,320 @@ mod tests {
         );
     }
 
+    /// A maximized pin walks its files against the display's room, and not against the box the
+    /// file before each one left.
+    ///
+    /// This is the same rule the bound keeps above, in the one place it was not kept: a
+    /// maximized window is the one that fills its display, so every file it walks to is fitted
+    /// to the room afresh. Measured against the last file's box instead, each step is fitted
+    /// into a box the step before shrank — 16:9 into 16:9, then 4:3 into that, then 1:1 into
+    /// that — so a window walked far enough shrinks to the smallest shape in the folder and
+    /// keeps shrinking, while the caption goes on drawing the restore glyph the whole way,
+    /// because the maximize is a state about the room and was never given up.
+    #[test]
+    fn a_maximized_pin_walks_its_files_against_the_room_and_not_the_last_box() {
+        let folder = std::env::temp_dir().join("rust-hover-preview-pin-maximized");
+        std::fs::create_dir_all(&folder).expect("a test folder");
+
+        let bounds = ScreenBounds {
+            left: 0,
+            top: 0,
+            right: 1920,
+            bottom: 1080,
+        };
+
+        // The room a maximized window's media is laid out in: the display's own, less the
+        // caption above it (see `pinned_room`).
+        let room = pinned_room(bounds, 96, false, false);
+
+        // Five files of real shapes, walked in an order that makes the ratchet visible: a wide
+        // one, a tall one, a square, a strip, and the wide one again. What a user hammering
+        // next through a mixed folder actually does.
+        let shapes = [
+            (1920u32, 1080u32),
+            (1080, 1920),
+            (1000, 1000),
+            (4000, 400),
+            (1920, 1080),
+        ];
+
+        // A file per shape, each a real picture of that size, so that the measure is an answer
+        // and the swap a laying out rather than a wait (see `pin_swap_awaits`).
+        let files: Vec<PathBuf> = shapes
+            .iter()
+            .map(|(width, height)| {
+                let path = folder.join(format!("{width}x{height}.png"));
+                image::save_buffer(
+                    &path,
+                    &vec![0x40u8; (*width * *height * 3) as usize],
+                    *width,
+                    *height,
+                    image::ExtendedColorType::Rgb8,
+                )
+                .expect("a written picture");
+                path
+            })
+            .collect();
+
+        // Walk the folder, carrying the box each file was laid out in as the box the next one
+        // is swapped into. That carrying is the whole of the bug, and it is why the walk has to
+        // be continuous rather than restarted: a maximized swap that measures the new file
+        // against the box the last one left makes every step a smaller step, so the window
+        // shrinks a little on every keypress and never comes back. A walk restarted from the
+        // room each time would ratchet identically on every lap and look perfectly stable,
+        // which is why the box is carried through rather than reset.
+        //
+        // Three laps is enough to see it, and not so many that the test is slow: each step is
+        // one fit of one shape.
+        let mut current = room_bounds_as_region(room);
+        let mut laps: Vec<Vec<(i32, i32)>> = Vec::new();
+
+        for _ in 0..3 {
+            let mut sizes = Vec::new();
+
+            for path in &files {
+                let space = PinSwapSpace {
+                    current,
+                    bound: None,
+                    transport_bar: false,
+                    overlay: false,
+                    maximized: true,
+                    // The room the production reader builds, caption and all, and not the bare
+                    // display: a test that laid its files out against a room nothing lays out
+                    // against is a test of its own fixture.
+                    room: pinned_room(bounds, 96, false, false),
+                };
+                let Some(PinBox::Measured(laid_out)) = pin_update_content(space, path, bounds, 96)
+                else {
+                    panic!("a measured picture was not laid out");
+                };
+
+                current = laid_out;
+                sizes.push((current.2 - current.0, current.3 - current.1));
+            }
+
+            laps.push(sizes);
+        }
+
+        // Every lap of the same five files is the same as every other. A window measured
+        // against the last file's box cannot be: each lap comes back smaller than the one
+        // before, which is the window shrinking away under a caption still drawing the restore
+        // glyph — because nothing ever gave the maximize up, so nothing said it had stopped
+        // being one.
+        assert_eq!(
+            laps[0], laps[1],
+            "a maximized window was given a different box the second time a file was shown"
+        );
+        assert_eq!(
+            laps[1], laps[2],
+            "a maximized window kept shrinking over a third lap of the same files"
+        );
+
+        // And a file that fills the room still fills it, so "maximized" is a window of the
+        // room's size and not a name for no larger a box than before.
+        //
+        // The room is 1920 by 1050 — the display's own 1080 less the caption. A 16:9 file
+        // fitted to it fills the height and is 1867 wide, since 16:9 of 1050 is 1866.67: the
+        // picture's own shape at the room's own height, which is the largest this display has
+        // to give it. Under the ratchet the same file came back 105 by 59.
+        assert_eq!(
+            laps[0][0],
+            (1867, 1050),
+            "a maximized pin's own 16:9 file no longer fills the room"
+        );
+
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    fn room_bounds_as_region(room: ScreenBounds) -> ScreenRegion {
+        (room.left, room.top, room.right, room.bottom)
+    }
+
+    /// The maximize button is a toggle, and both of its presses change the pin.
+    ///
+    /// A window with no restore put aside is maximized to the room and remembers the box it had;
+    /// a window with one is put back to it and gives it up. Which of the two it is has to be
+    /// read from the restore that came *in* — the two answers are never the same value, so a
+    /// button that checks its answer against the state it is writing silently does nothing at
+    /// all, in both directions, forever. That is what a check written against the outgoing
+    /// value does, and it is invisible from the tests below unless the decision itself is
+    /// asked directly.
+    #[test]
+    fn a_maximize_button_answers_in_both_directions() {
+        let room = ScreenBounds {
+            left: 0,
+            top: 30,
+            right: 1920,
+            bottom: 1080,
+        };
+        let standing_in = (700, 400, 1700, 1000);
+        let wide = (1920u32, 1080u32);
+
+        // The first press: nothing is maximized, so the file is fitted to the room and the box
+        // it stood in is put aside for the way back.
+        let (maximized, remembered) = pin_maximize_decided(PinMaximize {
+            frame: PinFrame::Shaped,
+            content: standing_in,
+            restore: None,
+            shape: Some(wide),
+            room,
+        });
+
+        assert_eq!(
+            remembered,
+            Some(standing_in),
+            "a maximize did not put the box it replaced aside"
+        );
+        let (width, height) = (maximized.2 - maximized.0, maximized.3 - maximized.1);
+        assert_eq!(
+            (width, height),
+            (1867, 1050),
+            "a maximize is not the file fitted to the room"
+        );
+
+        // The second press, on the state the first left: the box comes back and the maximize is
+        // given up, so a third press maximizes again rather than restoring a second time.
+        let (restored, given_up) = pin_maximize_decided(PinMaximize {
+            frame: PinFrame::Shaped,
+            content: maximized,
+            restore: remembered,
+            shape: Some(wide),
+            room,
+        });
+
+        assert_eq!(given_up, None, "a restore left a maximize behind");
+
+        // The whole of the button in one property: what a press decides is never the state it
+        // was handed. A maximize remembers a box and a restore gives it up, so the two can
+        // never agree — which is what makes it safe to guard the write on the state that was
+        // read, and unsafe to guard it on the value being written, since that could never
+        // match. A button that did the latter does nothing at all, in both directions, and
+        // nothing else about the pin would say so.
+        for (restore_in, restore_out) in [(None, remembered), (remembered, given_up)] {
+            assert_ne!(
+                restore_in, restore_out,
+                "a press of the maximize button left the pin exactly as it found it"
+            );
+        }
+
+        // The box that comes back is the box that file wants rather than the one the maximize
+        // filled the room with — a window put back into the maximized box would be a 16:9
+        // picture in a 1867-wide box it can never grow out of, which is the stretch the button
+        // was fixed for. And it is the same box every time, so a restore is not a reshuffle.
+        let (restored_again, _) = pin_maximize_decided(PinMaximize {
+            frame: PinFrame::Shaped,
+            content: restored,
+            restore: Some(standing_in),
+            shape: Some(wide),
+            room,
+        });
+        assert_eq!(
+            restored_again, restored,
+            "a restore of the same file gave it two different boxes"
+        );
+        assert_ne!(
+            restored, maximized,
+            "a restore is the maximized box, which is the stretch the button was fixed for"
+        );
+        let (width, height) = (restored.2 - restored.0, restored.3 - restored.1);
+        assert!(
+            width <= standing_in.2 - standing_in.0 && height <= standing_in.3 - standing_in.1,
+            "a restore grew the window past the box the user had: {restored:?}"
+        );
+
+        // And the state the first press wrote is what the second one reads: a toggle that took
+        // its answer from anywhere else would get this wrong.
+        let (again, _) = pin_maximize_decided(PinMaximize {
+            frame: PinFrame::Shaped,
+            content: restored,
+            restore: given_up,
+            shape: Some(wide),
+            room,
+        });
+        assert_eq!(again, maximized, "the button is not a toggle");
+
+        // A kind laid out to whatever box it is given has no shape to fit, and the room is the
+        // whole of what maximizing means for it.
+        let (free, remembered) = pin_maximize_decided(PinMaximize {
+            frame: PinFrame::Free,
+            content: standing_in,
+            restore: None,
+            shape: Some(wide),
+            room,
+        });
+        assert_eq!(
+            (free.2 - free.0, free.3 - free.1),
+            (1920, 1050),
+            "a page of text is not maximized to the room"
+        );
+        assert_eq!(remembered, Some(standing_in));
+    }
+
+    /// A restore down gives the file on screen a box of *its own* shape, at the size the user
+    /// had the window at.
+    ///
+    /// The box put aside belongs to whatever was on screen when the maximize was pressed. A
+    /// window that has since walked along the pin to a file of another shape and then restores
+    /// down is put into a box sized and shaped for the old file — which is a stretched window,
+    /// and a walk through shapes is the surest way to arrive at one. The size stays the user's,
+    /// because a restore undoes a maximize and does not resize; only the shape is the file's.
+    #[test]
+    fn a_restore_down_gives_the_file_on_screen_a_box_of_its_own_shape() {
+        let room = ScreenBounds {
+            left: 0,
+            top: 30,
+            right: 1920,
+            bottom: 1080,
+        };
+
+        // The box a 16:9 window was left at before it was maximized, and the file that was in
+        // it: its own shape, fitted to that box, which is where it was before the maximize and
+        // is where a restore puts it back.
+        let chosen = (700, 400, 1700, 1000);
+        let before = (1920u32, 1080u32);
+
+        // The file the walk has since landed on. Its shape is nothing like the box's, and the
+        // aspect of what comes back has to follow the file rather than the box.
+        let after = (1080u32, 1920u32);
+
+        // A restore of the file the box belongs to is that box again, to the pixel: a restore
+        // undoes a maximize and does not resize, so the box the user had is the answer.
+        let fitted_before = pin_restored_box(before, chosen, room);
+        assert_eq!(
+            pin_restored_box(before, fitted_before, room),
+            fitted_before,
+            "a restore of the file a box was fitted to moved it"
+        );
+
+        let restored = pin_restored_box(after, chosen, room);
+        let (width, height) = (restored.2 - restored.0, restored.3 - restored.1);
+
+        // The aspect is the file's, which is the whole of what a stretched window is not. Had
+        // the box been put back as it stood, this would be 1000 by 600 — a 1.67 ratio for a
+        // 0.56 file, drawn 3× too wide.
+        assert_eq!(
+            (width as f32 / height as f32).round(),
+            (after.0 as f32 / after.1 as f32).round(),
+            "a tall file was restored into a wide box and would be drawn stretched"
+        );
+
+        // And the box is never larger than the one the user chose: the file is fitted into
+        // their size rather than replacing it, so a restore takes nothing away.
+        assert!(
+            width <= chosen.2 - chosen.0 && height <= chosen.3 - chosen.1,
+            "a restore grew the window past the size the user had: {restored:?}"
+        );
+
+        // A file whose shape *is* the box's shape comes back at that size, in the middle of the
+        // room, which is what makes the rule above a fit and not a guess at a smaller box.
+        let square = (600u32, 600u32);
+        assert_eq!(
+            pin_restored_box(square, (0, 0, 600, 600), room),
+            (660, 255, 1260, 855),
+            "a square file in a square box comes back at that size"
+        );
+    }
+
     /// A pin taken up as a portrait leaves the whole of its longest side for the files that follow
     /// it: the widescreen file below is given 2000 pixels of width, where the box the pin went up in
     /// would have given it 1000 and shown it at a third of the size (see `PinnedPreview::bound`).
@@ -23457,6 +23934,7 @@ mod tests {
             transport_bar: false,
             overlay: true,
             maximized: false,
+            room: bounds,
         };
         let room = pin_swap_room(space, bounds, 96);
         assert_eq!(room, (500, 100, 2500, 2100));
@@ -23492,6 +23970,7 @@ mod tests {
             transport_bar: false,
             overlay: true,
             maximized: false,
+            room: bounds,
         };
         let room = pin_swap_room(space, bounds, 96);
 
@@ -23538,6 +24017,7 @@ mod tests {
             transport_bar: true,
             overlay: false,
             maximized: false,
+            room: bounds,
         };
 
         // The room of a kind with bands is the work area less the caption and the transport bar,
@@ -23577,6 +24057,7 @@ mod tests {
             transport_bar: false,
             overlay: true,
             maximized: false,
+            room: bounds,
         };
         let room = pin_swap_room(space, bounds, 96);
         assert_eq!(room, (0, 0, 1920, 1080));
@@ -23602,6 +24083,7 @@ mod tests {
             transport_bar: true,
             overlay: false,
             maximized: false,
+            room: bounds,
         };
         assert_eq!(pin_swap_room(banded, bounds, 96), (0, 30, 1920, 1050));
     }
@@ -23630,6 +24112,7 @@ mod tests {
             transport_bar: false,
             overlay: false,
             maximized: false,
+            room: bounds,
         };
 
         // What the measure a card is asked for is keyed by, so that an answer can be held for a
@@ -23688,6 +24171,7 @@ mod tests {
             transport_bar: false,
             overlay: false,
             maximized: false,
+            room: bounds,
         };
 
         assert_eq!(
@@ -23705,6 +24189,7 @@ mod tests {
             transport_bar: false,
             overlay: false,
             maximized: true,
+            room: bounds,
         };
 
         assert_eq!(
@@ -23765,6 +24250,7 @@ mod tests {
             transport_bar: false,
             overlay: false,
             maximized: false,
+            room: bounds,
         };
 
         assert_eq!(
@@ -23844,6 +24330,7 @@ mod tests {
             transport_bar: false,
             overlay: false,
             maximized: false,
+            room: bounds,
         };
 
         // The room is the display's own, which the card's box does not shrink.
@@ -23863,6 +24350,7 @@ mod tests {
             transport_bar: false,
             overlay: false,
             maximized: false,
+            room: bounds,
         };
         let next_room = pin_swap_room(next, bounds, 96);
         assert_eq!(
