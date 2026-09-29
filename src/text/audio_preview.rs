@@ -18,6 +18,11 @@
 //! (see [`NameScroll`] and `Card::name_offset`). A painted preview of this app's is otherwise
 //! drawn once and held, so the preview loop is what asks for the card again while a sound is
 //! playing (see `repaint_audio_card`).
+//!
+//! The bar is also the card's one control, which is a question about where it was drawn rather
+//! than about anything that plays: a press on it is answered against the card's own layout (see
+//! [`bar_share_at`]), and only a pinned window asks — a hover's own window is a window nobody is
+//! in, and a click on one of those lands on the file behind it.
 
 use crate::config::config::TextTheme;
 use crate::readers::audio_track::Track;
@@ -288,6 +293,63 @@ pub(crate) fn render(
     Some((surface.pixels(), surface.width, surface.height))
 }
 
+/// Where a press on a card's bar is, as the share of the file it stands for — or nothing at all
+/// where the point is not on the bar.
+///
+/// A bar is three pixels of track with a hairline under it, which is not something a hand can be
+/// asked to hit: the row a press is answered against is the bar's own row *and* the gap above it,
+/// which is the same gap every other line of the card is set out with. So the bar is as easy to
+/// press as the facts above it are to read, and as exact as it is drawn the moment the press is on
+/// it. Below the bar is the card's own margin, which is left as a margin: a press there is a hand
+/// on the card rather than on the bar, and a hand on the card is a window being carried (see
+/// `pinned_press`).
+///
+/// What the share is a share of is the caller's question and not this function's: a file that
+/// does not say how long it is is drawn with a block crossing the track rather than a played part
+/// of it, and there is no second of such a file for a press to mean (see [`Card::duration`]).
+///
+/// The bar's row is asked of the same arithmetic the card is laid out with, and the width it is
+/// measured across is the width the card was drawn at — a card is a box of its own, so the bar
+/// runs from margin to margin of it whatever the display had room for.
+pub(crate) fn bar_share_at(
+    x: i32,
+    y: i32,
+    width: u32,
+    dpi: u32,
+    options: AudioPreviewOptions,
+) -> Option<f64> {
+    let dc = unsafe { CreateCompatibleDC(None) };
+    if dc.0.is_null() {
+        return None;
+    }
+
+    let share = TextMetrics::new(dc, dpi, options.font_scale_percent).and_then(|metrics| {
+        let row = bar_row(&metrics);
+        let left = metrics.padding;
+        let right = width as i32 - metrics.padding;
+        let across = right - left;
+
+        // A card too narrow for the bar to be a line of anything is a card with no bar on it,
+        // which is what an empty page draws.
+        if across <= 0 {
+            return None;
+        }
+
+        let above = row.top - scaled(BAR_GAP_PIXELS, metrics.scale);
+        if y < above || y >= row.top + row.height || x < left || x >= right {
+            return None;
+        }
+
+        Some(((x - left) as f64 / across as f64).clamp(0.0, 1.0))
+    });
+
+    unsafe {
+        let _ = DeleteDC(dc);
+    }
+
+    share
+}
+
 /// The facts line of a file: what it holds, in the order a person reads it — what the format
 /// is, how fast it was sampled, how many channels it has, how much room a second of it takes.
 ///
@@ -425,6 +487,35 @@ struct Bar {
     fill_width: i32,
 }
 
+/// The row the bar is drawn in: where it begins beneath the facts, how tall it is, and how thick
+/// the track under the played part is.
+///
+/// These are the numbers the bar is drawn from *and* the numbers a press on it is answered
+/// against, which is the whole of why they are one set rather than two: a bar laid out by one
+/// arithmetic and hit-tested by another is a bar whose middle few pixels answer for a line
+/// somewhere else on the card (see [`bar_share_at`]).
+struct BarRow {
+    top: i32,
+    height: i32,
+    track_height: i32,
+}
+
+fn bar_row(metrics: &TextMetrics) -> BarRow {
+    BarRow {
+        // The same walk down the page `build_page` makes, from the top margin to the bar: the
+        // name, the rule under it, the facts, and the gap the bar is set out after.
+        top: metrics.padding
+            + metrics.line_height[HEADER_LEVEL as usize]
+            + scaled(RULE_GAP_PIXELS, metrics.scale)
+            + scaled(RULE_PIXELS, metrics.scale)
+            + scaled(RULE_GAP_PIXELS, metrics.scale)
+            + metrics.line_height[BODY_LEVEL as usize]
+            + scaled(BAR_GAP_PIXELS, metrics.scale),
+        height: scaled(BAR_PIXELS, metrics.scale),
+        track_height: scaled(TRACK_PIXELS, metrics.scale),
+    }
+}
+
 /// A painted card: what to draw and how big it came out.
 struct Page {
     header: Vec<PageRun>,
@@ -456,9 +547,7 @@ fn build_page(
 
     let rule_gap = scaled(RULE_GAP_PIXELS, metrics.scale);
     let rule_height = scaled(RULE_PIXELS, metrics.scale);
-    let bar_height = scaled(BAR_PIXELS, metrics.scale);
-    let track_height = scaled(TRACK_PIXELS, metrics.scale);
-    let bar_gap = scaled(BAR_GAP_PIXELS, metrics.scale);
+    let bar_row = bar_row(metrics);
 
     let page_color = rgb(theme.background());
     let foreground = rgb(theme.foreground());
@@ -535,8 +624,6 @@ fn build_page(
     let rule_top = top;
     top += rule_height + rule_gap;
     let facts_top = top;
-    top += body_height + bar_gap;
-    let bar_top = top;
 
     let bar_width = content_right - content_left;
     let mut facts = fact_runs(
@@ -570,14 +657,16 @@ fn build_page(
         bar: Bar {
             left: content_left,
             width: bar_width,
-            top: bar_top,
-            height: bar_height,
-            track_height,
+            top: bar_row.top,
+            height: bar_row.height,
+            track_height: bar_row.track_height,
             fill_start,
             fill_width,
         },
         width,
-        height: box_height.min((bar_top + bar_height + padding) as u32).max(1),
+        height: box_height
+            .min((bar_row.top + bar_row.height + padding) as u32)
+            .max(1),
         padding,
     }
 }
@@ -1187,5 +1276,57 @@ mod tests {
         let home = scrolled(&long, width, scroll.offset());
         let name = home.header.last().expect("the run the name is drawn in");
         assert_eq!(name.origin, name.x, "and the near end is its resting place");
+    }
+
+    /// The bar is the card's one control, and a press on it is answered against the row the card
+    /// is drawn with rather than one kept beside it: the bar's own three pixels and the gap above
+    /// it, from margin to margin, and nowhere else on the card.
+    ///
+    /// The row is asked of the page the card is laid out with, so the two agree by construction —
+    /// a bar drawn by one arithmetic and pressed by another would answer a press in the middle of
+    /// the facts line.
+    #[test]
+    fn a_press_on_the_bar_is_answered_where_the_bar_is_drawn() {
+        let (width, _) = measure(&card(), 4096, 2160, 96, options()).expect("a measured card");
+        let bar = scrolled(&card(), width, 0).bar;
+        assert!(bar.width > 0 && bar.height > 0, "there is a bar to press");
+
+        let at = |x: i32, y: i32| bar_share_at(x, y, width, 96, options());
+
+        // Across the bar: the margin it starts at is the beginning of the file, the middle of it
+        // is half way through, and the far end of it is the end.
+        assert_eq!(at(bar.left, bar.top), Some(0.0), "the margin is the beginning");
+        assert_eq!(
+            at(bar.left + bar.width / 2, bar.top),
+            Some(0.5),
+            "the middle of the bar is half way through the file"
+        );
+        let far = at(bar.left + bar.width - 1, bar.top).expect("the far end is the bar too");
+        assert!(far > 0.99, "and the last pixel of it is the end of the file: {far}");
+
+        // The row a press is answered against is the bar and the gap above it, which is what
+        // makes three pixels of track a thing a hand can be asked to hit at all.
+        assert!(
+            at(bar.left + bar.width / 2, bar.top - 1).is_some(),
+            "the line just above the bar is still the bar's row"
+        );
+        assert_eq!(
+            at(bar.left, bar.top + bar.height),
+            None,
+            "and the margin under it is the card's own, which is a hand on the card"
+        );
+        assert_eq!(
+            at(bar.left + bar.width / 2, bar.top - BAR_GAP_PIXELS * 4),
+            None,
+            "while the facts line above the gap is a line of text and not a control"
+        );
+
+        // And across the margins: the bar runs from one to the other and no further.
+        assert_eq!(at(bar.left - 1, bar.top), None, "left of it is the card's margin");
+        assert_eq!(
+            at(bar.left + bar.width, bar.top),
+            None,
+            "and right of it is the other one"
+        );
     }
 }
