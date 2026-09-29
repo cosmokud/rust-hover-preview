@@ -5,12 +5,12 @@ use crate::config::config::{
     PreviewScale, PreviewType, TextTheme, TransparentBackground, DEFAULT_ANIMATED_SCALE_PERCENT,
     DEFAULT_AUDIO_SEEK, DEFAULT_DDS_BACKGROUND, DEFAULT_DESIGN_BACKGROUND, DEFAULT_DESIGN_SCALE,
     DEFAULT_DOCUMENT_SCALE, DEFAULT_EBOOK_SCALE, DEFAULT_FONT_BACKGROUND, DEFAULT_FONT_SCALE,
-    DEFAULT_IMAGE_BACKGROUND, DEFAULT_IMAGE_CACHE_MB, DEFAULT_NORMALIZE_VIDEO_VOLUME,
-    DEFAULT_NORMALIZE_VOLUME, DEFAULT_PIN_PAUSE_AUDIO, DEFAULT_PIN_PAUSE_VIDEO,
-    DEFAULT_PIN_UPDATE_ENABLED, DEFAULT_PREVIEW_SCALE_PERCENT, DEFAULT_SPINNER_DELAY_MS,
-    DEFAULT_TEXT_FONT_SCALE_PERCENT, DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS,
-    DEFAULT_VECTOR_BACKGROUND, DEFAULT_VECTOR_SCALE, DEFAULT_VIDEO_SCALE_PERCENT,
-    DEFAULT_WEBP_PLAYBACK_FPS,
+    DEFAULT_HTML_BACKGROUND, DEFAULT_IMAGE_BACKGROUND, DEFAULT_IMAGE_CACHE_MB,
+    DEFAULT_NORMALIZE_VIDEO_VOLUME, DEFAULT_NORMALIZE_VOLUME, DEFAULT_PIN_PAUSE_AUDIO,
+    DEFAULT_PIN_PAUSE_VIDEO, DEFAULT_PIN_UPDATE_ENABLED, DEFAULT_PREVIEW_SCALE_PERCENT,
+    DEFAULT_SPINNER_DELAY_MS, DEFAULT_TEXT_FONT_SCALE_PERCENT,
+    DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS, DEFAULT_VECTOR_BACKGROUND, DEFAULT_VECTOR_SCALE,
+    DEFAULT_VIDEO_SCALE_PERCENT, DEFAULT_WEBP_PLAYBACK_FPS,
 };
 use crate::engines::calibre_render;
 use crate::engines::imagemagick_render;
@@ -2352,6 +2352,17 @@ fn current_vector_background() -> TransparentBackground {
         .unwrap_or(DEFAULT_VECTOR_BACKGROUND)
 }
 
+/// The backdrop a page of HTML is drawn over, which the tray keeps apart from a vector
+/// drawing's: a document the browser is handed is a page already — it brings its own markup
+/// and its own stylesheet — so what is behind it is the page to read it against rather than
+/// a transparency to look through, which is why it does not borrow the drawing's answer.
+fn current_html_background() -> TransparentBackground {
+    CONFIG
+        .lock()
+        .map(|cfg| cfg.html_background)
+        .unwrap_or(DEFAULT_HTML_BACKGROUND)
+}
+
 /// How loud a video is played, which is read when one is started rather than when the
 /// setting changes: a preview is a few seconds long, and the next one is played at
 /// whatever the volume is by then.
@@ -2393,12 +2404,14 @@ fn current_audio_options() -> AudioPreviewOptions {
 
 /// The backdrop an engine-drawn preview of `path` is drawn over: the kind decides it, the
 /// same way it decides everything else about a document. The one engine draws all the kinds
-/// this app hands it — an SVG document, which is a vector drawing, a font file's specimen,
-/// and a page of HTML — and a drawing and a page stand behind the same backdrop, the
-/// specimen's is a page of its own.
+/// this app hands it, and each of the three answers for itself — a font file's specimen is a
+/// page of its own, an SVG document is a vector drawing, and a page of HTML is a page, so
+/// the backdrop the tray keeps for the kind is the one it is given.
 fn engine_background(path: &Path) -> TransparentBackground {
     if font_formats::is_font_file(path) {
         current_font_background()
+    } else if crate::formats::text_formats::is_html_extension(path) {
+        current_html_background()
     } else {
         current_vector_background()
     }
