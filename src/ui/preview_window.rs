@@ -1,14 +1,14 @@
 use crate::app::engine_processes;
 use crate::config::config::{
     frame_bytes_within_budget, image_decode_limits, read_within_budget, sanitize_image_cache_mb,
-    sanitize_spinner_delay_ms, sanitize_webp_playback_fps, AudioSeek, MarkdownMode, OfficeEngine,
-    PreviewScale, PreviewType, TextTheme, TransparentBackground, DEFAULT_ANIMATED_SCALE_PERCENT,
-    DEFAULT_AUDIO_SEEK, DEFAULT_DDS_BACKGROUND, DEFAULT_DESIGN_BACKGROUND, DEFAULT_DESIGN_SCALE,
-    DEFAULT_DOCUMENT_SCALE, DEFAULT_EBOOK_SCALE, DEFAULT_FONT_BACKGROUND, DEFAULT_FONT_SCALE,
-    DEFAULT_HTML_BACKGROUND, DEFAULT_IMAGE_BACKGROUND, DEFAULT_IMAGE_CACHE_MB,
-    DEFAULT_NORMALIZE_VIDEO_VOLUME, DEFAULT_NORMALIZE_VOLUME, DEFAULT_PIN_PAUSE_AUDIO,
-    DEFAULT_PIN_PAUSE_VIDEO, DEFAULT_PIN_UPDATE_ENABLED, DEFAULT_PREVIEW_SCALE_PERCENT,
-    DEFAULT_SPINNER_DELAY_MS, DEFAULT_TEXT_FONT_SCALE_PERCENT,
+    sanitize_spinner_delay_ms, sanitize_webp_playback_fps, AppConfig, AudioSeek, MarkdownMode,
+    OfficeEngine, PreviewScale, PreviewType, TextTheme, TransparentBackground,
+    DEFAULT_ANIMATED_SCALE_PERCENT, DEFAULT_AUDIO_SEEK, DEFAULT_DDS_BACKGROUND,
+    DEFAULT_DESIGN_BACKGROUND, DEFAULT_DESIGN_SCALE, DEFAULT_DOCUMENT_SCALE, DEFAULT_EBOOK_SCALE,
+    DEFAULT_FONT_BACKGROUND, DEFAULT_FONT_SCALE, DEFAULT_HTML_BACKGROUND, DEFAULT_IMAGE_BACKGROUND,
+    DEFAULT_IMAGE_CACHE_MB, DEFAULT_NORMALIZE_VIDEO_VOLUME, DEFAULT_NORMALIZE_VOLUME,
+    DEFAULT_PIN_PAUSE_AUDIO, DEFAULT_PIN_PAUSE_VIDEO, DEFAULT_PIN_UPDATE_ENABLED,
+    DEFAULT_PREVIEW_SCALE_PERCENT, DEFAULT_SPINNER_DELAY_MS, DEFAULT_TEXT_FONT_SCALE_PERCENT,
     DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS, DEFAULT_VECTOR_BACKGROUND, DEFAULT_VECTOR_SCALE,
     DEFAULT_VIDEO_SCALE_PERCENT, DEFAULT_WEBP_PLAYBACK_FPS,
 };
@@ -226,6 +226,102 @@ fn note_preview_alive() {
         PREVIEW_CLOCK.elapsed().as_millis() as u64,
         Ordering::Relaxed,
     );
+}
+
+/// The clock the pin's own liveness is read on, and when the loop last turned a tick
+/// with a pin up.
+///
+/// This is a second clock from the one above, and it is a second because the two are read
+/// by different watchers for different reasons. `PREVIEW_ALIVE_MS` answers "is the preview
+/// loop working at all", and the Explorer hook is what asks it — a loop stopped on an idle
+/// channel is a loop that is working. This one answers "is the loop turning while a window
+/// the user is looking at is up", which is a much narrower question with a much shorter
+/// bound, and nobody inside the loop can ask it: a loop that has stopped is a loop that
+/// cannot notice it has stopped (see `spawn_pin_watchdog`).
+static PIN_ALIVE_MS: AtomicU64 = AtomicU64::new(0);
+static PIN_CLOCK: Lazy<Instant> = Lazy::new(Instant::now);
+
+/// How long a pin may hold the loop before it is given up on.
+///
+/// It is generous on purpose, and deliberately so: the loop is a busy one and a pinned
+/// window legitimately does work on it — starting a player, laying out a large picture,
+/// reading a folder the first time it is walked. A bound that fires on those would close
+/// a window out from under a user who was reading it. What it is long enough to outlast is
+/// the *repeatable* case: a window that is frozen rather than busy, where the loop is not
+/// coming back at all and every button on it is dead.
+const PIN_STALL_MS: u64 = 20_000;
+
+/// Note that the loop turned a tick with a pin up. One relaxed store per tick (see
+/// `note_preview_alive`, which is the same idea for the loop as a whole).
+fn note_pin_alive() {
+    PIN_ALIVE_MS.store(PIN_CLOCK.elapsed().as_millis() as u64, Ordering::Relaxed);
+}
+
+/// Watch a pinned window's loop and give up on a window that is not coming back.
+///
+/// This is the last-resort half of the answer to a pin whose buttons do nothing. The other
+/// half is that nothing slow runs on the loop at all (see `PinPlanner`), and this exists for
+/// whatever that does not anticipate: a window that cannot be closed is a bug with no way
+/// out but restarting the app, and a pin the user can lose is a far better answer than that.
+///
+/// So it is blunt by design. When the loop has not turned for `PIN_STALL_MS` while a pin is
+/// up, the pin is ended from outside the loop, and the loop is left alone — whatever it is
+/// stuck in is not something another thread can safely interrupt.
+///
+/// The take-down is the whole of `end_pin_state` and not part of it, because a pin taken
+/// down in halves is worse than one not taken down at all: the player's window and the
+/// browser's are somebody else's windows, and leaving either standing puts a playing video
+/// or a rendered document over the live previews that resume behind it, with no transport
+/// bar left to stop them. The bubble is taken down for the same reason — a collapsed pin
+/// whose state has been cleared but whose bubble is still on screen is a window nothing
+/// will ever take away again.
+///
+/// Every one of those is a window message, so the whole of it is done on a thread of its
+/// own: this thread is not the one that owns the windows, and a window procedure that is
+/// the thing being waited on would only make it wait too. Losing this thread costs nothing;
+/// losing the only one that can take a window down costs the window.
+fn spawn_pin_watchdog() {
+    std::thread::spawn(|| {
+        while RUNNING.load(Ordering::Acquire) {
+            std::thread::sleep(Duration::from_millis(500));
+
+            if !pinned() {
+                // Nothing to watch. The clock is left where it is, and the next pin is
+                // given a full bound rather than inheriting the age of the last one.
+                continue;
+            }
+
+            let now = PIN_CLOCK.elapsed().as_millis() as u64;
+            if now.saturating_sub(PIN_ALIVE_MS.load(Ordering::Relaxed)) < PIN_STALL_MS {
+                continue;
+            }
+
+            // The state first, and the same state a close button takes: a hook behind the
+            // pin stops holding back its hovers the moment `PIN_ACTIVE` is false, and a
+            // loop that comes back to a cleared pin is a loop with nothing to clean up.
+            // The windows follow on a thread of their own.
+            if let Ok(mut pinned) = PINNED.lock() {
+                *pinned = None;
+            }
+            PIN_ACTIVE.store(false, Ordering::Release);
+            PIN_COLLAPSED.store(false, Ordering::Release);
+            PIN_RESUMED.store(true, Ordering::Release);
+            if let Ok(mut jobs) = PIN_JOBS.0.lock() {
+                *jobs = None;
+            }
+
+            std::thread::spawn(|| {
+                // Safety: each handle is read from the slot its own window was created
+                // into, and each is only asked to hide. `hide_pin_bubble` does the same
+                // for the bubble, and a handle to a window that has since gone is refused
+                // by the call rather than acted on.
+                unsafe {
+                    hide_pinned_windows();
+                    hide_pin_bubble();
+                }
+            });
+        }
+    });
 }
 
 /// How long the preview loop has been quiet, in milliseconds: the age of its last
@@ -792,6 +888,15 @@ pub enum PreviewMessage {
         path: PathBuf,
         size: Option<(u32, u32)>,
     },
+    /// The planner is done with a question the pin asked — a walk along the folder, or the
+    /// name of the program a file would open with. Neither question can be asked on the
+    /// thread that draws the pin, so both are asked elsewhere and answered here (see
+    /// `PinPlanner`).
+    ///
+    /// A walk is answered whatever it found: a folder that could not be read and a folder
+    /// with nothing in it to step onto are both answers, not the absence of one, so the pin's
+    /// arc comes down when they land rather than waiting out a bound (see `answer_pin_job`).
+    PinAnswered(PinPlanned),
     /// The ImageMagick engine is done with a file: the picture it developed is in hand, or
     /// there is none — a file it cannot read is remembered as one it will not draw. The
     /// generation is the hover that was waiting on it, so a conversion landing after the
@@ -7235,12 +7340,18 @@ fn audio_box(path: &Path, bounds: ScreenBounds, dpi: u32) -> Option<(u32, u32)> 
 /// card by this app rather than by a player, so the layout has to know one when it sees one —
 /// which for a renamed file, or for a container whose streams hold only a song, is a question
 /// about the content rather than about the name.
+///
+/// The configuration is taken by copy and the lock let go before the content is asked of: that
+/// question is a `content_type::of`, which reads the file's first four kilobytes on a miss, and
+/// a lock held across a file read is a lock every other thread of the app waits on for as long
+/// as the disk takes — the preview thread included, which is the thread that pumps this
+/// window's own messages.
 fn drawn_as_audio(path: &Path) -> bool {
     if !PreviewType::Audio.enabled() {
         return false;
     }
 
-    let Some(config) = CONFIG.lock().ok() else {
+    let Some(config) = CONFIG.lock().ok().map(|config| config.clone()) else {
         return false;
     };
 
@@ -12957,6 +13068,12 @@ impl PinTooltip {
 /// pays for it is the first of its kind in the run (see `default_app_name`).
 static APP_NAMES: Lazy<Mutex<HashMap<String, String>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 
+/// How many formats the table holds. A folder walk asks about the handful of formats it holds
+/// rather than one per file, so this is generous for what the app does and small enough that a
+/// session sweeping across a whole drive does not grow the table by a format per window — the
+/// same bound `pin_navigation::FOLDER_LIMIT` puts on the folder lists beside it.
+const APP_NAMES_LIMIT: usize = 64;
+
 /// The program the Shell would open this file with, as it names it, or nothing where the
 /// machine has no association for the format at all.
 ///
@@ -12974,32 +13091,41 @@ fn default_app_name(path: &Path) -> String {
         }
     }
 
+    // Safety: the argument is this app's own file, and the call allocates and frees its own
+    // buffers (see `ask_default_app_name`).
     let name = unsafe { ask_default_app_name(path) };
 
     if let Ok(mut names) = APP_NAMES.lock() {
+        if names.len() >= APP_NAMES_LIMIT {
+            // Whichever format the table offers up, rather than the one least recently asked
+            // about. The table is a cache of answers this run already has, so what is given
+            // up is a name asked again later, not one still owed to a window on screen.
+            if let Some(dropped) = names.keys().next().cloned() {
+                names.remove(&dropped);
+            }
+        }
         names.insert(format, name.clone());
     }
 
     name
 }
 
-/// The format a file's association is filed under, which is what the Shell's own answer is
-/// cached by: the last dot of the name and the whole of what follows it, dot and all.
+/// What a file's own name says its format is, which is what the Shell's answer is filed under.
 ///
-/// A leading dot is part of the format rather than a separator before one — `.gitignore` is
-/// filed under `.gitignore`, and the answer it is given is not the one a name with no dot in it
-/// is given — so the whole of such a name is the key, and a name with no dot in it is keyed as
-/// nothing, which is the one key no format can share with another.
+/// It is the extension, spelled the way the filesystem reads one — which is to say a leading dot
+/// is not an extension but the start of a name, so `.gitignore` is the format and nothing
+/// follows it. A file with neither is keyed by its whole name rather than being filed under no
+/// format at all: two extensionless files are not one format, and a shared empty slot between
+/// them would put one file's association on another file's button.
 fn shell_format(path: &Path) -> String {
-    let Some(name) = path.file_name() else {
-        return String::new();
-    };
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
 
-    let name = name.to_string_lossy().to_lowercase();
-
-    match name.rfind('.') {
-        Some(dot) => name[dot..].to_string(),
-        None => String::new(),
+    match path.extension() {
+        Some(extension) => format!(".{}", extension.to_string_lossy().to_lowercase()),
+        None => name,
     }
 }
 
@@ -14595,7 +14721,11 @@ fn pin_update_box(room: ScreenRegion, shape: (u32, u32), scale: PreviewScale) ->
 /// own measure came out at rather than the box the pin has (see `pin_update_content`), and what the
 /// answer is for here is that a box the file was *drawn* to is no ceiling for the files after it.
 fn pin_keeps_its_box(path: &Path) -> bool {
-    if let Ok(config) = CONFIG.lock() {
+    // The configuration is taken by copy and the lock let go before the content is asked of,
+    // for the reason `drawn_as_audio` gives: the question is a `content_type::of`, which
+    // reads the file on a miss, and the take-up that asks this one is a take-up that must
+    // not be holding a lock a window message may be waiting on.
+    if let Some(config) = CONFIG.lock().ok().map(|config| config.clone()) {
         if let crate::formats::content_type::Content::Kind(kind) =
             crate::formats::content_type::of(path, &config)
         {
@@ -15522,6 +15652,11 @@ fn centred_at(size: (i32, i32), centre: (i32, i32)) -> ScreenRegion {
 /// cannot be shown is stepped over rather than stopped at, and what is stepped over is
 /// bounded by the list the walk is made of (see `PinStep`).
 ///
+/// A walk answered here is one the planner had already read the folder for. The walk a
+/// caption button asks for is asked of the planner instead, and comes back later as its own
+/// answer — which is what `wait` is for, the arc that says the pin is still asking (see
+/// `step_pinned_file`).
+///
 /// A key is answered here rather than in the window procedure because what it means is a
 /// question about the file on screen, and the player behind that file is the loop's: a Space
 /// holds a sound or lets it go, which is a player ended and another begun rather than a state
@@ -15530,6 +15665,7 @@ fn centred_at(size: (i32, i32), centre: (i32, i32)) -> ScreenRegion {
 /// the key was pressed in.
 fn pin_command_request(
     request: &mut Option<PreviewMessage>,
+    wait: &mut Option<PinWait>,
     audio_started: &mut Option<Instant>,
     audio_start_offset: &mut f64,
     audio_paused: &mut Option<f64>,
@@ -15551,8 +15687,8 @@ fn pin_command_request(
             toggle_pin_maximized(request);
             None
         }
-        Some(PinCommand::Previous) => step_pinned_file(-1),
-        Some(PinCommand::Next) => step_pinned_file(1),
+        Some(PinCommand::Previous) => step_pinned_file(-1, wait),
+        Some(PinCommand::Next) => step_pinned_file(1, wait),
         Some(PinCommand::TogglePlayback) => {
             toggle_pinned_audio(audio_started, audio_start_offset, audio_paused);
             None
@@ -15590,16 +15726,34 @@ fn walk_budget(list: &[PathBuf]) -> usize {
 ///
 /// Every other file of the list is offered at most once, so a folder of nothing this app can
 /// read is a walk that ends rather than one that goes for ever (see `walk_budget`).
-struct PinStep {
+#[derive(Clone)]
+pub(crate) struct PinStep {
     /// The file the walk last landed on, which is where the next step is taken from.
     at: PathBuf,
+    /// The file the walk was *asked* from, which is what an answer is matched against.
+    ///
+    /// It is not `at` and cannot become it: a walk's first step is taken on the planner's
+    /// thread, so by the time the loop holds this walk, `at` is already the file the walk
+    /// landed on rather than the one the press was made on. A walk that lands after the
+    /// pin has been given another file is an answer to a press about a file the pin is no
+    /// longer showing, and this is what says so (see `PreviewMessage::PinAnswered`).
+    from: PathBuf,
     /// Which way the walk goes: `1` along the listing, `-1` against it.
     step: i32,
     /// How many more files the walk may be asked for (see `walk_budget`).
     left: usize,
+    /// The folder's list, read once by the planner and carried here so that a step after
+    /// the first is a walk through what is already in hand rather than a second read of
+    /// the folder (see `PinPlanner`).
+    list: Vec<PathBuf>,
 }
 
 impl PinStep {
+    /// The file this walk was asked from, which is what a late answer is matched against.
+    fn from(&self) -> &Path {
+        &self.from
+    }
+
     /// The file the next step of this walk lands on, and where the walk stands after it, or
     /// nothing where the walk has nothing left to offer.
     fn step(&mut self) -> Option<PathBuf> {
@@ -15608,14 +15762,9 @@ impl PinStep {
         }
         self.left -= 1;
 
-        // The configuration is taken by copy and the lock let go before the walk: the walk
-        // reads a folder behind it, and a lock held across a folder read is a lock every
-        // other thread of the app waits on for as long as the disk takes — the preview
-        // thread included, which is the thread that pumps this window's own messages.
-        let config = CONFIG.lock().ok()?.clone();
-
-        let path = pin_navigation::list_for(&self.at, &config)
-            .and_then(|list| pin_navigation::step_to(&self.at, &list, self.step))?;
+        // The list is already in hand — the planner read it off the preview thread — so a
+        // step costs a position in a vector rather than a walk of the folder behind it.
+        let path = pin_navigation::step_to(&self.at, &self.list, self.step)?;
 
         self.at = path.clone();
 
@@ -15623,39 +15772,274 @@ impl PinStep {
     }
 }
 
+/// A walk the planner is reading a folder for, and the wait it is.
+///
+/// It is the pin's spinner over a wait that is not a load: no frame is being decoded, so
+/// there is nothing to be in flight on the media side, but the file the pin is about to be
+/// shown is not known yet and the user is owed an answer either way. Painted on the arc the
+/// pin already turns, on the same delay, because it is the same question to the person
+/// looking at it (see `PinLoad` and `paint_pin_spinner`).
+struct PinWait {
+    started: Instant,
+    spinner_delay: Duration,
+    turned: Option<Instant>,
+}
+
+impl PinWait {
+    fn new() -> Self {
+        PinWait {
+            started: Instant::now(),
+            spinner_delay: load_spinner_delay(),
+            turned: None,
+        }
+    }
+
+    /// Whether this wait is due a paint, on the same terms a load's is.
+    fn due(&self) -> bool {
+        match self.turned {
+            None => self.started.elapsed() >= self.spinner_delay,
+            Some(turned) => {
+                turned.elapsed() >= Duration::from_millis(u64::from(MIN_ANIMATION_FRAME_DELAY_MS))
+            }
+        }
+    }
+
+    fn spun(&mut self) {
+        self.turned = Some(Instant::now());
+    }
+}
+
 /// The file a step along the folder's walk takes the pin to, and the walk that step began,
 /// or nothing where the walk has nowhere to step to.
 ///
-/// The walk is the pin's own, read under the configuration and against the listing's order
-/// (see `shell::pin_navigation`), so this is only the step: which of the folder's files is
-/// next, and what a pin does with a file it has been given, are both already answered
-/// elsewhere (`pin_update_plan` and what it measures, and the swap behind it).
+/// The walk itself is the folder's own, and reading a folder is a felt read: a whole
+/// `read_dir`, and a registry `ProgID` read for every distinct kind in it. So it is not read
+/// here. This asks the planner for it and answers nothing this tick, and the wait is painted
+/// as the arc the pin already knows how to paint (see `PinPlanner` and `PinWait`).
 ///
-/// The file is handed back as a pick rather than posted as a `PinUpdate` message. The
-/// message is the Explorer's half of the question — a file picked in the listing — and it
-/// drops the request when `Pin Mode → Update Preview` is off, which is the right answer there
-/// and the wrong one here: a button on the caption is a thing the user pressed, and it is
-/// asked for by no setting. A pick is taken up by the loop whether it came from the listing
-/// or from the caption, which is what makes the two the same gesture.
-fn step_pinned_file(step: i32) -> Option<PinStep> {
+/// Nothing is lost by the round trip: a walk that lands is taken up by the answer, and a
+/// walk that does not is a walk with nowhere to step to, which is what this already
+/// answered with.
+fn step_pinned_file(step: i32, wait: &mut Option<PinWait>) -> Option<PinStep> {
     let at = pinned_path()?;
 
-    // The configuration is taken by copy and the lock let go before the walk: the walk reads
-    // a folder behind it, and a lock held across a folder read is a lock every other thread
-    // of the app waits on for as long as the disk takes — the preview thread included, which
-    // is the thread that pumps this window's own messages.
-    let config = CONFIG.lock().ok()?.clone();
+    if !ask_pin_walk(at, step) {
+        return None;
+    }
 
-    // The walk is the list asked one file at a time, so it is bounded by the list: every file
-    // of it but the one the pin is showing is one the walk may still be offered, and this step
-    // is the first of them.
-    let left = walk_budget(&pin_navigation::list_for(&at, &config)?);
+    // The wait starts when the question is asked, not when the planner gets to it, so the
+    // arc is put up on the same delay a load's is however long the planner is busy.
+    *wait = Some(PinWait::new());
 
-    let mut walk = PinStep { at, step, left };
+    None
+}
 
-    walk.step()?;
+/// A question the pin asks that only a thread of its own may answer.
+///
+/// Each arm is work whose cost is not known in advance and not bounded by this app: a
+/// folder is read from the disk, a file is opened through the system's own codecs and its
+/// Shell, a registry is consulted. None of it can run on the preview thread, because that
+/// thread is the one that pumps this window's messages — see `PinPlanner` for what that
+/// means to a caption's buttons.
+enum PinJob {
+    /// The folder's list, for a step of the pin's own walk.
+    ///
+    /// The configuration is carried by the walk rather than read off a global where it is
+    /// wanted, and it is the one field here big enough to be worth boxing: a job slot is
+    /// one of them at a time, and a walk that made every queued question as large as the
+    /// configuration would be paying for the second question's sake too.
+    Walk {
+        at: PathBuf,
+        step: i32,
+        config: Box<AppConfig>,
+    },
+    /// The name of the program this file would open with, for the hand-off button.
+    OpenWith { path: PathBuf },
+}
 
-    Some(walk)
+/// The job the planner is working on, and the one it will work on next, coalesced.
+///
+/// Newest wins, and that is the whole of the design: a user holding the next button is
+/// asking for one walk, not one per file, and a queue would spend the planner reading
+/// folders nobody is waiting for.
+type PinJobSlot = (Mutex<Option<PinJob>>, Condvar);
+static PIN_JOBS: Lazy<PinJobSlot> = Lazy::new(|| (Mutex::new(None), Condvar::new()));
+
+/// The give-up on a job that has not answered.
+///
+/// It is the bound that turns an unbounded wait into a failed one: a folder on a network
+/// share that never answers is a walk that ends rather than a window that never comes back.
+/// The pin keeps the file it is showing, which is the only other answer a window that is
+/// already up has (see `player_wait`, which bounds the same way for the same reason).
+const PIN_JOB_GIVEUP: Duration = Duration::from_secs(15);
+
+/// Ask the planner for a walk, answering whether the question was asked at all.
+///
+/// The configuration is taken by copy and the lock let go before the job is queued: the
+/// walk reads a folder behind it, and a lock held across a folder read is a lock every
+/// other thread of the app waits on for as long as the disk takes.
+fn ask_pin_walk(at: PathBuf, step: i32) -> bool {
+    let Some(config) = CONFIG.lock().ok().map(|config| config.clone()) else {
+        return false;
+    };
+
+    queue_pin_job(PinJob::Walk {
+        at,
+        step,
+        config: Box::new(config),
+    })
+}
+
+/// Ask the planner which program this file would open with.
+fn ask_pin_open_with(path: PathBuf) {
+    queue_pin_job(PinJob::OpenWith { path });
+}
+
+/// Leave a job for the planner, answering whether it was left.
+///
+/// A job that cannot be queued is a question that was never asked, which is a different
+/// thing from one whose answer is nothing: the caller starts a wait only for the former, so
+/// an arc is never turned for a walk that was not asked.
+fn queue_pin_job(job: PinJob) -> bool {
+    let (lock, cvar) = &*PIN_JOBS;
+    if let Ok(mut pending) = lock.lock() {
+        *pending = Some(job);
+        cvar.notify_one();
+        return true;
+    }
+
+    false
+}
+
+/// Run the planner: one thread, one job at a time, newest first.
+///
+/// This is the reason a pinned window's caption keeps answering its buttons while the file
+/// behind it is slow. Everything the pin wants to know that could be slow goes through here,
+/// and the preview thread's tick is left holding only the work that cannot be moved — a
+/// repaint, a hit-test, a key, and the engines this app's own windows are drawn by. That
+/// separation is what the window needs: a caption is painted by the thread that drains its
+/// messages, so anything slow run on that thread is a window whose buttons do nothing for
+/// as long as it takes.
+///
+/// Answers come back as `PreviewMessage::PinAnswered` on the same channel every other
+/// answer arrives on, and each is acted on only where it still applies: a walk is dropped
+/// unless the pin is standing where the walk was asked from, and a name is dropped unless
+/// the pin is standing on the file it names (see `PinStep::from`).
+fn spawn_pin_planner() {
+    std::thread::spawn(|| {
+        // A folder is read through the Shell's own directory entry and a file is opened
+        // through the system's codecs, so this thread needs an apartment before the first
+        // job asks for either (see `spawn_load_worker`, which takes the same two).
+        pdf_preview::initialize_apartment();
+        wic_image::initialize_apartment();
+
+        while RUNNING.load(Ordering::Acquire) {
+            let job = {
+                let (lock, cvar) = &*PIN_JOBS;
+                let mut pending = match lock.lock() {
+                    Ok(guard) => guard,
+                    Err(_) => return,
+                };
+
+                while pending.is_none() && RUNNING.load(Ordering::Acquire) {
+                    pending = match cvar.wait_timeout(pending, Duration::from_millis(200)) {
+                        Ok((guard, _)) => guard,
+                        Err(_) => return,
+                    };
+                }
+
+                if !RUNNING.load(Ordering::Acquire) {
+                    return;
+                }
+
+                // The job is taken rather than left for the next pass, which is what makes
+                // this one-at-a-time rather than a queue.
+                pending.take()
+            };
+
+            let Some(job) = job else {
+                continue;
+            };
+
+            // A job that came apart is answered as a question that had nothing to say, and
+            // it *is* answered rather than dropped: `answer_pin_job` is what turns a folder
+            // that could not be read into a walk that is over, so a read that unwound past
+            // the take above arrives as that walk — the pin's arc comes down and it keeps
+            // the file it is showing. An unwound thread past the take would instead leave
+            // the question with nothing to end it at all.
+            let answer =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| answer_pin_job(&job)))
+                    .unwrap_or_default();
+
+            if let Some(answer) = answer {
+                if let Ok(sender) = PREVIEW_SENDER.lock() {
+                    if let Some(ref tx) = *sender {
+                        let _ = tx.send(PreviewMessage::PinAnswered(answer));
+                    }
+                }
+            }
+        }
+    });
+}
+
+/// Answer one job, on the planner's own thread.
+///
+/// A walk is *always* answered, and that is the whole of what this returns `Some` for: a
+/// folder that cannot be read, and a folder with nothing in it this app can step onto, are
+/// both ordinary answers rather than the absence of one. A walk answered with nothing would
+/// leave the pin's arc turning until `PIN_JOB_GIVEUP` for what is really a press that had
+/// nowhere to go — a one-file folder, a folder whose only walkable file is the pinned one,
+/// or a share that is not answering. `left: 0` is how that says itself: the walk is spent,
+/// so the loop has nothing to ask of it and the pin keeps what it is showing (see `PinStep`).
+fn answer_pin_job(job: &PinJob) -> Option<PinPlanned> {
+    match job {
+        PinJob::Walk { at, step, config } => {
+            // A folder that cannot be walked is walked as a folder with nothing in it, so
+            // that the answer below is the same shape whichever of the two it was.
+            let empty = Vec::new();
+            let list = pin_navigation::list_for(at, config).unwrap_or_else(|| empty.clone());
+
+            // The walk is the list asked one file at a time, so it is bounded by the list:
+            // every file of it but the one the pin is showing is one the walk may still be
+            // offered, and this step is the first of them.
+            let left = walk_budget(&list);
+            let mut walk = PinStep {
+                at: at.clone(),
+                // The walk is asked from the file the pin is standing on, and steps from it
+                // onto the first of the list that is not that file.
+                from: at.clone(),
+                step: *step,
+                left,
+                list,
+            };
+
+            // A step that lands is the walk; one that does not leaves it with nothing left
+            // to offer, which the loop reads as a walk that is over rather than one that is
+            // still out.
+            walk.step();
+
+            Some(PinPlanned::Walk(walk))
+        }
+        PinJob::OpenWith { path } => Some(PinPlanned::OpenWith {
+            path: path.clone(),
+            name: default_app_name(path),
+        }),
+    }
+}
+
+/// An answer to a question the planner was asked, matched back to the walk or the pin
+/// that is waiting for it.
+///
+/// It is a message body, so it is cloned with the message it travels in — which is why
+/// the walk it carries is a whole list rather than a borrowed one. It is not the load's
+/// answer of the same shape above: that one is a frame a pinned window is installed from,
+/// and this one is what the pin asked a question of.
+#[derive(Clone)]
+pub(crate) enum PinPlanned {
+    /// A walk, ready to be handed the file it landed on.
+    Walk(PinStep),
+    /// The program this file would open with, for the hand-off button's name.
+    OpenWith { path: PathBuf, name: String },
 }
 
 /// Carry a walk on past a file the pin could not be shown, putting it back where the loop holds
@@ -18303,6 +18687,13 @@ pub fn run_preview_window() {
         let (load_tx, load_rx): (Sender<LoadResult>, Receiver<LoadResult>) = channel();
         let load_request_slot: LoadRequestSlot = Arc::new((Mutex::new(None), Condvar::new()));
         let load_worker = spawn_load_worker(Arc::clone(&load_request_slot), load_tx);
+        // The pin's own slow questions, answered off this thread — a folder walked, a file
+        // opened through the Shell — so that a caption being slow does not take its own
+        // buttons with it (see `spawn_pin_planner`).
+        spawn_pin_planner();
+        // And the thread that gives up on a pin this loop has stopped turning, which is the
+        // one thing the loop itself cannot do (see `spawn_pin_watchdog`).
+        spawn_pin_watchdog();
         let mut current_generation: u64 = 0;
         let mut pending_load: Option<PendingLoad> = None;
         let mut pending_load_cancel: Option<Arc<AtomicBool>> = None;
@@ -18359,6 +18750,16 @@ pub fn run_preview_window() {
         // asked for on a tick of its own, with the walk carried onto it. What the walk stands
         // on is the file to be shown next (see `PinStep`).
         let mut pin_walk: Option<PinStep> = None;
+        // A walk the planner is reading the folder for, and the wait it is. It is held here
+        // rather than inside a tick for the same reason a load is: the read is on another
+        // thread, so the question is still out when this tick ends and the answer to it
+        // arrives on one of the next. The wait is painted as the same arc a load's is,
+        // because it is the same wait to the person looking at it (see `PinWait`).
+        let mut pin_walk_wait: Option<PinWait> = None;
+        // Whether an arc was ever put up for a walk, so that the one put up for it comes
+        // down when the walk lands or is given up on rather than turning for a question
+        // nobody is asking any more.
+        let mut pin_walk_wait_seen = false;
         // A listing pick that arrived while a hover load was in flight, held across ticks until
         // nothing is loading rather than dropped with the per-tick slot: the per-tick pick below
         // is consumed where it is taken up and never read again that tick, so a pick held in it
@@ -18390,6 +18791,14 @@ pub fn run_preview_window() {
             // stopped, and a loop waiting on the channel is working (see
             // `preview_stall_ms`).
             note_preview_alive();
+
+            // And the same note for the pin, which is a narrower question with a much
+            // shorter bound: a loop that is not turning while a window the user is
+            // looking at is up is a window whose buttons do nothing, and the thread that
+            // would notice is the one that is stuck (see `spawn_pin_watchdog`).
+            if pinned() {
+                note_pin_alive();
+            }
 
             // What the pin asks for this tick, if anything: the key, one of the caption's
             // buttons, or the media behind it having come apart. It is held for the drain
@@ -18519,15 +18928,46 @@ pub fn run_preview_window() {
                 // A step the caption's own walk buttons took is a pick like any other, and is
                 // held in the walk rather than in the pick slot: the file it stands on is the
                 // file to be shown, and the walk is what carries it on when that file turns out
-                // to be one the pin cannot be shown (see `PinStep`). A key a pinned window was
-                // given is answered here too, because the player it acts on is this thread's.
+                // to be one the pin cannot be shown (see `PinStep`). Reading the folder is the
+                // planner's work now, so what comes back immediately is usually a wait rather
+                // than a walk — the walk arrives as its own answer (see `step_pinned_file`).
+                // A key a pinned window was given is answered here too, because the player it
+                // acts on is this thread's.
                 if let Some(walk) = pin_command_request(
                     &mut pin_request,
+                    &mut pin_walk_wait,
                     &mut audio_started,
                     &mut audio_start_offset,
                     &mut audio_paused,
                 ) {
                     pin_walk = Some(walk);
+                }
+
+                // The wait is over where its answer landed in this tick, and where it has run
+                // for as long as this app will wait for a question it asked: a folder on a
+                // share that never answers is a walk that ends rather than an arc that turns
+                // for ever. The pin keeps the file it is showing either way (see
+                // `PIN_JOB_GIVEUP`).
+                //
+                // This is read here rather than where the arc is turned because that is
+                // before the drain below, where an answer for this walk would be found — a
+                // wait given up on in the same tick its answer landed would take the walk
+                // with it, and the pin would stop where a question had already been
+                // answered.
+                if pin_walk_wait
+                    .as_ref()
+                    .is_some_and(|wait| wait.started.elapsed() >= PIN_JOB_GIVEUP)
+                {
+                    pin_walk_wait = None;
+                }
+
+                // And a wait that is no longer a wait takes its arc down with it, once: a
+                // pin left showing its old file is not left showing a spinner for a question
+                // nobody is asking.
+                if pin_walk_wait_seen && pin_walk_wait.is_none() {
+                    pin_walk_wait_seen = false;
+                    pin_arc_set(None);
+                    render_layered_preview(hwnd);
                 }
 
                 // A window that is up holds nothing for the key: what a restore by a click on the
@@ -18624,6 +19064,22 @@ pub fn run_preview_window() {
                     // The paint just happened, so the bar's own clock starts again here: a
                     // window with a transport bar would otherwise be painted twice within a
                     // turn, once for the arc and once for the playhead.
+                    last_pin_repaint = Instant::now();
+
+                    render_layered_preview(hwnd);
+                }
+
+                // A walk the planner is still reading the folder for is the same wait, painted
+                // the same way and on the same delay: the pin is showing a file it has not
+                // been asked for yet, and the arc is what says the question is still out
+                // rather than a window that has simply stopped answering. The wait is read
+                // here, where the loop knows what has been asked this tick; whether it is
+                // still unanswered is settled further down, where the drain below is.
+                if let Some(wait) = pin_walk_wait.as_mut().filter(|wait| wait.due()) {
+                    pin_arc_set(Some(wait.started.elapsed()));
+                    wait.spun();
+                    pin_walk_wait_seen = true;
+
                     last_pin_repaint = Instant::now();
 
                     render_layered_preview(hwnd);
@@ -19637,6 +20093,49 @@ pub fn run_preview_window() {
                             video_probed = Some((path, generation));
                         }
                     }
+                    PreviewMessage::PinAnswered(answer) => {
+                        // Both answers are the pin's own, and both are dropped where the
+                        // pin is no longer up: the wait was a window's, and a window that
+                        // is not there is owed nothing.
+                        if pinned() {
+                            match answer {
+                                // A walk is taken up where a pick is, because that is what a
+                                // walk is: a file the pin cannot be shown is stepped over
+                                // rather than stopped at (see `PinStep`). The wait it was
+                                // asked under is over with it, so the arc comes down on the
+                                // tick the walk is acted on rather than turning until it is.
+                                //
+                                // It is taken only if the pin is still standing where the
+                                // walk was asked from. A walk lands some time after the
+                                // press, and by then the pin may have been given another
+                                // file — a pick in the listing, or a walk the user has
+                                // pressed since. Stepping from a file the pin has left is
+                                // a window that changes its mind about a file nobody
+                                // picked, so the answer is dropped instead.
+                                PinPlanned::Walk(walk) => {
+                                    pin_walk_wait = None;
+                                    if pinned_path().as_deref() == Some(walk.from()) {
+                                        pin_walk = Some(walk);
+                                    }
+                                }
+                                // The hand-off button's name, for the file the pin is showing
+                                // now. An answer for a file the pin has already left is
+                                // dropped rather than shown: a name for the wrong file is
+                                // worse than no name.
+                                PinPlanned::OpenWith { path, name } => {
+                                    if pinned_path().as_deref() == Some(path.as_path()) {
+                                        if let Ok(mut pinned) = PINNED.lock() {
+                                            if let Some(pin) = pinned.as_mut() {
+                                                pin.tooltip.default_app = name;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        } else {
+                            pin_walk_wait = None;
+                        }
+                    }
                     PreviewMessage::MeasureProbed { path, size } => {
                         // The same pick again for a pin, where the measure answered with a box:
                         // that a reader has no box for the file at all is no box to lay anything
@@ -20015,6 +20514,11 @@ pub fn run_preview_window() {
                 // belongs to the window it was pressed on, and the pin that follows is shown
                 // whatever the user picks rather than the rest of a walk behind it.
                 pin_walk = None;
+                // And the walk it was reading the folder for is a wait on a window that is
+                // gone: it is not waited for, and the arc it may have put up goes down with
+                // it (see `PinWait`).
+                pin_walk_wait = None;
+                pin_walk_wait_seen = false;
                 // A file picked behind a pin that is over is not owed to the pin that follows it:
                 // what the key brings a bubble back on is what was picked while *that* bubble was
                 // down, and a file nobody is holding any more is a swap nothing asked for (see
@@ -20579,29 +21083,39 @@ pub fn run_preview_window() {
                         // across either (see `cached_video_geometry`).
                         let duration = video_duration(&path);
 
-                        // And the same rule for the rest of what this take-up needs an answer
-                        // to before it can build the pin: what the file keeps of its box, and
-                        // whether it is drawn as a card, are a look in the configuration and a
-                        // read of the file, and the program the Shell would open it with is
-                        // Shell work with no limit on how long it takes. None of them belongs
-                        // under the pin's own lock: a call that takes as long as the disk or
-                        // the Shell takes is this window standing still for the whole of it —
-                        // this is the thread that pumps its own messages — and one that pumps
-                        // or re-enters while the lock is held leaves the window procedure
-                        // asking for a lock this thread already owns, which is not a wait but
-                        // a stop (see `pin_media_is_alive` for the same rule, written down for
-                        // the media). A take-up runs for every file a walk lands on rather than
-                        // once per pin, so it is the arrow keys, the two step buttons and a
-                        // pick in the listing alike that pay it (see `ask_default_app_name`).
-                        let keeps_its_box = pin_keeps_its_box(&path);
-                        let drawn_as_card = drawn_as_audio(&path);
-                        let default_app = default_app_name(&path);
-
                         let carried = PINNED.lock().ok().and_then(|pinned| {
                             pinned.as_ref().map(|pin| {
                                 (pin.restore, pin.chrome, pin.volume, pin.overlay, pin.bound)
                             })
                         });
+
+                        // The three facts that have to be read before the pin's own lock is
+                        // taken, because each of them is a read of the machine rather than of
+                        // the state in hand: `pin_keeps_its_box` and `drawn_as_audio` are
+                        // answered by a content probe that takes `CONFIG` over a file read,
+                        // and the Shell's own answer to "which program opens this" is two
+                        // `AssocQueryStringW` calls. None of them belongs inside a guard
+                        // that the window procedure takes for every mouse move, press,
+                        // release and paint — a take-up holding `PINNED` across any of them
+                        // is a window whose buttons stop answering for as long as the disk
+                        // or the Shell takes. One that pumps or re-enters while the lock is
+                        // held is worse still: the window procedure would be asking for a
+                        // lock this thread already owns, which is not a wait but a stop (see
+                        // `pin_media_is_alive` for the same rule, written down for the media).
+                        //
+                        // A take-up runs for every file a walk lands on rather than once per
+                        // pin, so it is the arrow keys, the two step buttons and a pick in the
+                        // listing alike that pay it.
+                        let keeps_its_box = pin_keeps_its_box(&path);
+                        let card = drawn_as_audio(&path);
+
+                        // The name the hand-off button says is asked of the planner rather
+                        // than here, for the same reason and by the same rule: it is a
+                        // question about the machine's own associations, and the pin is
+                        // answered about the file it holds until it holds another one (see
+                        // `PinTooltip`). The button is drawn without a name until the
+                        // answer lands rather than the take-up waiting for it.
+                        ask_pin_open_with(path.clone());
 
                         if let Ok(mut pinned) = PINNED.lock() {
                             let now = Instant::now();
@@ -20622,7 +21136,7 @@ pub fn run_preview_window() {
                                 ),
                                 restore: pin_restore_after(
                                     carried.and_then(|(restore, ..)| restore),
-                                    drawn_as_card,
+                                    card,
                                 ),
                                 dpi,
                                 transport_bar,
@@ -20650,15 +21164,13 @@ pub fn run_preview_window() {
                                 bubble_pause: None,
                                 hovered: None,
                                 pressed: None,
-                                // The name the hand-off button says, read once here rather
-                                // than on every repaint: which program would open this file
-                                // is a question about the machine's own associations,
-                                // and a pin is answered about the file it holds until it
-                                // holds another one (see `PinTooltip`).
-                                tooltip: PinTooltip {
-                                    default_app,
-                                    ..Default::default()
-                                },
+                                // The name the hand-off button says. It is left empty here
+                                // and filled in when the planner's answer lands, because
+                                // the Shell is asked on a thread of its own and this
+                                // take-up must not wait for it (see `ask_pin_open_with`).
+                                // The name is still asked once per format per run, as it
+                                // was below the lock before (see `default_app_name`).
+                                tooltip: PinTooltip::default(),
                                 dragging: None,
                                 transport: PinTransport {
                                     // The length the probe read, and where a player this app
@@ -20755,6 +21267,10 @@ pub fn run_preview_window() {
                     // which is answered above: it is not a hover, so nothing here has a layout
                     // to make for it (see `PreviewMessage::PinUpdate`).
                     PreviewMessage::PinUpdate(_) => {}
+                    // And what the planner answered, which is the pin's own walk and its
+                    // hand-off name rather than a hover — taken where a pin is acted on, not
+                    // here (see `PreviewMessage::PinAnswered`).
+                    PreviewMessage::PinAnswered(_) => {}
                 }
 
                 // Shared load/display logic for Show and ShowKeyboard
@@ -27731,10 +28247,14 @@ mod tests {
 
         let mut walk = PinStep {
             at: list[0].clone(),
+            from: list[0].clone(),
             step: 1,
             // The bound a walk of this folder is given by the button that started it, so that
             // what is tested here is the bound the caption actually walks under.
             left: walk_budget(&list),
+            // The list is what the planner read off the preview thread, handed in rather
+            // than looked up again on every step (see `PinStep`).
+            list: list.clone(),
         };
 
         // Every step, and the one that ends the walk: the end is part of what is being asked
@@ -27777,8 +28297,10 @@ mod tests {
         let mut held: Option<PinStep> = None;
         let walk = PinStep {
             at: folder.join("a.png"),
+            from: folder.join("a.png"),
             step: 1,
             left: 1,
+            list: vec![folder.join("a.png"), folder.join("b.png")],
         };
 
         step_pin_over(Some(walk), &mut held);
@@ -27849,6 +28371,154 @@ mod tests {
         assert!(
             load.due(),
             "until the spinner's own cadence has come round again"
+        );
+    }
+
+    /// What this guards: the wait a walk is asked under is painted on the pin's own terms —
+    /// nothing before the delay, then the arc at the spinner's cadence — because the folder
+    /// read is on a thread of its own now and a walk is only slow for the person looking at
+    /// it if they are told it is out.
+    ///
+    /// The same shape a load's wait has, deliberately: it is the same question to the user
+    /// (see `PinWait` and `PinLoad`).
+    #[test]
+    fn a_walk_wait_is_answered_on_the_same_terms_a_load_is() {
+        let mut wait = PinWait {
+            started: Instant::now(),
+            spinner_delay: Duration::from_millis(DEFAULT_SPINNER_DELAY_MS),
+            turned: None,
+        };
+
+        assert!(
+            !wait.due(),
+            "a folder that reads inside the delay shows no arc at all"
+        );
+
+        wait.started = Instant::now() - Duration::from_millis(DEFAULT_SPINNER_DELAY_MS + 1);
+        assert!(wait.due(), "and a read that outlasts it shows one");
+
+        wait.spun();
+        assert!(
+            !wait.due(),
+            "and the turn is a cadence away from the last rather than due at once, so a \
+             long folder read does not repaint the window as fast as the loop runs"
+        );
+    }
+
+    /// What this guards: the walk a caption button asks for is asked of the planner, and the
+    /// planner answers with a walk that already holds the folder's list.
+    ///
+    /// The list being in the answer is the whole of what makes a walk cheap: `PinStep` steps
+    /// through what it was handed, so a second and third press down the same folder cost a
+    /// position in a vector rather than another `read_dir` on the thread that draws the pin's
+    /// caption. The bound is carried with it for the same reason — a walk that did not know
+    /// how many files it had left would go round the folder for ever.
+    #[test]
+    fn a_walk_the_planner_answers_carries_the_list_it_walked() {
+        let folder = walkable_folder("planner-walked");
+        let list = vec![folder.join("a.png"), folder.join("b.png")];
+
+        let mut walk = PinStep {
+            at: list[0].clone(),
+            from: list[0].clone(),
+            step: 1,
+            left: walk_budget(&list),
+            list: list.clone(),
+        };
+
+        assert_eq!(
+            walk.step(),
+            Some(list[1].clone()),
+            "the walk steps through the list it was handed, with no second read of the folder"
+        );
+        assert_eq!(
+            walk.from(), list[0],
+            "and it still says which file it was asked from after it has moved on, which is \
+             what a late answer is matched against"
+        );
+        assert_eq!(
+            walk.left, 0,
+            "and the bound came with it, so a folder of files this app cannot show is a walk \
+             that ends rather than one that goes round for ever"
+        );
+        assert!(
+            walk.step().is_none(),
+            "which is what ends it: nothing further is asked of the planner for this walk"
+        );
+    }
+
+    /// What this guards: the Shell is asked once per *format*, and a name with no extension
+    /// is keyed by itself rather than filed under no format at all.
+    ///
+    /// The second half is the one that bites: `Path::extension` reports none for `.gitignore`
+    /// — a leading dot begins a name rather than an extension — so keying on the extension
+    /// alone would put a dot-file in the same slot as every extensionless name beside it, and
+    /// one file's association would be drawn on another's hand-off button.
+    #[test]
+    fn the_shell_is_asked_once_per_format_and_a_dot_file_is_its_own() {
+        assert_eq!(shell_format(Path::new("C:\\a\\b.PNG")), ".png");
+        assert_eq!(shell_format(Path::new("C:\\a\\b.png")), ".png");
+        assert_eq!(shell_format(Path::new("C:\\a\\.gitignore")), ".gitignore");
+        assert_eq!(shell_format(Path::new("C:\\a\\LICENSE")), "license");
+
+        assert_ne!(
+            shell_format(Path::new("C:\\a\\.gitignore")),
+            shell_format(Path::new("C:\\a\\Makefile")),
+            "a name with no extension is its own format rather than a shared empty one, so \
+             two such files cannot trade associations"
+        );
+    }
+
+    /// What this guards: a walk is *always* answered, so a press that had nowhere to go ends
+    /// the wait at once rather than leaving the pin's arc turning out a bound.
+    ///
+    /// The three ways a walk can come back with nothing — a folder that cannot be read, a
+    /// folder whose only walkable file is the one the pin is showing, and a folder this build
+    /// can walk nothing in — are ordinary answers. A walk answered with nothing at all is
+    /// indistinguishable from a planner that has stopped answering, and only the give-up
+    /// would end it: a 15-second spinner for a press that had nothing to step to.
+    #[test]
+    fn a_walk_with_nowhere_to_go_is_answered_rather_than_left_outstanding() {
+        let _every_file = WalkEveryFile::set();
+        let config = CONFIG.lock().expect("the configuration is not poisoned").clone();
+
+        // The case the planner most often finds, and the least dramatic: a folder holding
+        // nothing but the file the pin is standing on. `walkable_folder` makes three, so
+        // this is a folder of its own with one.
+        let folder = walkable_folder("nowhere-to-go-alone");
+        for picture in ["b.png", "c.png"] {
+            let _ = std::fs::remove_file(folder.join(picture));
+        }
+
+        let answered = answer_pin_job(&PinJob::Walk {
+            at: folder.join("a.png"),
+            step: 1,
+            config: Box::new(config.clone()),
+        });
+        let Some(PinPlanned::Walk(walk)) = answered else {
+            panic!("a walk is always answered, so the pin's arc can be taken down");
+        };
+        assert_eq!(
+            walk.left, 0,
+            "and a walk with nothing to step to is a spent one, which is how the loop is told \
+             the press is over rather than still out"
+        );
+        assert_eq!(walk.at, folder.join("a.png"), "standing on the file it was asked from");
+        let _ = std::fs::remove_dir_all(&folder);
+
+        // And a folder this build cannot read at all is the same answer rather than silence.
+        let gone = answer_pin_job(&PinJob::Walk {
+            at: PathBuf::from("C:\\no-such-folder-here\\a.png"),
+            step: 1,
+            config: Box::new(config),
+        });
+        let Some(PinPlanned::Walk(walk)) = gone else {
+            panic!("a folder that cannot be read is answered like a folder with nothing in it");
+        };
+        assert_eq!(
+            walk.left, 0,
+            "and it ends the wait on the tick it lands, rather than the pin waiting out \
+             PIN_JOB_GIVEUP for a question that was answered the moment it was asked"
         );
     }
 
