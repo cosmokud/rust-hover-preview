@@ -37,15 +37,24 @@ each would take a reader rather than a byte to change:
   carry more than one picture behind a header this app reads only the first surface of; what
   each is drawn as is that first surface, which is the picture either way.
 
-Two of the formats that were on this list are no longer on it, and both are on it for
-opposite reasons, which is what the list is for. **An animated AVIF and an animated HEIF
-sequence** are drawn now — through the media engine Windows has, used as a decoder rather than
-as the app's video path, because HEVC and AV1 have no decoder in this graph and libheif and
-libde265 were rejected for a tree that compiles zero C/C++ (`heif_sequence`). Whether the media
-stack can open one at all is a property of the machine rather than of this code, so the
-answer is allowed to be no, and every failure is the first frame this app always showed. **An
-animated JPEG XL** is drawn now too, by a decoder compiled in (`jxl_image`), and needs nothing
-installed on the machine at all.
+**And one of the three is settled, and two are back on the list for a measured reason.** An
+**animated JPEG XL** is drawn now, by a decoder compiled in (`jxl_image`), and needs nothing
+installed on the machine at all. **An animated AVIF and an animated HEIF sequence** are not,
+and the reason is not a guess: the media engine Windows has was asked directly, on files whose
+brands are exactly the ones this is about, and it refused every one of them —
+`MFCreateSourceReaderFromByteStream` answering `0x80004005` for an `avis` AVIF and an `msf1`
+HEIC alike, while an AV1 `.mp4` and an HEVC `.mp4` through the same calls came back with frames
+at 100 ms and 33 ms on the same machine. So the engine is not missing the codec, and never was:
+it decodes both, and has no demuxer for the image-sequence brands. The reader that asked it
+(`heif_sequence`) is still wired in, still returns `None` for these, and still falls through to
+the first frame — which is the behaviour it was written to have, and is why these show a still
+rather than nothing. What is needed is a demuxer for `avis` and `msf1` that this graph does not
+have, and the ways to get one are not small: **libheif** (which brings libde265 for HEVC, and is
+its samples to a decoder the same way this one does — [`heic`](https://github.com/imazen/heic)
+parses `msf1`/`moov` in pure Rust, but is AGPL-3.0 or a paid commercial licence, decodes HEVC
+I-slices only with no inter prediction, and reads a movie structure for its first I-frame rather
+than a whole sequence, so it may land in the same place this did. Neither is a decision to make
+without a licence answer first.
 
 **And one that was never on the list, because it is a name rather than a flag.** A multi-image
 HEIC — a camera burst — carries its pictures as items behind a `mif1` brand, and `mif1` is the
