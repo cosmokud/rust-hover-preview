@@ -123,7 +123,10 @@ run during normal use.
   event is read, no character or text is ever produced, nothing is written down
   or sent, and the keystroke is always passed on: `Space` still does what it
   does in Explorer. Turning **Enable Pin** off unbinds the key, and the hook
-  then compares against nothing at all.
+  then compares against nothing at all. A pinned window you have clicked takes
+  the ordinary Windows keyboard focus, and the handful of keys it answers
+  (arrows, `Escape`) arrive at it as keystrokes sent to that window — nothing
+  is polled system-wide for them, and nothing is recorded.
 - **Clipboard, two cases:** (1) copying from a text preview writes to the
   clipboard only when you choose Copy / Select All / Ctrl+C with a selection.
   (2) On printerless machines, an Excel sheet preview copies a corner of the
