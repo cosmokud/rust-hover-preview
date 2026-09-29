@@ -101,7 +101,7 @@ use windows::Win32::System::Threading::{
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, GetCapture, GetFocus, ReleaseCapture, SetCapture, SetFocus, VK_A, VK_C,
-    VK_CONTROL, VK_DOWN, VK_ESCAPE, VK_LEFT, VK_RIGHT, VK_UP,
+    VK_CONTROL, VK_DOWN, VK_ESCAPE, VK_LEFT, VK_LBUTTON, VK_RIGHT, VK_UP,
 };
 use windows::Win32::UI::Shell::{
     AssocQueryStringW, ShellExecuteW, ASSOCF_NONE, ASSOCSTR_FRIENDLYAPPNAME,
@@ -13525,54 +13525,66 @@ impl PinnedPreview {
     }
 
     /// Which edge or corner of the window a point is on, if it is on one: what a resize is begun
-    /// by, and what the shape of the pointer is decided from.
-    ///
-    /// Four bands, one to a side, and the corners where two of them meet taken first so that a
-    /// point in one is answered with the corner rather than with whichever side happens to be
-    /// asked about first. A corner's band is the wider of the two: it is the smallest target the
-    /// window has, and the top-right one is under the caption's buttons — which is the same
-    /// bargain Windows makes on a window whose frame is drawn for it.
+    /// by, and what the shape of the pointer is decided from (see `pin_resize_edge`, which is the
+    /// question itself, asked of this pin's own geometry).
     fn resize_edge(&self, x: i32, y: i32) -> Option<PinResize> {
-        let (width, height) = self.window_size();
-        let border = logical_px(self.dpi, PIN_RESIZE_BORDER_PIXELS).max(2);
-        let corner = border + logical_px(self.dpi, PIN_RESIZE_CORNER_EXTRA_PIXELS).max(1);
-
-        // A window too small to tell its edges apart is not resized at all: every band would
-        // overlap the others and a press would land on whichever was asked for first.
-        if width <= corner + border || height <= corner + border {
-            return None;
-        }
-
-        let mut edge = PinResize {
-            left: x < border,
-            top: y < border,
-            right: x >= width - border,
-            bottom: y >= height - border,
-        };
-
-        // A corner is the two bands that meet there, and its own is wider than either: a point
-        // inside one is on both of the sides it is between, whether or not it is deep enough into
-        // them to have been read as a side on its own.
-        if y < corner {
-            if x < corner {
-                edge.left = true;
-                edge.top = true;
-            } else if x >= width - corner {
-                edge.right = true;
-                edge.top = true;
-            }
-        } else if y >= height - corner {
-            if x < corner {
-                edge.left = true;
-                edge.bottom = true;
-            } else if x >= width - corner {
-                edge.right = true;
-                edge.bottom = true;
-            }
-        }
-
-        (edge.left || edge.top || edge.right || edge.bottom).then_some(edge)
+        pin_resize_edge(self.window_size(), self.dpi, x, y)
     }
+}
+
+/// Which edge or corner of a window of this size a point is on, if it is on one.
+///
+/// Four bands, one to a side, and the corners where two of them meet taken first so that a
+/// point in one is answered with the corner rather than with whichever side happens to be
+/// asked about first. A corner's band is the wider of the two: it is the smallest target the
+/// window has, and the top-right one is under the caption's buttons — which is the same
+/// bargain Windows makes on a window whose frame is drawn for it.
+///
+/// It is a question about a size and a scale rather than about a pin, because two callers ask
+/// it: the pinned window's own procedure, of a press that landed on it (see `pinned_press`),
+/// and the loop, of a press that landed on the engine's window standing in the pin's media band
+/// (see `pinned_engine_press_action`). One geometry answers both, so a press is answered the
+/// same way whichever window it happened to reach.
+fn pin_resize_edge(size: (i32, i32), dpi: u32, x: i32, y: i32) -> Option<PinResize> {
+    let (width, height) = size;
+    let border = logical_px(dpi, PIN_RESIZE_BORDER_PIXELS).max(2);
+    let corner = border + logical_px(dpi, PIN_RESIZE_CORNER_EXTRA_PIXELS).max(1);
+
+    // A window too small to tell its edges apart is not resized at all: every band would
+    // overlap the others and a press would land on whichever was asked for first.
+    if width <= corner + border || height <= corner + border {
+        return None;
+    }
+
+    let mut edge = PinResize {
+        left: x < border,
+        top: y < border,
+        right: x >= width - border,
+        bottom: y >= height - border,
+    };
+
+    // A corner is the two bands that meet there, and its own is wider than either: a point
+    // inside one is on both of the sides it is between, whether or not it is deep enough into
+    // them to have been read as a side on its own.
+    if y < corner {
+        if x < corner {
+            edge.left = true;
+            edge.top = true;
+        } else if x >= width - corner {
+            edge.right = true;
+            edge.top = true;
+        }
+    } else if y >= height - corner {
+        if x < corner {
+            edge.left = true;
+            edge.bottom = true;
+        } else if x >= width - corner {
+            edge.right = true;
+            edge.bottom = true;
+        }
+    }
+
+    (edge.left || edge.top || edge.right || edge.bottom).then_some(edge)
 }
 
 /// A drag of a pinned window: where the pointer was when it began, the box the window had
@@ -16935,6 +16947,149 @@ unsafe fn pinned_set_cursor(hwnd: HWND) -> bool {
     }
     true
 }
+
+/// Answer a press that has landed on the window standing in a pin's media band.
+///
+/// A document the engine draws is not this app's pixels and not this app's window: the band the
+/// pin leaves for it is filled by a browser's window, which is *over* the pin's — a press there
+/// is delivered to the browser, and the pinned window never sees it at all. So a hand on the
+/// drawing that means to carry the window, which is what a hand anywhere on the media of a pin
+/// means (see `pinned_content_is_the_pins`), would begin no drag: the window would not move,
+/// and the document the hand was on would not either. What is read here is the press itself —
+/// the one reading the engine's window cannot be asked for, since it is not this window — and
+/// what it begins is the drag the point means, by the same geometry the window procedure uses
+/// for a press on the parts of the pin the engine does not cover.
+///
+/// It is a transition and not a state, and the latch is what makes it one: the press that is
+/// answered sets it, a button that is not down clears it, and a hand held down on the band is
+/// one drag rather than one per tick. The drag it begins takes the pointer for the pin (`SetCapture`
+/// in `begin_pin_drag`), so the moves and the release that follow are this window's whatever they
+/// are over, and the rest of the drag is the one `pinned_mouse_move` and `pinned_release` carry.
+///
+/// Three kinds of press are deliberately left where they landed. A document that *runs* is a page
+/// the user is working in rather than a picture of one, and its own rectangle is where its own
+/// clicks belong, which is what `page_runs` tells the two apart by. A press with no pin up, or on
+/// a pin that is down to its bubble, is not on this window at all. And a press that did not reach
+/// the engine's window — one on the caption, on the opaque parts of the pin, or on whatever the
+/// pin is standing over — has already come to this window or to another one, and is that window's
+/// to answer.
+unsafe fn settle_pinned_engine_press(hwnd: HWND, answered: &mut bool) {
+    let down = left_button_down();
+
+    if !down {
+        *answered = false;
+        return;
+    }
+
+    if *answered {
+        return;
+    }
+    *answered = true;
+
+    // Nothing of anybody else's stands in a bubble, and nothing of the engine's does either: what
+    // a collapsed pin leaves is the round bubble and the listing under it.
+    if pin_is_collapsed() {
+        return;
+    }
+
+    // The document that is really on screen, read from the engine rather than from the pin: a pin
+    // mid-swap still names the file it is showing, and it is the engine's window that took the
+    // press either way.
+    let Some(shown) = webview_preview::showing_path() else {
+        return;
+    };
+
+    if webview_preview::page_runs(&shown) {
+        return;
+    }
+
+    // What took the press: the engine's window, or one of the browser's own child windows inside
+    // it — the same question the pointer is asked in `cursor_preview_hover`, asked here about a
+    // press in the same spot.
+    let Some(point) = cursor_screen_point() else {
+        return;
+    };
+    if !engine_window_is_at(point.0, point.1) {
+        return;
+    }
+
+    let Some((window, dpi, frame)) = pinned_window_frame() else {
+        return;
+    };
+
+    // A press on a pinned window is what makes the pin the window the user is in, whichever part
+    // of it was pressed, and what it begins is the drag its place means.
+    pin_take_focus(hwnd);
+    begin_pin_drag(hwnd, pinned_engine_press_action(window, dpi, frame, point));
+}
+
+/// Whether the window under a point is the one a document the engine draws is standing in.
+///
+/// What the pointer is over *inside* that window is a browser's own child window — one or two
+/// levels down — so the question is whether the window under the point is the engine's or one
+/// inside it, exactly as `cursor_preview_hover` asks it: comparing the two handles alone never
+/// answers yes.
+fn engine_window_is_at(x: i32, y: i32) -> bool {
+    let engine = webview_preview::showing_hwnd();
+    if engine == 0 {
+        return false;
+    }
+
+    unsafe {
+        use windows::Win32::UI::WindowsAndMessaging::{IsChild, WindowFromPoint};
+
+        let under = WindowFromPoint(POINT { x, y });
+        !under.is_invalid()
+            && (under.0 as isize == engine || IsChild(HWND(engine as *mut _), under).as_bool())
+    }
+}
+
+/// Whether the left button is down.
+///
+/// Read from the system rather than waited for, and it is the *state* that is read rather than
+/// the press bit: a press that lands on the engine's window is a message for that window, so
+/// there is none here to wait for, and the press bit `GetAsyncKeyState` also reports is consumed
+/// by whoever reads it first — the Explorer hook reads the mouse buttons every tick, and a read
+/// from here would take the bit out from under it.
+fn left_button_down() -> bool {
+    unsafe { GetAsyncKeyState(VK_LBUTTON.0 as i32) as u16 & 0x8000 != 0 }
+}
+
+/// The box, display scale and frame of the pin that is up, for a press that landed on the window
+/// standing in its media band — read in one look, so that the lock is not held across the answer.
+fn pinned_window_frame() -> Option<(ScreenRegion, u32, PinFrame)> {
+    let pinned = PINNED.lock().ok()?;
+    let pin = pinned.as_ref()?;
+    Some((pin.window_box(), pin.dpi, pin.frame))
+}
+
+/// What a press that has landed on the window standing in a pin's media band begins: a resize
+/// where the point is on an edge of the pin's own window, and a move anywhere else.
+///
+/// The two are asked in the order the window procedure asks them of a press that came to it — an
+/// edge first, and the media after it (`pinned_press`) — and of the same geometry, because a
+/// press on the pin is a press on the pin whichever window took it: the bands an edge is found
+/// in are the ones a hand on the opaque parts of the pin finds them in (`pin_resize_edge`), and
+/// everything left of them is the media, which is the handle a window's body is.
+///
+/// The point arrives in screen coordinates, since it is read from the pointer rather than from a
+/// message of this window's, and the pin's own window is where its coordinates begin.
+fn pinned_engine_press_action(
+    window: ScreenRegion,
+    dpi: u32,
+    frame: PinFrame,
+    point: (i32, i32),
+) -> PinDragAction {
+    if frame != PinFrame::None {
+        let size = ((window.2 - window.0).max(1), (window.3 - window.1).max(1));
+        if let Some(edge) = pin_resize_edge(size, dpi, point.0 - window.0, point.1 - window.1) {
+            return PinDragAction::Resize(edge);
+        }
+    }
+
+    PinDragAction::Move
+}
+
 unsafe fn begin_pin_drag(hwnd: HWND, action: PinDragAction) {
     let Some(from) = cursor_screen_point() else {
         return;
@@ -17786,6 +17941,11 @@ pub fn run_preview_window() {
         // A message the idle wait took off the channel, held for the drain below
         // rather than acted on where it was received.
         let mut carried_preview_msg: Option<PreviewMessage> = None;
+        // Whether a press that landed on the window standing in the pin's media band has already
+        // been answered. A press is a transition and the window procedure never sees this one —
+        // the browser's window took it — so the reading that says it has been dealt with is kept
+        // here until the button comes up (see `settle_pinned_engine_press`).
+        let mut engine_press_answered = false;
         while RUNNING.load(Ordering::SeqCst) {
             // Every tick is noted, whether it does anything or not: what the note is
             // for is the Explorer hook telling a loop that is working from one that has
@@ -17911,6 +18071,12 @@ pub fn run_preview_window() {
                 // as it is up and put back on top the tick after it goes (see
                 // `settle_open_with_dialog`).
                 settle_open_with_dialog(hwnd);
+
+                // A press that landed on the window the engine draws a document in, which is the
+                // one thing on a pinned window the window procedure cannot be told about: the
+                // band is a browser's window over this one, so the press is read here and the
+                // drag it means begun here (see `settle_pinned_engine_press`).
+                settle_pinned_engine_press(hwnd, &mut engine_press_answered);
 
                 // A step the caption's own walk buttons took is a pick like any other, and is
                 // held in the walk rather than in the pick slot: the file it stands on is the
@@ -26246,6 +26412,62 @@ mod tests {
         assert_eq!(pin.resize_edge(40, 40), None);
         assert_eq!(pin.resize_edge(40, height / 2), None);
         assert_eq!(pin.resize_edge(width / 2, 40), None);
+    }
+
+    /// A press that lands on the window the engine draws a document in begins what a press on the
+    /// same place of any other kind's band begins: a resize on an edge of the pin's own window —
+    /// the edges that window covers, which is every one of them but the caption's — and a move
+    /// anywhere else. The point is read from the pointer rather than from a message, so it arrives
+    /// in screen coordinates and the window's own origin is taken out here.
+    #[test]
+    fn a_press_on_the_engines_window_begins_the_drag_its_place_means() {
+        // A pin whose window is (100, 100, 700, 500): the caption is the strip along the top, and
+        // the engine's window is everything below it and the full width.
+        let window = (100, 100, 700, 500);
+        let action_at =
+            |x: i32, y: i32| pinned_engine_press_action(window, 96, PinFrame::Shaped, (x, y));
+        let edge_of = |action: PinDragAction| match action {
+            PinDragAction::Resize(edge) => Some(edge),
+            PinDragAction::Move => None,
+        };
+
+        // The middle of the band is the media, which is the handle a window's body is.
+        assert!(matches!(action_at(400, 300), PinDragAction::Move));
+
+        // The left, right and bottom edges of the pin's window are the engine's window's own —
+        // the caption is above them — so a press there is a resize, in the same bands the window
+        // procedure finds them in.
+        assert_eq!(
+            edge_of(action_at(100, 300)),
+            Some(edge(true, false, false, false)),
+            "the left edge"
+        );
+        assert_eq!(
+            edge_of(action_at(700, 300)),
+            Some(edge(false, false, true, false)),
+            "the right edge"
+        );
+        assert_eq!(
+            edge_of(action_at(400, 500)),
+            Some(edge(false, false, false, true)),
+            "the bottom edge"
+        );
+        assert_eq!(
+            edge_of(action_at(100, 500)),
+            Some(edge(true, false, false, true)),
+            "and a corner of two of them"
+        );
+
+        // A hand just inside the edge is the media, which is the same border a press on the
+        // opaque parts of the pin is measured by — eight pixels at this scale.
+        assert!(matches!(action_at(109, 300), PinDragAction::Move));
+        assert!(matches!(action_at(400, 490), PinDragAction::Move));
+
+        // A window that offers no resize at all — a sound's card — moves from its edges as it
+        // does from its middle: the edges are not the pin's to offer there.
+        let card = |x: i32, y: i32| pinned_engine_press_action(window, 96, PinFrame::None, (x, y));
+        assert!(matches!(card(100, 300), PinDragAction::Move));
+        assert!(matches!(card(400, 300), PinDragAction::Move));
     }
 
     /// A band the frame is not the size of is filled by the frame, sampled: it is what a pinned
