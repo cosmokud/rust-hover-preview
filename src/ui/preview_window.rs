@@ -104,8 +104,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     VK_CONTROL, VK_DOWN, VK_ESCAPE, VK_LEFT, VK_RIGHT, VK_UP,
 };
 use windows::Win32::UI::Shell::{
-    AssocQueryStringW, ShellExecuteW, ASSOCF_NONE, ASSOCSTR_FRIENDLYAPPNAME, OPENASINFO,
-    SHOpenWithDialog,
+    AssocQueryStringW, ShellExecuteW, ASSOCF_NONE, ASSOCSTR_FRIENDLYAPPNAME,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DispatchMessageW,
@@ -114,16 +113,16 @@ use windows::Win32::UI::WindowsAndMessaging::{
     MsgWaitForMultipleObjectsEx, PeekMessageW, RegisterClassExW, SetCursor, SetForegroundWindow,
     SetWindowLongPtrW, SetWindowPos, ShowWindow, ShowWindowAsync, SystemParametersInfoW,
     TrackPopupMenu, TranslateMessage, UpdateLayeredWindow, CS_HREDRAW, CS_VREDRAW, GWL_EXSTYLE,
-    GW_OWNER, HWND_TOPMOST, IDC_ARROW, IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE,
-    IDC_SIZEWE, MF_STRING, MSG, MWMO_INPUTAVAILABLE, PBT_APMRESUMEAUTOMATIC, PBT_APMRESUMESUSPEND,
-    PBT_APMSTANDBY, PBT_APMSUSPEND, PM_REMOVE, QS_ALLINPUT, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN,
-    SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SPI_GETWORKAREA, SWP_FRAMECHANGED, SWP_NOACTIVATE,
-    SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SW_HIDE, SW_SHOWNOACTIVATE,
-    SW_SHOWNORMAL, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, TPM_LEFTALIGN, TPM_NONOTIFY, TPM_RETURNCMD,
-    TPM_TOPALIGN, ULW_ALPHA, WA_INACTIVE, WM_ACTIVATE, WM_CHAR, WM_CLOSE, WM_DISPLAYCHANGE,
-    WM_DPICHANGED, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_POWERBROADCAST,
-    WM_RBUTTONUP, WM_SETCURSOR, WM_SYSCOMMAND, WM_SYSKEYDOWN, WNDCLASSEXW, WS_EX_LAYERED,
-    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    GW_OWNER, HWND_NOTOPMOST, HWND_TOPMOST, IDC_ARROW, IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS,
+    IDC_SIZENWSE, IDC_SIZEWE, MF_STRING, MSG, MWMO_INPUTAVAILABLE, PBT_APMRESUMEAUTOMATIC,
+    PBT_APMRESUMESUSPEND, PBT_APMSTANDBY, PBT_APMSUSPEND, PM_REMOVE, QS_ALLINPUT,
+    SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SPI_GETWORKAREA,
+    SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW,
+    SW_HIDE, SW_SHOWNOACTIVATE, SW_SHOWNORMAL, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, TPM_LEFTALIGN,
+    TPM_NONOTIFY, TPM_RETURNCMD, TPM_TOPALIGN, ULW_ALPHA, WA_INACTIVE, WM_ACTIVATE, WM_CHAR,
+    WM_CLOSE, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP,
+    WM_MOUSEMOVE, WM_POWERBROADCAST, WM_RBUTTONUP, WM_SETCURSOR, WM_SYSCOMMAND, WM_SYSKEYDOWN,
+    WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
 const PREVIEW_CLASS: PCWSTR = w!("RustHoverPreviewWindow");
@@ -16775,6 +16774,18 @@ unsafe fn open_path_with_default_app(path: &Path) {
     let _ = launched.0 as usize > 32;
 }
 
+/// Whether the Open With dialog is up, which is held here only so that the tick has
+/// something to answer before it bothers the process: most ticks of most pins have no dialog
+/// to think about, and asking a `Child` about its exit state is a syscall for nothing.
+///
+/// The answer itself is the child's, not this flag's — see `settle_open_with_dialog`.
+static OPEN_WITH_UP: AtomicBool = AtomicBool::new(false);
+
+/// The `rundll32` the dialog is running in, kept in hand for as long as it is up and dropped
+/// as soon as it has gone: a `Child` left behind is a handle this process has no further use
+/// for and has not been given back.
+static OPEN_WITH_CHILD: Mutex<Option<Child>> = Mutex::new(None);
+
 /// Show the Shell's own "How do you want to open this?" dialog for a file: the list of
 /// programs installed on this machine that could open it, which is the only way into a second
 /// program when the default is the wrong one. The button beside this one can only ever reach
@@ -16787,53 +16798,143 @@ unsafe fn open_path_with_default_app(path: &Path) {
 /// in their own language, with their own accessibility, and it is the dialog they have already
 /// seen a thousand times from Explorer's own context menu.
 ///
-/// It is given the pin's window as its owner, and that is what keeps it in front of the pin
-/// rather than behind it: a dialog with no owner is a window of its own, and this pin is
-/// topmost and would sit over it. The pin cannot take the focus — it is `WS_EX_NOACTIVATE` —
-/// so it is brought to the foreground first, the same way the tray's own menu is put up on it
-/// (see `show_text_preview_menu`), because a dialog opened against a window that was not the
-/// foreground is a dialog that can open behind somebody else's.
-///
-/// The call blocks while the dialog is up, which is the Shell's own doing and not something
-/// this window chose — the pin's message loop is inside it until the user has picked a program
-/// or closed the dialog, which is what lets the dialog paint and be moved, and leaves the pin
-/// showing the file underneath it afterwards.
+/// It is raised by handing `shell32`'s `OpenAs_RunDLL` export the file, which is the route
+/// Explorer's own "Open with" item takes and the one a caller without a COM apartment can
+/// still reach. The obvious alternative, `SHOpenWithDialog`, cannot be used: since Windows 11
+/// 22H2 that entry point opens nothing at all and says so, telling the caller to go and change
+/// the default in Settings instead of offering the list. A button whose only job is to offer
+/// the list cannot be built on an entry point that has stopped offering it, so this is the
+/// other way in and not a preference between two that both work.
 ///
 /// # Safety
 ///
-/// `SHOpenWithDialog` is a plain `extern "system"` call whose pointers are both this
-/// function's own: the `OPENASINFO` is a value on this stack and its one string is a buffer
-/// built here, both of which live longer than the call and are dropped after it. The owner is
-/// the pin's own window, which the caller holds for the length of the call; a dialog is modal
-/// over its owner for exactly as long as this call takes, and the pin is a topmost window with
-/// no caption of its own for anything to close it with while it stands there.
+/// Nothing here is a borrowed pointer: the command line is a `String` this function owns,
+/// handed to the standard library as one argument, and the only handle involved is this
+/// app's own window, passed to Windows calls that do not retain it. The file belongs to
+/// whichever program the user goes on to pick, and this side has no handle on it to release.
 unsafe fn show_open_with_dialog(hwnd: HWND, path: &Path) {
-    let wide: Vec<u16> = std::ffi::OsStr::new(&plain_path(path))
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect();
+    // The one argument `rundll32` is given, in the spelling it wants.
+    //
+    // `rundll32` does not read its command line as a list of arguments. It takes everything up
+    // to the first space as the "<library>,<entry>" pair, and then hands the function the whole
+    // of the rest of the line as one opaque tail — whatever is in it, verbatim, quotes and all.
+    // So the tail is passed with `raw_arg`, which puts it on the wire exactly as written and
+    // skips the quoting `arg` would otherwise add to any argument holding a space.
+    //
+    // Two spellings that look reasonable both put a filename into that tail that cannot exist,
+    // and neither fails loudly — `rundll32` simply exits at once, and a button that does that
+    // is a button that does nothing. Passing the path as a second argument reaches the tail as
+    // `"C:\...\my file.md"`, quotes included, because the library was already split off before
+    // the path was reached; and quoting it inside a single argument nests a second pair in the
+    // same place. Either way the Shell is handed a name with quote characters in it, finds no
+    // such file, and shows nothing. The path goes in bare, and `plain_path` above is what
+    // guarantees the only space in the tail is the one separating the entry point from it.
+    let tail = format!("shell32.dll,OpenAs_RunDLL {}", plain_path(path));
 
-    // The class is left null so that the dialog offers the file's own registered types, and the
-    // flags are zero: the dialog is the user's to answer, not a hint about what this app would
-    // have opened.
-    let info = OPENASINFO {
-        pcszFile: PCWSTR(wide.as_ptr()),
-        pcszClass: PCWSTR::null(),
-        oaifInFlags: Default::default(),
+    let mut command = Command::new("rundll32.exe");
+    command.raw_arg(&tail);
+
+    // The dialog is a window of its own with no owner to keep it in front of anything, and
+    // this pin is topmost: left as it is, the pin would sit over the very list it just asked
+    // for. Dropping the topmost band for as long as the dialog is up is what lets the user
+    // reach it — the pin is a preview of a file, and it is still one when this is over, but
+    // it is a picture of a file with a modal list in front of it otherwise.
+    let _ = SetWindowPos(
+        hwnd,
+        HWND_NOTOPMOST,
+        0,
+        0,
+        0,
+        0,
+        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+    );
+    OPEN_WITH_UP.store(true, Ordering::Release);
+
+    // The child is deliberately not waited for. `rundll32` holds itself open for as long as
+    // its dialog is, and the pin's own loop keeps running underneath it, so waiting here
+    // would be waiting on this thread's message loop from inside itself.
+    match command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        Ok(child) => {
+            if let Ok(mut slot) = OPEN_WITH_CHILD.lock() {
+                *slot = Some(child);
+            }
+        }
+        // A `rundll32` that would not start is a question this button has nowhere to put an
+        // answer: a machine that refuses the entry point is the user's machine rather than a
+        // fault in this one. What is not left undone is the topmost band, which goes straight
+        // back on — a pin stuck behind every other window is a pin the user cannot get to.
+        Err(_) => restore_pin_topmost(hwnd),
+    }
+}
+
+/// Put the pin's window back in front of everything, after the Open With dialog has gone.
+///
+/// The band is the pin's to have whenever the user is looking at the pin and not at something
+/// that has to be reached through it, and the dialog is the one thing this app puts up that is
+/// not part of the pin and is not its own window. So the tick that watches for the dialog to
+/// end is also what puts the pin back on top, and the same is true of a child that never
+/// started: the answer to "is the dialog up?" has to be a question asked of the process
+/// rather than of a flag this side set on the way past.
+///
+/// # Safety
+///
+/// `raise_pinned_window` is reached only with this app's own window, which the caller holds,
+/// and the call reads the pin's box and puts the window in the z-order without retaining
+/// either.
+unsafe fn restore_pin_topmost(hwnd: HWND) {
+    OPEN_WITH_UP.store(false, Ordering::Release);
+    if !pinned() {
+        return;
+    }
+    raise_pinned_window(hwnd);
+}
+
+/// Notice that the Open With dialog has gone: the pin's topmost band is held down for as long
+/// as one is up, and put back the moment it is not.
+///
+/// The question is asked of the child rather than of a flag, because a dialog that failed to
+/// come up looks exactly like one that is up if the only record of it is that something was
+/// started. `rundll32` is running for exactly as long as its dialog is, so its handle is the
+/// whole of the answer.
+///
+/// # Safety
+///
+/// See `restore_pin_topmost`: this reads a process's exit state and, on the strength of that
+/// reading alone, puts this app's own window back in the z-order.
+unsafe fn settle_open_with_dialog(hwnd: HWND) {
+    if !OPEN_WITH_UP.load(Ordering::Acquire) {
+        return;
+    }
+
+    let finished = match OPEN_WITH_CHILD.lock() {
+        Ok(mut child) => match child.as_mut() {
+            // A wait that could not be answered has not shown the dialog to be gone, and a
+            // dialog still up behind an unanswerable wait is a pin the user cannot reach. The
+            // band is left down for another tick rather than raised over a dialog that is in
+            // fact still there.
+            Some(process) => !matches!(process.try_wait(), Ok(None)),
+            // The slot is empty and the flag says otherwise, which is only reachable if the
+            // tick that cleared it has not run yet.
+            None => true,
+        },
+        // The lock is the only state this asks about, and a thread holding it is a thread
+        // between the spawn and the store. Nothing is decided until it is let go of.
+        Err(_) => false,
     };
 
-    // The pin is `WS_EX_NOACTIVATE` and so cannot be brought forward by this call, which is
-    // asked for anyway for the same reason the tray's menu asks for it (see
-    // `show_text_preview_menu`): it is the one place a window that has just been clicked is
-    // entitled to say it is the window being worked on. What actually puts the dialog in front
-    // is the pin being topmost and the dialog being owned by it — an owned window is placed
-    // above its owner — so nothing here is what makes the dialog visible.
-    let _ = SetForegroundWindow(hwnd);
+    if !finished {
+        return;
+    }
 
-    // The same answer as the button beside it: the dialog was refused, closed, or a Shell that
-    // is not answering, and none of those is a fault here. The file is left with whichever
-    // program the user picked, and this side has no handle on what that program does next.
-    let _ = SHOpenWithDialog(hwnd, &info);
+    if let Ok(mut child) = OPEN_WITH_CHILD.lock() {
+        *child = None;
+    }
+    restore_pin_topmost(hwnd);
 }
 
 /// Put away whatever name the caption is currently saying, whether or not it has been long
@@ -16841,9 +16942,9 @@ unsafe fn show_open_with_dialog(hwnd: HWND, path: &Path) {
 ///
 /// It is a button being *pressed*, and the thing it is about to open is going to take the
 /// pointer away from this window for as long as the user takes to answer it. The name is put
-/// away rather than left for the tick to notice, because the tick does not run while a modal
-/// dialog has this thread: a name still up would be a caption still naming a button the hand
-/// is no longer on, for the whole of the time the dialog is up.
+/// away rather than left for the tick to notice, because a tick that comes round while the
+/// dialog is up is a tick that finds the pointer somewhere the button is not, and the name
+/// would outlive the hover that earned it by however long the dialog is left standing.
 fn put_pin_tooltip_away() {
     if let Ok(mut pinned) = PINNED.lock() {
         if let Some(pin) = pinned.as_mut() {
@@ -16915,12 +17016,12 @@ unsafe fn pinned_release(hwnd: HWND, x: i32, y: i32) -> bool {
                 }
                 // The Shell's own list, the same way round: the file is in hand and the dialog
                 // is the system's, so the only thing asked of the loop here is the window the
-                // dialog is hung off, which this function already has.
+                // dialog is put up behind, which this function already has.
                 //
                 // The name goes away first, and the window is repainted without it, because the
-                // dialog runs its own message loop on this thread and no tick runs while it is
-                // up: a name left on the caption naming a button the pointer left when it
-                // clicked would stay there for as long as the user takes to choose a program.
+                // pointer leaves the button as the dialog is put up and stays away for as long
+                // as the user takes to choose: a name left on the caption naming a button the
+                // hand is no longer on would be read off as a label for the dialog.
                 pin_chrome::CaptionButton::OpenWithList => {
                     if let Some(path) = pinned_path() {
                         put_pin_tooltip_away();
@@ -17238,6 +17339,13 @@ pub fn run_preview_window() {
             }
 
             if pinned() {
+                // Whether the Shell's own list of programs is still on screen, and so whether
+                // the pin's own topmost band is owed back. The dialog is a window of its own
+                // with nothing in this app owning it, so the pin is held below it for as long
+                // as it is up and put back on top the tick after it goes (see
+                // `settle_open_with_dialog`).
+                settle_open_with_dialog(hwnd);
+
                 // A step the caption's own walk buttons took is a pick like any other, and is
                 // held in the same slot: what a pick is taken up as is the loop's, whether it
                 // came from the listing, from the key, or from a button.
