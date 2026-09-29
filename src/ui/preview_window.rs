@@ -7151,14 +7151,16 @@ const AUDIO_CARD_REPAINT: Duration = Duration::from_millis(250);
 const AUDIO_NAME_REPAINT: Duration = Duration::from_millis(33);
 
 /// A card that is stale the moment it is asked about, rather than at the next of its own
-/// repaints: a sound a key has held or let go, and a second a press on the card's own bar has
-/// taken the file to.
+/// repaints: a sound a key has held or let go, a second a press on the card's own bar has taken
+/// the file to, and a pass that has gone round under a card still drawn at the end of the last
+/// one.
 ///
-/// Both are answered here rather than in the window that asked — the clock a card is drawn from
-/// is this loop's (see `toggle_pinned_audio` and `settle_pinned_audio_seek`) — so this is how
-/// either of them says so. A card a quarter of a second behind the hand that just used it is a
-/// card that has not caught up, and the quarter of a second is the whole of what the cadence
-/// above is.
+/// The first two are answered by the loop rather than by the window that asked — the clock a card
+/// is drawn from is this loop's (see `toggle_pinned_audio` and `settle_pinned_audio_seek`) — and
+/// the third by the loop alone, since the player is what ends a pass and the card is then at the
+/// other end of the file. A card a quarter of a second behind the hand that just used it, or a
+/// quarter of a second behind the sound that just went round, is a card that has not caught up,
+/// and the quarter of a second is the whole of what the cadence above is.
 static AUDIO_CARD_DIRTY: AtomicBool = AtomicBool::new(false);
 
 /// The box a sound's card asks for, with the probe that fills it beside it on the same thread.
@@ -7834,6 +7836,7 @@ fn wrap_audio_player(
 
     if !reached_the_end(played, length, *offset) {
         *started = None;
+        AUDIO_CARD_DIRTY.store(true, Ordering::Release);
         return;
     }
 
@@ -7848,6 +7851,12 @@ fn wrap_audio_player(
     } else {
         *started = None;
     }
+
+    // The card is at the other end of the file from where it was drawn a moment ago, and this
+    // side's clock no longer wraps itself, so nothing would ask for it again until the next of
+    // its own repaints: a card sitting at the whole of a file for a quarter of a second after
+    // the sound has gone round (see `AUDIO_CARD_DIRTY`).
+    AUDIO_CARD_DIRTY.store(true, Ordering::Release);
 }
 
 /// Where the sound is and how long it is: the engine's own clock where Windows plays it, and
@@ -7855,13 +7864,14 @@ fn wrap_audio_player(
 /// answer either way, and either half is nothing where there is nothing to say it — which is
 /// what a card with no player behind it is drawn with.
 ///
-/// A sound loops for as long as it is hovered, so what the clock says is where in the file the
-/// sound is *now*: a player that has been going for longer than the file lasts is wrapped back
-/// into it, which is what keeps the bar going round rather than standing full. The clock over
-/// the player's start is counted from the second the sound was put in at as well — `from` —
-/// because `ffplay` reports nothing at all: a file dropped half way into itself draws its clock
-/// and its bar at its middle only if this side counts the first half as already played, and
-/// what a hover would otherwise show is a sound playing from its middle with a card saying it
+/// A sound loops for as long as it is hovered, and where in the file it is *now* is the player's
+/// own: a pass ends when the player this side started is seen to have ended, and the pass after
+/// it begins at 0:00 with a bar that is empty (see `wrap_audio_player`).
+///
+/// The clock over the player's start is counted from the second the sound was put in at as well
+/// — `from` — because `ffplay` reports nothing at all: a file dropped half way into itself draws
+/// its clock and its bar at its middle only if this side counts the first half as already played,
+/// and what a hover would otherwise show is a sound playing from its middle with a card saying it
 /// has just begun.
 ///
 /// `paused_at` is what a key answered by holding a pinned sound has to say in its place: a player
@@ -7898,8 +7908,21 @@ fn audio_clock(
     }
 
     let elapsed = started.map(|at| from + at.elapsed().as_secs_f64());
+
+    // A sound still inside its file is held at the whole of it rather than wrapped round it, and
+    // the end of a pass is the player's exit rather than the length: a container's length is a
+    // header's reading of itself and is a little out for some formats (see `reached_the_end`), so
+    // the two are two answers to one question that do not always agree — and where they disagree
+    // the length is the one that is wrong, because a sound outlives its own header.
+    //
+    // Wrapping here instead meant a file whose header read short went back to 0:00 while the last
+    // moment of it was still playing, and the card's bar with it: a sub-second position is a
+    // pixel or two of bar and a clock still reading zero, so the bar stood a little way along a
+    // card saying 0:00 and then stepped back to nothing as the player's exit turned the pass over
+    // for real. A progress bar going backwards, once in a while, for a file whose header is a
+    // little out — and this side's clock is not the thing that gets to say the pass ended.
     let position = match (elapsed, track.duration) {
-        (Some(elapsed), Some(duration)) if duration > 0.0 => Some(elapsed % duration),
+        (Some(elapsed), Some(duration)) if duration > 0.0 => Some(elapsed.min(duration)),
         (elapsed, _) => elapsed,
     };
 
@@ -25134,6 +25157,26 @@ mod tests {
             audio_clock(&path, None, 0.0, None).0,
             None,
             "a card with nothing playing it has no clock to draw"
+        );
+
+        // And a sound still inside its file is never drawn past the end of it, whatever the
+        // header said the length was. A container's length is a header's reading of itself and
+        // is a little out for some formats, so wrapping this clock on it would put the card back
+        // at 0:00 — with a sub-second position, which is a pixel or two of bar and a clock still
+        // reading zero — a moment before the sound was really over, and the bar would then step
+        // backwards as the pass turned over for real (see `wrap_audio_player`).
+        let at = Instant::now() - Duration::from_secs(180);
+        assert_eq!(
+            audio_clock(&path, Some(at), 0.0, None).0,
+            Some(180.0),
+            "a sound at the whole of the file is drawn at the whole of the file"
+        );
+
+        let past = Instant::now() - Duration::from_secs(183);
+        assert_eq!(
+            audio_clock(&path, Some(past), 0.0, None).0,
+            Some(180.0),
+            "and a sound a moment past what the header said is still at the end of it, not at the start"
         );
 
         let _ = std::fs::remove_dir_all(&folder);
