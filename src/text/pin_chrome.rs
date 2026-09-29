@@ -1995,6 +1995,10 @@ fn draw_cross(
 /// A chevron rather than an arrowhead: a walk has no end, so what the two buttons mean is
 /// which way along it to go and not where it stops, and the mark for that is the one the
 /// keyboard's own arrow keys carry.
+///
+/// The vertex is at the end the chevron points to and the arms open away from it. Measured
+/// from the middle of the span instead, the two arms open on both sides of it and the mark
+/// is a cross rather than a chevron — which is what a `<` and a `>` would both be drawn as.
 fn draw_chevron(
     buffer: &mut [u8],
     width: i32,
@@ -2007,14 +2011,16 @@ fn draw_chevron(
 ) {
     let thickness = thickness.round().max(1.0) as i32;
     let half = span / 2;
+    let steps = span.max(1);
 
-    for step in 0..=span.max(1) {
-        let x = if pointing_right {
-            center_x - half + step
-        } else {
-            center_x + half - step
-        };
-        let offset = (step - half).abs();
+    for step in 0..=steps {
+        // The columns are walked the same way whichever way the chevron points — what says
+        // which way it points is whether the arms are widest at the first column or the last.
+        // Measuring the arms from the middle instead is what draws an X; taking the columns
+        // one way and the arms the other is what draws both buttons as the same arrow.
+        let x = center_x - half + step;
+        let offset = if pointing_right { steps - step } else { step };
+
         for depth in 0..thickness {
             put(buffer, width, x, center_y - offset + depth, color, 1.0);
             put(buffer, width, x, center_y + offset - depth, color, 1.0);
@@ -2595,6 +2601,73 @@ mod tests {
         }
 
         out
+    }
+
+    /// The two walk buttons point opposite ways, and each points the way it walks.
+    ///
+    /// A chevron whose arms open on both sides of its middle is a cross, and one whose arms
+    /// open away from the end the columns stop at points the wrong way — either of which is a
+    /// button that reads as something other than what it does, and neither of which a test on
+    /// the boxes alone could see.
+    #[test]
+    fn the_two_walk_buttons_are_chevrons_pointing_opposite_ways() {
+        // A box with room for the whole glyph: the arms part a full span either side of the
+        // middle row, so a box the glyph's own width would cut the open end off and leave a
+        // test that passes for a chevron that is really a stub.
+        const W: i32 = 24;
+        const H: i32 = 24;
+        let span = 10;
+        let ink = [0u8, 0, 0];
+
+        // The rows drawn in one column. The buffer is filled with a colour first, so that a
+        // blank column reads as blank rather than as ink.
+        fn drawn(buffer: &[u8], x: i32) -> Vec<i32> {
+            (0..H)
+                .filter(|y| buffer[((*y * W + x) * 4) as usize] == 0)
+                .collect()
+        }
+
+        let mut left = vec![255u8; (W * H * 4) as usize];
+        draw_chevron(&mut left, W, 12, 12, span, 1.0, ink, false);
+        let mut right = vec![255u8; (W * H * 4) as usize];
+        draw_chevron(&mut right, W, 12, 12, span, 1.0, ink, true);
+
+        // A chevron has a vertex: the end it points at is a single row, and the arms open
+        // away from it to two that part as they go. A cross has two rows at both ends and
+        // four through its middle, so the end that is one row is what says a chevron — and
+        // the point is at the end the button walks off, which is a different end for each.
+        let left_edge = 12 - span / 2;
+        let right_edge = 12 + span / 2;
+        for (buffer, point, open, name) in [
+            (&left, left_edge, right_edge, "the back one"),
+            (&right, right_edge, left_edge, "the on one"),
+        ] {
+            assert_eq!(
+                drawn(buffer, point).len(),
+                1,
+                "{name} points at one row of its end, and not two: {:?}",
+                drawn(buffer, point)
+            );
+            assert_eq!(
+                drawn(buffer, open).len(),
+                2,
+                "{name} opens to two rows at the other end: {:?}",
+                drawn(buffer, open)
+            );
+        }
+
+        // The two are the same shape facing the other way, so what the back one draws in a
+        // column is what the on one draws in the column reflected about the middle of the
+        // glyph. Two buttons drawn the same way round would be equal column for column
+        // instead, and this is what catches that. Only the columns the glyph itself covers
+        // are compared: the rest of the box is empty on both sides and reflects out of it.
+        for x in 12 - span..=12 + span {
+            assert_eq!(
+                drawn(&left, x),
+                drawn(&right, 2 * 12 - x),
+                "the two chevrons are each other turned about at x={x}"
+            );
+        }
     }
 
     #[test]
