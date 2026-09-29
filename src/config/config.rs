@@ -846,6 +846,17 @@ pub const DEFAULT_DDS_BACKGROUND: TransparentBackground = TransparentBackground:
 /// that picture's transparency is the document's own.
 pub const DEFAULT_DESIGN_BACKGROUND: TransparentBackground = TransparentBackground::Checkerboard;
 
+/// What a page of HTML is drawn over: white, which is the page a page is written on rather
+/// than a backdrop behind one.
+///
+/// A document the browser is handed is a page already — it brings its own markup, its own
+/// stylesheet and its own idea of what a heading looks like — so what is behind it is
+/// something to read it against, and white is where the setting starts. The two backdrops
+/// that show what stands behind a preview are the two a page has no use for, so rather than
+/// offering transparency the menu offers the page black, the page white and the squares the
+/// picture half keeps.
+pub const DEFAULT_HTML_BACKGROUND: TransparentBackground = TransparentBackground::White;
+
 /// The backdrop a texture is drawn over, as the setting keeps it: either of the two a
 /// texture is offered, and the default for anything else — a `transparent` or a
 /// `checkerboard` a file still holds from when the texture's half of the `Background`
@@ -856,6 +867,19 @@ pub fn sanitize_dds_background(background: TransparentBackground) -> Transparent
         TransparentBackground::Transparent | TransparentBackground::Checkerboard => {
             DEFAULT_DDS_BACKGROUND
         }
+    }
+}
+
+/// The backdrop a page is drawn over, as the setting keeps it: the two pages a preview can
+/// be read against and the squares beside them, and the default for the one that is not
+/// offered — a `transparent` a hand-edited `config.ini` still holds from when a page was
+/// drawn over the vector half's setting, and which is not something a page is offered.
+pub fn sanitize_html_background(background: TransparentBackground) -> TransparentBackground {
+    match background {
+        TransparentBackground::Black
+        | TransparentBackground::White
+        | TransparentBackground::Checkerboard => background,
+        TransparentBackground::Transparent => DEFAULT_HTML_BACKGROUND,
     }
 }
 
@@ -1492,6 +1516,17 @@ pub struct AppConfig {
     /// designer saved with its transparency as it is one to be looked at against a page,
     /// so what stands behind it is worth being a setting rather than a guess.
     pub design_background: TransparentBackground,
+    /// The backdrop a page of HTML is drawn over.
+    ///
+    /// A setting of its own for the reason a specimen's is: a page is a page, and what is
+    /// behind it is the page to read it against rather than a transparency to be shown
+    /// through — the markup brings its own colours and a background behind it is only ever
+    /// the page's. Three of the four backdrops are offered, all but the transparent one, so
+    /// a file that names transparency — which is what a page's preview was held at before
+    /// the kind had a setting of its own — is read as the one this setting starts at rather
+    /// than kept as a value the menu beside it has no item for (see
+    /// `sanitize_html_background`).
+    pub html_background: TransparentBackground,
     /// The backdrop a vector drawing is drawn over.
     ///
     /// A setting of its own because a drawing is made for a page and says nothing about it
@@ -1866,6 +1901,7 @@ impl Default for AppConfig {
             font_background: DEFAULT_FONT_BACKGROUND,
             dds_background: DEFAULT_DDS_BACKGROUND,
             design_background: DEFAULT_DESIGN_BACKGROUND,
+            html_background: DEFAULT_HTML_BACKGROUND,
             vector_background: DEFAULT_VECTOR_BACKGROUND,
             video_volume: DEFAULT_VIDEO_VOLUME,
             audio_volume: DEFAULT_AUDIO_VOLUME,
@@ -2025,6 +2061,7 @@ const SETTING_GROUPS: &[(&str, &[&str])] = &[
             "dds_background",
             "design_background",
             "font_background",
+            "html_background",
             "image_background",
             "vector_background",
         ],
@@ -2814,6 +2851,11 @@ impl AppConfig {
         );
         ini.set(
             CONFIG_SECTION,
+            "html_background",
+            Some(self.html_background.as_str().to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
             "vector_background",
             Some(self.vector_background.as_str().to_string()),
         );
@@ -3290,6 +3332,16 @@ impl AppConfig {
         if let Some(value) = ini.get(CONFIG_SECTION, "design_background") {
             if let Some(background) = TransparentBackground::from_str(&value) {
                 self.design_background = background;
+            }
+        }
+        // A page's is read the way the others are, and through the same kind of filter: the
+        // backdrop is three of the four backdrops rather than all of them, so a file that
+        // names the fourth — transparency, which is what a page was drawn over before the
+        // kind had a setting of its own — is read as the backdrop this setting starts at,
+        // rather than kept as a value the menu beside it has no item for.
+        if let Some(value) = ini.get(CONFIG_SECTION, "html_background") {
+            if let Some(background) = TransparentBackground::from_str(&value) {
+                self.html_background = sanitize_html_background(background);
             }
         }
         if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "video_volume") {
@@ -5555,6 +5607,8 @@ something_new=1
         assert_eq!(config.font_background, TransparentBackground::White);
         assert_eq!(config.dds_background, DEFAULT_DDS_BACKGROUND);
         assert_eq!(config.dds_background, TransparentBackground::White);
+        assert_eq!(config.html_background, DEFAULT_HTML_BACKGROUND);
+        assert_eq!(config.html_background, TransparentBackground::White);
 
         assert_eq!(config.avoid_mode, DEFAULT_AVOID_MODE);
         assert_eq!(config.avoid_mode, AvoidMode::Filename);
@@ -5608,6 +5662,68 @@ something_new=1
         let config = read_file(&mut ini);
 
         assert_eq!(config.dds_background, DEFAULT_DDS_BACKGROUND);
+    }
+
+    /// A page is offered three backdrops of the four, which is what `html_background` is
+    /// written against: everything but transparency, which is not something a page is drawn
+    /// over, so a file that still names it is read as the white page the setting starts at
+    /// rather than left holding a value the menu beside it has no item for.
+    #[test]
+    fn a_pages_backdrop_is_one_of_the_three_it_is_offered() {
+        for kept in [
+            TransparentBackground::White,
+            TransparentBackground::Black,
+            TransparentBackground::Checkerboard,
+        ] {
+            assert_eq!(
+                sanitize_html_background(kept),
+                kept,
+                "`{kept:?}` is offered"
+            );
+        }
+
+        assert_eq!(
+            sanitize_html_background(TransparentBackground::Transparent),
+            DEFAULT_HTML_BACKGROUND,
+            "transparency is not a backdrop a page is offered"
+        );
+
+        let mut ini = Ini::new();
+        ini.set(
+            CONFIG_SECTION,
+            "html_background",
+            Some("transparent".to_string()),
+        );
+
+        let config = read_file(&mut ini);
+
+        assert_eq!(config.html_background, DEFAULT_HTML_BACKGROUND);
+    }
+
+    /// A page's backdrop is a key of its own for the reason a specimen's is: the kind is one
+    /// of its own, so the key a picture was written under is read for a picture and leaves
+    /// this one where it starts.
+    #[test]
+    fn a_pages_backdrop_is_read_from_its_own_key() {
+        let mut ini = Ini::new();
+        ini.set(
+            CONFIG_SECTION,
+            "image_background",
+            Some("checkerboard".to_string()),
+        );
+        ini.set(CONFIG_SECTION, "html_background", Some("black".to_string()));
+
+        let config = read_file(&mut ini);
+
+        assert_eq!(config.html_background, TransparentBackground::Black);
+
+        // A file that says nothing about one leaves the setting where it starts, which for a
+        // page is the page it is written on.
+        let ini = Ini::new();
+
+        let mut config = AppConfig::default();
+        config.apply_ini(&ini);
+        assert_eq!(config.html_background, DEFAULT_HTML_BACKGROUND);
     }
 
     /// The settings reset puts every setting back where this build starts it, and the lists

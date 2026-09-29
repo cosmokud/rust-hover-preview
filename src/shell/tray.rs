@@ -8,8 +8,9 @@ use crate::config::config::{
     DEFAULT_AUDIO_SEEK, DEFAULT_AVOID_MODE, DEFAULT_DDS_BACKGROUND, DEFAULT_DECODE_BUDGET_GB,
     DEFAULT_DESIGN_BACKGROUND, DEFAULT_DESIGN_SCALE, DEFAULT_DOCUMENT_CACHE_MB,
     DEFAULT_DOCUMENT_SCALE, DEFAULT_EBOOK_SCALE, DEFAULT_FOLLOW_CURSOR, DEFAULT_FONT_BACKGROUND,
-    DEFAULT_FONT_SCALE, DEFAULT_HOVER_DELAY_MS, DEFAULT_IMAGE_BACKGROUND, DEFAULT_IMAGE_CACHE_MB,
-    DEFAULT_IMAGE_DISK_CACHE_MB, DEFAULT_LIBREOFFICE_IDLE_SECS, DEFAULT_NORMALIZE_VIDEO_VOLUME,
+    DEFAULT_FONT_SCALE, DEFAULT_HOVER_DELAY_MS, DEFAULT_HTML_BACKGROUND,
+    DEFAULT_IMAGE_BACKGROUND, DEFAULT_IMAGE_CACHE_MB, DEFAULT_IMAGE_DISK_CACHE_MB,
+    DEFAULT_LIBREOFFICE_IDLE_SECS, DEFAULT_NORMALIZE_VIDEO_VOLUME,
     DEFAULT_NORMALIZE_VOLUME, DEFAULT_OFFICE_ENGINE,
     DEFAULT_OFFICE_ENGINE_IDLE_SECS, DEFAULT_PIN_NAV_FILE_TYPES, DEFAULT_PIN_PAUSE_AUDIO,
     DEFAULT_PIN_PAUSE_VIDEO, DEFAULT_PIN_UPDATE_ENABLED, DEFAULT_PIN_UPDATE_ON_HOVER,
@@ -92,15 +93,16 @@ const ID_TRAY_TRIGGER_AFFECT_PIN: u16 = 1099;
 /// The `Engine → Select Engine → Office` pair: which engine an Office document's page is
 /// asked of — the application that owns the format, or the render engine beside it. Two ids
 /// rather than a range, the way the trigger key's mode has two, and they sit in the gap the
-/// update row at 1007 leaves before the volume block at 1010.
+/// update row at 1007 leaves before the page's backdrop range that begins at 1010.
 const ID_TRAY_ENGINE_OFFICE_MS: u16 = 1008;
 const ID_TRAY_ENGINE_OFFICE_LIBRE: u16 = 1009;
 /// The `Background` submenu: one command per backdrop it offers, in the order it
-/// lists them, for each of the five kinds of preview it keeps apart — a picture's
-/// backdrop, a vector drawing's, a font specimen's, a texture's, and a design
-/// document's. Each half is a base plus the position the choice was listed at, so one
-/// table and one builder serve all of them, and each range is four wide and apart from
-/// the others, which is what keeps an item of one from being read as a choice of another.
+/// lists them, for each of the six kinds of preview it keeps apart — a picture's
+/// backdrop, a vector drawing's, a page of HTML's, a font specimen's, a texture's, and a
+/// design document's. Each half is a base plus the position the choice was listed at, so
+/// one table and one builder serve all of them, and each range is exactly as wide as the
+/// choices its half lists, which is what keeps an item of one from being read as a choice
+/// of another.
 const ID_TRAY_IMAGE_BACKGROUND_BASE: u16 = 1023;
 /// The second half, for a vector drawing — an SVG document the browser draws, or a
 /// metafile the drawing layer replays: one page's backdrop for both halves of that kind,
@@ -123,6 +125,14 @@ const ID_TRAY_DDS_BACKGROUND_BASE: u16 = 1200;
 /// container holds — and that picture's transparency is the document's own, so what stands
 /// behind one is a question of its own.
 const ID_TRAY_DESIGN_BACKGROUND_BASE: u16 = 1208;
+/// The sixth, for a page of HTML: a document the browser is handed is a page already, so
+/// what stands behind it is a page to read it against rather than a transparency to look
+/// through — the reason it did not go on drawing over the vector half's backdrop.
+///
+/// It sits in the gap at 1010 to 1015, which is where the six single ids the `Volume`
+/// submenu's two halves replaced used to be: a backdrop is a base plus a position in a list
+/// rather than a name of its own, so it wanted the same stretch the volume halves gave up.
+const ID_TRAY_HTML_BACKGROUND_BASE: u16 = 1010;
 /// The backdrops a half of the `Background` submenu offers, in the order it lists
 /// them, with `Transparent` at the top: the whole range the setting holds, so nothing
 /// a hand-edited `config.ini` can ask for is left unmarked.
@@ -130,6 +140,18 @@ const BACKGROUND_CHOICES: [TransparentBackground; 4] = [
     TransparentBackground::Transparent,
     TransparentBackground::Black,
     TransparentBackground::White,
+    TransparentBackground::Checkerboard,
+];
+/// The backdrops the `HTML Background` half offers, which are three of the four rather than
+/// all of them: a page is drawn over a page rather than over what stands behind one, so
+/// transparency is the one backdrop left off, and the white page the setting starts at is
+/// listed first, as every other half lists its own. A file that names transparency anyway,
+/// from when a page was drawn over the vector half's setting, is read as the backdrop the
+/// setting starts at rather than kept as a value the menu has no item for (see
+/// `sanitize_html_background`).
+const HTML_BACKGROUND_CHOICES: [TransparentBackground; 3] = [
+    TransparentBackground::White,
+    TransparentBackground::Black,
     TransparentBackground::Checkerboard,
 ];
 /// The backdrops the `DDS Background` half offers, which are two of the four rather than all
@@ -150,7 +172,9 @@ const DDS_BACKGROUND_CHOICES: [TransparentBackground; 2] =
 ///
 /// They sit in the stretch between the disk-cache range and the decode budget's, which is the
 /// one gap this block had left. The six single ids they replace (1010 to 1015) are gone with
-/// them: a volume is a level of one of two lists now rather than a name of its own.
+/// them: a volume is a level of one of two lists now rather than a name of its own. The bottom
+/// three of that stretch have since gone to a page's backdrop, which is a list too (see
+/// `ID_TRAY_HTML_BACKGROUND_BASE`).
 const ID_TRAY_VIDEO_VOLUME_BASE: u16 = 1360;
 const ID_TRAY_AUDIO_VOLUME_BASE: u16 = 1370;
 /// The `Volume → Audio Seek` submenu: one command per way a sound can be started, in the order
@@ -603,6 +627,12 @@ unsafe extern "system" fn tray_window_proc(
                     .contains(&cmd) =>
                 {
                     set_vector_background(cmd - ID_TRAY_VECTOR_BACKGROUND_BASE)
+                }
+                cmd if (ID_TRAY_HTML_BACKGROUND_BASE
+                    ..ID_TRAY_HTML_BACKGROUND_BASE + HTML_BACKGROUND_CHOICES.len() as u16)
+                    .contains(&cmd) =>
+                {
+                    set_html_background(cmd - ID_TRAY_HTML_BACKGROUND_BASE)
                 }
                 // The peak above the levels of each half of the `Volume` submenu, the sound's and
                 // the video's: switches rather than levels, and read where a player is started
@@ -1670,30 +1700,39 @@ unsafe fn show_context_menu(hwnd: HWND) {
     // a picture and a document answer differently — a picture's transparency is the
     // picture's, while a document is drawn on a page — so each of them has a half
     // of its own, listing the same backdrops.
-    let (image_background, vector_background, font_background, dds_background, design_background) =
-        CONFIG
-            .lock()
-            .map(|c| {
-                (
-                    c.image_background,
-                    c.vector_background,
-                    c.font_background,
-                    c.dds_background,
-                    c.design_background,
-                )
-            })
-            .unwrap_or((
-                DEFAULT_IMAGE_BACKGROUND,
-                DEFAULT_VECTOR_BACKGROUND,
-                DEFAULT_FONT_BACKGROUND,
-                DEFAULT_DDS_BACKGROUND,
-                DEFAULT_DESIGN_BACKGROUND,
-            ));
+    let (
+        image_background,
+        vector_background,
+        html_background,
+        font_background,
+        dds_background,
+        design_background,
+    ) = CONFIG
+        .lock()
+        .map(|c| {
+            (
+                c.image_background,
+                c.vector_background,
+                c.html_background,
+                c.font_background,
+                c.dds_background,
+                c.design_background,
+            )
+        })
+        .unwrap_or((
+            DEFAULT_IMAGE_BACKGROUND,
+            DEFAULT_VECTOR_BACKGROUND,
+            DEFAULT_HTML_BACKGROUND,
+            DEFAULT_FONT_BACKGROUND,
+            DEFAULT_DDS_BACKGROUND,
+            DEFAULT_DESIGN_BACKGROUND,
+        ));
     let background_menu = CreatePopupMenu().unwrap();
 
-    // Each half is handed its own default, since the four backdrops a half offers are not
-    // the same four everywhere: a picture, a drawing and a document start at the squares, a
-    // specimen and a texture start at a page — and a texture is offered only the two pages.
+    // Each half is handed its own default, since the backdrops a half offers are not the same
+    // ones everywhere: a picture, a drawing and a design document start at the squares, a
+    // specimen, a page and a texture start at a page — and a texture is offered only the two
+    // pages, a page all but the transparency.
     append_background_menu(
         background_menu,
         w!("Image Background"),
@@ -1709,6 +1748,14 @@ unsafe fn show_context_menu(hwnd: HWND) {
         &BACKGROUND_CHOICES,
         vector_background,
         DEFAULT_VECTOR_BACKGROUND,
+    );
+    append_background_menu(
+        background_menu,
+        w!("HTML Background"),
+        ID_TRAY_HTML_BACKGROUND_BASE,
+        &HTML_BACKGROUND_CHOICES,
+        html_background,
+        DEFAULT_HTML_BACKGROUND,
     );
     append_background_menu(
         background_menu,
@@ -2459,6 +2506,21 @@ fn set_font_background(index: u16) {
     refresh_preview();
 }
 
+/// And for a page of HTML, which is drawn on a page the engine owns the way a specimen is:
+/// the page's colours are part of what the browser draws, so the preview on screen is
+/// rebuilt rather than only composited again.
+fn set_html_background(index: u16) {
+    let Some(background) = html_background_at(index) else {
+        return;
+    };
+
+    if let Ok(mut config) = CONFIG.lock() {
+        config.html_background = background;
+        config.save();
+    }
+    refresh_preview();
+}
+
 /// And for a texture, which is a picture like any other on this side of the answer: its
 /// frame is composited by this app, so the preview on screen only needs compositing again.
 fn set_dds_background(index: u16) {
@@ -2985,6 +3047,12 @@ fn background_at(index: u16) -> Option<TransparentBackground> {
 /// backdrops of the four rather than all of them.
 fn dds_background_at(index: u16) -> Option<TransparentBackground> {
     DDS_BACKGROUND_CHOICES.get(index as usize).copied()
+}
+
+/// And the same for an item of a page's half, which is the one half that offers three
+/// backdrops of the four — everything but the transparency a page is not drawn over.
+fn html_background_at(index: u16) -> Option<TransparentBackground> {
+    HTML_BACKGROUND_CHOICES.get(index as usize).copied()
 }
 
 /// One `… Scaling` submenu: the shares of the display a document is drawn at, with the
@@ -4352,8 +4420,8 @@ mod tests {
     /// The halves of the `Background` submenu list the backdrops their settings hold, in the
     /// order the ids are handed out in, and each id resolves back to the backdrop its item was
     /// listed for — which is what makes a click select what it named. Every half marks the
-    /// backdrop its own setting starts at, which is not the same one for every half, and the
-    /// texture's half offers two of the four rather than all of them.
+    /// backdrop its own setting starts at, which is not the same one for every half, and not
+    /// every half lists all four: the texture's offers two of them and a page's three.
     #[test]
     fn every_offered_background_is_one_the_setting_keeps() {
         assert_eq!(
@@ -4374,6 +4442,7 @@ mod tests {
             (&BACKGROUND_CHOICES[..], DEFAULT_FONT_BACKGROUND),
             (&BACKGROUND_CHOICES[..], DEFAULT_DESIGN_BACKGROUND),
             (&DDS_BACKGROUND_CHOICES[..], DEFAULT_DDS_BACKGROUND),
+            (&HTML_BACKGROUND_CHOICES[..], DEFAULT_HTML_BACKGROUND),
         ] {
             let marked: Vec<TransparentBackground> = choices
                 .iter()
@@ -4408,6 +4477,17 @@ mod tests {
             None,
             "a backdrop the texture's half does not offer is not one of its items"
         );
+
+        // And a page's half is a range and a table of its own too, three backdrops wide.
+        for (index, background) in HTML_BACKGROUND_CHOICES.iter().enumerate() {
+            assert_eq!(html_background_at(index as u16), Some(*background));
+        }
+
+        assert_eq!(
+            html_background_at(HTML_BACKGROUND_CHOICES.len() as u16),
+            None,
+            "a backdrop a page's half does not offer is not one of its items"
+        );
     }
 
     /// An item of one half of the submenu is never an item of another, whatever it was
@@ -4415,10 +4495,10 @@ mod tests {
     /// the failure this range was moved for: a backdrop of a specimen and the text
     /// preview's `Full Mode` item were one id, and the backdrop was read first.
     #[test]
-    fn the_five_halves_of_the_background_submenu_carry_different_ids() {
-        // Each half is as wide as the choices it offers, which is two for the texture's half
-        // and four for the rest: a range that were wider than the items in it would take an
-        // id from the half beside it.
+    fn the_six_halves_of_the_background_submenu_carry_different_ids() {
+        // Each half is as wide as the choices it offers, which is two for the texture's half,
+        // three for a page's and four for the rest: a range that were wider than the items in
+        // it would take an id from the half beside it.
         let halves = [
             (
                 ID_TRAY_IMAGE_BACKGROUND_BASE,
@@ -4440,6 +4520,10 @@ mod tests {
                 ID_TRAY_VECTOR_BACKGROUND_BASE,
                 BACKGROUND_CHOICES.len() as u16,
             ),
+            (
+                ID_TRAY_HTML_BACKGROUND_BASE,
+                HTML_BACKGROUND_CHOICES.len() as u16,
+            ),
         ];
 
         for (index, half) in halves.iter().enumerate() {
@@ -4454,7 +4538,9 @@ mod tests {
             }
         }
 
-        // The ids around them, of the menus that grew up beside the `Background` one.
+        // The ids around them, of the menus that grew up beside the `Background` one. A
+        // page's half is in the stretch the `Volume` submenu's two halves gave up, so the
+        // ids those used to be are among the ones that must stay away from it.
         for elsewhere in [
             ID_TRAY_THEME_LIGHT,
             ID_TRAY_MARKDOWN_RENDERED,
@@ -4463,6 +4549,7 @@ mod tests {
             ID_TRAY_VIDEO_SCALE_BASE,
             ID_TRAY_TYPE_IMAGES,
             ID_TRAY_TRIGGER_ENABLED,
+            ID_TRAY_RENDER_HTML,
         ] {
             for half in halves {
                 let ours = half.0..half.0 + half.1;
@@ -4870,6 +4957,10 @@ mod tests {
             ),
             (ID_TRAY_SCALE_BASE, BITMAP_SCALE_CHOICES.len() as u16),
             (ID_TRAY_ENGINE_IDLE_BASE, ENGINE_IDLE_CHOICES.len() as u16),
+            (
+                ID_TRAY_HTML_BACKGROUND_BASE,
+                HTML_BACKGROUND_CHOICES.len() as u16,
+            ),
         ] {
             assert!(
                 !(base..base + len).contains(&ID_TRAY_RENDER_HTML),
