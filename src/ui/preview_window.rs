@@ -101,7 +101,7 @@ use windows::Win32::System::Threading::{
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, GetCapture, GetFocus, ReleaseCapture, SetCapture, SetFocus, VK_A, VK_C,
-    VK_CONTROL, VK_DOWN, VK_ESCAPE, VK_LEFT, VK_LBUTTON, VK_RIGHT, VK_UP,
+    VK_CONTROL, VK_DOWN, VK_ESCAPE, VK_LEFT, VK_RIGHT, VK_UP,
 };
 use windows::Win32::UI::Shell::{
     AssocQueryStringW, ShellExecuteW, ASSOCF_NONE, ASSOCSTR_FRIENDLYAPPNAME,
@@ -617,6 +617,23 @@ static PIN_ACTIVE: AtomicBool = AtomicBool::new(false);
 /// Whether the pinned preview is collapsed into the round bubble that stands in for it.
 /// A collapsed pin is still a pin: previews stay quiet until it is restored and closed.
 static PIN_COLLAPSED: AtomicBool = AtomicBool::new(false);
+
+/// Whether the left mouse button is down, as the Explorer hook's last read of the buttons
+/// found it.
+///
+/// Published rather than read here, because `GetAsyncKeyState` cannot be asked for this
+/// without also spending the press bit that tells the hook a click has happened — and the
+/// hook is what `Pin Mode → Update Preview` follows a pick by. See `left_button_down` for
+/// the whole of it, and `PIN_MEDIA_LEFT_PRESSES` for the press beside the state.
+static PIN_MEDIA_LEFT_DOWN: AtomicBool = AtomicBool::new(false);
+
+/// How many left-button presses the Explorer hook has read, as a count rather than a bit.
+///
+/// The preview thread polls for a pin's press handling more slowly than the hook publishes,
+/// so a press published as a bit would be overwritten by the next tick's "no press" before
+/// this side ever looked and would read as no press at all. A count cannot be missed that
+/// way: what this side asks is whether the count has moved, which is the question a press is.
+static PIN_MEDIA_LEFT_PRESSES: AtomicU64 = AtomicU64::new(0);
 
 /// Whether this app took the keyboard and has not given it back yet.
 ///
@@ -16973,18 +16990,27 @@ unsafe fn pinned_set_cursor(hwnd: HWND) -> bool {
 /// the engine's window — one on the caption, on the opaque parts of the pin, or on whatever the
 /// pin is standing over — has already come to this window or to another one, and is that window's
 /// to answer.
-unsafe fn settle_pinned_engine_press(hwnd: HWND, answered: &mut bool) {
-    let down = left_button_down();
+///
+/// The press is recognised by the count the Explorer hook publishes having moved rather than by
+/// the button being down, and the difference is a click this poll can be too slow to see: a
+/// press and a release inside the gap between two ticks of this loop leaves the button up on
+/// both of them, so a latch on the level alone never opens and the drag it means never begins.
+/// The count cannot be missed that way, and the button's own state is still what says the hand
+/// is on it now (see `pin_media_press_count`).
+unsafe fn settle_pinned_engine_press(hwnd: HWND, seen_presses: &mut u64) {
+    let presses = pin_media_press_count();
 
-    if !down {
-        *answered = false;
+    if presses == *seen_presses {
         return;
     }
+    *seen_presses = presses;
 
-    if *answered {
+    // A press the hook has seen and this window has not answered, with the button already up
+    // again, is a click rather than a hand on the drawing: there is nothing to drag, and the
+    // click is the page's own.
+    if !left_button_down() {
         return;
     }
-    *answered = true;
 
     // Nothing of anybody else's stands in a bubble, and nothing of the engine's does either: what
     // a collapsed pin leaves is the round bubble and the listing under it.
@@ -17044,15 +17070,47 @@ fn engine_window_is_at(x: i32, y: i32) -> bool {
     }
 }
 
-/// Whether the left button is down.
+/// Whether the left button is down, as the Explorer hook published it.
 ///
-/// Read from the system rather than waited for, and it is the *state* that is read rather than
-/// the press bit: a press that lands on the engine's window is a message for that window, so
-/// there is none here to wait for, and the press bit `GetAsyncKeyState` also reports is consumed
-/// by whoever reads it first — the Explorer hook reads the mouse buttons every tick, and a read
-/// from here would take the bit out from under it.
+/// Read from what the hook published rather than from the system, and the reason is the press
+/// bit rather than the key.
+///
+/// `GetAsyncKeyState`'s low-order bit — the one that says a key has been pressed since the
+/// previous call — is *spent* by any call for that key, whichever thread makes it and whichever
+/// bit the caller goes on to read. Asking for it here therefore took the click out from under
+/// the Explorer hook, which is what tells `Pin Mode → Update Preview` that the user picked a
+/// file: the two loops poll at different rates on different threads, so a click was answered
+/// by whichever read it first, and roughly half of them were answered here, on a pin, where
+/// the listing behind it never heard of them. The hook reads the buttons once per tick and
+/// publishes the left button's state; this is that state, and it costs nothing to read.
+///
+/// The state rather than the press is what was wanted here anyway: what this answers is whether
+/// the button is *down* right now (see `settle_pinned_engine_press`).
 fn left_button_down() -> bool {
-    unsafe { GetAsyncKeyState(VK_LBUTTON.0 as i32) as u16 & 0x8000 != 0 }
+    PIN_MEDIA_LEFT_DOWN.load(Ordering::Acquire)
+}
+
+/// Publish the left mouse button's state for the pin's own press handling, from the one place
+/// in this app that reads the buttons.
+///
+/// The hook calls it on every tick, pinned or not, so the published state is never older than
+/// a tick and never absent. Ordering is release/acquire because the only thing crossing here
+/// is the button's state and not one reading of another's memory (see `PIN_MEDIA_LEFT_DOWN`).
+pub fn publish_pin_media_press(down: bool, pressed: bool) {
+    PIN_MEDIA_LEFT_DOWN.store(down, Ordering::Release);
+
+    if pressed {
+        PIN_MEDIA_LEFT_PRESSES.fetch_add(1, Ordering::AcqRel);
+    }
+}
+
+/// How many left presses the hook has seen, as a count rather than as a bit, because the
+/// preview thread polls slower than the hook writes: a bit published and published again a
+/// tick later reads as no press at all from here, and a press is a transition that has to be
+/// noticed to have happened. The count is what makes it survivable, and it wraps at a rate no
+/// session reaches (see `PIN_MEDIA_LEFT_PRESSES`).
+fn pin_media_press_count() -> u64 {
+    PIN_MEDIA_LEFT_PRESSES.load(Ordering::Acquire)
 }
 
 /// The box, display scale and frame of the pin that is up, for a press that landed on the window
@@ -17947,11 +18005,11 @@ pub fn run_preview_window() {
         // A message the idle wait took off the channel, held for the drain below
         // rather than acted on where it was received.
         let mut carried_preview_msg: Option<PreviewMessage> = None;
-        // Whether a press that landed on the window standing in the pin's media band has already
-        // been answered. A press is a transition and the window procedure never sees this one —
-        // the browser's window took it — so the reading that says it has been dealt with is kept
-        // here until the button comes up (see `settle_pinned_engine_press`).
-        let mut engine_press_answered = false;
+        // How many left-button presses the pin's own press handling has already been given, as a
+        // count rather than a latch on the button being down: a press and a release between two
+        // ticks of this loop leaves nothing to latch, so a drag begun from one would never begin at
+        // all (see `settle_pinned_engine_press`).
+        let mut engine_press_seen: u64 = 0;
         while RUNNING.load(Ordering::SeqCst) {
             // Every tick is noted, whether it does anything or not: what the note is
             // for is the Explorer hook telling a loop that is working from one that has
@@ -18082,7 +18140,7 @@ pub fn run_preview_window() {
                 // one thing on a pinned window the window procedure cannot be told about: the
                 // band is a browser's window over this one, so the press is read here and the
                 // drag it means begun here (see `settle_pinned_engine_press`).
-                settle_pinned_engine_press(hwnd, &mut engine_press_answered);
+                settle_pinned_engine_press(hwnd, &mut engine_press_seen);
 
                 // A step the caption's own walk buttons took is a pick like any other, and is
                 // held in the walk rather than in the pick slot: the file it stands on is the
@@ -20053,6 +20111,26 @@ pub fn run_preview_window() {
                         // window is not it (see `pin_awaiting_box`).
                         pin_awaiting_box = None;
 
+                        // And it is owed no hover's wait either, which is the one it inherits.
+                        // A pin is taken up out of a hover, and a hover that was still loading
+                        // when the key was pressed leaves its wait standing here — where nothing
+                        // will ever take it up, because a pin refuses hovers at every door and
+                        // this loop drops their messages (see `hover_is_shown`). Left armed it
+                        // is not merely useless: a file the user picks in the listing is held
+                        // behind it and put back every tick, so `Pin Mode → Update Preview` looks
+                        // broken rather than absent, and the first click after every take-up is
+                        // the one it eats.
+                        //
+                        // The generation moves with it so an answer still on its way is dropped
+                        // rather than installed over a window that is now a pin — the same
+                        // teardown a `Hide` performs, which is what this is: the hover is over.
+                        current_generation += 1;
+                        pending_load = None;
+                        clear_load_request(&load_request_slot);
+                        if let Some(cancel) = pending_load_cancel.take() {
+                            cancel.store(true, Ordering::Release);
+                        }
+
                         let kind = CURRENT_MEDIA
                             .lock()
                             .ok()
@@ -20801,6 +20879,54 @@ mod tests {
     /// process, so two of these tests at once is one test's box answering another test's
     /// question.
     static POINTER_STAND_IN: Mutex<()> = Mutex::new(());
+
+    /// A press the Explorer hook publishes reaches the pin's own press handling, and a tick
+    /// that publishes no press leaves the count where it was.
+    ///
+    /// This is the whole of what the count is for. The hook polls faster than this loop does,
+    /// so a press published as a bit would be overwritten by the next tick's "no press" before
+    /// this side ever looked, and a click that began and ended between two ticks here would
+    /// be a press nothing ever saw — which is the drag that would never begin, and, through
+    /// the press bit it was reading to find that out, the click in the Explorer listing behind
+    /// the pin that `Pin Mode → Update Preview` follows (see `left_button_down`).
+    #[test]
+    fn a_published_press_is_not_missed_by_a_slower_poll() {
+        // The two are one set for the whole process, so this test stands in with the others
+        // that publish the machine's own state rather than racing them.
+        let _stand_in = POINTER_STAND_IN.lock().expect("the pointer's own state");
+
+        let before = pin_media_press_count();
+
+        // A tick that finds nothing pressed leaves both the state and the count alone.
+        publish_pin_media_press(false, false);
+        assert!(!left_button_down(), "and the button is up");
+        assert_eq!(
+            pin_media_press_count(),
+            before,
+            "a tick with no press in it publishes no press"
+        );
+
+        // A press moves the count, which is what this side asks about, and leaves the button
+        // down while the hand is on it.
+        publish_pin_media_press(true, true);
+        let pressed = pin_media_press_count();
+        assert!(pressed > before, "a press is a count that moved");
+        assert!(left_button_down(), "and the button is down under the hand");
+
+        // The hand lets go and nothing else happens: the count stays where the press left it,
+        // so the next poll knows that press has already been given rather than reading the
+        // button being down as a second one.
+        publish_pin_media_press(false, false);
+        assert_eq!(pin_media_press_count(), pressed, "a release is not a press");
+
+        // And a second press is a second move, which is what a second click has to be for the
+        // drag to be begun twice.
+        publish_pin_media_press(true, true);
+        assert!(
+            pin_media_press_count() > pressed,
+            "each press moves the count again"
+        );
+    }
 
     /// A wait holds the pointer through the item it is waiting for rather than through the
     /// box its spinner occupies: the spinner is placed at the hand and follows it, so a box
