@@ -9,10 +9,10 @@ use crate::formats::video_formats::is_video_file;
 use crate::shell::wheel_input;
 use crate::ui::preview_window::{
     ask_pin, cursor_preview_hover, end_pin, hide_preview, kill_stray_video_process,
-    monitor_dpi_from_point, pinned, pinned_path, pointer_item_box, pointer_item_holds,
-    preview_pointer_hold, preview_screen_rect, preview_stall_ms, publish_pointer_item_box,
-    show_preview, show_preview_keyboard, take_pin_resumed, update_pinned_preview, PinCommand,
-    PreviewCursorHover,
+    monitor_dpi_from_point, note_engine_page_drag, pinned, pinned_path, pointer_item_box,
+    pointer_item_holds, preview_pointer_hold, preview_screen_rect, preview_stall_ms,
+    publish_pointer_item_box, show_preview, show_preview_keyboard, take_pin_resumed,
+    update_pinned_preview, PinCommand, PreviewCursorHover,
 };
 use crate::{CONFIG, RUNNING};
 use once_cell::sync::Lazy;
@@ -59,8 +59,8 @@ use windows::Win32::UI::Shell::{
 use windows::Win32::UI::Shell::PropertiesSystem::PROPERTYKEY;
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetAncestor, GetClassNameW, GetCursorPos, GetForegroundWindow, GetWindowPlacement,
-    GetWindowRect, IsIconic, IsWindowVisible, SystemParametersInfoW, WindowFromPoint, GA_ROOT,
-    SPI_GETICONTITLELOGFONT, SW_SHOWMAXIMIZED, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
+    GetWindowRect, IsChild, IsIconic, IsWindowVisible, SystemParametersInfoW, WindowFromPoint,
+    GA_ROOT, SPI_GETICONTITLELOGFONT, SW_SHOWMAXIMIZED, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
     WINDOWPLACEMENT,
 };
 
@@ -3281,6 +3281,37 @@ pub(crate) fn is_foreground_explorer() -> bool {
     }
 }
 
+/// Whether the engine's window — the window a page of HTML is drawn in — owns the keyboard
+/// right now, which is what a click into a page that runs makes it do. Nothing else the
+/// engine draws can be asked the question: a document and a specimen refuse activation, so
+/// a foreground window of this family is a page the user clicked into and had keys arrive
+/// at, and the pin key needs no case of its own for the same reason — a press while this is
+/// true is already answered as another program's key (`is_foreground_explorer`).
+///
+/// The question is asked of the foreground window rather than of the pointer, because the
+/// pointer can be anywhere: a page the user has clicked into and then left the hand resting
+/// beside still has the keyboard, and the keys that belong to it are the keys the app's own
+/// readers must leave alone. The engine's own window is not the only one of its family in
+/// front — a page the user has activated focuses a child of it — so the question covers the
+/// children the way `cursor_preview_hover` does, in the other direction and for the same
+/// reason: the surface is the engine's, and so is everything inside it.
+fn engine_owns_the_keyboard() -> bool {
+    let engine = webview_preview::showing_hwnd();
+    if engine == 0 {
+        return false;
+    }
+
+    unsafe {
+        let engine = HWND(engine as *mut _);
+        let foreground = GetForegroundWindow();
+        if foreground.is_invalid() {
+            return false;
+        }
+
+        (foreground.0 as isize) == engine.0 as isize || IsChild(engine, foreground).as_bool()
+    }
+}
+
 /// Check if a window is maximized
 fn is_window_maximized(hwnd: HWND) -> bool {
     unsafe {
@@ -3668,6 +3699,13 @@ fn type_ahead_keys() -> impl Iterator<Item = i32> {
 /// would leave the bit standing until Ctrl was next pressed — and a Ctrl pressed for
 /// something else would then read as a Ctrl+T that opens a tab. What leaving a press bit
 /// standing costs is the read that consumes it, which is why both are read every tick.
+///
+/// A page the user has clicked into owns the keyboard, and everything read above belongs to
+/// the page: an arrow walks a pin from here and a letter drives Explorer's type-ahead, both
+/// of them a gesture the user made on the page and not in the folder view. The reads are
+/// still made — that is the point of them, and a key not read here is a press bit left
+/// standing to be read later as somebody else's gesture — but nothing this function has
+/// worked out is acted on while the page is in front (see `engine_owns_the_keyboard`).
 fn navigation_input() -> NavigationInput {
     let alt_down = is_key_down(VK_MENU_CODE);
     let ctrl_down = is_key_down(VK_CONTROL_CODE);
@@ -3728,6 +3766,13 @@ fn navigation_input() -> NavigationInput {
                 input.pressed = true;
             }
         }
+    }
+
+    // The pass is over and the press bits it found are spent, so there is nothing left to
+    // hand back: the page in front gets the keys, and the folder view is not told about any
+    // of them this tick.
+    if engine_owns_the_keyboard() {
+        return NavigationInput::default();
     }
 
     input
@@ -4663,6 +4708,11 @@ pub fn run_explorer_hook() {
     // interval later.
     let mut last_navigation_trigger_at: Option<Instant> = None;
     let mut stationary_hover_probe_done = false;
+    // Whether a drag that began on a page the engine is drawing is still down. It stands while
+    // a button is and falls on the first tick that finds none, so what it answers is "has the
+    // hand let go", which no reading of the pointer alone can answer once an orbit has carried
+    // the hand off the page (see `preview_window::note_engine_page_drag`).
+    let mut engine_page_drag = false;
 
     // Safety net for a ffplay process that survived a stop (failed or
     // unconfirmed kill): while nothing is hovered it is re-checked and killed.
@@ -5222,6 +5272,30 @@ pub fn run_explorer_hook() {
             // is not over Explorer is not a reason to close a preview either.
             let loop_now = Instant::now();
 
+            // The buttons, read before the hold below rather than beside the rest of the
+            // key state further down, because what the page rule below reads depends on them
+            // and the press bit a click is known by can only be taken once. The two are
+            // disjoint sets of keys, so reading the mouse before the keyboard is the same
+            // reading whichever order it happens in.
+            let (mouse_button_input, mouse_button_press) = mouse_button_input_state();
+
+            // A drag that began on a page the engine is drawing, which is the page's own and
+            // has to be held through the hand leaving it: an orbit carries the pointer well
+            // outside the rectangle the page was drawn in, and a preview taken down there is a
+            // page the user was working on, gone. It is armed by a press inside the engine's
+            // own rectangle and stands until a tick finds no button down at all, which is the
+            // only reading that says the hand has let go — a drag begun on the listing rather
+            // than on the page never arms it, and so never holds a preview the page is not
+            // responsible for. Noted before the hold is read, so the tick that begins a drag
+            // is the tick the page is already being held by.
+            if mouse_button_press {
+                engine_page_drag = webview_preview::screen_rect()
+                    .is_some_and(|rect| point_in_box(cursor_pos, rect));
+            } else if !mouse_button_input {
+                engine_page_drag = false;
+            }
+            note_engine_page_drag(engine_page_drag);
+
             // Read straight from the published region, with nothing held over from
             // the last tick: the moment the pointer is out of it, the preview is
             // treated the way it was before the pointer ever touched it.
@@ -5255,7 +5329,6 @@ pub fn run_explorer_hook() {
             let keyboard_navigation_input =
                 explorer_navigation_shortcut_input || keyboard_navigation_active;
             let mouse_navigation_input = is_mouse_navigation_button_detected();
-            let (mouse_button_input, mouse_button_press) = mouse_button_input_state();
             let (activation_key_input, activation_key_press) = activation_key_input_state();
 
             // A wheel tick only counts while the wheel is driving Explorer: the
@@ -5438,13 +5511,16 @@ pub fn run_explorer_hook() {
             // suppressing preview until the cursor leaves so a delayed spinner
             // or background load result cannot resurrect a stuck preview under
             // the pointer. Keyboard previews own the screen: they may cover the
-            // parked cursor and are never dismissed by it.
+            // parked cursor and are never dismissed by it. A page that runs is
+            // the third exception and is not answered here at all: it holds the
+            // pointer through its own rectangle, and a preview a hold covers is
+            // never one this closes.
             //
             // What the pointer can touch is three surfaces, and they are not the same window:
             // this app's own layered preview, the player's window a video is played in, and
-            // — for a document or a specimen — the engine's window, which is asked for by its
-            // own handle because a document drawn by a browser is still a preview of this
-            // app's (see `cursor_preview_hover`).
+            // — for a document or a specimen, or a page that runs — the engine's window,
+            // which is asked for by its own handle because a document drawn by a browser
+            // is still a preview of this app's (see `cursor_preview_hover`).
             let preview_hover = if should_probe_preview_hover(
                 is_keyboard_hover || pointer_pause.freezes_pointer(),
                 last_file.is_some(),
