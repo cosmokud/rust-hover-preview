@@ -890,44 +890,89 @@ pub fn wanted_here(path: &Path, area: Area) {
 /// way has only a want to move — moving one sends no command, exactly as `wanted_here` does
 /// — while one the engine is already holding has the window put in the new box, which is a
 /// `show` that does not navigate again because the document it is asked for is the document
-/// it holds (`Host::show`). Nothing is asked for another file: a box belongs to the preview
-/// it was measured for, and a preview for another file is a `show`, which is the ask that
-/// takes this want's place altogether. A box that is already the one asked for is nothing
-/// to do at all — a drag is many of these.
+/// it holds (`Host::show`). The two are told apart by the window rather than by the want:
+/// a document that has landed keeps its want, so a box that changed under one would be read
+/// as a box still on its way and moved nowhere (`box_change`). Nothing is asked for another
+/// file: a box belongs to the preview it was measured for, and a preview for another file is
+/// a `show`, which is the ask that takes this want's place altogether. A box that is already
+/// the one asked for is nothing to do at all — a drag is many of these.
 pub fn place(path: &Path, area: Area, background: TransparentBackground) {
-    // Nothing to do where the box is already the one asked for: a want that is this document at
-    // this box is one the engine has been told about, and a drag is many of these.
-    let already = WANTED
+    // What is done with the box is read from the two cells the engine keeps and nothing else:
+    // whether the document is the one *wanted*, whether it is the one *held*, and whether the
+    // box is already the one on record for it. A drag is many of these, so the last of the three
+    // is what keeps a box that has not moved from asking anything at all.
+    let owed = owed(path);
+    let holds = showing_path().is_some_and(|shown| shown == path);
+    let same_box = WANTED
         .lock()
         .ok()
         .and_then(|wanted| {
-            wanted.as_ref().map(|wanted| {
-                wanted.path == path && wanted.background == background && wanted.area == area
-            })
+            wanted
+                .as_ref()
+                .map(|wanted| wanted.path == path && wanted.area == area)
         })
         .unwrap_or(false);
 
-    if already {
-        return;
+    match box_change(owed, holds, same_box) {
+        // A document still on its way has only a want to move, and moving one sends nothing: what
+        // is drawn is drawn in the box the newest want asks for when it lands, so a box that
+        // changed while a browser was coming up is a document that arrives in the right place and
+        // an engine that is not asked again (see `wanted_here`).
+        BoxChange::Want => wanted_here(path, area),
+        // A document the engine is holding has a window that has to move with the box: `show`,
+        // which re-places it and does not navigate again, because the document it is asked for is
+        // the document it holds (see `Host::show`).
+        BoxChange::Window => show(path, area, background),
+        // A box that did not move, or a file the engine neither holds nor is owed: nothing to
+        // move, and nothing asked (see `box_change`).
+        BoxChange::Nothing => {}
+    }
+}
+
+/// Which half of a `place` a box that changed under a document belongs to.
+///
+/// The two facts a cell alone cannot tell apart are the whole of this, and the reason it is a
+/// question at all is that both of them are true of a document that is on screen: a want is what
+/// the engine is *owed*, a document that lands keeps it until the next file takes its place, and
+/// what a box that changed under a landed document asks is not the want but the window the
+/// document is really in. So "owed" is the wrong question to ask on its own — a document still
+/// on its way and the one being drawn are both owed, and a box that changed under the second
+/// was answered as if it were the first: the want was moved, no window was, and a pinned window
+/// left its document behind the moment it was dragged.
+///
+/// What separates them is the window, which is what `holds` is: the file the engine has put up.
+/// A box that changed under it — and under a file that is *wanted*, since one the engine holds
+/// without being the wanted file is a preview that has moved on and has no box of its own to
+/// move — is the window's, and the ask that moves a window without navigating again is a
+/// `show`. A box that changed under a document still on its way is the want's, and moving one
+/// sends nothing at all. A box that has not moved is neither, and a file the engine neither
+/// holds nor is owed — which is no document of this file's to move — is nothing.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum BoxChange {
+    /// Nothing to do: the box is the one on record, or the file is not the engine's.
+    Nothing,
+    /// The want is moved, and the engine is not asked: the document has not landed.
+    Want,
+    /// The engine's window is put in the new box, and the document is not navigated again.
+    Window,
+}
+
+fn box_change(owed: bool, holds: bool, same_box: bool) -> BoxChange {
+    if same_box {
+        return BoxChange::Nothing;
     }
 
-    // A document still on its way has only a want to move, and moving one sends nothing: what is
-    // drawn is drawn in the box the newest want asks for when it lands, so a box that changed
-    // while a browser was coming up is a document that arrives in the right place and an engine
-    // that is not asked again (see `wanted_here`).
-    if owed(path) {
-        wanted_here(path, area);
-        return;
+    if owed {
+        // Both halves of what a window is: the document is on screen, and it is the one this
+        // preview is for — a held document nobody wants is a want that has already moved on.
+        return if holds {
+            BoxChange::Window
+        } else {
+            BoxChange::Want
+        };
     }
 
-    // A document the engine is holding has a window that has to move with the box: `show`, which
-    // re-places it and does not navigate again, because the document it is asked for is the
-    // document it holds (see `Host::show`). Nothing is asked where the engine holds nothing at
-    // all — neither the document nor a window to put it in — which is a preview with nothing to
-    // move, and a `show` for it is the ask that takes a want's place, not this.
-    if showing_hwnd() != 0 {
-        show(path, area, background);
-    }
+    BoxChange::Nothing
 }
 
 /// Publish a want for a document and take it back again, without asking for a browser.
@@ -2415,6 +2460,35 @@ mod tests {
                 "`{name}` is not a page under either setting, and the switch cannot make it one"
             );
         }
+    }
+
+    /// A box that changes under a document is answered by the half of the ask that owns it, and
+    /// the half that owns it is what the *window* says. The want cannot say it on its own: the
+    /// want a document landed under is not taken back when it lands, so the document being drawn
+    /// and the one still on its way are both wanted, and a box that changed under the first would
+    /// be moved into the want — a window left standing where it was while the box travelled
+    /// (see `place` and `box_change`).
+    #[test]
+    fn a_box_that_changes_moves_the_window_of_the_document_the_engine_holds() {
+        // The document the engine is holding, at a box that has moved: the window's.
+        assert_eq!(box_change(true, true, false), BoxChange::Window);
+
+        // A document still on its way, at a box that has moved: the want's, and nothing at all is
+        // asked of the engine — the page is drawn in the box the newest want asks for when it
+        // lands.
+        assert_eq!(box_change(true, false, false), BoxChange::Want);
+
+        // A box that has not moved: nothing, whichever half owns it — a drag is many of these.
+        assert_eq!(box_change(true, true, true), BoxChange::Nothing);
+        assert_eq!(box_change(true, false, true), BoxChange::Nothing);
+
+        // And a file the engine neither holds nor is owed has nothing to move, whatever the box
+        // says: a box belongs to the preview it was measured for, and one for another file is a
+        // `show` rather than this. A *held* file that is no longer wanted is the same answer —
+        // a preview that has moved on has no box of this file's to move, and asking for it would
+        // take the want from the file that now owns it.
+        assert_eq!(box_change(false, false, false), BoxChange::Nothing);
+        assert_eq!(box_change(false, true, false), BoxChange::Nothing);
     }
 
     /// The keyboard follows the document, and nothing else does. A page that runs is a program
