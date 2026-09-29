@@ -4040,8 +4040,9 @@ fn pin_update_settings() -> (bool, bool) {
 /// business, and the file it is showing is read back from there (see `pinned_path`).
 #[derive(Default)]
 struct PinUpdateWatch {
-    /// The file the pin was last seen showing. A pin taken up, and a pin that has been shown
-    /// another file since the last tick, start the watch again from what it is showing now.
+    /// The file the pin was last seen showing, and what tells a pin taken up from a pin that has
+    /// been shown another file since the last tick: a take-up is a watch beginning, and a swap is
+    /// not (see `PinUpdateWatch::note_shown`).
     showing: Option<PathBuf>,
     /// The pointer as the last tick of the watch read it, or nothing on the first tick of a watch:
     /// what has been measured since is how the hand has come.
@@ -4097,6 +4098,13 @@ impl PinUpdateWatch {
     /// that walks a listing has to be what moved it (see `PinUpdateWatch::note_place` and
     /// `PinUpdateWatch::focus_moved_by_key`). A click and a hover need neither rule: each is the
     /// pointer acting on something the user is looking at, whatever listing it happens to be in.
+    ///
+    /// The first item a watch sees is a baseline rather than a pick — it is the item the keyboard
+    /// was already on when the watch began — and a swap does not begin a watch again, so the item
+    /// the pin was shown another file over is still the one the next key is measured against. That
+    /// is what leaves the first selection a user makes after pressing the pin to give it the
+    /// keyboard and then clicking back into Explorer a pick rather than a baseline, with the one
+    /// after it not the first that counts (see `PinUpdateWatch::note_shown`).
     fn follow(
         &mut self,
         resolver: &mut ItemResolver,
@@ -4118,14 +4126,13 @@ impl PinUpdateWatch {
         };
 
         if self.showing.as_ref() != Some(&showing) {
-            // A pin taken up, or one shown another file — by this watch, or by a key the preview
-            // loop answered in between. What a swap from here is measured against is that file, and
-            // the pointer and the keyboard are read again from where they are now.
-            *self = Self {
-                showing: Some(showing),
-                ..Self::default()
-            };
-            return;
+            // A pin taken up, and a pin shown another file — by this watch, or by a key the preview
+            // loop answered in between. What a swap from here is measured against is the file the
+            // pin has now, and the tick is not abandoned over it: the press bits this tick was
+            // given have already been spent by the read above, so a watch that returned here would
+            // drop the very pick they are the answer to — which is a click on the file the pin is
+            // being swapped to, arriving on the tick the swap is noticed on.
+            self.note_shown(&showing);
         }
 
         let Some(pointer) = read_pointer() else {
@@ -4220,6 +4227,39 @@ impl PinUpdateWatch {
                 }
             }
         }
+    }
+
+    /// Begin again from the file a pin is showing now, and tell apart the two reasons the file can
+    /// be one the watch has not seen: a pin taken up, and a pin that has been shown another file
+    /// since the last tick.
+    ///
+    /// The pointer's own reading is taken again either way, because all of it is about what is
+    /// under the hand rather than about the pin: the settle and the probe were measured against a
+    /// window that has since moved, and the file under a pointer nobody moved is not a hover.
+    ///
+    /// A swap is not a new watch, though, and the two facts that make a focus change a pick are
+    /// neither of them about the pin. The item the keyboard is on and the place it was read in
+    /// belong to the listing, and whether the hand has arrived belongs to the hand; a swap that
+    /// forgot them is what makes the first selection a user makes after pressing the pin to give it
+    /// the keyboard and then clicking back into Explorer read as a baseline rather than as a pick —
+    /// with the one after it the first that counts, and the whole of it again after every press of
+    /// the pin. A swap is a window being shown another file, and the listing is where it was.
+    ///
+    /// A pin taken up is the watch beginning, and it begins from nothing: what is on the keyboard
+    /// when a pin comes up is a baseline and not a choice, whatever the listing had on it.
+    fn note_shown(&mut self, showing: &Path) {
+        let mut next = Self {
+            showing: Some(showing.to_path_buf()),
+            ..Self::default()
+        };
+
+        if self.showing.is_some() {
+            next.focused = self.focused.clone();
+            next.place = self.place.clone();
+            next.arrived = self.arrived;
+        }
+
+        *self = next;
     }
 
     /// Note what the keyboard and the pointer did on one tick, as the witness a focus moved by the
@@ -6598,6 +6638,109 @@ mod tests {
         assert!(
             !watch.focus_moved_by_key(started + Duration::from_millis(1360)),
             "a key pressed with a modifier down is a command, not a walk"
+        );
+    }
+
+    /// A pin shown another file is not a watch beginning: the item the keyboard is on, the place it
+    /// was read in and the hand having arrived are the listing's and the hand's, and a swap that
+    /// forgot them made the first selection a user makes after pressing the pin and clicking back
+    /// into Explorer a baseline rather than a pick — see `PinUpdateWatch::note_shown`.
+    #[test]
+    fn a_swap_carries_the_keyboard_baseline_forward() {
+        let here = HoverLocation {
+            folder: None,
+            search_root: None,
+            location_url: Some("file:///D:/Pictures".to_string()),
+            view_hwnd: Some(0x1234),
+        };
+        let item = |name: &str, top: i32| FocusedItemKey {
+            name: name.to_string(),
+            rect: (0, top, 200, top + 20),
+        };
+        let mut watch = PinUpdateWatch::default();
+
+        // A pin taken up begins from nothing: what is on the keyboard when it comes up is a
+        // baseline, not a choice.
+        watch.note_shown(Path::new("D:/Pictures/one.png"));
+        assert!(
+            watch.focused.is_none() && watch.place.is_none() && !watch.arrived,
+            "a watch that has not watched anything holds no baseline to keep"
+        );
+
+        // A listing is read into it, and the hand arrives.
+        watch.focused = Some(item("one.png", 100));
+        watch.note_place(Some(here.clone()));
+        watch.arrived = true;
+
+        // A swap throws the pointer's own reading away and nothing else.
+        watch.note_shown(Path::new("D:/Pictures/two.png"));
+        assert_eq!(
+            watch.showing.as_deref(),
+            Some(Path::new("D:/Pictures/two.png")),
+            "and is measured against the file the pin has now"
+        );
+        assert_eq!(
+            watch.focused.as_ref().map(|key| key.name.as_str()),
+            Some("one.png"),
+            "the item the keyboard is on belongs to the listing, not to the file the pin shows"
+        );
+        assert_eq!(
+            watch.place.as_ref().and_then(|place| place.view_hwnd),
+            Some(0x1234),
+            "and so does the place it was read in, which is what tells a move from a landing"
+        );
+        assert!(
+            watch.arrived,
+            "a window that has moved is not a hand that has not come"
+        );
+        assert!(
+            watch.pointer.is_none() && watch.settled_at.is_none() && !watch.probed,
+            "the settle and the probe were measured against a window that has since moved"
+        );
+
+        // And so the first item the focus lands on after the swap is a change the watch already
+        // had a baseline for — which is what makes it a pick rather than a baseline. `FocusedItemKey`
+        // is compared by its name and its box rather than as a whole, which is the same pair the
+        // watch itself tells one observation from the next by.
+        assert_ne!(
+            watch.focused.as_ref().map(|key| (&key.name, key.rect)),
+            Some((&"two.png".to_string(), (0, 120, 200, 140))),
+            "the first selection after the swap is a different item from the one before it"
+        );
+    }
+
+    /// A pin taken up again — a new pin, after the old one was closed — is a watch that has watched
+    /// nothing, and begins from nothing whatever the listing had on the keyboard.
+    #[test]
+    fn a_pin_taken_up_begins_from_nothing() {
+        let mut watch = PinUpdateWatch {
+            focused: Some(FocusedItemKey {
+                name: "one.png".to_string(),
+                rect: (0, 100, 200, 120),
+            }),
+            place: Some(HoverLocation {
+                folder: None,
+                search_root: None,
+                location_url: Some("file:///D:/Pictures".to_string()),
+                view_hwnd: Some(0x1234),
+            }),
+            arrived: true,
+            ..PinUpdateWatch::default()
+        };
+        watch.note_shown(Path::new("D:/Pictures/one.png"));
+
+        // A pin is up again on another file, after the first was taken down: the watch was reset
+        // while nothing was pinned (see `PinUpdateWatch::follow`), so this is a take-up.
+        watch = PinUpdateWatch::default();
+        watch.note_shown(Path::new("D:/Videos/clip.mp4"));
+
+        assert!(
+            watch.focused.is_none() && watch.place.is_none() && !watch.arrived,
+            "what is on the keyboard when a pin comes up is a baseline, not a choice"
+        );
+        assert_eq!(
+            watch.showing.as_deref(),
+            Some(Path::new("D:/Videos/clip.mp4"))
         );
     }
 
