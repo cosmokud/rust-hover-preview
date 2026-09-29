@@ -1433,26 +1433,12 @@ fn paint_glyph(
     let half = glyph / 2;
 
     match button.kind {
-        CaptionButton::Previous => draw_chevron(
-            buffer,
-            width,
-            center_x,
-            center_y,
-            glyph,
-            stroke,
-            ink,
-            false,
-        ),
-        CaptionButton::Next => draw_chevron(
-            buffer,
-            width,
-            center_x,
-            center_y,
-            glyph,
-            stroke,
-            ink,
-            true,
-        ),
+        CaptionButton::Previous => {
+            draw_chevron(buffer, width, center_x, center_y, glyph, stroke, ink, false)
+        }
+        CaptionButton::Next => {
+            draw_chevron(buffer, width, center_x, center_y, glyph, stroke, ink, true)
+        }
         CaptionButton::OpenWith => {
             draw_open_with(buffer, width, center_x, center_y, glyph, stroke, ink)
         }
@@ -1999,6 +1985,17 @@ fn draw_cross(
 /// The vertex is at the end the chevron points to and the arms open away from it. Measured
 /// from the middle of the span instead, the two arms open on both sides of it and the mark
 /// is a cross rather than a chevron — which is what a `<` and a `>` would both be drawn as.
+///
+/// The arms part *half* a span either side of the middle row, a row for every other column
+/// rather than a row for every column, so that the mark comes out the size the close cross
+/// and the maximize box beside it are drawn at. Arms that reach as far as the mark is walked
+/// are twice as tall as every other glyph in the bar, and a row of marks that is not one size
+/// is a row of things that are not one kind of thing.
+///
+/// Walked in whole pixels rather than in `stroke_segment` because a vertex is the whole of
+/// what a chevron says: an anti-aliased stroke a pixel wide rounds its own point off, and the
+/// one row at the end the arms part from is what says a chevron. The cross is walked the same
+/// way, for the same reason.
 fn draw_chevron(
     buffer: &mut [u8],
     width: i32,
@@ -2011,16 +2008,24 @@ fn draw_chevron(
 ) {
     let thickness = thickness.round().max(1.0) as i32;
     let half = span / 2;
-    let steps = span.max(1);
-
-    for step in 0..=steps {
+    for step in 0..=span.max(1) {
         // The columns are walked the same way whichever way the chevron points — what says
         // which way it points is whether the arms are widest at the first column or the last.
         // Measuring the arms from the middle instead is what draws an X; taking the columns
         // one way and the arms the other is what draws both buttons as the same arrow.
         let x = center_x - half + step;
-        let offset = if pointing_right { steps - step } else { step };
+        let reach = if pointing_right { span - step } else { step };
+        // The reach is rounded to the nearer row, so that the column the arms part from is
+        // the one row on its own and not the two the rounding would otherwise leave on it.
+        // The reach is *half* the span and not the whole of it: arms that reach as far as the
+        // mark is walked are drawn a whole span either side of the middle row, which is twice
+        // as tall as every other glyph in the bar.
+        let offset = (reach * half * 2 + span.max(1)) / (span.max(1) * 2);
 
+        // As many rows either side of the middle as the stroke is wide, taken in opposite
+        // directions, so that the two arms are each other turned about the mark's own middle
+        // row at any thickness: a stroke that ran the same way on both sides would close the
+        // arms into a blob on the row where they meet.
         for depth in 0..thickness {
             put(buffer, width, x, center_y - offset + depth, color, 1.0);
             put(buffer, width, x, center_y + offset - depth, color, 1.0);
@@ -2033,6 +2038,20 @@ fn draw_chevron(
 /// Drawn as the box and the arrow together rather than as a box with a mark in it, because
 /// the button's whole meaning is the leaving — a pin shows a file and this is the one that
 /// gives it away to a program that owns the format.
+///
+/// The box is a full-height outline drawn in every side but the one the arrow goes out of, so
+/// that what it stands for — the file — is a box, and the corner the arrow leaves from is the
+/// one that is open. It is the mark every "open in" button is drawn as, and the reading it
+/// has to carry is *leaving this thing*, which a box with an arrow in it does not say: a box
+/// drawn too small to read as a box, with a big arrow standing on top of it, is the upload
+/// mark, and a button that means "hand this to another program" must not be drawn as a
+/// button that means "send this away".
+///
+/// The tail starts at the middle of the box and crosses its open side to run out past the
+/// corner, so that the arrow is seen leaving rather than hovering over. The strokes are laid
+/// out about the mark's centre and then have the stroke's own half width taken out of them,
+/// because a stroke is drawn about the line it is given and not inside it — a mark a stroke
+/// and a half past the size it was asked for is a mark off its own button.
 fn draw_open_with(
     buffer: &mut [u8],
     width: i32,
@@ -2042,54 +2061,36 @@ fn draw_open_with(
     thickness: f32,
     color: [u8; 3],
 ) {
-    let half = span / 2;
-    // The stroke is rounded once and used as a width to draw with and as a number of rows to
-    // step over, which is the two things the cross does with its own.
     let edge = thickness.round().max(1.0);
-    let rows = edge as i32;
+    let half = ((span as f32 / 2.0) - edge / 2.0).max(0.0);
+    let (middle_x, middle_y) = (center_x as f32 + 0.5, center_y as f32 + 0.5);
+    let point = |x: f32, y: f32| (middle_x + x * half, middle_y + y * half);
+    let open_at = |y: f32| (point(-1.0, y), point(1.0, y));
 
-    // The box is the left half of the glyph, so the arrow has the right of it to run out
-    // along and the two do not read as one mark.
-    let box_right = center_x - half / 2;
-
-    stroke_box(
+    // The file: a box with its top right corner left off, so that the corner the arrow goes
+    // out of is the one that is not drawn.
+    let (top_left, top_right) = open_at(-1.0);
+    let (bottom_left, bottom_right) = open_at(1.0);
+    stroke_segment(buffer, width, top_left, top_right, edge, color, 1.0);
+    stroke_segment(buffer, width, bottom_left, bottom_right, edge, color, 1.0);
+    stroke_segment(buffer, width, top_left, bottom_left, edge, color, 1.0);
+    stroke_segment(
         buffer,
         width,
-        RECT {
-            left: center_x - half,
-            top: center_y - half,
-            right: box_right,
-            bottom: center_y + half + 1,
-        },
+        top_right,
+        point(1.0, -1.0 / 3.0),
         edge,
         color,
         1.0,
     );
 
-    // The shaft, and the head it ends in: the same thickness as the box's own edge, and the
-    // same two strokes a chevron is drawn in.
-    let shaft_top = center_y - rows / 2;
-    fill_box(
-        buffer,
-        width,
-        RECT {
-            left: center_x,
-            top: shaft_top,
-            right: center_x + half + 1,
-            bottom: shaft_top + rows,
-        },
-        color,
-        1.0,
-    );
-
-    let head = half / 2;
-    for step in 0..=head.max(1) {
-        let x = center_x + half + 1 - step;
-        for depth in 0..rows {
-            put(buffer, width, x, center_y - step + depth, color, 1.0);
-            put(buffer, width, x, center_y + step - depth, color, 1.0);
-        }
-    }
+    // The hand-off: a tail out of the middle of the file, through the open side and past the
+    // corner it goes out of, and the head it ends in — one stroke along the top of it and one
+    // along the side of it, which is the same pair a chevron is drawn in.
+    let tip = point(1.0, -1.0);
+    stroke_segment(buffer, width, point(-0.2, 0.2), tip, edge, color, 1.0);
+    stroke_segment(buffer, width, tip, point(1.0 / 3.0, -1.0), edge, color, 1.0);
+    stroke_segment(buffer, width, tip, point(1.0, -1.0 / 3.0), edge, color, 1.0);
 }
 
 #[cfg(test)]
@@ -2181,7 +2182,10 @@ mod tests {
                 button.kind
             );
             // Each end of the box is its own, and the pixel past the last one is the title's.
-            assert_eq!(button_at(button.rect.left, 0, 600, 30, 96, true), Some(button.kind));
+            assert_eq!(
+                button_at(button.rect.left, 0, 600, 30, 96, true),
+                Some(button.kind)
+            );
             assert_eq!(
                 button_at(button.rect.right - 1, 29, 600, 30, 96, true),
                 Some(button.kind)
@@ -2220,7 +2224,11 @@ mod tests {
             );
         }
         assert_eq!(button_at(0, 5, 200, 30, 96, true), None);
-        for kind in [CaptionButton::Previous, CaptionButton::Next, CaptionButton::OpenWith] {
+        for kind in [
+            CaptionButton::Previous,
+            CaptionButton::Next,
+            CaptionButton::OpenWith,
+        ] {
             assert!(
                 narrow.iter().all(|button| button.kind != kind),
                 "a caption too narrow for the walk does not carry {kind:?}"
@@ -2259,7 +2267,10 @@ mod tests {
         assert_eq!(two[4].rect.left, close.left);
         assert_eq!(two[4].rect.right, close.right);
         assert_eq!(two[3].rect.right, two[4].rect.left);
-        assert_eq!(two[3].rect.right - two[3].rect.left, minimize.right - minimize.left);
+        assert_eq!(
+            two[3].rect.right - two[3].rect.left,
+            minimize.right - minimize.left
+        );
 
         // And the space the button used to take is a button's, not a hole: it is the minimize
         // that has moved along into it, with the walk along beside it.
@@ -2564,10 +2575,36 @@ mod tests {
     }
 
     fn blit(out: &mut [u8], width: u32, height: u32, source: &[u8], x: u32, y: u32) {
-        for row in 0..height {
-            for column in 0..width {
-                let from = ((row * width + column) * 4) as usize;
-                let to = (((y + row) * width + x + column) * 4) as usize;
+        // The source is as wide as the destination: every caller pastes a full-width picture at
+        // a y offset, which is what the volume fixture and this one both do.
+        let stride = width as usize;
+        for row in 0..height as usize {
+            for column in 0..width as usize {
+                let from = ((row * stride + column) * 4) as usize;
+                let to = (((y as usize + row) * stride + x as usize + column) * 4) as usize;
+                if to + 3 < out.len() && from + 3 < source.len() {
+                    out[to..to + 4].copy_from_slice(&source[from..from + 4]);
+                }
+            }
+        }
+    }
+
+    /// One painted button's own width pasted into a strip of several, so that a row of glyphs is
+    /// laid out side by side the way the bar lays them out. The source is a button wide and the
+    /// destination is the whole strip, so the two are not the same stride and this cannot be
+    /// `blit`.
+    fn blit_cell(
+        out: &mut [u8],
+        width: u32,
+        height: u32,
+        source: &[u8],
+        source_width: u32,
+        x: u32,
+    ) {
+        for row in 0..height as usize {
+            for column in 0..source_width as usize {
+                let from = ((row * source_width as usize + column) * 4) as usize;
+                let to = ((row * width as usize + x as usize + column) * 4) as usize;
                 if to + 3 < out.len() && from + 3 < source.len() {
                     out[to..to + 4].copy_from_slice(&source[from..from + 4]);
                 }
@@ -2603,17 +2640,180 @@ mod tests {
         out
     }
 
-    /// The two walk buttons point opposite ways, and each points the way it walks.
+    /// The pictures this test writes are the design under review: the six marks the caption's
+    /// own buttons carry, at both scales, side by side in one strip. A row of marks is judged
+    /// as a row — one of them twice the size of the rest, or a third the size, or sitting a
+    /// pixel or two off the middle of its own button, is what a strip shows and a test on one
+    /// mark at a time cannot.
+    #[test]
+    fn draws_the_caption_glyphs() {
+        let dir = scratch("caption-glyphs");
+        // The marks on the bar's own background: the glyphs are ink, so a picture that is not
+        // the colour behind them shows nothing, which is what a black buffer and black ink do.
+        let bar = [250u8, 250, 250];
+        let marks = [
+            ("previous", CaptionButton::Previous, false),
+            ("next", CaptionButton::Next, false),
+            ("open-with", CaptionButton::OpenWith, false),
+            ("minimize", CaptionButton::Minimize, false),
+            ("maximize", CaptionButton::Maximize, false),
+            ("restore", CaptionButton::Maximize, true),
+            ("close", CaptionButton::Close, false),
+        ];
+
+        for (dpi, tag) in [(96u32, "96dpi"), (192u32, "192dpi")] {
+            let scale = dpi as f32 / 96.0;
+            let side = text_paint::scaled(BUTTON_PIXELS as i32, scale).max(1);
+            let height = side as u32;
+            let width = (side * marks.len() as i32) as u32;
+            let mut out = image_buffer(width, height);
+            let mut sizes: Vec<(&str, i32, i32)> = Vec::new();
+
+            for (index, (name, kind, maximized)) in marks.iter().enumerate() {
+                let surface = DibSurface::create(side as u32, height).expect("a surface");
+                // The bar behind the mark, opaque, so that a column the glyph did not reach
+                // reads as the background and not as ink. Filled through the same raw bits
+                // every glyph here is drawn into.
+                let filled = unsafe {
+                    std::slice::from_raw_parts_mut(
+                        surface.bits(),
+                        4 * side as usize * height as usize,
+                    )
+                };
+                for pixel in filled.as_chunks_mut::<4>().0 {
+                    pixel[0] = bar[2];
+                    pixel[1] = bar[1];
+                    pixel[2] = bar[0];
+                    pixel[3] = 255;
+                }
+
+                paint_glyph(
+                    &surface,
+                    CaptionButtonBox {
+                        kind: *kind,
+                        rect: RECT {
+                            left: 0,
+                            top: 0,
+                            right: side,
+                            bottom: side,
+                        },
+                    },
+                    *maximized,
+                    [56u8, 58, 66],
+                    scale,
+                );
+
+                let painted = surface.pixels();
+                let ink =
+                    |x: usize, y: usize| painted[((y * side as usize + x) * 4) as usize] < 128;
+
+                // The mark's own bounds in the surface it was painted into, as the min and
+                // max of every row and column that carries any ink at all.
+                let mut low = (i32::MAX, i32::MAX);
+                let mut high = (i32::MIN, i32::MIN);
+                for y in 0..height as usize {
+                    for x in 0..side as usize {
+                        if !ink(x, y) {
+                            continue;
+                        }
+                        low = (low.0.min(x as i32), low.1.min(y as i32));
+                        high = (high.0.max(x as i32), high.1.max(y as i32));
+                    }
+                }
+                assert!(
+                    low.0 > i32::MIN && high.0 > i32::MIN,
+                    "{name} drew nothing at all at {tag}"
+                );
+
+                // The mark sits in the middle of its own button, which is the half of "beauty"
+                // a row of glyphs is judged on that no single-glyph test can see: a mark one
+                // pixel off its centre is a mark the hand does not aim where the eye is.
+                let middle = (side / 2) as i32;
+                let (across, down) = ((low.0 + high.0) / 2 - middle, (low.1 + high.1) / 2 - middle);
+                assert!(
+                    across.abs() <= 1 && down.abs() <= 1,
+                    "{tag} {name} is {across}px across and {down}px down from the middle of its button"
+                );
+
+                // And it is the size of the rest of the row, which is the other half. A glyph
+                // drawn twice the height of its neighbours is the one the report is about, and
+                // a picture is the only place that shows: the chevron once reached a whole span
+                // either side of the middle row, twice every other mark's height. The
+                // minimize bar is a bar, so it is not held to the height of the rest.
+                let (tall, wide) = (high.1 - low.1 + 1, high.0 - low.0 + 1);
+                sizes.push((*name, tall, wide));
+
+                println!(
+                    "{tag:>6} {name:<9} x {}..={} y {}..={} ({}x{})",
+                    low.0,
+                    high.0,
+                    low.1,
+                    high.1,
+                    high.0 - low.0 + 1,
+                    high.1 - low.1 + 1
+                );
+
+                let at = (index as u32) * side as u32;
+                blit_cell(&mut out, width, height, &painted, side as u32, at);
+            }
+
+            // The walk buttons are the size of the marks they sit beside, which is the whole
+            // of the report they were redrawn for: they used to reach a whole span either side
+            // of the middle row and come out twice the height of every other mark in the bar.
+            //
+            // The size they have to match is the glyph square the strip is drawn on — a mark
+            // is asked for a span, and a span across and a span down is what it should be. The
+            // close cross is not the yardstick: a diagonal stroke laid down a pixel at a time
+            // overshoots its own ends by the stroke's width, so the cross is a row or two taller
+            // than it is wide at 200% and always has been. Comparing to it would be holding the
+            // chevron to the cross's overhang rather than to the size a glyph is asked for.
+            let glyph = text_paint::scaled(GLYPH_PIXELS as i32, scale).max(6);
+            let square = glyph + 1;
+            for (name, tall, wide) in &sizes {
+                if *name != "previous" && *name != "next" {
+                    continue;
+                }
+                assert_eq!(
+                    (*tall, *wide),
+                    (square, square),
+                    "{tag} {name} is {tall}x{wide} beside the {square}x{square} a glyph is asked for"
+                );
+            }
+
+            // And the row is one size the rest of the way: nothing stands much taller than the
+            // rest, which is the property a picture shows and a per-glyph test cannot. The
+            // minimize bar is not counted: it is a bar, and is one row tall by being a bar.
+            let heights = sizes
+                .iter()
+                .filter(|(name, ..)| *name != "minimize")
+                .map(|(_, tall, _)| *tall);
+            let tallest = heights.clone().max().unwrap_or_default();
+            let smallest = heights.min().unwrap_or_default();
+            assert!(
+                tallest - smallest <= 2,
+                "{tag} the row runs from {smallest} to {tallest} rows tall"
+            );
+
+            let path = dir.join(format!("caption-glyphs-{tag}.png"));
+            write_png(path.clone(), &out, width, height);
+            println!("{}", path.display());
+        }
+    }
+
+    /// The two walk buttons point opposite ways, each points the way it walks, and each is
+    /// drawn the size of every other glyph in the bar.
     ///
     /// A chevron whose arms open on both sides of its middle is a cross, and one whose arms
     /// open away from the end the columns stop at points the wrong way — either of which is a
     /// button that reads as something other than what it does, and neither of which a test on
-    /// the boxes alone could see.
+    /// the boxes alone could see. Arms that reach further than the mark is wide are the third
+    /// of the same kind: a row of marks that are not one size is a row of things that are not
+    /// one kind of thing, and the walk buttons are the two biggest of the six.
     #[test]
     fn the_two_walk_buttons_are_chevrons_pointing_opposite_ways() {
-        // A box with room for the whole glyph: the arms part a full span either side of the
-        // middle row, so a box the glyph's own width would cut the open end off and leave a
-        // test that passes for a chevron that is really a stub.
+        // A box with room for the whole glyph and a row to spare: the arms part half a span
+        // either side of the middle row, so a box the glyph's own width would cut the open
+        // end off and leave a test that passes for a chevron that is really a stub.
         const W: i32 = 24;
         const H: i32 = 24;
         let span = 10;
@@ -2636,11 +2836,11 @@ mod tests {
         // away from it to two that part as they go. A cross has two rows at both ends and
         // four through its middle, so the end that is one row is what says a chevron — and
         // the point is at the end the button walks off, which is a different end for each.
-        let left_edge = 12 - span / 2;
-        let right_edge = 12 + span / 2;
+        let point_end = 12 - span / 2;
+        let open_end = 12 + span / 2;
         for (buffer, point, open, name) in [
-            (&left, left_edge, right_edge, "the back one"),
-            (&right, right_edge, left_edge, "the on one"),
+            (&left, point_end, open_end, "the back one"),
+            (&right, open_end, point_end, "the on one"),
         ] {
             assert_eq!(
                 drawn(buffer, point).len(),
@@ -2661,11 +2861,31 @@ mod tests {
         // glyph. Two buttons drawn the same way round would be equal column for column
         // instead, and this is what catches that. Only the columns the glyph itself covers
         // are compared: the rest of the box is empty on both sides and reflects out of it.
-        for x in 12 - span..=12 + span {
+        for x in 12 - span / 2..=12 + span / 2 {
             assert_eq!(
                 drawn(&left, x),
                 drawn(&right, 2 * 12 - x),
                 "the two chevrons are each other turned about at x={x}"
+            );
+        }
+
+        // The arms part half a span either side of the middle row, which is what the close
+        // cross and the maximize box are drawn at: a chevron taller than the glyph beside it
+        // is an arrow in a row of marks, not a mark in a row.
+        for buffer in [&left, &right] {
+            let ink = |x: i32, y: i32| buffer[((y * W + x) * 4) as usize] == 0;
+            let (top, bottom) = (0..H)
+                .find(|y| (point_end..=open_end).any(|x| ink(x, *y)))
+                .zip(
+                    (0..H)
+                        .rev()
+                        .find(|y| (point_end..=open_end).any(|x| ink(x, *y))),
+                )
+                .expect("a chevron that was drawn");
+            assert_eq!(
+                bottom - top + 1,
+                span + 1,
+                "a chevron is a glyph tall, whatever else it is"
             );
         }
     }
@@ -2701,7 +2921,8 @@ mod tests {
 
         assert_eq!(dead.elapsed.left, 10, "the clock begins at the padding");
         assert_eq!(
-            live.elapsed.left, dead.elapsed.left + (live.play.right - live.play.left) + 5,
+            live.elapsed.left,
+            dead.elapsed.left + (live.play.right - live.play.left) + 5,
             "a bar with a button begins after it"
         );
 
