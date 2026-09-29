@@ -38,6 +38,12 @@ const GLYPH_STROKE_PIXELS: f32 = 1.4;
 /// How wide the glyph inside a caption button is.
 const GLYPH_PIXELS: f32 = 10.0;
 
+/// The room a caption tooltip takes around its text, and how far it floats below the button it
+/// belongs to, in the units a display's scale multiplies.
+const TOOLTIP_PADDING_PIXELS: f32 = 8.0;
+const TOOLTIP_GAP_PIXELS: f32 = 6.0;
+const TOOLTIP_RADIUS: f32 = 4.0;
+
 /// The room a volume popup takes at a display's scale: the panel that floats over the media
 /// above the bar, and the groove the level is drawn in inside it.
 ///
@@ -787,6 +793,53 @@ pub(crate) fn paint_volume_popup(
     fill_disc(buffer, width, center_x, center_y, thumb, ink, 1.0);
 }
 
+/// How wide a run of text is in a caption's face at a display's scale, measured through the
+/// same font the run is drawn in.
+///
+/// It is a question rather than an estimate because the text is a program's name: "Open With
+/// Adobe Photoshop" and "Open With Photos" are nowhere near the same width, and a panel sized
+/// for one of them clips the other.
+pub(crate) fn measure_caption_text(surface: &DibSurface, text: &str, dpi: u32) -> i32 {
+    if text.is_empty() {
+        return 0;
+    }
+
+    let scale = dpi as f32 / 96.0;
+    let style = text_paint::TextStyle {
+        foreground: [0, 0, 0],
+        background: None,
+        bold: false,
+        italic: false,
+        underline: false,
+        strike: false,
+        level: text_paint::BODY_LEVEL,
+        face: CAPTION_FACE,
+    };
+
+    unsafe {
+        let font = text_paint::create_font(
+            text_paint::scaled(text_paint::LEVEL_FONT_PIXELS[style.level as usize], scale),
+            &style,
+        );
+        if font.0.is_null() {
+            return 0;
+        }
+
+        let previous = SelectObject(surface.dc, font);
+        let mut extent = SIZE::default();
+        let wide: Vec<u16> = text.encode_utf16().collect();
+        let width = if GetTextExtentPoint32W(surface.dc, &wide, &mut extent).as_bool() {
+            extent.cx
+        } else {
+            0
+        };
+        let _ = SelectObject(surface.dc, previous);
+        let _ = windows::Win32::Graphics::Gdi::DeleteObject(font);
+
+        width
+    }
+}
+
 /// Fill a rounded rectangle, shaded from one colour at its top edge to another at its bottom: a
 /// popup panel is the one thing here that is not a flat surface.
 fn fill_round_rect(
@@ -1176,19 +1229,26 @@ pub(crate) enum CaptionButton {
     /// rather than opening it, so this is the only way out of it into the program that owns
     /// the format.
     OpenWith,
+    /// Hand the pinned file to a program the user names out loud, rather than to the one the
+    /// machine has settled on. Beside `OpenWith` because the two are the same gesture two
+    /// directions: this one opens the Shell's own list of what could open it, which is the only
+    /// way into a second program when the default is the wrong one — the button beside it can
+    /// only ever reach the one the Shell has already chosen.
+    OpenWithList,
     Minimize,
     Maximize,
     Close,
 }
 
-/// The pin's own three, in the order they are packed. They are separate from the window's
+/// The pin's own four, in the order they are packed. They are separate from the window's
 /// group because a window's group is measured by itself and cannot give any of its room:
 /// a close button that moved because a pin grew a walk would be a close button in a new
 /// place on every caption the moment this app was updated.
-const NAV_BUTTONS: [CaptionButton; 3] = [
+const NAV_BUTTONS: [CaptionButton; 4] = [
     CaptionButton::Previous,
     CaptionButton::Next,
     CaptionButton::OpenWith,
+    CaptionButton::OpenWithList,
 ];
 
 /// What a caption is drawn from: the name of what is pinned, whether it is maximized, whether it
@@ -1213,11 +1273,11 @@ pub(crate) struct Caption<'a> {
 /// close button that moved because the window it is on has nothing to maximize would be a
 /// window whose close button is where a maximize is on every other one.
 ///
-/// The pin's own three — the file before, the file after, and the file opened by whatever
-/// the machine has filed it under — are packed beside that group and not inside it, and are
-/// dropped whole where a caption is too narrow to carry them. Which of the two is given up is
-/// not a question: the walk is a thing a window only has once it is a pin, and closing a pin
-/// is not.
+/// The pin's own four — the file before, the file after, the file opened by whatever
+/// the machine has filed it under, and the file opened by a program named out loud — are packed
+/// beside that group and not inside it, and are dropped whole where a caption is too narrow to
+/// carry them. Which of the two is given up is not a question: the walk is a thing a window
+/// only has once it is a pin, and closing a pin is not.
 pub(crate) fn button_boxes(
     width: i32,
     height: i32,
@@ -1262,7 +1322,7 @@ pub(crate) fn button_boxes(
     // caption's buttons are one size, and a narrower one in the middle of them is a row of
     // targets a hand has to find rather than count.
     //
-    // A caption too narrow for all three keeps the window's group and loses the walk whole.
+    // A caption too narrow for all four keeps the window's group and loses the walk whole.
     // The buttons a hand has been reaching for on every window it has ever had are the ones
     // that are not given up, and half a walk beside them is a set of targets with no known
     // order to them.
@@ -1271,9 +1331,11 @@ pub(crate) fn button_boxes(
     }
 
     // Packed from the group's own left edge outward, so the walk reads left-to-right in the
-    // order it is written: the file before this one, the file after it, and then the hand-off
-    // to another program. Walking out from the edge and reversing would put them the other
-    // way round, which puts `Next` where a hand reaches for `Previous`.
+    // order it is written: the file before this one, the file after it, the hand-off to
+    // another program, and then the hand-off to one named out loud. Walking out from the edge
+    // and reversing would put them the other way round, which puts `Next` where a hand reaches
+    // for `Previous` — and puts the list beside the default rather than beyond it, which is
+    // where a hand that has just tried the default and found it wanting goes next.
     let group_left = width - kinds.len() as i32 * button;
     let mut nav: Vec<CaptionButtonBox> = NAV_BUTTONS
         .iter()
@@ -1371,6 +1433,267 @@ pub(crate) fn paint_caption(
         .min()
         .unwrap_or(width);
     paint_title(surface, palette, caption.title, title_right, scale);
+
+    // The tooltip is not drawn here: it is a panel of its own hanging below the strip, over
+    // the media, and is the window's own business to place (see `tooltip_layout`). All this
+    // hands over is which button the name belongs to and what it says.
+    //
+    // GDI leaves the alpha byte of everything it draws at zero, and a caption is opaque wherever
+    // it is painted, so the strip's own coverage is handed back here — after the last of the
+    // text rather than after each run, because a caption whose title was sealed and whose
+    // tooltip was sealed separately would leave the tooltip's run as a hole in the bar (see the
+    // module documentation).
+    let buffer = unsafe {
+        std::slice::from_raw_parts_mut(
+            surface.bits(),
+            surface.width as usize * surface.height as usize * 4,
+        )
+    };
+    for pixel in buffer.as_chunks_mut::<4>().0 {
+        pixel[3] = 255;
+    }
+}
+
+/// Where a caption's tooltip is, in the window's own coordinates: the panel it is drawn in,
+/// which is a panel of its own rather than any part of the strip.
+///
+/// It is *below* the caption, over the media, and not inside the strip. A name like "Open With
+/// Adobe Photoshop" is wider than the two buttons it would have to sit among, and a tooltip
+/// written inside a thirty-pixel bar either covers the buttons beside it or is a box of text
+/// with a row of glyphs showing through it. A tooltip that covers the buttons it is describing
+/// has covered them for as long as it was up, and the hand cannot move to the one next to it
+/// without waiting for it to go first.
+///
+/// So it hangs off the bottom edge of the strip, over the media underneath, which is the same
+/// arrangement as the volume popup and for the same reason (see `volume_popup_layout`).
+pub(crate) fn tooltip_layout(
+    width: i32,
+    height: i32,
+    caption_height: i32,
+    anchor: RECT,
+    text_width: i32,
+    dpi: u32,
+) -> Option<RECT> {
+    let scale = dpi as f32 / 96.0;
+    let padding = text_paint::scaled(TOOLTIP_PADDING_PIXELS as i32, scale);
+    let gap = text_paint::scaled(TOOLTIP_GAP_PIXELS as i32, scale);
+    let cell = text_paint::scaled(text_paint::LEVEL_FONT_PIXELS[text_paint::BODY_LEVEL as usize], scale);
+
+    let panel_width = (text_width + padding * 2).min(width.max(0));
+    let panel_height = cell + padding;
+    // The panel is hung *below* the caption, so the room it needs is measured from the bottom of
+    // the strip and not from the top of the window: a guard that asked only whether the panel is
+    // taller than the window would admit a panel that runs off the bottom of one, and a name cut
+    // off across its middle is a name that is not a name.
+    let top = caption_height + gap;
+    if panel_width <= 0 || panel_height <= 0 || top + panel_height > height {
+        return None;
+    }
+
+    // Centred under the button it belongs to, then pulled inside the window's own sides, and
+    // hung below the caption with the gap it was given — a name touching the bar it describes
+    // reads as part of the bar.
+    let left = ((anchor.left + anchor.right - panel_width) / 2)
+        .clamp(0, (width - panel_width).max(0));
+
+    Some(RECT {
+        left,
+        top,
+        right: left + panel_width,
+        bottom: top + panel_height,
+    })
+}
+
+/// A caption's tooltip as the painter is given it: the name, how wide it was measured at, and
+/// the surface it is to be written on.
+///
+/// The three are one thing rather than three arguments because they are one thing: a name is
+/// measured on a surface and drawn on the same one, and a pair that could be given apart is a
+/// pair that can be given wrong — a name measured in one font and drawn in another, or a name
+/// measured on a surface that is not the one it is drawn on.
+pub(crate) struct TooltipText<'a> {
+    pub(crate) text: &'a str,
+    /// The name's width in the face and at the scale it is drawn at, as `measure_caption_text`
+    /// measured it.
+    pub(crate) width: i32,
+    /// A surface with a device context to draw it on, which the window's own surface is not.
+    pub(crate) surface: &'a DibSurface,
+}
+
+/// Paint the name of a caption button as a panel of its own, floated over the media below the
+/// strip (see `tooltip_layout` for why it is not drawn into the strip).
+///
+/// The panel and its outline are put down straight into the window's own pixels, because that is
+/// what they are: a thing drawn over the picture, with the picture behind it. The name on top of
+/// them is not, because GDI needs a device context — so it is drawn onto a surface of its own,
+/// and then carried across the pixels the panel already covers, which is the only place it is
+/// wanted.
+pub(crate) fn paint_tooltip(
+    buffer: &mut [u8],
+    width: i32,
+    palette: &ChromePalette,
+    panel: RECT,
+    name: TooltipText<'_>,
+    scale: f32,
+) {
+    let TooltipText {
+        text,
+        width: text_width,
+        surface,
+    } = name;
+    if text.is_empty() || panel.right <= panel.left || panel.bottom <= panel.top {
+        return;
+    }
+
+    let padding = text_paint::scaled(TOOLTIP_PADDING_PIXELS as i32, scale);
+    let radius = (TOOLTIP_RADIUS * scale).max(1.0);
+    let cell = text_paint::scaled(
+        text_paint::LEVEL_FONT_PIXELS[text_paint::BODY_LEVEL as usize],
+        scale,
+    );
+
+    // The panel is the theme's own page colour moved off the caption's, so that a name reads
+    // against a surface rather than against the bar it belongs to; the hairline is what keeps
+    // it off a picture of a colour close to its own. It is flat rather than shaded, because the
+    // name is laid over it in a flat colour of its own and a name across a gradient has a shade
+    // running through it — which is the one thing a tool tip is not.
+    //
+    // A shadow under it, the panel's own shape held a couple of pixels lower, is what makes it
+    // float over the picture rather than sit in it, the same as the volume popup's.
+    let shadow = (2.0 * scale).round().max(1.0) as i32;
+    fill_round_rect(
+        buffer,
+        width,
+        RECT {
+            left: panel.left,
+            top: panel.top + shadow,
+            right: panel.right,
+            bottom: panel.bottom + shadow,
+        },
+        radius,
+        [0, 0, 0],
+        [0, 0, 0],
+        0.32,
+    );
+    fill_round_rect(
+        buffer,
+        width,
+        panel,
+        radius,
+        palette.hover(0.0),
+        palette.hover(0.0),
+        1.0,
+    );
+    stroke_round_rect(
+        buffer,
+        width,
+        panel,
+        radius,
+        (1.0 * scale).round().max(1.0),
+        palette.hover(0.30),
+        1.0,
+    );
+
+    let style = text_paint::TextStyle {
+        foreground: palette.foreground,
+        background: None,
+        bold: false,
+        italic: false,
+        underline: false,
+        strike: false,
+        level: text_paint::BODY_LEVEL,
+        face: CAPTION_FACE,
+    };
+
+    // The name is measured against this same font, so the run is given a box of the cell's own
+    // height and the room `text_width` leaves is the room the panel was made from. Its
+    // background is the panel's own colour, so that where the run is not a letter it is exactly
+    // what the panel already is.
+    let top = panel.top + ((panel.bottom - panel.top - cell) / 2).max(0);
+    let rect = RECT {
+        left: panel.left,
+        top,
+        right: (panel.left + padding + text_width.max(0)).min(panel.right),
+        bottom: (top + cell).min(panel.bottom),
+    };
+    let mut painter = text_paint::RunPainter::new(surface, scale);
+    painter.draw(
+        text,
+        panel.left + padding,
+        rect,
+        &style,
+        palette.foreground,
+        palette.hover(0.0),
+    );
+
+    // GDI leaves the alpha byte of everything it draws at zero (see the module documentation),
+    // and a run is drawn over the whole of its box and not only over its letters, so the box is
+    // given its own coverage back here. It is the same sealing the caption does for its title,
+    // and it is done on the surface of its own rather than on the caption's because this text is
+    // not part of the caption — it is a panel over the media underneath it.
+    let pixels = unsafe {
+        std::slice::from_raw_parts_mut(
+            surface.bits(),
+            surface.width as usize * surface.height as usize * 4,
+        )
+    };
+    for y in rect.top.max(0)..rect.bottom.min(surface.height as i32) {
+        for x in rect.left.max(0)..rect.right.min(surface.width as i32) {
+            pixels[(y as usize * surface.width as usize + x as usize) * 4 + 3] = 255;
+        }
+    }
+
+    // And the run is carried across onto the panel it was written over in the surface, which is
+    // the only place it is wanted: the surface is the size of the whole window and the rest of
+    // it is blank memory, which over the media would be a sheet of nothing.
+    composite_text_into(surface, buffer, width, panel);
+}
+
+/// Put the text a surface was drawn on into the window's own pixels, over the panel it belongs
+/// to, in the premultiplied form the layered surface is composited from.
+///
+/// A pixel the run did not reach is left exactly as it was, which is what makes this the name
+/// rather than a rectangle of text-coloured panel: the run's background is written over the
+/// whole of its box, and its coverage is what separates the letters from the box around them.
+fn composite_text_into(surface: &DibSurface, out: &mut [u8], width: i32, panel: RECT) {
+    let source = unsafe {
+        std::slice::from_raw_parts(
+            surface.bits(),
+            surface.width as usize * surface.height as usize * 4,
+        )
+    };
+    let height = surface.height as i32;
+
+    for y in panel.top.max(0)..panel.bottom.min(height) {
+        let left = panel.left.max(0);
+        let from = (y as usize * surface.width as usize + left as usize) * 4;
+        let to = (y as usize * width as usize + left as usize) * 4;
+        let count = ((panel.right - left).max(0) as usize) * 4;
+        if from + count > source.len() || to + count > out.len() {
+            // A row that does not fit is a row of nothing: the rest of the panel is still
+            // worth carrying, and a name that stopped halfway is worse than one that stopped
+            // short of the bottom.
+            continue;
+        }
+
+        for (pixel, drawn) in out[to..to + count]
+            .as_chunks_mut::<4>()
+            .0
+            .iter_mut()
+            .zip(source[from..from + count].as_chunks::<4>().0)
+        {
+            let alpha = drawn[3] as u32;
+            if alpha == 0 {
+                continue;
+            }
+            for channel in 0..3 {
+                let over = drawn[channel] as u32;
+                let under = pixel[channel] as u32;
+                pixel[channel] = (over + (under * (255 - alpha)) / 255).min(255) as u8;
+            }
+            pixel[3] = 255;
+        }
+    }
 }
 
 fn paint_button(
@@ -1441,6 +1764,9 @@ fn paint_glyph(
         }
         CaptionButton::OpenWith => {
             draw_open_with(buffer, width, center_x, center_y, glyph, stroke, ink)
+        }
+        CaptionButton::OpenWithList => {
+            draw_open_with_list(buffer, width, center_x, center_y, glyph, stroke, ink)
         }
         CaptionButton::Minimize => {
             let top = center_y;
@@ -1561,19 +1887,6 @@ fn paint_title(
         palette.foreground,
         palette.background,
     );
-
-    // GDI leaves the alpha byte of everything it draws at zero, and a caption is opaque
-    // wherever it is painted: the strip's own coverage is handed back here (see the module
-    // documentation).
-    let buffer = unsafe {
-        std::slice::from_raw_parts_mut(
-            surface.bits(),
-            surface.width as usize * surface.height as usize * 4,
-        )
-    };
-    for pixel in buffer.as_chunks_mut::<4>().0 {
-        pixel[3] = 255;
-    }
 }
 
 /// The longest beginning of `title` that fits `available` pixels, with an ellipsis after it
@@ -2093,6 +2406,57 @@ fn draw_open_with(
     stroke_segment(buffer, width, tip, point(1.0, -1.0 / 3.0), edge, color, 1.0);
 }
 
+/// A list of rows above a chevron pointing down: the file handed to a program named out loud.
+///
+/// It is not the hand-off mark beside it with a mark added, and the difference is the whole of
+/// what the two buttons are: the one before opens the file with the program the machine has
+/// already chosen, which is a *going* and is drawn as an arrow leaving a box, while this one
+/// opens a list of what else could — which is a *choosing*, and is drawn as the list itself. Two
+/// boxes and two arrows on one strip would be a row of targets a hand has to read one at a time,
+/// which is what a walk beside the window's own three is not for.
+///
+/// The rows are three lines of the same length rather than a bulleted list, because a bullet is
+/// a dot this size does not survive and a line is. The chevron below them is the same pair of
+/// strokes a `Previous` is drawn in, which is what makes the two read as one family.
+fn draw_open_with_list(
+    buffer: &mut [u8],
+    width: i32,
+    center_x: i32,
+    center_y: i32,
+    span: i32,
+    thickness: f32,
+    color: [u8; 3],
+) {
+    let edge = thickness.round().max(1.0);
+
+    // The list: three rows across the top of the mark, each as wide as the mark itself, so
+    // that it reads as a list rather than as three specks. A row shorter than the chevron
+    // below it is a bullet, and a bullet at ten pixels is a dot. It is walked in whole pixels
+    // for the reason the chevron is: a row of a list is a row, and a row drawn in halves is
+    // a row of gaps at the scale a display runs at.
+    let half = span / 2;
+    for offset in [0, half / 2, half] {
+        for x in (center_x - half)..=(center_x + half) {
+            put(buffer, width, x, center_y - half + offset, color, 1.0);
+        }
+    }
+
+    // The chevron below them, pointing down and drawn as the two arms a `Previous` is drawn
+    // in, reaching to the same edge the list's top row does: the list is what is being
+    // offered, and this is the sign that there is more of it than the button can hold. A
+    // chevron that stopped short of the top row would leave the mark sitting high on its own
+    // button, which is the one thing a row of marks beside each other cannot afford.
+    let shoulder = half as f32 * 0.8;
+    let top = center_y as f32 + half as f32 * 0.35;
+    let (left, right) = (
+        (center_x as f32 - shoulder, top),
+        (center_x as f32 + shoulder, top),
+    );
+    let tip = (center_x as f32 + 0.5, center_y as f32 + half as f32 + 0.5);
+    stroke_segment(buffer, width, left, tip, edge, color, 1.0);
+    stroke_segment(buffer, width, right, tip, edge, color, 1.0);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2116,24 +2480,25 @@ mod tests {
 
         // The walk comes first in the run and the window's three after it, because the
         // window's are the ones against the right edge and the walk hangs off them.
-        assert_eq!(buttons.len(), 6);
+        assert_eq!(buttons.len(), 7);
         assert_eq!(buttons[0].kind, CaptionButton::Previous);
         assert_eq!(buttons[1].kind, CaptionButton::Next);
         assert_eq!(buttons[2].kind, CaptionButton::OpenWith);
-        assert_eq!(buttons[3].kind, CaptionButton::Minimize);
-        assert_eq!(buttons[4].kind, CaptionButton::Maximize);
-        assert_eq!(buttons[5].kind, CaptionButton::Close);
+        assert_eq!(buttons[3].kind, CaptionButton::OpenWithList);
+        assert_eq!(buttons[4].kind, CaptionButton::Minimize);
+        assert_eq!(buttons[5].kind, CaptionButton::Maximize);
+        assert_eq!(buttons[6].kind, CaptionButton::Close);
         for pair in buttons.windows(2) {
             assert!(pair[0].rect.left < pair[1].rect.left);
         }
-        assert_eq!(buttons[5].rect.right, 600);
+        assert_eq!(buttons[6].rect.right, 600);
 
         // The window's three keep the widths and the places they have always had: 46 pixels
         // each at 100%, packed to 600, which is what a hand has been reaching for on every
         // window it has ever had.
         for (index, left) in [462, 508, 554].into_iter().enumerate() {
             assert_eq!(
-                buttons[index + 3].rect,
+                buttons[index + 4].rect,
                 RECT {
                     left,
                     top: 0,
@@ -2146,7 +2511,7 @@ mod tests {
 
         // And the walk is the same width as the buttons beside it, laid end to end and
         // touching the group rather than leaving a gap in it.
-        assert_eq!(buttons[2].rect.right, buttons[3].rect.left);
+        assert_eq!(buttons[3].rect.right, buttons[4].rect.left);
         for button in &buttons {
             assert_eq!(
                 button.rect.right - button.rect.left,
@@ -2156,7 +2521,7 @@ mod tests {
         }
 
         // And a point is on the button it looks like it is on, or on none of them.
-        let close = buttons[5].rect;
+        let close = buttons[6].rect;
         assert_eq!(
             button_at(close.left + 1, 5, 600, 30, 96, true),
             Some(CaptionButton::Close)
@@ -2171,7 +2536,7 @@ mod tests {
     #[test]
     fn every_button_of_a_caption_is_the_one_under_the_pointer() {
         let buttons = button_boxes(600, 30, 96, true);
-        assert_eq!(buttons.len(), 6);
+        assert_eq!(buttons.len(), 7);
 
         for button in &buttons {
             let middle_x = (button.rect.left + button.rect.right) / 2;
@@ -2208,7 +2573,7 @@ mod tests {
         let narrow = button_boxes(200, 30, 96, true);
 
         // The buttons are 46 wide either way here — 200 / 3 is 66, and the width is the
-        // smaller of the two — so the walk's own three would need 6 * 46 = 276 of a strip
+        // smaller of the two — so the walk's own four would need 7 * 46 = 322 of a strip
         // 200 wide, and the strip is the window's alone.
         assert_eq!(narrow.len(), 3);
         assert_eq!(narrow[0].kind, CaptionButton::Minimize);
@@ -2228,6 +2593,7 @@ mod tests {
             CaptionButton::Previous,
             CaptionButton::Next,
             CaptionButton::OpenWith,
+            CaptionButton::OpenWithList,
         ] {
             assert!(
                 narrow.iter().all(|button| button.kind != kind),
@@ -2246,12 +2612,13 @@ mod tests {
         let three = button_boxes(600, 30, 96, true);
         let two = button_boxes(600, 30, 96, false);
 
-        assert_eq!(two.len(), 5);
+        assert_eq!(two.len(), 6);
         assert_eq!(two[0].kind, CaptionButton::Previous);
         assert_eq!(two[1].kind, CaptionButton::Next);
         assert_eq!(two[2].kind, CaptionButton::OpenWith);
-        assert_eq!(two[3].kind, CaptionButton::Minimize);
-        assert_eq!(two[4].kind, CaptionButton::Close);
+        assert_eq!(two[3].kind, CaptionButton::OpenWithList);
+        assert_eq!(two[4].kind, CaptionButton::Minimize);
+        assert_eq!(two[5].kind, CaptionButton::Close);
 
         let close = three
             .iter()
@@ -2264,11 +2631,11 @@ mod tests {
             .expect("a minimize button")
             .rect;
 
-        assert_eq!(two[4].rect.left, close.left);
-        assert_eq!(two[4].rect.right, close.right);
-        assert_eq!(two[3].rect.right, two[4].rect.left);
+        assert_eq!(two[5].rect.left, close.left);
+        assert_eq!(two[5].rect.right, close.right);
+        assert_eq!(two[4].rect.right, two[5].rect.left);
         assert_eq!(
-            two[3].rect.right - two[3].rect.left,
+            two[4].rect.right - two[4].rect.left,
             minimize.right - minimize.left
         );
 
@@ -2640,6 +3007,178 @@ mod tests {
         out
     }
 
+    /// The pictures this test writes are the design under review: a caption with each of the
+    /// two names it can say, at both scales, over a picture — which is what a tooltip is drawn
+    /// over, and what it has to read against at every level.
+    ///
+    /// It is the one panel here that hangs off a strip rather than out of a bar, so the thing
+    /// worth seeing is where it lands: below the caption, clear of the buttons on either side
+    /// of it, and off the window's own edges when the name is longer than the space for it.
+    #[test]
+    fn draws_the_caption_tooltip() {
+        let dir = scratch("tooltip");
+        let light = ChromePalette {
+            background: [250, 250, 250],
+            foreground: [56, 58, 66],
+            accent: [166, 38, 164],
+            dark: false,
+        };
+        let dark = ChromePalette {
+            background: [40, 44, 52],
+            foreground: [171, 178, 191],
+            accent: [198, 120, 221],
+            dark: true,
+        };
+
+        for (name, palette) in [("light", &light), ("dark", &dark)] {
+            for (dpi, size) in [(96u32, "1x"), (192, "2x")] {
+                let caption = 30 * (dpi / 96);
+                let window = 360 * (dpi / 96);
+                let row = 240 * (dpi / 96);
+                // The three names a caption can be saying, laid out in one row of windows: the
+                // default's own, the list, and a name far too long for the window it is on.
+                let names = [
+                    "Open With Adobe Photoshop",
+                    "Open With...",
+                    "Open With A Program Whose Name Goes On",
+                ];
+                let mut cells: Vec<Vec<u8>> = Vec::new();
+
+                for text in names {
+                    // One window drawn at a time and pasted into its own cell, rather than all
+                    // three drawn at once into a strip: a panel and a caption are placed against
+                    // a window's own width, and a window that had the other two beside it would
+                    // be laid out as if it were the width of all three.
+                    let mut out = image_buffer(window, row);
+                    let picture = backdrop(window, row, palette);
+                    out.copy_from_slice(&picture);
+
+                    let surface = DibSurface::create(window, caption).expect("a surface");
+                    let caption_state = Caption {
+                        title: "picture.png",
+                        maximized: false,
+                        maximizable: true,
+                        hovered: Some(CaptionButton::OpenWith),
+                        pressed: None,
+                    };
+                    paint_caption(&surface, palette, &caption_state, dpi);
+                    blit(&mut out, window, row, &surface.pixels(), 0, 0);
+
+                    // The name over the media below it, on a surface of its own because GDI
+                    // needs a device context to draw it on.
+                    let anchor = button_boxes(window as i32, caption as i32, dpi, true)
+                        .into_iter()
+                        .find(|button| button.kind == CaptionButton::OpenWith)
+                        .expect("a hand-off button")
+                        .rect;
+                    let text_surface = DibSurface::create(window, row).expect("a surface");
+                    let text_width = measure_caption_text(&text_surface, text, dpi);
+                    if let Some(panel) = tooltip_layout(
+                        window as i32,
+                        row as i32,
+                        caption as i32,
+                        anchor,
+                        text_width,
+                        dpi,
+                    ) {
+                        paint_tooltip(
+                            &mut out,
+                            window as i32,
+                            palette,
+                            panel,
+                            TooltipText {
+                                text,
+                                width: text_width,
+                                surface: &text_surface,
+                            },
+                            dpi as f32 / 96.0,
+                        );
+                    }
+
+                    cells.push(out);
+                }
+
+                let (out_width, out_height) = (window * names.len() as u32, row);
+                let mut strip = image_buffer(out_width, out_height);
+                for (index, cell) in cells.iter().enumerate() {
+                    blit(&mut strip, out_width, out_height, cell, index as u32 * window, 0);
+                    // Each cell on its own as well as in the strip: a strip of three windows is
+                    // a picture of the three together and is read as one, and what has to be
+                    // seen here — whether a name is drawn whole, and how far off its panel it
+                    // sits — is a thing a name thirty pixels wide says at full size and not at
+                    // a third of it.
+                    write_png(
+                        dir.join(format!("tooltip-{name}-{size}-{index}.png")),
+                        cell,
+                        window,
+                        row,
+                    );
+                }
+
+                write_png(
+                    dir.join(format!("tooltip-{name}-{size}.png")),
+                    &strip,
+                    out_width,
+                    out_height,
+                );
+            }
+        }
+    }
+
+    /// A caption is opaque everywhere, and a tooltip drawn on one of its own surfaces carries
+    /// its text across with the coverage that text has.
+    ///
+    /// The name is written through GDI, and GDI knows nothing of an alpha channel: it leaves the
+    /// alpha byte of everything it draws at zero. A caption is copied into the layered surface
+    /// a row at a time and composited with `AC_SRC_ALPHA`, so a pixel left at zero is a hole in
+    /// the title bar — and a run of text is drawn with an opaque background over the whole of
+    /// its box, not just over its glyphs, so the hole is a box rather than a letter.
+    ///
+    /// This is the one thing about a caption's text a test on its layout cannot see, and the
+    /// reason the caption hands its own coverage back after the last of its runs.
+    #[test]
+    fn a_caption_is_opaque_everywhere_it_is_painted() {
+        let palette = ChromePalette {
+            background: [250, 250, 250],
+            foreground: [30, 30, 30],
+            accent: [10, 90, 200],
+            dark: false,
+        };
+        let width = 600u32;
+        // A caption is as tall as a pinned window's caption is given at a display's scale, which
+        // is the height the surface is really created at (see `pinned_caption_height`).
+        let height = 30u32;
+        let surface = DibSurface::create(width, height).expect("a surface");
+
+        // With a name on it and without: the coverage is the caption's own, and a caption that
+        // only happened to be opaque on a strip with nothing written on it is not opaque.
+        for title in ["picture.png", ""] {
+            let caption = Caption {
+                title,
+                maximized: false,
+                maximizable: true,
+                hovered: Some(CaptionButton::OpenWith),
+                pressed: None,
+            };
+            paint_caption(&surface, &palette, &caption, 96);
+
+            let pixels = unsafe {
+                std::slice::from_raw_parts(surface.bits(), width as usize * height as usize * 4)
+            };
+            let transparent = pixels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .filter(|pixel| pixel[3] != 255)
+                .count();
+            assert_eq!(
+                transparent,
+                0,
+                "a caption is opaque wherever it is painted, and {transparent} of its pixels were not"
+            );
+        }
+    }
+
     /// The pictures this test writes are the design under review: the six marks the caption's
     /// own buttons carry, at both scales, side by side in one strip. A row of marks is judged
     /// as a row — one of them twice the size of the rest, or a third the size, or sitting a
@@ -2655,6 +3194,7 @@ mod tests {
             ("previous", CaptionButton::Previous, false),
             ("next", CaptionButton::Next, false),
             ("open-with", CaptionButton::OpenWith, false),
+            ("open-with-list", CaptionButton::OpenWithList, false),
             ("minimize", CaptionButton::Minimize, false),
             ("maximize", CaptionButton::Maximize, false),
             ("restore", CaptionButton::Maximize, true),
