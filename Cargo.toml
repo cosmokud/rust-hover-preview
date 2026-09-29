@@ -17,6 +17,10 @@ windows = { version = "0.58", features = [
     "Win32_UI_WindowsAndMessaging",
     "Win32_UI_Shell",
     "Win32_UI_Shell_Common",
+    # `SORTCOLUMN` and `IFolderView2::GetSortColumns`, which is how a folder view is asked
+    # what it is sorted by so the pin's own previous/next buttons walk the files in the
+    # order the listing shows them (see `explorer_hook::read_view_sort`).
+    "Win32_UI_Shell_PropertiesSystem",
     "Win32_Security",
     "Win32_System_LibraryLoader",
     "Win32_System_Threading",

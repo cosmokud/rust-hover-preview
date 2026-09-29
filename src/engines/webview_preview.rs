@@ -69,6 +69,7 @@ use crate::config::config::{
     EngineIdle, PreviewType, TransparentBackground, DEFAULT_WEBVIEW_IDLE_SECS,
 };
 use crate::formats::font_formats;
+use crate::formats::text_formats;
 use crate::readers::font_preview;
 use crate::{readers::svg_preview, CONFIG};
 
@@ -300,8 +301,24 @@ pub fn last_timings() -> Timings {
 
 /// Whether a file is one the engine draws: the runtime is on the machine, the file is a
 /// document or a font, and the engine is not in one of its own bad spells.
+///
+/// A page of HTML is the third of those, and only while `render_html` asks for it: the same
+/// file is a page of text without it, so the switch is read here rather than being answered
+/// by the name — and a machine with no runtime answers no for all three alike, which is what
+/// leaves such a file its text preview (see `load_media_of_kind`).
 pub fn draws(path: &Path) -> bool {
-    can_draw() && (svg_preview::is_svg_file(path) || font_formats::is_font_file(path))
+    can_draw()
+        && (svg_preview::is_svg_file(path)
+            || font_formats::is_font_file(path)
+            || (renders_html() && text_formats::is_html_extension(path)))
+}
+
+/// Whether the configuration asks for a page of HTML to be drawn rather than its markup.
+pub fn renders_html() -> bool {
+    CONFIG
+        .lock()
+        .map(|config| config.render_html)
+        .unwrap_or(false)
 }
 
 /// Whether the engine still owes `path`: a want published for it that has not been
@@ -457,6 +474,66 @@ fn frame_page(
     );
 
     write_page(&page, &html, version)
+}
+
+/// The page a page of HTML is drawn in: the file itself, whole, in a frame that fills the
+/// window it is given.
+///
+/// The frame is what a standalone document is not: a browser draws an SVG at the size it
+/// asks for and will not stretch one to the window, and a page of HTML asked for as the page
+/// would scroll inside it and show only its first screenful. A frame is sized by the box it
+/// is given, so the page and the window are the same box at every scale, and the share of the
+/// display `document_scale` names is a share of the room — see `frame_page`, which is the
+/// same arrangement for a document that has a size of its own.
+///
+/// The frame is sandboxed to its own origin and nothing else, which is the one allowance
+/// that keeps the page itself: a page's stylesheets and its pictures are relative to it, so a
+/// frame loaded as a document of its own origin would come up unstyled. What that also
+/// withholds is everything else — scripts, popups, forms, and any navigation out of the
+/// frame — which is the rule an SVG drawn as an image runs under anyway, and which
+/// `BROWSER_ARGUMENTS` reaches from the outside for the links a page keeps.
+///
+/// The target is in the page's own name as well as in its content, for the reason the
+/// backdrop and the face are: two pages of HTML are two pages the browser has not seen,
+/// rather than one URL answered out of its cache with the last page's source in it.
+fn html_page(
+    path: &Path,
+    version: u64,
+    background: TransparentBackground,
+) -> Option<(PathBuf, String)> {
+    let page_url = file_url(path)?;
+    let page = user_data_folder().join(format!(
+        "html-{}-{}.html",
+        background.as_str(),
+        path_identity(path)
+    ));
+
+    let html = format!(
+        "<!doctype html><meta charset=\"utf-8\"><title>preview</title>\
+         <style>html,body{{margin:0;padding:0;height:100%;overflow:hidden}}\
+         iframe{{display:block;width:100%;height:100%;border:0}}</style>\
+         {checkerboard}\
+         <iframe src=\"{}?v={version}\" sandbox=\"allow-same-origin\" title=\"\"></iframe>",
+        escape_attribute(&page_url),
+        checkerboard = checkerboard_style(background)
+    );
+
+    write_page(&page, &html, version)
+}
+
+/// What a page of HTML is called in the page that draws it, from its own path.
+///
+/// A wrapper is one page however many targets it has been written for, so the target is
+/// hashed into the name the browser caches by: a hover on one page and then on another is two
+/// pages rather than one page rewritten under the browser that has already seen the first.
+/// The version is what distinguishes one file from itself, not two files from each other.
+fn path_identity(path: &Path) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = DefaultHasher::new();
+    path.hash(&mut hasher);
+    hasher.finish()
 }
 
 /// The page a font specimen is drawn in: the font itself, in the page through
@@ -698,6 +775,21 @@ pub fn hide() {
     // Nothing is wanted any more, so a navigation in the middle of arriving is one nobody
     // is waiting for: the thread is woken rather than left to finish it.
     wake_engine_thread();
+}
+
+/// Take the engine's window down when the file it is drawing is a page of HTML: the switch
+/// that asks for the page has just been turned off, and a page left standing would be a
+/// window nothing takes down again until the pointer leaves (see `renders_html`).
+///
+/// The want is read as well as what is up: a switch turned while the engine is still
+/// navigating to a page has no window yet, and the page that lands afterwards would stay.
+pub fn hide_html_preview() {
+    let watching_html = wanted().is_some_and(|want| text_formats::is_html_extension(&want.path));
+    let showing_html = showing_path().is_some_and(|path| text_formats::is_html_extension(&path));
+
+    if watching_html || showing_html {
+        hide();
+    }
 }
 
 /// Move a want that is already in hand to the box the wait has ended up in: what a pointer
@@ -988,14 +1080,23 @@ fn engine_thread(commands: Receiver<Command>) {
 
         pump_messages();
 
-        // The engine draws two kinds, and both gates switched off is a browser held for
-        // nothing: while neither can be shown no hover can be answered with a document or a
-        // specimen at all, so there is nothing warm to keep. It is read here rather than being
-        // told because a gate can be closed either way — in the tray, or in `config.ini` for
-        // the watcher to reload — and because the thread that would be told is this one,
-        // parked on its channel. The browser's own children are its business: ending it ends
-        // them.
-        if host.is_some() && !PreviewType::Vector.enabled() && !PreviewType::Fonts.enabled() {
+        // The engine draws three kinds, and every gate that could reach one switched off is a
+        // browser held for nothing: while none can be shown no hover can be answered with a
+        // document, a specimen or a page at all, so there is nothing warm to keep. It is read
+        // here rather than being told because a gate can be closed either way — in the tray,
+        // or in `config.ini` for the watcher to reload — and because the thread that would be
+        // told is this one, parked on its channel. The browser's own children are its
+        // business: ending it ends them.
+        //
+        // The text gate is one of them, but only while it asks for pages: a page of HTML is
+        // a text file, so the kind's gate is what switches the browser off — and with the
+        // kind on by default and the switch for pages off by default, the gate alone would
+        // hold a browser for everyone who never previews a page (see `draws`).
+        if host.is_some()
+            && !PreviewType::Vector.enabled()
+            && !PreviewType::Fonts.enabled()
+            && !(PreviewType::Text.enabled() && renders_html())
+        {
             trace("engine: let go, the kinds are switched off");
 
             if let Some(mut host) = host.take() {
@@ -1385,9 +1486,12 @@ impl Host {
     ///
     /// What it is pointed at is a page of this app's rather than the file itself, and which
     /// page is what the file is: a document's is the document as an image, which is what makes
-    /// it the size of the window, and a font's is the font in the page with its own lines under
+    /// it the size of the window, a font's is the font in the page with its own lines under
     /// it — read at `face`, which is which of a collection's faces is written out; see
-    /// `frame_page` and `font_page`.
+    /// `frame_page` and `font_page`. A page of HTML is the third of those kinds of document:
+    /// its page is a frame of its own around the file, so the page is laid out by the browser
+    /// rather than drawn by the app, and what it asks for is whatever box it is given (see
+    /// `html_page`).
     ///
     /// The wait is asked under the generation this navigation was made for, and it ends on one
     /// of the four [`Arrival`]s: the page arriving, a newer want taking this one's place, the
@@ -1403,6 +1507,8 @@ impl Host {
         let version = file_version(path);
         let page = if font_formats::is_font_file(path) {
             font_page(path, version, background, face)
+        } else if text_formats::is_html_extension(path) {
+            html_page(path, version, background)
         } else {
             frame_page(path, version, background)
         };
@@ -2040,6 +2146,71 @@ mod tests {
 
         assert!(html.contains("text-shadow"));
         assert!(!html.contains("conic-gradient"));
+
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    /// A page of HTML is the one thing previewed in a page of this app's own, so the wrapper
+    /// is the one construct that widens what a previewed file may do — and what it is given
+    /// is exactly one allowance: its own origin, without which a page's own stylesheets and
+    /// pictures would not load. The page is named for the file it draws, so a hover on one
+    /// page and then on another is two pages the browser has not seen, and the URL carries the
+    /// version for the reason the other pages' do.
+    #[test]
+    fn the_page_a_page_of_html_is_drawn_in_is_a_sandboxed_frame_of_the_file_itself() {
+        let folder = std::env::temp_dir().join("rust-hover-preview-html-page-tests");
+        std::fs::create_dir_all(&folder).expect("a test folder");
+        let one = folder.join("one page.html");
+        let two = folder.join("another page.html");
+        std::fs::write(&one, "<!doctype html><title>one</title>").expect("a written file");
+        std::fs::write(&two, "<!doctype html><title>two</title>").expect("a written file");
+
+        let (page, url) =
+            html_page(&one, 42, TransparentBackground::Black).expect("a page for a page of html");
+        let html = std::fs::read_to_string(&page).expect("a written page");
+
+        let (other_page, _) =
+            html_page(&two, 42, TransparentBackground::Black).expect("a page for a page of html");
+        let other_name = other_page
+            .file_name()
+            .expect("a named page")
+            .to_string_lossy()
+            .into_owned();
+
+        assert_ne!(
+            page.file_name().expect("a named page"),
+            other_page.file_name().expect("a named page"),
+            "two pages of html are two pages the browser has not seen, and the target is \
+             hashed into the wrapper's name so one is not rewritten under the other"
+        );
+        assert!(
+            other_name.starts_with("html-black-"),
+            "the wrapper is named for the backdrop it was written for, as {other_name} is"
+        );
+        assert!(url.ends_with("?v=42"), "the URL carries the version");
+        assert!(url.starts_with("file:///"));
+
+        assert!(
+            html.contains("sandbox=\"allow-same-origin\""),
+            "the frame runs in the page's own origin, which is what keeps its stylesheets"
+        );
+        let target = escape_attribute(&file_url(&one).expect("a url"));
+        assert!(
+            html.contains(&format!("{target}?v=42")),
+            "the target is the file itself, at the version that was read"
+        );
+
+        for refused in [
+            "allow-scripts",
+            "allow-forms",
+            "allow-popups",
+            "allow-top-navigation",
+        ] {
+            assert!(
+                !html.contains(refused),
+                "{refused} is not given to a page previewed, so the page cannot do it"
+            );
+        }
 
         let _ = std::fs::remove_dir_all(&folder);
     }

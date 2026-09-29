@@ -2,21 +2,22 @@ use crate::app::{dialogs, updates};
 use crate::config::config::{
     sanitize_decode_budget_gb, sanitize_document_cache_mb, sanitize_image_cache_mb,
     sanitize_image_disk_cache_mb, sanitize_text_font_scale_percent, sanitize_tick_ms, AudioSeek,
-    AvoidMode, EngineIdle, MarkdownMode, OfficeEngine, PreviewScale, PreviewType, TextTheme,
-    TransparentBackground, TriggerKeyMode, DEFAULT_AFK_TIMER_SECS, DEFAULT_ANIMATED_SCALE,
+    AvoidMode, EngineIdle, MarkdownMode, OfficeEngine, PinNavFileTypes, PreviewScale, PreviewType,
+    TextTheme, TransparentBackground, TriggerKeyMode, DEFAULT_AFK_TIMER_SECS,
+    DEFAULT_ANIMATED_SCALE,
     DEFAULT_AUDIO_SEEK, DEFAULT_AVOID_MODE, DEFAULT_DDS_BACKGROUND, DEFAULT_DECODE_BUDGET_GB,
     DEFAULT_DESIGN_BACKGROUND, DEFAULT_DESIGN_SCALE, DEFAULT_DOCUMENT_CACHE_MB,
     DEFAULT_DOCUMENT_SCALE, DEFAULT_EBOOK_SCALE, DEFAULT_FOLLOW_CURSOR, DEFAULT_FONT_BACKGROUND,
     DEFAULT_FONT_SCALE, DEFAULT_HOVER_DELAY_MS, DEFAULT_IMAGE_BACKGROUND, DEFAULT_IMAGE_CACHE_MB,
     DEFAULT_IMAGE_DISK_CACHE_MB, DEFAULT_LIBREOFFICE_IDLE_SECS, DEFAULT_NORMALIZE_VIDEO_VOLUME,
     DEFAULT_NORMALIZE_VOLUME, DEFAULT_OFFICE_ENGINE,
-    DEFAULT_OFFICE_ENGINE_IDLE_SECS, DEFAULT_PIN_PAUSE_AUDIO, DEFAULT_PIN_PAUSE_VIDEO,
-    DEFAULT_PIN_UPDATE_ENABLED, DEFAULT_PIN_UPDATE_ON_HOVER,
-    DEFAULT_PREVIEW_SCALE, DEFAULT_SAME_FILE_REHOVER_DELAY_MS, DEFAULT_SETTLING_DELAY_MS,
-    DEFAULT_TEXT_FONT_SCALE_PERCENT, DEFAULT_TEXT_SCALE, DEFAULT_TICK_MS,
-    DEFAULT_TRIGGER_KEY_AFFECT_PIN_MODE,
-    DEFAULT_VECTOR_BACKGROUND, DEFAULT_VECTOR_SCALE, DEFAULT_VIDEO_SCALE, DEFAULT_VIDEO_VOLUME,
-    DEFAULT_WEBVIEW_IDLE_SECS, DEFAULT_AUDIO_VOLUME, VOLUME_CHOICES,
+    DEFAULT_OFFICE_ENGINE_IDLE_SECS, DEFAULT_PIN_NAV_FILE_TYPES, DEFAULT_PIN_PAUSE_AUDIO,
+    DEFAULT_PIN_PAUSE_VIDEO, DEFAULT_PIN_UPDATE_ENABLED, DEFAULT_PIN_UPDATE_ON_HOVER,
+    DEFAULT_PREVIEW_SCALE, DEFAULT_RENDER_HTML, DEFAULT_SAME_FILE_REHOVER_DELAY_MS,
+    DEFAULT_SETTLING_DELAY_MS, DEFAULT_TEXT_FONT_SCALE_PERCENT, DEFAULT_TEXT_SCALE, DEFAULT_TICK_MS,
+    DEFAULT_TRIGGER_KEY_AFFECT_PIN_MODE, DEFAULT_VECTOR_BACKGROUND, DEFAULT_VECTOR_SCALE,
+    DEFAULT_VIDEO_SCALE, DEFAULT_VIDEO_VOLUME, DEFAULT_WEBVIEW_IDLE_SECS, DEFAULT_AUDIO_VOLUME,
+    VOLUME_CHOICES,
 };
 use crate::config::theme_files;
 use crate::engines::document_cache;
@@ -27,7 +28,7 @@ use crate::formats::codecs::{self, refresh as refresh_codecs, Row};
 use crate::shell::explorer_hook;
 use crate::text::text_theme;
 use crate::ui::preview_window::{
-    refresh_pin, refresh_preview, refresh_preview_types, trim_image_cache,
+    refresh_pin, refresh_preview, refresh_preview_types, refresh_render_html, trim_image_cache,
 };
 use crate::{app::startup, StartupTrace, CONFIG, RUNNING};
 use once_cell::sync::Lazy;
@@ -73,6 +74,15 @@ const ID_TRAY_PIN_UPDATE_HOVER: u16 = 1017;
 /// pin's own business and neither is a click on the row beside it.
 const ID_TRAY_PIN_PAUSE_AUDIO: u16 = 1018;
 const ID_TRAY_PIN_PAUSE_VIDEO: u16 = 1019;
+/// The two rows of the `Pin Mode → Nav File Types` submenu: whether a pin's own previous/next
+/// buttons walk every file this build can preview or only those of the pinned file's own kind
+/// of thing (see `PinNavFileTypes`).
+///
+/// They sit in the slack the `Scaling` range leaves before it begins at 1041, which is the
+/// one gap this block has left: a walk's two answers belong under the pin's own row rather
+/// than in a range of their own, since a setting of two ways is two ids and not a list.
+const ID_TRAY_PIN_NAV_ALL: u16 = 1025;
+const ID_TRAY_PIN_NAV_CATEGORY: u16 = 1026;
 const ID_TRAY_TRIGGER_DISABLE: u16 = 1005; // Hold the trigger key to stop previews
 const ID_TRAY_TRIGGER_ENABLE: u16 = 1006; // Hold the trigger key to allow previews
 const ID_TRAY_TRIGGER_ENABLED: u16 = 1068; // Whether the trigger key is watched at all
@@ -312,6 +322,13 @@ const ID_TRAY_THEME_LIGHT: u16 = 1050; // Atom One Light
 const ID_TRAY_THEME_DARK: u16 = 1051; // One Dark Pro
 const ID_TRAY_MARKDOWN_RENDERED: u16 = 1052; // Rendered document
 const ID_TRAY_MARKDOWN_SOURCE: u16 = 1053; // Highlighted Markdown source
+/// The `Text Preview → Render HTML` row: whether a page of HTML is drawn by the browser
+/// engine rather than shown as its markup.
+///
+/// The id is the one the text preview's `Full Mode` item carried, which is a row of this
+/// submenu that has gone (see `ID_TRAY_FONT_BACKGROUND_BASE` for why that block was moved):
+/// the setting is the same question `Full Mode` was asked and one this app still asks.
+const ID_TRAY_RENDER_HTML: u16 = 1058;
 /// The `Preview Types` submenu, one command per kind of preview.
 const ID_TRAY_TYPE_IMAGES: u16 = 1062;
 const ID_TRAY_TYPE_VIDEOS: u16 = 1063;
@@ -546,6 +563,8 @@ unsafe extern "system" fn tray_window_proc(
                 ID_TRAY_PIN_PAUSE_VIDEO => {
                     toggle_pin_pause_video();
                 }
+                ID_TRAY_PIN_NAV_ALL => set_pin_nav_file_types(PinNavFileTypes::All),
+                ID_TRAY_PIN_NAV_CATEGORY => set_pin_nav_file_types(PinNavFileTypes::Category),
                 ID_TRAY_TRIGGER_DISABLE => set_trigger_key_mode(TriggerKeyMode::Disable),
                 ID_TRAY_TRIGGER_ENABLE => set_trigger_key_mode(TriggerKeyMode::Enable),
                 ID_TRAY_TRIGGER_ENABLED => toggle_trigger_key_enabled(),
@@ -679,6 +698,7 @@ unsafe extern "system" fn tray_window_proc(
                 }
                 ID_TRAY_MARKDOWN_RENDERED => set_markdown_mode(MarkdownMode::Rendered),
                 ID_TRAY_MARKDOWN_SOURCE => set_markdown_mode(MarkdownMode::Source),
+                ID_TRAY_RENDER_HTML => toggle_render_html(),
                 ID_TRAY_TYPE_IMAGES => toggle_preview_type(PreviewType::Images),
                 ID_TRAY_TYPE_VIDEOS => toggle_preview_type(PreviewType::Videos),
                 ID_TRAY_TYPE_AUDIO => toggle_preview_type(PreviewType::Audio),
@@ -884,27 +904,36 @@ unsafe fn show_context_menu(hwnd: HWND) {
     // the key that pins the way the trigger key's own submenu names its own: the key is a
     // setting, so the row says which one is watched rather than only whether one is (see
     // `key_input`).
-    let (pin_enabled, pin_key, pin_pause_audio, pin_pause_video, pin_update, pin_update_on_hover) =
-        CONFIG
-            .lock()
-            .map(|c| {
-                (
-                    c.pin_enabled,
-                    c.pin_key.clone(),
-                    c.pin_pause_audio,
-                    c.pin_pause_video,
-                    c.pin_update_enabled,
-                    c.pin_update_on_hover,
-                )
-            })
-            .unwrap_or((
-                true,
-                "space".to_string(),
-                DEFAULT_PIN_PAUSE_AUDIO,
-                DEFAULT_PIN_PAUSE_VIDEO,
-                DEFAULT_PIN_UPDATE_ENABLED,
-                DEFAULT_PIN_UPDATE_ON_HOVER,
-            ));
+    let (
+        pin_enabled,
+        pin_key,
+        pin_pause_audio,
+        pin_pause_video,
+        pin_update,
+        pin_update_on_hover,
+        pin_nav_file_types,
+    ) = CONFIG
+        .lock()
+        .map(|c| {
+            (
+                c.pin_enabled,
+                c.pin_key.clone(),
+                c.pin_pause_audio,
+                c.pin_pause_video,
+                c.pin_update_enabled,
+                c.pin_update_on_hover,
+                c.pin_nav_file_types,
+            )
+        })
+        .unwrap_or((
+            true,
+            "space".to_string(),
+            DEFAULT_PIN_PAUSE_AUDIO,
+            DEFAULT_PIN_PAUSE_VIDEO,
+            DEFAULT_PIN_UPDATE_ENABLED,
+            DEFAULT_PIN_UPDATE_ON_HOVER,
+            DEFAULT_PIN_NAV_FILE_TYPES,
+        ));
     let mut pin_key_chars = pin_key.chars();
     let pin_key_display = match pin_key_chars.next() {
         Some(first) => first.to_uppercase().collect::<String>() + pin_key_chars.as_str(),
@@ -1005,6 +1034,43 @@ unsafe fn show_context_menu(hwnd: HWND) {
         MF_STRING | MF_POPUP,
         pause_menu.0 as usize,
         w!("Pause Preview"),
+    );
+
+    // The `Nav File Types` submenu: what the pin's own previous/next buttons step through —
+    // every file this build can preview, or only those of the kind of thing the pinned file
+    // is. It is a question about the walk rather than about the pin, which is why it hangs
+    // under the same row as the two switches above it and not on its own: the buttons are
+    // the pin's, and what they are buttons *of* is the whole of the setting.
+    //
+    // The two answers are one of two rather than a switch, because a folder of mixed work is
+    // what a hand is most often looking at and the narrow walk is not obviously the better
+    // one — so which walk a pin takes is asked rather than assumed (see `PinNavFileTypes`).
+    let nav_types_menu = CreatePopupMenu().unwrap();
+    let nav_types_flag = |candidate: PinNavFileTypes| {
+        MF_STRING
+            | if pin_nav_file_types == candidate {
+                MF_CHECKED
+            } else {
+                MF_UNCHECKED
+            }
+    };
+    let _ = AppendMenuW(
+        nav_types_menu,
+        nav_types_flag(PinNavFileTypes::All),
+        ID_TRAY_PIN_NAV_ALL as usize,
+        w!("All"),
+    );
+    let _ = AppendMenuW(
+        nav_types_menu,
+        nav_types_flag(PinNavFileTypes::Category),
+        ID_TRAY_PIN_NAV_CATEGORY as usize,
+        w!("Category"),
+    );
+    let _ = AppendMenuW(
+        pin_menu,
+        MF_STRING | MF_POPUP,
+        nav_types_menu.0 as usize,
+        w!("Nav File Types"),
     );
 
     let _ = AppendMenuW(
@@ -1210,6 +1276,25 @@ unsafe fn show_context_menu(hwnd: HWND) {
         MF_STRING | MF_POPUP,
         markdown_menu.0 as usize,
         w!("Markdown"),
+    );
+
+    // Whether a page of HTML is drawn by the browser engine rather than shown as its markup.
+    // The whole menu is built from the configuration each time it is opened, so this is read
+    // here rather than kept between the click and the row.
+    let render_html = CONFIG
+        .lock()
+        .map(|c| c.render_html)
+        .unwrap_or(DEFAULT_RENDER_HTML);
+    let _ = AppendMenuW(
+        text_menu,
+        MF_STRING
+            | if render_html {
+                MF_CHECKED
+            } else {
+                MF_UNCHECKED
+            },
+        ID_TRAY_RENDER_HTML as usize,
+        w!("Render HTML"),
     );
 
     let _ = AppendMenuW(
@@ -2469,6 +2554,12 @@ fn toggle_preview_type(kind: PreviewType) {
         if let PreviewType::Document = kind {
             office_render::stop_engines();
         }
+
+        // A page of HTML the browser is drawing rides the text kind's gate: switched off,
+        // the page comes down with it (see `webview_preview::hide_html_preview`).
+        if let PreviewType::Text = kind {
+            webview_preview::hide_html_preview();
+        }
     }
 
     refresh_preview_types();
@@ -3659,6 +3750,48 @@ fn set_markdown_mode(mode: MarkdownMode) {
     refresh_preview();
 }
 
+/// Which files the previous/next buttons on a pin's own caption step through: every file this
+/// build can preview, or only those of the kind of thing the pinned file is.
+///
+/// Nothing on screen changes and nothing is rebuilt. The walk is read per step rather than
+/// held, and what it is made of is a question answered off the folder when a button is
+/// pressed — so the next step of a pin already up is the first one under the new setting,
+/// and a pin with no folder of its own to walk is not a walk at all either way.
+fn set_pin_nav_file_types(mode: PinNavFileTypes) {
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_nav_file_types = mode;
+        config.save();
+    }
+}
+
+/// Whether a page of HTML is drawn by the browser engine rather than shown as its markup.
+///
+/// What changes is which of the two things draws a `.htm`, and the whole menu is read from
+/// the configuration, so the row is ticked from the setting on the next open rather than
+/// kept in step by hand. The two renderers are not one swapped in place of the other — the
+/// page is a window of the engine's and the markup a frame of this app's — so the preview
+/// on screen is rebuilt from the hover it came from rather than left standing. The direction
+/// that leaves the engine has its page taken down with the switch, though a pin's is left
+/// as it is (see `refresh_render_html` and `refresh_preview`).
+fn toggle_render_html() {
+    let mut turned_off = false;
+    if let Ok(mut config) = CONFIG.lock() {
+        config.render_html = !config.render_html;
+        turned_off = !config.render_html;
+        config.save();
+    }
+
+    // The direction that leaves the engine is the one that has to say so: a preview
+    // rebuilt from its hover is what a painted page owes (see `refresh_preview`), while
+    // a page the engine is drawing for a hover is a window nothing else would take down
+    // — and a pin's page is left as it is (see `refresh_render_html`).
+    if turned_off {
+        refresh_render_html();
+    }
+
+    refresh_preview();
+}
+
 fn set_video_volume(index: u16) {
     let Some(volume) = VOLUME_CHOICES.get(index as usize).copied() else {
         return;
@@ -4360,8 +4493,35 @@ mod tests {
             (ID_TRAY_PIN, ID_TRAY_TRIGGER_ENABLED),
             (ID_TRAY_PIN_UPDATE, ID_TRAY_TRIGGER_ENABLED),
             (ID_TRAY_PIN_UPDATE_HOVER, ID_TRAY_TRIGGER_ENABLED),
+            (ID_TRAY_PIN_NAV_ALL, ID_TRAY_PIN_NAV_CATEGORY),
+            (ID_TRAY_PIN_NAV_ALL, ID_TRAY_PIN),
+            (ID_TRAY_PIN_NAV_ALL, ID_TRAY_PIN_UPDATE),
+            (ID_TRAY_PIN_NAV_ALL, ID_TRAY_PIN_UPDATE_HOVER),
+            (ID_TRAY_PIN_NAV_CATEGORY, ID_TRAY_PIN),
+            (ID_TRAY_PIN_NAV_CATEGORY, ID_TRAY_PIN_UPDATE),
+            (ID_TRAY_PIN_NAV_CATEGORY, ID_TRAY_PIN_UPDATE_HOVER),
+            (ID_TRAY_PIN_NAV_ALL, ID_TRAY_PIN_PAUSE_AUDIO),
+            (ID_TRAY_PIN_NAV_ALL, ID_TRAY_PIN_PAUSE_VIDEO),
         ] {
             assert_ne!(row, other, "two rows of the menu share the id {row}");
+        }
+
+        // And outside every range a click is read against before this row is, so a walk's
+        // two answers are never answered as an item of a submenu of their own.
+        for (base, len) in [
+            (
+                ID_TRAY_LIBREOFFICE_IDLE_BASE,
+                ENGINE_IDLE_CHOICES.len() as u16,
+            ),
+            (ID_TRAY_SCALE_BASE, BITMAP_SCALE_CHOICES.len() as u16),
+        ] {
+            for row in [ID_TRAY_PIN_NAV_ALL, ID_TRAY_PIN_NAV_CATEGORY] {
+                assert!(
+                    !(base..base + len).contains(&row),
+                    "the {row} row is inside the {base} range, so a click on it is read as that \
+                     submenu's"
+                );
+            }
         }
 
         let defaults = crate::config::config::AppConfig::default();
@@ -4373,6 +4533,10 @@ mod tests {
         assert!(
             !defaults.pin_update_on_hover,
             "the pointer's own hover is not one of the ways until it is asked for"
+        );
+        assert_eq!(
+            defaults.pin_nav_file_types, DEFAULT_PIN_NAV_FILE_TYPES,
+            "a pin walks the whole folder until it is told otherwise"
         );
     }
 
@@ -4658,6 +4822,66 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// The `Render HTML` row is an id of its own, and one of the slack rather than of a
+    /// range: it sits where the text preview's `Full Mode` item did, four ids above the
+    /// Markdown rows this submenu also holds, and a click on either of them is a click on
+    /// the setting it names.
+    ///
+    /// It is also read the way the menu draws it — from the setting on the configuration
+    /// rather than from a value remembered between the click and the row — so the answer the
+    /// row shows and the answer the click gives are the same one.
+    #[test]
+    fn the_render_html_row_is_an_id_of_its_own() {
+        for other in [
+            ID_TRAY_THEME_LIGHT,
+            ID_TRAY_THEME_DARK,
+            ID_TRAY_MARKDOWN_RENDERED,
+            ID_TRAY_MARKDOWN_SOURCE,
+            ID_TRAY_FONT_100,
+            ID_TRAY_TYPE_IMAGES,
+            ID_TRAY_TYPE_TEXT,
+            ID_TRAY_VECTOR_BACKGROUND_BASE,
+            ID_TRAY_IMAGE_BACKGROUND_BASE,
+        ] {
+            assert_ne!(
+                ID_TRAY_RENDER_HTML, other,
+                "the text preview's rows share the id {other}"
+            );
+        }
+
+        const _: () = assert!(
+            ID_TRAY_RENDER_HTML > ID_TRAY_MARKDOWN_SOURCE,
+            "the row is listed after the Markdown popup it hangs beside"
+        );
+
+        // And outside every range the click reads before the row is: a row that fell in one
+        // of them would be answered as an item of that submenu and never reach the switch
+        // (see the `cmd if` arms above `ID_TRAY_RENDER_HTML` in `tray_window_proc`).
+        for (base, len) in [
+            (
+                ID_TRAY_IMAGE_BACKGROUND_BASE,
+                BACKGROUND_CHOICES.len() as u16,
+            ),
+            (
+                ID_TRAY_VECTOR_BACKGROUND_BASE,
+                BACKGROUND_CHOICES.len() as u16,
+            ),
+            (ID_TRAY_SCALE_BASE, BITMAP_SCALE_CHOICES.len() as u16),
+            (ID_TRAY_ENGINE_IDLE_BASE, ENGINE_IDLE_CHOICES.len() as u16),
+        ] {
+            assert!(
+                !(base..base + len).contains(&ID_TRAY_RENDER_HTML),
+                "the row is inside the {base} range, so a click on it is read as that row's"
+            );
+        }
+
+        let defaults = crate::config::config::AppConfig::default();
+        assert_eq!(
+            defaults.render_html, DEFAULT_RENDER_HTML,
+            "a fresh install shows a page as its markup"
+        );
     }
 
     /// Every `… Scaling` submenu offers the whole room a document can be given and then

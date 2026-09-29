@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
-use windows::core::{w, IUnknown, Interface, VARIANT};
+use windows::core::{w, GUID, IUnknown, Interface, VARIANT};
 use windows::Win32::Foundation::{BOOL, HWND, LPARAM, POINT, RECT, SIZE};
 use windows::Win32::Graphics::Gdi::{
     CreateCompatibleDC, CreateFontIndirectW, DeleteDC, DeleteObject, EnumDisplayMonitors,
@@ -53,8 +53,9 @@ use windows::Win32::UI::Shell::{
     IFolderView, IFolderView2, IPersistFolder2, IShellBrowser, IShellItem, IShellView,
     IShellWindows, IWebBrowser2, ItemIndex_Property_GUID, SHCreateItemFromIDList,
     SID_STopLevelBrowser, ShellWindows, SIGDN_DESKTOPABSOLUTEPARSING, SIGDN_FILESYSPATH,
-    SIGDN_NORMALDISPLAY,
+    SIGDN_NORMALDISPLAY, FWF_AUTOARRANGE, SORTCOLUMN, SORT_ASCENDING, SORT_DESCENDING,
 };
+use windows::Win32::UI::Shell::PropertiesSystem::PROPERTYKEY;
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetAncestor, GetClassNameW, GetCursorPos, GetForegroundWindow, GetWindowPlacement,
     GetWindowRect, IsIconic, IsWindowVisible, SystemParametersInfoW, WindowFromPoint, GA_ROOT,
@@ -1084,6 +1085,224 @@ static EXPLORER_LAST_REAL_FOLDERS: Lazy<Mutex<HashMap<isize, String>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 static EXPLORER_WINDOW_CACHE: Lazy<Mutex<HashMap<isize, (bool, Instant)>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
+
+/// What each folder was last seen sorted by, as the view that is drawing it said so.
+///
+/// It is here rather than asked of the view on the far side of a click because a click on a
+/// caption button is the one moment nothing is hovering: the listing is not being read for a
+/// file, so the sort is whatever was read the last time a pointer was over something in it.
+/// A header click drops what the resolver holds of the item it was on (`forget_item`), and a
+/// sort is read per item, so what is here cannot outlive the sort it describes by more than
+/// the folder the pointer is not in.
+///
+/// The map is keyed by folder rather than by window because the window is not what the
+/// question is about: two windows on one folder are one listing's order, and a window with
+/// several folders open is several. A pin in a folder nothing has been hovered asks nothing
+/// and is walked in name order, which is the order a listing nobody has touched is in.
+static VIEW_SORT: Lazy<Mutex<HashMap<PathBuf, ViewSort>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+
+/// How a view's own `Name` column compares two names, and whether a folder's sort can be
+/// read at all: a column the system defines and a view that draws items wherever they were
+/// dropped.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) struct ViewSort {
+    pub(crate) key: SortKey,
+    pub(crate) descending: bool,
+}
+
+/// The four columns a folder is ordered by that this app can reproduce, which are the four
+/// the pin's own buttons can walk in the order the listing shows.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum SortKey {
+    Name,
+    DateModified,
+    Size,
+    FileType,
+}
+
+/// The sort a folder was last seen in, if it was seen at all and if the view could name one.
+///
+/// Nothing is asked of a view that cannot be asked: no sort at all is what a `Details` or
+/// `List` view in an icon mode answers, and it is a normal answer rather than a failure, so
+/// the walk falls back to name order rather than to a guess.
+pub(crate) fn view_sort_of(folder: &Path) -> Option<ViewSort> {
+    VIEW_SORT.lock().ok()?.get(folder).copied()
+}
+
+/// What a folder's sort is remembered as, and how many folders are remembered at once. A pin
+/// walks one folder, so the cap is generous rather than tight; it exists so a machine that
+/// sweeps the pointer across a drive cannot grow this without end.
+const VIEW_SORT_LIMIT: usize = 256;
+
+fn remember_view_sort(folder: PathBuf, sort: ViewSort) {
+    let Ok(mut sorts) = VIEW_SORT.lock() else {
+        return;
+    };
+
+    // A header click is a new sort of a folder already in here, so it is written in place
+    // rather than added beside itself; and a folder is given up when the map is full, which
+    // is a list of folders a hand swept across rather than one it is working in. Which of
+    // them goes is whatever the map offers: a sort read again is a couple of crossings, and
+    // a listing walked again is a folder read, so neither is worth an order kept beside it.
+    sorts.retain(|held, _| *held != folder);
+    if sorts.len() >= VIEW_SORT_LIMIT {
+        if let Some(dropped) = sorts.keys().next().cloned() {
+            sorts.remove(&dropped);
+        }
+    }
+    sorts.insert(folder, sort);
+}
+
+/// The order a folder is in, asked of the view that is drawing it.
+///
+/// Four questions of a view it already has an interface for, and every one of them can say
+/// "no" without anything being wrong:
+///
+/// * **How many sort columns there are.** Zero is what an icon or tile view answers, and
+///   what a list or details view answers in an arrangement that has none to speak of. It is
+///   not a failure, so it is not a failure here either: the walk falls back to name order.
+/// * **The columns themselves**, of which only the first is the order — the rest are
+///   tie-breakers, and this app walks one dimension.
+/// * **What the first column is**, matched against the system property keys rather than
+///   against the name a locale would print for it. A column called `Date created` and a
+///   column called `Name` are told apart by their key, and a view in another language
+///   answers with the same key this one does.
+/// * **Whether items are still in the order the sort puts them.** Auto-arrange off means the
+///   user has dragged things to where they want them, and a position in that view says
+///   nothing about a file's name, its date or its size — so the answer is that the view has
+///   no sort to reproduce.
+fn read_view_sort(view: &IFolderView2) -> Option<ViewSort> {
+    unsafe {
+        let count = view.GetSortColumnCount().ok()?;
+        let flags = view.GetCurrentFolderFlags().ok()?;
+
+        sort_from_columns(count, flags, || {
+            let mut columns = [SORTCOLUMN {
+                direction: SORT_ASCENDING,
+                propkey: PROPERTYKEY {
+                    fmtid: GUID::zeroed(),
+                    pid: 0,
+                },
+            }];
+
+            view.GetSortColumns(&mut columns).ok()?;
+            Some(columns)
+        })
+    }
+}
+
+/// What a view's own answers mean, with the columns read separately so the two questions
+/// that can be asked without a view at all are the two that are tested without one.
+///
+/// * **No columns** is what an icon, tile, list or medium-icon view says, and it is a normal
+///   answer: there is nothing to reproduce, and the walk falls back to name order.
+/// * **Auto-arrange off** is a folder whose items are where the user put them. Its order is
+///   the order they were dragged into, which is not a column and not anything this app could
+///   work back out from a file's name, its date or its size.
+fn sort_from_columns(
+    count: i32,
+    flags: u32,
+    columns: impl FnOnce() -> Option<[SORTCOLUMN; 1]>,
+) -> Option<ViewSort> {
+    if count <= 0 {
+        return None;
+    }
+
+    if flags & FWF_AUTOARRANGE.0 as u32 == 0 {
+        return None;
+    }
+
+    let column = columns()?.first()?.clone();
+
+    Some(ViewSort {
+        key: sort_key_of(&column.propkey)?,
+        descending: column.direction == SORT_DESCENDING,
+    })
+}
+
+/// The four columns a listing can be ordered by that this app walks, written out by their
+/// canonical keys rather than imported.
+///
+/// Every one of them is a property of the `System` property set, and the crate binds that
+/// set's keys only behind a further feature this app has no other use for — so the four this
+/// walk needs are written here, each with the property id Windows documents for it. The
+/// `Type` key is the one the crate does not bind at all.
+///
+/// They are compared as whole keys rather than matched on a name a locale prints, so a
+/// column this app cannot walk is recognised as one it cannot walk in every language.
+const PKEY_ITEM_NAME_DISPLAY: PROPERTYKEY = PROPERTYKEY {
+    fmtid: GUID::from_u128(0xb725f130_47ef_101a_a5f1_02608c9eebac),
+    pid: 10,
+};
+const PKEY_SIZE: PROPERTYKEY = PROPERTYKEY {
+    fmtid: GUID::from_u128(0xb725f130_47ef_101a_a5f1_02608c9eebac),
+    pid: 12,
+};
+const PKEY_DATE_MODIFIED: PROPERTYKEY = PROPERTYKEY {
+    fmtid: GUID::from_u128(0xb725f130_47ef_101a_a5f1_02608c9eebac),
+    pid: 14,
+};
+const PKEY_FILE_TYPE: PROPERTYKEY = PROPERTYKEY {
+    fmtid: GUID::from_u128(0xb725f130_47ef_101a_a5f1_02608c9eebac),
+    pid: 26,
+};
+
+/// The column a property key names, of the four this app walks, and nothing for any other:
+/// a folder sorted by its tags is a folder whose order there is no way to reproduce, and the
+/// name order is a better answer than a half-right one.
+fn sort_key_of(key: &PROPERTYKEY) -> Option<SortKey> {
+    if *key == PKEY_ITEM_NAME_DISPLAY {
+        Some(SortKey::Name)
+    } else if *key == PKEY_DATE_MODIFIED {
+        Some(SortKey::DateModified)
+    } else if *key == PKEY_SIZE {
+        Some(SortKey::Size)
+    } else if *key == PKEY_FILE_TYPE {
+        Some(SortKey::FileType)
+    } else {
+        None
+    }
+}
+
+/// What a view's folder is sorted by, remembered against the folder — or deliberately not,
+/// for the two places where a position in the listing means something other than an order.
+///
+/// The first is a search. A `search-ms:` view holds the results of a query across as many
+/// folders as the query reached, and its order is how relevant each result is to what was
+/// typed. There is no column behind that, so what a folder's own sort is says nothing about
+/// the order the user is looking at, and remembering one would put the pin's buttons in an
+/// order no window on the desktop is showing.
+///
+/// The second is a view whose sort could not be read at all: no columns, or items where they
+/// were dropped. Whatever was remembered for the folder before is a sort of a listing that is
+/// not this one, so it is taken out rather than left to stand.
+fn note_view_sort(view: &AnsweredView) {
+    let folder = view_folder_path(view);
+
+    match (read_view_sort(&view.folder_view), folder.clone()) {
+        (Some(sort), Some(folder)) => remember_view_sort(folder, sort),
+        (_, Some(folder)) => {
+            if let Ok(mut sorts) = VIEW_SORT.lock() {
+                sorts.remove(&folder);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The folder a view is showing, which is what a sort is remembered against — and nothing at
+/// all for a view opened on a search, since a search has results rather than a folder.
+fn view_folder_path(view: &AnsweredView) -> Option<PathBuf> {
+    unsafe {
+        let url = view.browser.LocationURL().ok()?.to_string();
+        if is_search_ms_url(&url) {
+            return None;
+        }
+
+        get_shell_view_folder_path(&view.shell_view).map(PathBuf::from)
+    }
+}
 
 /// Explorer restarts seen, counted rather than flagged: the hook loop is the one
 /// that has to notice one, since it is the thread holding what a restart
@@ -2712,6 +2931,7 @@ fn item_file_path(
             match window.view_holding(views) {
                 Some(position) => {
                     note_probe(&PROBE_VIEW_ANCHORED);
+                    note_view_sort(&views[position]);
                     (
                         Some(view_item(&views[position].folder_view, index, &item.name)),
                         Some(position),
@@ -3047,7 +3267,10 @@ fn avoid_box_under_cursor(
 }
 
 /// Quick check if foreground window is Explorer (cheap, no COM)
-fn is_foreground_explorer() -> bool {
+///
+/// The pin's own key asks it as well, because a key pressed while another program is in front is a
+/// press about that program and not about the pin.
+pub(crate) fn is_foreground_explorer() -> bool {
     unsafe {
         let foreground = GetForegroundWindow();
         if foreground.is_invalid() {
@@ -5875,6 +6098,128 @@ pub fn run_explorer_hook() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use windows::Win32::UI::Shell::{FWF_USESEARCHFOLDER, SORTDIRECTION};
+
+    /// The sort a column asks for, given the key it is on and which way it runs.
+    fn sorted(key: PROPERTYKEY, direction: SORTDIRECTION) -> Option<[SORTCOLUMN; 1]> {
+        Some([SORTCOLUMN {
+            direction,
+            propkey: key,
+        }])
+    }
+
+    /// The four columns a folder is ordered by that the pin's own buttons can walk, told
+    /// apart by the system property key rather than by the name a locale would print for
+    /// them: a view in another language names the same keys, and a column called `Name` and
+    /// one called `Date created` are the same pair of questions either way.
+    #[test]
+    fn a_sort_column_is_told_apart_by_the_property_it_is_on() {
+        for (key, expected) in [
+            (PKEY_ITEM_NAME_DISPLAY, SortKey::Name),
+            (
+                PKEY_DATE_MODIFIED,
+                SortKey::DateModified,
+            ),
+            (PKEY_SIZE, SortKey::Size),
+            (PKEY_FILE_TYPE, SortKey::FileType),
+        ] {
+            assert_eq!(sort_key_of(&key), Some(expected));
+        }
+
+        // A column this app has no comparison for is a column it will not half-reproduce, so
+        // a view sorted by one falls back to name order rather than to an order that is only
+        // sometimes the listing's.
+        assert_eq!(
+            sort_key_of(&PROPERTYKEY {
+                fmtid: GUID::from_u128(0xb725f130_47ef_101a_a5f1_02608c9eebac),
+                pid: 15,
+            }),
+            None,
+            "`Date created` is a column this app has no comparison for"
+        );
+    }
+
+    /// A view with no sort columns is what an icon, tile, list or medium-icon view says, and
+    /// it is a normal answer rather than a failure: there is nothing to reproduce there, and
+    /// the walk falls back to name order.
+    #[test]
+    fn a_view_with_no_sort_columns_is_no_sort() {
+        assert_eq!(
+            sort_from_columns(0, FWF_AUTOARRANGE.0 as u32, || {
+                sorted(PKEY_ITEM_NAME_DISPLAY, SORT_ASCENDING)
+            }),
+            None,
+            "no columns is a view whose order there is nothing to reproduce"
+        );
+    }
+
+    /// Items the user has dragged are where they put them, and a position in such a view
+    /// says nothing about a file's name, its date or its size — so auto-arrange off is a
+    /// folder with no sort to walk in, whatever column the header is still showing.
+    #[test]
+    fn a_view_whose_items_were_moved_has_no_order_to_reproduce() {
+        let moved = FWF_USESEARCHFOLDER.0 as u32;
+
+        assert_eq!(
+            sort_from_columns(1, moved, || {
+                sorted(PKEY_ITEM_NAME_DISPLAY, SORT_ASCENDING)
+            }),
+            None,
+            "auto-arrange off means the positions are the user's, not a column's"
+        );
+
+        assert!(
+            sort_from_columns(1, FWF_AUTOARRANGE.0 as u32 | moved, || {
+                sorted(PKEY_ITEM_NAME_DISPLAY, SORT_DESCENDING)
+            })
+            .is_some(),
+            "and the same flags with auto-arrange on are a sort again"
+        );
+    }
+
+    /// A search results view is not sorted by a column at all: it is ordered by how relevant
+    /// each result is to what was typed, across whatever folders the query reached. So the
+    /// folder a sort would be remembered against is not a folder a search view has, and
+    /// nothing is remembered for one.
+    #[test]
+    fn a_search_view_has_no_folder_to_remember_a_sort_against() {
+        assert!(
+            is_search_ms_url("search-ms:query=x&crumb=location:C:\\art"),
+            "which is what a search view's own URL looks like"
+        );
+        assert!(
+            !is_search_ms_url("file:///C:/art"),
+            "and an ordinary folder is not one"
+        );
+    }
+
+    /// The direction is part of the sort rather than something read after it: a folder
+    /// sorted by date with the newest first is a different walk from one with the oldest
+    /// first, and the buttons move the same either way.
+    #[test]
+    fn a_sort_says_which_way_it_runs() {
+        let ascending = sort_from_columns(1, FWF_AUTOARRANGE.0 as u32, || {
+            sorted(PKEY_SIZE, SORT_ASCENDING)
+        });
+        let descending = sort_from_columns(1, FWF_AUTOARRANGE.0 as u32, || {
+            sorted(PKEY_SIZE, SORT_DESCENDING)
+        });
+
+        assert_eq!(
+            ascending,
+            Some(ViewSort {
+                key: SortKey::Size,
+                descending: false
+            })
+        );
+        assert_eq!(
+            descending,
+            Some(ViewSort {
+                key: SortKey::Size,
+                descending: true
+            })
+        );
+    }
 
     /// A signature of one display, which is all the tests here need: what is compared
     /// is a display's own place and scale, not what the desktop adds up to.
