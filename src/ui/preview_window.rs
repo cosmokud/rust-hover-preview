@@ -12609,8 +12609,12 @@ impl PinResize {
 /// A command the chrome has asked for: a button that was clicked, a window that was dragged or
 /// resized, or a collapse. The window procedure cannot do any of it — the media, the player and
 /// the browser are the preview loop's — so it is written here and drained by the loop.
+///
+/// Public because a key asks for the same two as a click does, and the key is read on the hook
+/// thread rather than in the window procedure (see `shell::explorer_hook::pin_navigation_step`).
+/// One door, whichever side of the app the gesture came from.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum PinCommand {
+pub(crate) enum PinCommand {
     /// The file before the one pinned, in the order the folder it was taken up in is showing
     /// them. It goes through the loop like the rest, because the file it names is a walk of
     /// the folder and the loop is what owns the configuration the walk is read under (see
@@ -12632,7 +12636,7 @@ static PIN_COMMAND: AtomicU32 = AtomicU32::new(0);
 const PIN_COMMAND_NONE: u32 = 0;
 
 /// Leave a command for the preview loop to act on.
-fn ask_pin(command: PinCommand) {
+pub(crate) fn ask_pin(command: PinCommand) {
     let code = match command {
         PinCommand::Previous => 5,
         PinCommand::Next => 6,
