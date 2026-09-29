@@ -47,6 +47,55 @@ pub enum Asked {
     Name,
 }
 
+/// What a pin's own previous/next buttons count as the same kind of file as the one it is
+/// showing.
+///
+/// A [`PreviewType`] is a claim, and claims are per reader: an SVG document is a drawing
+/// while the image list still names it, a camera raw is a picture the converter develops, and
+/// a `.docx` is a document whether Word or LibreOffice draws it. The buttons the pin carries
+/// are not asking what would draw a file, though — they are asking whether a file in the
+/// folder is worth stepping onto from the one on screen, and a folder of artwork should step
+/// from a `.psd` to a `.svg` rather than past it. So the kinds are folded into the eight
+/// things a user would call them (see [`nav_category`]), which is also what the
+/// `Pin Mode → Nav File Types → Category` switch means.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum NavCategory {
+    Images,
+    Video,
+    Audio,
+    Documents,
+    Archives,
+    Text,
+    Fonts,
+    Design,
+}
+
+/// The category a kind belongs to, which is what one line of that fold is worth.
+///
+/// Exhaustive rather than answered with a default: a kind this app grows has to be told
+/// where it goes, and the place that says so is the one that will not compile until it has
+/// been said. Two groups are decisions rather than accidents. The pictures take the drawings
+/// that are pictures in every sense but the list they are named in — a converter's camera
+/// raw is a picture to a user, and this app already shares one switch with the pictures
+/// (see `PreviewType::enabled_in`). The documents take the ebook, the Office and the render
+/// engine's kinds together, and the archives the listing engine's with the ones read here:
+/// both are what the file is, whichever program opened it.
+pub fn nav_category(kind: PreviewType) -> NavCategory {
+    match kind {
+        PreviewType::Images | PreviewType::Magick => NavCategory::Images,
+        PreviewType::Videos => NavCategory::Video,
+        PreviewType::Audio => NavCategory::Audio,
+        PreviewType::Ebook
+        | PreviewType::Calibre
+        | PreviewType::Document
+        | PreviewType::Libre => NavCategory::Documents,
+        PreviewType::Archives | PreviewType::Peazip => NavCategory::Archives,
+        PreviewType::Text => NavCategory::Text,
+        PreviewType::Fonts => NavCategory::Fonts,
+        PreviewType::Design | PreviewType::Vector => NavCategory::Design,
+    }
+}
+
 /// One kind's claim on a file, and the kind it answers with.
 ///
 /// The answer is the kind rather than a yes or a no because one list answers with a kind of
@@ -571,6 +620,93 @@ mod tests {
             Some(PreviewType::Text),
             "and a file of that name which is not one is the source the text lists claim"
         );
+    }
+
+    /// The fold the pin's own buttons walk by is the one a user would draw: a picture a
+    /// converter develops is a picture, a book a converter converted and a page an engine
+    /// drew are both a document, and a drawing is a drawing whether it was reached through
+    /// the image list or the vector one.
+    #[test]
+    fn a_kind_folds_into_the_thing_a_user_would_call_it() {
+        for (kind, expected) in [
+            (PreviewType::Images, NavCategory::Images),
+            (PreviewType::Magick, NavCategory::Images),
+            (PreviewType::Videos, NavCategory::Video),
+            (PreviewType::Audio, NavCategory::Audio),
+            (PreviewType::Ebook, NavCategory::Documents),
+            (PreviewType::Calibre, NavCategory::Documents),
+            (PreviewType::Document, NavCategory::Documents),
+            (PreviewType::Libre, NavCategory::Documents),
+            (PreviewType::Archives, NavCategory::Archives),
+            (PreviewType::Peazip, NavCategory::Archives),
+            (PreviewType::Text, NavCategory::Text),
+            (PreviewType::Fonts, NavCategory::Fonts),
+            (PreviewType::Design, NavCategory::Design),
+            (PreviewType::Vector, NavCategory::Design),
+        ] {
+            assert_eq!(nav_category(kind), expected, "{kind:?} is a {expected:?}");
+        }
+    }
+
+    /// A kind and the kind it shares a switch with are one category, always: the two answers
+    /// `All` and `Category` give a folder are supposed to differ, and a pair of kinds the tray
+    /// cannot switch apart is a difference they cannot have.
+    #[test]
+    fn the_kinds_that_share_a_switch_share_a_category() {
+        let config = AppConfig::default();
+        let kinds = [
+            PreviewType::Images,
+            PreviewType::Magick,
+            PreviewType::Videos,
+            PreviewType::Audio,
+            PreviewType::Ebook,
+            PreviewType::Calibre,
+            PreviewType::Document,
+            PreviewType::Libre,
+            PreviewType::Archives,
+            PreviewType::Peazip,
+            PreviewType::Text,
+            PreviewType::Fonts,
+            PreviewType::Design,
+            PreviewType::Vector,
+        ];
+
+        // The whole set is switched off one kind at a time, and every kind whose own gate
+        // went down with it is the kind that shares its switch — which is the fold's own
+        // table, read back off the gates rather than off the arms that wrote it.
+        for kind in kinds {
+            let mut probe = config.clone();
+            probe.image_preview_enabled = false;
+            probe.video_preview_enabled = false;
+            probe.audio_preview_enabled = false;
+            probe.text_preview_enabled = false;
+            probe.ebook_preview_enabled = false;
+            probe.archive_preview_enabled = false;
+            probe.document_preview_enabled = false;
+            probe.font_preview_enabled = false;
+            probe.design_preview_enabled = false;
+            probe.vector_preview_enabled = false;
+            kind.set_enabled_in(&mut probe, true);
+
+            let switched = kind.enabled_in(&probe);
+            assert!(
+                switched,
+                "{kind:?} is switched back on by the switch it is written for"
+            );
+
+            // What one switch turns on is one category: the tray can only narrow a walk by
+            // something it can also switch, so a gate that brought up a kind of another
+            // category would put a file in a walk the user had turned off.
+            for other in kinds {
+                if other.enabled_in(&probe) {
+                    assert_eq!(
+                        nav_category(other),
+                        nav_category(kind),
+                        "{other:?} is switched by {kind:?}'s gate, and so has to be walked with it"
+                    );
+                }
+            }
+        }
     }
 
     /// The chain names the readers of each kind, and the two names whose preview was given up

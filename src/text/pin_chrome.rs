@@ -1157,14 +1157,39 @@ fn measure_text(
     }
 }
 
-/// The three buttons a caption carries, in the order Windows has them: minimize, maximize or
-/// restore, close.
+/// The buttons a caption carries, in the order they sit in: the two or three that are a
+/// window's own — minimize, maximize or restore, close — and the three that are a pin's,
+/// packed to their left.
+///
+/// The window's are the ones a hand has been reaching for on every window on the desktop,
+/// and they are where Windows puts them. The pin's are new: the file before this one, the
+/// file after it, and the file handed to whatever the machine has filed it under (see
+/// `shell::pin_navigation`).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum CaptionButton {
+    /// The file before the one pinned, in the order the folder it was taken up in is
+    /// showing them.
+    Previous,
+    /// The file after the one pinned, the same walk the other way.
+    Next,
+    /// Hand the pinned file to whatever the Shell has filed it under. A pin previews a file
+    /// rather than opening it, so this is the only way out of it into the program that owns
+    /// the format.
+    OpenWith,
     Minimize,
     Maximize,
     Close,
 }
+
+/// The pin's own three, in the order they are packed. They are separate from the window's
+/// group because a window's group is measured by itself and cannot give any of its room:
+/// a close button that moved because a pin grew a walk would be a close button in a new
+/// place on every caption the moment this app was updated.
+const NAV_BUTTONS: [CaptionButton; 3] = [
+    CaptionButton::Previous,
+    CaptionButton::Next,
+    CaptionButton::OpenWith,
+];
 
 /// What a caption is drawn from: the name of what is pinned, whether it is maximized, whether it
 /// offers a maximize at all, and which button the pointer is on, if any.
@@ -1187,6 +1212,12 @@ pub(crate) struct Caption<'a> {
 /// keep their own places at that edge: closing a window is a gesture made by position, and a
 /// close button that moved because the window it is on has nothing to maximize would be a
 /// window whose close button is where a maximize is on every other one.
+///
+/// The pin's own three — the file before, the file after, and the file opened by whatever
+/// the machine has filed it under — are packed beside that group and not inside it, and are
+/// dropped whole where a caption is too narrow to carry them. Which of the two is given up is
+/// not a question: the walk is a thing a window only has once it is a pin, and closing a pin
+/// is not.
 pub(crate) fn button_boxes(
     width: i32,
     height: i32,
@@ -1203,11 +1234,13 @@ pub(crate) fn button_boxes(
         &[CaptionButton::Minimize, CaptionButton::Close]
     };
 
+    // Measured off the window's group alone, so the walk beside it can be any width at all and
+    // the three land where they landed before it existed.
     let button = text_paint::scaled(BUTTON_PIXELS as i32, dpi as f32 / 96.0)
         .max(1)
         .min((width / kinds.len().max(1) as i32).max(1));
 
-    kinds
+    let mut boxes: Vec<CaptionButtonBox> = kinds
         .iter()
         .enumerate()
         .map(|(index, kind)| {
@@ -1223,11 +1256,48 @@ pub(crate) fn button_boxes(
                 },
             }
         })
-        .collect()
+        .collect();
+
+    // The walk is packed against the group it hangs off, as wide as the buttons beside it: a
+    // caption's buttons are one size, and a narrower one in the middle of them is a row of
+    // targets a hand has to find rather than count.
+    //
+    // A caption too narrow for all three keeps the window's group and loses the walk whole.
+    // The buttons a hand has been reaching for on every window it has ever had are the ones
+    // that are not given up, and half a walk beside them is a set of targets with no known
+    // order to them.
+    if width - (kinds.len() as i32 + NAV_BUTTONS.len() as i32) * button < 0 {
+        return boxes;
+    }
+
+    // Packed from the group's own left edge outward, so the walk reads left-to-right in the
+    // order it is written: the file before this one, the file after it, and then the hand-off
+    // to another program. Walking out from the edge and reversing would put them the other
+    // way round, which puts `Next` where a hand reaches for `Previous`.
+    let group_left = width - kinds.len() as i32 * button;
+    let mut nav: Vec<CaptionButtonBox> = NAV_BUTTONS
+        .iter()
+        .enumerate()
+        .map(|(index, kind)| {
+            let left = group_left - (NAV_BUTTONS.len() as i32 - index as i32) * button;
+            CaptionButtonBox {
+                kind: *kind,
+                rect: RECT {
+                    left,
+                    top: 0,
+                    right: left + button,
+                    bottom: height,
+                },
+            }
+        })
+        .collect();
+    nav.append(&mut boxes);
+
+    nav
 }
 
 /// One caption button and the box it occupies.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) struct CaptionButtonBox {
     pub(crate) kind: CaptionButton,
     pub(crate) rect: RECT,
@@ -1363,6 +1433,29 @@ fn paint_glyph(
     let half = glyph / 2;
 
     match button.kind {
+        CaptionButton::Previous => draw_chevron(
+            buffer,
+            width,
+            center_x,
+            center_y,
+            glyph,
+            stroke,
+            ink,
+            false,
+        ),
+        CaptionButton::Next => draw_chevron(
+            buffer,
+            width,
+            center_x,
+            center_y,
+            glyph,
+            stroke,
+            ink,
+            true,
+        ),
+        CaptionButton::OpenWith => {
+            draw_open_with(buffer, width, center_x, center_y, glyph, stroke, ink)
+        }
         CaptionButton::Minimize => {
             let top = center_y;
             fill_box(
@@ -1897,6 +1990,102 @@ fn draw_cross(
     }
 }
 
+/// One chevron pointing left or right, walked a column at a time the way the cross is.
+///
+/// A chevron rather than an arrowhead: a walk has no end, so what the two buttons mean is
+/// which way along it to go and not where it stops, and the mark for that is the one the
+/// keyboard's own arrow keys carry.
+fn draw_chevron(
+    buffer: &mut [u8],
+    width: i32,
+    center_x: i32,
+    center_y: i32,
+    span: i32,
+    thickness: f32,
+    color: [u8; 3],
+    pointing_right: bool,
+) {
+    let thickness = thickness.round().max(1.0) as i32;
+    let half = span / 2;
+
+    for step in 0..=span.max(1) {
+        let x = if pointing_right {
+            center_x - half + step
+        } else {
+            center_x + half - step
+        };
+        let offset = (step - half).abs();
+        for depth in 0..thickness {
+            put(buffer, width, x, center_y - offset + depth, color, 1.0);
+            put(buffer, width, x, center_y + offset - depth, color, 1.0);
+        }
+    }
+}
+
+/// An arrow leaving a box: the file handed to whatever the machine has filed it under.
+///
+/// Drawn as the box and the arrow together rather than as a box with a mark in it, because
+/// the button's whole meaning is the leaving — a pin shows a file and this is the one that
+/// gives it away to a program that owns the format.
+fn draw_open_with(
+    buffer: &mut [u8],
+    width: i32,
+    center_x: i32,
+    center_y: i32,
+    span: i32,
+    thickness: f32,
+    color: [u8; 3],
+) {
+    let half = span / 2;
+    // The stroke is rounded once and used as a width to draw with and as a number of rows to
+    // step over, which is the two things the cross does with its own.
+    let edge = thickness.round().max(1.0);
+    let rows = edge as i32;
+
+    // The box is the left half of the glyph, so the arrow has the right of it to run out
+    // along and the two do not read as one mark.
+    let box_right = center_x - half / 2;
+
+    stroke_box(
+        buffer,
+        width,
+        RECT {
+            left: center_x - half,
+            top: center_y - half,
+            right: box_right,
+            bottom: center_y + half + 1,
+        },
+        edge,
+        color,
+        1.0,
+    );
+
+    // The shaft, and the head it ends in: the same thickness as the box's own edge, and the
+    // same two strokes a chevron is drawn in.
+    let shaft_top = center_y - rows / 2;
+    fill_box(
+        buffer,
+        width,
+        RECT {
+            left: center_x,
+            top: shaft_top,
+            right: center_x + half + 1,
+            bottom: shaft_top + rows,
+        },
+        color,
+        1.0,
+    );
+
+    let head = half / 2;
+    for step in 0..=head.max(1) {
+        let x = center_x + half + 1 - step;
+        for depth in 0..rows {
+            put(buffer, width, x, center_y - step + depth, color, 1.0);
+            put(buffer, width, x, center_y + step - depth, color, 1.0);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1918,15 +2107,49 @@ mod tests {
     fn the_buttons_sit_against_the_right_edge_in_the_order_windows_has_them() {
         let buttons = button_boxes(600, 30, 96, true);
 
-        assert_eq!(buttons[0].kind, CaptionButton::Minimize);
-        assert_eq!(buttons[1].kind, CaptionButton::Maximize);
-        assert_eq!(buttons[2].kind, CaptionButton::Close);
-        assert!(buttons[0].rect.left < buttons[1].rect.left);
-        assert!(buttons[1].rect.left < buttons[2].rect.left);
-        assert_eq!(buttons[2].rect.right, 600);
+        // The walk comes first in the run and the window's three after it, because the
+        // window's are the ones against the right edge and the walk hangs off them.
+        assert_eq!(buttons.len(), 6);
+        assert_eq!(buttons[0].kind, CaptionButton::Previous);
+        assert_eq!(buttons[1].kind, CaptionButton::Next);
+        assert_eq!(buttons[2].kind, CaptionButton::OpenWith);
+        assert_eq!(buttons[3].kind, CaptionButton::Minimize);
+        assert_eq!(buttons[4].kind, CaptionButton::Maximize);
+        assert_eq!(buttons[5].kind, CaptionButton::Close);
+        for pair in buttons.windows(2) {
+            assert!(pair[0].rect.left < pair[1].rect.left);
+        }
+        assert_eq!(buttons[5].rect.right, 600);
+
+        // The window's three keep the widths and the places they have always had: 46 pixels
+        // each at 100%, packed to 600, which is what a hand has been reaching for on every
+        // window it has ever had.
+        for (index, left) in [462, 508, 554].into_iter().enumerate() {
+            assert_eq!(
+                buttons[index + 3].rect,
+                RECT {
+                    left,
+                    top: 0,
+                    right: left + 46,
+                    bottom: 30,
+                },
+                "the window's button at {left} has moved"
+            );
+        }
+
+        // And the walk is the same width as the buttons beside it, laid end to end and
+        // touching the group rather than leaving a gap in it.
+        assert_eq!(buttons[2].rect.right, buttons[3].rect.left);
+        for button in &buttons {
+            assert_eq!(
+                button.rect.right - button.rect.left,
+                46,
+                "a caption's buttons are one size"
+            );
+        }
 
         // And a point is on the button it looks like it is on, or on none of them.
-        let close = buttons[2].rect;
+        let close = buttons[5].rect;
         assert_eq!(
             button_at(close.left + 1, 5, 600, 30, 96, true),
             Some(CaptionButton::Close)
@@ -1935,18 +2158,86 @@ mod tests {
         assert_eq!(button_at(close.left + 1, 40, 600, 30, 96, true), None);
     }
 
+    /// Every button a caption carries is found by pointing at it. Painting and hit-testing are
+    /// both read off the one list of boxes, so a button that is drawn and is not on, or is on
+    /// and is not drawn, is a caption the hand and the eye disagree about.
+    #[test]
+    fn every_button_of_a_caption_is_the_one_under_the_pointer() {
+        let buttons = button_boxes(600, 30, 96, true);
+        assert_eq!(buttons.len(), 6);
+
+        for button in &buttons {
+            let middle_x = (button.rect.left + button.rect.right) / 2;
+            assert_eq!(
+                button_at(middle_x, 5, 600, 30, 96, true),
+                Some(button.kind),
+                "the middle of {:?} is not on it",
+                button.kind
+            );
+            // Each end of the box is its own, and the pixel past the last one is the title's.
+            assert_eq!(button_at(button.rect.left, 0, 600, 30, 96, true), Some(button.kind));
+            assert_eq!(
+                button_at(button.rect.right - 1, 29, 600, 30, 96, true),
+                Some(button.kind)
+            );
+        }
+
+        assert_eq!(
+            button_at(buttons[0].rect.left - 1, 5, 600, 30, 96, true),
+            None,
+            "the strip to the left of the walk is the title's"
+        );
+    }
+
+    /// A caption too narrow for the walk carries the window's buttons and nothing else. A
+    /// pin is worth less than a window it can be closed from, and half a walk is a set of
+    /// targets with no known order to them — so the whole group goes, and the buttons that
+    /// stay are exactly where they would have been on a caption wide enough to carry it.
+    #[test]
+    fn a_caption_narrower_than_its_own_walk_keeps_the_window_s_buttons() {
+        let narrow = button_boxes(200, 30, 96, true);
+
+        // The buttons are 46 wide either way here — 200 / 3 is 66, and the width is the
+        // smaller of the two — so the walk's own three would need 6 * 46 = 276 of a strip
+        // 200 wide, and the strip is the window's alone.
+        assert_eq!(narrow.len(), 3);
+        assert_eq!(narrow[0].kind, CaptionButton::Minimize);
+        assert_eq!(narrow[1].kind, CaptionButton::Maximize);
+        assert_eq!(narrow[2].kind, CaptionButton::Close);
+        assert_eq!(narrow[2].rect.right, 200);
+
+        // And the pointer agrees with the painter about what is there.
+        for button in &narrow {
+            assert_eq!(
+                button_at(button.rect.left + 1, 5, 200, 30, 96, true),
+                Some(button.kind)
+            );
+        }
+        assert_eq!(button_at(0, 5, 200, 30, 96, true), None);
+        for kind in [CaptionButton::Previous, CaptionButton::Next, CaptionButton::OpenWith] {
+            assert!(
+                narrow.iter().all(|button| button.kind != kind),
+                "a caption too narrow for the walk does not carry {kind:?}"
+            );
+        }
+    }
+
     /// A pin with nothing to maximize — a sound's card — carries the two buttons that mean
     /// something on it, packed against the right edge the way Windows packs a window's: the one
     /// that closes it keeps the place it has on every other caption, and the one beside it is
-    /// the minimize that was there before.
+    /// the minimize that was there before. Neither of them moves for the walk, which sits
+    /// against the group and is measured off the same strip.
     #[test]
     fn a_caption_without_a_maximize_keeps_the_close_button_where_it_was() {
         let three = button_boxes(600, 30, 96, true);
         let two = button_boxes(600, 30, 96, false);
 
-        assert_eq!(two.len(), 2);
-        assert_eq!(two[0].kind, CaptionButton::Minimize);
-        assert_eq!(two[1].kind, CaptionButton::Close);
+        assert_eq!(two.len(), 5);
+        assert_eq!(two[0].kind, CaptionButton::Previous);
+        assert_eq!(two[1].kind, CaptionButton::Next);
+        assert_eq!(two[2].kind, CaptionButton::OpenWith);
+        assert_eq!(two[3].kind, CaptionButton::Minimize);
+        assert_eq!(two[4].kind, CaptionButton::Close);
 
         let close = three
             .iter()
@@ -1959,13 +2250,13 @@ mod tests {
             .expect("a minimize button")
             .rect;
 
-        assert_eq!(two[1].rect.left, close.left);
-        assert_eq!(two[1].rect.right, close.right);
-        assert_eq!(two[0].rect.right, two[1].rect.left);
-        assert_eq!(two[0].rect.right - two[0].rect.left, minimize.right - minimize.left);
+        assert_eq!(two[4].rect.left, close.left);
+        assert_eq!(two[4].rect.right, close.right);
+        assert_eq!(two[3].rect.right, two[4].rect.left);
+        assert_eq!(two[3].rect.right - two[3].rect.left, minimize.right - minimize.left);
 
         // And the space the button used to take is a button's, not a hole: it is the minimize
-        // that has moved along into it.
+        // that has moved along into it, with the walk along beside it.
         let maximize = three
             .iter()
             .find(|button| button.kind == CaptionButton::Maximize)

@@ -132,6 +132,20 @@ pub(crate) fn lookup_extension(path: &Path) -> Option<String> {
     (!stripped.is_empty() && !stripped.contains('.')).then(|| stripped.to_lowercase())
 }
 
+/// Whether `path` is a page of HTML — the two names a web page goes by, and no other.
+///
+/// The question is the name alone, exactly as `svg_preview::is_svg_file` asks it: what the
+/// browser would be handed is decided by what the file is called, and the switch over it
+/// belongs to the configuration rather than to this module (see `render_html`). The
+/// extension is read through `lookup_extension`, so `.HTML` and `.html` are one name and a
+/// dot file is read the way every other list reads one.
+pub fn is_html_extension(path: &Path) -> bool {
+    matches!(
+        lookup_extension(path).as_deref(),
+        Some("htm") | Some("html")
+    )
+}
+
 /// Whether `path` carries an extension the configuration previews as text.
 pub fn matches_configured_extension(path: &Path, extensions: &[String]) -> bool {
     let Some(extension) = lookup_extension(path) else {
@@ -163,4 +177,40 @@ pub fn matches_configured_name(path: &Path, names: &[String]) -> bool {
 /// kind a file is, is asked of the one order every side asks it in.
 pub fn matches_text_lists(path: &Path, extensions: &[String], names: &[String]) -> bool {
     matches_configured_extension(path, extensions) || matches_configured_name(path, names)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A page of HTML is a page of HTML under either of its two names and under no other
+    /// one: `.xhtml` is XML, which the text preview still reads, and a file with no
+    /// extension at all is a name rather than an extension.
+    #[test]
+    fn a_page_of_html_is_one_of_two_names() {
+        for name in [
+            "page.html",
+            "page.htm",
+            "PAGE.HTML",
+            "Page.HtM",
+            "some/deeper/page.HTML",
+        ] {
+            assert!(is_html_extension(Path::new(name)), "`{name}` is a page");
+        }
+
+        for name in [
+            "page.xhtml",
+            "page.xml",
+            "page.html.gz",
+            "page.html5",
+            "html",
+            "page.txt",
+            "Makefile",
+        ] {
+            assert!(
+                !is_html_extension(Path::new(name)),
+                "`{name}` is not one of the two names"
+            );
+        }
+    }
 }

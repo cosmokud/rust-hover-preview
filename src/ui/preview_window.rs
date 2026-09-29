@@ -49,6 +49,7 @@ use crate::readers::video_player;
 use crate::readers::webp_image;
 use crate::readers::wic_image;
 use crate::shell::cloud_files;
+use crate::shell::pin_navigation;
 use crate::shell::wheel_input;
 use crate::text::archive_preview::{self, ArchivePreviewOptions};
 use crate::text::audio_preview::{self, AudioPreviewOptions, Card};
@@ -63,6 +64,7 @@ use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::fs::File;
 use std::io::BufReader;
+use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::AsRawHandle;
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -98,6 +100,7 @@ use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, GetCapture, ReleaseCapture, SetCapture, VK_A, VK_C, VK_CONTROL,
 };
+use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DispatchMessageW,
     EnumWindows, GetCursorPos, GetSystemMetrics, GetWindow, GetWindowLongPtrW, GetWindowRect,
@@ -109,7 +112,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     IDC_SIZEWE, MF_STRING, MSG, MWMO_INPUTAVAILABLE, PBT_APMRESUMEAUTOMATIC, PBT_APMRESUMESUSPEND,
     PBT_APMSTANDBY, PBT_APMSUSPEND, PM_REMOVE, QS_ALLINPUT, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN,
     SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SPI_GETWORKAREA, SWP_FRAMECHANGED, SWP_NOACTIVATE,
-    SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SW_HIDE, SW_SHOWNOACTIVATE,
+    SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SW_HIDE, SW_SHOWNORMAL, SW_SHOWNOACTIVATE,
     SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, TPM_LEFTALIGN, TPM_NONOTIFY, TPM_RETURNCMD, TPM_TOPALIGN,
     ULW_ALPHA, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
     WM_POWERBROADCAST, WM_RBUTTONUP, WM_SETCURSOR, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
@@ -596,6 +599,24 @@ static PIN_ACTIVE: AtomicBool = AtomicBool::new(false);
 /// Whether the pinned preview is collapsed into the round bubble that stands in for it.
 /// A collapsed pin is still a pin: previews stay quiet until it is restored and closed.
 static PIN_COLLAPSED: AtomicBool = AtomicBool::new(false);
+
+/// Whether the hand is on one of the pin's own windows: a mouse press has landed on the pinned
+/// window or on the bubble, and the pointer has not been taken off it since.
+///
+/// This is a fact the app keeps about itself rather than a fact asked of Windows, because neither of
+/// those windows can take focus. A pinned window is created `WS_EX_NOACTIVATE` so that a pin does
+/// not steal the caret out of a folder being named, and the bubble is made the same way, so a
+/// question that would be settled in one call for an ordinary window — is this the window the user
+/// is in — cannot be settled at all for these two. What is left is the two things a key press
+/// really is: whether the keyboard is in Explorer, and whether a press has been made on the pin.
+/// Both are kept here; the keyboard is asked of the foreground window at the moment of the press
+/// (see `pin_press_action`).
+///
+/// It goes with the pin, and it is set again by a window coming up rather than left over from the
+/// last one: a pin is placed where the pointer already is, so a press the pointer is merely
+/// resting inside says nothing about the pin that has just appeared under it (see
+/// `note_pin_hand`).
+static PIN_HAND: AtomicBool = AtomicBool::new(false);
 
 /// A pin was asked to come down, by the Explorer hook (previews were turned off, or the
 /// trigger key is holding them back), by the tray, or by the resumption of the machine
@@ -1661,6 +1682,19 @@ pub fn refresh_preview() {
     }
 }
 
+/// The tray's `Render HTML` row has been switched off: a page the engine is drawing for a
+/// hover comes down with the switch it was asked for by, while a page a pin is showing is
+/// left exactly as it is — a pin is not a hover, and what a setting asks is owed to the next
+/// hover rather than to a window that stands (see `PreviewMessage::Refresh`, which leaves a
+/// pin alone for the same reason, and `webview_preview::hide_html_preview`).
+pub fn refresh_render_html() {
+    if pinned() {
+        return;
+    }
+
+    webview_preview::hide_html_preview();
+}
+
 /// The tray's `Pin Mode → Enable` row was clicked, or the configuration that decides whether
 /// the key is watched was reloaded. Whether there is a pin to take down is a question
 /// only the preview thread can answer — the window and the media under it are its own
@@ -2341,9 +2375,10 @@ fn current_audio_options() -> AudioPreviewOptions {
 }
 
 /// The backdrop an engine-drawn preview of `path` is drawn over: the kind decides it, the
-/// same way it decides everything else about a document. The one engine draws both kinds
-/// this app hands it — an SVG document, which is a vector drawing, and a font file's
-/// specimen — and each has a backdrop of its own.
+/// same way it decides everything else about a document. The one engine draws all the kinds
+/// this app hands it — an SVG document, which is a vector drawing, a font file's specimen,
+/// and a page of HTML — and a drawing and a page stand behind the same backdrop, the
+/// specimen's is a page of its own.
 fn engine_background(path: &Path) -> TransparentBackground {
     if font_formats::is_font_file(path) {
         current_font_background()
@@ -2352,11 +2387,11 @@ fn engine_background(path: &Path) -> TransparentBackground {
     }
 }
 
-/// The kind of engine-drawn preview `path` would get, when it is one of the two the browser
-/// draws: a document, or a font file's specimen.
+/// The kind of engine-drawn preview `path` would get, when it is one of the three the browser
+/// draws: a document, a font file's specimen, or a page of HTML.
 ///
 /// It stands in for the file's name where a hover is replayed or taken down: what is on
-/// screen for either kind is the engine's window rather than anything this app composed, so
+/// screen for any of them is the engine's window rather than anything this app composed, so
 /// what the loop asks about one it asks about the other — the same way the loader asks the
 /// name gates in one order.
 fn engine_kind_of(path: &Path) -> Option<PreviewType> {
@@ -2376,6 +2411,7 @@ fn engine_kind_of(path: &Path) -> Option<PreviewType> {
         return match kind {
             PreviewType::Vector if svg_preview::is_svg_file(path) => Some(PreviewType::Vector),
             PreviewType::Fonts => Some(PreviewType::Fonts),
+            PreviewType::Text if html_is_engine_drawn(path) => Some(PreviewType::Text),
             _ => None,
         };
     }
@@ -2388,7 +2424,21 @@ fn engine_kind_of(path: &Path) -> Option<PreviewType> {
         return Some(PreviewType::Fonts);
     }
 
+    // A page of HTML is a text file, so the kind it answers with is the text kind's: the
+    // gate over it is the one a text preview is switched by, and the loader reaches the
+    // engine through that same arm (see `load_media_of_kind`).
+    if html_is_engine_drawn(path) {
+        return Some(PreviewType::Text);
+    }
+
     None
+}
+
+/// Whether `path` is a page of HTML the browser engine draws: the name is one of the two a
+/// page goes by, and the engine is the thing that draws it (see `webview_preview::draws`,
+/// which answers for a machine with no runtime by not drawing at all).
+fn html_is_engine_drawn(path: &Path) -> bool {
+    crate::formats::text_formats::is_html_extension(path) && webview_preview::draws(path)
 }
 
 fn current_webp_playback_fps() -> u32 {
@@ -3068,6 +3118,11 @@ fn scale_of_kind(kind: PreviewType, path: &Path, scales: HoverScales) -> Preview
         // the whole of that room unless it asks for less (see `fit_reduced`).
         PreviewType::Ebook => fit_reduced(scales.ebook),
 
+        // A page of HTML the engine draws is the one exception to the arm below: the engine
+        // draws it at whatever box it is given rather than painting it at a fixed size, so
+        // the share is of the room — the rule a document follows (see `html_page_box`).
+        PreviewType::Text if html_is_engine_drawn(path) => fit_reduced(scales.document),
+
         // Text is drawn at a fixed, display-scaled font size and a listing is painted to
         // the frame it is given, so neither is enlarged or reduced by a setting: the size
         // the box came out at is the size they are drawn at. A text page is measured
@@ -3267,6 +3322,11 @@ fn is_text_preview(path: &Path) -> bool {
 /// bytes first and the name after them — so an archive it lists under a name no list holds (a
 /// `.cab` renamed to `.dat`) is a page here too.
 fn page_is_painted(path: &Path) -> bool {
+    // A page the engine draws is not painted into the box at all, so it is not this rule.
+    if html_is_engine_drawn(path) {
+        return false;
+    }
+
     is_text_preview(path)
         || archive_formats::is_archive_file(path)
         || peazip_formats::is_engine_archive(path)
@@ -4425,6 +4485,11 @@ fn image_cache_put(key: ImageCacheKey, frame: ImageFrame) {
 /// This is what the loader answers with for a document, and the install path reads it as
 /// the signal to hand the hover over: nothing of this app's goes on screen for one, so
 /// there is no frame to install and no size to place it by.
+///
+/// A page of HTML the engine draws is the same kind of document as far as this is
+/// concerned, and this is what it is answered with too: the one kind carries both, and the
+/// engine's window is the preview either way (see `html_is_engine_drawn`, which is what
+/// decides between this and a painted text preview).
 fn engine_svg_media() -> MediaData {
     MediaData {
         frames: Vec::new(),
@@ -6502,8 +6567,14 @@ fn load_media_of_kind(
                 load_vector_preview(path, max_width, max_height, preview_scale)
             }
         }
+        // A page of HTML the engine draws is handed over the way a document is: the media carries
+        // the kind and no frame, and the engine's window is the preview (see `engine_svg_media`).
         PreviewType::Text => {
-            load_text_preview(path, max_width, max_height, dpi, current_text_options())
+            if html_is_engine_drawn(path) {
+                Some(engine_svg_media())
+            } else {
+                load_text_preview(path, max_width, max_height, dpi, current_text_options())
+            }
         }
         // A sound: a card of what the file holds, painted like an archive's page. The facts are
         // the probe's and are already in hand — the measure that read them is what laid this
@@ -6776,6 +6847,23 @@ fn font_box(path: &Path) -> Option<(u32, u32)> {
         font_preview::probe(&source)
             .map(|_| (font_preview::SPECIMEN_WIDTH, font_preview::SPECIMEN_HEIGHT))
     })
+}
+
+/// The nominal width of the box a page of HTML is drawn in.
+const HTML_PAGE_WIDTH: u32 = 1280;
+
+/// The nominal height of the box a page of HTML is drawn in.
+const HTML_PAGE_HEIGHT: u32 = 800;
+
+/// The box a page of HTML is drawn in, which is this app's own: a page asks for no size of
+/// its own, and what the layout gives it is this box scaled by `document_scale` — so a
+/// `Fit to Screen` is the room the display has and a share of it is that share of the room
+/// (see `page_is_painted`, which keeps a page that is text off this box).
+///
+/// Nothing is read to answer it, which is what a specimen's box is not: a page is laid out by
+/// the browser at the size it is given, so there is no size in the file to measure.
+fn html_page_box() -> (u32, u32) {
+    (HTML_PAGE_WIDTH, HTML_PAGE_HEIGHT)
 }
 
 /// The box a vector drawing asks for, measured the same way: what a metafile declares is read
@@ -7725,7 +7813,11 @@ fn media_dimensions_of_kind(kind: PreviewType, path: &PathBuf) -> Option<(u32, u
         // beside the drawn kinds and not here (see `media_dimensions`).
         PreviewType::Audio => None,
         PreviewType::Ebook => pdf_page_box(path),
-        PreviewType::Archives | PreviewType::Text | PreviewType::Peazip => None,
+        PreviewType::Archives | PreviewType::Peazip => None,
+        // A page of HTML the engine draws is the exception among the kinds that have no size
+        // of their own: it is drawn in a box of this app's rather than painted into one (see
+        // `html_page_box`).
+        PreviewType::Text => html_is_engine_drawn(path).then(html_page_box),
         PreviewType::Document => office_preview::measure(path),
         PreviewType::Libre => libre_box(path),
         PreviewType::Magick => magick_box(path),
@@ -7897,6 +7989,11 @@ fn media_dimensions(path: &PathBuf, bounds: ScreenBounds, dpi: u32) -> Option<(u
         return match kind {
             // The three kinds measured against the room they are drawn in, which is a question
             // this side has the answer to and `media_dimensions_of_kind` does not.
+            PreviewType::Text if html_is_engine_drawn(path) && PreviewType::Text.enabled() => {
+                Some(html_page_box())
+            }
+            // And a text file that is not one, which is the arm this group is about: the
+            // room it is drawn in is a question `media_dimensions_of_kind` cannot answer.
             PreviewType::Text => text_box(path, bounds, dpi),
             PreviewType::Archives => archive_box_off_the_tick(path, bounds, dpi),
             PreviewType::Peazip => peazip_box(path, bounds, dpi),
@@ -7906,6 +8003,13 @@ fn media_dimensions(path: &PathBuf, bounds: ScreenBounds, dpi: u32) -> Option<(u
             PreviewType::Audio => audio_box(path, bounds, dpi),
             _ => media_dimensions_of_kind(kind, path),
         };
+    }
+
+    // A page of HTML the engine draws is measured at a box of this app's own, for the reason
+    // a specimen is: the page asks for no size, and the box is the one the layout scales by
+    // `document_scale` (see `html_page_box`).
+    if html_is_engine_drawn(path) && PreviewType::Text.enabled() {
+        return Some(html_page_box());
     }
 
     if is_text_preview(path) {
@@ -10382,6 +10486,57 @@ fn pin_is_collapsed() -> bool {
     PIN_COLLAPSED.load(Ordering::Acquire)
 }
 
+/// Note that a press has landed on one of the pin's own windows. The window procedures are the
+/// only places a press can be seen — a window that is behind another one is sent nothing, and a
+/// window that is not there is sent nothing either — so the fact is left here for the loop to ask
+/// about when the key comes (see `pin_has_the_hand`).
+fn note_pin_hand() {
+    PIN_HAND.store(true, Ordering::Release);
+}
+
+/// Whether the hand is on one of the pin's own windows: a press landed on one and the pointer has
+/// not been taken off it since. The press is what keeps a preview that merely stands where the
+/// pointer happens to be — which is where a preview is placed — from reading as one the hand is on.
+fn pin_has_the_hand() -> bool {
+    PIN_HAND.load(Ordering::Acquire) && pointer_on_a_pin_window()
+}
+
+/// Whether the pointer is inside the pin's own window, or inside the bubble a collapsed one left.
+///
+/// A collapsed pin has no window of its own on the screen, so the bubble is what the hand can be
+/// on; an uncollapsed one is the window, whose box the media is laid out in (see `window_box`).
+/// Anything that cannot be read — no cursor position, a pin that has gone between the two reads, a
+/// box that could not be asked for — answers no: the fact being asked for is a hand, and a hand
+/// that cannot be placed on anything is not one.
+fn pointer_on_a_pin_window() -> bool {
+    let Some((x, y)) = cursor_screen_point() else {
+        return false;
+    };
+
+    // The bubble is a window of its own, so it is asked for its own box; a window that is up is
+    // asked for the box its media is laid out in, which is the box on the screen (see
+    // `window_box`).
+    let (left, top, right, bottom) = if pin_is_collapsed() {
+        let bubble = PIN_BUBBLE_HWND.load(Ordering::SeqCst);
+        if bubble == 0 {
+            return false;
+        }
+        let Some((left, top, width, height)) = window_origin(HWND(bubble as *mut _)) else {
+            return false;
+        };
+        (left, top, left + width, top + height)
+    } else {
+        let window =
+            PINNED.lock().ok().and_then(|pinned| pinned.as_ref().map(|pin| pin.window_box()));
+        match window {
+            Some(window) => window,
+            None => return false,
+        }
+    };
+
+    x >= left && x < right && y >= top && y < bottom
+}
+
 /// A mouse message's point in the coordinates the media of a pinned window is drawn in: the same
 /// point, less the band of chrome that has been added above it — and the same point exactly for a
 /// kind whose chrome is drawn over its media, whose media begins at the window's own top (see
@@ -10447,6 +10602,13 @@ unsafe extern "system" fn window_proc(
             LRESULT(1)
         }
         WM_LBUTTONDOWN => {
+            // A press on the pin is what puts the hand on it, and the pin's key asks that before it
+            // takes the window down, because this window cannot take focus and so cannot be found
+            // out from Windows (see `PIN_HAND`).
+            if pinned() {
+                note_pin_hand();
+            }
+
             // A press on a pinned window is the pin's before it is anything else's: the volume
             // popup over the picture, the caption's buttons, the caption itself, an edge, and the
             // media under the hand are all things a window does with a pointer (see `pinned_press`).
@@ -12449,6 +12611,13 @@ impl PinResize {
 /// the browser are the preview loop's — so it is written here and drained by the loop.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum PinCommand {
+    /// The file before the one pinned, in the order the folder it was taken up in is showing
+    /// them. It goes through the loop like the rest, because the file it names is a walk of
+    /// the folder and the loop is what owns the configuration the walk is read under (see
+    /// `shell::pin_navigation`).
+    Previous,
+    /// The file after the one pinned, the same walk the other way.
+    Next,
     Minimize,
     Maximize,
     Close,
@@ -12465,6 +12634,8 @@ const PIN_COMMAND_NONE: u32 = 0;
 /// Leave a command for the preview loop to act on.
 fn ask_pin(command: PinCommand) {
     let code = match command {
+        PinCommand::Previous => 5,
+        PinCommand::Next => 6,
         PinCommand::Minimize => 1,
         PinCommand::Maximize => 2,
         PinCommand::Close => 3,
@@ -12480,6 +12651,8 @@ fn take_pin_command() -> Option<PinCommand> {
         2 => Some(PinCommand::Maximize),
         3 => Some(PinCommand::Close),
         4 => Some(PinCommand::Restore),
+        5 => Some(PinCommand::Previous),
+        6 => Some(PinCommand::Next),
         _ => None,
     }
 }
@@ -12596,6 +12769,9 @@ fn end_pin_state() -> PreviewMessage {
 
     PIN_ACTIVE.store(false, Ordering::Release);
     PIN_COLLAPSED.store(false, Ordering::Release);
+    // A pin that is over is not a thing the hand is on any more, and the next one comes up
+    // somewhere the pointer may well be (see `PIN_HAND`).
+    PIN_HAND.store(false, Ordering::Release);
     // A pin that is over is a pointer that is on something new: the file the pin was of is not
     // a hover the hook has already answered, and one is due the moment the pin is gone rather
     // than after the delay a re-hover of the same file is given (see `PIN_RESUMED`).
@@ -13686,19 +13862,109 @@ fn centred_at(size: (i32, i32), centre: (i32, i32)) -> ScreenRegion {
     (left, top, left + width, top + height)
 }
 
-/// The pin's own answers to the chrome, once a tick: the four buttons, and whether the media
+/// The pin's own answers to the chrome, once a tick: its buttons, and whether the media
 /// behind the pin is still there at all.
-fn pin_command_request(request: &mut Option<PreviewMessage>) {
-    match take_pin_command() {
-        Some(PinCommand::Close) => *request = Some(end_pin_state()),
-        Some(PinCommand::Minimize) => collapse_pin(),
-        Some(PinCommand::Restore) => restore_pin(),
-        Some(PinCommand::Maximize) => toggle_pin_maximized(request),
-        None => {}
-    }
+///
+/// A step along the walk is answered with the file it lands on rather than with a message,
+/// because the walk is taken up where a pick is taken up (`pin_pick`) and nowhere else: a
+/// `PinUpdate` message is the Explorer's half of the question, and the loop's own match for
+/// one is a no-op — it is a pick that swaps a pin's file, and a button is a pick (see
+/// `step_pinned_file`).
+fn pin_command_request(request: &mut Option<PreviewMessage>) -> Option<PathBuf> {
+    let step = match take_pin_command() {
+        Some(PinCommand::Close) => {
+            *request = Some(end_pin_state());
+            None
+        }
+        Some(PinCommand::Minimize) => {
+            collapse_pin();
+            None
+        }
+        Some(PinCommand::Restore) => {
+            restore_pin();
+            None
+        }
+        Some(PinCommand::Maximize) => {
+            toggle_pin_maximized(request);
+            None
+        }
+        Some(PinCommand::Previous) => step_pinned_file(-1),
+        Some(PinCommand::Next) => step_pinned_file(1),
+        None => None,
+    };
 
     if !pin_media_is_alive() {
         *request = Some(end_pin_state());
+    }
+
+    step
+}
+
+/// The file a step along the folder's walk takes the pin to, or nothing where the walk has
+/// nowhere to step to.
+///
+/// The walk is the pin's own, read under the configuration and against the listing's order
+/// (see `shell::pin_navigation`), so this is only the step: which of the folder's files is
+/// next, and what a pin does with a file it has been given, are both already answered
+/// elsewhere (`pin_update_plan` and what it measures, and the swap behind it).
+///
+/// The file is handed back as a pick rather than posted as a `PinUpdate` message. The
+/// message is the Explorer's half of the question — a file picked in the listing — and it
+/// drops the request when `Pin Mode → Update Preview` is off, which is the right answer there
+/// and the wrong one here: a button on the caption is a thing the user pressed, and it is
+/// asked for by no setting. A pick is taken up by the loop whether it came from the listing
+/// or from the caption, which is what makes the two the same gesture.
+fn step_pinned_file(step: i32) -> Option<PathBuf> {
+    let current = pinned_path()?;
+
+    // The configuration is taken by copy and the lock let go before the walk: the walk reads
+    // a folder behind it, and a lock held across a folder read is a lock every other thread
+    // of the app waits on for as long as the disk takes — the preview thread included, which
+    // is the thread that pumps this window's own messages.
+    let config = CONFIG.lock().ok()?.clone();
+
+    pin_navigation::list_for(&current, &config)
+        .and_then(|list| pin_navigation::step_to(&current, &list, step))
+}
+
+/// The three answers a pin's key can get when a pin is up: take it down, show it a file picked
+/// since, or do nothing at all.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum PinPress {
+    /// The pin comes down, by the ordinary take-down a close button goes through.
+    Unpin,
+    /// The window is put back up on a file picked in Explorer since the collapse: a bubble is a
+    /// thing that was put away to be brought out again, not a thing the key ends.
+    Swap,
+    /// The key was not about the pin, and the pin is left exactly as it is.
+    Nothing,
+}
+
+/// What the key does to a pin that is up, from the three facts that make the question askable.
+///
+/// The hand is asked first because it is the only one of the three that cannot be a coincidence:
+/// a press on the pin is the pin being touched, whatever the keyboard happens to be doing, and it
+/// is the one a drag of the bubble leaves behind.
+fn pin_press_action(collapsed: bool, explorer_focused: bool, hand: bool) -> PinPress {
+    if hand {
+        return PinPress::Unpin;
+    }
+
+    // With the keyboard in another program, the key belongs to that program. A pin never took
+    // focus, so this is the only thing that says the press was not about the pin at all.
+    if !explorer_focused {
+        return PinPress::Nothing;
+    }
+
+    // Explorer holding the keyboard, and the pin not in front of the user, is a key thrown at the
+    // folder tree. A window that is up is what stands between the tree and the files in it, so
+    // that press is about the pin; a bubble is not — it has been put away on purpose, and what the
+    // user is doing behind it is picking files, which the pin is owed an answer to rather than an
+    // end (see `pin_bubble_pick`).
+    if collapsed {
+        PinPress::Swap
+    } else {
+        PinPress::Unpin
     }
 }
 
@@ -13748,6 +14014,10 @@ fn collapse_pin() {
 
         pin.collapsed = true;
         PIN_COLLAPSED.store(true, Ordering::Release);
+        // The press that collapsed the window was on the minimize button, and what it leaves is a
+        // bubble the hand has not been on: the pin is not on the bubble until it is pressed (see
+        // `PIN_HAND`).
+        PIN_HAND.store(false, Ordering::Release);
 
         // A bubble has no bar and no level to be read off: the popup goes with the window it was
         // drawn over, and a pin put back up is put back up without it.
@@ -14356,6 +14626,11 @@ unsafe extern "system" fn pin_bubble_proc(
 ) -> LRESULT {
     match msg {
         WM_LBUTTONDOWN => {
+            // The hand is on the bubble from the press that takes hold of it, whatever that press
+            // turns out to be — a click, or a drag that carries the bubble somewhere and leaves it
+            // there under the pointer (see `PIN_HAND`).
+            note_pin_hand();
+
             let cursor = cursor_screen_point();
             let origin = window_origin(hwnd).map(|rect| (rect.0, rect.1));
 
@@ -15599,6 +15874,64 @@ fn resize_pinned_content(
     )
 }
 
+/// Hand a file to whatever the machine has filed it under — the program the user chose for
+/// this kind of file, or the one Windows picked — which is the one way out of a pin into the
+/// program that owns the format. A pin shows a file rather than opening it, so this is the
+/// only button that gives it away.
+///
+/// The path is the one the pin holds, and the Shell canonicalizes to the verbatim `\\?\`
+/// spelling, which is not a legal thing to hand `ShellExecuteW`: a file handed to the Shell
+/// in that form is a file it cannot find, and the button does nothing at all. So the prefix
+/// is taken off first — the same adjustment the browser and the Office engine make before
+/// they point anything at a file (see `plain_path` in `shell::pin_navigation`, which is the
+/// other end of the same question).
+///
+/// Nothing is asked of the file here and nothing is waited for: the Shell hands the file to
+/// the program and returns, and what that program does with it is the program's own business
+/// and never the pin's — a pin that came back up afterwards would be a second window of a
+/// file this app is already showing.
+///
+/// # Safety
+///
+/// `ShellExecuteW` is a plain `extern "system"` call with no caller-supplied pointers: the
+/// verb and the file are this function's own null-terminated buffers, and the window handle
+/// handed it is null rather than borrowed, so there is nothing for the caller to keep alive
+/// across the call and nothing it can invalidate underneath it. The file itself belongs to
+/// whichever program the Shell starts, and this side has no handle on it to release.
+unsafe fn open_path_with_default_app(path: &Path) {
+    let text = path.to_string_lossy();
+    let plain = match text.strip_prefix(r"\\?\UNC\") {
+        Some(rest) => format!(r"\\{rest}"),
+        None => text
+            .strip_prefix(r"\\?\")
+            .unwrap_or(&text)
+            .to_string(),
+    };
+
+    let wide: Vec<u16> = std::ffi::OsStr::new(&plain)
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+
+    // The Shell hands back the handle of a program it started, and one of its own error codes
+    // at or below 32 for anything it would not start: no association for the format, a path it
+    // will not take, a Shell that is not answering. Which of those it was is not asked, and not
+    // asserted either — a format with nothing filed against it is the user's machine rather
+    // than a fault in this one, so a check that panicked on it would be an alarm that goes off
+    // for an ordinary machine. A pin has nowhere to put an error and nothing to say about it,
+    // so a button that did not work says so by having not worked, and the value is read only to
+    // keep the boundary written down where the call is.
+    let launched = ShellExecuteW(
+        HWND(std::ptr::null_mut()),
+        w!("open"),
+        PCWSTR(wide.as_ptr()),
+        PCWSTR::null(),
+        PCWSTR::null(),
+        SW_SHOWNORMAL,
+    );
+    let _ = launched.0 as usize > 32;
+}
+
 /// A release on a pinned window, answering whether it was the pin's to act on: the button a press
 /// landed on is clicked if the pointer is still on it, and a drag — which is over wherever the
 /// pointer left it — asks for the media to be laid out again at the box the window ended up with.
@@ -15650,6 +15983,16 @@ unsafe fn pinned_release(hwnd: HWND, x: i32, y: i32) -> bool {
                 pin_chrome::CaptionButton::Minimize => ask_pin(PinCommand::Minimize),
                 pin_chrome::CaptionButton::Maximize => ask_pin(PinCommand::Maximize),
                 pin_chrome::CaptionButton::Close => ask_pin(PinCommand::Close),
+                pin_chrome::CaptionButton::Previous => ask_pin(PinCommand::Previous),
+                pin_chrome::CaptionButton::Next => ask_pin(PinCommand::Next),
+                // The file is in hand here and the Shell takes it as it stands, so this one
+                // is asked for where it was pressed rather than written down for the loop
+                // to pick up: nothing about opening a file is the loop's business.
+                pin_chrome::CaptionButton::OpenWith => {
+                    if let Some(path) = pinned_path() {
+                        open_path_with_default_app(&path);
+                    }
+                }
             }
         }
 
@@ -15827,6 +16170,11 @@ pub fn run_preview_window() {
         // the answer lands, which is a tick of its own, so this outlives the tick the way the
         // replay flags above it do (see `PinPlan::Awaiting`).
         let mut pin_awaiting_box: Option<PathBuf> = None;
+        // The file picked in Explorer while the pin is a bubble: held rather than shown, because a
+        // pin that is a bubble has no window to show anything in, and what the user is doing
+        // behind it is walking through files. The key is what brings the window back up on it
+        // (see `pin_press_action`).
+        let mut pin_bubble_pick: Option<PathBuf> = None;
         // A player that has been started and has not put its window up yet: the wait
         // for a video, which the spinner stands in for until the player's window is
         // there (see `VideoStart`).
@@ -15852,6 +16200,10 @@ pub fn run_preview_window() {
             // buttons, or the media behind it having come apart. It is held for the drain
             // below, which is where a hover's own messages are turned into a preview.
             let mut pin_request: Option<PreviewMessage> = None;
+            // The file the key asked a bubble to be brought back up on, answered further down the
+            // tick by the ordinary swap rather than here, so that a bubble is shown a file the
+            // same way a window is (see `pin_bubble_pick`).
+            let mut pin_swap_requested: Option<PathBuf> = None;
 
             // Check for Windows messages
             while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
@@ -15916,8 +16268,40 @@ pub fn run_preview_window() {
             if pin_presses > 0 && pin_enabled() {
                 if pinned() {
                     // The key that pins is the key that unpins: one gesture for the whole of
-                    // it, which is what a key Explorer also owns has to be.
-                    pin_request = Some(end_pin_state());
+                    // it, which is what a key Explorer also owns has to be. It only unpins what
+                    // it is about, though, and neither the pin nor its bubble can be found out
+                    // from Windows as the window the user is in — so what is asked instead is
+                    // the keyboard, and whether the hand is on one of the pin's own windows
+                    // (see `pin_press_action`).
+                    match pin_press_action(
+                        pin_is_collapsed(),
+                        crate::shell::explorer_hook::is_foreground_explorer(),
+                        pin_has_the_hand(),
+                    ) {
+                        PinPress::Unpin => pin_request = Some(end_pin_state()),
+                        // A bubble is not a thing the key ends: it is a window the user put away
+                        // and is working behind, so the key brings it back on the file that has
+                        // been picked since it went down. The window is put back up first, so
+                        // that the swap below runs against a pin that is on screen again, at the
+                        // box a restore leaves it in.
+                        PinPress::Swap => {
+                            // The window comes back only where the swap has room to be made in the
+                            // same tick: a load already in hand is a tick the pick below has no
+                            // work for, and a window put back up without the file it was brought
+                            // back for is a worse answer than the bubble it stayed in. The file is
+                            // left in hand for the next press either way.
+                            if pending_load.is_none() {
+                                if let Some(path) = pin_bubble_pick.take() {
+                                    restore_pin();
+                                    pin_swap_requested = Some(path);
+                                }
+                            }
+                        }
+                        // A key thrown at another program is that program's, and the pin is left
+                        // as it stands: closing it here would lose a window nothing asked to be
+                        // lost.
+                        PinPress::Nothing => {}
+                    }
                 } else if let Some(request) =
                     pin_what_is_on_screen(&current_show, pending_load.as_ref())
                 {
@@ -15926,7 +16310,19 @@ pub fn run_preview_window() {
             }
 
             if pinned() {
-                pin_command_request(&mut pin_request);
+                // A step the caption's own walk buttons took is a pick like any other, and is
+                // held in the same slot: what a pick is taken up as is the loop's, whether it
+                // came from the listing, from the key, or from a button.
+                if let Some(path) = pin_command_request(&mut pin_request) {
+                    pin_swap_requested = Some(path);
+                }
+
+                // A window that is up holds nothing for the key: what a restore by a click on the
+                // bubble shows is the file the window was showing, and a pick made behind a pin
+                // nobody asked for one is not owed a swap later (see `pin_bubble_pick`).
+                if !pin_is_collapsed() {
+                    pin_bubble_pick = None;
+                }
 
                 // What a collapse into the bubble holds back and what a restore puts back,
                 // read from the two `Pin Mode → Pause Preview` switches every tick: a switch
@@ -16862,6 +17258,19 @@ pub fn run_preview_window() {
                                 // pin was (see the gate before the match below).
                                 (true, ..) => refresh_requested = true,
                                 (_, true, Some(show)) => latest_preview_msg = Some(show),
+                                // A page the engine was drawing is a window of the engine's
+                                // with no media of this app's behind it, so a switch that
+                                // stops the file being one the engine draws leaves nothing
+                                // to recomposite: the hover is rebuilt from itself instead
+                                // (see `refresh_render_html`).
+                                (_, false, Some(show))
+                                    if current_media_kind().is_none()
+                                        && show_path(&show)
+                                            .and_then(|path| engine_kind_of(path))
+                                            .is_none() =>
+                                {
+                                    latest_preview_msg = Some(show)
+                                }
                                 _ => refresh_requested = true,
                             }
                         }
@@ -17344,11 +17753,24 @@ pub fn run_preview_window() {
             // would take the landing of a hover's wait for its own (see `pin_awaiting_box`).
             if !pinned() {
                 pin_awaiting_box = None;
+                // A file picked behind a pin that is over is not owed to the pin that follows it:
+                // what the key brings a bubble back on is what was picked while *that* bubble was
+                // down, and a file nobody is holding any more is a swap nothing asked for (see
+                // `pin_bubble_pick`). It is cleared here rather than with the file that is on
+                // screen, because a pin ended and another taken up in the same tick is a tick this
+                // is the only place to notice.
+                pin_bubble_pick = None;
             }
 
-            if let Some(path) = pin_pick.take() {
+            if let Some(path) = pin_pick.take().or_else(|| pin_swap_requested.take()) {
                 pin_awaiting_box = None;
-                if pinned() && pin_update_enabled() && pending_load.is_none() {
+                // A pin that is a bubble has no window to show this in, so the file is held for
+                // the key rather than swapped in: what the user is doing behind a bubble is
+                // picking, and a bubble that took the pin down on the first pick would be a
+                // window lost for a file they did not ask to see (see `pin_bubble_pick`).
+                if pinned() && pin_is_collapsed() {
+                    pin_bubble_pick = Some(path);
+                } else if pinned() && pin_update_enabled() && pending_load.is_none() {
                     let update = match pin_update_plan(&path) {
                         Some(PinPlan::Show(update)) => Some(update),
                         // The file has no box of its own yet — what was measured for it is the
@@ -17863,6 +18285,10 @@ pub fn run_preview_window() {
 
                         PIN_ACTIVE.store(true, Ordering::Release);
                         PIN_COLLAPSED.store(false, Ordering::Release);
+                        // A window coming up is one nobody has pressed on yet, and a pin is placed
+                        // where the pointer already is, so a pointer resting inside the new box is
+                        // not a hand on it (see `PIN_HAND`).
+                        PIN_HAND.store(false, Ordering::Release);
 
                         // A text preview is the one kind a pin *changes* rather than frames: it
                         // comes up in full mode, which is the scrollbar, the selection, and the
@@ -22149,6 +22575,58 @@ mod tests {
         // media, and the caption and the bar are strips *of* it rather than room beside it.
         assert_eq!(content_box_of(window, 96, false, true), window);
         assert_eq!(content_box_of(window, 96, true, true), window);
+    }
+
+    #[test]
+    fn the_pin_key_only_closes_the_window_it_is_about() {
+        // The hand on the pin and another program in front of it: the key was about the pin
+        // whatever the keyboard is doing, so the window comes down. A press on the pin is the
+        // one fact that cannot be a coincidence, and it is a drag of the bubble that leaves it
+        // behind.
+        assert_eq!(pin_press_action(false, false, true), PinPress::Unpin);
+
+        // Nothing anywhere near the pin: no hand on it and the keyboard in somebody else's
+        // program, so the key is that program's and the window is left standing.
+        assert_eq!(pin_press_action(false, false, false), PinPress::Nothing);
+
+        // Explorer holding the keyboard, and a window up in front of the tree: the key was
+        // thrown at the pin, and one key for the whole of a pin is the gesture there is.
+        assert_eq!(pin_press_action(false, true, false), PinPress::Unpin);
+
+        // The same key at the same keyboard, but the pin is a bubble: it comes back up on the
+        // file that has been picked behind it, which is what a key means when what is up is a
+        // thing the user put away and is working behind.
+        assert_eq!(pin_press_action(true, true, false), PinPress::Swap);
+    }
+
+    /// Every command a caption's button asks for survives the trip out of the window procedure
+    /// and back, and a tick drains one of them and leaves the rest alone. The codes are the
+    /// whole of the crossing — the loop and the window procedure share nothing else — so a
+    /// button whose code nothing reads back is a button that does nothing at all.
+    #[test]
+    fn every_command_a_caption_asks_for_comes_back_to_the_loop() {
+        for command in [
+            PinCommand::Previous,
+            PinCommand::Next,
+            PinCommand::Minimize,
+            PinCommand::Maximize,
+            PinCommand::Close,
+            PinCommand::Restore,
+        ] {
+            ask_pin(command);
+            assert_eq!(
+                take_pin_command(),
+                Some(command),
+                "{command:?} does not survive being left for the loop"
+            );
+        }
+
+        // And the second ask overwrites the first rather than queueing behind it, which is
+        // what a single-slot command means: one at a time is all a pointer can ask for.
+        ask_pin(PinCommand::Previous);
+        ask_pin(PinCommand::Next);
+        assert_eq!(take_pin_command(), Some(PinCommand::Next));
+        assert_eq!(take_pin_command(), None, "a command is taken once");
     }
 
     #[test]

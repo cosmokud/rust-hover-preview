@@ -217,18 +217,22 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
 
 - **Enable Preview** — Turn previews on or off.
 - **Pin Mode** — Everything about pinning, in one place.
-  - **Enable (Space)** — Turn pinning on or off. Pressing the key while a preview is up turns it into a window of its own: captioned, movable, always on top, and still there when the pointer leaves. Its edges resize it, **Maximize** fits it to the screen, and **Minimize** collapses it into a round bubble. A pinned text preview comes up in full mode, so it scrolls and its text can be selected and copied. The key is named in the item and can be changed in `config.ini` (`pin_key`).
+  - **Enable (Space)** — Turn pinning on or off. Pressing the key while a preview is up turns it into a window of its own: captioned, movable, always on top, and still there when the pointer leaves. Its edges resize it, **Maximize** fits it to the screen, and **Minimize** collapses it into a round bubble. The caption also carries **Previous**, **Next** and **Open With**: the first two step the pin through the sibling files in the folder it was taken up in, in the order the listing is showing them, and the third opens the file in whatever program Windows has registered for it — the way out of a pin and into the editor or player that owns the format. A pinned text preview comes up in full mode, so it scrolls and its text can be selected and copied. The key is named in the item and can be changed in `config.ini` (`pin_key`).
   - **Update Preview** — Whether a pin that is up is shown the file you pick next.
     - **Enabled** — On by default. A file you click, or one the keyboard selects, is shown where the window already stands, rather than as a second preview beside it. A sound's card is drawn at its own size, in the middle of that box.
     - **On Hover** — Off by default. On, the pointer's own hover is one of the ways a pin is told about a file, the way a Quick Look window follows a listing. Greyed while **Enabled** is off.
   - **Pause Preview** — What a window collapsed into its bubble does with what it was playing. Both on by default: the media engine is paused where it stood and started again at the second it stopped at when the window comes back, rather than playing on behind a bubble nobody can see.
     - **Audio**
     - **Video**
+  - **Nav File Types** — What **Previous** and **Next** on the caption step through. Both work with **Update Preview** off; they are a thing you pressed, and no setting asks for them.
+    - **All** (`default`) — Every file this build can preview, in the folder the pin was taken up in and not any subfolder of it, in the order the Explorer listing is showing them. A video sits beside a sound.
+    - **Category** — Only the files of the pinned file's own kind of thing: pictures, video, audio, documents, archives, text, fonts, or design. A camera raw is a picture and a book is a document, because that is what you call them. A kind switched off under **Preview Types**, or one with no engine installed on the machine, is not a step either way.
 - **Preview Types** — Choose which file kinds can preview: Images, Videos, Audio, Text, Ebook, Archives, Document, Vector, Fonts, Design. One switch covers both the original file and the engine-drawn preview. Examples: camera raw uses **Images**; LibreOffice document uses **Document**; PeaZip archive uses **Archives**; Calibre book uses **Ebook** — also the app-drawn PDF and comic pages.
 - **Text Preview**
   - **Theme** — Atom One Light, One Dark Pro, or any `.tmTheme` in the theme folder.
   - **Font Size** — `400%` at the top down to `70%` at the bottom.
   - **Markdown** — Rendered or Source.
+  - **Render HTML** — Off by default. On, a `.htm` or `.html` file is previewed as the page it holds rather than as its markup, drawn by the browser engine. Without that engine on the machine it stays a text preview.
 - **Timing**
   - **Prioritize Keyboard** — On by default. The file under a pointer that has not been moved does not preview of its own while the keyboard is driving Explorer, so pressing a key onto a file with no preview of its own behaves like pressing one onto a file that has a preview. The pointer takes the screen back when it is moved, when the wheel is turned, or when a folder change hands it over. Off, the pointer's own hover always wins.
   - **Trigger Key (Alt)** — The key is named in the item.
@@ -293,6 +297,7 @@ Example, trimmed:
 ; General
 pin_enabled=true
 pin_key=space
+pin_nav_file_types=all
 pin_pause_audio=true
 pin_pause_video=true
 pin_update_enabled=true
@@ -313,6 +318,7 @@ video_preview_enabled=true
 
 ; Text Preview
 markdown_mode=rendered
+render_html=false
 text_font_scale=125
 theme=light
 
@@ -385,6 +391,7 @@ Here’s what this .INI does:
 - `theme`: `light`, `dark`, or `custom:<name>`.
 - `markdown_mode`: show Markdown as `rendered` or `source`.
 - `text_font_scale`: 1–1000%, default `125`; archive lists follow it too.
+- `render_html`: `false` by default. On, `.htm` and `.html` files are drawn as the page they hold by the browser engine, at the share of the screen **Document Scaling** names. Without that engine, they are text like before.
 
 **What can preview**
 
@@ -420,9 +427,10 @@ Here’s what this .INI does:
 
 - `trigger_key` / `trigger_key_mode` / `trigger_key_enabled`: the key (`alt`, `ctrl`, `shift`, `win`), what it does (`disable` or `enable`), and whether it is watched. Default `true`.
 - `trigger_key_affect_pin_mode`: whether the trigger key reaches a pinned preview. Default `false` — the key is not read while a preview is pinned, up or collapsed into its bubble, since a pin is a window you put there rather than a hover for the key to hold back. `true` lets holding the key bring the pin down with the previews it stops. It speaks for `disable`; the `enable` mode is left as it is.
-- `pin_key` / `pin_enabled`: the key that pins the preview on screen (`space` by default — the same spellings the trigger key takes: `alt`, `f8`, `a`, `space`, …), and whether it is watched. A pinned preview is a window of its own: a caption with minimize, maximize and close, draggable by the caption or by the picture, and previews are held back until it is closed. Its edges resize it and what that does depends on what is inside — a picture, a video or a rendered page keeps its own shape, a document or a listing is laid out to whatever box it is given, and a sound's card or a video FFmpeg's player has is not resized at all. A picture's caption and bar are drawn over the media rather than in bands around it, and fade in as the pointer arrives; only the strip under the pointer is shown. A pinned text preview comes up in full mode: it scrolls, its text can be selected, `Ctrl+A` selects all of it, and `Ctrl+C` copies what is selected. A pinned video has a transport bar with a volume of its own, which is set on the window and does not change **Volume → Video**. Minimize collapses it into a round bubble that can be dragged anywhere and clicked to bring the window back; a right-click on the bubble closes it.
+- `pin_key` / `pin_enabled`: the key that pins the preview on screen (`space` by default — the same spellings the trigger key takes: `alt`, `f8`, `a`, `space`, …), and whether it is watched. A pinned preview is a window of its own: a caption with minimize, maximize and close beside its own **Previous**, **Next** and **Open With**, draggable by the caption or by the picture, and previews are held back until it is closed. Its edges resize it and what that does depends on what is inside — a picture, a video or a rendered page keeps its own shape, a document or a listing is laid out to whatever box it is given, and a sound's card or a video FFmpeg's player has is not resized at all. A picture's caption and bar are drawn over the media rather than in bands around it, and fade in as the pointer arrives; only the strip under the pointer is shown. A pinned text preview comes up in full mode: it scrolls, its text can be selected, `Ctrl+A` selects all of it, and `Ctrl+C` copies what is selected. A pinned video has a transport bar with a volume of its own, which is set on the window and does not change **Volume → Video**. Minimize collapses it into a round bubble that can be dragged anywhere and clicked to bring the window back; a right-click on the bubble closes it.
 - `pin_update_enabled`: whether a pin that is up is shown the file picked next, by click or by keyboard, without moving the window. Default `true`. Off, the pin keeps the file it was taken up on until it is closed — a pin is also a window to read in, and one that swapped its file out from under the hand on every keystroke would be unreadable.
 - `pin_update_on_hover`: whether that following includes the pointer's own hover, or only what a click or a key asks for. Default `false`; greyed in the tray while `pin_update_enabled` is off.
+- `pin_nav_file_types`: what the caption's **Previous** and **Next** buttons step through. `all` (default) is every file this build can preview, so a video steps to the sound beside it; `category` narrows the walk to the pinned file's own kind of thing — pictures, video, audio, documents, archives, text, fonts, or design, where a camera raw is a picture and a book is a document. The walk is the folder the pin was taken up in and no subfolder of it, is in the order the Explorer listing is showing, wraps at both ends, and is held per folder, read on the first press rather than when the pin is taken up. A file written before this setting existed is read as `all`.
 - `pin_pause_video` / `pin_pause_audio`: whether a pin collapsed into its bubble holds what it was playing where it stands, and starts it again at the second it stopped at when the window comes back up. Both default `true`. They are two switches because a video and a sound are two different things to want quiet.
 - `follow_cursor`: `true` = Follow Cursor; `false` = Best Position.
 - `avoid_mode`: `filename` default, `filename_column`, `details`, or `off` — what the preview avoids.

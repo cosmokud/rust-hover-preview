@@ -180,6 +180,15 @@ pub const DEFAULT_TTC_FACE: u32 = 1;
 /// stops at the tenth rather than at whatever a crafted file could claim, since what the
 /// menu offers is the whole range the setting holds.
 pub const MAX_TTC_FACE: u32 = 10;
+/// Whether a page of HTML is drawn by the browser engine rather than shown as its markup.
+///
+/// It is off where the app starts: a `.htm` and a `.html` are text files, and what the text
+/// lists claim is a page of text drawn at a fixed font size. The setting is what a file of
+/// those two names is previewed by instead — the same page the browser would show, in the
+/// engine's own window — and it is answered by whether the runtime is on the machine, so a
+/// machine without it keeps the text preview however the setting is written (see
+/// `webview_preview::draws`).
+pub const DEFAULT_RENDER_HTML: bool = false;
 pub const DEFAULT_TEXT_FONT_SCALE_PERCENT: u32 = 125;
 pub const MIN_TEXT_FONT_SCALE_PERCENT: u32 = 1;
 pub const MAX_TEXT_FONT_SCALE_PERCENT: u32 = 1000;
@@ -980,7 +989,7 @@ impl MarkdownMode {
 /// picture an installed converter develops, an archive an installed listing engine reads, and a
 /// book an installed ebook engine converts. Each is the same preview as the kind it belongs to — a
 /// page, a picture, a page of contents, a book — and is switched by that kind's gate.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PreviewType {
     Images,
     Videos,
@@ -1293,6 +1302,49 @@ pub const DEFAULT_PIN_PAUSE_VIDEO: bool = true;
 /// a preview that is heard where nothing of it is seen (see `DEFAULT_PIN_PAUSE_VIDEO`).
 pub const DEFAULT_PIN_PAUSE_AUDIO: bool = true;
 
+/// Which files a pinned window's own previous/next buttons step through.
+///
+/// The pin walks its folder rather than its own kind, so the two answers are what the walk is
+/// made of. `All` is every file this build could preview, so a `.mp4` sits beside a `.mp3`
+/// and the buttons are a way through a folder rather than a way through one kind of it.
+/// `Category` narrows the walk to what the pinned file is — a picture, a sound, a document —
+/// which is what a folder of mixed work wants, where stepping from a photograph into a video
+/// is a different gesture from stepping to the next photograph.
+///
+/// The two are categories rather than kinds because the kinds are claims: a camera raw and a
+/// JPEG are both pictures to anyone walking a folder, and whether the picture was developed
+/// by a converter on this machine is not a question the buttons on a caption should ask (see
+/// `formats::routing::nav_category`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PinNavFileTypes {
+    /// Every file this build can preview, whatever kind it is.
+    All,
+    /// Only the files of the pinned file's own category.
+    Category,
+}
+
+impl PinNavFileTypes {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::Category => "category",
+        }
+    }
+
+    /// The way a `config.ini` value names, or `None` for one that names no set of files.
+    fn from_str(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "all" | "every" | "all files" | "all file types" => Some(Self::All),
+            "category" | "same" | "same category" | "same type" => Some(Self::Category),
+            _ => None,
+        }
+    }
+}
+
+/// What the pin's own buttons step through unless the configuration says otherwise: every
+/// file this build can preview, which is the answer that makes them a way through a folder.
+pub const DEFAULT_PIN_NAV_FILE_TYPES: PinNavFileTypes = PinNavFileTypes::All;
+
 #[derive(Debug, Clone)]
 pub struct AppConfig {
     pub is_first_run: bool,
@@ -1344,6 +1396,15 @@ pub struct AppConfig {
     /// after another, the way a Quick Look window does; off, moving the pointer across a
     /// listing leaves the pin alone (see `pin_update_enabled`).
     pub pin_update_on_hover: bool,
+    /// Which files the pin's own previous/next buttons step through: every file this build
+    /// could preview, or only the ones of the pinned file's own category (see
+    /// `DEFAULT_PIN_NAV_FILE_TYPES`).
+    ///
+    /// It is a setting of its own because the two are two different folders: a folder of mixed
+    /// work is a list the buttons walk end to end under `All` and only part of under
+    /// `Category`, and neither is the other. The walk itself is over the folder the pin was
+    /// taken up in and no other, and its order is the order the listing is showing.
+    pub pin_nav_file_types: PinNavFileTypes,
     pub follow_cursor: bool,
     /// How far a preview is placed clear of the item it is about, so the file the
     /// pointer is on or the keyboard is focused on stays readable while its preview is
@@ -1578,6 +1639,19 @@ pub struct AppConfig {
     pub ttc_face: u32,
     pub theme: TextTheme,
     pub markdown_mode: MarkdownMode,
+    /// Whether a page of HTML is drawn by the browser engine instead of shown as its
+    /// markup.
+    ///
+    /// A `.htm` and a `.html` are in the text lists, so what they are previewed by is the
+    /// text preview: the markup, at a fixed font size, in a page of this app's own. This is
+    /// what asks for the page rather than the markup — the engine that draws an SVG document
+    /// draws the page in a window of its own, and the box it is given is the share of the
+    /// display `document_scale` names, which is the document question and not the text one.
+    ///
+    /// It is a switch over two names and nothing else: `.xhtml` is a page of text, as is
+    /// every other file the text lists claim, and a machine with no WebView2 runtime keeps
+    /// the text preview whatever this says.
+    pub render_html: bool,
     /// Whether pictures are previewed at all, ahead of the image list their names are
     /// entries of.
     ///
@@ -1778,6 +1852,7 @@ impl Default for AppConfig {
             pin_pause_audio: DEFAULT_PIN_PAUSE_AUDIO,
             pin_update_enabled: DEFAULT_PIN_UPDATE_ENABLED,
             pin_update_on_hover: DEFAULT_PIN_UPDATE_ON_HOVER,
+            pin_nav_file_types: DEFAULT_PIN_NAV_FILE_TYPES,
             follow_cursor: DEFAULT_FOLLOW_CURSOR,
             avoid_mode: DEFAULT_AVOID_MODE,
             same_file_rehover_delay_ms: DEFAULT_SAME_FILE_REHOVER_DELAY_MS,
@@ -1809,6 +1884,7 @@ impl Default for AppConfig {
             ttc_face: DEFAULT_TTC_FACE,
             theme: TextTheme::Light,
             markdown_mode: MarkdownMode::Rendered,
+            render_html: DEFAULT_RENDER_HTML,
             image_preview_enabled: true,
             video_preview_enabled: true,
             audio_preview_enabled: true,
@@ -1887,6 +1963,7 @@ const SETTING_GROUPS: &[(&str, &[&str])] = &[
         &[
             "pin_enabled",
             "pin_key",
+            "pin_nav_file_types",
             "pin_pause_audio",
             "pin_pause_video",
             "pin_update_enabled",
@@ -1912,7 +1989,7 @@ const SETTING_GROUPS: &[(&str, &[&str])] = &[
     ),
     (
         "Text Preview",
-        &["markdown_mode", "text_font_scale", "theme"],
+        &["markdown_mode", "render_html", "text_font_scale", "theme"],
     ),
     (
         "Timing",
@@ -2671,6 +2748,11 @@ impl AppConfig {
         );
         ini.set(
             CONFIG_SECTION,
+            "pin_nav_file_types",
+            Some(self.pin_nav_file_types.as_str().to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
             "follow_cursor",
             Some(self.follow_cursor.to_string()),
         );
@@ -2807,6 +2889,11 @@ impl AppConfig {
             CONFIG_SECTION,
             "markdown_mode",
             Some(self.markdown_mode.as_str().to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
+            "render_html",
+            Some(self.render_html.to_string()),
         );
         ini.set(
             CONFIG_SECTION,
@@ -3119,6 +3206,14 @@ impl AppConfig {
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "pin_update_on_hover") {
             self.pin_update_on_hover = value;
         }
+        // Which files the pin's own previous/next buttons step through. A value that names
+        // neither of the two is not one of them: the file is left at the answer a fresh one
+        // has, which is every file the build could preview.
+        if let Some(value) = ini.get(CONFIG_SECTION, "pin_nav_file_types") {
+            if let Some(mode) = PinNavFileTypes::from_str(&value) {
+                self.pin_nav_file_types = mode;
+            }
+        }
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "follow_cursor") {
             self.follow_cursor = value;
         }
@@ -3310,6 +3405,11 @@ impl AppConfig {
             if let Some(mode) = MarkdownMode::from_str(&value) {
                 self.markdown_mode = mode;
             }
+        }
+        // Left where it is where the key is not written at all, which is every file written
+        // before the setting existed: the page is the markup until the tray says otherwise.
+        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "render_html") {
+            self.render_html = value;
         }
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "image_preview_enabled") {
             self.image_preview_enabled = value;
@@ -4070,6 +4170,65 @@ mod tests {
         );
     }
 
+    /// Which files a pin's own previous/next buttons step through is one of its own keys, and
+    /// it is written under the name the tray's `Nav File Types` submenu shows: `category` is
+    /// the folder narrowed to the pinned file's own kind of thing, and every file this build
+    /// could preview is what a file that names neither — or names nothing at all — is read as.
+    #[test]
+    fn reads_which_files_the_pin_steps_through_from_its_own_key() {
+        let mut ini = Ini::new();
+        ini.set(CONFIG_SECTION, "pin_nav_file_types", Some("category".to_string()));
+        assert_eq!(read_file(&mut ini).pin_nav_file_types, PinNavFileTypes::Category);
+
+        let mut unknown = Ini::new();
+        unknown.set(
+            CONFIG_SECTION,
+            "pin_nav_file_types",
+            Some("sideways".to_string()),
+        );
+        assert_eq!(
+            read_file(&mut unknown).pin_nav_file_types,
+            DEFAULT_PIN_NAV_FILE_TYPES,
+            "a value the app cannot read is answered with what a fresh one walks rather than \
+             guessed at"
+        );
+
+        let mut older = Ini::new();
+        older.set(CONFIG_SECTION, "pin_key", Some("space".to_string()));
+        assert_eq!(
+            read_file(&mut older).pin_nav_file_types,
+            DEFAULT_PIN_NAV_FILE_TYPES,
+            "a file written before the setting existed walks every file a fresh one walks"
+        );
+    }
+
+    /// The key is written under the name it is read under, so the file a user edits by hand
+    /// is the file the app wrote: what comes back out of `save` is what went in, and the
+    /// heading table names it (see `every_setting_the_app_writes_is_one_the_table_names`).
+    #[test]
+    fn the_pin_navigation_setting_survives_a_write_and_a_read() {
+        let config = AppConfig {
+            pin_nav_file_types: PinNavFileTypes::Category,
+            ..AppConfig::default()
+        };
+
+        let mut written = Ini::new();
+        let _ = written.read(ordered_text(&config.to_ini()));
+        assert_eq!(
+            written.get(CONFIG_SECTION, "pin_nav_file_types"),
+            Some("category".to_string())
+        );
+
+        let mut read_back = Ini::new();
+        read_back
+            .read(ordered_text(&config.to_ini()))
+            .expect("a file this app wrote is one it can read");
+        assert_eq!(
+            read_file(&mut read_back).pin_nav_file_types,
+            PinNavFileTypes::Category
+        );
+    }
+
     /// What a pin collapsed into its bubble does with what it is playing is two settings, each
     /// read from its own key: a video behind one and a sound behind the other, so a file that
     /// turns one off leaves the other where it was. Both hold what is playing unless the file
@@ -4309,6 +4468,48 @@ mod tests {
 
             assert!(kind.enabled_in(&config), "and back up with it");
             assert!(gate.enabled_in(&config));
+        }
+    }
+
+    /// The switch over the two names a page of HTML goes by is a key of its own, and it
+    /// starts off: a `.htm` is a page of text until something says otherwise, which is what
+    /// every file written before the setting existed says by not having it.
+    #[test]
+    fn a_page_of_html_is_markup_until_the_tray_says_otherwise() {
+        assert_eq!(AppConfig::default().render_html, DEFAULT_RENDER_HTML);
+
+        // A file that names no such key reads as the markup and is written back with the key
+        // the next time it is saved, so the file the app keeps is one that can be read again.
+        let mut ini = Ini::new();
+        let config = read_file(&mut ini);
+        assert!(!config.render_html);
+
+        let written = ordered_text(&config.to_ini());
+        assert!(
+            written.contains("render_html=false"),
+            "the key is written under the heading the table names it in:\n{written}"
+        );
+
+        // And the switch round-trips as the switch itself rather than as a value read one
+        // way and written the other.
+        for setting in [true, false] {
+            let config = AppConfig {
+                render_html: setting,
+                ..Default::default()
+            };
+
+            let written = ordered_text(&config.to_ini());
+            let mut read_back = Ini::new();
+            read_back
+                .read(written)
+                .expect("a file this app wrote is one it can read");
+
+            let mut config = AppConfig::default();
+            config.apply_ini(&read_back);
+            assert_eq!(
+                config.render_html, setting,
+                "`render_html={setting}` read back"
+            );
         }
     }
 
