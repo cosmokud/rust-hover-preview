@@ -12846,19 +12846,78 @@ impl PinTooltip {
     }
 }
 
-/// The program the Shell would open a file with, as it names it, or nothing where the machine
-/// has no association for it at all.
+/// The names the Shell has given for the formats this run has asked about, keyed by the file's
+/// own format — its extension, or the whole of a name that begins with a dot (see
+/// `shell_format`).
 ///
-/// This is the one string about a pinned file that is not in the file's name, and it is read
-/// once per pin rather than per frame (see `PinTooltip`). `ASSOCSTR_FRIENDLYAPPNAME` is the
-/// association's own display name rather than the class it is stored under, so what comes back
-/// is what the user would read in Explorer's "Open with" — which is the whole point of naming
-/// the default on a button that opens it.
+/// Which program opens a file is a fact about the machine and the format rather than about the
+/// file, and asking it is Shell work with no bound on how long it takes. A pinned window's walk
+/// asks for the name on every file it lands on — the name is read when the window is shown
+/// another file, and a window is shown one per press of the caption's buttons — so the question
+/// is asked once per format and answered out of this map after that, and the only step that
+/// pays for it is the first of its kind in the run (see `default_app_name`).
+static APP_NAMES: Lazy<Mutex<HashMap<String, String>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+
+/// The program the Shell would open this file with, as it names it, or nothing where the
+/// machine has no association for the format at all.
+///
+/// The question is the machine's rather than the file's — two files of one format open in one
+/// program — so it is asked once per format this run and answered out of `APP_NAMES` after
+/// that. That is what a walk of a pinned window needs: asking the Shell about one file per
+/// press is work nobody asked for, and it is work that can take as long as the Shell takes
+/// (see `ask_default_app_name`).
+fn default_app_name(path: &Path) -> String {
+    let format = shell_format(path);
+
+    if let Ok(names) = APP_NAMES.lock() {
+        if let Some(name) = names.get(&format) {
+            return name.clone();
+        }
+    }
+
+    let name = unsafe { ask_default_app_name(path) };
+
+    if let Ok(mut names) = APP_NAMES.lock() {
+        names.insert(format, name.clone());
+    }
+
+    name
+}
+
+/// The format a file's association is filed under, which is what the Shell's own answer is
+/// cached by: the last dot of the name and the whole of what follows it, dot and all.
+///
+/// A leading dot is part of the format rather than a separator before one — `.gitignore` is
+/// filed under `.gitignore`, and the answer it is given is not the one a name with no dot in it
+/// is given — so the whole of such a name is the key, and a name with no dot in it is keyed as
+/// nothing, which is the one key no format can share with another.
+fn shell_format(path: &Path) -> String {
+    let Some(name) = path.file_name() else {
+        return String::new();
+    };
+
+    let name = name.to_string_lossy().to_lowercase();
+
+    match name.rfind('.') {
+        Some(dot) => name[dot..].to_string(),
+        None => String::new(),
+    }
+}
+
+/// The association itself, asked of the Shell the once per format: see `default_app_name`.
+///
+/// `ASSOCSTR_FRIENDLYAPPNAME` is the association's own display name rather than the class it is
+/// stored under, so what comes back is what the user would read in Explorer's "Open with" —
+/// which is the whole point of naming the default on a button that opens it.
 ///
 /// Two calls, because the Shell asks for the length first: a call with no buffer is how it says
 /// how long the answer is. A file nothing is filed against, a format the machine has no program
 /// for, and a path the Shell will not take are all one answer — no name — and none of them is a
 /// fault here, so nothing is asserted and nothing is reported.
+///
+/// It is Shell work and it is not bounded, which is the whole of why it is asked once per
+/// format rather than once per file, and never with the pin's own lock held (see the take-up in
+/// `run_preview_window`).
 ///
 /// # Safety
 ///
@@ -12866,7 +12925,7 @@ impl PinTooltip {
 /// own: the two buffers are allocated here, sized by the first call from the count it wrote,
 /// and both are dropped before the function returns. The wide string handed in is the caller's
 /// file, which outlives the call.
-unsafe fn default_app_name(path: &Path) -> String {
+unsafe fn ask_default_app_name(path: &Path) -> String {
     let wide: Vec<u16> = std::ffi::OsStr::new(&plain_path(path))
         .encode_wide()
         .chain(std::iter::once(0))
@@ -19855,6 +19914,24 @@ pub fn run_preview_window() {
                         // across either (see `cached_video_geometry`).
                         let duration = video_duration(&path);
 
+                        // And the same rule for the rest of what this take-up needs an answer
+                        // to before it can build the pin: what the file keeps of its box, and
+                        // whether it is drawn as a card, are a look in the configuration and a
+                        // read of the file, and the program the Shell would open it with is
+                        // Shell work with no limit on how long it takes. None of them belongs
+                        // under the pin's own lock: a call that takes as long as the disk or
+                        // the Shell takes is this window standing still for the whole of it —
+                        // this is the thread that pumps its own messages — and one that pumps
+                        // or re-enters while the lock is held leaves the window procedure
+                        // asking for a lock this thread already owns, which is not a wait but
+                        // a stop (see `pin_media_is_alive` for the same rule, written down for
+                        // the media). A take-up runs for every file a walk lands on rather than
+                        // once per pin, so it is the arrow keys, the two step buttons and a
+                        // pick in the listing alike that pay it (see `ask_default_app_name`).
+                        let keeps_its_box = pin_keeps_its_box(&path);
+                        let drawn_as_card = drawn_as_audio(&path);
+                        let default_app = default_app_name(&path);
+
                         let carried = PINNED.lock().ok().and_then(|pinned| {
                             pinned.as_ref().map(|pin| {
                                 (pin.restore, pin.chrome, pin.volume, pin.overlay, pin.bound)
@@ -19875,12 +19952,12 @@ pub fn run_preview_window() {
                                 // up on a picture gets its bound too (see `pin_bound_after`).
                                 bound: pin_bound_after(
                                     carried.and_then(|(.., bound)| bound),
-                                    pin_keeps_its_box(&path),
+                                    keeps_its_box,
                                     content,
                                 ),
                                 restore: pin_restore_after(
                                     carried.and_then(|(restore, ..)| restore),
-                                    drawn_as_audio(&path),
+                                    drawn_as_card,
                                 ),
                                 dpi,
                                 transport_bar,
@@ -19914,7 +19991,7 @@ pub fn run_preview_window() {
                                 // and a pin is answered about the file it holds until it
                                 // holds another one (see `PinTooltip`).
                                 tooltip: PinTooltip {
-                                    default_app: default_app_name(&path),
+                                    default_app,
                                     ..Default::default()
                                 },
                                 dragging: None,
