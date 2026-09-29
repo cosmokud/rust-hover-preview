@@ -73,7 +73,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, AtomicU64, Ordering};
-use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
+use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender, TryRecvError};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant, SystemTime};
 use windows::core::{w, PCWSTR, PWSTR};
@@ -640,6 +640,21 @@ static PIN_END_REQUESTED: AtomicBool = AtomicBool::new(false);
 /// went up is not a hover it has already answered, and the delay a re-hover of the same
 /// file is given is a delay that belongs to a file the pointer left and came back to.
 static PIN_RESUMED: AtomicBool = AtomicBool::new(false);
+
+/// The wait a pinned window is in, in the form a repaint can draw: the millisecond its arc
+/// began turning at, counted from [`PIN_ARC_BASE`], and `0` for a window that is waiting for
+/// nothing.
+///
+/// It is a global rather than a field of the wait because a repaint is not the loop: the arc
+/// is drawn by whatever paint is asked for — a tick of the loop's own, or a window message
+/// from a hand that moved across the caption — and all a paint needs to know is whether one is
+/// up and how far round it has come. The wait itself belongs to the loop, which is what
+/// started it and what takes the answer (see `PinLoad` and `paint_pin_spinner`).
+static PIN_ARC: AtomicU64 = AtomicU64::new(0);
+
+/// What [`PIN_ARC`] counts from: this module's own first moment, so that a moment of a wait
+/// fits in the `u64` an atomic can hold rather than in an `Instant` it cannot.
+static PIN_ARC_BASE: Lazy<Instant> = Lazy::new(Instant::now);
 
 static CURRENT_MEDIA: Lazy<Mutex<Option<MediaData>>> = Lazy::new(|| Mutex::new(None));
 /// What a probed geometry is only valid for: the file and the version of it that
@@ -8542,6 +8557,149 @@ fn create_loading_media(width: u32, height: u32) -> MediaData {
     }
 }
 
+/// The pin's own arc, in the window's own pixels: how large its ring is, how thick it is, how
+/// far its halo reaches past it, and how far past that the box it is walked in has to go.
+///
+/// It is the arc a hover waits with — the same 270° sweep, the same white over a dark halo, the
+/// same ease from tail to head (see `render_loading_frame`) — at the size a *window* wants. A
+/// hover's arc is sized by the box it is placed in, which is the arc's own box and is small,
+/// because it stands at a pointer's corner; this one is drawn into the middle of a window the
+/// user is reading, where a ring the size of the corner spinner is a mark on a picture rather
+/// than an answer about the window. It is drawn straight onto the band rather than rendered into
+/// a frame of its own and copied over, which is what keeps a repaint every thirty-odd
+/// milliseconds from allocating a square of pixels to throw away.
+const PIN_ARC_RADIUS: f32 = 20.0;
+const PIN_ARC_THICKNESS: f32 = 5.0;
+/// How far the halo reaches past the arc, and how much of it there is where it meets the arc's
+/// own edge — both drawn from the arc's own size, so a larger arc gets a halo in proportion.
+/// The shade is what the halo is made of: dark enough to read over a light file list, and
+/// light enough to read as a shadow rather than a second arc (see `render_loading_frame`).
+const PIN_ARC_HALO: f32 = 5.0;
+const PIN_ARC_HALO_OPACITY: f32 = 0.85;
+const PIN_ARC_HALO_SHADE: f32 = 12.0;
+/// How far from the centre the arc's own ring reaches: the halo, and one pixel more for the
+/// edge it fades out over. The box the drawing walks is this either side of the centre.
+const PIN_ARC_REACH: i32 = (PIN_ARC_RADIUS + PIN_ARC_THICKNESS + PIN_ARC_HALO + 1.0) as i32;
+
+/// Publish a pinned window's arc — how long its wait has been running — or take it down, which
+/// is what a window that has answered, or a pin that has gone, is left with.
+///
+/// A wait publishes nothing until it has run for the delay `spinner_delay_ms` names, because a
+/// load that answers inside the delay is a load the user never sees a spinner for, and that is
+/// the whole of what the delay is for (see `PinLoad::due`).
+fn pin_arc_set(since: Option<Duration>) {
+    // A wait that has not run a whole millisecond is still a wait, so a `0` — which is how
+    // this says there is no arc — is never what a wait publishes.
+    PIN_ARC.store(
+        since.map_or(0, |since| (since.as_millis() as u64).max(1)),
+        Ordering::Release,
+    );
+}
+
+/// Draw the arc a pinned window is waiting for a file with, in the middle of its media band.
+///
+/// It goes *over* the band rather than in place of it: the file the pin is showing is the pin
+/// until the new one has answered, and a band cleared for a spinner would be a window with
+/// nothing in it for the length of a decode — the wait this exists for made visible as the
+/// freeze it was meant to answer. The halo is what makes that legible over either a light
+/// picture or a dark one, which is the same reason a hover's own arc carries one.
+///
+/// A band with no room for the arc is left as it is rather than drawn into: a window smaller
+/// than the arc is a window whose wait is the caption changing, and half a ring is a mark
+/// rather than a wait.
+fn paint_pin_spinner(out: &mut [u8], out_width: u32, band_top: i32, band_height: i32) {
+    let since = PIN_ARC.load(Ordering::Acquire);
+    if since == 0 {
+        return;
+    }
+
+    let band_top = band_top.max(0) as u32;
+    let band_height = band_height.max(1) as u32;
+    if band_height <= PIN_ARC_REACH as u32 * 2 || out_width <= PIN_ARC_REACH as u32 * 2 {
+        return;
+    }
+
+    // The middle of the band: the middle of the window for a kind whose chrome is drawn over its
+    // media, and the middle of what is left between the two strips for a kind whose chrome has
+    // bands of its own (see `pinned_band_rows`).
+    let centre_x = out_width as f32 / 2.0;
+    let centre_y = band_top as f32 + band_height as f32 / 2.0;
+
+    let left = (centre_x as i32 - PIN_ARC_REACH).max(0) as u32;
+    let right = ((centre_x as i32 + PIN_ARC_REACH) as u32).min(out_width - 1);
+    let top = (centre_y as i32 - PIN_ARC_REACH).max(0) as u32;
+    let bottom = ((centre_y as i32 + PIN_ARC_REACH) as u32).min(band_top + band_height - 1);
+
+    let elapsed = PIN_ARC_BASE
+        .elapsed()
+        .saturating_sub(Duration::from_millis(since));
+    let angle = elapsed.as_secs_f32() * std::f32::consts::PI * 2.4;
+
+    let two_pi = std::f32::consts::PI * 2.0;
+    let arc_length = std::f32::consts::PI * 1.5; // 270-degree arc
+    let out_width = out_width as usize;
+
+    for y in top..=bottom {
+        for x in left..=right {
+            let dx = x as f32 + 0.5 - centre_x;
+            let dy = y as f32 + 0.5 - centre_y;
+            let dist = (dx * dx + dy * dy).sqrt();
+
+            // Only the arc's own ring and the halo the arc's edge fades out over.
+            let ring_dist = (dist - PIN_ARC_RADIUS).abs();
+            if ring_dist > PIN_ARC_THICKNESS + PIN_ARC_HALO {
+                continue;
+            }
+
+            let relative = (dy.atan2(dx) - angle).rem_euclid(two_pi);
+            if relative > arc_length {
+                continue;
+            }
+
+            // Smooth gradient: ease-in from tail (transparent) to head (bright), with the
+            // anti-aliased edge of the arc over the anti-aliased edge of its halo.
+            let t_smooth = (relative / arc_length).powi(2);
+            let arc =
+                (1.0 - (ring_dist - PIN_ARC_THICKNESS + 1.0).max(0.0)).clamp(0.0, 1.0) * t_smooth;
+            let halo = (1.0 - (ring_dist - PIN_ARC_THICKNESS).max(0.0) / PIN_ARC_HALO)
+                .clamp(0.0, 1.0)
+                * PIN_ARC_HALO_OPACITY
+                * t_smooth;
+
+            let index = (y as usize * out_width + x as usize) * 4;
+            let Some(pixel) = out.get_mut(index..index + 4) else {
+                continue;
+            };
+
+            blend_pin_arc_pixel(arc, halo, pixel);
+        }
+    }
+}
+
+/// Put one pixel of a pinned window's arc over one pixel of its band.
+///
+/// The arc over the halo, over the band: the coverage is how much of the two there is, and the
+/// shade is what is left of them once that is known — white where the arc covers, the halo's
+/// shade where only the halo does. What a layered window's surface holds is premultiplied
+/// coverage (see `compose_preview_row`), so the shade is scaled by it on the way in and the
+/// band's own pixel by what is left of it.
+fn blend_pin_arc_pixel(arc: f32, halo: f32, destination: &mut [u8]) {
+    let alpha = (arc + halo * (1.0 - arc)).clamp(0.0, 1.0);
+    if alpha <= 0.0 {
+        return;
+    }
+
+    let shade = ((255.0 * arc + PIN_ARC_HALO_SHADE * halo * (1.0 - arc)) / alpha).clamp(0.0, 255.0);
+    let keep = 1.0 - alpha;
+
+    // The three colour channels, and the coverage after them: the arc is a colour over the
+    // band and not a colour in place of it, which is what makes the halo read as a shadow.
+    for channel in destination.iter_mut().take(3) {
+        *channel = (shade * alpha + f32::from(*channel) * keep).clamp(0.0, 255.0) as u8;
+    }
+    destination[3] = (alpha * 255.0 + f32::from(destination[3]) * keep).clamp(0.0, 255.0) as u8;
+}
+
 /// The spinner's own geometry, in the frame's coordinates: how large the ring is, how thick
 /// it is, and how far its corner sits from the frame's own.
 const SPINNER_OVERLAY_RADIUS: f32 = 8.0;
@@ -9396,6 +9554,11 @@ unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
             }
         }
     }
+
+    // The arc of a window that is waiting for a file, over the band and under the chrome: a
+    // caption drawn over it is a caption a hand can still read, which is the whole of what the
+    // wait is not allowed to cost the window (see `paint_pin_spinner`).
+    paint_pin_spinner(out, width.max(1) as u32, band_top, band_height as i32);
 
     // The chrome, for kinds that draw it over their media: each strip whole, or not painted at
     // all, which is what makes a picture whose chrome has gone a picture and nothing else — and the
@@ -13578,15 +13741,20 @@ fn end_pin_state() -> PreviewMessage {
 
 /// Whether the thing a pin is a window onto is still there.
 ///
-/// Three kinds of media can go away on their own, because something outside this thread is
-/// drawing them: a video FFmpeg's player is playing, a sound it is playing, and a document or
-/// a specimen the browser is drawing. Each is a process this app started and does not own, and
-/// a pin whose process has died is a window onto nothing — so it comes down and previews
-/// resume, which is the half of "until it is closed, or it comes apart" that is not a button.
+/// Two kinds of media can go away on their own, because something outside this thread is
+/// drawing them: a video FFmpeg's player is playing, and a document or a specimen the browser
+/// is drawing. Each is a process this app started and does not own, and a pin whose process
+/// has died is a window onto nothing — so it comes down and previews resume, which is the half
+/// of "until it is closed, or it comes apart" that is not a button.
 ///
-/// What is deliberately not asked about is a sound the media engine plays: a card is text, and
-/// a card whose engine has stopped is a card with a still clock rather than a window onto
-/// nothing.
+/// A sound is deliberately not one of them, whichever player is behind it. A card is text
+/// this app draws, and the player it is playing is a player this app started: it plays the
+/// pass it was given and stops, and the tick after that stops puts the whole file round again
+/// (see `wrap_audio_player`). A player that is not running is therefore the moment between two
+/// passes rather than a pin onto nothing, and asking about it took the window down at the end
+/// of every pass — a sound looping, with the pin closing over it as it came back round. A card
+/// whose player never came back at all is a card with a still clock, which is the answer a
+/// machine with no output device gives, and the window stays up over it.
 ///
 /// And the question is whether the thing is *there*, not whether it has drawn anything yet: a
 /// browser that is still coming up, and a document it has been asked for that has not landed, are
@@ -13595,13 +13763,13 @@ fn end_pin_state() -> PreviewMessage {
 /// failed is where the pin does come down, and that arrives as the engine's own failure notice
 /// (see the loop's answer to it).
 fn pin_media_is_alive() -> bool {
-    // What kind it is, and whether a player of this app's is behind it, are taken in one look
-    // and the lock is let go of before anything is asked *about* the answer. What a player's
-    // liveness is asked through — `is_video_process_running` — reads the media itself, so
-    // asking it with the media already locked by this thread is asking for a lock this thread
-    // owns, which is not a wait but a stop: the preview loop would never draw another frame,
-    // and the pinned window would stand there answering nothing for the rest of the run.
-    let (kind, has_player) = {
+    // What kind it is, is taken in one look and the lock is let go of before anything is asked
+    // *about* the answer. What a player's liveness is asked through — `is_video_process_running`
+    // — reads the media itself, so asking it with the media already locked by this thread is
+    // asking for a lock this thread owns, which is not a wait but a stop: the preview loop would
+    // never draw another frame, and the pinned window would stand there answering nothing for the
+    // rest of the run.
+    let kind = {
         let Ok(media) = CURRENT_MEDIA.lock() else {
             return true;
         };
@@ -13610,13 +13778,13 @@ fn pin_media_is_alive() -> bool {
             return false;
         };
 
-        (media.media_type, media.video_process.is_some())
+        media.media_type
     };
 
     // What the bubble parked is not something that came apart: a player this app ended, or an
     // engine it paused, is the pin's media still — what the pin is a window onto has not gone
     // anywhere, and the restore that follows is what puts it back (see `BubblePause`). Asked
-    // before the kinds below, two of which would answer "gone" about a player that is
+    // before the kinds below, one of which would answer "gone" about a player that is
     // deliberately not running.
     if pin_bubble_pause().is_some() {
         return true;
@@ -13624,7 +13792,9 @@ fn pin_media_is_alive() -> bool {
 
     match kind {
         MediaType::Video => is_video_process_running(),
-        MediaType::Audio if has_player => is_video_process_running(),
+        // A card is this app's own text and a player this app started, and the player is
+        // between passes rather than gone — the whole of what is asked about here is above.
+        MediaType::Audio => true,
         MediaType::NativeVideo => video_player::is_playing(),
         // A document or a specimen is the browser's, and what says it is still there is the
         // engine standing behind the file rather than a window with pixels in it: a window is
@@ -14120,39 +14290,29 @@ fn pin_restore_after(carried: Option<ScreenRegion>, card: bool) -> Option<Screen
 
 /// Show a pinned window another file: what is on screen is taken down — the frame this app holds,
 /// the player it started, the browser another engine draws in — and the file that replaces it is
-/// loaded for the box the pin's media occupies.
+/// put up in the box the pin's media occupies.
 ///
-/// The load is this thread's and it is synchronous, which is the same bargain a pin's own box change
-/// makes: a pinned window is not a hover, so there is no spinner to put up and no generation for an
-/// answer to be matched against, and what a decode costs is one tick longer than usual, spent on a
-/// file the user has just picked, with nothing else on screen for it to be late for (see
-/// `relayout_pinned_media`).
+/// What this is handed is the frame itself, already loaded (`pin_media_load`): what is left here
+/// is everything that has to be asked of this thread, which is the browser a document is handed
+/// to, the media engine a video is played through and FFmpeg's player a sound and a film are
+/// played by. A load that has run for `spinner_delay_ms` puts an arc in the middle of the pin's
+/// media while it runs, so a file whose read or decode is slow is a wait the pin is painted for
+/// rather than a window frozen for as long as the disk takes (see `PinLoad` and
+/// `paint_pin_spinner`).
 ///
-/// The media answered with is installed by the caller and put up by the take-up that follows, so a
-/// swap reaches the window by the same path a first pin does. Nothing is answered where the file
-/// cannot be shown: the pin keeps the file it is showing, which is the only other thing a window
-/// that is already up can do for a file that has no preview.
+/// What is installed is put up by the take-up that follows, so a swap reaches the window by the
+/// same path a first pin does. Nothing is answered where the file cannot be shown: the pin keeps
+/// the file it is showing, which is the only other thing a window that is already up can do for a
+/// file that has no preview — and a step of the pin's own walk that lands on one is stepped over
+/// rather than stopped at (see `PinStep`).
 fn swap_pinned_media(
     path: &PathBuf,
     content: ScreenRegion,
-    dpi: u32,
     volume: u32,
+    mut media: MediaData,
 ) -> Option<(MediaData, Option<SwappedAudio>)> {
     let width = (content.2 - content.0).max(1);
     let height = (content.3 - content.1).max(1);
-
-    // The file's own frame for the box the pin has: the call a hover's load makes and the one a
-    // pin's own relayout makes, so what is drawn is what any other preview of the file would be.
-    // Nothing of the pin is touched until this has answered.
-    let cancel = Arc::new(AtomicBool::new(false));
-    let mut media = load_media(
-        path,
-        width as u32,
-        height as u32,
-        PreviewScale::FitToScreen,
-        dpi,
-        cancel,
-    )?;
 
     // What was showing goes before what replaces it: the player a video of this app's was started
     // in, and the frame this side holds. A browser is left to the branch below, because whether it
@@ -14268,6 +14428,170 @@ struct SwappedAudio {
     started: Option<Instant>,
     from: f64,
     share: Option<AudioSeek>,
+}
+
+/// A file a pinned window is loading, and the wait it is.
+///
+/// A load a hover waits for has a `PendingLoad`: the media is a thread's work, the window shows
+/// the spinner's own box at the hand that asked, and the answer is matched against a generation
+/// so that a load the pointer has left is dropped rather than shown. A pin has none of that — the
+/// file was picked rather than hovered, so there is no hand to put a spinner at and no generation
+/// to match against — but it has what the whole of that is for: the file on screen is a window
+/// with a caption, and a window that freezes for as long as a large decode takes says nothing at
+/// all. So the load is a thread's work here too, and what the wait shows is the arc in the middle
+/// of the pin's own media (see `paint_pin_spinner`).
+///
+/// The file the load is for, the box it was laid out for and the walk it is a step of are all
+/// kept, because the answer is taken up a tick or more after the load was started: what the answer
+/// is installed with is the plan made when the file was picked, and a file that could not be shown
+/// is a step the walk is asked to carry on from (see `PinStep`).
+struct PinLoad {
+    path: PathBuf,
+    /// The box the file's media is loaded for, and the level the pin plays it at — the plan the
+    /// pick was made with, kept rather than asked for again so that the answer and the plan can
+    /// never disagree.
+    update: PinUpdate,
+    started: Instant,
+    /// How long this load may run before the arc is put up for it, read from
+    /// `spinner_delay_ms` when it started, which is the delay a hover's own load is given.
+    spinner_delay: Duration,
+    /// When the arc was last turned, and nothing while it has not been put up at all. It is the
+    /// turn and not the wait that the cadence is read against, which is what keeps the turns at
+    /// the spinner's own pace rather than at the pace of whatever the loop happens to be doing.
+    turned: Option<Instant>,
+    /// The thread's answer, taken where it lands (see `take_pin_load`).
+    answer: Receiver<Option<MediaData>>,
+    /// The walk this load is a step of, which is stepped on where the file cannot be shown.
+    walk: Option<PinStep>,
+}
+
+impl PinLoad {
+    /// Start loading the file a pick was made for, and answer the wait it is.
+    ///
+    /// The thread is started here and the answer is left on a channel rather than handed over,
+    /// because the loop is what owns the window and everything installed into it: a frame read
+    /// on a thread of its own is installed by the thread that draws (see `take_pin_load`).
+    fn start(path: &Path, update: PinUpdate, walk: Option<PinStep>) -> Self {
+        let width = (update.content.2 - update.content.0).max(1) as u32;
+        let height = (update.content.3 - update.content.1).max(1) as u32;
+        let answer = pin_media_load(path, width, height, update.dpi);
+
+        PinLoad {
+            path: path.to_path_buf(),
+            spinner_delay: load_spinner_delay(),
+            update,
+            started: Instant::now(),
+            turned: None,
+            answer,
+            walk,
+        }
+    }
+}
+
+/// Load the frame a pinned window is about to show, on a thread of its own.
+///
+/// This is the whole of what a swap can be waited for: everything the file is drawn *by* — the
+/// browser a document hands to, the media engine a video is played through, FFmpeg's player — is
+/// this thread's and cannot be moved, and all of it is asked for once the frame is in hand
+/// (see `swap_pinned_media`). The read and the decode are not, and those are what a slow file
+/// spends its time on.
+///
+/// The call is the one a hover's own load makes and the one a pin's own relayout makes, at the
+/// same box, so what is drawn is what any other preview of the file would be. Nothing of the pin
+/// is touched while it runs, which is what lets a wait be shown over the file the pin is still
+/// showing: the old file is the pin's until the new one has answered.
+fn pin_media_load(path: &Path, width: u32, height: u32, dpi: u32) -> Receiver<Option<MediaData>> {
+    let (answer, answers) = channel();
+    let path = path.to_path_buf();
+
+    std::thread::spawn(move || {
+        // The same apartment a hover's loader takes before its first load: a PDF page is
+        // rendered through Windows.Data.Pdf and a picture of a format this app has no decoder
+        // for is decoded by the codec Windows has, and this is a thread of its own either way.
+        pdf_preview::initialize_apartment();
+        wic_image::initialize_apartment();
+
+        // A panic in a decoder is a file with no preview rather than a thread this app's own
+        // that takes the window down with it, which is what the hover's loader answers the same
+        // way (see `spawn_load_worker`).
+        let media = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            load_media(
+                &path,
+                width,
+                height,
+                PreviewScale::FitToScreen,
+                dpi,
+                Arc::new(AtomicBool::new(false)),
+            )
+        }))
+        .unwrap_or(None);
+
+        let _ = answer.send(media);
+    });
+
+    answers
+}
+
+/// A pinned window's load, answered: the file, the plan it was loaded for, the frame, and the
+/// walk the load is a step of.
+struct PinAnswer {
+    path: PathBuf,
+    update: PinUpdate,
+    /// The frame the load came back with, or nothing at all for a file this app cannot read — a
+    /// file that is not there, a file still in the cloud, a file whose decode is nothing. It is
+    /// the walk that answers that, and not the pin: the file it is showing stays on screen
+    /// (see `PinStep`).
+    media: Option<MediaData>,
+    walk: Option<PinStep>,
+}
+
+/// Take a pinned window's load, where it has answered.
+///
+/// `None` is a load still running: what the pin is showing is the file it already had, and the
+/// arc is due for the wait or is up (see `PinLoad`).
+fn take_pin_load(pin_load: &mut Option<PinLoad>) -> Option<PinAnswer> {
+    let load = pin_load.as_ref()?;
+    let media = match load.answer.try_recv() {
+        Ok(media) => media,
+        // Still running, or the thread is gone with nothing to say — the latter is answered as
+        // a file with no frame, which is what a thread that ended in a panic is.
+        Err(TryRecvError::Empty) => return None,
+        Err(TryRecvError::Disconnected) => None,
+    };
+
+    let load = pin_load.take()?;
+
+    Some(PinAnswer {
+        path: load.path,
+        update: load.update,
+        media,
+        walk: load.walk,
+    })
+}
+
+impl PinLoad {
+    /// Whether this wait is due a paint: once it has run for the delay `spinner_delay_ms`
+    /// names — the same moment a hover's own wait is given — and then once per turn of the arc
+    /// for as long as it stands.
+    ///
+    /// The turn is the spinner's own cadence, the one `MediaType::Loading` advances at, because
+    /// it is the same arc (see `MediaData::update_loading_frame`). It is measured from the last
+    /// turn rather than from the start of the wait, so the moment the delay runs out is one
+    /// paint and not one paint a tick until the cadence catches up with it.
+    fn due(&self) -> bool {
+        match self.turned {
+            None => self.started.elapsed() >= self.spinner_delay,
+            Some(turned) => {
+                turned.elapsed() >= Duration::from_millis(u64::from(MIN_ANIMATION_FRAME_DELAY_MS))
+            }
+        }
+    }
+
+    /// Note that the arc for this wait has been turned, so that the next turn is a cadence away
+    /// rather than due at once.
+    fn spun(&mut self) {
+        self.turned = Some(Instant::now());
+    }
 }
 
 /// Lay the pinned media out again for the box its window has been given — one it was maximized
@@ -14809,12 +15133,16 @@ fn centred_at(size: (i32, i32), centre: (i32, i32)) -> ScreenRegion {
 /// The pin's own answers to the chrome, once a tick: its buttons, and whether the media
 /// behind the pin is still there at all.
 ///
-/// A step along the walk is answered with the file it lands on rather than with a message,
+/// A step along the walk is answered with the walk itself rather than with a message,
 /// because the walk is taken up where a pick is taken up (`pin_pick`) and nowhere else: a
 /// `PinUpdate` message is the Explorer's half of the question, and the loop's own match for
 /// one is a no-op — it is a pick that swaps a pin's file, and a button is a pick (see
 /// `step_pinned_file`).
-fn pin_command_request(request: &mut Option<PreviewMessage>) -> Option<PathBuf> {
+///
+/// What comes back is more than the file, because a walk is not one file: a file the pin
+/// cannot be shown is stepped over rather than stopped at, and what is stepped over is
+/// bounded by the list the walk is made of (see `PinStep`).
+fn pin_command_request(request: &mut Option<PreviewMessage>) -> Option<PinStep> {
     let step = match take_pin_command() {
         Some(PinCommand::Close) => {
             *request = Some(end_pin_state());
@@ -14844,8 +15172,64 @@ fn pin_command_request(request: &mut Option<PreviewMessage>) -> Option<PathBuf> 
     step
 }
 
-/// The file a step along the folder's walk takes the pin to, or nothing where the walk has
-/// nowhere to step to.
+/// Every file of a list but the one the pin is showing, which is how many files a walk of that
+/// list may be asked for.
+///
+/// The file the pin is on is not one of them: the walk stepped from it, so it is where the walk
+/// came rather than a file to be shown, and offering it again would be a step onto the file
+/// already on screen. This is the whole of what bounds a walk, so that a folder of nothing this
+/// app can read is a walk that ends rather than one that goes for ever (see `PinStep`).
+fn walk_budget(list: &[PathBuf]) -> usize {
+    list.len().saturating_sub(1)
+}
+
+/// A step the pin's own walk has taken, and what is left of the walk to ask for.
+///
+/// The walk is a list of files and a pin can only be shown some of them: a file that is not
+/// there, a file nothing here can read, a file whose decode comes back with nothing at all.
+/// Those are not where a walk stops. A caption button is one press and one gesture, and the
+/// gesture is *the next file I can look at* — so the file that cannot be shown is stepped over
+/// and the walk carries on from it, which is the one place the file the pin has to stop
+/// being what the walk steps from: a file that was not shown leaves the pin showing what it
+/// was showing, so the pin's own path is not where the walk is.
+///
+/// Every other file of the list is offered at most once, so a folder of nothing this app can
+/// read is a walk that ends rather than one that goes for ever (see `walk_budget`).
+struct PinStep {
+    /// The file the walk last landed on, which is where the next step is taken from.
+    at: PathBuf,
+    /// Which way the walk goes: `1` along the listing, `-1` against it.
+    step: i32,
+    /// How many more files the walk may be asked for (see `walk_budget`).
+    left: usize,
+}
+
+impl PinStep {
+    /// The file the next step of this walk lands on, and where the walk stands after it, or
+    /// nothing where the walk has nothing left to offer.
+    fn step(&mut self) -> Option<PathBuf> {
+        if self.left == 0 {
+            return None;
+        }
+        self.left -= 1;
+
+        // The configuration is taken by copy and the lock let go before the walk: the walk
+        // reads a folder behind it, and a lock held across a folder read is a lock every
+        // other thread of the app waits on for as long as the disk takes — the preview
+        // thread included, which is the thread that pumps this window's own messages.
+        let config = CONFIG.lock().ok()?.clone();
+
+        let path = pin_navigation::list_for(&self.at, &config)
+            .and_then(|list| pin_navigation::step_to(&self.at, &list, self.step))?;
+
+        self.at = path.clone();
+
+        Some(path)
+    }
+}
+
+/// The file a step along the folder's walk takes the pin to, and the walk that step began,
+/// or nothing where the walk has nowhere to step to.
 ///
 /// The walk is the pin's own, read under the configuration and against the listing's order
 /// (see `shell::pin_navigation`), so this is only the step: which of the folder's files is
@@ -14858,8 +15242,8 @@ fn pin_command_request(request: &mut Option<PreviewMessage>) -> Option<PathBuf> 
 /// and the wrong one here: a button on the caption is a thing the user pressed, and it is
 /// asked for by no setting. A pick is taken up by the loop whether it came from the listing
 /// or from the caption, which is what makes the two the same gesture.
-fn step_pinned_file(step: i32) -> Option<PathBuf> {
-    let current = pinned_path()?;
+fn step_pinned_file(step: i32) -> Option<PinStep> {
+    let at = pinned_path()?;
 
     // The configuration is taken by copy and the lock let go before the walk: the walk reads
     // a folder behind it, and a lock held across a folder read is a lock every other thread
@@ -14867,8 +15251,37 @@ fn step_pinned_file(step: i32) -> Option<PathBuf> {
     // is the thread that pumps this window's own messages.
     let config = CONFIG.lock().ok()?.clone();
 
-    pin_navigation::list_for(&current, &config)
-        .and_then(|list| pin_navigation::step_to(&current, &list, step))
+    // The walk is the list asked one file at a time, so it is bounded by the list: every file
+    // of it but the one the pin is showing is one the walk may still be offered, and this step
+    // is the first of them.
+    let left = walk_budget(&pin_navigation::list_for(&at, &config)?);
+
+    let mut walk = PinStep { at, step, left };
+
+    walk.step()?;
+
+    Some(walk)
+}
+
+/// Carry a walk on past a file the pin could not be shown, putting it back where the loop holds
+/// it with the next file of the list standing under it.
+///
+/// It is put back rather than spent here, and that is the whole of what makes a walk more than
+/// one file: the file it lands on next is picked up on a tick of its own, and a walk dropped
+/// after the first file it could not show is a walk of one — which is the navigation stopping on
+/// a corrupted file with the button still pressed.
+///
+/// Nothing is put back where the walk has run out: a folder of nothing this app can show is a
+/// walk that ends, and the pin keeps what it was showing, which is the only answer there is for a
+/// window that is already up (see `PinStep`).
+fn step_pin_over(walk: Option<PinStep>, held: &mut Option<PinStep>) {
+    let Some(mut walk) = walk else {
+        return;
+    };
+
+    if walk.step().is_some() {
+        *held = Some(walk);
+    }
 }
 
 /// Whether the pin key brings a bubble back, from the two facts that make the question askable.
@@ -17289,6 +17702,17 @@ pub fn run_preview_window() {
         // behind it is walking through files. The key is what brings the window back up on it
         // (see `pin_key_restores_bubble`).
         let mut pin_bubble_pick: Option<PathBuf> = None;
+        // A file a pinned window is loading, and the wait it is. The load is a thread's work,
+        // so the pin keeps the file it is showing until the answer lands, and a wait that has
+        // run for `spinner_delay_ms` puts an arc in the middle of the pin's media (see
+        // `PinLoad` and `paint_pin_spinner`).
+        let mut pin_load: Option<PinLoad> = None;
+        // A walk a pin's own caption button stepped, held for as long as the walk has files
+        // left to offer rather than for the length of the tick that started it: a file the pin
+        // cannot be shown is stepped over rather than stopped at, and the file after it is
+        // asked for on a tick of its own, with the walk carried onto it. What the walk stands
+        // on is the file to be shown next (see `PinStep`).
+        let mut pin_walk: Option<PinStep> = None;
         // A player that has been started and has not put its window up yet: the wait
         // for a video, which the spinner stands in for until the player's window is
         // there (see `VideoStart`).
@@ -17406,6 +17830,11 @@ pub fn run_preview_window() {
                             if let Some(path) = pin_bubble_pick.take() {
                                 restore_pin();
                                 pin_swap_requested = Some(path);
+                                // A file picked in the listing is not a step of the walk, so
+                                // nothing is stepped over on its account: it is a file the user
+                                // named, and a file the pin cannot show is a pin that keeps what
+                                // it has rather than a walk that moves on (see `PinStep`).
+                                pin_walk = None;
                             }
                         }
                     }
@@ -17425,10 +17854,11 @@ pub fn run_preview_window() {
                 settle_open_with_dialog(hwnd);
 
                 // A step the caption's own walk buttons took is a pick like any other, and is
-                // held in the same slot: what a pick is taken up as is the loop's, whether it
-                // came from the listing, from the key, or from a button.
-                if let Some(path) = pin_command_request(&mut pin_request) {
-                    pin_swap_requested = Some(path);
+                // held in the walk rather than in the pick slot: the file it stands on is the
+                // file to be shown, and the walk is what carries it on when that file turns out
+                // to be one the pin cannot be shown (see `PinStep`).
+                if let Some(walk) = pin_command_request(&mut pin_request) {
+                    pin_walk = Some(walk);
                 }
 
                 // A window that is up holds nothing for the key: what a restore by a click on the
@@ -17496,6 +17926,27 @@ pub fn run_preview_window() {
                     && last_pin_repaint.elapsed() >= Duration::from_millis(PIN_TRANSPORT_REPAINT_MS)
                 {
                     last_pin_repaint = Instant::now();
+                    render_layered_preview(hwnd);
+                }
+
+                // A window waiting for a file is painted again for the arc: once, when the
+                // wait has run for the delay `spinner_delay_ms` names, and then once per turn
+                // of it. A window with a transport bar would have been repainted anyway and
+                // the arc rides along on that paint; one without has nothing else to repaint
+                // for, and this is what a load that outlives the delay is answered with
+                // rather than a window frozen for the length of the read (see `PinLoad`).
+                if let Some(load) = pin_load.as_mut().filter(|load| load.due()) {
+                    // The arc is published as the wait comes due rather than as it starts, so
+                    // a load that answers inside the delay never shows one — which is the
+                    // whole of what the delay is for.
+                    pin_arc_set(Some(load.started.elapsed()));
+                    load.spun();
+
+                    // The paint just happened, so the bar's own clock starts again here: a
+                    // window with a transport bar would otherwise be painted twice within a
+                    // turn, once for the arc and once for the playhead.
+                    last_pin_repaint = Instant::now();
+
                     render_layered_preview(hwnd);
                 }
             }
@@ -18867,6 +19318,15 @@ pub fn run_preview_window() {
             // would take the landing of a hover's wait for its own (see `pin_awaiting_box`).
             if !pinned() {
                 pin_awaiting_box = None;
+                // A file a pin that is over was loading is not waited for: the window it was
+                // being shown in has gone, and the answer landing for it would be installed
+                // into a pin that is not there (see `PinLoad`).
+                pin_load = None;
+                pin_arc_set(None);
+                // A walk a pin that is over was stepping is not stepped on: a caption's next
+                // belongs to the window it was pressed on, and the pin that follows is shown
+                // whatever the user picks rather than the rest of a walk behind it.
+                pin_walk = None;
                 // A file picked behind a pin that is over is not owed to the pin that follows it:
                 // what the key brings a bubble back on is what was picked while *that* bubble was
                 // down, and a file nobody is holding any more is a swap nothing asked for (see
@@ -18876,15 +19336,44 @@ pub fn run_preview_window() {
                 pin_bubble_pick = None;
             }
 
-            if let Some(path) = pin_pick.take().or_else(|| pin_swap_requested.take()) {
+            if let Some(path) = pin_pick
+                .take()
+                .or_else(|| pin_swap_requested.take())
+                .or_else(|| pin_walk.as_ref().map(|walk| walk.at.clone()))
+            {
                 pin_awaiting_box = None;
+                // A pick the pin's own walk made is a step of that walk, and the walk is
+                // carried with it: a file the pin cannot be shown is stepped over rather than
+                // stopped at. A pick from the listing is a file the user named, and has no
+                // walk to carry on from (see `PinStep`).
+                let walk = pin_walk.take();
+                // Whatever was loading is a load for a file nobody is asking for any more, and
+                // the answer it lands with is dropped with it: what the pin shows next is
+                // planned here, for this file, and taking up an answer for another one would
+                // install a frame the take-up below was not asked for.
+                pin_load = None;
+                pin_arc_set(None);
                 // A pin that is a bubble has no window to show this in, so the file is held for
                 // the key rather than swapped in: what the user is doing behind a bubble is
                 // picking, and a bubble that took the pin down on the first pick would be a
                 // window lost for a file they did not ask to see (see `pin_bubble_pick`).
                 if pinned() && pin_is_collapsed() {
                     pin_bubble_pick = Some(path);
-                } else if pinned() && pin_update_enabled() && pending_load.is_none() {
+                } else if pinned()
+                    && (pin_update_enabled() || walk.is_some())
+                    && pending_load.is_none()
+                {
+                    // The setting is the gate on a *pick in the listing* — a file the pointer or
+                    // the keyboard chose behind the window — and not on a step of the pin's own
+                    // walk, which is a thing the user pressed on the window and is asked for by
+                    // no setting: a caption's next and previous did nothing at all with
+                    // `Pin Mode → Update Preview` off, which is the same "the navigation stopped"
+                    // a file with no preview causes, asked for by no one (see `step_pinned_file`).
+                    // Whether the plan answered that the file cannot be shown at all, as
+                    // opposed to a box or an engine that has not answered yet. Only the first
+                    // of the two is a file the walk steps over: a wait is a wait, and what
+                    // ends it is the answer it was asked for.
+                    let mut refused = false;
                     let update = match pin_update_plan(&path) {
                         Some(PinPlan::Show(update)) => Some(update),
                         // The file has no box of its own yet — what was measured for it is the
@@ -18926,6 +19415,7 @@ pub fn run_preview_window() {
                                 // the only thing a window that is already up can do for a file it
                                 // cannot show (the hover comes down on the same answer, having
                                 // nothing to keep).
+                                refused = true;
                                 None
                             } else {
                                 // Nothing was on its way after all — an answer that landed between
@@ -18933,79 +19423,123 @@ pub fn run_preview_window() {
                                 // is planned once more, and this time there is a box to lay out.
                                 match pin_update_plan(&path) {
                                     Some(PinPlan::Show(update)) => Some(update),
-                                    _ => None,
+                                    _ => {
+                                        refused = true;
+                                        None
+                                    }
                                 }
                             }
                         }
-                        None => None,
+                        None => {
+                            // A file no kind previews, and a file the pin is already showing —
+                            // the walk's own list of one steps onto it. The first is stepped
+                            // over, because a walk that stopped on a file with no preview would
+                            // stop on every one of them; the second is not, because there is
+                            // nothing to show it again and nowhere to step on to.
+                            refused =
+                                walk.is_some() && pinned_path().as_deref() != Some(path.as_path());
+                            None
+                        }
                     };
 
                     if let Some(update) = update {
-                        if let Some((media, audio)) =
-                            swap_pinned_media(&path, update.content, update.dpi, update.volume)
-                        {
-                            // A volume popup floating over the media belongs to the box it was
-                            // opened over, and that box has just been given another file: it is put
-                            // away rather than left where the hand left it (see the box change
-                            // below, which does the same).
-                            close_pin_volume();
-
-                            // A sound's card is drawn against the clock of the player this app
-                            // started, and the clock is the loop's rather than the media's: where
-                            // that player was started and from which second is read here the way
-                            // the load path reads it, so a card swapped into a pin ticks like a
-                            // card a hover put up (see `audio_clock`). The marquee its name needs is
-                            // the card's own box, which is the frame that has just been loaded.
-                            if let Some(start) = audio {
-                                let card_width = media.current_width();
-
-                                audio_started = start.started;
-                                audio_start_offset = start.from;
-                                audio_share_seek = start.share;
-                                audio_repaint_at = Instant::now();
-                                audio_card_dpi = update.dpi;
-                                audio_name_scroll = Some(audio_preview::NameScroll::of(
-                                    &audio_preview::name_of(&path),
-                                    card_width,
-                                    audio_card_dpi,
-                                    current_audio_options(),
-                                ));
-                            }
-
-                            // Where a player's window belongs while a pin is up is the pin's media
-                            // band, which is what the tick's own re-assertion reads.
-                            video_pos = (
-                                update.content.0,
-                                update.content.1,
-                                update.content.2 - update.content.0,
-                                update.content.3 - update.content.1,
-                            );
-                            current_video_path = match media.media_type {
-                                MediaType::Video => Some(path.clone()),
-                                _ => None,
-                            };
-
-                            if let Ok(mut current) = CURRENT_MEDIA.lock() {
-                                *current = Some(media);
-                            }
-
-                            // What the loop's own bookkeeping is about is the file on screen, and
-                            // the pin is showing another one now: the card a sound is drawn from,
-                            // the render tier's own record, and the hover a take-down ends are all
-                            // read of this.
-                            current_show = Some(PreviewMessage::Show(
-                                path.clone(),
-                                update.content.0,
-                                update.content.1,
-                                None,
-                            ));
-
-                            pin_request = Some(PreviewMessage::Pin {
-                                path,
-                                rect: update.content,
-                            });
-                        }
+                        // The read and the decode are a thread's work, so a file whose load is
+                        // slow is a wait the pin is painted for rather than a window frozen for
+                        // as long as the disk takes (see `PinLoad`).
+                        pin_load = Some(PinLoad::start(&path, update, walk));
+                    } else if refused {
+                        // A file the pin cannot be shown is stepped over rather than stopped
+                        // at: one press of a caption button is one gesture, and the gesture is
+                        // the next file there is to look at (see `PinStep`).
+                        step_pin_over(walk, &mut pin_walk);
                     }
+                }
+            }
+
+            // A load a pinned window is waiting for has answered. What came back is installed
+            // here, on this thread, and the take-up below is the pin's own: the box is the one
+            // the plan was made with, and what comes of it is the same window showing
+            // something else (see `PreviewMessage::Pin`).
+            if let Some(answer) = take_pin_load(&mut pin_load) {
+                pin_arc_set(None);
+
+                let PinAnswer {
+                    path,
+                    update,
+                    media,
+                    walk,
+                } = answer;
+
+                let swapped = media.and_then(|media| {
+                    swap_pinned_media(&path, update.content, update.volume, media)
+                });
+
+                if let Some((media, audio)) = swapped {
+                    // A volume popup floating over the media belongs to the box it was
+                    // opened over, and that box has just been given another file: it is put
+                    // away rather than left where the hand left it (see the box change
+                    // below, which does the same).
+                    close_pin_volume();
+
+                    // A sound's card is drawn against the clock of the player this app
+                    // started, and the clock is the loop's rather than the media's: where
+                    // that player was started and from which second is read here the way
+                    // the load path reads it, so a card swapped into a pin ticks like a
+                    // card a hover put up (see `audio_clock`). The marquee its name needs is
+                    // the card's own box, which is the frame that has just been loaded.
+                    if let Some(start) = audio {
+                        let card_width = media.current_width();
+
+                        audio_started = start.started;
+                        audio_start_offset = start.from;
+                        audio_share_seek = start.share;
+                        audio_repaint_at = Instant::now();
+                        audio_card_dpi = update.dpi;
+                        audio_name_scroll = Some(audio_preview::NameScroll::of(
+                            &audio_preview::name_of(&path),
+                            card_width,
+                            audio_card_dpi,
+                            current_audio_options(),
+                        ));
+                    }
+
+                    // Where a player's window belongs while a pin is up is the pin's media
+                    // band, which is what the tick's own re-assertion reads.
+                    video_pos = (
+                        update.content.0,
+                        update.content.1,
+                        update.content.2 - update.content.0,
+                        update.content.3 - update.content.1,
+                    );
+                    current_video_path = match media.media_type {
+                        MediaType::Video => Some(path.clone()),
+                        _ => None,
+                    };
+
+                    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+                        *current = Some(media);
+                    }
+
+                    // What the loop's own bookkeeping is about is the file on screen, and
+                    // the pin is showing another one now: the card a sound is drawn from,
+                    // the render tier's own record, and the hover a take-down ends are all
+                    // read of this.
+                    current_show = Some(PreviewMessage::Show(
+                        path.clone(),
+                        update.content.0,
+                        update.content.1,
+                        None,
+                    ));
+
+                    pin_request = Some(PreviewMessage::Pin {
+                        path,
+                        rect: update.content,
+                    });
+                } else {
+                    // A file this app cannot read, a file still in the cloud, a player that
+                    // would not start: nothing of it to show, so the walk is asked for the
+                    // next file rather than left on one that cannot be shown.
+                    step_pin_over(walk, &mut pin_walk);
                 }
             }
 
@@ -19986,7 +20520,7 @@ pub fn run_preview_window() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::config::DEFAULT_FONT_SCALE_PERCENT;
+    use crate::config::config::{PinNavFileTypes, DEFAULT_FONT_SCALE_PERCENT};
     // The key a pin answers with nothing, which is the one the mapping has to name explicitly
     // and which nothing outside a test ever has to read.
     use windows::Win32::UI::Input::KeyboardAndMouse::VK_SPACE;
@@ -26102,6 +26636,324 @@ mod tests {
         if let Ok(mut media) = CURRENT_MEDIA.lock() {
             *media = previous_media;
         }
+    }
+
+    /// What this guards: a pinned window playing a sound, whose player plays the pass it was
+    /// given and stops at the end of it.
+    ///
+    /// A player between passes is what `wrap_audio_player` exists to answer — the tick finds the
+    /// player gone, reads the stop as the end of the file, and starts the whole file again. The
+    /// pin's liveness question ran *before* that tick, and read the same dead player as a pin
+    /// onto nothing: every pinned sound closed its window at the end of each pass, which read
+    /// as a sound that stopped rather than looped. The card is this app's own text, so the pin
+    /// is a window onto a card whatever the player behind it is doing (see `pin_media_is_alive`).
+    #[test]
+    fn a_pinned_sound_is_not_a_pin_that_came_apart_between_passes() {
+        let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+        let previous_pin = PINNED.lock().ok().and_then(|mut pinned| pinned.take());
+
+        let folder = std::env::temp_dir().join("rust-hover-preview-pin-sound");
+        let path = folder.join("pass.mp3");
+        std::fs::create_dir_all(&folder).expect("a test folder");
+        std::fs::write(&path, b"not really a sound").expect("a written file");
+
+        let mut sound = create_loading_media(8, 8);
+        sound.media_type = MediaType::Audio;
+        if let Ok(mut media) = CURRENT_MEDIA.lock() {
+            *media = Some(sound);
+        }
+
+        let mut pin = overlay_pin((0, 0, 80, 60), PinChrome::always());
+        pin.path = path.clone();
+        if let Ok(mut pinned) = PINNED.lock() {
+            *pinned = Some(pin);
+        }
+
+        assert!(
+            pin_media_is_alive(),
+            "a card is this app's own text: a player between two passes is not a window onto \
+             nothing, and taking the window down for it closed a looping sound at the end of \
+             every pass"
+        );
+
+        if let Ok(mut pinned) = PINNED.lock() {
+            *pinned = previous_pin;
+        }
+        if let Ok(mut media) = CURRENT_MEDIA.lock() {
+            *media = previous_media;
+        }
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    /// A folder of a test's own with three pictures in it and nothing else, so that a walk of
+    /// it is the three and the three in the order they are named: the name order is what a
+    /// folder nothing has been hovered in is walked in, and a fresh folder of a test's own is
+    /// exactly that (see `pin_navigation`).
+    fn walkable_folder(name: &str) -> PathBuf {
+        let folder = std::env::temp_dir()
+            .join("rust-hover-preview-pin-walk-tests")
+            .join(name);
+        let _ = std::fs::remove_dir_all(&folder);
+        std::fs::create_dir_all(&folder).expect("a folder a test can write to");
+
+        for picture in ["a.png", "b.png", "c.png"] {
+            std::fs::write(folder.join(picture), vec![0u8; 8]).expect("a file a test can write");
+        }
+
+        folder
+    }
+
+    /// The walk is read under the app's own configuration, which is loaded from `config.ini` —
+    /// so a walk test says what it wants walked rather than taking whatever the machine it runs
+    /// on has set. Only that switch is touched, and it is put back when the guard is dropped,
+    /// so a test running beside this one is not answered with this one's setting.
+    struct WalkEveryFile(PinNavFileTypes);
+
+    impl WalkEveryFile {
+        fn set() -> Self {
+            let mut config = CONFIG.lock().expect("the configuration");
+            let was = config.pin_nav_file_types;
+            config.pin_nav_file_types = PinNavFileTypes::All;
+
+            WalkEveryFile(was)
+        }
+    }
+
+    impl Drop for WalkEveryFile {
+        fn drop(&mut self) {
+            if let Ok(mut config) = CONFIG.lock() {
+                config.pin_nav_file_types = self.0;
+            }
+        }
+    }
+
+    /// What this guards: a walk bounded by the list it came from, standing on the file it last
+    /// landed on.
+    ///
+    /// The bound is the whole of what makes stepping over a file safe: a walk that is not
+    /// bounded is a walk that goes for ever over a folder of files this app cannot read. The
+    /// base is the same fact read the other way — a walk that steps from the file the pin is
+    /// still showing steps straight back onto the file it just failed on, and that is the
+    /// navigation stopping one file further along rather than not at all.
+    #[test]
+    fn a_walk_offers_every_other_file_of_the_folder_once_and_then_ends() {
+        let _every_file = WalkEveryFile::set();
+        let folder = walkable_folder("bounded");
+        let list = vec![
+            folder.join("a.png"),
+            folder.join("b.png"),
+            folder.join("c.png"),
+        ];
+
+        let mut walk = PinStep {
+            at: list[0].clone(),
+            step: 1,
+            // The bound a walk of this folder is given by the button that started it, so that
+            // what is tested here is the bound the caption actually walks under.
+            left: walk_budget(&list),
+        };
+
+        // Every step, and the one that ends the walk: the end is part of what is being asked
+        // about, so it is a step like any other and is recorded as one.
+        let mut offered = Vec::new();
+        loop {
+            let next = walk.step();
+            let ends = next.is_none();
+            offered.push(next);
+            if ends {
+                break;
+            }
+        }
+
+        assert_eq!(
+            offered,
+            vec![Some(list[1].clone()), Some(list[2].clone()), None],
+            "every file of the folder but the one the pin is showing is offered, and then the \
+             walk ends rather than going round for ever"
+        );
+        assert_eq!(
+            walk.at, list[2],
+            "the walk stands on the file it last landed on, which is where the next step is \
+             taken from rather than from the file the pin is still showing"
+        );
+    }
+
+    /// What this guards: a file the pin cannot be shown is not where a walk stops, and the walk
+    /// comes back rather than being spent.
+    ///
+    /// It has to come back where the loop holds it, because the file after this one is picked
+    /// up on a tick of its own: a walk spent on the first file it could not show is a walk of
+    /// one, and the navigation stops on a corrupted file with the button still pressed (see
+    /// `step_pin_over`).
+    #[test]
+    fn stepping_over_a_file_the_pin_cannot_show_carries_the_walk_on() {
+        let _every_file = WalkEveryFile::set();
+        let folder = walkable_folder("carried-on");
+
+        let mut held: Option<PinStep> = None;
+        let walk = PinStep {
+            at: folder.join("a.png"),
+            step: 1,
+            left: 1,
+        };
+
+        step_pin_over(Some(walk), &mut held);
+
+        let walk = held.expect("the walk is handed back rather than spent");
+        assert_eq!(
+            walk.at,
+            folder.join("b.png"),
+            "standing on the next file, which is the one the walk carries on to"
+        );
+
+        // And a walk that has nothing left is not held: a folder of files this app cannot show
+        // is a walk that ends rather than one that goes for ever.
+        let mut spent: Option<PinStep> = None;
+        step_pin_over(Some(walk), &mut spent);
+        assert!(
+            spent.is_none(),
+            "the walk that has run out of files is not held, so nothing is asked for again"
+        );
+    }
+
+    /// What this guards: the arc a pinned window waits with, and when it is put up.
+    ///
+    /// The delay is the point: a file that loads inside `spinner_delay_ms` goes from the file
+    /// the pin was showing straight to the new one, and one that does not is a wait the user
+    /// can see — the answer to a slow load being a window frozen for the length of it, which
+    /// is what the pin did before the load was given a thread of its own. The turn is a
+    /// cadence away from the last one rather than due on the next tick, which is what keeps a
+    /// long wait from repainting the window as fast as the loop runs.
+    #[test]
+    fn a_pin_wait_puts_its_arc_up_only_once_it_has_outlasted_the_delay() {
+        let mut load = PinLoad {
+            path: PathBuf::from("C:\\wait\\slow.png"),
+            update: PinUpdate {
+                content: (0, 0, 100, 100),
+                dpi: 96,
+                volume: 50,
+            },
+            started: Instant::now(),
+            spinner_delay: Duration::from_millis(DEFAULT_SPINNER_DELAY_MS),
+            turned: None,
+            answer: channel().1,
+            walk: None,
+        };
+
+        assert!(
+            !load.due(),
+            "a wait that has not run its delay shows no arc"
+        );
+
+        load.started = Instant::now() - Duration::from_millis(DEFAULT_SPINNER_DELAY_MS + 1);
+        assert!(load.due(), "and a wait that has outlasted it shows one");
+
+        load.spun();
+        assert!(
+            !load.due(),
+            "the turn is a cadence away from the last one rather than due at once, so the \
+             moment the delay runs out is one paint and not one paint a tick"
+        );
+        assert!(
+            load.turned.is_some(),
+            "and a wait that has had its arc is a wait that does not ask for a second one"
+        );
+
+        load.turned = Some(
+            Instant::now() - Duration::from_millis(u64::from(MIN_ANIMATION_FRAME_DELAY_MS) + 1),
+        );
+        assert!(
+            load.due(),
+            "until the spinner's own cadence has come round again"
+        );
+    }
+
+    /// What this guards: the arc is put over a band that is already there, in the middle of it,
+    /// and nowhere else — a band cleared for a spinner would be a window with nothing in it for
+    /// the length of a decode, which is the freeze the arc is here to answer (see
+    /// `paint_pin_spinner`).
+    #[test]
+    fn the_pin_arc_leaves_the_band_it_is_drawn_over_except_where_it_is() {
+        let (width, height) = (240u32, 200u32);
+        // A band as a file leaves it: an even, opaque surface, so a pixel that has changed is a
+        // pixel the arc can only have changed.
+        let band = |alpha: u8| {
+            let mut surface = vec![40u8; (width as usize) * (height as usize) * 4];
+            for pixel in surface.as_chunks_mut::<4>().0 {
+                pixel[3] = alpha;
+            }
+            surface
+        };
+        let changed = |surface: &[u8], untouched: &[u8]| {
+            surface
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .zip(untouched.as_chunks::<4>().0.iter())
+                .filter(|(drawn, was)| drawn != was)
+                .count()
+        };
+
+        let untouched = band(255);
+        pin_arc_set(Some(Duration::from_millis(500)));
+
+        let mut out = untouched.clone();
+        paint_pin_spinner(&mut out, width, 0, height as i32);
+
+        let drawn = changed(&out, &untouched);
+        assert!(
+            drawn > 0,
+            "a window waiting for a file is painted with the arc, in the middle of its band"
+        );
+
+        // Every pixel of it is inside the arc's own ring, and every pixel of the ring is
+        // inside the box the drawing walks: the band outside that box is the file the pin is
+        // showing, untouched right to the edges of the window.
+        let outside = untouched
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(out.as_chunks::<4>().0.iter())
+            .enumerate()
+            .filter(|(_, (was, drawn))| was != drawn)
+            .all(|(index, _)| {
+                let (x, y) = (index as i32 % width as i32, index as i32 / width as i32);
+                (x - width as i32 / 2).abs() <= PIN_ARC_REACH
+                    && (y - height as i32 / 2).abs() <= PIN_ARC_REACH
+            });
+        assert!(
+            outside,
+            "and it is drawn nowhere else: the rest of the band is the file the pin is showing"
+        );
+
+        // A band with nothing behind it — the hole a player's window of its own stands in —
+        // takes the arc as premultiplied coverage over nothing, which is what a layered
+        // window's surface is read as.
+        let clear = band(0);
+        let mut over_nothing = clear.clone();
+        paint_pin_spinner(&mut over_nothing, width, 0, height as i32);
+        assert!(
+            changed(&over_nothing, &clear) > 0,
+            "an arc over an empty band is still an arc: the window says what it is waiting for"
+        );
+
+        // And a band with no room for one is left alone, rather than drawn into a half of a
+        // ring that would read as a mark rather than a wait.
+        let narrow = band(255);
+        let mut cramped = narrow.clone();
+        paint_pin_spinner(&mut cramped, width, 0, PIN_ARC_REACH * 2 - 1);
+        assert_eq!(
+            cramped, narrow,
+            "and a band with no room for the arc keeps the file it is showing"
+        );
+
+        pin_arc_set(None);
+        let mut after = untouched.clone();
+        paint_pin_spinner(&mut after, width, 0, height as i32);
+        assert_eq!(
+            after, untouched,
+            "and a window that is waiting for nothing is painted exactly as it was"
+        );
     }
 
     /// What this guards: a pinned video laid out again for the box its window was dragged to, which
