@@ -33,10 +33,26 @@
 //! it, which is no preview for the rest of the run. An app left alone has no browser
 //! process and one thread asleep — and the settings it is given are the app's own rules
 //! rather than a browser's: a document is drawn and not run, and nothing about it is a
-//! way out of the preview. A page of HTML is the one exception, and the exception is
-//! deliberate rather than a leak: it is handed to the browser as a page rather than as an
+//! way out of the preview. A page of HTML is the one exception to that, and the exception
+//! is deliberate rather than a leak: it is handed to the browser as a page rather than as an
 //! image, a page that draws itself is nothing without a run, and what a run is given stops
 //! at everything that is a way out of the frame it is in (see `html_page`, `page_runs`).
+//!
+//! Kept warm is not the same as left working, and the second of those is what that same
+//! exception makes necessary. A browser whose window is not on screen is told to stop —
+//! `Host::hide` asks the runtime to suspend it, which takes a runtime exposing
+//! `ICoreWebView2_3`; on an older one the controller is only hidden, and that alone is
+//! enough to stop the compositor producing frames for a window no one can see. Where the
+//! ask is there to be made it is also what a document that runs needs: its frame loop and
+//! its script timers are paused too, rather than dropped to what a background tab runs at.
+//! What is kept between documents is the browser, not the work it was doing, and
+//! `Host::wake` puts that browser back to work on the next document, which is a resume
+//! rather than a browser start — so what a page costs is paid while it is on screen, and
+//! briefly after a browser has been woken but before its window goes up, which a
+//! navigation ending superseded or failed never reaches (see `Host::hide`). None of it is
+//! about HTML alone: an animated SVG is a compositor working just as hard behind a window
+//! that has been hidden, and the same question is asked of every kind of document (see
+//! `frame_page`, `suspend`).
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, AtomicU64, Ordering};
@@ -48,11 +64,12 @@ use once_cell::sync::Lazy;
 use webview2_com::Microsoft::Web::WebView2::Win32::{
     CreateCoreWebView2EnvironmentWithOptions, GetAvailableCoreWebView2BrowserVersionString,
     ICoreWebView2, ICoreWebView2Controller, ICoreWebView2Environment,
-    ICoreWebView2EnvironmentOptions, COREWEBVIEW2_COLOR,
+    ICoreWebView2EnvironmentOptions, ICoreWebView2_3, COREWEBVIEW2_COLOR,
 };
 use webview2_com::{
     CoreWebView2EnvironmentOptions, CreateCoreWebView2ControllerCompletedHandler,
     CreateCoreWebView2EnvironmentCompletedHandler, NavigationCompletedEventHandler,
+    TrySuspendCompletedHandler,
 };
 use windows::core::{w, Interface, PCWSTR, PWSTR};
 use windows::Win32::Foundation::{E_POINTER, HWND, LPARAM, LRESULT, RECT, WPARAM};
@@ -828,6 +845,10 @@ pub fn show(path: &Path, area: Area, background: TransparentBackground) {
 /// begin is a browser start, and what it costs to point at another document is a few
 /// milliseconds, so a hover that follows another one pays almost nothing.
 ///
+/// Kept warm is not the same as left working, and this is the other half of it: the
+/// browser is told to stop while its window is off screen, so a document that runs costs
+/// nothing until the next one is asked for (see `Host::hide`, `suspend`).
+///
 /// Nothing is wanted once this returns, and the generation goes with it: a navigation the
 /// engine is in the middle of is one whose file the pointer has left, so it is dropped
 /// rather than put up, and the window comes down without waiting for it.
@@ -1295,6 +1316,18 @@ struct Host {
     /// the next document: what it would answer with is the file before this one, and what
     /// its thread would do is wait on a page that is never coming (see `NAVIGATION_TIMEOUT`).
     hung: bool,
+    /// Whether the browser has been asked to suspend and is to be resumed before the next
+    /// document is drawn. It is kept here rather than read back from the browser because
+    /// both questions are about this host's own last word: a runtime older than
+    /// suspension is a host that never suspends, and a resume of a WebView that is not
+    /// suspended is harmless (see `suspend`, `wake`).
+    ///
+    /// It is also the record of the invariant `hide` keeps: after a hide returns, the
+    /// browser has been asked to stop, whatever was on screen and whatever was. Nothing
+    /// is read to decide whether the ask is owed, so a hide that has already been had
+    /// does not ask again, and a browser that is stopped is a browser `wake` knows to put
+    /// back to work before it navigates.
+    suspended: bool,
 }
 
 impl Host {
@@ -1400,6 +1433,7 @@ impl Host {
             current: None,
             browser_pid,
             hung: false,
+            suspended: false,
         };
 
         // The window a hit test compares against, for the preview loop and the Explorer
@@ -1447,6 +1481,16 @@ impl Host {
         } else {
             0
         };
+
+        // A browser that was told to stop when the last document was taken down is put back
+        // to work here: before anything is navigated to, and before the controller is told
+        // it is on screen, which is the order the runtime documents for a resume. Either of
+        // those two would wake it anyway — a `Navigate` resumes a suspended WebView, and so
+        // does making it visible — so nothing about the document turns on the order. The
+        // resume is made explicitly rather than left to either of them so that the state this
+        // app keeps is the state the browser is in, and the flag on `Host` cannot come to
+        // disagree with it (see `suspend`, `wake`).
+        self.wake();
 
         unsafe {
             // The background is a setting of the controller rather than of the page,
@@ -1577,14 +1621,148 @@ impl Host {
         self.hung
     }
 
+    /// Take the window down, and tell the browser that nothing is looking at it.
+    ///
+    /// `ShowWindow(SW_HIDE)` is only half of what a window leaving the screen means to a
+    /// browser: a controller still told that it is on screen keeps the compositor making
+    /// frames for it, and a document that runs goes on running at it for the rest of the
+    /// session, so the browser is asked to suspend as well (see `suspend`). That is asked
+    /// of every kind of document and not only of a page of HTML, because the frames are
+    /// the browser's rather than the page's: an animated SVG is composited just as hard.
+    ///
+    /// There is deliberately no check of whether the window was ever put up, because a
+    /// browser can be awake with its window hidden: a `show` that puts the browser back to
+    /// work and then ends as a navigation that was superseded or failed returns before the
+    /// controller is told it is on screen, so what is left is a browser drawing a window
+    /// nobody is looking at (see `show`). A hide that took the absence of a visible window
+    /// as an answer to the question of what the browser is doing would skip the one ask
+    /// that stops it, and the engine is kept warm between documents, so nothing else would
+    /// ever come along and do it. What not guarding costs is two Win32 calls and the one
+    /// `Interface::cast` in `suspend`, and that is nothing at all once the browser has
+    /// been asked: the guard at the top of `suspend` is what returns for a host that has
+    /// nothing to wake.
     fn hide(&mut self) {
         unsafe {
             let _ = ShowWindow(self.hwnd, SW_HIDE);
+            // `TrySuspend` states a precondition rather than a preference: the controller's
+            // `IsVisible` must already be false when it is called, and otherwise the call
+            // fails outright with `HRESULT_FROM_WIN32(ERROR_INVALID_STATE)` rather than
+            // answering no. So the controller is hidden first, and this half of the hide is
+            // never made conditional on a runtime that can be asked to suspend — it is the
+            // half that stops the frames whether or not the ask is ever answered, including
+            // on a runtime too old to be asked at all (see `suspend`).
+            let _ = self.controller.SetIsVisible(false);
         }
 
+        // These are what the preview loop reads as the preview still being there — through
+        // `is_showing`, `showing_path` and `screen_rect` — so they are published before the
+        // ask rather than after it: `suspend` waits, and can wait for up to
+        // `SUSPEND_TIMEOUT`, and publishing first is what keeps a window in which the
+        // preview has been taken down and the app is still reporting one under the pointer.
         publish_shown(None);
         SHOWING.store(false, Ordering::Release);
         publish_rect(None);
+
+        self.suspend();
+    }
+
+    /// Ask the browser to stop working while nothing is looking at its window.
+    ///
+    /// What this is for is the engine being kept warm between documents (see the module
+    /// docs): the browser is there to be pointed at the next one, and a browser left
+    /// rendering a window that is off screen spends CPU and GPU on a picture no one is
+    /// seeing. `TrySuspend` is the runtime's own answer to that — it halts rendering and
+    /// throttles the page's script timers, which is what a page that runs needs, and it
+    /// does it for an animated document as much as for a page.
+    ///
+    /// The ask is waited for, and waited for within `SUSPEND_TIMEOUT`, rather than left to
+    /// complete whenever it completes: the engine's thread is the thread the browser is
+    /// driven from, so the wait here is a `GetMessage` for the reason `wait_for_navigation`
+    /// is one. A runtime older than suspension is answered by leaving the controller
+    /// hidden and doing nothing else — `SetIsVisible(false)` has already stopped the
+    /// frames, and that half is the one that is not optional.
+    ///
+    /// It is called on every hide rather than only on a hide of something on screen, so the
+    /// guard at the top of it is what keeps that cheap: a browser that has already been asked
+    /// to stop is asked nothing further, however many hides arrive behind it and whether or
+    /// not a window was ever put up in between.
+    fn suspend(&mut self) {
+        if self.suspended {
+            return;
+        }
+
+        let Ok(webview) = self.webview.cast::<ICoreWebView2_3>() else {
+            trace("host: this runtime does not suspend; the controller is hidden and no more");
+            return;
+        };
+
+        trace("host: asked the browser to suspend");
+        let (sender, receiver) = mpsc::channel::<bool>();
+
+        unsafe {
+            // The handler is let go of when this returns, and that is safe: the browser
+            // holds a reference of its own to it, so an answer that arrives after the wait
+            // has given up goes into a channel nobody is reading, and a send into a
+            // receiver that has been dropped is the error this ignores.
+            let handler =
+                TrySuspendCompletedHandler::create(Box::new(move |_code, is_successful| {
+                    let _ = sender.send(is_successful);
+                    Ok(())
+                }));
+
+            if webview.TrySuspend(&handler).is_err() {
+                trace("host: the browser would not be asked to suspend");
+                return;
+            }
+        }
+
+        // Whether the browser said yes, said no, or said nothing at all, the WebView is
+        // recorded as suspended: what the flag is for is not asking again while the browser
+        // stays where this left it, however many hides arrive behind it, and `wake` resumes
+        // a browser that may not really have suspended — harmlessly, its result being
+        // ignored. A refusal is therefore retried on the next hide, which is deliberate: a
+        // browser that refused because of something transient — a script dialog left open,
+        // say — is quite likely to say yes the next time it is asked (see `wake`).
+        match wait_for_suspend(&receiver) {
+            Some(true) => trace("host: the browser is suspended"),
+            Some(false) => trace("host: the browser refused to suspend"),
+            None => trace("host: the browser did not answer the suspend in time"),
+        }
+
+        self.suspended = true;
+    }
+
+    /// Put the browser back to work, which is what a page that runs needs before the next
+    /// document is drawn: a resume rather than a browser begun again, and a page that picks
+    /// up where it left off rather than an engine thrown away and started.
+    ///
+    /// The order it is called in — resume first, and the controller told it is on screen
+    /// after it — is the runtime's documented one, and nothing turns on it here: `Navigate`
+    /// resumes a suspended WebView of its own accord, and so does making it visible. The
+    /// resume is made explicitly rather than left to either of those so that the state this
+    /// app keeps is the state the browser is in, and the flag on `Host` cannot come to
+    /// disagree with it (see `show`).
+    ///
+    /// The flag is cleared before the call rather than after it, so a runtime with nothing to
+    /// resume cannot leave the host believing it has a suspended WebView to wake before every
+    /// document — and a resume of a WebView that was never suspended is harmless, its result
+    /// being ignored either way.
+    ///
+    /// Nothing asserts that order: `suspend`, this and `wait_for_suspend` all need a live
+    /// COM object to be asked against, so the invariant is on whoever changes this next rather
+    /// than on the suite.
+    fn wake(&mut self) {
+        if !self.suspended {
+            return;
+        }
+
+        self.suspended = false;
+
+        if let Ok(webview) = self.webview.cast::<ICoreWebView2_3>() {
+            unsafe {
+                let _ = webview.Resume();
+            }
+        }
     }
 
     fn close(&mut self) {
@@ -1596,7 +1774,11 @@ impl Host {
         // a hung host is. So the process is ended first — by the id it was recorded under,
         // which is the same verified end every other engine of this app gets — and the close
         // that follows is the close of something that is already gone rather than a wait on
-        // it.
+        // it. A browser `hide` suspended is closed the same way as one that was not, and
+        // nothing here waits for it to be woken first: a suspend is a browser that has
+        // stopped drawing rather than one that has stopped answering, and either way the
+        // close is this engine's last word — what did not take the browser down is ended
+        // by `Drop`, which is the path a suspended browser is answered on as well.
         if self.hung && self.browser_pid != 0 {
             if engine_processes::is_running(self.browser_pid) {
                 engine_processes::terminate_owned(self.browser_pid);
@@ -1726,6 +1908,19 @@ enum Arrival {
 /// answering, and it is let go of and begun again by the next document.
 const NAVIGATION_TIMEOUT: Duration = Duration::from_secs(15);
 
+/// How long the browser is given to answer a suspend before the engine reads it as having
+/// stopped rather than as having answered.
+///
+/// What the wait is for is `TrySuspendCompleted`, which the runtime calls as soon as it has
+/// stopped, so a quarter of a second is longer than a suspend takes on any machine and short
+/// enough that a pointer moving on over a document never notices it. The bound is the elapsed
+/// check read again on every pass of the wait loop, and the thread timer is what brings
+/// `GetMessage` back so that it is read again: the same shape and the same reliance as
+/// `wait_for_navigation`. A browser that does not answer is recorded as suspended anyway —
+/// the answer is what says it has stopped, not the asking — and a resume of a WebView that is
+/// not suspended is harmless.
+const SUSPEND_TIMEOUT: Duration = Duration::from_millis(250);
+
 /// Wait for the page to arrive, pumping the thread's messages while it does, and ending on
 /// one of the three things that can end the wait.
 ///
@@ -1789,6 +1984,65 @@ fn wait_for_navigation(receiver: &Receiver<()>, generation: u64) -> Arrival {
     }
 
     arrival
+}
+
+/// Wait for the browser to answer a suspend, pumping the thread's messages while it does.
+///
+/// The wait is a `GetMessage` for the reason the one in `wait_for_navigation` is: the
+/// browser is driven from this thread and its answer arrives through this thread's queue,
+/// so the wait *is* a message and the answer is noticed the moment it lands. The timer is
+/// armed on the thread rather than on a window for the same job the navigation's is armed
+/// for — its whole business is to bring `GetMessage` back so that the elapsed check is read
+/// again — under an id of its own so that the two waits cannot answer one another's timer.
+/// The answer is `Some` when the browser gave one, and `None` when it gave nothing before
+/// `SUSPEND_TIMEOUT` or when the queue is gone, both of which the caller reads as the same
+/// thing (see `suspend`).
+fn wait_for_suspend(receiver: &Receiver<bool>) -> Option<bool> {
+    const SUSPEND_TIMER: usize = 2;
+
+    let started = Instant::now();
+    let mut message = MSG::default();
+
+    unsafe {
+        let _ = SetTimer(
+            HWND::default(),
+            SUSPEND_TIMER,
+            SUSPEND_TIMEOUT.as_millis() as u32,
+            None,
+        );
+    }
+
+    let answered = loop {
+        if let Ok(answer) = receiver.try_recv() {
+            break Some(answer);
+        }
+
+        if started.elapsed() >= SUSPEND_TIMEOUT {
+            break None;
+        }
+
+        let mut retrieved = false;
+        unsafe {
+            let got = GetMessageW(&mut message, HWND::default(), 0, 0);
+            if got.0 > 0 {
+                let _ = TranslateMessage(&message);
+                DispatchMessageW(&message);
+                retrieved = true;
+            }
+        }
+
+        if !retrieved {
+            // `GetMessage` answered -1, an error, or 0, a quit: there is no queue left to
+            // wait on, and a browser that has not answered by then is not coming.
+            break None;
+        }
+    };
+
+    unsafe {
+        let _ = KillTimer(HWND::default(), SUSPEND_TIMER);
+    }
+
+    answered
 }
 
 impl Drop for Host {
