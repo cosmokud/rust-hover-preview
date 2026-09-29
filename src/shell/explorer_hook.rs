@@ -10,9 +10,9 @@ use crate::shell::wheel_input;
 use crate::ui::preview_window::{
     cursor_preview_hover, end_pin, hide_preview, kill_stray_video_process, monitor_dpi_from_point,
     note_engine_page_drag, pinned, pinned_path, pointer_item_box, pointer_item_holds,
-    preview_pointer_hold, preview_screen_rect, preview_stall_ms, publish_pointer_item_box,
-    show_preview, show_preview_keyboard, take_pin_resumed, update_pinned_preview,
-    PreviewCursorHover,
+    preview_pointer_hold, preview_screen_rect, preview_stall_ms, publish_pin_media_press,
+    publish_pointer_item_box, show_preview, show_preview_keyboard, take_pin_resumed,
+    update_pinned_preview, PreviewCursorHover,
 };
 use crate::{CONFIG, RUNNING};
 use once_cell::sync::Lazy;
@@ -3580,11 +3580,55 @@ fn read_explorer_state() -> ExplorerState {
     state
 }
 
-/// Left, right and middle buttons are deliberate input even when the cursor
-/// never moves: the folder a double-click opens is user navigation, not a
-/// background change the preview has to wait out.
-fn mouse_button_input_state() -> (bool, bool) {
-    key_input_state(&mouse_press_buttons())
+/// Left, right and middle buttons as one pass over them finds them.
+///
+/// They are deliberate input even when the cursor never moves: the folder a double-click
+/// opens is user navigation, not a background change the preview has to wait out.
+///
+/// The left button is kept apart from the other two, and the pass is the only read of them
+/// in the app, because a press bit is spent by the first read of a key: two readers on two
+/// threads are one answer and one silence, and which of them it is is a race. The pin's own
+/// press handling needs the left button on its own — a drag is begun from a press, and a
+/// right button is not one — and it is asked from the preview thread, which therefore reads
+/// what this pass published rather than reading the key again (see `publish_pin_media_press`
+/// and `settle_pinned_engine_press`).
+#[derive(Clone, Copy, Default)]
+struct MouseButtons {
+    /// Whether any of the three is down, which is what the hold a page is dragged under and
+    /// the settle a press ends are both read of.
+    active: bool,
+    /// Whether any of them was pressed since the previous pass: the transition, which is
+    /// what a click is known by and what a folder change is told apart from a held key by.
+    pressed: bool,
+    /// Whether the left button is down on its own.
+    left_down: bool,
+    /// Whether the left button was pressed since the previous pass on its own.
+    left_pressed: bool,
+}
+
+/// Read the buttons, and keep the left one apart as above. The index rather than the key is
+/// what tells the left button from the other two, which is why `mouse_press_buttons` leads
+/// with it and why that order is part of this function's contract.
+fn mouse_buttons() -> MouseButtons {
+    let mut state = MouseButtons::default();
+
+    for (index, &key) in mouse_press_buttons().iter().enumerate() {
+        let raw = unsafe { GetAsyncKeyState(key.0 as i32) as u16 };
+        let pressed = (raw & 0x0001) != 0;
+
+        if is_pressed_or_down_state(raw) {
+            state.active = true;
+        }
+        if pressed {
+            state.pressed = true;
+        }
+        if index == 0 {
+            state.left_down = is_key_down_state(raw);
+            state.left_pressed = pressed;
+        }
+    }
+
+    state
 }
 
 /// Enter opens the focused item, so it drives folder changes without any
@@ -3785,6 +3829,11 @@ fn is_mouse_navigation_button_detected() -> bool {
         .any(|&key| unsafe { is_pressed_or_down_state(GetAsyncKeyState(key.0 as i32) as u16) })
 }
 
+/// The three press buttons, left one first.
+///
+/// The order is part of `mouse_buttons`' contract rather than a list: the left button is the
+/// one the pin's own press handling is asked about on its own, and the index is what tells
+/// it from the other two.
 fn mouse_press_buttons() -> [windows::Win32::UI::Input::KeyboardAndMouse::VIRTUAL_KEY; 3] {
     [VK_LBUTTON, VK_RBUTTON, VK_MBUTTON]
 }
@@ -3835,7 +3884,15 @@ fn focus_move_input() -> FocusMoveInput {
     // under Ctrl is a tab of Explorer's switched — the one move onto another listing that neither
     // the shortcut set nor a button of the mouse's answers (see `is_explorer_navigation_shortcut_key`).
     let (_, tab_pressed) = key_input_state(&[VK_TAB]);
-    let (_, mouse_clicked) = mouse_button_input_state();
+    // Read once per tick, and the left button kept apart within it: this pass is the only
+    // read of the buttons in the app, and a press bit is spent by the first reader of a key.
+    let mouse = mouse_buttons();
+
+    // What the pin's own press handling needs, published rather than read again there — it
+    // runs on the preview thread, and a read of the key from that thread would spend the
+    // press this pass has just found, which is the very click the listing behind the pin is
+    // answered by (see `MouseButtons` and `settle_pinned_engine_press`).
+    publish_pin_media_press(mouse.left_down, mouse.left_pressed);
 
     FocusMoveInput {
         walked_by_key: navigation.active,
@@ -3848,7 +3905,7 @@ fn focus_move_input() -> FocusMoveInput {
             || is_key_down(VK_MENU_CODE)
             || is_key_down(VK_LWIN_CODE)
             || is_key_down(VK_RWIN_CODE),
-        clicked: mouse_clicked,
+        clicked: mouse.pressed,
     }
 }
 
@@ -5363,7 +5420,11 @@ pub fn run_explorer_hook() {
             // and the press bit a click is known by can only be taken once. The two are
             // disjoint sets of keys, so reading the mouse before the keyboard is the same
             // reading whichever order it happens in.
-            let (mouse_button_input, mouse_button_press) = mouse_button_input_state();
+            let MouseButtons {
+                active: mouse_button_input,
+                pressed: mouse_button_press,
+                ..
+            } = mouse_buttons();
 
             // A drag that began on a page the engine is drawing, which is the page's own and
             // has to be held through the hand leaving it: an orbit carries the pointer well
