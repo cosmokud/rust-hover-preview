@@ -1,15 +1,21 @@
 //! System-wide keyboard watcher for the pin key.
 //!
 //! A preview is pinned by pressing a key while it is on screen, and the key has to
-//! be seen wherever the pointer happens to be — the preview window never has
-//! focus, and Explorer owns the keyboard whenever it is the active window. A
-//! low-level keyboard hook reports the key without touching either of them, and
-//! the hook thread publishes a monotonic press counter that the preview loop
-//! consumes, exactly as the wheel watcher beside it publishes wheel ticks.
+//! be seen wherever the pointer happens to be — the preview window is not where the
+//! user's keyboard is, and Explorer owns the keyboard whenever it is the active
+//! window. A low-level keyboard hook reports the key without touching either of
+//! them, and the hook thread publishes a monotonic press counter that the preview
+//! loop consumes, exactly as the wheel watcher beside it publishes wheel ticks.
 //!
 //! The key is never swallowed: `Space` is Explorer's own key, and pinning a
 //! preview does not make it this app's. What the hook does is count, and what the
 //! preview loop does with the count is its own business (see `PIN_PRESSES`).
+//!
+//! It is asked about the *pin* only. A pinned window the user has pressed takes the
+//! focus like any other window, and the keys it answers while it has it arrive as
+//! messages rather than through here (see `pinned_key_command`); what this hook
+//! still answers is the key that puts a pin up, and the one that brings a collapsed
+//! one back.
 //!
 //! This module is also where the spelling of a key name lives — `alt`, `f8`, `a` —
 //! because two settings are written that way: the trigger key the Explorer hook
