@@ -238,7 +238,7 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
   - **Theme** — Atom One Light, One Dark Pro, or any `.tmTheme` in the theme folder.
   - **Font Size** — `400%` at the top down to `70%` at the bottom.
   - **Markdown** — Rendered or Source.
-  - **Render HTML** — Off by default. On, a `.htm` or `.html` file is previewed as the page it holds rather than as its markup, drawn by the browser engine. Without that engine on the machine it stays a text preview.
+  - **Render HTML** — Off by default. On, a `.htm` or `.html` file is previewed as the page it holds rather than as its markup, run by the browser engine: a page is the one thing previewed as a page rather than as a picture, so it is the one thing that runs, and a page that draws itself with script has nothing to show without a run. What it may still do is bounded — the frame it is shown in cannot open forms or popups or navigate, and nothing a page links to is fetched — while SVG documents and font specimens, which a browser is handed as an image, are still drawn rather than run. A running page can be pointed at, clicked into and typed into; a document, a specimen and every other preview still cannot. Without the engine on the machine it stays a text preview.
 - **Timing**
   - **Prioritize Keyboard** — On by default. The file under a pointer that has not been moved does not preview of its own while the keyboard is driving Explorer, so pressing a key onto a file with no preview of its own behaves like pressing one onto a file that has a preview. The pointer takes the screen back when it is moved, when the wheel is turned, or when a folder change hands it over. Off, the pointer's own hover always wins.
   - **Trigger Key (Alt)** — The key is named in the item.
@@ -264,7 +264,7 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
 - **Background**
   - **Image Background** — Transparent, Black, White, or Checkerboard. Default **Checkerboard**.
   - **Vector Background** — Same backdrops for an SVG document or metafile. Default **Checkerboard**.
-  - **HTML Background** — White, Black, or Checkerboard for a page of HTML. Default **White**. The see-through backdrop is not offered: a page is drawn on a page.
+  - **HTML Background** — White, Black, or Checkerboard for a page of HTML. Default **White**. The see-through backdrop is not offered: a page is drawn on a page, whether it runs or not, and the backdrop is behind the page rather than behind what it paints.
   - **Font Background** — Same backdrops for a font specimen. Default **White**.
   - **DDS Background** — Black or White for `.dds` textures. Default **White**. The two see-through backdrops are not offered.
   - **Design Background** — Same as picture backdrops for a design document. Default **Checkerboard**.
@@ -399,7 +399,7 @@ Here’s what this .INI does:
 - `theme`: `light`, `dark`, or `custom:<name>`.
 - `markdown_mode`: show Markdown as `rendered` or `source`.
 - `text_font_scale`: 1–1000%, default `125`; archive lists follow it too.
-- `render_html`: `false` by default. On, `.htm` and `.html` files are drawn as the page they hold by the browser engine, at the share of the screen **Document Scaling** names. Without that engine, they are text like before.
+- `render_html`: `false` by default. On, `.htm` and `.html` files are run as the pages they hold by the browser engine, at the share of the screen **Document Scaling** names, and that is the one kind of preview a pointer and a keyboard reach: the page's own box holds the pointer, and a click into it gives it the keys. Without that engine, they are text like before.
 
 **What can preview**
 
@@ -465,7 +465,7 @@ Here’s what this .INI does:
 - `font_background`: `white` default, `black`, `checkerboard`, or `transparent`.
 - `dds_background`: `white` default or `black`, and only those two. Any other value reads as `white`.
 - `vector_background`: `checkerboard` default, `white`, `black`, or `transparent`. Used for SVG pages and metafiles. Old `svg_background` is ignored and removed.
-- `html_background`: `white` default, `black`, or `checkerboard`, and only those three. Any other value reads as `white`. Used for a page of HTML drawn by `render_html`; a page is drawn on a page, so transparency is not one of the backdrops it is offered.
+- `html_background`: `white` default, `black`, or `checkerboard`, and only those three. Any other value reads as `white`. Used for a page of HTML previewed by `render_html`, run or not; a page is drawn on a page, so transparency is not one of the backdrops it is offered.
 - `design_background`: `checkerboard` default, `white`, `black`, or `transparent`.
 
 **Old or removed names**
