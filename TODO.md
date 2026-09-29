@@ -50,6 +50,7 @@ it decodes both, and has no demuxer for the image-sequence brands. The reader th
 the first frame — which is the behaviour it was written to have, and is why these show a still
 rather than nothing. What is needed is a demuxer for `avis` and `msf1` that this graph does not
 have, and the ways to get one are not small: **libheif** (which brings libde265 for HEVC, and is
+the first C/C++ build in a tree that compiles none), or a pure-Rust container reader that hands
 its samples to a decoder the same way this one does — [`heic`](https://github.com/imazen/heic)
 parses `msf1`/`moov` in pure Rust, but is AGPL-3.0 or a paid commercial licence, decodes HEVC
 I-slices only with no inter prediction, and reads a movie structure for its first I-frame rather
