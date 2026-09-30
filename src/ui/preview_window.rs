@@ -18232,11 +18232,15 @@ fn pin_drag_carried_to() -> (i32, i32) {
 /// eleven places a second is what that costs, which a hand on a 144 Hz display reads as a window
 /// being thrown after the pointer rather than carried by it.
 ///
-/// So while a hand is going, the loop does not wait at all. It puts the window where the pointer
-/// is, gives the window procedure its turn, and asks again — which is the whole of what a window
-/// being carried is, at the pointer's rate instead of the clock's. A pass costs a `GetCursorPos`
-/// and a comparison when the pointer has not shifted (`apply_pin_drag` answers a pointer that has
-/// not moved with nothing at all), so following costs what following costs and no more.
+/// So while a hand is going, the loop waits only for the pointer's next step rather than for the
+/// tick: it puts the window where the pointer is, gives the window procedure its turn, and waits
+/// for input or for `PIN_DRAG_FOLLOW_MS` — the same shape as `carry_bubble_drag`, except the moves
+/// never arrive here (they went to the engine's window), so the timeout is what paces the poll.
+/// A pass costs a `GetCursorPos` and a comparison when the pointer has not shifted (`apply_pin_drag`
+/// answers a pointer that has not moved with nothing at all), so following costs what following
+/// costs and no more. The ceiling keeps the poll at the pointer's rate instead of a spin: a tight
+/// loop issues `SetWindowPos` pairs (preview plus engine sibling) faster than DWM presents them,
+/// which reads as low Hz despite a high place count.
 ///
 /// Two things bound it, and both are about not being a thread that never gives the tick back. A
 /// hand that stops moving is handed back to the loop's own wait, because a drag sitting still has
@@ -18259,6 +18263,17 @@ unsafe fn carry_pin_drag_with_the_hand(hwnd: HWND) {
         }
 
         pump_window_messages();
+
+        // The pointer's next step or the ceiling, whichever comes first. Moves went to the
+        // engine's window, so this mostly times out — and that timeout is the throttle.
+        unsafe {
+            let _ = MsgWaitForMultipleObjectsEx(
+                None,
+                PIN_DRAG_FOLLOW_MS,
+                QS_ALLINPUT,
+                MWMO_INPUTAVAILABLE,
+            );
+        }
     }
 }
 
@@ -18269,6 +18284,10 @@ unsafe fn carry_pin_drag_with_the_hand(hwnd: HWND) {
 /// enough that a drag left down over a window nobody is touching is a pause rather than a thread
 /// that has stopped turning.
 const PIN_DRAG_HAND_RESTED: Duration = Duration::from_millis(150);
+
+/// Ceiling for one pass of a carried drag: paced above any display (`~250 Hz`) and below a spin,
+/// so the poll follows the pointer instead of outrunning DWM (see `carry_pin_drag_with_the_hand`).
+const PIN_DRAG_FOLLOW_MS: u32 = 4;
 
 /// Give the window procedures this thread owns their turn, without blocking on them.
 ///
@@ -18379,7 +18398,7 @@ unsafe fn apply_pin_drag(hwnd: HWND) {
         // And where it was carried to, so that the next ask for a pointer that has not moved is
         // recognised as the same question (see the early return above).
         if let Some(drag) = pin.dragging.as_mut() {
-            drag.carried = cursor_screen_point().unwrap_or(drag.carried);
+            drag.carried = point;
         }
     }
 
@@ -18417,6 +18436,9 @@ unsafe fn apply_pin_drag(hwnd: HWND) {
             SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
         );
     } else {
+        // Kept in its band without touching the z-order: the order (engine above preview) is
+        // established where the pin comes up, and re-asserting TOPMOST per move fights the
+        // engine's own placement for the top, one DWM reorder each (see `Host::place`).
         let _ = SetWindowPos(
             hwnd,
             HWND_TOPMOST,
@@ -18424,7 +18446,7 @@ unsafe fn apply_pin_drag(hwnd: HWND) {
             window.1,
             width,
             height,
-            SWP_NOACTIVATE,
+            SWP_NOACTIVATE | SWP_NOZORDER,
         );
     }
 
