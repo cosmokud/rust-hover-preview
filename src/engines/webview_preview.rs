@@ -154,7 +154,7 @@ type ScreenRect = (i32, i32, i32, i32);
 static ENGINE: Lazy<Mutex<Option<Engine>>> = Lazy::new(|| Mutex::new(None));
 
 /// Where the engine is asked to put its window, in screen coordinates.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Area {
     pub x: i32,
     pub y: i32,
@@ -182,6 +182,66 @@ static WANTED: Lazy<Mutex<Option<Wanted>>> = Lazy::new(|| Mutex::new(None));
 /// thread asks of a navigation that is still running, in the middle of pumping a browser's
 /// messages and unable to take a lock the loop may be holding.
 static WANTED_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+/// The box a document the engine is *holding* is to be moved to: one cell rather than a
+/// queue, and the same rule `WANTED` follows for the document itself.
+///
+/// A drag is many placements and only the place the hand let go at is worth putting up. This
+/// is what a placement is made of, and it is deliberately not a want: a want names a document
+/// and is replaced only by another document, while this is the same document in another box.
+/// Publishing a new one here therefore *replaces* what was there, which is the whole of the
+/// coalescing — the same arrangement `WANTED` has, kept apart because a document that has
+/// landed keeps its want and a box is asked for far more often than a document is (see
+/// `place`, `ask_place`).
+static PLACED: Lazy<Mutex<Option<Placement>>> = Lazy::new(|| Mutex::new(None));
+
+/// Whether a placement has been asked of the engine's thread and not yet taken up, so that a
+/// drag which outruns the engine leaves one placement owed rather than a queue of them.
+///
+/// The engine's thread takes one command per pass, and a document that animates is a browser
+/// already busy compositing — so a queue of placements is a queue it can never drain. What
+/// falls behind is not the box but the whole browser: the window stops following the hand,
+/// and then the engine stops answering altogether, which is the same answer as one that hung
+/// (see `NAVIGATION_TIMEOUT`). One outstanding placement is the bound, and the cell above is
+/// what makes satisfying it cheap: the ask that finds one already outstanding publishes a
+/// newer box and returns, and that newer box is what the outstanding one is answered with.
+static PLACE_ASKED: AtomicBool = AtomicBool::new(false);
+
+/// A box a document the engine is holding is to be moved to, with the two facts it is
+/// published under: the file it is for, so a box left behind by a document the preview has
+/// moved on from is not carried out, and the backdrop, which is the page's own as well as the
+/// controller's and so can make a placement a page to write again (see `Host::needs_page`).
+#[derive(Clone)]
+struct Placement {
+    path: PathBuf,
+    background: TransparentBackground,
+    area: Area,
+}
+
+/// The newest placement asked for, taken back for the engine's thread to carry out, and the
+/// flag that says one is owed released — the two are taken together because a placement left
+/// owed with nothing behind it is a window that would never move again.
+fn take_placement() -> Option<Placement> {
+    PLACE_ASKED.store(false, Ordering::Release);
+
+    PLACED.lock().ok().and_then(|mut placed| placed.take())
+}
+
+/// Throw a published placement away without carrying it out, and give back the flag that says
+/// one is owed.
+///
+/// This is what a hide and a shutdown both do: the window the box was for is off screen or
+/// gone, so the box belongs to nothing, and leaving it would have it applied to the next
+/// document put up rather than dropped. The flag goes back for the same reason it is given
+/// back when a send fails — a flag left owed is a window that stops following the hand for
+/// the rest of the run.
+fn drop_placement() {
+    PLACE_ASKED.store(false, Ordering::Release);
+
+    if let Ok(mut placed) = PLACED.lock() {
+        *placed = None;
+    }
+}
 
 /// The engine thread's id, once it is running: what a want published while that thread is
 /// parked on `GetMessage` is posted to, so that the wait a navigation is in the middle of
@@ -940,13 +1000,58 @@ pub fn place(path: &Path, area: Area, background: TransparentBackground) {
         // changed while a browser was coming up is a document that arrives in the right place and
         // an engine that is not asked again (see `wanted_here`).
         BoxChange::Want => wanted_here(path, area),
-        // A document the engine is holding has a window that has to move with the box: `show`,
-        // which re-places it and does not navigate again, because the document it is asked for is
-        // the document it holds (see `Host::show`).
-        BoxChange::Window => show(path, area, background),
+        // A document the engine is holding has a window that has to move with the box, and that
+        // is a *move* and not a document being put on screen: the want is moved too, so a
+        // navigation that comes later lands in the box the window is in, and the window itself is
+        // asked for by a placement rather than by a `show` (see `ask_place`, `Host::place`).
+        BoxChange::Window => {
+            wanted_here(path, area);
+            ask_place(path, area, background);
+        }
         // A box that did not move, or a file the engine neither holds nor is owed: nothing to
         // move, and nothing asked (see `box_change`).
         BoxChange::Nothing => {}
+    }
+}
+
+/// Publish a box for the engine's thread to move a held document's window into, and ask for it
+/// once however many boxes have been published.
+///
+/// The cell is what makes a drag of any length cost one move: each of these replaces what was
+/// there, so the placement the engine eventually takes up is the box the hand ended in. The
+/// flag is what makes it cost that one move rather than one per pointer move — a drag can
+/// publish boxes far faster than a single-threaded engine takes commands, and a document that
+/// animates is a browser already busy enough, so an ask that finds one already outstanding
+/// leaves the newer box in the cell and is answered by the ask already in the channel.
+///
+/// A send that finds no engine, or an engine whose thread has gone, is a placement nothing will
+/// ever take up, so the flag is given back rather than left owed: a flag left owed is a window
+/// that stops following the hand for the rest of the run (see `PLACE_ASKED`).
+fn ask_place(path: &Path, area: Area, background: TransparentBackground) {
+    if let Ok(mut placed) = PLACED.lock() {
+        *placed = Some(Placement {
+            path: path.to_path_buf(),
+            background,
+            area,
+        });
+    } else {
+        return;
+    }
+
+    // One outstanding placement at a time, and the newest box travels in the cell above rather
+    // than in the command, so this is the same one command however long the drag is.
+    if PLACE_ASKED.swap(true, Ordering::AcqRel) {
+        return;
+    }
+
+    let Ok(engine) = ENGINE.lock() else {
+        PLACE_ASKED.store(false, Ordering::Release);
+        return;
+    };
+
+    match engine.as_ref() {
+        Some(engine) if engine.sender.send(Command::Place).is_ok() => {}
+        _ => PLACE_ASKED.store(false, Ordering::Release),
     }
 }
 
@@ -965,9 +1070,11 @@ pub fn place(path: &Path, area: Area, background: TransparentBackground) {
 /// A box that changed under it — and under a file that is *wanted*, since one the engine holds
 /// without being the wanted file is a preview that has moved on and has no box of its own to
 /// move — is the window's, and the ask that moves a window without navigating again is a
-/// `show`. A box that changed under a document still on its way is the want's, and moving one
-/// sends nothing at all. A box that has not moved is neither, and a file the engine neither
-/// holds nor is owed — which is no document of this file's to move — is nothing.
+/// *placement* rather than a `show`, which is a document being put up and pays for one (see
+/// `ask_place`, `Host::place`). A box that changed under a document still on its way is the
+/// want's, and moving one sends nothing at all. A box that has not moved is neither, and a file
+/// the engine neither holds nor is owed — which is no document of this file's to move — is
+/// nothing.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum BoxChange {
     /// Nothing to do: the box is the one on record, or the file is not the engine's.
@@ -1036,6 +1143,11 @@ pub fn clear_want_for_test() {
 pub fn shutdown() {
     let engine = ENGINE.lock().ok().and_then(|mut engine| engine.take());
 
+    // A placement published for a window this call is about to destroy belongs to nothing, and
+    // the flag has to go back with it — the thread that would have taken it up is joined below
+    // and the next engine begins with no placement owed (see `drop_placement`).
+    drop_placement();
+
     if let Some(engine) = engine {
         let _ = engine.sender.send(Command::Shutdown);
         let _ = engine.thread.join();
@@ -1058,6 +1170,15 @@ enum Command {
     Show {
         generation: u64,
     },
+    /// Move the window of a document the engine is already holding, to the newest box
+    /// published in `PLACED`.
+    ///
+    /// The box is not carried in the command and that is the whole of it: a drag asks for a
+    /// box on every pointer move, so carrying one per command would queue a move per move for
+    /// a thread that takes one command per pass. The box travels in the cell instead, where
+    /// asking again replaces what was there, so a drag of any length is answered by one move
+    /// to where the hand ended up rather than by a backlog of where it was (see `PLACED`).
+    Place,
     Hide,
     Shutdown,
 }
@@ -1136,6 +1257,11 @@ fn engine_thread(commands: Receiver<Command>) {
     }
     ENGINE_THREAD.store(unsafe { GetCurrentThreadId() }, Ordering::Release);
 
+    // No placement is owed by a thread that has only just begun: whatever was published before
+    // it was aimed at a window this engine has not made, and a flag left set by a previous
+    // engine's thread would stop the next box from ever being asked for (see `PLACE_ASKED`).
+    drop_placement();
+
     let mut host: Option<Host> = None;
     let mut idle_since = Instant::now();
 
@@ -1160,6 +1286,44 @@ fn engine_thread(commands: Receiver<Command>) {
                     host.hide();
                 }
                 idle_since = Instant::now();
+            }
+            Ok(Command::Place) => {
+                // The newest box, not the one this command was sent for: a drag publishes a box
+                // per pointer move and only the last of them is a place worth putting the
+                // window in.
+                if let Some(placement) = take_placement() {
+                    // A placement for a document the engine no longer holds is a drag of a
+                    // window that has been swapped or closed since, and moving that window
+                    // would put somebody else's document where the hand let go.
+                    if !host
+                        .as_ref()
+                        .is_some_and(|host| host.holds(&placement.path))
+                    {
+                        trace(&format!(
+                            "engine: dropped a placement for {} it does not hold",
+                            placement.path.display()
+                        ));
+                    } else if let Some(ask) = wanted().filter(|ask| ask.path == placement.path) {
+                        // A backdrop is the page's as well as the controller's, so a box
+                        // published under a backdrop the page was not written for is a page to
+                        // write again rather than a window to move — which is what `show` is
+                        // for, and it is asked for once rather than per pointer move, because
+                        // every box of a drag carries the backdrop that is on record.
+                        if host
+                            .as_ref()
+                            .is_some_and(|host| host.needs_page(&placement))
+                        {
+                            if let Some(host) = host.as_mut() {
+                                host.show(&ask);
+                            }
+                        } else if let Some(host) = host.as_mut() {
+                            // And a move: nothing navigates, nothing is woken and nothing is
+                            // re-shown, all of which describe a document arriving rather than a
+                            // window being carried (see `Host::place`).
+                            host.place(&placement);
+                        }
+                    }
+                }
             }
             Ok(Command::Show { generation }) => {
                 // What was asked for here may have been asked for after: the pointer moves
@@ -1306,6 +1470,14 @@ struct Host {
     /// specimen of another face is another page and another font in it. The face is the index the
     /// page was written for, and `0` for a file that is not a collection.
     current: Option<(PathBuf, TransparentBackground, usize)>,
+    /// The width and height the controller was last told to lay the page out at, and the
+    /// window's own last box, so that a box which merely moved is not also re-laid-out.
+    ///
+    /// This is what makes a carried window cost one `SetWindowPos` rather than a bounds change
+    /// as well: a page is laid out at the size of the window it is drawn in, so `SetBounds` is
+    /// owed only by a box that changed *size*, and a drag that changes only where the window
+    /// is has no reason to ask the browser to lay the document out again (see `place`).
+    last_area: Option<(i32, i32)>,
     /// The browser process this engine started, when it could be told which one it
     /// was. The runtime owns the browser, but the process is this app's own child —
     /// started by the loader in this process — and it is what is ended if it is
@@ -1431,6 +1603,7 @@ impl Host {
             controller,
             webview,
             current: None,
+            last_area: None,
             browser_pid,
             hung: false,
             suspended: false,
@@ -1580,6 +1753,10 @@ impl Host {
         let runs = page_runs(path);
         RUNNING_DOCUMENT.store(runs, Ordering::Release);
 
+        // The bounds this window was given are recorded, so that a box which only moves from
+        // here is not also re-laid-out (see `place`).
+        self.last_area = Some((area.width, area.height));
+
         unsafe {
             let _ = self.controller.SetBounds(RECT {
                 left: 0,
@@ -1613,6 +1790,80 @@ impl Host {
         publish_shown(Some(path.clone()));
         SHOWING.store(true, Ordering::Release);
         publish_rect(Some(area));
+    }
+
+    /// Whether the document this host is holding is `path`, which is what a placement is
+    /// answered for: a box published for a document the engine has since swapped away from
+    /// belongs to no window it has, and moving whatever window it does have would put a
+    /// document the pointer has left where the hand let go.
+    fn holds(&self, path: &Path) -> bool {
+        self.current
+            .as_ref()
+            .is_some_and(|(held, _, _)| held == path)
+    }
+
+    /// Whether a placement under this backdrop is a page to write again rather than a window
+    /// to move.
+    ///
+    /// Three of the four backdrops are partly the page's own — the checkerboard's squares, a
+    /// specimen's ink — and the page is what the browser caches, so a backdrop the page was
+    /// not written for is a different page and a different URL rather than a different colour
+    /// on the window. A placement is published with whatever backdrop is on record at the time
+    /// it is asked for, so a tray switch behind a pin arrives here as one placement that is a
+    /// page to write, and as a move for every pointer move after it.
+    fn needs_page(&self, placement: &Placement) -> bool {
+        self.current
+            .as_ref()
+            .is_some_and(|(_, held, _)| *held != placement.background)
+    }
+
+    /// Move the window of the document already on screen into a box that changed under it.
+    ///
+    /// This is deliberately the *whole* of what a moved box costs, and the difference from
+    /// `show` is the point of it. A `show` is a document being put up: it wakes a suspended
+    /// browser, sets the controller's colour, sets its bounds, tells it the window is on
+    /// screen and shows the window. A drag of a pinned window asked for that on every pointer
+    /// move, and the engine's thread takes one command per pass — so the queue of full shows
+    /// grew faster than it could be drained and never was. A document that animates is what
+    /// made that fatal rather than merely slow: its compositor is already working, so the
+    /// thread fell so far behind that the drawing stopped following the window, and then
+    /// stopped answering at all.
+    ///
+    /// So a box that merely moved costs one `SetWindowPos` and nothing else, which is all a
+    /// window being carried has ever cost on this side (see `apply_pin_drag` in
+    /// `preview_window`). `SetBounds` is owed only by a box that changed *size*, because a
+    /// page is laid out at the size of the window it is drawn in; and nothing here wakes,
+    /// re-shows or re-asserts visibility, all of which describe a document arriving rather
+    /// than a window being carried. The window is kept above the pin's own, which is what a
+    /// drag needs — the pin is raised on every move and would otherwise cover the drawing it
+    /// is carrying.
+    fn place(&mut self, placement: &Placement) {
+        let size = (placement.area.width, placement.area.height);
+        let resized = self.last_area != Some(size);
+        self.last_area = Some(size);
+
+        unsafe {
+            if resized {
+                let _ = self.controller.SetBounds(RECT {
+                    left: 0,
+                    top: 0,
+                    right: placement.area.width,
+                    bottom: placement.area.height,
+                });
+            }
+
+            let _ = SetWindowPos(
+                self.hwnd,
+                HWND_TOPMOST,
+                placement.area.x,
+                placement.area.y,
+                placement.area.width,
+                placement.area.height,
+                SWP_NOACTIVATE | SWP_SHOWWINDOW,
+            );
+        }
+
+        publish_rect(Some(placement.area));
     }
 
     /// Whether the browser has stopped answering, which is a host to be let go of rather
@@ -1662,6 +1913,12 @@ impl Host {
         publish_shown(None);
         SHOWING.store(false, Ordering::Release);
         publish_rect(None);
+
+        // The window is off screen, so the box a drag last asked for is a box nothing is in:
+        // taking it back is what stops a placement published before this hide being carried out
+        // against a window that is no longer showing, and it is the same reason the publishes
+        // above happen first.
+        drop_placement();
 
         self.suspend();
     }
@@ -2743,6 +3000,110 @@ mod tests {
         // take the want from the file that now owns it.
         assert_eq!(box_change(false, false, false), BoxChange::Nothing);
         assert_eq!(box_change(false, true, false), BoxChange::Nothing);
+    }
+
+    /// A drag of a pinned document is a flood of boxes, and the engine's thread is one that
+    /// takes a single command per pass — so what a box is asked for has to cost the engine one
+    /// move however many boxes arrive, and never a backlog.
+    ///
+    /// This is the shape of the fault: the box was asked for as a whole `show`, one per
+    /// pointer move, on an unbounded channel. Each of those re-woke the browser, re-told the
+    /// controller it was on screen and re-showed the window, so a drag queued far more work
+    /// than the thread could ever drain. A still document absorbs that. An animated one has a
+    /// compositor already working, and the thread fell behind until the drawing stopped
+    /// following the hand and then stopped answering altogether — a window that cannot be
+    /// dragged and an app that has to be killed.
+    ///
+    /// What is asserted here is the two halves of the answer, both of them visible without a
+    /// browser: a box published replaces the one before it rather than queueing behind it, and
+    /// asking again while one is already owed publishes without asking, so a drag of any length
+    /// leaves exactly one placement outstanding.
+    #[test]
+    fn a_drag_publishes_one_box_rather_than_a_queue_of_them() {
+        /// The box a placement is published under, read without taking the cell's contents out
+        /// of it — a test asks what is there, and the engine is what takes one.
+        fn published_area() -> Option<Area> {
+            PLACED
+                .lock()
+                .ok()
+                .and_then(|placed| placed.as_ref().map(|p| p.area))
+        }
+
+        let path = Path::new("D:/Pictures/dragged.svg");
+        let area = |x: i32| Area {
+            x,
+            y: 40,
+            width: 640,
+            height: 480,
+        };
+
+        // A stand-in for the engine's thread: it owes nothing, so every ask below finds no
+        // engine to send to, which is the only part of `ask_place` a test can reach. What it
+        // does reach is the cell, and the cell is where the coalescing is decided. The engine
+        // is read in a block of its own because `ask_place` takes the same lock, and a lock
+        // this thread already holds is not a lock it can wait for.
+        PLACE_ASKED.store(false, Ordering::Release);
+        drop_placement();
+        {
+            let Ok(engine) = ENGINE.lock() else {
+                return;
+            };
+            assert!(
+                engine.is_none(),
+                "a placement needs no engine to be published into its cell"
+            );
+        }
+
+        // A first box is published, and it is the one left behind.
+        ask_place(path, area(10), TransparentBackground::Black);
+        assert_eq!(
+            published_area(),
+            Some(area(10)),
+            "a box that changed under a held document is published for the engine to move to"
+        );
+
+        // The next two are asked while the first is still owed, which is what a drag is: the
+        // pointer outruns the engine's thread. Each replaces the cell, and none of them is
+        // asked of the engine — which is the bound, and it is what a drag of a thousand moves
+        // now costs.
+        PLACE_ASKED.store(true, Ordering::Release);
+        ask_place(path, area(20), TransparentBackground::Black);
+        ask_place(path, area(30), TransparentBackground::Black);
+
+        let published = published_area();
+        assert_eq!(
+            published,
+            Some(area(30)),
+            "a drag leaves the box the hand is at now, not a backlog of where it was"
+        );
+
+        // Taking the placement up is the engine's, and it gives back the flag as it does so:
+        // a flag left owed is a window that stops following the hand for the rest of the run.
+        let taken = take_placement().expect("the placement the drag left behind");
+        assert_eq!(
+            taken.area,
+            area(30),
+            "and it is the newest one, not the first"
+        );
+        assert_eq!(taken.path, path, "for the document the window is showing");
+        assert!(
+            !PLACE_ASKED.load(Ordering::Acquire),
+            "taking a placement up gives back the flag that says one is owed"
+        );
+
+        // A hide throws the box away with the flag, so a box asked for before the window went
+        // down is not carried out against whatever is put up next.
+        drop_placement();
+        ask_place(path, area(40), TransparentBackground::Black);
+        drop_placement();
+        assert!(
+            published_area().is_none(),
+            "a box published before a hide belongs to a window that is off screen"
+        );
+        assert!(
+            !PLACE_ASKED.load(Ordering::Acquire),
+            "and the ask goes with it, rather than being owed to a window that is gone"
+        );
     }
 
     /// The keyboard follows the document, and nothing else does. A page that runs is a program
