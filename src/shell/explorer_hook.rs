@@ -6596,19 +6596,23 @@ mod tests {
         );
     }
 
-    /// A negative answer kept against an item outlives the tick that read it, which is what
-    /// makes the click retry drop it before asking again.
+    /// A negative answer kept against an item outlives the tick that read it, and that is
+    /// what the click retry has to drop before it asks again.
     ///
     /// A look that finds an item and cannot name a file for it is kept as an answer, because
     /// most of the time that is what it is — a folder, an application, a name no kind claims
     /// — and asking the shell about it again on every tick is the cost the memo exists to
     /// avoid. A click that lands on the tick the listing takes the focus back produces the
     /// same shape for a different reason: the item is read before the shell has caught up with
-    /// the move, and the stale views cannot name it. Nothing tells the two apart, so the retry
-    /// — which exists precisely to ask again once the shell has — reads the memo and is
-    /// answered with the negative it was sent to replace, once a tick, until it expires. The
-    /// pick is then offered nothing, and the first click after the pin is focused is the one
-    /// that is lost (see the retry in `PinUpdateWatch::follow`).
+    /// the move, and the stale views cannot name it. Nothing tells the two apart, so a retry
+    /// that kept the memo would be answered with the negative it was sent to replace, once a
+    /// tick, until it expires — and would be a retry that never asked anything (see the retry
+    /// in `PinUpdateWatch::follow`).
+    ///
+    /// This is the property the retry's `forget_item` rests on, and it is worth a test of its
+    /// own because the symptom it explains — a retry that silently re-reads its own answer —
+    /// cannot be told from a retry that is simply never reached, which is what it looked like
+    /// from the outside.
     #[test]
     fn a_negative_item_answer_outlives_the_tick_that_read_it() {
         // Built field by field rather than through `ItemResolver::new`, which asks the
