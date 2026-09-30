@@ -2293,13 +2293,42 @@ pub fn cursor_preview_hover() -> PreviewCursorHover {
 /// An SVG document's preview is the engine's window rather than this app's, so its box
 /// is asked for as well — a document is a preview of this app's in every way but the
 /// window it is drawn in.
-/// Whether `handle` is this app's own preview window.
+/// Whether `handle` is one of this app's own preview surfaces: the window every kind but a
+/// video is drawn in, and — for a video FFmpeg's player is playing — the player's own
+/// window, which is the preview while it is up (see `VIDEO_HWND`).
 ///
 /// The Explorer hook asks it so that a click landing on a pinned window is read out of the
 /// listing that window is standing on, rather than being taken as a click on something that
 /// is not a listing at all (see `click_is_over_a_listing`).
 pub fn is_preview_window(handle: isize) -> bool {
-    handle != 0 && handle == PREVIEW_HWND.load(Ordering::Acquire)
+    if handle == 0 {
+        return false;
+    }
+
+    if handle == PREVIEW_HWND.load(Ordering::Acquire) {
+        return true;
+    }
+
+    // The player's window is another process's and the handle kept for it is read a tick
+    // behind the player: a handle that is no longer a window, or by then one the system
+    // has handed to something else, is not this app's surface. The process id is what
+    // says which it is, and it is checked rather than trusted for that reason.
+    let video = VIDEO_HWND.load(Ordering::Acquire);
+    if video == 0 || video != handle {
+        return false;
+    }
+
+    let pid = VIDEO_PID.load(Ordering::Acquire);
+    let window = HWND(video as *mut core::ffi::c_void);
+    unsafe {
+        if !IsWindow(window).as_bool() {
+            return false;
+        }
+
+        let mut window_pid: u32 = 0;
+        GetWindowThreadProcessId(window, Some(&mut window_pid));
+        pid != 0 && window_pid == pid
+    }
 }
 
 pub fn preview_screen_rect() -> Option<(i32, i32, i32, i32)> {
