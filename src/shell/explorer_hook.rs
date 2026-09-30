@@ -66,19 +66,19 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 /// What the walk over Explorer's own windows found: how many there are, how many are
 /// showing, and how many of those the region the window in front covers does not
-/// hold ΓÇö the ones a hover can still reach.
+/// hold — the ones a hover can still reach.
 struct ExplorerWindowCounts {
     total: usize,
     visible: usize,
     reachable: usize,
     /// The region the window in front hides what is behind, where that window is one
-    /// that hides anything at all ΓÇö see `foreground_cover_rect`.
+    /// that hides anything at all — see `foreground_cover_rect`.
     cover: Option<RECT>,
 }
 
 /// What the desktop looks like from here, which is what decides whether everything
-/// the hook remembers about a view ΓÇö the window the pointer is in, the folder it has
-/// open, the item an observation was made of ΓÇö still describes anything.
+/// the hook remembers about a view — the window the pointer is in, the folder it has
+/// open, the item an observation was made of — still describes anything.
 ///
 /// Each display is in it, rather than the union of them: a display rescaled from 100%
 /// to 150% rearranges everything drawn on that display and leaves the union exactly
@@ -130,7 +130,7 @@ struct ItemResolver {
     automation: Option<IUIAutomation>,
     /// Whether every call the client above makes is bounded. A resolver holding one
     /// that is not asks for a bounded client again on a slow cadence, because a
-    /// probe through an unbounded one is a wait with nothing watching it ΓÇö see
+    /// probe through an unbounded one is a wait with nothing watching it — see
     /// `rebuild_automation`.
     automation_bounded: bool,
     /// The batched property request every element is read with, so an element
@@ -150,15 +150,15 @@ struct ItemResolver {
     /// `frame_views`).
     window_views: Option<WindowViews>,
     /// The answer the last look at the item under the pointer produced, kept while the
-    /// pointer stays inside that item ΓÇö see `AnsweredItem`.
+    /// pointer stays inside that item — see `AnsweredItem`.
     item: Option<AnsweredItem>,
     probe: Option<ProbeMemo>,
 }
 
 /// One view of a window, as the Shell hands it over.
 struct AnsweredView {
-    /// The view's own identity, which is what tells one view of a window from another ΓÇö
-    /// a window that holds tabs has one per tab ΓÇö and is the same object across a
+    /// The view's own identity, which is what tells one view of a window from another —
+    /// a window that holds tabs has one per tab — and is the same object across a
     /// navigation: what changes then is the folder the view holds, not the view.
     view_identity: *mut core::ffi::c_void,
     /// The window the view is drawn in, which is what says which of a frame's views the
@@ -177,11 +177,11 @@ struct AnsweredView {
 }
 
 impl AnsweredView {
-    /// What this view is showing: the URL it was opened with, and ΓÇö where the caller wants
-    /// it ΓÇö the folder it has open, which is what a probe remembers about the place.
+    /// What this view is showing: the URL it was opened with, and — where the caller wants
+    /// it — the folder it has open, which is what a probe remembers about the place.
     ///
-    /// It is the question a folder probe asks of the view it is about ΓÇö the URL the view
-    /// was opened with and the folder it has open ΓÇö asked of a view that was found once for
+    /// It is the question a folder probe asks of the view it is about — the URL the view
+    /// was opened with and the folder it has open — asked of a view that was found once for
     /// a window rather than once for every probe: the same two facts of the same objects,
     /// paid for once per window instead of once per tick (see `WindowViews`).
     fn describe(&self, want_folder: bool) -> ActiveShellViewContext {
@@ -210,7 +210,7 @@ impl AnsweredView {
 /// `ItemWindow`), and a set read again for that would be the walk this exists to save.
 /// So the set is read again only where it cannot describe the window any more, and that
 /// is a short list: the window is gone, hidden or minimized, or the desktop holds a
-/// different number of Shell windows than it did when the set was read ΓÇö one cheap
+/// different number of Shell windows than it did when the set was read — one cheap
 /// number that moves when a tab or a window is opened or closed, and the only thing that
 /// ever adds a view to a window or takes one away.
 struct WindowViews {
@@ -223,7 +223,7 @@ struct WindowViews {
     /// navigation pane, the toolbar or the details pane is in no tab, so no view of the
     /// frame can be told from another by the pointer, and what the frame is showing is a
     /// question this set cannot answer. Answering with the view the hand was last inside
-    /// is answering with the tab the user was last working in, and ΓÇö which matters more ΓÇö
+    /// is answering with the tab the user was last working in, and — which matters more —
     /// it is an answer that does not move while the pointer does not: a place read twice
     /// is one place rather than two (see `anchored_view_context`).
     ///
@@ -235,7 +235,7 @@ struct WindowViews {
 
 impl WindowViews {
     /// Whether the window this set was read for is still one an item can be drawn in.
-    /// A window that is gone, hidden or minimized holds nothing to answer about ΓÇö the
+    /// A window that is gone, hidden or minimized holds nothing to answer about — the
     /// same question `folder_views_for_window` asks of a window before walking it.
     fn is_live(&self) -> bool {
         let frame = HWND(self.frame as *mut core::ffi::c_void);
@@ -250,23 +250,23 @@ impl WindowViews {
 /// The second is what tells a frame's views apart, and it is the fact this path did
 /// without for as long as they could not be told apart at all. A window that holds tabs
 /// registers one Shell window per tab, every one of them answering with the frame's own
-/// window, so the frame names a *set* of views rather than one ΓÇö and the tabs that are
+/// window, so the frame names a *set* of views rather than one — and the tabs that are
 /// not showing cannot be told from the showing one by their own windows, which are
 /// visible either way. What the item is drawn in is inside a window of exactly one of
 /// them: the tab that is showing. A view whose window the item's own window descends
 /// from is therefore the view the item was drawn by, and it is asked alone. It is the
 /// same test the folder probe makes to find the view a point is in (see
-/// `anchored_view_context`), which is why a pointer that is in none of them ΓÇö
+/// `anchored_view_context`), which is why a pointer that is in none of them —
 /// over the navigation pane, the toolbar, the details pane, none of which belongs to a
-/// tab ΓÇö names no view, and the frame's views are told apart by what they answer, as
+/// tab — names no view, and the frame's views are told apart by what they answer, as
 /// they were before this window was read.
 #[derive(Clone, Copy)]
 struct ItemWindow {
     /// The frame the item path resolves against: the root window under the pointer, or
     /// the frame the focused item is drawn in.
     frame: isize,
-    /// The window the item is drawn in ΓÇö the window under the pointer for the pointer's
-    /// item, the window the item's own provider reports for the keyboard's ΓÇö or nothing
+    /// The window the item is drawn in — the window under the pointer for the pointer's
+    /// item, the window the item's own provider reports for the keyboard's — or nothing
     /// where neither is known.
     drawn_in: isize,
 }
@@ -312,7 +312,7 @@ impl ItemWindow {
 /// The two questions are asked in order and are not the same question (see
 /// `item_file_path`), and they are asked of one item object rather than two: the item at
 /// that position is fetched once and asked for the name it is shown under and for the
-/// path it stands for. Fetching it is the crossing the two questions used to pay twice ΓÇö
+/// path it stands for. Fetching it is the crossing the two questions used to pay twice —
 /// and a frame whose every view is asked paid it twice for each of them.
 enum ViewItem {
     /// The view could not be asked for the item at all. A view is not something this app
@@ -335,19 +335,19 @@ enum ViewItem {
 /// hand sweeping a list has a new one of every tick and the item is not: a `Details` row
 /// is as wide as the view, so a pointer moving along one crosses many points and never
 /// leaves the item the first of them was answered for. What ends it is the pointer
-/// leaving that box ΓÇö or the window the box was read in, which a box on its own cannot
+/// leaving that box — or the window the box was read in, which a box on its own cannot
 /// stand in for: a tab switched under a parked pointer is another view drawing another
 /// folder at the same place, and the box that held the item of one is the box of the
 /// item of the other. Everything else that makes the item under a parked pointer a new
 /// question drops the answer where it happens (see `ItemResolver::forget_item`).
 struct AnsweredItem {
-    /// The window the item under the pointer was drawn in ΓÇö see `ItemWindow`. The
+    /// The window the item under the pointer was drawn in — see `ItemWindow`. The
     /// pointer has to be in the same window for the answer to still be about it.
     drawn_in: isize,
     /// The box the view draws the item in, which the pointer has to stay inside.
     bounds: (i32, i32, i32, i32),
     /// The file the item stands for, or nothing where the view holds an item with no
-    /// file to preview ΓÇö a folder, an application. That is an answer as well: the item
+    /// file to preview — a folder, an application. That is an answer as well: the item
     /// under the pointer is one this app has nothing to show for, which is not a reason
     /// to ask the shell about it again on every tick.
     path: Option<PathBuf>,
@@ -359,7 +359,7 @@ struct PointerLook {
     path: Option<PathBuf>,
     /// The box the view draws the item the look read in, or nothing where the look found
     /// no item at all. It is published for the preview thread and the pointer-left check
-    /// as it always was, and it is what the answer is kept against ΓÇö see `AnsweredItem`.
+    /// as it always was, and it is what the answer is kept against — see `AnsweredItem`.
     item_bounds: Option<(i32, i32, i32, i32)>,
     /// The window the look read the item in, or nothing where the pointer was in no
     /// window this app could name.
@@ -379,34 +379,34 @@ struct ProbeMemo {
 /// draws, and the piece its name is drawn in.
 #[derive(Clone, Copy)]
 struct ItemText {
-    /// Every piece of the item's text taken as one box ΓÇö a row's name with the columns
-    /// beside it, the label under an icon ΓÇö which is the region `Avoid Details` keeps a
+    /// Every piece of the item's text taken as one box — a row's name with the columns
+    /// beside it, the label under an icon — which is the region `Avoid Details` keeps a
     /// preview off. Its right edge is where the item's content stops.
     all: RECT,
     /// The piece the name is drawn in: the leftmost of them, which in the views that
-    /// draw their items as rows is the `Name` column of `Details` ΓÇö the name above the
-    /// path of `Content` ΓÇö and the label itself under an icon. It is the room the name
+    /// draw their items as rows is the `Name` column of `Details` — the name above the
+    /// path of `Content` — and the label itself under an icon. It is the room the name
     /// is *given*: the region `Avoid Filename Column` keeps a preview off, and the box
-    /// `Avoid Filename` narrows to the width the name itself is drawn at ΓÇö see
+    /// `Avoid Filename` narrows to the width the name itself is drawn at — see
     /// [`HoveredItem::name_box`].
     name: RECT,
     /// Whether anything is drawn beside the piece the name is drawn in. A view that
-    /// draws its items as rows writes the columns beside the name there ΓÇö a `Details`
-    /// row's type, date and size, the path and details of a `Content` row ΓÇö where a
+    /// draws its items as rows writes the columns beside the name there — a `Details`
+    /// row's type, date and size, the path and details of a `Content` row — where a
     /// label under an icon, a tile's stacked lines and a name alone draw nothing
     /// beside it. It is what says the item is a row of its view rather than a box: a
     /// row's text is written into the left end of a box as wide as the view, so the
     /// columns are the room a keyboard preview may take and the box's own right edge
-    /// is not ΓÇö see [`HoveredItem::draws_columns`].
+    /// is not — see [`HoveredItem::draws_columns`].
     columns: bool,
 }
 
 /// The item a file is resolved from, as the view's accessibility provider reports
-/// it ΓÇö read at the cursor for the pointer and at the focused item for the
+/// it — read at the cursor for the pointer and at the focused item for the
 /// keyboard, so both paths get their answer from the same facts.
 struct HoveredItem {
     /// The item's position in the view, one-based as Explorer's own `ItemIndex`
-    /// reports it ΓÇö the one fact about a search result that a shared name cannot
+    /// reports it — the one fact about a search result that a shared name cannot
     /// take away, because two results may share a name and only one of them is
     /// at this position.
     index: Option<i32>,
@@ -419,12 +419,12 @@ struct HoveredItem {
     /// The box the item occupies on screen, which is what says the pointer is
     /// inside it and where a keyboard preview is placed.
     bounds: RECT,
-    /// The text the item draws ΓÇö its name, and the columns a view that draws its
-    /// items as rows writes beside it ΓÇö or `None` when the view reported no text, or
+    /// The text the item draws — its name, and the columns a view that draws its
+    /// items as rows writes beside it — or `None` when the view reported no text, or
     /// the walk that would have read one was not asked for it, which is what a walk
     /// with nothing to keep a preview off asks. What it holds is the region the
     /// `Avoid` setting places a preview from, the keyboard's as much as the pointer's,
-    /// and whether the item draws a row of columns at all ΓÇö see
+    /// and whether the item draws a row of columns at all — see
     /// [`HoveredItem::draws_columns`].
     text: Option<ItemText>,
     /// The window the item is drawn in, whose frame is the window the item's view
@@ -434,7 +434,7 @@ struct HoveredItem {
 
 impl HoveredItem {
     /// Whether a second look found the same item. What the view says about an item
-    /// is only true of the item ΓÇö a list can move under a parked pointer ΓÇö so an
+    /// is only true of the item — a list can move under a parked pointer — so an
     /// answer is only taken when both looks agree.
     fn same_item(&self, other: &HoveredItem) -> bool {
         self.index == other.index && self.name == other.name
@@ -443,7 +443,7 @@ impl HoveredItem {
     /// The region a preview of this item is kept off, as the `Avoid` setting has it:
     /// the name where it is drawn at `Filename`, the box the view gives the name at
     /// `FilenameColumn`, that box with the columns a row writes beside it at `Details`,
-    /// and nothing at all at `Off` ΓÇö or the item's own box at any of the first three
+    /// and nothing at all at `Off` — or the item's own box at any of the first three
     /// for a view that reports no text, the name being drawn inside that box whatever
     /// the view says about it, so an item whose text cannot be measured is avoided as
     /// the whole of itself.
@@ -451,15 +451,15 @@ impl HoveredItem {
     /// The region comes with whether it is a *column* of the view, which is the one
     /// thing a placement cannot read off the box itself: a view that draws its items
     /// as rows ([`Self::draws_columns`]) puts every row's text in the same columns, so
-    /// a preview that overlaps the `Name` column ΓÇö or the columns beside it, at
-    /// `Details` ΓÇö covers the rows next to the item however it is placed vertically,
+    /// a preview that overlaps the `Name` column — or the columns beside it, at
+    /// `Details` — covers the rows next to the item however it is placed vertically,
     /// and the ways out of it are the two to its sides (see
     /// `preview_window::avoiding_text`). The name alone, a label under an icon and the
     /// item's own box are regions of their own kind however the setting reads, and a
     /// preview is stepped off them in either axis.
     ///
     /// It is the pointer's region. A keyboard preview is placed from a region of its
-    /// own, which is this one except at `Off` ΓÇö see [`Self::keyboard_avoid_box`].
+    /// own, which is this one except at `Off` — see [`Self::keyboard_avoid_box`].
     fn avoid_box(&self) -> Option<((i32, i32, i32, i32), bool)> {
         let (region, column) = match avoid_mode() {
             AvoidMode::Off => return None,
@@ -477,12 +477,12 @@ impl HoveredItem {
     }
 
     /// The region a *keyboard* preview of this item is kept off: what [`Self::avoid_box`]
-    /// names for every way of avoiding but one ΓÇö `Avoid Nothing` is read as
+    /// names for every way of avoiding but one — `Avoid Nothing` is read as
     /// `Avoid Filename`.
     ///
     /// A pointer's `Avoid Nothing` places a preview by the position mode alone because
     /// the cursor is what such a placement is read from. A keyboard preview has no
-    /// cursor, and the item it has instead is a box as wide as the view for a row ΓÇö so a
+    /// cursor, and the item it has instead is a box as wide as the view for a row — so a
     /// placement by the position mode alone is one anchored at that box's middle, over
     /// the very file it describes, which is the placement the region exists to forbid.
     /// The name is the one thing the item says about itself and the one line a preview
@@ -507,7 +507,7 @@ impl HoveredItem {
     /// the item's box, because a row's box is as wide as the *view* it is drawn in and
     /// not as wide as the display: a `Details` row of a window that is a quarter of the
     /// display across is a row all the same, and at `Avoid Filename` its preview
-    /// belongs past the name ΓÇö over the columns the setting lets it cover ΓÇö and not
+    /// belongs past the name — over the columns the setting lets it cover — and not
     /// past the row's own right edge, which is what the placement would take were the
     /// row read as a box. An item whose text cannot be measured answers `false`, which
     /// leaves it placed by its box the way it always was.
@@ -519,9 +519,9 @@ impl HoveredItem {
     /// the region `Avoid Filename` keeps a preview off, where the box as the view
     /// reported it is the one `Avoid Filename Column` keeps it off.
     ///
-    /// A view reports the room an item's name is *given* ΓÇö the `Name` column of a
+    /// A view reports the room an item's name is *given* — the `Name` column of a
     /// `Details` row is one width for every file in it, a long name and a short one
-    /// alike ΓÇö so the width the name is drawn at, at the larger of the two sizes a view
+    /// alike — so the width the name is drawn at, at the larger of the two sizes a view
     /// may draw it at, is measured and the box is narrowed to it. It is only ever
     /// narrowed: a name that fills the room it was given, or is drawn truncated to it,
     /// is left as the view reported it.
@@ -543,7 +543,7 @@ impl HoveredItem {
 ///
 /// The window an item is reported through is not a display that can always be asked:
 /// the shell's own item provider answers with no window at all, and a display taken
-/// from the system's instead is the wrong one for an item on a scaled display ΓÇö a name
+/// from the system's instead is the wrong one for an item on a scaled display — a name
 /// drawn at 200% would be measured half its width. Where the region is, is what says
 /// which display it is drawn on, so the middle of it is what is looked up.
 fn region_display_dpi(region: &RECT) -> u32 {
@@ -556,7 +556,7 @@ fn region_display_dpi(region: &RECT) -> u32 {
 /// The share of the icon font the shell draws an item's name at in the views that give
 /// the name a line of its own: `Content` draws the name at 125% of the icon font, where
 /// a `Details` row is drawn at the font itself. A name is measured at the larger of the
-/// two so that one region clears the name in either view ΓÇö which costs a `Details` row
+/// two so that one region clears the name in either view — which costs a `Details` row
 /// a quarter more room than its name takes, and is what keeps a `Content` row's name,
 /// extension and all, from being covered.
 ///
@@ -566,15 +566,15 @@ fn region_display_dpi(region: &RECT) -> u32 {
 const NAME_FONT_SCALE: (i64, i64) = (5, 4);
 
 /// The width a name is drawn at, in the pixels of the display the item is on, or
-/// `None` when it cannot be measured ΓÇö which leaves the name as the view reported it.
+/// `None` when it cannot be measured — which leaves the name as the view reported it.
 ///
 /// The shell draws an item's name in the icon font, the one folder views are given, at
-/// the size the view gives it ΓÇö see `NAME_FONT_SCALE` ΓÇö so that is what a name is
+/// the size the view gives it — see `NAME_FONT_SCALE` — so that is what a name is
 /// measured with: a font and a memory DC are made for the one call and let go again. It
-/// is asked beside the walk that read the item ΓÇö once per preview, not once per probe ΓÇö
+/// is asked beside the walk that read the item — once per preview, not once per probe —
 /// and the font is the shell's own, written for the display the system is at, so it is
-/// scaled here to the display the item is drawn on ΓÇö `dpi`, the one the region is in
-/// (see [`region_display_dpi`]) ΓÇö which is the scale the drawn name is in.
+/// scaled here to the display the item is drawn on — `dpi`, the one the region is in
+/// (see [`region_display_dpi`]) — which is the scale the drawn name is in.
 ///
 /// A display that is not known is not measured at another one's scale: the name is left
 /// as the view reported it, the answer a name with nothing in it gets, because a region
@@ -603,7 +603,7 @@ fn drawn_name_width(name: &str, dpi: u32) -> Option<i32> {
         }
 
         // The name is drawn at one of two sizes and the region has to clear whichever
-        // it is, so the larger is what is measured ΓÇö see `NAME_FONT_SCALE`.
+        // it is, so the larger is what is measured — see `NAME_FONT_SCALE`.
         let height = logfont.lfHeight as i64 * NAME_FONT_SCALE.0;
         logfont.lfHeight = (height / NAME_FONT_SCALE.1) as i32;
 
@@ -697,7 +697,7 @@ impl ItemResolver {
     /// worth being plain about, because it is the whole of what this can do: the
     /// modern object is served by the UI Automation core in this process rather than
     /// by the shell, so a machine that cannot create it is not a shell that is slow
-    /// to come up ΓÇö it is a machine without it, where the ask never succeeds and the
+    /// to come up — it is a machine without it, where the ask never succeeds and the
     /// unbounded client is kept. The timeouts cannot be added to a client that does
     /// not carry them, and nothing in user mode can interrupt a probe already inside
     /// one.
@@ -727,7 +727,7 @@ impl ItemResolver {
     /// views of the window last resolved in, and the item under the pointer. These are
     /// what the resolver holds that another process serves: the collection and every view
     /// are Explorer's own, so once Explorer is not the process it was, both are proxies
-    /// into one that is gone ΓÇö and a proxy into a gone process fails for good rather than
+    /// into one that is gone — and a proxy into a gone process fails for good rather than
     /// reconnecting.
     fn rebuild_shell(&mut self) {
         self.shell_windows =
@@ -737,8 +737,8 @@ impl ItemResolver {
     }
 
     /// Drop a window's views, for a caller that has just seen the place they describe
-    /// change. A set is otherwise kept across a navigation ΓÇö a view is the same object
-    /// afterwards and reads the folder it holds now ΓÇö so this is for the change nothing
+    /// change. A set is otherwise kept across a navigation — a view is the same object
+    /// afterwards and reads the folder it holds now — so this is for the change nothing
     /// about the set can be read against, and what it costs is one walk.
     fn forget_window_views(&mut self) {
         self.window_views = None;
@@ -747,7 +747,7 @@ impl ItemResolver {
     /// The view of `frame` the pointer was last inside, out of the set kept for that frame.
     ///
     /// What reads it is a probe that is in none of the frame's views and has to answer with
-    /// something anyway ΓÇö a pointer over the navigation pane or the toolbar ΓÇö and the
+    /// something anyway — a pointer over the navigation pane or the toolbar — and the
     /// answer is the tab the hand was last working in rather than one picked at random (see
     /// `WindowViews`).
     fn remembered_view(&self, frame: isize) -> Option<usize> {
@@ -792,7 +792,7 @@ impl ItemResolver {
     }
 
     /// The answer the item under the pointer was read for, where the pointer is still
-    /// inside that item: the same window, and the same box within it ΓÇö see `AnsweredItem`.
+    /// inside that item: the same window, and the same box within it — see `AnsweredItem`.
     fn item_under(&self, point: POINT, drawn_in: isize) -> Option<Option<PathBuf>> {
         self.item
             .as_ref()
@@ -817,7 +817,7 @@ impl ItemResolver {
 
 /// How long a UI Automation call may take before it is abandoned. Every probe
 /// crosses into the shell's own thread, so a shell that has stopped answering
-/// would otherwise hold this thread inside a probe for as long as it likes ΓÇö and
+/// would otherwise hold this thread inside a probe for as long as it likes — and
 /// the slow-probe backoff cannot see a probe that has not returned yet, which
 /// leaves an unbounded wait with nothing watching it.
 const UIA_TIMEOUT_MS: u32 = 500;
@@ -834,7 +834,7 @@ struct AutomationClient {
     client: IUIAutomation,
     /// Whether `IUIAutomation2` answered for this client *and* took both timeouts.
     /// What a client that is not bounded costs is a probe that runs until the shell
-    /// answers, however long that is ΓÇö which is why it is a state to leave rather
+    /// answers, however long that is — which is why it is a state to leave rather
     /// than one to settle into, and why it is carried beside the client rather than
     /// assumed from it.
     bounded: bool,
@@ -845,7 +845,7 @@ struct AutomationClient {
 ///
 /// `CUIAutomation8` is the client that carries `IUIAutomation2`, which is where
 /// the timeouts live: the legacy `CUIAutomation` object does not answer for that
-/// interface at all, so asking it to be bounded is what failed ΓÇö and, when that
+/// interface at all, so asking it to be bounded is what failed — and, when that
 /// was treated as fatal, what left every hover without a preview. The legacy
 /// client is still the fallback, and a client that cannot be bounded is still
 /// used, because a client that cannot be bounded still resolves items: what it
@@ -855,7 +855,7 @@ struct AutomationClient {
 /// What it is not is a client to keep. The fallback is reached exactly where
 /// `CUIAutomation8` could not be created, and a shell that is not up yet is as good
 /// a reason for that as a machine without the object is, so a client that came back
-/// unbounded is asked for again rather than held ΓÇö see
+/// unbounded is asked for again rather than held — see
 /// `ItemResolver::rebuild_automation`.
 ///
 /// Both setters are checked rather than assumed. A client that answered for the
@@ -907,7 +907,7 @@ fn register_item_index_property() -> Option<UIA_PROPERTY_ID> {
 /// delay, not a verdict: the file it names is held off the mouse path until the
 /// same-file rehover delay has passed, and released sooner when the cursor
 /// resolves another file. A keyboard preview that a mouse move dismissed latches
-/// the file it showed the same way ΓÇö long enough that the handover cannot flash
+/// the file it showed the same way — long enough that the handover cannot flash
 /// the file straight back, and no longer, because a pointer parked on that file
 /// afterwards is a user asking for it and not a repeat of the handover.
 #[derive(Default)]
@@ -984,7 +984,7 @@ impl KeyboardPointerPause {
     }
 
     /// Cursor movement that hands control back to the mouse. Small movements are
-    /// ignored on purpose so a parked mouse cannot cancel a keyboard preview ΓÇö and
+    /// ignored on purpose so a parked mouse cannot cancel a keyboard preview — and
     /// the wider tolerance holds for the whole of the keyboard's turn, not only
     /// while the preview's box happens to cover the cursor.
     fn move_threshold_px(&self, keyboard_owns_screen: bool, dpi: u32) -> i32 {
@@ -1037,7 +1037,7 @@ const DISPLAY_CHANGE_BACKOFF_MS: u64 = 1500;
 /// machine has, each one's scale, and which of them is the primary one (see
 /// `current_display_signature`). A display change is acted on within this of it
 /// happening, which is a fifth of a second against the backoff the rebuild waits out
-/// anyway ΓÇö and walking every display on every tick would be the most expensive thing
+/// anyway — and walking every display on every tick would be the most expensive thing
 /// in a loop that runs two or three dozen times a second.
 const DISPLAY_CHECK_MS: u64 = 200;
 const KEYBOARD_FOCUS_INPUT_GRACE_MS: u64 = 500;
@@ -1055,22 +1055,22 @@ const PIN_CLICK_RETRY_MS: u64 = 500;
 /// How often the file the listing under the pointer has selected is read while a pin follows
 /// picks rather than hovers: the selection is answered out of live shell objects on every
 /// read, so it is polled on its own cadence rather than on every tick of a loop that runs
-/// several dozen times a second. A click is still answered on its own tick ΓÇö the press is
-/// what schedules a read outside this cadence ΓÇö so what this bounds is the keyboard's lag
+/// several dozen times a second. A click is still answered on its own tick — the press is
+/// what schedules a read outside this cadence — so what this bounds is the keyboard's lag
 /// behind a parked hand, and what a folder opened under one costs (see
 /// `PinUpdateWatch::follow_selection`).
 const PIN_SELECTION_POLL_MS: u64 = 120;
 /// How often the item the keyboard is on is looked at, while a key is being pressed or while a
 /// preview is pinned and the pin follows the keyboard: the focus is read through UI Automation,
-/// which is a crossing into Explorer, so it is asked no faster than this ΓÇö fast enough that a list
+/// which is a crossing into Explorer, so it is asked no faster than this — fast enough that a list
 /// walked with the arrow keys is read as being followed rather than as catching up.
 const KEYBOARD_FOCUS_PROBE_MS: u64 = 30;
 
 /// The sleep each Explorer state is answered with, and how often the state is read again while it
 /// is being answered with (see `ExplorerState` and `explorer_pace`).
 ///
-/// The active row is the `tick_ms` setting rather than a constant of its own ΓÇö the one number that
-/// trades how soon a move is answered against what the app costs while it works ΓÇö so a state is
+/// The active row is the `tick_ms` setting rather than a constant of its own — the one number that
+/// trades how soon a move is answered against what the app costs while it works — so a state is
 /// asked for its row rather than carrying its numbers.
 const DEEP_SLEEP_MS: u64 = 1000; // No Explorer windows - check once per second
 const LONG_SLEEP_MS: u64 = 500; // All minimized or hidden - check twice per second
@@ -1087,13 +1087,13 @@ const STATE_RECHECK_ACTIVE_MS: u64 = 100; // When active
 /// has stopped answering cannot end anything: a document nothing is waiting on, held
 /// by a loop that is not running, is the leftover process this app exists not to leave
 /// behind (see `engine_processes`). What counts as stopped is the age of the loop's
-/// last tick, which it notes as it runs (`preview_window::preview_stall_ms`) ΓÇö its own
+/// last tick, which it notes as it runs (`preview_window::preview_stall_ms`) — its own
 /// waits are a sixteenth of a second with a preview up and half a second idle, so
 /// three seconds of quiet is not a wait but work that has not come back, or a loop
 /// that is gone.
 const PREVIEW_STALL_MS: u64 = 3000;
 /// How far the pointer has to move before it counts as moved at all, in logical
-/// pixels ΓÇö and the wider distance that counts while the keyboard owns the screen, so
+/// pixels — and the wider distance that counts while the keyboard owns the screen, so
 /// a pointer resting on a desk cannot cancel a keyboard preview. Logical distances,
 /// scaled by the display the pointer is on: a hand moves the same distance whatever
 /// the display it is over is scaled to.
@@ -1108,8 +1108,8 @@ const VK_LWIN_CODE: i32 = 0x5B;
 const VK_RWIN_CODE: i32 = 0x5C;
 /// How far up from the element under the pointer the item that holds it is looked
 /// for. The item is the nearest list row or data item; what lies between it and
-/// the element under the pointer is the view's own chrome ΓÇö an icon, a label, a
-/// row's text ΓÇö so the walk is short by nature, and it is bounded here anyway.
+/// the element under the pointer is the view's own chrome — an icon, a label, a
+/// row's text — so the walk is short by nature, and it is bounded here anyway.
 const POINTER_ITEM_ANCESTOR_LIMIT: usize = 8;
 /// The most Shell windows that will be asked which one the pointer is in. A
 /// collection that reports more than this is not one to walk for every probe.
@@ -1240,7 +1240,7 @@ fn sort_from_columns(
 /// canonical keys rather than imported.
 ///
 /// Every one of them is a property of the `System` property set, and the crate binds that
-/// set's keys only behind a further feature this app has no other use for ΓÇö so the four this
+/// set's keys only behind a further feature this app has no other use for — so the four this
 /// walk needs are written here, each with the property id Windows documents for it. The
 /// `Type` key is the one the crate does not bind at all.
 ///
@@ -1280,7 +1280,7 @@ fn sort_key_of(key: &PROPERTYKEY) -> Option<SortKey> {
     }
 }
 
-/// What a view's folder is sorted by, remembered against the folder ΓÇö or deliberately not,
+/// What a view's folder is sorted by, remembered against the folder — or deliberately not,
 /// for the two places where a position in the listing means something other than an order.
 ///
 /// The first is a search. A `search-ms:` view holds the results of a query across as many
@@ -1306,7 +1306,7 @@ fn note_view_sort(view: &AnsweredView) {
     }
 }
 
-/// The folder a view is showing, which is what a sort is remembered against ΓÇö and nothing at
+/// The folder a view is showing, which is what a sort is remembered against — and nothing at
 /// all for a view opened on a search, since a search has results rather than a folder.
 fn view_folder_path(view: &AnsweredView) -> Option<PathBuf> {
     unsafe {
@@ -1327,8 +1327,8 @@ fn view_folder_path(view: &AnsweredView) -> Option<PathBuf> {
 static EXPLORER_RESTARTS: AtomicU64 = AtomicU64::new(0);
 
 /// How long a Shell collection that could not be built is left alone before it is
-/// built again. Building it fails while the shell is still coming up ΓÇö at logon,
-/// and in the moment after a restart ΓÇö and a collection left missing answers every
+/// built again. Building it fails while the shell is still coming up — at logon,
+/// and in the moment after a restart — and a collection left missing answers every
 /// later lookup the way a dead one does.
 const SHELL_COLLECTION_RETRY_MS: u64 = 1000;
 
@@ -1354,8 +1354,8 @@ fn explorer_restart_count() -> u64 {
 /// A run without the variable set writes nothing anywhere. The counters below are
 /// kept either way and this is only what says whether they are ever written down:
 /// what they are for is a run that is being measured, and what a hover costs is
-/// otherwise only reasoned about. One of them in particular ΓÇö how often the view
-/// that answered last is the answer rather than a walk ΓÇö is the number a measurement
+/// otherwise only reasoned about. One of them in particular — how often the view
+/// that answered last is the answer rather than a walk — is the number a measurement
 /// settles and an argument does not.
 static HOOK_TRACE: Lazy<bool> = Lazy::new(|| std::env::var_os("RHP_HOOK_TRACE").is_some());
 
@@ -1368,16 +1368,16 @@ static HOOK_TRACE: Lazy<bool> = Lazy::new(|| std::env::var_os("RHP_HOOK_TRACE").
 ///
 /// The pair to read together is the walks against the sets kept: reading a window's
 /// views is one crossing into the shell per Shell window the desktop holds, and a
-/// window that holds tabs is one registration per tab ΓÇö so a set read again on every
+/// window that holds tabs is one registration per tab — so a set read again on every
 /// probe is the cost that grows with how many tabs are open, and a set kept is what
 /// says that cost is paid once for a window rather than once for a tick. Beside them,
 /// the anchored count against the points resolved says how often the window an item and
-/// a place are read in was enough to tell a frame's views apart ΓÇö a window holding tabs
+/// a place are read in was enough to tell a frame's views apart — a window holding tabs
 /// answered by one view rather than by all of them.
 static PROBE_VIEW_WALKS: AtomicU64 = AtomicU64::new(0);
 static PROBE_VIEW_WINDOWS: AtomicU64 = AtomicU64::new(0);
 /// The probes a frame's views answered without being read again, and the probes the view
-/// the pointer is in was asked for rather than every view of the frame ΓÇö see `frame_views`
+/// the pointer is in was asked for rather than every view of the frame — see `frame_views`
 /// and `ItemWindow`.
 static PROBE_VIEW_SETS_KEPT: AtomicU64 = AtomicU64::new(0);
 static PROBE_VIEW_ANCHORED: AtomicU64 = AtomicU64::new(0);
@@ -1385,17 +1385,17 @@ static PROBE_ITEM_WALKS: AtomicU64 = AtomicU64::new(0);
 static PROBE_POINTER_RESOLUTIONS: AtomicU64 = AtomicU64::new(0);
 /// The looks the item under the pointer was answered from, without the shell being
 /// asked at all: a hand moving along one row of a list is many points and one item, and
-/// this is what says how much of a sweep that answers for ΓÇö see `AnsweredItem`.
+/// this is what says how much of a sweep that answers for — see `AnsweredItem`.
 static PROBE_ITEM_MEMO_HITS: AtomicU64 = AtomicU64::new(0);
 
-/// The slowest of the view walks since the last line, in milliseconds ΓÇö what a probe
+/// The slowest of the view walks since the last line, in milliseconds — what a probe
 /// costs in time rather than in calls, which is the number that says whether the
 /// shell was held long enough for anyone to feel it.
 static PROBE_VIEW_SLOWEST_MS: AtomicU64 = AtomicU64::new(0);
 
 /// The slowest of the item walks since the last line, in milliseconds, and timed apart
 /// from the walks above on purpose: they are different work against different providers
-/// ΓÇö one walks Explorer's window collection, the other walks its accessibility tree ΓÇö
+/// — one walks Explorer's window collection, the other walks its accessibility tree —
 /// and one of them being cheap says nothing about the other.
 static PROBE_ITEM_SLOWEST_MS: AtomicU64 = AtomicU64::new(0);
 
@@ -1403,7 +1403,7 @@ static PROBE_ITEM_SLOWEST_MS: AtomicU64 = AtomicU64::new(0);
 ///
 /// Counted whether or not the trace is on. It is one relaxed add to a counter this
 /// thread owns, set against the crossings the counters are counting, which are calls
-/// into another process ΓÇö and gating it would buy nothing while making the numbers
+/// into another process — and gating it would buy nothing while making the numbers
 /// depend on when the variable happened to be read.
 fn note_probe(counter: &AtomicU64) {
     counter.fetch_add(1, Ordering::Relaxed);
@@ -1425,7 +1425,7 @@ fn hook_trace_path() -> Option<PathBuf> {
 /// second.
 ///
 /// Once a second rather than once a probe, because this writes a file and a file
-/// written per probe is the one thing a hover must never do ΓÇö the counters are here
+/// written per probe is the one thing a hover must never do — the counters are here
 /// to say what a hover costs, and they must not be what makes it cost more.
 fn flush_probe_counts(now: Instant, last: &mut Instant, path: &Path) {
     if now.duration_since(*last) < Duration::from_millis(1000) {
@@ -1513,7 +1513,7 @@ fn window_class_of(window: HWND) -> String {
 
 /// The one line a tick of a click in hand is written as, out of the facts the loop has
 /// already read for its own reasons. `clicked` is zero on every tick of the retry, and on
-/// every tick of a run in which the press was never read at all ΓÇö the one reading that says
+/// every tick of a run in which the press was never read at all — the one reading that says
 /// the click was lost before any of this had a chance to answer it.
 fn trace_click(
     pointer: &PointerTick,
@@ -1544,8 +1544,8 @@ fn trace_click(
 ///
 /// Engines only, and never the player a video preview ran: what ends that is the
 /// dismissal that hid it, by id (see `engine_processes`). The one engine left alone is
-/// a browser drawing a document ΓÇö that window *is* the preview while it is up, with
-/// this app's own window hidden behind it ΓÇö so a document being read is not an engine
+/// a browser drawing a document — that window *is* the preview while it is up, with
+/// this app's own window hidden behind it — so a document being read is not an engine
 /// being kept, and a loop that has stopped could not put it back. Nothing here waits
 /// on anything, and nothing is written anywhere but the trace.
 fn end_engines_of_a_stalled_preview(quiet_ms: u64, trace: Option<&Path>) {
@@ -1559,7 +1559,7 @@ fn end_engines_of_a_stalled_preview(quiet_ms: u64, trace: Option<&Path>) {
 
 /// Note a preview loop that stopped ticking, where a trace is being written: how long
 /// it had been quiet, and that the engines it was holding were ended for it. Written
-/// once for the stall, like everything else here ΓÇö the trace is there to say what a
+/// once for the stall, like everything else here — the trace is there to say what a
 /// hover costs, and must never be what makes it cost more.
 fn note_stalled_preview(path: Option<&Path>, quiet_ms: u64) {
     let Some(path) = path else {
@@ -1691,14 +1691,14 @@ fn should_probe_preview_hover(
 /// mouse having moved whatever the distance says.
 ///
 /// How far a hand has come is a measurement of jitter, and one that is deliberately
-/// coarse while the keyboard drives ΓÇö a pointer resting on a desk must not end a
-/// keyboard preview ΓÇö so a pointer can cross to the row below, and another file, and
+/// coarse while the keyboard drives — a pointer resting on a desk must not end a
+/// keyboard preview — so a pointer can cross to the row below, and another file, and
 /// never count as moved at all: the preview of the file it has left stays on screen
 /// with nothing taking it down, since the probe that would have is closed behind it.
 /// What a preview is about is not a distance but the box the view draws its item in,
 /// which the hook publishes with every look at the item under the pointer (see
 /// `preview_window::publish_pointer_item_box`); a pointer outside that box has left
-/// the item, and the tick that sees it is treated as the move it is ΓÇö so the preview
+/// the item, and the tick that sees it is treated as the move it is — so the preview
 /// is taken down and the item now under the pointer is asked about like any other.
 ///
 /// A pointer that the preview itself is holding is not one that has left: a text
@@ -1716,8 +1716,8 @@ fn pointer_moved_off_the_hovered_item(
 /// is about.
 ///
 /// The answer a look gives is a file or nothing, and nothing is two different things. One
-/// is a read that failed ΓÇö the walk out through the shell that answers nothing on a volume
-/// slow to answer, a view busy drawing the item it was just asked for ΓÇö where the pointer
+/// is a read that failed — the walk out through the shell that answers nothing on a volume
+/// slow to answer, a view busy drawing the item it was just asked for — where the pointer
 /// is still on the file the preview is about, and what that file is owed is the question
 /// asked again rather than the preview taken down and put back, which is a blink. The
 /// other is an item that is not a file this app previews at all: an application, a folder,
@@ -1726,7 +1726,7 @@ fn pointer_moved_off_the_hovered_item(
 ///
 /// What tells the two apart is the item rather than the answer. Every look publishes the
 /// box of the item it found, so a look that found the same item leaves that box exactly
-/// where it was, while a look that found another item publishes another box ΓÇö and an item
+/// where it was, while a look that found another item publishes another box — and an item
 /// with no preview of its own is an item all the same, which is the case that makes the
 /// published box on its own the wrong question (see `HOVER_POINTER_BOX`). A preview is
 /// therefore spared only where the box under the pointer is the box the preview was
@@ -1755,12 +1755,12 @@ fn read_failure_is_the_same_item(
 /// every side of the app, so the hook, the loader and the layout cannot disagree about
 /// what a file is (see `formats::routing`). The lists come from the configuration this
 /// already holds rather than from the gates' own lookups, which would take the same lock
-/// again ΓÇö and nothing in the router reads the configuration itself.
+/// again — and nothing in the router reads the configuration itself.
 ///
 /// What the file's content says it is comes ahead of all of that, where it disagrees
 /// with the name: a `.docx` whose bytes are an MP4 is a video, and the engine it is
 /// handed to is the one that plays videos (see `content_type`). Both questions are asked
-/// with the one copy of the configuration this gate takes ΓÇö the content question is handed
+/// with the one copy of the configuration this gate takes — the content question is handed
 /// the lists rather than taking them itself, which is what makes a second acquisition on this
 /// thread impossible (see `content_type::of`).
 fn is_media_file(path: &Path) -> bool {
@@ -1790,8 +1790,8 @@ fn is_media_file_with_facts(path: &Path, facts: &crate::formats::head::Facts) ->
         crate::formats::content_type::Content::Unknown => {}
     }
 
-    // The kind is the router's answer and the router's order is the only one ΓÇö a video first,
-    // then a page, on through the boxes and the documents to the pictures last ΓÇö so what this
+    // The kind is the router's answer and the router's order is the only one — a video first,
+    // then a page, on through the boxes and the documents to the pictures last — so what this
     // gate admits is what the loader will draw (see `formats::routing`). Every list is asked
     // of the copy in hand, and the switch the kind is under is the gate that decides it.
     crate::formats::routing::kind_of(path, &config).is_some_and(|kind| kind.enabled_in(&config))
@@ -2081,7 +2081,7 @@ fn is_probable_search_view_context(context: &ActiveShellViewContext) -> bool {
 /// It stands where a walk of every Shell window the desktop has registered once stood, and
 /// what it asks instead is the question the item path already settles a point with: the
 /// window given is a window, or a child of one, of exactly one of the views a window holds,
-/// and with tabs that is the tab that is showing ΓÇö so that view, and nothing else, is asked
+/// and with tabs that is the tab that is showing — so that view, and nothing else, is asked
 /// what it is showing (see `ItemWindow` and `frame_views`). The cost is one frame's worth of
 /// work rather than the desktop's: the set is in hand for all but the first probe of a
 /// window, and what is left is the shell being asked to describe the one view the item is in.
@@ -2089,7 +2089,7 @@ fn is_probable_search_view_context(context: &ActiveShellViewContext) -> bool {
 /// A window in none of the frame's views is a pointer over the navigation pane, the
 /// toolbar or the details pane, none of which belongs to a tab: which tab the frame is
 /// showing is then not something it can say, and what is answered for is the view the item
-/// was last read inside of that frame ΓÇö the tab the hand was last working in ΓÇö or the
+/// was last read inside of that frame — the tab the hand was last working in — or the
 /// frame's first view where it has never been inside one (see `WindowViews::anchor`).
 /// Any of a frame's views is a guess at that point; what this one has over a view picked at
 /// random is that it does not change while the item does not, so one place is read as
@@ -2157,7 +2157,7 @@ fn hwnd_is_same_or_ancestor(child: HWND, ancestor: HWND) -> bool {
 /// same answer, but they are read at the folder probe's cadence: a search opened a
 /// moment ago is seen here before it is seen there.
 ///
-/// It is the same view the hints are read from ΓÇö the one the pointer is in ΓÇö so the two
+/// It is the same view the hints are read from — the one the pointer is in — so the two
 /// cannot be about different views: what differs between them is when they were read (see
 /// `anchored_view_context`).
 fn is_current_search_view_legacy(resolver: &mut ItemResolver, pointer: &PointerTick) -> bool {
@@ -2173,7 +2173,7 @@ fn is_current_search_view_legacy(resolver: &mut ItemResolver, pointer: &PointerT
 }
 
 /// The facts one view's own description holds, as the probes that watch for a change of place
-/// read them: the folder it has open, the URL it was opened with, and whether it is a search ΓÇö
+/// read them: the folder it has open, the URL it was opened with, and whether it is a search —
 /// whose root is the folder behind the results rather than the view's own.
 fn view_resolver_hints(context: &ActiveShellViewContext) -> HoverResolverHints {
     let is_search_view = is_probable_search_view_context(context);
@@ -2197,8 +2197,8 @@ fn view_resolver_hints(context: &ActiveShellViewContext) -> HoverResolverHints {
 /// What the view under the pointer is showing, for the probes that need to know a
 /// location has changed.
 ///
-/// It is answered by the view the pointer is in ΓÇö the folder it has open and the URL it was
-/// opened with ΓÇö and by nothing else: the resolution of a file does not depend on it, so a
+/// It is answered by the view the pointer is in — the folder it has open and the URL it was
+/// opened with — and by nothing else: the resolution of a file does not depend on it, so a
 /// view the shell does not describe leaves the hints empty rather than sending the hook
 /// looking for another witness.
 fn get_current_hover_resolver_hints(
@@ -2222,7 +2222,7 @@ fn get_current_hover_resolver_hints(
 ///
 /// The folder a view *has open* is deliberately not asked for. It is a walk out through the
 /// shell's own objects to a filesystem path and a `stat` of what comes back, while the URL the view
-/// was opened with is answered every time by the browser object the view was found through ΓÇö and it
+/// was opened with is answered every time by the browser object the view was found through — and it
 /// names the same place as the folder for a folder view (a search answers with its own query, and
 /// its root is resolved out of that). The place is read once per item the focus lands on, and a key
 /// being held lands it on one every few dozen milliseconds.
@@ -2247,7 +2247,7 @@ fn click_place(resolver: &mut ItemResolver, pointer: &PointerTick) -> Option<Hov
 /// Whether a point is inside a box, read the way a window reads one: the right and
 /// bottom edges are outside it. It is the reading the published item box is compared
 /// with the pointer through (see `pointer_item_holds`), asked here of a box the hook is
-/// holding itself ΓÇö the item one answer was read from.
+/// holding itself — the item one answer was read from.
 fn point_in_box(point: POINT, bounds: (i32, i32, i32, i32)) -> bool {
     let (left, top, right, bottom) = bounds;
     point.x >= left && point.x < right && point.y >= top && point.y < bottom
@@ -2264,7 +2264,7 @@ fn normalize_existing_path(path: PathBuf) -> Option<PathBuf> {
 fn normalize_media_path(path: PathBuf) -> Option<PathBuf> {
     // One reading of the file's own entry answers every question this asks about it: that it is
     // there, that it is a file, what version it is at, and whether its content is on this
-    // machine. What follows is the form the rest of the app works in ΓÇö and the file is not
+    // machine. What follows is the form the rest of the app works in — and the file is not
     // asked about again for any of it (see `crate::formats::head::Facts`).
     let facts = crate::formats::head::Facts::read(&path)?;
 
@@ -2368,7 +2368,7 @@ fn is_valid_file_path(s: &str) -> bool {
 /// `measure_content` asks the walk for the item's own text as well, which a preview
 /// is placed from. A plain probe passes `false`: it answers which file the pointer is
 /// on, and a preview that keeps off that file's item asks for the text when it is
-/// about to be shown ΓÇö see `avoid_box_under_cursor`.
+/// about to be shown — see `avoid_box_under_cursor`.
 fn uia_item_from_point(
     resolver: &ItemResolver,
     point: POINT,
@@ -2378,8 +2378,8 @@ fn uia_item_from_point(
     let cache = resolver.cache.as_ref()?;
     note_probe(&PROBE_ITEM_WALKS);
 
-    // Timed from the first crossing to the last ΓÇö the element is asked of the view's
-    // provider and the walk climbs from it ΓÇö and timed around the early answers too,
+    // Timed from the first crossing to the last — the element is asked of the view's
+    // provider and the walk climbs from it — and timed around the early answers too,
     // which a `?` reaching out of the function would have timed past.
     let started = Instant::now();
     let found = (|| {
@@ -2403,7 +2403,7 @@ fn uia_item_from_focus(resolver: &ItemResolver) -> Option<HoveredItem> {
         let focused = unsafe { automation.GetFocusedElementBuildCache(cache) }.ok()?;
 
         // A view can report the list itself as focused while the focus it draws is on
-        // one of its items ΓÇö the search results view does ΓÇö and a list's name is not a
+        // one of its items — the search results view does — and a list's name is not a
         // file's, so the selection is where the item has to be taken from. For a
         // focused element that already is an item this is the element itself.
         let start = if element_names_an_item(&focused) {
@@ -2413,7 +2413,7 @@ fn uia_item_from_focus(resolver: &ItemResolver) -> Option<HoveredItem> {
         };
 
         // A keyboard preview is placed from the item alone, so the text the region is
-        // made of is read with it ΓÇö see `item_text_box`.
+        // made of is read with it — see `item_text_box`.
         walk_to_item(resolver, &start, None, true)
     })();
     note_probe_ms(&PROBE_ITEM_SLOWEST_MS, started.elapsed());
@@ -2423,8 +2423,8 @@ fn uia_item_from_focus(resolver: &ItemResolver) -> Option<HoveredItem> {
 
 /// The nearest item at or above an element, as the view reports it.
 ///
-/// The walk starts where the caller's evidence does ΓÇö the element under the
-/// pointer, or the focused element ΓÇö and goes up to the first list row or data
+/// The walk starts where the caller's evidence does — the element under the
+/// pointer, or the focused element — and goes up to the first list row or data
 /// item, because what the view says about an item is kept on the item and not on
 /// the text it draws inside it.
 fn walk_to_item(
@@ -2443,7 +2443,7 @@ fn walk_to_item(
             // been scrolled partly out of the view is not the place the view shows it: the
             // box carries on behind the toolbar above and past the edge of the window
             // below, and the pointer is on the search bar, the address bar, or off the
-            // window there rather than on the item ΓÇö a preview that nothing takes down,
+            // window there rather than on the item — a preview that nothing takes down,
             // because the box it is held by says the pointer never left. The view the item
             // is drawn in is the part of that box that is really there (see
             // `view_bounds`), so the box is kept to it here, once, and every question
@@ -2462,7 +2462,7 @@ fn walk_to_item(
 }
 
 /// The box of the view that shows an item: the element the item sits in, a level or two
-/// up ΓÇö the list itself, or the group a view that groups its items draws it in.
+/// up — the list itself, or the group a view that groups its items draws it in.
 ///
 /// This is what clips an item's box to what is on screen. A provider reports an item's
 /// box at the place the item's content is drawn however far the view has been scrolled,
@@ -2472,14 +2472,14 @@ fn walk_to_item(
 /// items are shown in, and an item is on screen exactly where the two overlap.
 ///
 /// Nothing is answered when the walk cannot get there, which leaves the item's own box as
-/// the provider reported it ΓÇö the reading this app had before the container was asked.
+/// the provider reported it — the reading this app had before the container was asked.
 fn view_bounds(resolver: &ItemResolver, element: &IUIAutomationElement) -> Option<RECT> {
     let cache = resolver.cache.as_ref()?;
     let walker = resolver.walker.as_ref()?;
     let mut current = unsafe { walker.GetParentElementBuildCache(element, cache) }.ok()?;
 
     // A grouped view puts a group between the item and the list, and a group scrolls with
-    // its items ΓÇö so it is not the window they are shown in, and the climb goes on. The
+    // its items — so it is not the window they are shown in, and the climb goes on. The
     // climb is bounded like every other walk here: a provider that answers something
     // unexpected must not cost the probe an unbounded one.
     for _ in 0..POINTER_ITEM_ANCESTOR_LIMIT {
@@ -2505,7 +2505,7 @@ fn clip_box(bounds: RECT, view: RECT) -> RECT {
 }
 
 /// The item an element is, when the pointer's box test says it is the one asked
-/// about ΓÇö or, for the keyboard, whenever it is an item at all.
+/// about — or, for the keyboard, whenever it is an item at all.
 ///
 /// The box is what says the pointer is on an item: a row is an item from its left
 /// edge to its right one, and a pointer anywhere on that row belongs to the file
@@ -2513,7 +2513,7 @@ fn clip_box(bounds: RECT, view: RECT) -> RECT {
 /// selected. An item whose box does not hold the point is not an answer even
 /// though the walk passed through it, and since the walk starts at the element
 /// under the pointer, the first item that holds the point is the one it is on. A
-/// keyboard preview has no point to test ΓÇö the focused element is the evidence ΓÇö
+/// keyboard preview has no point to test — the focused element is the evidence —
 /// so there it is the item itself that answers.
 fn item_from_element(
     resolver: &ItemResolver,
@@ -2563,16 +2563,16 @@ fn item_from_element(
 /// The text an item draws inside its own box, or `None` when it draws none.
 ///
 /// A view gives every item the box it occupies, and what it draws inside that box
-/// is reported the way a view reports everything: each piece of an item's text ΓÇö a
+/// is reported the way a view reports everything: each piece of an item's text — a
 /// Content row's name and path, a Details row's name, type, modified date and size,
-/// the label under an icon ΓÇö is an element of its own carrying the box it is drawn
+/// the label under an icon — is an element of its own carrying the box it is drawn
 /// in, child of the item. Reading them answers three things a box cannot: the whole of
-/// what the item draws, whose right edge is where a row's content stops ΓÇö the region
+/// what the item draws, whose right edge is where a row's content stops — the region
 /// `Avoid Details` keeps a preview off, and the room *past* it a keyboard preview is
-/// placed in ΓÇö the leftmost piece, which in the views that draw their items as rows is
+/// placed in — the leftmost piece, which in the views that draw their items as rows is
 /// the `Name` column of `Details` or the name above the path of `Content`, and which
 /// is the region a way of avoiding is measured from, and whether anything is drawn
-/// beside that piece, which is what says the item is a row of its view at all ΓÇö see
+/// beside that piece, which is what says the item is a row of its view at all — see
 /// [`ItemText`].
 ///
 /// It is measured from the item's own children for the same reason: a view reports
@@ -2580,7 +2580,7 @@ fn item_from_element(
 /// stops at. The read is batched into one round trip with the properties the rest of
 /// the walk already asks for. A view that draws its columns some other way reports no
 /// text at all, and is answered with `None`, which leaves the item measured by its box
-/// ΓÇö see [`HoveredItem::avoid_box`].
+/// — see [`HoveredItem::avoid_box`].
 fn item_text_box(
     resolver: &ItemResolver,
     element: &IUIAutomationElement,
@@ -2628,7 +2628,7 @@ fn item_text_box(
 /// whole of what the item draws as one box, the piece its name is drawn in, and
 /// whether anything was drawn *beside* that piece. The last is what tells a row of the
 /// view from a box item: a `Details` or `Content` row writes its columns to the right
-/// of the name ΓÇö the type, the date, the size ΓÇö where a label under an icon, a tile's
+/// of the name — the type, the date, the size — where a label under an icon, a tile's
 /// stacked lines and a name on its own draw nothing there. See [`ItemText::columns`].
 fn text_boxes(pieces: &[RECT]) -> Option<ItemText> {
     let mut all: Option<RECT> = None;
@@ -2636,8 +2636,8 @@ fn text_boxes(pieces: &[RECT]) -> Option<ItemText> {
 
     for rect in pieces {
         // The name is the leftmost piece, which is the one the views that draw their
-        // items as rows put first; two pieces drawn from the same edge ΓÇö the name above
-        // the path of `Content` ΓÇö are told apart by taking the higher.
+        // items as rows put first; two pieces drawn from the same edge — the name above
+        // the path of `Content` — are told apart by taking the higher.
         let is_name = match name {
             None => true,
             Some(current) => {
@@ -2671,7 +2671,7 @@ fn text_boxes(pieces: &[RECT]) -> Option<ItemText> {
 
 /// Whether an element is text the view draws, which is what an item's own content
 /// is made of. A row of a file list reports its name and its columns that way, and
-/// anything else it may report ΓÇö the file's icon, the row's own container ΓÇö is not
+/// anything else it may report — the file's icon, the row's own container — is not
 /// part of the text whose end is being measured.
 fn element_is_drawn_text(element: &IUIAutomationElement) -> bool {
     match element_control_type(element) {
@@ -2724,7 +2724,7 @@ fn element_native_window(element: &IUIAutomationElement) -> isize {
     }
 }
 
-/// The value the item's legacy accessible pattern carries ΓÇö for a file a search
+/// The value the item's legacy accessible pattern carries — for a file a search
 /// has surfaced, the file's own path.
 fn element_value(element: &IUIAutomationElement) -> Option<String> {
     unsafe {
@@ -2751,7 +2751,7 @@ fn element_value(element: &IUIAutomationElement) -> Option<String> {
 /// The position the view holds an element at, as Explorer reports it.
 ///
 /// The property is one-based, and zero is what the provider answers when it has
-/// nothing to say about the element's position at all ΓÇö so only a positive value
+/// nothing to say about the element's position at all — so only a positive value
 /// is a position. A missing one is not a failure: the item's own value still
 /// stands on its own.
 fn element_item_index(
@@ -2778,9 +2778,9 @@ fn element_item_index(
 /// The window an item is resolved in, from the window under the pointer.
 ///
 /// Both handles come out of the one walk: the window under the pointer, and the root it
-/// belongs to. The root is the frame whose views can be holding the item ΓÇö a Shell view
+/// belongs to. The root is the frame whose views can be holding the item — a Shell view
 /// has to belong to the window the pointer is over for the items it draws to be the ones
-/// under it ΓÇö and the window under the pointer is what says which of those views is
+/// under it — and the window under the pointer is what says which of those views is
 /// drawing it (see `ItemWindow`).
 ///
 /// The window is handed in rather than read here, because it is the tick's own reading of
@@ -2809,7 +2809,7 @@ fn item_window_of(window: HWND) -> Option<ItemWindow> {
 /// identity.
 ///
 /// A window that holds several tabs registers one Shell window per tab, and every
-/// one of them answers with the frame's own window ΓÇö so the frame names a set of
+/// one of them answers with the frame's own window — so the frame names a set of
 /// views rather than one, and something else has to say which of them is showing
 /// what the item is: the window the item is drawn in (see `ItemWindow`). Nothing
 /// here skips a tab that is not showing. This walk does not ask a view anything, it
@@ -2817,7 +2817,7 @@ fn item_window_of(window: HWND) -> Option<ItemWindow> {
 ///
 /// What it costs is the reason it is kept rather than made per probe: every
 /// registration is crossed into for the view it holds and for the window that view
-/// is drawn in, so a window holding tabs costs a few calls per tab ΓÇö and a window
+/// is drawn in, so a window holding tabs costs a few calls per tab — and a window
 /// that holds eight of them is not one to walk three dozen times a second. The
 /// caller that keeps the set is `frame_views`.
 fn folder_views_for_window(
@@ -2917,7 +2917,7 @@ fn folder_views_for_window(
 ///
 /// The number is read once and carried: the walk that looks a window's views up
 /// needs the same count, and asking the collection for it a second time would be a
-/// second crossing into the shell for it ΓÇö see `folder_views_for_window`.
+/// second crossing into the shell for it — see `folder_views_for_window`.
 fn shell_window_count(resolver: &ItemResolver) -> Option<i32> {
     unsafe { resolver.shell_windows.as_ref()?.Count().ok() }
 }
@@ -2927,12 +2927,12 @@ fn shell_window_count(resolver: &ItemResolver) -> Option<i32> {
 ///
 /// Keeping the set is what turns this path's cost from one paid per probe into one paid
 /// per window: reading it is a crossing into the shell for every Shell window the
-/// desktop holds ΓÇö a few of them each, and one more for every tab a window is holding ΓÇö
+/// desktop holds — a few of them each, and one more for every tab a window is holding —
 /// while asking one of the views it holds for an item is a call or two. What is read
 /// again is read again for one of two reasons, and they are the only two that can leave
 /// the set describing a window that is no longer there: the window the set was read for
 /// is gone, hidden or minimized, or the desktop holds a different number of Shell
-/// windows than it did ΓÇö which is the one cheap number that moves when a tab or a window
+/// windows than it did — which is the one cheap number that moves when a tab or a window
 /// is opened or closed, and the only thing that ever adds a view to a window or takes
 /// one away. Everything else a view does leaves the set alone: navigating is the same
 /// view holding another folder, and which of a frame's views is showing what the item
@@ -2940,9 +2940,9 @@ fn shell_window_count(resolver: &ItemResolver) -> Option<i32> {
 /// (see `ItemWindow`).
 ///
 /// What is *not* kept is a walk that found no view at all. A window showing a folder has
-/// a view in it, so no views means the shell was met between two of them ΓÇö a window that
+/// a view in it, so no views means the shell was met between two of them — a window that
 /// has just opened, or a folder change with the old view let go of and the new one not
-/// up yet ΓÇö and a set of no views is not an answer, it is the absence of one: it can be
+/// up yet — and a set of no views is not an answer, it is the absence of one: it can be
 /// asked for no item and it describes no place, and kept it would go on answering that
 /// for as long as the window was up, since neither of the two reasons above follows from
 /// it (the count has not moved, and the window is as live as it ever was). What that
@@ -2975,7 +2975,7 @@ fn frame_views(
         resolver.window_views = (!views.is_empty()).then(|| WindowViews {
             frame,
             // A collection that will not say how many windows it holds leaves the number
-            // of views it produced, which the next probe's count will disagree with ΓÇö the
+            // of views it produced, which the next probe's count will disagree with — the
             // set is read again then, which is what a count that could not be read is
             // worth.
             registrations: registrations.unwrap_or(views.len() as i32),
@@ -2994,23 +2994,23 @@ fn frame_views(
 
 /// The file an item stands for, asked of the view that is drawing it.
 ///
-/// The view belongs to a window ΓÇö the frame the pointer is over, or the one the focused
-/// item is drawn in ΓÇö and a window that holds tabs registers one Shell window per tab,
+/// The view belongs to a window — the frame the pointer is over, or the one the focused
+/// item is drawn in — and a window that holds tabs registers one Shell window per tab,
 /// all of them answering with the frame's own window, so the frame names a set of views
 /// and not one. Which of them it is, is settled in two steps that must not be confused
 /// with each other.
 ///
 /// First the view: the window the item is drawn in is a window of exactly one of the
-/// frame's views ΓÇö the tab that is showing ΓÇö and that view, and nothing else, is asked
+/// frame's views — the tab that is showing — and that view, and nothing else, is asked
 /// (see `ItemWindow`). A view answers about its own folder's items whether it is showing
 /// or not, so a tab the item is not in is one whose answer is about something else: it
 /// is not asked, and its agreement is not waited for. What that leaves is a pointer in
-/// none of them ΓÇö over the navigation pane, the toolbar, the details pane, none of which
-/// belongs to a tab ΓÇö and there the views are told apart the way all of them were before
+/// none of them — over the navigation pane, the toolbar, the details pane, none of which
+/// belongs to a tab — and there the views are told apart the way all of them were before
 /// the item's own window was read: each is asked, and what they answer has to agree.
 ///
-/// A set that cannot answer for the window the item is drawn in ΓÇö no view of it claims that
-/// window, or the one that does says the item at that position is another name ΓÇö is read
+/// A set that cannot answer for the window the item is drawn in — no view of it claims that
+/// window, or the one that does says the item at that position is another name — is read
 /// again once before the item is answered with nothing. The item is drawn in this window, so
 /// some view of it holds the item, and what answers otherwise is a set read while the window
 /// was between the two views of a folder change: the view the folder was left from, which
@@ -3019,14 +3019,14 @@ fn frame_views(
 ///
 /// Then the item: a candidate view is asked whether the item at that position is the
 /// item we are on, by name and nothing else. That is an identity question, and a folder
-/// answers it exactly as a file does ΓÇö what the item *is* says nothing about which view
+/// answers it exactly as a file does — what the item *is* says nothing about which view
 /// holds it. Then, and only for the views that claimed the item, the file: the path the
 /// Shell hands over, gated to a file this app previews. A view that holds the item but
 /// has no file to show it (a folder, an archive, a document) is a *match* with nothing
-/// to preview, not a view that failed to match ΓÇö treating it as the latter is how
+/// to preview, not a view that failed to match — treating it as the latter is how
 /// another tab's file gets shown while a folder is hovered. What several matches do has
-/// to agree: two tabs showing the same folder are one answer, while tabs that disagree ΓÇö
-/// about the file, or about whether there is one at all ΓÇö are a question the item cannot
+/// to agree: two tabs showing the same folder are one answer, while tabs that disagree —
+/// about the file, or about whether there is one at all — are a question the item cannot
 /// settle, and no answer is better than the wrong tab's file.
 fn item_file_path(
     resolver: &mut ItemResolver,
@@ -3045,12 +3045,12 @@ fn item_file_path(
     // The view the item is drawn in answers alone. A set that cannot answer for the window
     // the item is drawn in is read again, once, before what it answered is taken: no view
     // of it claims that window at all, or the one that does says the item at that position
-    // is another name. Neither is an answer the item can be given ΓÇö the item is drawn in
-    // this window, so some view of it holds the item ΓÇö and both are what a set read while
+    // is another name. Neither is an answer the item can be given — the item is drawn in
+    // this window, so some view of it holds the item — and both are what a set read while
     // the window was between two views answers with: the walk met the shell as a folder was
     // being changed, and what it collected was the view the folder was left from. Nothing
-    // else tells that set from a right one ΓÇö a folder probe asks its place of the same
-    // view, so the view it describes as the place is the one that has been left ΓÇö which is
+    // else tells that set from a right one — a folder probe asks its place of the same
+    // view, so the view it describes as the place is the one that has been left — which is
     // why the re-read is here rather than in the walk: it is the item that says the set is
     // wrong, and every look at the item makes the question askable again (see `frame_views`).
     // What the re-read costs is one walk of a collection this is holding for exactly that.
@@ -3068,7 +3068,7 @@ fn item_file_path(
                     )
                 }
                 // No view of the set claims the window the item is drawn in. Whether that is
-                // the set having been read wrong ΓÇö which is what the re-read below is for ΓÇö or
+                // the set having been read wrong — which is what the re-read below is for — or
                 // a set whose views cannot be told apart by their windows at all: a set that
                 // names no window can be matched against the item's by nothing, and one whose
                 // windows the item is inside of more than once is a reading that is not
@@ -3150,8 +3150,8 @@ fn item_file_path(
         return None;
     }
 
-    // Tabs that do not agree about what the item is ΓÇö one holding a file, another
-    // holding a folder, a name that is in both at that position ΓÇö cannot be told
+    // Tabs that do not agree about what the item is — one holding a file, another
+    // holding a folder, a name that is in both at that position — cannot be told
     // apart, and either answer could be the wrong tab's.
     if matched_without_file > 0 && (matches > 1 || disagreed) {
         return None;
@@ -3163,7 +3163,7 @@ fn item_file_path(
     answer
 }
 
-/// The file system path the Shell holds for an item ΓÇö the path the item *is*,
+/// The file system path the Shell holds for an item — the path the item *is*,
 /// rather than a name it is shown under. An item that stands for no file on disk
 /// (a library, a drive, a search root) has none, which is the Shell's own answer
 /// that there is nothing here to preview.
@@ -3180,8 +3180,8 @@ fn shell_item_filesystem_path(item: &IShellItem) -> Option<PathBuf> {
 }
 
 /// Whether the name a view shows an item under is the name that was asked about.
-/// Explorer labels a file with the name its view displays ΓÇö the extension hidden
-/// when the user has chosen to hide it ΓÇö so the item's own display name is what
+/// Explorer labels a file with the name its view displays — the extension hidden
+/// when the user has chosen to hide it — so the item's own display name is what
 /// the asked-about name is compared with.
 fn item_display_name_matches(item: &IShellItem, expected_name: &str) -> bool {
     unsafe {
@@ -3201,7 +3201,7 @@ fn item_display_name_matches(item: &IShellItem, expected_name: &str) -> bool {
 ///
 /// The identity question comes first and is nothing else: the name the view shows the
 /// item under against the name the accessibility tree reports for it. What the item *is*
-/// is not part of it ΓÇö a folder goes by its name exactly as a file does, and a view that
+/// is not part of it — a folder goes by its name exactly as a file does, and a view that
 /// holds a folder has to be seen as holding the item, or the tab that owns it abstains
 /// and another tab's file answers in its place. An item with no name to ask about is
 /// taken as held, which the caller has already established can only be asked of a window
@@ -3210,7 +3210,7 @@ fn item_display_name_matches(item: &IShellItem, expected_name: &str) -> bool {
 /// Then the file, and only for the views that claimed the item: the path the Shell holds
 /// for the item at that position (`SIGDN_FILESYSPATH`, which for a search result is the
 /// real file wherever it lives), gated to a file this app previews. A folder reaches
-/// this point and stops here ΓÇö held, with nothing to preview ΓÇö which is what keeps the
+/// this point and stops here — held, with nothing to preview — which is what keeps the
 /// preview of a folder from being another tab's file.
 ///
 /// Both answers are read off one item object, which is the whole of why the two
@@ -3244,7 +3244,7 @@ fn view_item(folder_view: &IFolderView2, index: i32, expected_name: &str) -> Vie
 /// The file the pointer is over, resolved once per point and kept while the pointer
 /// stays inside the item it was read from.
 ///
-/// The pointer asks one question ΓÇö what is under me ΓÇö and the view under it
+/// The pointer asks one question — what is under me — and the view under it
 /// answers by identity: the item the accessibility provider says the point is
 /// inside, the position that item holds in the view, and the file that position
 /// stands for. Nothing is looked up by name for the pointer, because a search
@@ -3257,14 +3257,14 @@ fn view_item(folder_view: &IFolderView2, index: i32, expected_name: &str) -> Vie
 /// hand sweeping a list is answered from: a `Details` row is as wide as the view, so a
 /// pointer moving along one is a new point on every tick and the same item on every one
 /// of them, and a file it has already been answered for is not asked about again while
-/// the pointer stays in the item ΓÇö and in the window ΓÇö that answer was read in. Everything
+/// the pointer stays in the item — and in the window — that answer was read in. Everything
 /// that makes the item under a parked pointer a new question drops the answer with it
 /// (`forget_item`).
 fn get_file_under_cursor(resolver: &mut ItemResolver, pointer: &PointerTick) -> Option<PathBuf> {
     let point = pointer.point;
 
-    // A tick asks about the same point more than once ΓÇö the move path asks for
-    // the file it latched and then for the one on screen ΓÇö and the answer is the
+    // A tick asks about the same point more than once — the move path asks for
+    // the file it latched and then for the one on screen — and the answer is the
     // same both times. Nothing is carried past the tick: the list under a parked
     // pointer may have moved on by the next one.
     if let Some(answer) = resolver.probed_at(point) {
@@ -3300,7 +3300,7 @@ fn get_file_under_cursor(resolver: &mut ItemResolver, pointer: &PointerTick) -> 
 /// Two witnesses and no third: the item the pointer is on, turned into a file by
 /// the view that is showing it, and the item's own accessible value when that
 /// value is a whole path. Nothing is looked up by name, nothing is walked, and a
-/// name that nothing can vouch for is left unanswered rather than guessed at ΓÇö a
+/// name that nothing can vouch for is left unanswered rather than guessed at — a
 /// search across folders is full of names that belong to more than one file.
 ///
 /// What it answers with is the file *and* the item it was read from, because the two
@@ -3327,15 +3327,15 @@ fn resolve_file_under_cursor(
     // The item the pointer is on, as the box the view draws it in, published for the
     // preview thread to hold a reveal to and for this loop to read a move off: a
     // pointer outside that box has left the item, whatever a distance says. It is
-    // published with every look at the item under the pointer ΓÇö this one and the one
-    // the walk below makes ΓÇö so what it holds is where the pointer is now rather than
+    // published with every look at the item under the pointer — this one and the one
+    // the walk below makes — so what it holds is where the pointer is now rather than
     // where the hover on screen was resolved from (see
     // `preview_window::publish_pointer_item_box`).
     //
     // What is published is the part of that box the view actually shows: the item's box
     // as it comes back from the walk is already the part of it that exists on screen
     // (see `view_bounds`), so a pointer over the toolbar above a clipped item, or off the
-    // window below one, is outside it and has left the item ΓÇö where the box the provider
+    // window below one, is outside it and has left the item — where the box the provider
     // drew carries on saying it has not.
     let bounds = (
         item.bounds.left,
@@ -3372,7 +3372,7 @@ fn resolve_file_under_cursor(
 }
 
 /// The region a preview of the file under the pointer is kept off, as the `Avoid`
-/// setting has it for the item that file is ΓÇö with whether that region is a column of
+/// setting has it for the item that file is — with whether that region is a column of
 /// the view, which is what says a placement steps off it to the side rather than over
 /// or under the item (see [`HoveredItem::avoid_box`]).
 ///
@@ -3411,18 +3411,18 @@ pub(crate) fn is_foreground_explorer() -> bool {
     }
 }
 
-/// Whether the engine's window ΓÇö the window a page of HTML is drawn in ΓÇö owns the keyboard
+/// Whether the engine's window — the window a page of HTML is drawn in — owns the keyboard
 /// right now, which is what a click into a page that runs makes it do. Nothing else the
 /// engine draws can be asked the question: a document and a specimen refuse activation, so
 /// a foreground window of this family is a page the user clicked into and had keys arrive
-/// at, and the pin key needs no case of its own for the same reason ΓÇö a press while this is
+/// at, and the pin key needs no case of its own for the same reason — a press while this is
 /// true is already answered as another program's key (`is_foreground_explorer`).
 ///
 /// The question is asked of the foreground window rather than of the pointer, because the
 /// pointer can be anywhere: a page the user has clicked into and then left the hand resting
 /// beside still has the keyboard, and the keys that belong to it are the keys the app's own
 /// readers must leave alone. The engine's own window is not the only one of its family in
-/// front ΓÇö a page the user has activated focuses a child of it ΓÇö so the question covers the
+/// front — a page the user has activated focuses a child of it — so the question covers the
 /// children the way `cursor_preview_hover` does, in the other direction and for the same
 /// reason: the surface is the engine's, and so is everything inside it.
 fn engine_owns_the_keyboard() -> bool {
@@ -3463,7 +3463,7 @@ fn is_window_maximized(hwnd: HWND) -> bool {
 /// 1080 used to read as fullscreen although most of that display was still showing,
 /// and a game covering a 1080p display beside a 4K one was missed although it covered
 /// the display it was on completely. Both answers are wrong in the way that matters
-/// here ΓÇö Explorer is read as hidden behind a window that does not reach it, or as
+/// here — Explorer is read as hidden behind a window that does not reach it, or as
 /// reachable behind one that covers the display it is on.
 fn is_window_fullscreen(hwnd: HWND) -> bool {
     // How far past its display a window may reach and still be that display's
@@ -3500,15 +3500,15 @@ fn is_window_fullscreen(hwnd: HWND) -> bool {
 
 /// The region the window in front hides what is behind, where that window is one
 /// that hides anything at all: a maximized or fullscreen window that is not
-/// Explorer's. `None` is a foreground window nothing is hidden behind ΓÇö an ordinary
+/// Explorer's. `None` is a foreground window nothing is hidden behind — an ordinary
 /// one, Explorer itself, or no window at all.
 ///
 /// What it is for is asking whether an Explorer window is behind it. Taking the
-/// foreground window alone for the answer ΓÇö a maximized window, so Explorer must be
-/// hidden behind it ΓÇö is wrong on an extended desktop, and was: a maximized window
+/// foreground window alone for the answer — a maximized window, so Explorer must be
+/// hidden behind it — is wrong on an extended desktop, and was: a maximized window
 /// hides what is on the display it covers and says nothing about an Explorer window
-/// on the display beside it, so the state went to `HiddenByForeground` ΓÇö which hides
-/// the preview and never asks where the cursor is ΓÇö and a pointer that crossed over
+/// on the display beside it, so the state went to `HiddenByForeground` — which hides
+/// the preview and never asks where the cursor is — and a pointer that crossed over
 /// to the Explorer window on the second display showed nothing at all until the
 /// click that made Explorer the foreground window. What a window hides is what its
 /// own rectangle holds, which is what the walk over Explorer's windows is asked.
@@ -3663,8 +3663,8 @@ fn get_explorer_state() -> ExplorerState {
 /// itself, or something inside the engine's window where a document is drawn.
 ///
 /// A pinned window stands over the listing it was taken from, and it stands over it where
-/// the files are. A click that lands on it is a click on the listing underneath ΓÇö the user
-/// is looking at a folder and clicking a file in it ΓÇö so it is read as a click on a listing
+/// the files are. A click that lands on it is a click on the listing underneath — the user
+/// is looking at a folder and clicking a file in it — so it is read as a click on a listing
 /// rather than dropped for having landed on us. What the shell will name for such a point is
 /// this window, which is why a click is read a second way wherever its own look at the point
 /// answers nothing: out of the item the view has the focus on, which is where a click's own
@@ -3682,7 +3682,7 @@ fn is_our_own_window(window: HWND) -> bool {
         }
 }
 
-/// Whether `window` is the preview window ΓÇö the pinned one where a pin is up, and the
+/// Whether `window` is the preview window — the pinned one where a pin is up, and the
 /// hover's where one is not. Both are this app's own, and both stand over a listing.
 fn preview_window_is_at(window: HWND) -> bool {
     !window.is_invalid() && crate::ui::preview_window::is_preview_window(window.0 as isize)
@@ -3691,7 +3691,7 @@ fn preview_window_is_at(window: HWND) -> bool {
 /// Whether a click where the pointer is can be read out of a listing behind it.
 ///
 /// One of Explorer's own windows, or one of this app's own standing over one. Anything else
-/// ΓÇö the desktop, another program, a browser ΓÇö is a click there is nothing behind to read,
+/// — the desktop, another program, a browser — is a click there is nothing behind to read,
 /// and a click on it is left to expire rather than answered out of whatever happens to be
 /// drawn underneath.
 fn click_is_over_a_listing(over_explorer: bool, over_our_own: bool) -> bool {
@@ -3702,7 +3702,7 @@ fn click_is_over_a_listing(over_explorer: bool, over_our_own: bool) -> bool {
 /// cursor is asked about at all.
 ///
 /// `pin_up` is handed in rather than read here so that the one answer a pin changes is
-/// a decision this function makes rather than a fact it goes and looks up ΓÇö it is the whole
+/// a decision this function makes rather than a fact it goes and looks up — it is the whole
 /// of what `PinUpdateWatch` depends on, and a rule that can only be tested by putting a window
 /// on somebody's screen is a rule that goes untested.
 fn explorer_state_from_counts(counts: &ExplorerWindowCounts, pin_up: bool) -> ExplorerState {
@@ -3721,7 +3721,7 @@ fn explorer_state_from_counts(counts: &ExplorerWindowCounts, pin_up: bool) -> Ex
     }
 
     // A window this app has put up and the user has not closed is a window of its own, and a pin
-    // takes the focus off Explorer on purpose ΓÇö `pin_take_focus`, so that the keys the pin answers
+    // takes the focus off Explorer on purpose — `pin_take_focus`, so that the keys the pin answers
     // are the user's own rather than the listing's. Reading that arrangement as "Explorer is
     // showing but nobody is in it" is what dropped the loop to the medium cadence behind a
     // preview that is on screen and being worked in. Minimized, and behind a window that covers
@@ -3736,7 +3736,7 @@ fn explorer_state_from_counts(counts: &ExplorerWindowCounts, pin_up: bool) -> Ex
 }
 
 /// The sleep a state is answered with, and how often that state is read again while it is being
-/// answered with ΓÇö the whole of the ladder, in one place because two branches of the loop are
+/// answered with — the whole of the ladder, in one place because two branches of the loop are
 /// paced by it: the hover machinery below, and the pinned tick above it, which is a reader only
 /// because a pin in front of a listing is `ActiveFocus` however the keyboard is arranged (see
 /// `explorer_state_from_counts`).
@@ -3754,7 +3754,7 @@ fn explorer_pace(state: ExplorerState, tick_ms: u64) -> (u64, u64) {
 ///
 /// Whether an Explorer window is left reachable is the whole of what an engine that is not
 /// marked `Persistent` is let go by (see `app::afk`), and the answer is one this loop already
-/// works out for its own sleeps ΓÇö so the recording is done here, on the read, rather than
+/// works out for its own sleeps — so the recording is done here, on the read, rather than
 /// anywhere the state is used: a state this function did not answer is a state the clock has
 /// not been told about, and the engines keep reading the last thing it was told.
 fn read_explorer_state() -> ExplorerState {
@@ -3776,8 +3776,8 @@ fn read_explorer_state() -> ExplorerState {
 /// The left button is kept apart from the other two, and the pass is the only read of them
 /// in the app, because a press bit is spent by the first read of a key: two readers on two
 /// threads are one answer and one silence, and which of them it is is a race. The pin's own
-/// press handling needs the left button on its own ΓÇö a drag is begun from a press, and a
-/// right button is not one ΓÇö and it is asked from the preview thread, which therefore reads
+/// press handling needs the left button on its own — a drag is begun from a press, and a
+/// right button is not one — and it is asked from the preview thread, which therefore reads
 /// what this pass published rather than reading the key again (see `publish_pin_media_press`
 /// and `settle_pinned_engine_press`).
 #[derive(Clone, Copy, Default)]
@@ -3873,15 +3873,15 @@ fn is_explorer_navigation_shortcut_key(key_vk: i32, alt_down: bool, ctrl_down: b
 
 /// Everything one poll of the keyboard says about navigation.
 ///
-/// `active` is true while a navigation key ΓÇö or one of the keys a file name is typed
-/// with, which is what Explorer's own type-ahead answers ΓÇö is held or was pressed since
+/// `active` is true while a navigation key — or one of the keys a file name is typed
+/// with, which is what Explorer's own type-ahead answers — is held or was pressed since
 /// the previous poll, and `pressed` is the fresh press transition alone: a held key keeps
 /// reporting `active` forever, so a folder change uses `pressed` to tell a new key press
 /// apart from state left over from the navigation that opened the folder (see
 /// `keyboard_navigation_press_seq`).
 ///
-/// `shortcut` is Explorer's own navigation being *asked* for ΓÇö a Backspace, an arrow under
-/// Alt, a Ctrl+T ΓÇö which is input the app acts on rather than state it waits out.
+/// `shortcut` is Explorer's own navigation being *asked* for — a Backspace, an arrow under
+/// Alt, a Ctrl+T — which is input the app acts on rather than state it waits out.
 ///
 /// There is no arrow here that walks a pinned window. An arrow a pin answers is a key Windows
 /// routed to the pin because the pin is the window the user is in, so it arrives as a message
@@ -3898,13 +3898,13 @@ struct NavigationInput {
 
 /// The keys a file name is typed with: the letters and the digits, the numpad's own among
 /// them. Explorer answers a name being typed with its type-ahead, which moves the selection
-/// to the item the name matches ΓÇö an item the keyboard is on changing with no navigation key
-/// touched ΓÇö and these are the keys that say it is happening (see `navigation_input`).
+/// to the item the name matches — an item the keyboard is on changing with no navigation key
+/// touched — and these are the keys that say it is happening (see `navigation_input`).
 ///
 /// The codes are the keys rather than the characters, so a name typed on a layout that is
 /// not this one is read as the same keys: what has to be noticed is that the keyboard has
 /// moved the item, and not what the name spells. They are read only where neither Ctrl nor
-/// Alt is held ΓÇö a letter under one of those is a command, and a command is not a name ΓÇö
+/// Alt is held — a letter under one of those is a command, and a command is not a name —
 /// which is what keeps the press bit of `C` where it belongs: the text preview's own Ctrl+C
 /// reads that key for itself, and a press bit is consumed by whoever reads it first.
 fn type_ahead_keys() -> impl Iterator<Item = i32> {
@@ -3916,7 +3916,7 @@ fn type_ahead_keys() -> impl Iterator<Item = i32> {
 ///
 /// One pass because the keys overlap: the arrows are navigation keys *and* half of a
 /// shortcut, and the press bit `GetAsyncKeyState` reports is consumed by whoever reads a key
-/// first ΓÇö so a second read of the same key in one tick is not the same answer twice, it is
+/// first — so a second read of the same key in one tick is not the same answer twice, it is
 /// a read that finds the bit already taken (see the caller, which reads the navigation keys
 /// ahead of everything else for exactly that reason). The arrows are read here, once, and
 /// the shortcut asks its question of the same reading: whether the key is *down*, which is
@@ -3924,7 +3924,7 @@ fn type_ahead_keys() -> impl Iterator<Item = i32> {
 ///
 /// The keys a name is typed with are read with them, and they are not navigation keys at
 /// all: Explorer answers a name being typed with its own type-ahead, which moves the
-/// selection ΓÇö and with it the item the keyboard is on ΓÇö with none of the keys above
+/// selection — and with it the item the keyboard is on — with none of the keys above
 /// touched. A preview that did not read them would stay on the item the keyboard came from,
 /// because the focus is only probed for a moment after input
 /// (`should_probe_keyboard_focus`) and typing would never open that moment again. They open
@@ -3937,16 +3937,16 @@ fn type_ahead_keys() -> impl Iterator<Item = i32> {
 /// modifiers are, and that is not an oversight. A Backspace navigates with no modifier at
 /// all, so gating it on a modifier would lose the shortcut outright; and a `T` typed
 /// anywhere on the machine sets its own press bit, so gating *that* read on Ctrl being held
-/// would leave the bit standing until Ctrl was next pressed ΓÇö and a Ctrl pressed for
+/// would leave the bit standing until Ctrl was next pressed — and a Ctrl pressed for
 /// something else would then read as a Ctrl+T that opens a tab. What leaving a press bit
 /// standing costs is the read that consumes it, which is why both are read every tick.
 ///
 /// A page the user has clicked into owns the keyboard, and everything read above belongs to
-/// the page: Explorer's navigation shortcut ΓÇö an arrow under a modifier, a Backspace, a `T`
-/// ΓÇö and Explorer's type-ahead, a letter or a digit, are gestures the user made on the page
-/// and not in the folder view. The reads are still made ΓÇö that is the point of them, and a
+/// the page: Explorer's navigation shortcut — an arrow under a modifier, a Backspace, a `T`
+/// — and Explorer's type-ahead, a letter or a digit, are gestures the user made on the page
+/// and not in the folder view. The reads are still made — that is the point of them, and a
 /// key not read here is a press bit left standing to be read later as somebody else's
-/// gesture ΓÇö but nothing this function has worked out is acted on while the page is in front
+/// gesture — but nothing this function has worked out is acted on while the page is in front
 /// (see `engine_owns_the_keyboard`).
 fn navigation_input() -> NavigationInput {
     let alt_down = is_key_down(VK_MENU_CODE);
@@ -4031,12 +4031,12 @@ fn mouse_press_buttons() -> [windows::Win32::UI::Input::KeyboardAndMouse::VIRTUA
 /// `PinUpdateWatch::focus_moved_by_key`).
 ///
 /// Two things move the focus in Explorer, and only one of them lands it on a file the user picked.
-/// A key the user presses ΓÇö an arrow, Home, End, a page key, or a letter or a digit, which Explorer
-/// answers with its own type-ahead ΓÇö *walks* the selection, and what it comes to rest on is the
+/// A key the user presses — an arrow, Home, End, a page key, or a letter or a digit, which Explorer
+/// answers with its own type-ahead — *walks* the selection, and what it comes to rest on is the
 /// user's own choice. Everything else puts the focus on an item that nobody chose: an Enter, which
 /// opens the folder or the document the focus was on; a shortcut of Explorer's own, which is a
 /// Backspace, an arrow under Alt, or a Ctrl+T; a Tab, which moves between the view's own elements
-/// and switches Explorer's own tabs under Ctrl; a click, which is the pointer acting on the view ΓÇö
+/// and switches Explorer's own tabs under Ctrl; a click, which is the pointer acting on the view —
 /// a tab, a breadcrumb, a folder in the tree, or a file; the mouse's own navigation buttons; a
 /// Delete, which takes what the focus was on out of the listing and lands the focus on whatever
 /// takes its place; and any key held with Ctrl, Alt or Windows down, which is a command rather than
@@ -4055,8 +4055,8 @@ struct FocusMoveInput {
 
 /// What the keyboard and the pointer did on one tick, for the rule above.
 ///
-/// Read on every tick a pin is up ΓÇö where the setting asks the pin to follow and where it does
-/// not, so a click nobody asked about is not left standing as the answer the next read gets ΓÇö and
+/// Read on every tick a pin is up — where the setting asks the pin to follow and where it does
+/// not, so a click nobody asked about is not left standing as the answer the next read gets — and
 /// a pinned tick is the one place that reads these keys at all: the loop returns at the pin before
 /// its own input reads, so the press bits this spends are ones nothing else in the tick was going
 /// to have (see `navigation_input`, whose one read per key per tick has to be the first).
@@ -4065,14 +4065,14 @@ fn focus_move_input() -> FocusMoveInput {
     let (_, activation_pressed) = activation_key_input_state();
     let (_, deletion_pressed) = key_input_state(&[VK_DELETE]);
     // A Tab is not a key that walks a listing: it moves between the view's own elements, and a Tab
-    // under Ctrl is a tab of Explorer's switched ΓÇö the one move onto another listing that neither
+    // under Ctrl is a tab of Explorer's switched — the one move onto another listing that neither
     // the shortcut set nor a button of the mouse's answers (see `is_explorer_navigation_shortcut_key`).
     let (_, tab_pressed) = key_input_state(&[VK_TAB]);
     // Read once per tick, and the left button kept apart within it: this pass is the only
     // read of the buttons in the app, and a press bit is spent by the first reader of a key.
     let mouse = mouse_buttons();
 
-    // What the pin's own press handling needs, published rather than read again there ΓÇö it
+    // What the pin's own press handling needs, published rather than read again there — it
     // runs on the preview thread, and a read of the key from that thread would spend the
     // press this pass has just found, which is the very click the listing behind the pin is
     // answered by (see `MouseButtons` and `settle_pinned_engine_press`).
@@ -4097,16 +4097,16 @@ fn focus_move_input() -> FocusMoveInput {
 /// fact per field: the folder the view has open, the search root under it, the URL it
 /// was opened with, and the view's own window.
 ///
-/// It stands where a single formatted key did ΓÇö the first fact that answered, written
-/// as a string ΓÇö and the difference between the two is the whole of it: the facts are
+/// It stands where a single formatted key did — the first fact that answered, written
+/// as a string — and the difference between the two is the whole of it: the facts are
 /// not equally reliable. The URL is the browser object's own and answers every time,
 /// while the folder is a walk out through the shell's objects to a filesystem path,
 /// and a path on a share, on a slow disk or in a library answers nothing to that walk
 /// on some looks and a path on others. Read as one key, the same place came out as
-/// `folder:ΓÇª` on one look and `url:ΓÇª` on the next, and each was read as a *change*:
+/// `folder:–` on one look and `url:–` on the next, and each was read as a *change*:
 /// the preview of a file that never moved was taken down, the gate armed, and the same
 /// preview put back a moment later, which is the blink. Kept apart, a fact is compared
-/// only where both looks answered it ΓÇö see [`hover_location_changed`].
+/// only where both looks answered it — see [`hover_location_changed`].
 #[derive(Clone, Default)]
 struct HoverLocation {
     folder: Option<String>,
@@ -4118,7 +4118,7 @@ struct HoverLocation {
 impl HoverLocation {
     /// The place a look's hints describe, as the facts that look managed to read.
     ///
-    /// A fact is read into the form it is compared in ΓÇö see `location_fact_key` ΓÇö so that
+    /// A fact is read into the form it is compared in — see `location_fact_key` — so that
     /// the Shell spelling one place another way on the next look is not a difference of
     /// place. What is stored is that form rather than what the Shell said, because the
     /// only thing a stored fact is for is being compared with the next look's.
@@ -4147,12 +4147,12 @@ impl HoverLocation {
 ///
 /// A fact out of the Shell is the Shell's own spelling of it, and the Shell does not spell
 /// one place the same way on every look. The folder a view has open is canonicalized where
-/// that succeeds ΓÇö which is where the verbatim `\\?\` form comes from ΓÇö and is left as the
+/// that succeeds — which is where the verbatim `\\?\` form comes from — and is left as the
 /// view reported it where it does not, so the same folder answers `\\?\<pictures>` on one
 /// look and `<pictures>` on the next, on the volumes where canonicalizing is the thing
 /// that fails from time to time. Read as it comes, that difference is a difference of
 /// *place*, and the preview of a file that never moved is taken down on the look that
-/// happens to answer the other spelling ΓÇö and put back on the one after it, which is a
+/// happens to answer the other spelling — and put back on the one after it, which is a
 /// preview that blinks at a pointer which has not moved at all. Case is the other half of
 /// the same coin: Windows reads two spellings of a path as one path, and so does a fact
 /// that is one, and a trailing separator names the place named without it.
@@ -4186,8 +4186,8 @@ fn location_fact_key(fact: &str) -> String {
 /// folder out of the view leaves that fact unanswered rather than answering another
 /// one, and two places are not told apart by one of them failing to say where it is:
 /// reading a missing answer as a different place is what blinked the preview. Where
-/// both looks did answer, a difference is a move ΓÇö another folder, another search,
-/// another tab of the same window ΓÇö and is read as the change it is.
+/// both looks did answer, a difference is a move — another folder, another search,
+/// another tab of the same window — and is read as the change it is.
 fn hover_location_changed(previous: &HoverLocation, current: &HoverLocation) -> bool {
     /// Whether two looks disagree about one fact, where both of them read it.
     fn differs<T: PartialEq>(previous: &Option<T>, current: &Option<T>) -> bool {
@@ -4234,7 +4234,7 @@ fn key_is_down(vk: i32) -> bool {
 /// asks about the pointer is a question about one instant: what the hand has done is one
 /// reading of "the mouse has moved", what is under it is one window, and the display it is
 /// on is one monitor. A caller that reads the cursor for itself in the middle of a tick is
-/// asking about a later instant than the tick it belongs to ΓÇö and paying a syscall for the
+/// asking about a later instant than the tick it belongs to — and paying a syscall for the
 /// privilege. The one read that is deliberately fresh is the one the preview loop makes
 /// before it lays a hover out (see `replay_where_the_pointer_is`): that one is about where
 /// the preview goes, and it happens on the thread that draws it.
@@ -4277,7 +4277,7 @@ fn read_pointer() -> Option<PointerTick> {
 
 /// Whether a pin that is up is shown the file the user picks next, and whether the pointer's own
 /// hover is one of the ways it is told about one, as the configuration has them (see the tray's
-/// `Pin Mode ΓåÆ Update Preview`).
+/// `Pin Mode … Update Preview`).
 ///
 /// They are read here rather than kept in the tick's own snapshot of the configuration, and they
 /// are read only while a pin is up: the two switches are the hook's answer to a question the rest
@@ -4290,21 +4290,21 @@ fn pin_update_settings() -> (bool, bool) {
         .unwrap_or((DEFAULT_PIN_UPDATE_ENABLED, DEFAULT_PIN_UPDATE_ON_HOVER))
 }
 
-/// What the hook watches while a preview is pinned, so that the tray's `Pin Mode ΓåÆ Update Preview`
+/// What the hook watches while a preview is pinned, so that the tray's `Pin Mode … Update Preview`
 /// can show the pin the file the user picks next.
 ///
 /// It is state of the shape the hover machinery beside it keeps, and it is kept apart from it rather
 /// than shared: a pin is not a hover, so the latch that holds a re-hover back, the gate a folder
 /// change raises and the file a preview is "about" all describe a preview that is not on screen.
 /// Nothing here is read unless a pin is up and the setting asks for one to follow, and nothing of
-/// the hover machinery is written by it ΓÇö what a pin does with an answer is the preview loop's
+/// the hover machinery is written by it — what a pin does with an answer is the preview loop's
 /// business, and the file it is showing is read back from there (see `pinned_path`).
 ///
 /// One argument runs through all of it, and the three places it is asked about carry it in three
 /// shapes (`place`, `pending.place`, `sel_place`): a *listing* changing is not a *file* being
 /// picked. A folder, a tab and a window the user moves to each put the focus on a new item without
 /// a key having walked to it, and the item a fresh listing puts under a hand nobody moved is drawn
-/// exactly where the click landed ΓÇö so a place is what tells a move from a landing, and a witness
+/// exactly where the click landed — so a place is what tells a move from a landing, and a witness
 /// (a key, or a click standing as one) is what tells a landing from a pick. Where the shell
 /// describes no place, a look that answered nothing leaves the last baseline standing rather than
 /// answering either way, and the witness is all that is left.
@@ -4331,7 +4331,7 @@ struct PinUpdateWatch {
     place: Option<HoverLocation>,
     /// When a key that walks a listing was last seen, or nothing where something that moves the
     /// focus by other means has been seen since. A time rather than a flag, so a witness
-    /// nothing made good on cannot outlive the press that gave it ΓÇö and a key walking the
+    /// nothing made good on cannot outlive the press that gave it — and a key walking the
     /// selection and nothing else that sets it, so an arrow pressed before an Enter does not
     /// stand as the witness for the item that Enter lands the focus on.
     walk_at: Option<Instant>,
@@ -4355,7 +4355,7 @@ struct PinUpdateWatch {
     press_point: Option<POINT>,
 }
 
-/// A click in hand: the three things that are always said of it together ΓÇö when it was read,
+/// A click in hand: the three things that are always said of it together — when it was read,
 /// where the pointer was standing, and the place it was made in. All three or none, because a
 /// click held without the spot it landed on, or without the listing it was made in, can neither
 /// be retried nor told from a listing that has been replaced.
@@ -4378,20 +4378,20 @@ impl PinUpdateWatch {
     ///
     /// Three things are watched, and each of them is a way a file is picked in Explorer: a click,
     /// which is the pointer acting on the view; the item the keyboard is on, which is what a key
-    /// the user presses moves; and ΓÇö where `On Hover` asks for it ΓÇö the file the pointer
+    /// the user presses moves; and — where `On Hover` asks for it — the file the pointer
     /// settles on, at the delay and the settling the hover behind the pin would have been given.
     /// A pin is not told about a file the pointer merely crosses, and not about one that was under
     /// a pointer nobody moved.
     ///
-    /// The first item a watch sees is a baseline rather than a pick ΓÇö it is the item the keyboard
-    /// was already on when the watch began ΓÇö and a swap does not begin a watch again, so the item
+    /// The first item a watch sees is a baseline rather than a pick — it is the item the keyboard
+    /// was already on when the watch began — and a swap does not begin a watch again, so the item
     /// the pin was shown another file over is still the one the next key is measured against. That
     /// is what leaves the first selection a user makes after pressing the pin to give it the
     /// keyboard and then clicking back into Explorer a pick rather than a baseline, with the one
     /// after it not the first that counts (see `PinUpdateWatch::note_shown`).
     ///
     /// A click is held for a moment rather than answered once: the press bit it comes from is
-    /// spent by the read, and the tick it is spent on is the only tick it is on ΓÇö which is exactly
+    /// spent by the read, and the tick it is spent on is the only tick it is on — which is exactly
     /// the tick a click that lands as a pin takes the focus away from Explorer, or as Explorer takes
     /// it back, is asked about, with the shell not yet answering for the listing under it. Such a
     /// click is held and asked again while the hand stays where it left it (see `pending`).
@@ -4417,11 +4417,11 @@ impl PinUpdateWatch {
         };
 
         if self.showing.as_ref() != Some(&showing) {
-            // A pin taken up, and a pin shown another file ΓÇö by this watch, or by a key the preview
+            // A pin taken up, and a pin shown another file — by this watch, or by a key the preview
             // loop answered in between. What a swap from here is measured against is the file the
             // pin has now, and the tick is not abandoned over it: the press bits this tick was
             // given have already been spent by the read above, so a watch that returned here would
-            // drop the very pick they are the answer to ΓÇö which is a click on the file the pin is
+            // drop the very pick they are the answer to — which is a click on the file the pin is
             // being swapped to, arriving on the tick the swap is noticed on.
             self.note_shown(&showing);
         }
@@ -4436,7 +4436,7 @@ impl PinUpdateWatch {
         let over_explorer = is_cursor_over_explorer_full(pointer.window);
 
         // Whether this app's own window is what the pointer is on. A pinned window stands over
-        // the listing it came from, and it stands over it *where the files are* ΓÇö a click that
+        // the listing it came from, and it stands over it *where the files are* — a click that
         // lands on it is a click on the listing underneath, and a listing is what is being read
         // for it. Left out, every such click answers "there is no listing here" and is asked
         // again against the same answer until its hold runs out, which is the whole of why the
@@ -4468,8 +4468,8 @@ impl PinUpdateWatch {
         }
 
         // Whether this tick looks at what the pointer is on, and why. A click is the pointer acting
-        // on the view ΓÇö what it does in Explorer is select, and the file it selected is the pin's to
-        // show ΓÇö and it counts whatever else is on: it is the one reason the setting leaves on when
+        // on the view — what it does in Explorer is select, and the file it selected is the pin's to
+        // show — and it counts whatever else is on: it is the one reason the setting leaves on when
         // a hover is not wanted. A hover is the file a hand has come to rest on, at the delay the
         // previews behind the pin are given one, and it is only asked for where the setting asks.
         let settled = self
@@ -4483,7 +4483,7 @@ impl PinUpdateWatch {
         // A press the hand has not moved for is the other half of a press it has already made, and
         // is not a pick of its own. That is what a double-click is: one gesture at one point. Where
         // the first press opened a folder, the second is answered out of the listing that first one
-        // put under a pointer nobody moved ΓÇö a file the user never chose, and the one the new folder
+        // put under a pointer nobody moved — a file the user never chose, and the one the new folder
         // happens to have drawn there. Both doors a press comes through are closed by this one
         // answer: the file under the point, and the listing's own selection (see
         // `PinUpdateWatch::press_is_a_pick`).
@@ -4520,8 +4520,8 @@ impl PinUpdateWatch {
             self.probed = true;
 
             if let Some(path) = get_file_under_cursor(resolver, &pointer) {
-                // What was resolved is answered whatever it turned out to be ΓÇö a file nothing can
-                // be shown for is one of them ΓÇö so there is nothing here left to ask about again.
+                // What was resolved is answered whatever it turned out to be — a file nothing can
+                // be shown for is one of them — so there is nothing here left to ask about again.
                 let offered = self.offer(&path, &showing);
                 self.answer_click(&path, &showing, pick, now, pointer.point);
                 trace_click(
@@ -4537,8 +4537,8 @@ impl PinUpdateWatch {
                 // The lookup answered nothing, and the click is the only evidence it happened: the
                 // press bit it came from has been spent by the read that gave this tick its input
                 // and is not on any later tick. Explorer is commonly still coming up when a click
-                // lands on it ΓÇö a click that takes the focus out of the pinned window and a click
-                // back into Explorer are both read before the shell has caught up with either ΓÇö so
+                // lands on it — a click that takes the focus out of the pinned window and a click
+                // back into Explorer are both read before the shell has caught up with either — so
                 // it is held and asked again below rather than spent for nothing.
                 self.pending = Some(PendingClick {
                     at: now,
@@ -4577,7 +4577,7 @@ impl PinUpdateWatch {
 
         // The click above, asked again now that the shell may have caught up. It runs only where
         // something is held, and only something a click put there, so a tick that never saw a
-        // pick offers nothing here ΓÇö the held click is a user's pick and never a hover.
+        // pick offers nothing here — the held click is a user's pick and never a hover.
         if !pick {
             // The click's own facts, copied out before anything below is allowed to let it go.
             let held = self.pending.as_ref().map(|held| (held.at, held.point));
@@ -4592,8 +4592,8 @@ impl PinUpdateWatch {
                 // the user has not picked.
                 let moved = (pointer.point.x - point.x).abs() > threshold
                     || (pointer.point.y - point.y).abs() > threshold;
-                // The listing the click was made in is not the one under the pointer any more ΓÇö
-                // a folder, a tab or a window moved to ΓÇö so the click is let go rather than
+                // The listing the click was made in is not the one under the pointer any more —
+                // a folder, a tab or a window moved to — so the click is let go rather than
                 // answered: what the point holds now is a file that arrived under a hand nobody
                 // has moved, which is not a file anybody picked.
                 let relisted = !expired && !moved && self.click_place_changed(resolver, &pointer);
@@ -4621,16 +4621,16 @@ impl PinUpdateWatch {
                     // and it will answer while this app's own window stands over the listing as
                     // readily as while Explorer's does. Gating this on Explorer's own window
                     // made a click that landed on a pinned window unanswerable for as long as
-                    // the hold lasted ΓÇö the retry could not run, so the shell was never asked,
+                    // the hold lasted — the retry could not run, so the shell was never asked,
                     // so nothing was ever resolved.
                     //
                     // Both caches go before the ask rather than only the item's answer: a retry is
                     // a question about a listing that has *since* caught up, and what the click was
                     // answered out of is the listing as it was when the click landed. Keeping the
                     // item's own memo would hand the retry back the very answer it exists to
-                    // replace ΓÇö a look that finds an item and cannot name a file for it is kept
+                    // replace — a look that finds an item and cannot name a file for it is kept
                     // against that item exactly as it keeps the answer that an item is a folder,
-                    // and the two are told apart nowhere ΓÇö and keeping the view set would ask the
+                    // and the two are told apart nowhere — and keeping the view set would ask the
                     // stale walk the same question again. One walk a tick for as long as the hold
                     // lasts, and only on a click that is not yet answered, is what a retry is.
                     resolver.forget_item();
@@ -4665,8 +4665,8 @@ impl PinUpdateWatch {
         }
 
         // The keyboard's own answer: the item the focus is on, which is what a key the user presses
-        // moves. It is probed on the terms the hover path probes it ΓÇö while Explorer has the
-        // foreground, and no more often than the hover path asks ΓÇö and a focus that has moved onto
+        // moves. It is probed on the terms the hover path probes it — while Explorer has the
+        // foreground, and no more often than the hover path asks — and a focus that has moved onto
         // another file is a file the user picked as surely as one a click selected: another folder,
         // another tab and another window move the focus onto an item as well, and those are moves
         // this setting does not follow.
@@ -4684,14 +4684,14 @@ impl PinUpdateWatch {
                 if changed {
                     // Why the focus has moved, which is what tells a key the user pressed from a
                     // folder, a tab or a window the user moved to. The place is read for the watch's
-                    // first item as much as for a move ΓÇö a baseline is taken in a place too.
+                    // first item as much as for a move — a baseline is taken in a place too.
                     let place = focused_item_location(resolver, &focused);
                     let landed = self.note_place(place.clone());
 
                     // And a place is not the whole of it, which is why the keyboard's own keys are
                     // asked as well: the place a focused item is read in is the view the *pointer*
-                    // was last seen working in rather than the one the item is drawn in ΓÇö an item's
-                    // provider reports no window for a frame's views to be told apart by ΓÇö so a tab
+                    // was last seen working in rather than the one the item is drawn in — an item's
+                    // provider reports no window for a frame's views to be told apart by — so a tab
                     // switched or a folder opened under the keyboard reads as the place the watch was
                     // already watching. A move both facts call the keyboard's is a file the user
                     // picked; one either of them calls somebody else's is not (see
@@ -4699,7 +4699,7 @@ impl PinUpdateWatch {
                     //
                     // A click is the other thing that moves the focus onto a file, and it is read
                     // here because it is the same change: what a click selects, the view reports as
-                    // the focus it moved ΓÇö from its own side, where the watch's own look at the point
+                    // the focus it moved — from its own side, where the watch's own look at the point
                     // answers for whatever is standing on top. It carries its own witness, and a
                     // click that is not this one is not a pick (see `click_picked_item`).
                     let by_key = known && !landed && self.focus_moved_by_key(now);
@@ -4742,7 +4742,7 @@ impl PinUpdateWatch {
     }
 
     /// Whether the press that was just read is a pick of its own, rather than the second press of
-    /// a double-click ΓÇö one gesture at one point rather than two choices. The press is noted on the
+    /// a double-click — one gesture at one point rather than two choices. The press is noted on the
     /// way out, so the next one is measured against this one.
     ///
     /// This is the whole of the rule that keeps a folder change from being answered as a pick.
@@ -4755,14 +4755,14 @@ impl PinUpdateWatch {
     /// hand travelled to.
     ///
     /// A press within the move tolerance of the last one is therefore the other half of a gesture
-    /// already read, and is not offered ΓÇö through either door, the file under the point and the
+    /// already read, and is not offered — through either door, the file under the point and the
     /// listing's own selection. It is still noted, so the third press of a triple-click is
     /// refused the same way rather than answering on the strength of the first.
     ///
     /// What this does not cost: a click on a different file is a different row, and the hand
     /// crosses a row to reach it. A click on the file the pin already shows is declined in
-    /// silence by `offer` whatever this says, and a second click on one file ΓÇö what a slow
-    /// double-click on a file is ΓÇö has nothing new to ask for either.
+    /// silence by `offer` whatever this says, and a second click on one file — what a slow
+    /// double-click on a file is — has nothing new to ask for either.
     fn press_is_a_pick(&mut self, point: POINT, threshold: i32) -> bool {
         let pick = self.press_point.is_none_or(|last| {
             (point.x - last.x).abs() > threshold || (point.y - last.y).abs() > threshold
@@ -4779,8 +4779,8 @@ impl PinUpdateWatch {
     /// under the hand rather than about the pin: the settle and the probe were measured against a
     /// window that has since moved, and the file under a pointer nobody moved is not a hover.
     ///
-    /// A swap is not a new watch, though, and what a swap keeps ΓÇö the item the keyboard is on, the
-    /// place it was read in, the selection, whether the hand has arrived ΓÇö belongs to the listing
+    /// A swap is not a new watch, though, and what a swap keeps — the item the keyboard is on, the
+    /// place it was read in, the selection, whether the hand has arrived — belongs to the listing
     /// rather than to the pin. Forgetting it is what made the first selection a user makes after
     /// pressing the pin read as a baseline rather than as a pick. A pin taken up is the watch
     /// beginning, and it begins from nothing: what is on the keyboard when a pin comes up is a
@@ -4797,7 +4797,7 @@ impl PinUpdateWatch {
             next.arrived = self.arrived;
             // The selection the listing holds goes with the listing, for the same reason the
             // keyboard's item does: a swap is the window being shown another file, and what the
-            // listing has selected is where it was ΓÇö so the first pick after one is still a
+            // listing has selected is where it was — so the first pick after one is still a
             // change, and still a pick (see `PinUpdateWatch::follow_selection`).
             next.sel_place = self.sel_place.clone();
             next.sel_selected = self.sel_selected.clone();
@@ -4816,7 +4816,7 @@ impl PinUpdateWatch {
         }
 
         if input.moved_otherwise || input.clicked {
-            // Noted after the key, so that a chord ΓÇö a Ctrl+PageDown, say ΓÇö is the command it is
+            // Noted after the key, so that a chord — a Ctrl+PageDown, say — is the command it is
             // rather than the walk its keys look like.
             self.walk_at = None;
         }
@@ -4828,8 +4828,8 @@ impl PinUpdateWatch {
     ///
     /// It is asked of a focus that has moved beside the place it moved in, because neither answers
     /// alone. The place a focused item is read in is the view the *pointer* was last seen working in
-    /// rather than the one the item is drawn in ΓÇö an item's provider reports no window for a frame's
-    /// views to be told apart by ΓÇö which leaves a tab switched, a folder opened with Enter and a
+    /// rather than the one the item is drawn in — an item's provider reports no window for a frame's
+    /// views to be told apart by — which leaves a tab switched, a folder opened with Enter and a
     /// window moved to reading as the place the watch was already watching.
     fn focus_moved_by_key(&self, now: Instant) -> bool {
         recent_elapsed_within(
@@ -4841,8 +4841,8 @@ impl PinUpdateWatch {
     /// Whether the click in hand is what moved the focus onto this item: the click's own pick, read
     /// out of the item the view has the focus on rather than out of the point under the hand.
     ///
-    /// It is the pick the keyboard's own rule reads ΓÇö an item the focus has moved to, in a place the
-    /// watch was already watching ΓÇö asked of a click instead of a key, because a click *is* a focus
+    /// It is the pick the keyboard's own rule reads — an item the focus has moved to, in a place the
+    /// watch was already watching — asked of a click instead of a key, because a click *is* a focus
     /// change the view reports and this app never sees: Explorer gives the item a click selects the
     /// keyboard focus, and what the view says about it is answered from the view's own side, where
     /// the hit test this watch's own look uses answers for whatever is standing on top.
@@ -4883,7 +4883,7 @@ impl PinUpdateWatch {
     /// The place is what a retry cannot say for itself: read without it, a listing that replaced
     /// the one the click was made in answers the retry about the *point* with whatever the fresh
     /// listing happens to have under a hand nobody moved. A click whose place was never read is not
-    /// answered as changed ΓÇö a shell that did not describe the view is not a listing that moved,
+    /// answered as changed — a shell that did not describe the view is not a listing that moved,
     /// and the click is left to its own look at the point (see `PendingClick::place`).
     fn click_place_changed(&self, resolver: &mut ItemResolver, pointer: &PointerTick) -> bool {
         let Some(clicked_in) = self.pending.as_ref().and_then(|held| held.place.as_ref()) else {
@@ -4896,7 +4896,7 @@ impl PinUpdateWatch {
     /// Note the place the item the keyboard has landed on was read in, and answer whether the focus
     /// has landed somewhere the watch was not watching: another folder, another tab of one window,
     /// another window. What such a move lands on is the baseline the next key is measured against
-    /// rather than a file the user picked ΓÇö the three things this setting follows are a click, a
+    /// rather than a file the user picked — the three things this setting follows are a click, a
     /// hover and the keyboard, and a listing that changed under the keyboard is none of them.
     ///
     /// A look that answered nothing is `false` and leaves the baseline standing, which is what
@@ -4916,8 +4916,8 @@ impl PinUpdateWatch {
     /// The file the pin is already showing is not an answer, it is the *absence* of one, and
     /// letting it end the hold is what made the first click after a pin was focused the one that
     /// was lost: `offer` declines such a file in silence, and the decline was read as "resolved",
-    /// so nothing was offered, nothing waited, and the next click on another file ΓÇö read a tick
-    /// later, against caches the click's own drop had by then cleared ΓÇö was the first one answered.
+    /// so nothing was offered, nothing waited, and the next click on another file — read a tick
+    /// later, against caches the click's own drop had by then cleared — was the first one answered.
     /// Every time, on any file, the first click only.
     ///
     /// So a click is held until the shell names a file that is not the one on screen, or until its
@@ -4927,7 +4927,7 @@ impl PinUpdateWatch {
     /// supposed to do.
     ///
     /// A click in hand is one read on this tick or one already being held for a retry; a hover
-    /// is neither and arms nothing ΓÇö a hand that settles on the file already on screen has asked
+    /// is neither and arms nothing — a hand that settles on the file already on screen has asked
     /// for nothing, so there is nothing to hold on its behalf.
     ///
     /// The hold's own clock is set by the click that started it and by nothing else. Re-arming it
@@ -4969,7 +4969,7 @@ impl PinUpdateWatch {
     /// thing in it that asks for anything.
     ///
     /// Nothing is offered where the pin is already showing the file, and nothing where the file is
-    /// not one this app previews at all ΓÇö a name no kind claims is a file Explorer selects and the
+    /// not one this app previews at all — a name no kind claims is a file Explorer selects and the
     /// pin has nothing to show for, and a pin that went blank or took a hover of its own for one
     /// would be worse than a pin that stayed as it was (see `is_media_file`). Which of the two it
     /// was is returned, because the caller has to tell them apart: the first is the silence that a
@@ -5046,14 +5046,14 @@ impl PinUpdateWatch {
     /// baseline or no change at all.
     ///
     /// A sighting is a pick by two facts, and only two. The listing is the one already
-    /// watched ΓÇö a folder, a tab or a window moved to is a fresh baseline, offered nothing,
-    /// the way a landing is (see `PinUpdateWatch::note_place`) ΓÇö and, where the listing is a
+    /// watched — a folder, a tab or a window moved to is a fresh baseline, offered nothing,
+    /// the way a landing is (see `PinUpdateWatch::note_place`) — and, where the listing is a
     /// new one, only a click in hand offers out of it: the click selects before the shell
     /// reports it, so the selection a click has just made in a listing this watch has not
     /// seen is still that click's pick. The very first sighting is a baseline too: which file
     /// a listing holds before the hand does anything in it is not a file anybody picked.
     ///
-    /// A click whose selection the shell has not caught up with offers nothing either ΓÇö the
+    /// A click whose selection the shell has not caught up with offers nothing either — the
     /// sighting keeps the old selection, so the change answers on the tick the shell reports
     /// it on. What the pin is already showing is answered the same way by the caller: it is
     /// offered and declined, which is what clicking the file on screen is supposed to do.
@@ -5096,7 +5096,7 @@ impl PinUpdateWatch {
 ///
 /// The list is what answers for its own selection, through the same pattern the focused
 /// list is asked with when the view reports the list itself as focused (see
-/// `selected_item_of_focused_list`) ΓÇö and a list answers it whoever has the keyboard, which
+/// `selected_item_of_focused_list`) — and a list answers it whoever has the keyboard, which
 /// is what makes this the reading a click behind a focused pin is followed by. The walk
 /// starts at what the point is on and climbs to the list the way the item walks climb to
 /// the item (see `walk_to_item`), and the item it names is resolved the way the pointer's
@@ -5183,7 +5183,7 @@ fn is_cursor_over_explorer_full(window: HWND) -> bool {
 /// browser frame, and this is the same answer the walk over Explorer's windows is made
 /// with (`explorer_browser_class_matches`), so the loop cannot count a window as Explorer's
 /// in one place and not in the other. What it keeps out is the rest of the shell, which is
-/// explorer.exe as well ΓÇö the desktop (`Progman`, `WorkerW`), the taskbar, the Start menu,
+/// explorer.exe as well — the desktop (`Progman`, `WorkerW`), the taskbar, the Start menu,
 /// the search box. Reading one of those as an Explorer window is what made the foreground
 /// test answer yes with the desktop in front, which is what Show Desktop leaves there: the
 /// state never left `ActiveFocus`, the counts that would have said every Explorer window
@@ -5192,8 +5192,8 @@ fn is_cursor_over_explorer_full(window: HWND) -> bool {
 ///
 /// The ask is one class lookup, kept for the window (see `EXPLORER_WINDOW_CACHE`). The
 /// process behind the window used to be read as well, for any window that was not one of
-/// the two classes ΓÇö an `OpenProcess` and an image name for every window the pointer
-/// walked over ΓÇö and it answered yes for every piece of the shell that is explorer.exe,
+/// the two classes — an `OpenProcess` and an image name for every window the pointer
+/// walked over — and it answered yes for every piece of the shell that is explorer.exe,
 /// which is the answer this test must never give.
 fn is_explorer_window(hwnd: HWND) -> bool {
     let hwnd_key = hwnd.0 as isize;
@@ -5227,18 +5227,18 @@ fn is_explorer_window(hwnd: HWND) -> bool {
 /// focus, and the window its view belongs to.
 struct FocusedItemInfo {
     item: HoveredItem,
-    /// The frame of the window the item is drawn in ΓÇö the window whose views can
+    /// The frame of the window the item is drawn in — the window whose views can
     /// be the one holding it.
     root_window: Option<isize>,
 }
 
 impl FocusedItemInfo {
     /// The window the item is resolved in, as the item path asks for one: the frame whose
-    /// views can hold it, and the window the item's own provider says it is drawn in ΓÇö
+    /// views can hold it, and the window the item's own provider says it is drawn in —
     /// which is what says which of that frame's views drew it (see `ItemWindow`).
     ///
     /// The keyboard has no pointer to take a window from, so where the provider reports
-    /// none ΓÇö the shell's item provider often does not ΓÇö the frame's views are told apart
+    /// none — the shell's item provider often does not — the frame's views are told apart
     /// by what they answer, which is how the keyboard path resolved its item before the
     /// window the item is drawn in was read at all.
     fn item_window(&self) -> Option<ItemWindow> {
@@ -5252,8 +5252,8 @@ impl FocusedItemInfo {
 /// What tells one keyboard focus observation from the next.
 ///
 /// The name alone does not. A search whose results come from several folders can
-/// hold the same file name in more than one of them ΓÇö a `README.md` here and a
-/// `README.md` there ΓÇö and moving between the two would read as no change at all,
+/// hold the same file name in more than one of them — a `README.md` here and a
+/// `README.md` there — and moving between the two would read as no change at all,
 /// which leaves the preview on the file the keyboard came from and never asks the
 /// new one up. The item's box is taken with the name for that reason: two files
 /// that share a name do not share a row, and an item that did not move keeps its
@@ -5289,7 +5289,7 @@ fn element_names_an_item(element: &IUIAutomationElement) -> bool {
 ///
 /// The search results view is why this exists: it can report the list as the
 /// focused element while the focus it draws is on one of the results, and a list's
-/// name stands for no file, so nothing downstream can be resolved from it ΓÇö which
+/// name stands for no file, so nothing downstream can be resolved from it — which
 /// is why a keyboard preview in such a view found nothing at all. The list answers
 /// for its own selection, and the item of that selection with the keyboard focus,
 /// or the first one it holds, is the item a keyboard preview is about.
@@ -5370,7 +5370,7 @@ fn root_window_of_item(item: &HoveredItem) -> Option<isize> {
 ///
 /// The item the focus is on is turned into a file the same way the pointer's item
 /// is: by the view that is showing it, which is what resolves a search result whose
-/// file lives in another folder ΓÇö a name has no folder to be found in when the
+/// file lives in another folder — a name has no folder to be found in when the
 /// results span folders, and two results may share one. The item's own accessible
 /// value answers when its position is not reported, and when the name itself is a
 /// path. Nothing else is tried: a name that nothing can vouch for is left
@@ -5419,7 +5419,7 @@ pub fn run_explorer_hook() {
     let mut last_file: Option<PathBuf> = None;
     // The box the item under the pointer was drawn in where the preview on screen was
     // resolved from it: the item that preview is about, as the view draws it. What it is
-    // for is telling a read that failed from a pointer that has moved on ΓÇö a look at the
+    // for is telling a read that failed from a pointer that has moved on — a look at the
     // same item leaves this box where it is, a look at another item publishes another one,
     // and a look that answered nothing is read against it (see
     // `read_failure_is_the_same_item`). A hover that never noted a box holds nothing, and
@@ -5441,7 +5441,7 @@ pub fn run_explorer_hook() {
     let mut video_hover_guard_until: Option<Instant> = None;
     // Folder/input gate state: suppress preview after folder changes until explicit user input.
     // The place the last folder probe found the pointer over, as the facts that probe
-    // read ΓÇö see `HoverLocation`.
+    // read — see `HoverLocation`.
     let mut last_cursor_location: Option<HoverLocation> = None;
     let mut hover_resolver_hints = HoverResolverHints::default();
     let mut suspend_preview_until_user_input = false;
@@ -5460,11 +5460,11 @@ pub fn run_explorer_hook() {
     let mut keyboard_press_seq_at_suspend: u64 = 0;
     // Whether the keyboard is the one driving Explorer: set on a navigation key
     // press and kept across the keyboard previews that follow, cleared only by
-    // deliberate pointer input ΓÇö a move past the pointer tolerance or a wheel
-    // tick ΓÇö or by a reset that ends the keyboard's turn outright (previews
+    // deliberate pointer input — a move past the pointer tolerance or a wheel
+    // tick — or by a reset that ends the keyboard's turn outright (previews
     // switched off, a display change, Explorer leaving the foreground, a folder
-    // change handing the screen back to the pointer). While it holds ΓÇö and where the
-    // tray's `Prioritize Keyboard` is on ΓÇö the parked pointer may neither raise a
+    // change handing the screen back to the pointer). While it holds — and where the
+    // tray's `Prioritize Keyboard` is on — the parked pointer may neither raise a
     // preview nor take one over: a focused item with no preview to give must not hand
     // the pointer the screen, so a key pressed onto a file nothing can show reads as
     // one pressed onto a file that can.
@@ -5514,15 +5514,15 @@ pub fn run_explorer_hook() {
     let mut last_state_check = Instant::now();
     // Read rather than assumed: a state assumed here is one the loop only corrects
     // when its recheck comes round, and the deepest state's recheck is two seconds
-    // off ΓÇö so an app started with Explorer already up spent that long unable to
+    // off — so an app started with Explorer already up spent that long unable to
     // answer the pointer at all. This is the read the first recheck would have made,
     // made before the first tick instead.
     let mut current_state = read_explorer_state();
 
     // Polling intervals based on state. How fast the loop runs while Explorer has focus
-    // is the `tick_ms` setting rather than a constant here ΓÇö the one number that trades
+    // is the `tick_ms` setting rather than a constant here — the one number that trades
     // how soon a move is answered against what the app costs while it works (see
-    // `DEFAULT_TICK_MS`) ΓÇö and the stationary probe below is gated by it as well: a file
+    // `DEFAULT_TICK_MS`) — and the stationary probe below is gated by it as well: a file
     // under a parked pointer is read again no sooner than the loop looks. The ladder
     // itself is `explorer_pace`, because a pinned tick is paced by it as well.
     const VIDEO_HOVER_DISMISS_GRACE_MS: u64 = 350;
@@ -5576,7 +5576,7 @@ pub fn run_explorer_hook() {
     // the wait between two asks has grown to.
     let mut last_automation_rebind = Instant::now();
     let mut automation_rebind_interval_ms = UIA_REBIND_RETRY_MS;
-    // When the probe counts were last written out, and where they go ΓÇö nothing at
+    // When the probe counts were last written out, and where they go — nothing at
     // all unless `RHP_HOOK_TRACE` asked for them.
     let mut last_probe_flush = Instant::now();
     let probe_trace_path = hook_trace_path();
@@ -5591,7 +5591,7 @@ pub fn run_explorer_hook() {
         }
 
         // A preview loop that has stopped ticking cannot end what it is holding, so
-        // what it keeps warm is ended from here instead ΓÇö once for the stall, and not
+        // what it keeps warm is ended from here instead — once for the stall, and not
         // again until it ticks (see `PREVIEW_STALL_MS`).
         let preview_quiet_ms = preview_stall_ms();
         if preview_quiet_ms >= PREVIEW_STALL_MS {
@@ -5605,7 +5605,7 @@ pub fn run_explorer_hook() {
         // Explorer restarting is not something the resolver can recover from by
         // itself: the window collection it holds and the view that answered through
         // it are served by explorer.exe, and a proxy into a process that is gone
-        // does not reconnect ΓÇö its calls fail for good, which is what left every
+        // does not reconnect — its calls fail for good, which is what left every
         // hover after a restart with no answer at all. So the collection is built
         // again when a restart has been counted, and a collection that could not be
         // built when it was first asked for is built again on a slow retry, since
@@ -5623,7 +5623,7 @@ pub fn run_explorer_hook() {
             clear_shell_view_probe_caches();
 
             // Nothing on screen is about a shell that exists any more, and the
-            // windows the pointer could be over are the new shell's ΓÇö which is
+            // windows the pointer could be over are the new shell's — which is
             // still putting them up, so the probes wait a moment before they ask.
             hide_preview();
             last_file = None;
@@ -5806,7 +5806,7 @@ pub fn run_explorer_hook() {
         // A key that is switched off is not asked about, and holds nothing back.
         //
         // A pin is not a hover, and the key that holds hovers back is not read while one is
-        // up ΓÇö up or collapsed into its bubble ΓÇö unless `Affect Pin Mode` asks for it, which
+        // up — up or collapsed into its bubble — unless `Affect Pin Mode` asks for it, which
         // is off where the app starts: a pinned preview is a window the user put there, and
         // its own close button is what takes it down. It is the `Hold to Disable Preview`
         // mode the setting speaks for; the reverse mode is left as it is.
@@ -5827,7 +5827,7 @@ pub fn run_explorer_hook() {
                 hover_start = None;
             }
             // A pinned preview is a window the user put there, and the two settings above are
-            // what says whether previews may be raised at all ΓÇö which is the question their
+            // what says whether previews may be raised at all — which is the question their
             // leaving it standing would answer wrongly. So it comes down with them, by the path
             // its own close button takes (see `end_pin`).
             if pinned() {
@@ -5859,8 +5859,8 @@ pub fn run_explorer_hook() {
 
         // A pin that has just been closed is a pointer that is on something new. The file the
         // pin was of is not a hover this hook has already answered, so none of what a hover
-        // leaves behind ΓÇö the file it was last about, the latch that holds a re-hover of one
-        // back, the gate a folder change raises ΓÇö may be read as still applying to it: a
+        // leaves behind — the file it was last about, the latch that holds a re-hover of one
+        // back, the gate a folder change raises — may be read as still applying to it: a
         // preview of whatever the pointer is on now is due the moment the pin is gone.
         if take_pin_resumed() {
             last_file = None;
@@ -5879,7 +5879,7 @@ pub fn run_explorer_hook() {
         // A pinned preview is the whole of what this app is showing, and the pin's own promise is
         // that the hover machinery is quiet behind it. The loop stays here, at the tick's own pace,
         // rather than sleeping deeply, and what is not quiet behind it is the pin's own following
-        // where `Pin Mode ΓåÆ Update Preview` asks for it (see `PinUpdateWatch`).
+        // where `Pin Mode … Update Preview` asks for it (see `PinUpdateWatch`).
         if pinned() {
             // The state is read here too, on the clock the ladder keeps it on, so the one thing
             // this branch does not ask about is not left to go stale behind the pin: the loop's
@@ -6017,8 +6017,8 @@ pub fn run_explorer_hook() {
 
         unsafe {
             // Get cursor position, as the tick's one reading of the pointer: everything
-            // this tick asks about it ΓÇö where it is, the scale of the display it is on, and
-            // the window under it ΓÇö is a question about one instant, and it is read here
+            // this tick asks about it — where it is, the scale of the display it is on, and
+            // the window under it — is a question about one instant, and it is read here
             // rather than again by each caller (see `PointerTick`).
             let mut cursor_pos = POINT::default();
             if GetCursorPos(&mut cursor_pos).is_err() {
@@ -6027,9 +6027,9 @@ pub fn run_explorer_hook() {
             let pointer = PointerTick::of(cursor_pos);
 
             // Whether the pointer is on a preview that holds it: a text preview the
-            // user can read or select from ΓÇö on the preview, or inside the margin
+            // user can read or select from — on the preview, or inside the margin
             // around it, which covers the gap it crosses on its way from the file it
-            // belongs to ΓÇö or the spinner a page is being rendered behind, which the
+            // belongs to — or the spinner a page is being rendered behind, which the
             // pointer reaches only by drifting into its box, and which has no page
             // yet to hand the pointer back to. While that holds, what is on screen
             // is what the user is waiting on rather than something in the way, so it
@@ -6058,7 +6058,7 @@ pub fn run_explorer_hook() {
             // outside the rectangle the page was drawn in, and a preview taken down there is a
             // page the user was working on, gone. It is armed by a press inside the engine's
             // own rectangle and stands until a tick finds no button down at all, which is the
-            // only reading that says the hand has let go ΓÇö a drag begun on the listing rather
+            // only reading that says the hand has let go — a drag begun on the listing rather
             // than on the page never arms it, and so never holds a preview the page is not
             // responsible for. Noted before the hold is read, so the tick that begins a drag
             // is the tick the page is already being held by.
@@ -6152,7 +6152,7 @@ pub fn run_explorer_hook() {
                     // pointer back: the wheel is the pointer taking the screen back, so
                     // the item the scroll brings under it is previewed like any
                     // other. Nothing of the keyboard's is on screen, so nothing is
-                    // taken down with it ΓÇö and the recent-keyboard-input window ends
+                    // taken down with it — and the recent-keyboard-input window ends
                     // with the turn, or the focus probe could put a keyboard preview
                     // over the item the wheel has just placed under the pointer.
                     keyboard_screen_owner = false;
@@ -6225,8 +6225,8 @@ pub fn run_explorer_hook() {
             // A click is the pointer acting on the view, and the one press that can change
             // the folder without the pointer having moved: the address bar's breadcrumbs are
             // clicked where the pointer already is. A keyboard preview cannot be told about
-            // that by the folder probe ΓÇö that probe is the pointer's own and is skipped for
-            // as long as a keyboard preview is up ΓÇö so the press ends the keyboard's turn
+            // that by the folder probe — that probe is the pointer's own and is skipped for
+            // as long as a keyboard preview is up — so the press ends the keyboard's turn
             // itself: what is on screen goes, and the new listing is read as the place it is
             // rather than as the listing the preview belongs to. A press on the preview is
             // not this: a text frame is clicked to read it, not to leave it.
@@ -6292,7 +6292,7 @@ pub fn run_explorer_hook() {
             //
             // What the pointer can touch is three surfaces, and they are not the same window:
             // this app's own layered preview, the player's window a video is played in, and
-            // ΓÇö for a document or a specimen, or a page that runs ΓÇö the engine's window,
+            // — for a document or a specimen, or a page that runs — the engine's window,
             // which is asked for by its own handle because a document drawn by a browser
             // is still a preview of this app's (see `cursor_preview_hover`).
             let preview_hover = if should_probe_preview_hover(
@@ -6310,7 +6310,7 @@ pub fn run_explorer_hook() {
             let over_any_preview = preview_hover.any();
 
             // A preview that holds the pointer is the exception to that rule: while
-            // it does, the preview is kept ΓÇö see `pointer_hold` above for what
+            // it does, the preview is kept — see `pointer_hold` above for what
             // holding it covers. A preview the pointer cannot work with keeps the
             // old behaviour, which is to close as soon as it is touched.
             let guard_active = video_hover_guard_until
@@ -6381,7 +6381,7 @@ pub fn run_explorer_hook() {
                 // A look that answered nothing about the place is left alone: it is a
                 // question to ask again, not a change to act on. And a fact is only
                 // read as a change where both looks answered it, so a folder the shell
-                // could not walk out this time is not another place ΓÇö see
+                // could not walk out this time is not another place — see
                 // `HoverLocation`.
                 let differs = location.was_answered()
                     && last_cursor_location
@@ -6401,8 +6401,8 @@ pub fn run_explorer_hook() {
                         HOVER_RESOLVER_INPUT_GRACE_MS,
                     );
                     last_cursor_location = Some(location);
-                    // The view this location describes is a different one now ΓÇö
-                    // another folder, or the same window searched again ΓÇö so what
+                    // The view this location describes is a different one now —
+                    // another folder, or the same window searched again — so what
                     // was cached about the last one describes the wrong place: a
                     // folder remembered for the window and the view that answered
                     // for it. A name looked up against those resolves to something
@@ -6427,7 +6427,7 @@ pub fn run_explorer_hook() {
                     // own, so what the view says now is what answers it. The box the
                     // preview was resolved from is not asked here: it belongs to the
                     // listing that has been left, and a look that answers nothing against
-                    // it is not a read that failed ΓÇö the file is not there any more.
+                    // it is not a read that failed — the file is not there any more.
                     // Read the other way, a folder change with nothing under the pointer
                     // left the preview of the old file on screen with nothing to take it
                     // down, which is what an empty folder and a folder pressed into with
@@ -6497,7 +6497,7 @@ pub fn run_explorer_hook() {
                     // A folder change hands the screen back to the pointer: the item
                     // that landed under a parked cursor previews in the new listing
                     // without a mouse move, the way it always has. A press is the
-                    // exception ΓÇö that is the user asking for the keyboard again ΓÇö
+                    // exception — that is the user asking for the keyboard again —
                     // and takes the screen for the new folder with it. Only the turn
                     // `Prioritize Keyboard` keeps is handed over here; with the setting
                     // off the flag is not what holds the pointer back, and what it says
@@ -6534,7 +6534,7 @@ pub fn run_explorer_hook() {
                                 // (set by Windows when folder opens)
                                 suspended_initial_focus = Some(focused_key);
                             } else if suspended_initial_focus.as_ref() != Some(&focused_key) {
-                                // Focus actually changed ΓÇö user pressed a navigation key
+                                // Focus actually changed — user pressed a navigation key
                                 keyboard_unlocked = true;
                             }
                         }
@@ -6544,7 +6544,7 @@ pub fn run_explorer_hook() {
                         suspend_preview_until_user_input = false;
                         allow_keyboard_preview_on_first_observation = true;
                         // No press released the gate, so this is the new view
-                        // settling ΓÇö the focus moving as the listing is built ΓÇö
+                        // settling — the focus moving as the listing is built —
                         // rather than the keyboard taking the screen: where the turn
                         // is what holds the pointer back, the folder change stays the
                         // pointer's, and the keyboard's turn comes back with the
@@ -6564,7 +6564,7 @@ pub fn run_explorer_hook() {
             // A move is "the mouse driving Explorer": resolve the item under the
             // cursor, and drop the preview when that is no longer the file it
             // shows. Another file always takes over, even while the pointer is
-            // inside a scrollable preview's region ΓÇö the region is only about the
+            // inside a scrollable preview's region — the region is only about the
             // pointer being on its way to the preview or on it, and the block
             // below tells those two apart by whether anything is under the pointer
             // at all.
@@ -6583,7 +6583,7 @@ pub fn run_explorer_hook() {
                 // file it showed is latched the way any dismissed hover is: held
                 // off the mouse path for the same-file rehover delay, so the
                 // handover cannot flash it straight back, and previewable again
-                // after that ΓÇö a pointer left sitting on the file is a user asking
+                // after that — a pointer left sitting on the file is a user asking
                 // for it.
                 if is_keyboard_hover {
                     if let Some(file) = keyboard_file.clone() {
@@ -6626,7 +6626,7 @@ pub fn run_explorer_hook() {
                             continue;
                         }
                         // Another file is under the pointer, so this is a hover like
-                        // any other and the preview gives way to it ΓÇö even while the
+                        // any other and the preview gives way to it — even while the
                         // pointer is inside a scrollable preview's region, which is
                         // why the check below is the "no file at all" case only.
                         suppressed.clear();
@@ -6642,9 +6642,9 @@ pub fn run_explorer_hook() {
                         cursor_pos,
                     ) {
                         // A read that came back with nothing, from the item the preview on
-                        // screen is about: what failed is the asking ΓÇö a walk out through the
+                        // screen is about: what failed is the asking — a walk out through the
                         // shell on a volume slow to answer, a view busy drawing the item it
-                        // was just asked for ΓÇö so the preview is kept with the question asked
+                        // was just asked for — so the preview is kept with the question asked
                         // again, rather than taken down for a look that failed and put back a
                         // moment later, which is a blink. A read that came back with nothing
                         // from *another* item is a look at an item with no preview of its own,
@@ -6665,7 +6665,7 @@ pub fn run_explorer_hook() {
                 // so what the file under the pointer has to outlast starts here. A
                 // settling delay is the setting that asks for a pointer which has stopped,
                 // and this is where a moving one waits it out: with it on, the hover below
-                // is not reached at all. With it off ΓÇö 0, which is where the app starts ΓÇö
+                // is not reached at all. With it off — 0, which is where the app starts —
                 // a move falls through instead, so the new file under the cursor has a
                 // preview put up for it even while the hand is still on its way to it.
                 hover_start = Some(Instant::now());
@@ -6700,8 +6700,8 @@ pub fn run_explorer_hook() {
 
                     if last_focused_key.is_none() {
                         if allow_keyboard_preview_on_first_observation {
-                            // The focus baseline is unknown ΓÇö the mouse just moved, or
-                            // the user unlocked a folder change with the keyboard ΓÇö so
+                            // The focus baseline is unknown — the mouse just moved, or
+                            // the user unlocked a folder change with the keyboard — so
                             // this first observed item acts immediately instead of
                             // being recorded and waiting for a second key press.
                             last_focused_key = Some(focused_key);
@@ -6759,7 +6759,7 @@ pub fn run_explorer_hook() {
                                 // onto an item with nothing to show must not take the preview
                                 // of the file under the pointer down and put it straight back
                                 // up. It goes only where `Prioritize Keyboard` is what holds
-                                // the pointer back ΓÇö there the keyboard owns the screen and
+                                // the pointer back — there the keyboard owns the screen and
                                 // the pointer waits for its turn (see the guard below).
                                 if prioritize_keyboard && last_file.is_some() {
                                     hide_preview();
@@ -6850,18 +6850,18 @@ pub fn run_explorer_hook() {
 
             // If keyboard hover is active, or the pointer is frozen under a
             // keyboard preview, skip mouse hover delay logic entirely. The same
-            // goes for a pointer held by what is on screen ΓÇö inside a scrollable
+            // goes for a pointer held by what is on screen — inside a scrollable
             // text preview, or on the spinner it is waiting behind: the file under
             // it is not what the user is looking at, so nothing is hovered over.
             //
             // A pointer parked since the keyboard last drove is held back by it where
             // `Prioritize Keyboard` asks for that: the keyboard owns the screen, so a file
-            // it left behind ΓÇö or one it landed on that has no preview to give ΓÇö is not a
+            // it left behind — or one it landed on that has no preview to give — is not a
             // reason for the pointer to raise a preview of whatever it happens to sit on.
             // That is the answer a key pressed onto a file that can be previewed already
             // gets, and it is what keeps the two previews from fighting over a list the
-            // keyboard is walking. The turn ends when the pointer is used on purpose ΓÇö
-            // moved past the tolerance, or given a wheel tick ΓÇö or when a folder change
+            // keyboard is walking. The turn ends when the pointer is used on purpose —
+            // moved past the tolerance, or given a wheel tick — or when a folder change
             // hands the screen back to it. With the setting off the pointer's own hover
             // wins: a parked pointer previews the file it is on while the keyboard
             // drives, and a key pressed onto an item with no preview to give leaves that
@@ -6876,7 +6876,7 @@ pub fn run_explorer_hook() {
 
             // Check if we've hovered long enough (mouse hover). The settling delay is
             // asked first and it is the pointer's own: it is measured off the same clock,
-            // which a move restarts, so it is how long the hand has been still ΓÇö a
+            // which a move restarts, so it is how long the hand has been still — a
             // pointer that has only just stopped is held back for its length even with no
             // hover delay in front of it, and 0 asks nothing of the pointer at all.
             if let Some(start) = hover_start {
@@ -6910,8 +6910,8 @@ pub fn run_explorer_hook() {
                     // Try to get file under cursor
                     let resolved = get_file_under_cursor(&mut resolver, &pointer);
                     // One probe per parked cursor: this one closes the latch, and the
-                    // events that make the file under the cursor a new question ΓÇö a
-                    // move, a wheel tick, a folder change ΓÇö are what reopen it.
+                    // events that make the file under the cursor a new question — a
+                    // move, a wheel tick, a folder change — are what reopen it.
                     stationary_hover_probe_done = true;
 
                     if let Some(file_path) = resolved {
@@ -7006,7 +7006,7 @@ pub fn run_explorer_hook() {
 
     // Everything COM handed the loop is released while the apartment that owns it
     // is still initialized. An interface released after `CoUninitialize` belongs to
-    // an apartment that has already been torn down, which faults ΓÇö and the resolver
+    // an apartment that has already been torn down, which faults — and the resolver
     // holds the Shell window collection, the batched property request and the view
     // that answered last, not just the automation client.
     drop(resolver);
@@ -7068,7 +7068,7 @@ mod tests {
     /// what the click retry has to drop before it asks again.
     ///
     /// A look that finds an item and cannot name a file for it is kept as an answer, because most
-    /// of the time that is what it is ΓÇö a folder, an application, a name no kind claims. Nothing
+    /// of the time that is what it is — a folder, an application, a name no kind claims. Nothing
     /// tells that apart from a click read before the shell caught up with the focus move, so a
     /// retry that kept the memo would be answered with the negative it was sent to replace (see
     /// the retry in `PinUpdateWatch::follow`).
@@ -7090,7 +7090,7 @@ mod tests {
         });
 
         // The pointer's own answer belongs to the tick that produced it, so the next tick
-        // begins with neither the point memo nor ΓÇö which is the point of this test ΓÇö the
+        // begins with neither the point memo nor — which is the point of this test — the
         // item's.
         resolver.forget_probe();
         assert!(
@@ -7206,7 +7206,7 @@ mod tests {
 
     /// What the signature is for: a display rescaled, or another one made the primary,
     /// rearranges everything Explorer is drawing without moving the desktop's own
-    /// bounds ΓÇö so both are changes, and a desktop that did not change is not.
+    /// bounds — so both are changes, and a desktop that did not change is not.
     #[test]
     fn a_display_change_is_a_rescale_or_another_primary_display() {
         let before = signed(&[(96, true), (96, false)]);
@@ -7240,7 +7240,7 @@ mod tests {
     /// leave the preview of the file that was left behind on screen, with the probe
     /// that would have noticed held behind a single probe per parked cursor. The two
     /// states that are not a move are the ones where there is nothing on screen to
-    /// leave, and the pointer a preview is holding ΓÇö see
+    /// leave, and the pointer a preview is holding — see
     /// `pointer_moved_off_the_hovered_item`.
     #[test]
     fn a_pointer_off_the_hovered_item_has_moved() {
@@ -7263,11 +7263,11 @@ mod tests {
     }
 
     /// A look that answered nothing is not a verdict on its own: the item it found says
-    /// which of the two things it was. The same item ΓÇö the box the preview was resolved
-    /// from, still under the pointer ΓÇö is a read that failed, and the preview of that file
+    /// which of the two things it was. The same item — the box the preview was resolved
+    /// from, still under the pointer — is a read that failed, and the preview of that file
     /// is owed the question asked again rather than being taken down and put back. Another
-    /// item's box is a pointer that has moved onto something with no preview of its own ΓÇö
-    /// an application, a folder ΓÇö where the look answered properly and the preview of the
+    /// item's box is a pointer that has moved onto something with no preview of its own —
+    /// an application, a folder — where the look answered properly and the preview of the
     /// file that was left has to go with it. A hover with no box of its own holds nothing
     /// back, and a box that no longer holds the pointer is not a box it is still on.
     #[test]
@@ -7303,11 +7303,11 @@ mod tests {
     /// never by one of them failing to answer: the folder behind a view is a walk out
     /// through the shell's objects to a filesystem path, and a share, a slow disk or a
     /// library answers nothing to that walk on some looks and a path on others. Read as
-    /// one key ΓÇö the first fact that answered ΓÇö the same place came out as `folder:ΓÇª` on
-    /// one look and `url:ΓÇª` on the next, and each was read as a change: the preview of a
+    /// one key — the first fact that answered — the same place came out as `folder:–` on
+    /// one look and `url:–` on the next, and each was read as a change: the preview of a
     /// file that never moved was taken down, the gate armed, and the same preview put
     /// back a moment later, which is the blink. A look that answered nothing at all is
-    /// not a place to compare against ΓÇö see `HoverLocation`.
+    /// not a place to compare against — see `HoverLocation`.
     #[test]
     fn a_place_is_told_apart_by_the_facts_both_looks_answered() {
         let view = |folder: Option<&str>, url: Option<&str>, hwnd: isize| HoverLocation {
@@ -7359,7 +7359,7 @@ mod tests {
     /// The item the keyboard has landed on counts only where it landed in the place the pin's watch
     /// was already watching: another folder, another tab of one window and another window all move
     /// the focus without a key having moved it, and read as a pick they are a pin following the
-    /// user's navigation ΓÇö see `PinUpdateWatch::note_place`.
+    /// user's navigation — see `PinUpdateWatch::note_place`.
     #[test]
     fn a_focus_item_landed_in_another_place_is_a_baseline() {
         let view = |url: &str, hwnd: isize| HoverLocation {
@@ -7407,7 +7407,7 @@ mod tests {
     /// The item the focus lands on is a file the user picked only where a key that walks a listing
     /// is what moved it there: an Enter, a Delete, a click, a shortcut and any key held with a
     /// modifier down all put the focus somewhere without a key walking it there, and the place
-    /// cannot be asked for an answer where the shell describes one ΓÇö see
+    /// cannot be asked for an answer where the shell describes one — see
     /// `PinUpdateWatch::focus_moved_by_key`.
     #[test]
     fn a_focus_moved_by_anything_but_a_key_walking_is_not_a_pick() {
@@ -7454,7 +7454,7 @@ mod tests {
         watch.note_focus_move(walking, started + Duration::from_millis(1030));
         assert!(watch.focus_moved_by_key(started + Duration::from_millis(1040)));
 
-        // And a move that is not a walk takes it away ΓÇö an arrow pressed before an Enter, which is
+        // And a move that is not a walk takes it away — an arrow pressed before an Enter, which is
         // how a folder is opened from the keyboard, does not stand as the witness for the item that
         // Enter lands the focus on, and neither does a key that is part of a chord.
         watch.note_focus_move(command, started + Duration::from_millis(1100));
@@ -7489,7 +7489,7 @@ mod tests {
     /// The press bit is spent the moment the button goes down, so the tick that sees the click
     /// is a tick *after* it, and the view under the pointer by then is the answer to the retry
     /// rather than a fresh place. Reading the place again would compare the retry against the
-    /// listing that click itself produced ΓÇö which never differs ΓÇö and the click would never be
+    /// listing that click itself produced — which never differs — and the click would never be
     /// released (see `PinUpdateWatch::answer_click`).
     #[test]
     fn a_second_click_on_the_file_the_pin_shows_keeps_the_place_the_first_was_made_in() {
@@ -7539,7 +7539,7 @@ mod tests {
     /// A pin shown another file is not a watch beginning: the item the keyboard is on, the place it
     /// was read in and the hand having arrived are the listing's and the hand's, and a swap that
     /// forgot them made the first selection a user makes after pressing the pin and clicking back
-    /// into Explorer a baseline rather than a pick ΓÇö see `PinUpdateWatch::note_shown`.
+    /// into Explorer a baseline rather than a pick — see `PinUpdateWatch::note_shown`.
     #[test]
     fn a_swap_carries_the_keyboard_baseline_forward() {
         let here = HoverLocation {
@@ -7604,7 +7604,7 @@ mod tests {
         );
 
         // And so the first item the focus lands on after the swap is a change the watch already
-        // had a baseline for ΓÇö which is what makes it a pick rather than a baseline. `FocusedItemKey`
+        // had a baseline for — which is what makes it a pick rather than a baseline. `FocusedItemKey`
         // is compared by its name and its box rather than as a whole, which is the same pair the
         // watch itself tells one observation from the next by.
         assert_ne!(
@@ -7614,7 +7614,7 @@ mod tests {
         );
     }
 
-    /// A pin taken up again ΓÇö a new pin, after the old one was closed ΓÇö is a watch that has watched
+    /// A pin taken up again — a new pin, after the old one was closed — is a watch that has watched
     /// nothing, and begins from nothing whatever the listing had on the keyboard.
     #[test]
     fn a_pin_taken_up_begins_from_nothing() {
@@ -7678,7 +7678,7 @@ mod tests {
     ///
     /// This is the whole of the fault. A press is read against whatever is under the pointer at the
     /// tick it lands, and a double-click that opens a folder leaves the new listing drawn exactly
-    /// where the hand already was ΓÇö so the second press was answered with whatever file the new
+    /// where the hand already was — so the second press was answered with whatever file the new
     /// folder happened to put there, and the pin swapped to it. The place cannot tell the two
     /// apart: by the time the second press lands the folder has already changed, so where the press
     /// was made and where the pointer is are one place. The hand can, because a pick in a new
@@ -7695,7 +7695,7 @@ mod tests {
 
         let mut watch = PinUpdateWatch::default();
 
-        // The first press: the folder. A pick, and `offer` declines it ΓÇö a folder is not a file
+        // The first press: the folder. A pick, and `offer` declines it — a folder is not a file
         // this app can show anything for.
         assert!(
             watch.press_is_a_pick(on_the_folder, tolerance),
@@ -7743,7 +7743,7 @@ mod tests {
         let mut watch = PinUpdateWatch::default();
 
         // The click tick. What a listing caught mid-click answers is the file the pin is already
-        // showing, and `offer` declines that in silence ΓÇö so a click given it has been given
+        // showing, and `offer` declines that in silence — so a click given it has been given
         // nothing at all, and has to be held to be asked again. This is the arm that was missing:
         // with the hold never taken, the retry had nothing to retry.
         watch.answer_click(showing, showing, true, clicked_at, point);
@@ -7758,7 +7758,7 @@ mod tests {
             "against the spot the hand clicked at, which is what a moved hand is told from"
         );
 
-        // The retry. The shell says the same thing again, and the hold survives it ΓÇö but its own
+        // The retry. The shell says the same thing again, and the hold survives it — but its own
         // clock does not move, because it is measured from the click: a hold re-armed here would
         // slide its window along with every tick and a click that is being spent rather than
         // answered would be held for as long as the hand stayed still over it.
@@ -7850,7 +7850,7 @@ mod tests {
     /// scaled display draws it twice as wide in. Measuring one at the system's scale on
     /// another display's is what covered the name: a provider that hands out no window
     /// left the display unknown, and the region came out at half the name on a display
-    /// at 200% ΓÇö see `region_display_dpi`.
+    /// at 200% — see `region_display_dpi`.
     #[test]
     fn a_name_is_measured_at_the_scale_of_its_display() {
         let plain = drawn_name_width("mid-length-name.txt", 96).expect("a name measures");
@@ -7865,14 +7865,14 @@ mod tests {
 
     /// A display that cannot be told apart from another is no display to measure
     /// against, so a name without one is left as the view reported it rather than
-    /// measured at a scale that is not its own ΓÇö see `drawn_name_width`.
+    /// measured at a scale that is not its own — see `drawn_name_width`.
     #[test]
     fn a_name_without_a_display_is_not_measured() {
         assert_eq!(drawn_name_width("report.txt", 0), None);
     }
 
     /// A name with nothing in it has no width to be kept off, so the box the view
-    /// reported is left as it is ΓÇö see `HoveredItem::name_box`.
+    /// reported is left as it is — see `HoveredItem::name_box`.
     #[test]
     fn a_name_with_nothing_in_it_is_not_measured() {
         assert_eq!(drawn_name_width("", 96), None);
@@ -7893,7 +7893,7 @@ mod tests {
 
     /// A `Details` row's text is read as a row: the name is the `Name` column, the box
     /// the item draws is the whole of its columns, and the columns drawn beside the
-    /// name are what says the item is a row of its view rather than a box ΓÇö see
+    /// name are what says the item is a row of its view rather than a box — see
     /// `text_boxes`. The boxes are the ones a row of a `Details` folder is reported
     /// with, a name and the columns beside it.
     #[test]
@@ -7937,7 +7937,7 @@ mod tests {
 
     /// A `Content` row is read the same way, though its name is drawn at 125% of the
     /// icon font and its columns are not all on the name's own line: the name is still
-    /// the leftmost piece and the pieces drawn past it still make the item a row ΓÇö see
+    /// the leftmost piece and the pieces drawn past it still make the item a row — see
     /// `text_boxes`.
     #[test]
     fn a_content_rows_text_is_read_as_a_row() {
@@ -7979,7 +7979,7 @@ mod tests {
 
     /// Text drawn *under* the name is not drawn beside it: the label under an icon is
     /// one piece, and the lines a tile stacks share the room they are drawn in, so
-    /// neither is read as a row ΓÇö the preview of such an item is placed by its box ΓÇö
+    /// neither is read as a row — the preview of such an item is placed by its box —
     /// see `text_boxes`.
     #[test]
     fn text_under_the_name_is_not_a_column_beside_it() {
@@ -8022,7 +8022,7 @@ mod tests {
     }
 
     /// An item that draws no text at all has no boxes to be read, which leaves its
-    /// preview placed by its box ΓÇö see `item_text_box`.
+    /// preview placed by its box — see `item_text_box`.
     #[test]
     fn an_item_that_draws_no_text_has_no_boxes() {
         assert!(text_boxes(&[]).is_none());
@@ -8111,7 +8111,7 @@ mod tests {
         );
     }
 
-    /// A foreground window that hides nothing ΓÇö an ordinary one ΓÇö leaves every
+    /// A foreground window that hides nothing — an ordinary one — leaves every
     /// Explorer window reachable, whatever display it is on.
     #[test]
     fn a_window_that_hides_nothing_leaves_explorer_visible() {
@@ -8140,7 +8140,7 @@ mod tests {
         );
     }
 
-    /// A region holds a window that is inside it ΓÇö including one that covers it whole ΓÇö
+    /// A region holds a window that is inside it — including one that covers it whole —
     /// and does not hold one on the display beside it, or one that reaches past its
     /// edge: what a window in front hides is what its own rectangle holds.
     #[test]
@@ -8193,12 +8193,12 @@ mod tests {
 
     /// The counts a run is measured by are written where it asked for them, once a
     /// second rather than once a probe, and the line carries the numbers themselves
-    /// rather than only being evidence that something ran ΓÇö see
+    /// rather than only being evidence that something ran — see
     /// `flush_probe_counts`.
     ///
     /// One test rather than two: the counters are process-wide, and two tests adding
     /// to them at the same time would be asserting about each other's numbers. What
-    /// is asserted is a floor for the same reason ΓÇö the probe test beside this one
+    /// is asserted is a floor for the same reason — the probe test beside this one
     /// walks a real shell and adds to some of the same counters, so a run holding
     /// both would otherwise be reading the other test's totals.
     #[test]
@@ -8262,7 +8262,7 @@ mod tests {
         assert_eq!(second.lines().count(), 1, "one line a second: {second}");
     }
 
-    /// The probe against the shell the machine is actually running ΓÇö the part of this
+    /// The probe against the shell the machine is actually running — the part of this
     /// no unit test reaches: a real window collection, the views a real window holds, and
     /// what the view the pointer is in is then asked.
     ///
@@ -8272,13 +8272,13 @@ mod tests {
     /// What it asserts is about the shape of the probe rather than about the answer,
     /// because the answer is whatever this machine happens to have under its pointer:
     /// that a place is read out of the views the pointed-at window holds, and that a
-    /// second probe of the same place reads no view set again ΓÇö the property the whole
+    /// second probe of the same place reads no view set again — the property the whole
     /// arrangement is for, and the one an argument cannot settle.
     #[test]
     #[ignore = "reads the shell of the desktop it runs on"]
     fn the_probe_reads_the_place_out_of_the_window_the_pointer_is_in() {
         // Every call on this path is a Shell object's, so the thread needs an
-        // apartment before any of it is asked for ΓÇö the same one the hook thread
+        // apartment before any of it is asked for — the same one the hook thread
         // takes, which never pumps either.
         if unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) }.is_err() {
             println!("no apartment: nothing could be asked of the shell");
@@ -8310,8 +8310,8 @@ mod tests {
         // The second probe of an unmoved pointer is answered out of the set the first
         // one read: a window's views are its own until a tab or a window is opened or
         // closed, and reading them again for every probe is the cost that grows with
-        // how many tabs are open. What is not kept is a walk that found no view at all ΓÇö
-        // the shell met between two of them ΓÇö and there the second probe reads again
+        // how many tabs are open. What is not kept is a walk that found no view at all —
+        // the shell met between two of them — and there the second probe reads again
         // rather than being answered from a set that has nothing in it (see `frame_views`).
         let held_views = resolver
             .window_views
@@ -8352,7 +8352,7 @@ mod tests {
         unsafe { CoUninitialize() };
     }
 
-    /// One place, spelled two ways, is one place ΓÇö which is what the Shell does not
+    /// One place, spelled two ways, is one place — which is what the Shell does not
     /// promise. The folder a view has open is canonicalized where that succeeds and left
     /// as the view reported it where it does not, so the same folder answers the verbatim
     /// form on one look and the plain one on the next. Read as it comes, that difference
@@ -8422,7 +8422,7 @@ mod tests {
 
         // The folder change, which is the case the rule is written against: the item the fresh
         // listing has put under the hand is drawn exactly where the click landed, so nothing about
-        // the box can tell it ΓÇö the place is what says it is not the item the click was on.
+        // the box can tell it — the place is what says it is not the item the click was on.
         let elsewhere = HoverLocation {
             location_url: Some("file:///D:/Pictures/2024".to_string()),
             ..clicked_in.clone()
@@ -8456,8 +8456,8 @@ mod tests {
         );
     }
 
-    /// A selection the listing holds is a pick wherever it changes in the listing watched ΓÇö
-    /// whoever has the keyboard ΓÇö and a baseline everywhere else (see
+    /// A selection the listing holds is a pick wherever it changes in the listing watched —
+    /// whoever has the keyboard — and a baseline everywhere else (see
     /// `PinUpdateWatch::note_selection`).
     #[test]
     fn a_selection_change_in_the_watched_listing_is_a_pick() {
@@ -8486,7 +8486,7 @@ mod tests {
         );
         assert_eq!(watch.sel_selected.as_deref(), Some(one.as_path()));
 
-        // Another file selected in the same listing is the pick ΓÇö by click or by key, which
+        // Another file selected in the same listing is the pick — by click or by key, which
         // of the two is not asked.
         assert_eq!(
             watch.note_selection(watched.clone(), Some(two.clone()), false),
