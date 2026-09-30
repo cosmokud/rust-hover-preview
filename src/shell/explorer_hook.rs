@@ -3648,27 +3648,6 @@ fn get_explorer_state() -> ExplorerState {
     explorer_state_from_counts(&counts, pinned())
 }
 
-/// Whether a state says an Explorer window is there to be worked in, rather than merely
-/// open somewhere.
-///
-/// This is the question every place that used to ask "does Explorer hold the focus" now
-/// asks, and the two are not the same. A pinned window takes the focus off Explorer on
-/// purpose — `pin_take_focus`, so that the keys the pin answers are the user's own rather
-/// than the listing's — so "nobody is in Explorer" is what a pin looks like from the
-/// outside, and reading it as the slow arrangement is what put a delay in front of
-/// everything a pin does: the medium cadence, the half-second state recheck, and — the
-/// expensive one — the probe that keeps the listing's own answers fresh going silent,
-/// because a pin is exactly the arrangement in which the user is about to pick something.
-///
-/// Minimized, and behind a window that covers it, are still not there: no listing under
-/// the pointer in either, so a pin has nothing to be shown another file from.
-fn explorer_state_is_active(state: ExplorerState) -> bool {
-    matches!(
-        state,
-        ExplorerState::ActiveFocus | ExplorerState::VisibleNotFocused
-    )
-}
-
 /// The state the counts come out as: which sleep the loop takes, and whether the
 /// cursor is asked about at all.
 ///
@@ -4369,7 +4348,6 @@ impl PinUpdateWatch {
         hover_delay_ms: u64,
         last_focus_probe: &mut Instant,
         focus_move: FocusMoveInput,
-        explorer_active: bool,
     ) {
         let trace = pin_click_trace_path();
         let now = Instant::now();
@@ -4620,23 +4598,17 @@ impl PinUpdateWatch {
         }
 
         // The keyboard's own answer: the item the focus is on, which is what a key the user presses
-        // moves, and — not as a side effect but as most of what it is for here — the probe that
-        // keeps the listing's own answers fresh while a pin is up. It is asked no more often than
-        // the hover path asks, because it is the same crossing into the shell.
-        //
-        // It is asked whether or not Explorer holds the focus, because a pin holds the focus *on
-        // purpose* and this probe is what the pick behind the pin is read against: left gated on
-        // the foreground, it runs for exactly as long as no preview is on screen, which is the
-        // one arrangement in which nothing needs it and the arrangement in which everything
-        // does. A focus that has moved onto another file is a file the user picked as surely as
-        // one a click selected: another folder, another tab and another window move the focus
-        // onto an item as well, and those are moves this setting does not follow.
-        if (is_foreground_explorer() || explorer_active)
+        // moves. It is probed on the terms the hover path probes it — while Explorer has the
+        // foreground, and no more often than the hover path asks — and a focus that has moved onto
+        // another file is a file the user picked as surely as one a click selected: another folder,
+        // another tab and another window move the focus onto an item as well, and those are moves
+        // this setting does not follow.
+        if is_foreground_explorer()
             && last_focus_probe.elapsed() >= Duration::from_millis(KEYBOARD_FOCUS_PROBE_MS)
         {
             *last_focus_probe = Instant::now();
 
-            if let Some(focused) = get_focused_explorer_item(resolver, false) {
+            if let Some(focused) = get_focused_explorer_item(resolver) {
                 let key = FocusedItemKey::new(focused.item.name.clone(), &focused.item.bounds);
                 let changed = self.focused.as_ref() != Some(&key);
                 let known = self.focused.is_some();
@@ -5028,42 +5000,10 @@ fn selected_item_of_focused_list(element: &IUIAutomationElement) -> Option<IUIAu
 }
 
 /// The item Explorer says holds the keyboard focus, as the view reports it.
-///
-/// `foreground_required` is the hover path's own rule, and it is right there: a keyboard
-/// preview belongs to the window the keyboard is in, so the item is only read while that
-/// window is Explorer, or the app would answer a key pressed into another program with a
-/// file from a window the user is not looking at.
-///
-/// A pin asking the same question is not asking it about itself. What a pin follows is a
-/// pick in the listing *behind* it, and the window in front is the pin's because the pin
-/// took the focus on purpose — so the same check, left where it was, means the one probe
-/// that keeps the listing's own answers fresh stops running for exactly as long as a
-/// preview is on screen being worked in. That is not a rule about where a preview may
-/// answer; it is the focus being read as use, and it is the difference between a pin that
-/// follows the listing behind it and one that resolves a click against the listing as it
-/// was when the pin came up.
-///
-/// So the pin passes false and is answered whenever the listing is there
-/// (`explorer_state_is_active`). What that costs is one crossing into the shell on a clock
-/// the pin is already keeping, and what it buys is that the views and the item under the
-/// pointer are read against the listing as it is now.
-fn get_focused_explorer_item(
-    resolver: &ItemResolver,
-    foreground_required: bool,
-) -> Option<FocusedItemInfo> {
+fn get_focused_explorer_item(resolver: &ItemResolver) -> Option<FocusedItemInfo> {
+    // Only works when Explorer is the foreground window
     let foreground = unsafe { GetForegroundWindow() };
-    let explorer_in_front = !foreground.is_invalid() && is_explorer_window(foreground);
-
-    // The hover path's rule, and the only thing this asks that a pin does not: what is in
-    // front is what the keyboard is in, and nothing here may answer for another program.
-    if foreground_required && !explorer_in_front {
-        return None;
-    }
-
-    // Asked of a pin, so it is only asked at all while a pin is up. Explorer in front is
-    // the one arrangement that needs no pin to be true, and anything else in front is
-    // this app's own window standing over a listing — which is the case worth asking.
-    if !explorer_in_front && !pinned() {
+    if foreground.is_invalid() || !is_explorer_window(foreground) {
         return None;
     }
 
@@ -5081,15 +5021,9 @@ fn get_focused_explorer_item(
     })
 }
 
-/// The frame of the window an item is drawn in, which is the window whose views can be
-/// the one holding it. A provider that reports no window of its own leaves the foreground
-/// window, which is Explorer's while the keyboard is driving.
-///
-/// A foreground window that is *not* Explorer's is not a frame at all and is not used as
-/// one: a pin standing over a listing is this app's own window, and asking a folder view
-/// for an item by a frame that is not one of its own walks nothing and answers nothing. So
-/// a provider that names no window leaves the item with no frame, and the caller falls back
-/// to what the item says about itself rather than to a window that is not a listing.
+/// The frame of the window an item is drawn in, which is the window whose views
+/// can be the one holding it. A provider that reports no window of its own leaves
+/// the foreground window, which is Explorer's while the keyboard is driving.
 fn root_window_of_item(item: &HoveredItem) -> Option<isize> {
     let window = HWND(item.native_window as *mut core::ffi::c_void);
     if !window.is_invalid() {
@@ -5100,7 +5034,7 @@ fn root_window_of_item(item: &HoveredItem) -> Option<isize> {
     }
 
     let foreground = unsafe { GetForegroundWindow() };
-    (!foreground.is_invalid() && is_explorer_window(foreground)).then_some(foreground.0 as isize)
+    (!foreground.is_invalid()).then_some(foreground.0 as isize)
 }
 
 /// The file a keyboard preview is about.
@@ -5507,22 +5441,7 @@ pub fn run_explorer_hook() {
                     }
                 }
 
-                // The last place this loop sleeps at the medium cadence with a preview on
-                // screen. A backoff is armed for the hover machinery — a shell that is being
-                // restarted, a display that has just changed — and a pin is not the hover
-                // machinery, so it is not held behind one: the branch above it watches the
-                // pointer leaving the preview's own file, and the watch that follows a pick in
-                // the listing would be the next thing to run if this did not step over it.
-                // The loop's own pace is used while Explorer is there to be probed, which is
-                // what `explorer_state_is_active` answers, and the medium cadence only where
-                // there is nothing to probe.
-                std::thread::sleep(Duration::from_millis(
-                    if explorer_state_is_active(current_state) {
-                        config_snapshot.8
-                    } else {
-                        MEDIUM_SLEEP_MS
-                    },
-                ));
+                std::thread::sleep(Duration::from_millis(MEDIUM_SLEEP_MS));
                 continue;
             }
 
@@ -5701,12 +5620,6 @@ pub fn run_explorer_hook() {
                 // What the hover of a file under a settled pointer would wait out, which is the
                 // delay the hover behind the pin is given and the settling it must outlast as well.
                 let delay = hover_delay_ms.max(settling_delay_ms);
-                // Whether a listing is there to be read, which is the loop's own answer and not a
-                // question asked again: a pin takes the focus off Explorer on purpose, so "Explorer
-                // does not have the focus" is what every arrangement with a preview on screen looks
-                // like from the outside, and the watch behind that window has to be told otherwise
-                // (see `explorer_state_is_active`).
-                let explorer_active = explorer_state_is_active(current_state);
                 // What the keyboard and the pointer did, read here rather than by the watch: it is
                 // the tick's own answer about the machine, and the press bits it reads are ones the
                 // loop never comes back for while a pin is up (see `focus_move_input`).
@@ -5716,7 +5629,6 @@ pub fn run_explorer_hook() {
                     delay,
                     &mut last_keyboard_focus_probe,
                     focus_move,
-                    explorer_active,
                 );
             } else {
                 // A pin that follows nothing watches nothing: the state the watch holds is left
@@ -6317,7 +6229,7 @@ pub fn run_explorer_hook() {
                             >= Duration::from_millis(KEYBOARD_FOCUS_PROBE_MS)
                     {
                         last_keyboard_focus_probe = Instant::now();
-                        if let Some(focused_info) = get_focused_explorer_item(&resolver, true) {
+                        if let Some(focused_info) = get_focused_explorer_item(&resolver) {
                             let focused_key = FocusedItemKey::new(
                                 focused_info.item.name.clone(),
                                 &focused_info.item.bounds,
@@ -6483,7 +6395,7 @@ pub fn run_explorer_hook() {
                     >= Duration::from_millis(KEYBOARD_FOCUS_PROBE_MS)
             {
                 last_keyboard_focus_probe = Instant::now();
-                if let Some(focused_info) = get_focused_explorer_item(&resolver, true) {
+                if let Some(focused_info) = get_focused_explorer_item(&resolver) {
                     // The name alone cannot tell two observations apart: a search
                     // can hold the same name in more than one folder, and the box is
                     // what says which of them the keyboard is on.
@@ -6933,41 +6845,6 @@ mod tests {
             resolver.item_under(point, 0).is_none(),
             "so the retry reads the shell instead of the answer it is replacing"
         );
-    }
-
-    /// A pinned window does not stop a listing being in use, and the one question that
-    /// says otherwise is the focus — which a pin takes on purpose.
-    ///
-    /// This is the whole of the delay behind a pin. The loop's own state answers
-    /// `ActiveFocus` for a reachable Explorer window with a pin over it, and that same
-    /// answer is what the watch behind the pin is told, so the probe that keeps the
-    /// listing's views and items fresh keeps running for as long as a preview is on screen
-    /// being worked in — rather than starting again, a tick late, only after the loop
-    /// happens to notice Explorer has the focus back.
-    ///
-    /// Minimized, and behind a maximized window that covers it, are not use: there is no
-    /// listing under the pointer in either, so there is nothing for a pin to be shown
-    /// another file from, and those two keep the slow rows.
-    #[test]
-    fn a_pin_over_a_listing_is_that_listing_in_use() {
-        // Every state that says a window is there to be worked in, and only those.
-        for state in [ExplorerState::ActiveFocus, ExplorerState::VisibleNotFocused] {
-            assert!(
-                explorer_state_is_active(state),
-                "{state:?} has a listing under the pointer"
-            );
-        }
-
-        for state in [
-            ExplorerState::AllMinimized,
-            ExplorerState::HiddenByForeground,
-            ExplorerState::NoExplorerWindows,
-        ] {
-            assert!(
-                !explorer_state_is_active(state),
-                "{state:?} has nothing to pick from"
-            );
-        }
     }
 
     /// Items the user has dragged are where they put them, and a position in such a view
