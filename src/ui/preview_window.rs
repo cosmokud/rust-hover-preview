@@ -2293,6 +2293,15 @@ pub fn cursor_preview_hover() -> PreviewCursorHover {
 /// An SVG document's preview is the engine's window rather than this app's, so its box
 /// is asked for as well — a document is a preview of this app's in every way but the
 /// window it is drawn in.
+/// Whether `handle` is this app's own preview window.
+///
+/// The Explorer hook asks it so that a click landing on a pinned window is read out of the
+/// listing that window is standing on, rather than being taken as a click on something that
+/// is not a listing at all (see `click_is_over_a_listing`).
+pub fn is_preview_window(handle: isize) -> bool {
+    handle != 0 && handle == PREVIEW_HWND.load(Ordering::Acquire)
+}
+
 pub fn preview_screen_rect() -> Option<(i32, i32, i32, i32)> {
     if let Some(rect) = webview_preview::screen_rect() {
         return Some(rect);
