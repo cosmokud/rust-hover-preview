@@ -15208,16 +15208,29 @@ impl PinLoad {
 /// is cheaper still: a player's window is resized and its picture scales with it, and a browser
 /// is told the new bounds of the page it is already showing.
 ///
-/// It runs on the preview thread, and that is deliberate. A pinned window is not a hover, so
-/// there is no spinner to put up and no generation to match an answer against; what a decode
-/// costs is one tick that takes longer than usual, spent on a box the user has just asked for,
-/// with nothing else on screen for it to be late for.
+/// It runs on the preview thread, and that is deliberate for everything a box change asks of
+/// *another* window — a player's window to move, a browser's to travel with the band, a card to be
+/// laid out again — because all of that is a message to a window this thread owns and nothing else
+/// can send it.
+///
+/// What it asks of this thread's own decoding is not, and is not asked here any more. A decode is
+/// the one thing in this function with no bound on it, and it was being run inline on the thread
+/// that pumps the pinned window's messages: a large picture or a long document resized on the
+/// loop is a tick that takes seconds, and a tick is a stretch of the loop in which no window
+/// message is dispatched at all — so the drag under the hand stops answering, the caption's
+/// buttons stop answering, and the window is the frozen one this function's own comment used to
+/// call a deliberate trade. It is the same wait a swap already waits on, and it is waited on the
+/// same way: the read and the decode go to a thread of their own and the loop installs what comes
+/// back (see `PinRelayout`). Nothing is lost by the frame not being there the instant the box
+/// changes, because the band is already filled from the frame that *is* there and scaled into the
+/// new box — the same answer a resized video is given for as long as the engine's next frame is
+/// on its way (see `compose_media_into_band`).
 fn relayout_pinned_media(
-    path: &PathBuf,
+    path: &Path,
     content: ScreenRegion,
     dpi: u32,
     card: Option<AudioCardClock>,
-) {
+) -> Option<PinRelayout> {
     let width = (content.2 - content.0).max(1) as u32;
     let height = (content.3 - content.1).max(1) as u32;
     let kind = CURRENT_MEDIA
@@ -15230,6 +15243,7 @@ fn relayout_pinned_media(
         // box that changed is a window that moved.
         Some(MediaType::Video) => {
             ensure_pinned_sibling_box(content);
+            None
         }
         // The media engine draws into a surface of the size it was started at, and this window
         // draws the frames it hands back: both are resized, and the picture follows.
@@ -15243,6 +15257,7 @@ fn relayout_pinned_media(
             // frame that lands on the next tick is the one at the size the window now is (see
             // `compose_media_into_band`).
             video_player::resize(width, height);
+            None
         }
         // The browser draws in a window of its own, so the band that changed is a window that has
         // to travel with the box: it is moved rather than only asked again — a document still on
@@ -15258,15 +15273,14 @@ fn relayout_pinned_media(
                 },
                 engine_background(path),
             );
+            None
         }
         // A sound's card, which is a page of text laid out again rather than a file decoded —
         // and the one kind whose layout needs something the loop holds rather than the media:
         // where the player it started is, how far a name it had no room for has been scrolled,
         // and where a key put it on hold (see `AudioCardClock`).
         Some(MediaType::Audio) => {
-            let Some(clock) = card else {
-                return;
-            };
+            let clock = card?;
             let (elapsed, duration) = audio_clock(path, clock.started, clock.from, clock.paused);
 
             if let Ok(mut media) = CURRENT_MEDIA.lock() {
@@ -15281,24 +15295,84 @@ fn relayout_pinned_media(
                     );
                 }
             }
+            None
         }
-        // A frame this app draws for itself: the media is loaded again at the box it is now
-        // shown in, which is the same call a hover's own load makes.
-        Some(_) => {
-            let cancel = Arc::new(AtomicBool::new(false));
-            if let Some(media) =
-                load_media(path, width, height, PreviewScale::FitToScreen, dpi, cancel)
-            {
-                let media = keep_text_place(media);
-                if let Ok(mut current) = CURRENT_MEDIA.lock() {
-                    if let Some(ref mut existing) = *current {
-                        existing.cancel_background_work();
-                    }
-                    *current = Some(media);
-                }
-            }
+        // A frame this app draws for itself: the media is read and decoded again at the box it
+        // is now shown in, which is the same call a hover's own load makes — and the same
+        // wait one is, on a thread of its own. The decode used to run here, inline, which
+        // put an unbounded stretch of unpumped loop in front of a window the hand was
+        // still dragging; it is now answered a tick or more later by `take_pin_relayout`,
+        // and the band is filled from the frame that is there until it lands.
+        Some(_) => Some(PinRelayout {
+            path: path.to_path_buf(),
+            answer: pin_media_load(path, width, height, dpi),
+        }),
+        None => None,
+    }
+}
+
+/// A relayout of a pinned window's own media, waited for on a thread of its own.
+///
+/// The wait is held by the loop rather than inside the tick that started it, for the reason a
+/// `PinLoad` is: the read and the decode are a thread's work, so the question is still out when
+/// the tick that asked it ends and the answer to it arrives on one of the next.
+///
+/// There is no arc for this wait, and no spinner, and that is deliberate rather than an
+/// oversight. A relayout answers a box the window has *already* been given: the file on screen is
+/// the right file at a size it is being taken to, so there is nothing to wait *for* as far as the
+/// person looking at it is concerned — the picture is there, scaled into the new box, and the frame
+/// that is drawn for that box arrives when it arrives. An arc over it would say a thing that is
+/// not true: that the window has nothing to show yet. It is the same answer a resized video is
+/// given while the media engine's next frame is on its way.
+struct PinRelayout {
+    /// The file being decoded, which is what the answer is installed over: a relayout left in
+    /// flight across a swap would otherwise install a frame of the file the pin has left behind,
+    /// at a box belonging to the one it is now showing.
+    path: PathBuf,
+    answer: Receiver<Option<MediaData>>,
+}
+
+/// Take a relayout that has answered, and install it.
+///
+/// One still running is the ordinary case for the first few ticks after a window is dragged to a
+/// new size: what is on screen is the frame already decoded, and this is where it is replaced by
+/// one drawn for the box the window is now at.
+///
+/// The frame is installed here, on the loop's own thread, because `CURRENT_MEDIA` is the loop's
+/// (see `swap_pinned_media` for the same rule on a swap's answer) — and `keep_text_place` is asked
+/// of the media being replaced *before* that lock is taken, for the reason it takes the lock
+/// itself: a lock this thread already holds is not a lock it can wait for.
+fn take_pin_relayout(relayout: &mut Option<PinRelayout>) {
+    let media = match relayout.as_ref().map(|pending| &pending.answer) {
+        Some(answer) => match answer.try_recv() {
+            Ok(media) => media,
+            Err(TryRecvError::Empty) => return,
+            // The thread is gone with nothing to say, which is answered as a frame that could
+            // not be decoded: the frame already on screen stays, which is what a resize has
+            // been showing all along.
+            Err(TryRecvError::Disconnected) => None,
+        },
+        None => return,
+    };
+    let Some(pending) = relayout.take() else {
+        return;
+    };
+
+    // A relayout is only an answer while the pin is still standing on the file it was asked for.
+    // A swap that landed first, or a pin that has been closed, leaves it asking a question about
+    // a window that is no longer there, and its frame must not be installed over whatever is
+    // there now.
+    if pinned_path().as_deref() != Some(pending.path.as_path()) {
+        return;
+    }
+
+    let Some(media) = media else { return };
+    let media = keep_text_place(media);
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        if let Some(ref mut existing) = *current {
+            existing.cancel_background_work();
         }
-        None => {}
+        *current = Some(media);
     }
 }
 
@@ -18869,6 +18943,12 @@ pub fn run_preview_window() {
         // run for `spinner_delay_ms` puts an arc in the middle of the pin's media (see
         // `PinLoad` and `paint_pin_spinner`).
         let mut pin_load: Option<PinLoad> = None;
+        // A pinned window's own media being decoded again at a box it has been given, and the
+        // wait for it. Held here rather than inside a tick for the reason a load is: the read
+        // and the decode are a thread's work, so a window dragged to a new size keeps drawing
+        // the frame it had — scaled into the new box — until the frame drawn for that box
+        // lands, rather than costing a tick as long as the decode (see `PinRelayout`).
+        let mut pin_relayout: Option<PinRelayout> = None;
         // A walk a pin's own caption button stepped, held for as long as the walk has files
         // left to offer rather than for the length of the tick that started it: a file the pin
         // cannot be shown is stepped over rather than stopped at, and the file after it is
@@ -20785,6 +20865,14 @@ pub fn run_preview_window() {
                 }
             }
 
+            // A relayout of a pinned window's own media has answered, and is installed here on this
+            // thread. It is asked of before the load below, and that order is the only thing
+            // that matters: a swap installs its own media and a relayout left over from the box
+            // before it would put a frame of the file just left behind over the file just
+            // arrived — which the path check in `take_pin_relayout` refuses, but which is
+            // better not to be asked about at all.
+            take_pin_relayout(&mut pin_relayout);
+
             // A load a pinned window is waiting for has answered. What came back is installed
             // here, on this thread, and the take-up below is the pin's own: the box is the one
             // the plan was made with, and what comes of it is the same window showing
@@ -21364,7 +21452,10 @@ pub fn run_preview_window() {
                         // because being pinned is the whole of what full mode is read from.
                         if kind == Some(MediaType::Text) {
                             if let Some((path, dpi)) = pinned_media_owner() {
-                                relayout_pinned_media(&path, content, dpi, None);
+                                // A take-up is a box this window has not been given before, so
+                                // the relayout asked for here is asked for the file the pin is
+                                // now showing, and any older one is dropped with it.
+                                pin_relayout = relayout_pinned_media(&path, content, dpi, None);
                             }
                         }
 
@@ -21394,7 +21485,11 @@ pub fn run_preview_window() {
                         };
 
                         if let Some((path, dpi)) = pinned_media_owner() {
-                            relayout_pinned_media(&path, content, dpi, Some(card));
+                            // A box change is what a relayout is asked for, so this is where one
+                            // starts — and where an older one is dropped: the newest box is the
+                            // only one worth decoding for, and the frame already decoded is
+                            // drawn scaled into this one meanwhile.
+                            pin_relayout = relayout_pinned_media(&path, content, dpi, Some(card));
                         }
                         show_pinned_window(hwnd);
                         place_pinned_siblings();
