@@ -15173,9 +15173,7 @@ impl PinLoad {
     fn due(&self) -> bool {
         match self.turned {
             None => self.started.elapsed() >= self.spinner_delay,
-            Some(turned) => {
-                turned.elapsed() >= Duration::from_millis(u64::from(SPINNER_TURN_MS))
-            }
+            Some(turned) => turned.elapsed() >= Duration::from_millis(u64::from(SPINNER_TURN_MS)),
         }
     }
 
@@ -15886,9 +15884,7 @@ impl PinWait {
     fn due(&self) -> bool {
         match self.turned {
             None => self.started.elapsed() >= self.spinner_delay,
-            Some(turned) => {
-                turned.elapsed() >= Duration::from_millis(u64::from(SPINNER_TURN_MS))
-            }
+            Some(turned) => turned.elapsed() >= Duration::from_millis(u64::from(SPINNER_TURN_MS)),
         }
     }
 
@@ -28763,9 +28759,7 @@ mod tests {
             "and a wait that has had its arc is a wait that does not ask for a second one"
         );
 
-        load.turned = Some(
-            Instant::now() - Duration::from_millis(u64::from(SPINNER_TURN_MS) + 1),
-        );
+        load.turned = Some(Instant::now() - Duration::from_millis(u64::from(SPINNER_TURN_MS) + 1));
         assert!(
             load.due(),
             "until the spinner's own cadence has come round again"
@@ -28800,6 +28794,58 @@ mod tests {
             !wait.due(),
             "and the turn is a cadence away from the last rather than due at once, so a \
              long folder read does not repaint the window as fast as the loop runs"
+        );
+    }
+
+    /// What this guards: the floor an animation frame's own delay is lifted to, and which
+    /// frames it is lifted for.
+    ///
+    /// Sixty a second is a file's own timing, and a floor of thirty played every such
+    /// animation at half the speed it was authored at — the picture was right and the
+    /// timing was not, which is the kind of wrong nobody can say out loud. The floor is a
+    /// floor and not a pace: anything slower than it keeps the delay the file was given,
+    /// and only a file saying nothing at all is lifted, so a zero delay — a frame the
+    /// playhead would otherwise step through as fast as the message pump runs — is held
+    /// back to it.
+    ///
+    /// A wait's arc is deliberately not on this clock (see `SPINNER_TURN_MS`): an arc is a
+    /// mark rather than a picture, and the two are not to be moved together again.
+    #[test]
+    fn an_animation_floor_holds_back_nothing_a_file_itself_timed() {
+        // A frame's delay as the APNG decoder hands it over: milliseconds, kept as the
+        // exact ratio the file wrote so that a hundredth of a second is not lost to
+        // integer division before the floor ever sees it.
+        let frame_of = |numerator: u32, denominator: u32| {
+            image::Frame::from_parts(
+                image::RgbaImage::new(1, 1),
+                0,
+                0,
+                image::Delay::from_numer_denom_ms(numerator, denominator),
+            )
+        };
+
+        assert_eq!(
+            apng_frame_delay_ms(&frame_of(50, 3)),
+            16,
+            "a frame timed at sixty a second — sixteen and two thirds milliseconds, which is \
+             what a hundredth of a second a frame is written as — is played at the file's own \
+             sixty and not held to thirty"
+        );
+        assert_eq!(
+            apng_frame_delay_ms(&frame_of(33, 1)),
+            33,
+            "and a file slower than the floor keeps the delay it was authored at"
+        );
+        assert_eq!(
+            apng_frame_delay_ms(&frame_of(0, 1)),
+            16,
+            "while a file saying nothing at all is lifted to the floor rather than spun as \
+             fast as the message pump allows"
+        );
+        assert_eq!(
+            SPINNER_TURN_MS, 33,
+            "and the two floors stay apart: an arc turns at thirty because it is a mark, and \
+             a mark is not a picture to be run at a picture's speed"
         );
     }
 
